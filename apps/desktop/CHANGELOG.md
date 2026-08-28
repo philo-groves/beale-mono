@@ -1,0 +1,862 @@
+# Changelog
+
+## Unreleased
+
+### Added
+
+- Added a Google OSS VRP Research Kit with the official published OT0 and OT1 repository catalog, preserved repository-tier metadata, Google Bug Hunters OSS rules and report requirements, bundled refresh support, and Googlesource repository materialization.
+- Workspace Campaign view now visualizes authorized assets, durable memory, canonical findings, runbooks, and reports; ranks uncovered assets, unsupported claims, lifecycle gaps, staleness, and contradictions; and opens the highest-value gap as a prefilled research run.
+- Runbook views now support inclusive start/end cell selection in addition to whole-run and single-cell execution, allowing a repaired late failure to continue without replaying successful prefix cells.
+- Honeycrisp-backed findings now expose an evidence-gated lifecycle from hypothesis through observation, reproduction, independent verification, report readiness, disclosure, rejection, and source/environment staleness.
+- Added an authenticated app-server control plane for Desktop, Beale-iOS, and future clients to list path-free workspaces and read bounded canonical memory and session state over an operator-managed network boundary such as Tailscale.
+- Specialized workspaces now expose an active-kit-only dashboard view with a shared refresh form. HackerOne re-imports current program resources, rules, and guidance; Apple and Google OSS refresh selected repository metadata plus bundled rules and guidance; MSRC refreshes bundled rules and guidance while preserving manual resources and repository checkout metadata.
+- Research Kits formalize General, HackerOne, Apple Security Bounty, Google OSS VRP, and MSRC workspace creation behind typed resource, scope, rule, and repository-catalog acquisition metadata. The selected kit is immutable workspace metadata, survives registry removal and re-import, and appears read-only beneath Research Profile in Workspace Overview; registry migration 10 records it for known workspaces.
+
+### Changed
+
+- Desktop now consumes the shared versioned app-server lifecycle DTOs and relative transport path. The app-server supports HTTPS/WSS Tailscale Serve origins, persistent operator provisioning, direct session polling, and bounded reconnect replay without stopping the underlying run when a mobile client disconnects.
+- Desktop now sends only logical run intent to the app-server and reads canonical session detail through its control plane. App-server-owned capture paths, raw capture import, built-in plugin resources, and the duplicate raw Tailscale catalog were removed from Desktop.
+- The no-workspace launch screen now displays the Beale app icon above its heading, matching the New Research welcome view from the first rendered frame.
+- Honeycrisp-backed session catalogs and lifecycle reads now use metadata-only contract-v4 queries. Initial display and polling use bounded event pages, collaboration cleanup uses current collaboration state, capture rows use metadata until detail is requested, and tool-event cache misses use targeted trace-detail reads.
+- Live Honeycrisp research events are no longer copied into a second Beale trace payload; concise transcript projections remain durable while the canonical Honeycrisp event supplies on-demand detail.
+- Renderer-facing Honeycrisp detail is capped by event count and serialized bytes before it crosses the process boundary; oversized individual events are projected to requestable summaries.
+- Beale now supplies stable source-revision, execution-environment, and authorized-asset identities to Honeycrisp; campaign state is injected into agent context and drives typed research momentum before trace-text heuristics.
+- Honeycrisp feature calls now require contract v4 runtime identity, schema versions, bounded-read and targeted-detail capabilities, and Beale validates memory-summary v3 runbook content/execution metrics instead of trusting compile-time casts.
+- Runbook summaries and catalog rows now separate content revisions, completed runs, executed cells, and latest execution status instead of presenting execution persistence churn as content updates.
+- Session Heat defaults now use revised Security palettes for Light and Dark plus revised shared Cream and Midnight variants.
+- New Research now opens with the live-session commentary and steering composer instead of a modal, appears as a temporary active session in the workspace sidenav, and includes a centered profile-workflow suggestion chooser, Repeat, Goal, and Add Context controls above the shared input plus a hierarchical Collaboration control and aligned, stackable collaborator-model pickers below it.
+- Session views now remain full-width while their commentary is empty and slide the right summary sidenav into view only after session content becomes available.
+- New Workspace now reuses the main workspace Overview, active Research Kit, Resources, and Rules views instead of a separate onboarding dialog. Creation advances through explicitly unlocked steps with per-view validation, kit imports preserve the entered workspace identity, and the final Rules header creates the workspace.
+- Connected-iPhone capture now stages a short-lived authentication token in the companion's app-data container and waits for the operator to open the iOS app, instead of launching or foregrounding it through `devicectl` when a session opens.
+- Moved the iOS capture companion's Xcode project, Swift sources, metadata validation, and documentation into the dedicated Beale-iOS repository; Beale retains the desktop-side USB capture integration.
+- Workspace rows in the left sidebar now expose a direct New Research action that switches to the owning workspace before opening the research dialog.
+- Workspace Utilities now includes a confirmed registry-only removal form that leaves workspace directories, metadata, repositories, scoped resources, and Honeycrisp data intact.
+- Loading session summaries now reserve duration, token, cache-hit, context, and memory rows with animated placeholders instead of briefly reporting zero memories.
+- The workspace Rules tab now sits beside Utilities, uses the workspace name in its heading, and has balanced composer and Add Rule spacing.
+- Workspace Guidance now opens as a vertically resizable Markdown preview and switches to an equally sized editor with an explicit Show Markdown action.
+- Workspace directory management now appears as an inline field below Workspace Name, with a primary-directory indicator and compact controls for adding or removing secondary directories.
+- Workspace repositories now retain their editable cloned directory and checkout revision metadata on the repository resource itself instead of creating a second local-path resource. Migration 26 attaches legacy checkout paths where possible and consolidates Path, Host, IP range, Account, and Credential ref resources into Other while retaining their former kind as compatibility metadata.
+- Workspace resource tabs now match the workspace view tabs' padding, typography, and icon sizing, and repository Clone actions no longer have an outline.
+- Workspace Overview now uses the workspace name as its heading and orders its metadata as Research Profile, Research Subject, Workspace Name, Description, then Directories.
+- Workspace view tabs now show distinct left-side icons for Overview, Activity, Resources, Rules, Memory, Runbooks, and Utilities.
+- Workspace rules now use a durable append-only text list in a dedicated Rules view, while Resources define formal scope. Migration 25 moves legacy active Scope & Rules text into the rule list and clears the retired scope field; HackerOne imports use the configured default provider model to extract formal rules separately from imported scope resources.
+- Workspace Description now reads from and writes to the primary workspace's `AGENTS.md`. New-workspace onboarding imports existing instructions, legacy stored descriptions migrate when the file is missing, and Honeycrisp receives them only through its standard workspace-instruction discovery instead of a duplicate stored scope-description context.
+- End-of-session suggestions now come from three structured follow-up prompts captured with the session's final disposition and are persisted without a second model request. Ended sessions without captured prompts receive deterministic local continuations, and selecting a suggestion opens its complete prompt directly; suggestion loading no longer touches memory, artifacts, run history, or provider transport.
+- Right-sidenav catalog rows now use compact elapsed-time labels for subagents, memories, runbooks, reports, and breakout rooms while retaining the full timestamp in a hover tooltip. Memory rows allow titles to wrap around their time and status, and replace description previews with heat-colored type and model-author metadata.
+- The session Memory sidenav now groups records into one list per canonical memory type and orders type sections by configured session heat, then record count and profile order, matching the workspace Memory view. Memory rows rely on their section heading for type context, omit the redundant leading type icon and trailing type label, and show a semantic status dot beside the timestamp. The same polarity-based status colors appear beside state labels in Profile settings.
+- Subagent catalog rows now present the response-colored name, muted provider icon, and muted catalog model display name together, falling back to the stored identifier for unavailable historical models. Creation time precedes a compact status indicator, with a spinner for active subagents and colored dots for terminal states. Subagent, Memory, Runbook, and Report rows keep transparent hover backgrounds while highlighting their text and top and bottom dividers with the response foreground color.
+- Ticketing settings now includes a default-on Human In The Loop automation control. Disabling it automatically submits newly completed reports to the configured provider while durable submission records prevent duplicate tickets across refreshes and restarts.
+- Automations, Reporting, Plugins, and Agent Settings now have transparent resting states in the left sidenav and reveal their former subtle fill on hover.
+- Active header sidenav and bottom-panel controls now use the same subtle background as the workspace editor opener.
+- Workspace views now center their content at the standard session width. Overview includes Directories inside its primary form, while the Activity Gantt and Resources, Memory, and Runbooks lists use the same centered maximum width.
+- Computer-use approvals now use the compact inline steering overlay instead of a modal. Computer Use settings adds persisted Every Action and Once Per Session permission modes, defaulting to Every Action; session grants remain scoped to each approved target binary.
+- General settings now includes persisted, enabled-by-default controls for session-ending, response, and New Research prompt suggestions; disabling a type hides its UI, and dedicated suggestion requests are not started while their surface is disabled.
+- Agent Settings now includes a persisted Appearance view with Light, Dark, warm Cream, and dark-blue Midnight themes; Dark remains the default, and profile Session Heat palettes provide customizable variants with theme-appropriate defaults.
+- Removed the session trace timeline, filters, and detail UI. Commentary is now always on, while General settings exposes a Debugging > Traces checkbox that defaults off and controls retention of optional diagnostic trace mirrors; functional, evidence, policy, and session-history records remain retained, and enabled traces stay available through run-detail queries.
+- Workspace Overview now matches its Directories column to the session summary sidenav width, presents directories as a flat divided list, and lets users promote any directory to the persisted primary position while keeping the workspace storage root protected.
+- Workspace Overview form labels, descriptions, fields, and save status now use the same 14px typography as the General and Profile settings views.
+- General, Profiles, and Computer Use settings now use the application's normal font size instead of their previous compact typography.
+- Provider Settings, Automations, Reporting, Plugins, and session views now share the Plugins-style centered loading indicator with regular-weight text.
+- Runbook detail now provides whole-run and per-cell execution controls for the owning live Honeycrisp session, records Localhost, Device, VM, Web, or Other as the proof target plus the target OS for Device runs, persists each cell's latest status, duration, exit code, and bounded output, and surfaces healthy-runbook guidance. Auto-Review classifies proofing and denies proof commands outside a trusted runbook cell; `runbook.run` is the canonical model-facing proof execution path.
+- Workspace repository resources now show whether a managed checkout exists and offer an in-place Clone action when it does not. Clone requests stay scope-bound, deduplicate concurrent acquisition, and use Honeycrisp's large-repository-safe asynchronous materialization path.
+- Report summaries now carry typed submission-packet metadata from the Honeycrisp report catalog.
+- Workspace model context now deduplicates scope assets already represented by the bounded Rules and Constraints text or by known local repository roots, while retaining asset-specific instructions, direction-mismatched assets, exclusions, credentials, and entries beyond the visible rules budget.
+- The bundled default profile is consistently named Security in selectors and editable defaults. Security and Mathematics now present eight active memory types; Security combines new Source and Sink records into Flow Endpoint while retaining existing retired memory in resource views, and Profile settings hides retired type tabs.
+- General settings now uses a centered session-width form layout with regular-weight typography, a larger evenly padded heading outside the raised squircle surface, and flat vertically stacked, right-aligned controls. Session View replaces Chat View, and a persisted Permissions form sets the default safety mode for new sessions while gating Danger Mode behind an explicit enablement checkbox.
+- Provider settings now keeps provider tabs and the lead selector across the full main-content top row and centers its stacked acknowledgment, authentication, default-model, and optional-model forms at session width. The active provider's refresh action sits beside its header label instead of repeating in every tab, with the health indicator centered inside the refresh glyph. Forms use outside headings and descriptions with left-aligned option copy and right-aligned controls; each model has an adjacent reasoning picker, with large-model reasoning configurable and small-model reasoning read-only. Authentication presents subscription and API-key actions as rows and consolidates the acknowledgment prerequisite into an orange header warning.
+- Session loading text no longer ends in a period, and Commentary now shows lone shell commands and file reads as directly expandable `Running <command>` and `Reading <path>` rows with hover-revealed animated chevrons while retaining the existing grouped-call behavior. Singular file labels abbreviate recognizable user-home prefixes to `~/` without changing the full path in tool details.
+- Commentary repository searches now read `Querying <repository> for "<query>"` for one call and each expanded inner item, preferring configured display names and repository URL metadata over materialized checkout directories such as `default` or `app`, while consecutive grouped calls read `Searching X repositories with Y queries` using resolved result roots for the repository count.
+- Commentary memory searches now read `Searching memory for "<query>"` for a singular call and `Searching memory with X queries` for consecutive grouped calls, with long summary text ellipsized at narrow widths.
+- The workspace dashboard now uses Overview, Activity, Resources, Memory, Runbooks, and Utilities tabs in a left-aligned, bounded layout, and the application header pairs the workspace name with the active view. Overview persists editable workspace metadata in place when a field loses focus; Memory and Runbooks reuse their detailed catalog rows and open the right detail panel with the same slide transition used by session sidenavs, while Utilities presents Settings-style Dejunk and Dream actions with live counts and progress states.
+- Workspace Activity, Resources, Memory, and Runbooks now share a left-aligned, flat yearly heatmap: Activity tracks token usage, while Resources, Memory, and Runbooks track creation of their respective records. The Activity Gantt and Memory and Runbook catalogs remain full-width beneath it.
+- Memory type indicators now use neutral grey instead of categorical profile colors. Types with configured session heat use the corresponding heat-palette color, and individual memory records resolve that color from their current state and any saved state-specific override.
+- Workspace Memory now separates records into heat-ranked type lists with count-aware headings, four initially visible records per type, and animated Show More or Show Less controls.
+- Workspaces now persist an ordered directory collection while retaining the original primary `workspacePath` as the `.beale/` storage and execution root. Registry migration 9 promotes existing workspaces to one-directory collections; new workspace setup opens before directory selection, requires at least one directory, and shares an add/remove directory widget with the full-width 75/25 Overview layout.
+- Header titles now carry the same workspace, settings, automation, reporting, or plugin icon used by their corresponding sidenav destination.
+- Reporting's aggregate scope is now labeled All Reports, and Plugins now opens as a main-content catalog with its existing install controls, counted list header, active navigation state, and divider-separated plugin rows instead of a popup dialog.
+- Compact session and workspace summary sidenavs now omit Runbooks, Reports, Rooms, and Subagents rows when their count is zero and use singular labels when exactly one resource is present.
+- Breakout rooms now live in the session right sidenav, with a stacked Rooms summary button, a status-grouped Rooms tab, and the existing room transcript layout in a nested detail view instead of workspace-sidebar rows.
+- Session search now opens as a fixed-height pill in the workspace-list header and filters matching sessions in place across registered workspaces, replacing the Find a Session navigation item and transcript-search dialog.
+- Pruned the overlapping 4,300-line workbench catch-all and brittle renderer presentation/source-shape tests. Expensive process, SQLite, filesystem, and loopback-server boundaries now run serially under `npm run test:integration`; `npm run test:all` retains the focused critical suite while the default `npm test` stays fast.
+
+### Fixed
+
+- Windows Anthropic sign-in now prefers Beale's Agent SDK-bundled Claude Code CLI, falls back to native and npm-installed host CLIs, and reports a direct dependency/install error when none is available. Managed provider keys now load before app-server startup, and saving or removing an OpenRouter API key refreshes both its persisted Desktop preference and the app-server environment.
+- Electron-hosted app-server children now run Honeycrisp in Node mode, and session detail uses one bounded update for both data and workspace ownership, preventing 30-second process-exit timeouts and redundant readers on large active profiles.
+- Research sessions now send typed intent to the app-server instead of constructing Honeycrisp arguments and environments, startup failures show their concrete diagnostic instead of only the generic session-start message, and capability-aware health checks prevent reuse of incompatible background servers after upgrades.
+- Canonical session reads retry once after a transient app-server transport reset, and app-server launch provenance remains durable even when optional diagnostic tracing is disabled.
+- Desktop now compares its app-server contract timestamp at startup, replaces an older app-server automatically, offers to restart when Desktop itself is older, and launches the visible Windows tray host with correctly cropped icon artwork.
+- Honeycrisp child-process shutdown and failure callbacks now isolate cleanup and finalization errors so a session-boundary read failure cannot escape into Electron's main process.
+- Desktop iPhone integration now enforces a device-command allowlist that rejects companion process launches or termination, preventing reconnect loops from repeatedly foregrounding the iOS app.
+- Session Heat palette selections, memory previews, workspace housekeeping cards, and active window surfaces now render the configured color directly instead of tinting it through a panel-border blend.
+
+### Security
+
+- Enabled Electron renderer sandboxing, added a restrictive content security policy, denied popup creation, and blocked navigation away from the configured renderer origin or packaged application file.
+- Newly started research sessions now render their submitted prompt immediately and show a setup-phase status while Honeycrisp initializes, retaining the usable session view instead of surfacing initial detail-fetch timeouts.
+- Workspace removal confirmation now tolerates invisible and compatibility Unicode differences in otherwise identical workspace names while remaining case- and punctuation-sensitive.
+
+- Auto-Review failures now retain bounded timeout, authentication, quota, model, provider, and response-shape diagnostics from Honeycrisp without exposing raw provider errors; malformed reviewer output receives one bounded repair attempt before remaining fail-closed.
+
+- End-of-session next-step suggestions now read captured prompts and persist results through Honeycrisp's canonical session boundary instead of failing when the session has no legacy workbench run row.
+- Honeycrisp context-compaction telemetry now uses provider-neutral language and reports the active model context window, so OpenAI-compatible providers such as xAI no longer inherit a misleading 200k context meter or OpenAI attribution.
+- Switching directly between sessions now retains the prior session heat and palette while the next detail loads, then transitions straight to the newly resolved heat without briefly resetting to the neutral background.
+- Completed sessions resumed after app recovery now show the successful terminal response instead of letting the historical recovery marker suppress an otherwise empty result area.
+- Detailed Windows computer-use observations no longer let Terminator SDK diagnostics corrupt the MCP JSON-RPC stdout stream and terminate the active research session.
+- Workspace registry loading now shows a compact spinner beside the Workspaces sidenav heading instead of adding a separate loading-text row to the workspace list.
+- Header context labels now follow the main content edge when the left sidenav resizes or collapses, while clamping after the measured application-menu controls so narrow windows and display zoom cannot overlap the labels.
+- Workspace opening now batches registry updates in one SQLite transaction, avoids re-synchronizing cached background workspaces or immediately reloading the just-updated registry, and mounts only the visible dashboard tab instead of eagerly building all hidden activity, resource, memory, runbook, and utility views.
+- Connected iPhones reported by Xcode 27 as wired and paired with an idle CoreDevice tunnel are now discovered when a session opens; transient companion-session staging or USB-tunnel failures clear the renderer attempt latch so discovery can retry.
+- iOS Device proof runs now expand an active connected-iPhone stream while the runbook is running and restore it when the run ends; expanded capture derives its column width from the available height and frame aspect ratio, with equal left and right sidebar gutters.
+- Connected iPhone pixels now preserve their intrinsic aspect ratio while resolving both maximum width and maximum height against the measured remaining summary-sidebar row, preventing portrait frames from overflowing the dock.
+- Kept an approved iOS 27 full-display ScreenCaptureKit stream active when the Beale Capture companion moves to the background by declaring the required `screen-capture` background mode.
+- Honeycrisp session events and capture bodies now migrate out of repeatedly rewritten aggregate JSON into individually verified rows. Normal research appends update only bounded lifecycle state plus the new event, while corruption failures report an explicit preservation and restore/recovery path instead of the generic session-operation error.
+- Selecting a breakout room or returning to the Rooms list no longer reloads the session detail projection and briefly flashes the compact summary sidenav.
+- Automation editing now loads provider configuration and model catalogs when the view opens, keeps the lead model picker populated and editable, applies the editor field background to its dropdowns, and hides the New Research-only Add Context control.
+- The Automations catalog now batches canonical session summaries by research profile and opens at most one lightweight profile reader per batch, instead of launching a Honeycrisp process and materializing a recovery-capable workspace runtime for every registered workspace.
+- Breakout rooms no longer remain active after a subagent interruption or parent-session interruption; room state is reconciled from terminal member and session state across both Honeycrisp-owned and legacy persistence, including existing cached sidebar records.
+- Opening a report now leaves its agent chat idle with a short, immediately visible Tab suggestion until the user sends a chat or inline request. Report views load provider settings and the model catalog before startup, so the idle composer remains enabled and uses the configured default provider's large model and reasoning effort instead of an empty “Off” selection or the first catalog model; its safety-mode selector is also available before the first message and applies the selected mode when creating the report run. Report identity, artifact file, revision, and editing requirements are supplied through model context rather than a synthetic visible prompt. Report refinement sessions split the workspace evenly with a lighter, divider-free report pane, compact content gutters, and a title-first header without redundant back or type labels. Inline editing supports Shift-joined ranges, Ctrl/Command-toggled highlights, and highlighted-only or report-wide edit scope; accepted changes refresh the transcript and launch a continuation unless Honeycrisp completes the requested revision and a following response turn.
+- Live Honeycrisp approvals, transcripts, model metadata, collaboration records, notifications, and traces now share one ordered asynchronous session-write queue; SQLite lock contention is retried without escaping a WebSocket callback as an uncaught exception, while queued records remain immediately visible to Beale UI reads.
+- Session summary sidenavs once again show Honeycrisp token totals, prompt-cache hit rate, and current context usage in Commentary mode; the compact renderer projection now preserves bounded usage telemetry and Honeycrisp model-session metadata updates are rehydrated from canonical protocol events.
+- New Research goal suggestions now regenerate after any selection that leaves a workflow below its configured count, retaining unused choices and buffering fresh replacements so the list returns to four without repeating consumed suggestions.
+- Workspace dashboards no longer expand inactive Honeycrisp session histories to assemble approval and notification UI; session summaries are reused and canonical approval/notification reads are limited to active host processes.
+- Initial workspace snapshots no longer block Electron's main thread on Honeycrisp memory-summary setup; Dream housekeeping now loads after the workspace is painted and reports an explicit loading state.
+- Workspace and session navigation no longer initializes macOS Keychain access for provider API-key storage; Beale now touches Safe Storage only when managed credentials are actually needed and removes empty credential files.
+
+- Workspace dashboards now reuse versioned snapshots across open and registry-sync paths, avoid the redundant registered-workspace follow-up broadcast, ignore duplicate renderer deliveries, apply new dashboard state as an interruptible transition, defer the filesystem-backed Dejunk scan until after first paint with a loading state, and index timeline/resource relations instead of repeatedly rescanning the full workspace dataset.
+- Tab-completion steering suggestions now remove dangling conjunctions and prepositions, strip additional result-summary lead-ins, and clip long context at a coherent clause boundary instead of producing fragments such as `and.`.
+- Completed Honeycrisp sessions now retain the root agent's final response when a subagent already emitted its own final transcript, instead of suppressing the root response and leaving Commentary without a visible conclusion.
+- Left sidebar scrolling is now confined to the workspace or settings item list, which fills the available height above Agent Settings, keeps list and footer controls aligned, anchors the complete scroll track inside the sidebar immediately before the main content area, and uses Commentary's activity-aware inset scrollbar and conditional alpha fades that reveal the actual live session heat background.
+- Startup now reconciles cached active sidebar sessions through Honeycrisp without opening a workspace, app shutdown records live work as interrupted instead of failed with `Request was aborted`, inactive-session continuations complete their WebSocket handshake before Beale materializes or broadcasts the resumed snapshot, and active continuations no longer replay a prior attempt's terminal response on every detail update.
+- macOS source launches now brand the project-local Electron bundle as Beale before startup and embed the Beale icon at the bundle boundary, preventing the stock Electron name and icon from appearing in the Dock during launch and shutdown.
+- Shell approval decisions now append distinct Honeycrisp session events instead of colliding with the original pending record; legacy pending approvals are reconciled from their recorded resolution trace so completed Approve Once actions release the widget and steering composer.
+- New sessions now complete the Honeycrisp WebSocket handshake before Beale performs synchronous registry and snapshot reads, preventing busy workspaces from starving the 15-second host startup window; nonzero host exits retain their actionable stderr diagnostic.
+- Collapsed Commentary tool-call rows now show the actual one-line `shell.run` command with width-based ellipsis instead of the generic `Shell Run` label, including null-utility requests recovered from their bounded executed-shell result.
+- Shell approval surfaces now appear only for actively running sessions; terminal-session suggestions generate automatically only when the currently viewed session ends, while revisits show an explicit empty state and user-triggered Refresh action.
+- Selected New Research suggestions now disappear immediately, remain removed from Honeycrisp's durable cache, and inform subsequent generation through workspace-scoped selection history and semantic duplicate filtering.
+- Beale introspection no longer exposes workspace creation, accepts only registered workspace selectors, or changes the foreground workspace while viewing and editing resources; expired HTTP tool requests are canceled before dispatch.
+- Live Honeycrisp trace mirrors are now serialized into bounded asynchronous batches instead of synchronously spawning a growing session rewrite for every WebSocket event on Electron's main thread.
+- A transient `session.get_update` timeout no longer replaces an already loaded session with a global renderer error; live detail refreshes retain the current view and retry with bounded backoff.
+- Session navigation and live tool activity no longer stack stale full-session reads: renderer updates are cancelable, cursor-bounded, frame-coalesced, adapt to large histories, retry transient refresh failures, and avoid quadratic reasoning/payload work.
+- Refresh session navigation after a Honeycrisp session reaches a terminal state, even when another session in the workspace remains active.
+- Honeycrisp async protocol responses are no longer corrupted by retaining only their final two million characters; complete envelopes are assembled from UTF-8 byte chunks up to an explicit 64 MiB limit, after which the client reports a bounded response-size error instead of attempting to parse truncated JSON.
+- Live Honeycrisp events no longer spawn full `session list` queries merely to determine whether a runtime is active; actual list refreshes use compact summaries, and malformed CLI responses report exit, signal, and buffer failures instead of presenting SQLite's experimental warning as the cause.
+- App restart now atomically recovers Honeycrisp-owned active sessions and attempts as interrupted pauses, including recovery evidence and the existing unexpected-error presentation, instead of rediscovering them as still active.
+- Switching sessions no longer runs Honeycrisp session and memory queries synchronously on Electron's main thread; initial detail loads avoid the redundant version query, duplicate memory-summary requests are coalesced, and active Honeycrisp writers no longer cause UI hangs followed by `database is locked` errors.
+- Tab-completed session suggestions now replace vague status-only prompts with concise context from the latest user steering or the current research objective.
+- Beale now allows only one desktop app instance; repeated launches restore and focus the existing window, while runtime and package identity consistently use the Beale name.
+- Restart recovery now marks interrupted subagents and collaboration members as interrupted even when stale same-attempt events arrive late, and interrupted sessions receive an error final message reading `Unexpected error`.
+- Active-session rounded-square pulses now remain visible across dashboard and session views whenever the workspace has queued or active research, with their original contrast restored through the transparent window sidebar.
+- Dejunk no longer misclassifies paused research sessions as active; only queued or actively running sessions block workspace housekeeping.
+- Agent Plugin MCP runtime overlays and the built-in Beale Introspection bridge now use Honeycrisp's `servers` configuration and newline-delimited JSON-RPC contracts, preventing new sessions from exiting or hanging before their first model turn.
+- New Research goal suggestions now discard invalid surplus model candidates instead of failing the entire grounded candidate pool, and retries include the bounded host-validation reason when too few valid candidates remain.
+- Restored native macOS copy and paste menu roles so Command-C and Command-V work in focused renderer content and editable fields.
+
+### Added
+
+- Added OpenRouter provider settings, encrypted `OPENROUTER_API_KEY` management, the Pi-backed model catalog with `auto` defaults, API-key-only authentication UI, and routed-provider policy-risk preflight acknowledgement.
+- Memory, Runbook, and Report detail views now show every model author recorded across the resource's revisions, with an explicit unrecorded state for legacy resources.
+- Agent Settings now includes Ticketing with Local Reports Only as the default plus opt-in GitHub Issues and Linear integrations. Beale encrypts managed tokens in the host process, discovers accessible repositories or teams, and creates tickets directly from durable report Markdown.
+
+- Workspace and session views now provide a real interactive PTY terminal in a separate 250px bottom panel. The terminal opens in the active workspace's primary directory, streams through a typed host boundary, closes with its owning window or panel, and defaults to collapsed behind a context-matched header toggle with animated vertical transitions.
+- Workspace and session headers now open the active workspace's primary directory in a detected local editor. The compact control sits directly beside the details-sidenav button, prefers the system-configured editor when identifiable, falls back to Visual Studio Code, and lists only available editors with their native installed-app icons.
+- Agent Settings now includes a Computer Use view where Windows users can enable the built-in Terminator integration; other operating systems receive an availability notice instead of a feature toggle.
+
+- Added an iOS 27 ScreenCaptureKit companion for showing user-approved physical iPhone pixels in the available lower-right space below the compact session summary over an authenticated, loopback-only USB tunnel; Beale detects the wired device and establishes the channel automatically, the frameless stream can expand to fill the detailed sidenav, captured frames remain transient, and capture stops when the session workspace closes or the host disconnects.
+- Reports display attached Honeycrisp `submission.zip` metadata and can open the exact durable packet through a workspace-validated IPC boundary.
+- Added an installed-but-disabled built-in Terminator computer-use Agent Plugin for Windows, pinned to `@mediar-ai/terminator` 0.24.32 and limited to a curated UI Automation surface with screenshot support.
+- Reporting now has a dedicated workspace sidenav destination below Automations, uses the same active background as workspace rows, and opens a list of workspace reports. A user's first report request starts a report-scoped agent session that stays out of the workspace session list, presents the normal commentary and tool transcript beside the report, and accepts both chat-based and inline section change requests.
+- Moved Honeycrisp session creation, attempt state, live events, capture import, lifecycle state, list/detail queries, and transcript queries behind the versioned Honeycrisp CLI protocol. Backend selection is per-session and never dual-writes the legacy Beale session tables.
+- Added a versioned Honeycrisp CLI protocol client and an architecture ratchet that prevents direct Honeycrisp memory storage access from spreading beyond the explicitly recorded migration debt.
+- Auto-Review denials now offer an inline Approve Once question in the affected session composer, backed by Honeycrisp's correlated per-command human decision flow.
+- Added the Longshot suggestion workflow for Cybersecurity and Mathematics profiles, targeting evidence-gated reportable high or critical bugs in cyber and concrete paths toward major mathematical breakthroughs.
+- Added a repeat schedule picker to New Research with a default No Repeat state and persisted repeat metadata on started runs.
+- Added minute and hour interval options to repeat schedules.
+- Added an Automations sidebar dialog for viewing and canceling scheduled repeat prompts.
+- Added a default Beale Introspection Agent Plugin with MCP tools to list and create workspaces, list sessions, launch sessions, and stop sessions; it appears in Plugins by default and can be disabled there.
+- Added a first-class Agent Plugins manager with local/repository install paths, persistent enablement, removal, and v1 manifest/skill/MCP discovery surfaced from the left sidebar.
+- Enabled Agent Plugins now extend Honeycrisp runs and tooling discovery through generated skill-dir, selected-skill, MCP-config, and MCP server allow-list arguments, with plugin MCP paths rewritten into a Beale-owned runtime overlay.
+- Added Z.ai as a first-class provider with GLM-5.3 and GLM-5-Turbo model choices, official ZCode subscription sign-in/logout and execution, encrypted `ZAI_API_KEY` configuration, provider-specific authentication preference, provider marks, and a one-time policy-use acknowledgement for cybersecurity research.
+- Added live Memory Dreaming phase tracking from preparation through synthesis, compact-context and provider retries, plan correction, validation, atomic application, and completion; the workspace Dream card now fades between centered phase messages.
+- Added durable workspace-level research goal suggestions in workbench migration 23, with stale-while-refresh restoration across dialog and application reopen cycles.
+- Added durable structured collaboration-room protocol state in workbench migration 22, including independent, challenge, response, synthesis, and completed phases; bounded challenge rounds; evidence references; confidence; uncertainty; proposed next checks; and a lead-owned room outcome.
+- Added access-restricted OpenAI Daybreak Red (`gpt-daybreak-red-latest`) as an optional model. It remains hidden from model selectors and defaults until explicitly enabled in OpenAI Provider Settings.
+- Active breakout-room members now appear as collapsed working disclosures with live durations and expandable, real-time subagent commentary and tool history.
+- Added durable multi-provider breakout rooms for research sessions. New Research now configures adaptive collaboration, provider/model preferences, independent first passes, challenge rounds, and bounded team intensity; room membership and transcripts remain available from each session's Rooms sidenav.
+- Added Grok 4.6 to the xAI research-model options with its supported low-through-xhigh reasoning levels.
+- Added workspace Dejunk housekeeping beside Dream. Dejunk tracks files created since its last baseline, uses 10/50/200/1,000-file heat thresholds, organizes recognizable loose notes, PoCs, evidence, scripts, and scratch material under `research/`, and removes only large rebuildable trees or recognizable IPSW extractions outside `.beale`, symlinks, and detected Git repositories.
+- Added a compact Research Surface to the workspace dashboard with authorized repositories and references, scope direction, index readiness, directly targeted session coverage, linked Memory counts, and last-researched recency.
+- Workspace Gantt rows now show session results as outlined squares in a dedicated right-side column: green for terminal states without error, red for unexpected failures or app-close recovery interruptions, and red with a black diamond for provider safeguard failures.
+- Workspace activity timelines now show every session-attributed Runbook revision as a blue circle and Report revision as a yellow diamond.
+- Added first-class Reports as revisioned workspace Markdown artifacts. Session and workspace summaries show report and revision totals beneath Runbooks, detailed catalogs separate Complete and Stale reports, and selected reports render their full content in the right sidenav.
+- The workspace dashboard now splits its main area between a workspace-named 12-hour activity Gantt and a centered Dream card. Session bars use pause-aware activity intervals, memory events retain their profile-defined type colors, and workbench migration 17 backfills legacy sessions with conservative intervals.
+- The workspace dashboard now has a compact and detailed right sidenav for workspace-scoped Runbooks and Memories; shared detail views default to Workspace scope and do not offer Session scope from the workspace view.
+- Completed sessions now show three session-grounded next-step suggestions in a compact three-row loading surface; selecting one opens New Research and streams an expanded prompt from that goal.
+- Commentary and other Markdown trace prose now render inline and display LaTeX notation locally with KaTeX, including both dollar and `\\(...\\)` / `\\[...\\]` delimiters.
+
+### Removed
+
+- Removed the workspace-information and session-summary bottom sheets; workspace and session names in the application header are now plain, non-clickable labels.
+- Removed Beale's dormant project graph and local semantic-index stores, production fixture runtime, host tool/verifier executors, synthetic VM context model and schema, and duplicated Dreaming schema initialization.
+- Removed Beale's legacy Honeycrisp stdio event/control protocol and its test-only compatibility switch; active sessions now use the versioned Honeycrisp WebSocket boundary exclusively.
+
+### Changed
+
+- Automations now open as a main-content workspace view instead of a dialog, with All Automations and workspace scopes, Active and Inactive status lists, and an editor built from the reusable New Research settings form. Automation edits inflate the stored prompt, safety, workflow, repeat schedule, Lead and collaborator models, and collaboration controls without goal suggestions; disabled automations retain their schedule for later reactivation.
+- Reporting no longer requires an open workspace: its catalog defaults to All Workspaces, offers workspace scope tabs with the same compact content spacing as Profile settings, groups reports into divider-separated status lists, and defaults to the currently selected workspace when entered from one. Cross-workspace report reads stay independent of foreground navigation; starting an edit session opens the report's owning workspace.
+- The left-sidebar scrollbar now becomes visible on hover only when its measured list content exceeds the available height.
+- Left-sidebar session rows now reserve their leading slot for active spinners or durable unviewed-result dots, keep relative time on the right during active work, and show only muted active spinners for breakout rooms instead of status dots.
+- Commentary session loads now transfer only renderable message content and compact event/tool scaffolding; full tool inputs and outputs load on demand when an individual call is expanded, while Trace mode retains complete detail.
+- App startup now leaves every workspace closed and presents the neutral No Workspace Selected view without loading copy; reopening a known workspace requires an explicit user action.
+- Startup now paints a lightweight no-workspace renderer before requesting the full workbench bundle, then loads the workspace registry without blocking the central workspace view; credential, provider, profiling, and icon work is deferred off the first-window path.
+- Consolidated Beale's Honeycrisp CLI and WebSocket wire DTOs in one adapter module, added CLI request correlation checks, and aligned WebSocket validation and errors with Honeycrisp's shared protocol-v1 contract.
+- Moved auxiliary model-job routing and provider completion semantics, provider defaults, Agent Plugin registry/runtime assembly, source discovery and repository materialization, and Dejunk maintenance behind Honeycrisp protocol v1. Beale now retains only typed adapters, host credential injection, client-specific built-ins, and UI gating.
+- Moved memory summaries, Dreaming prompt preparation and reversible persistence, runbook/report reads, and artifact resolution behind Honeycrisp protocol v1. Beale now adapts those operations for its UI and provider stream without directly reading or writing Honeycrisp knowledge tables, and optional run-process wrappers no longer intercept canonical protocol calls.
+- Replaced Beale's Honeycrisp live event and control transport with Honeycrisp's versioned authenticated loopback WebSocket protocol.
+- Dejunk now structurally recognizes large Xcode `DerivedData` variants, renamed DerivedData roots, and Xcode build/cache layouts at lower high-confidence thresholds while preserving source lookalikes and Git repositories.
+- Sidebar breakout-room labels now use the same muted text palette as the session-list expansion control regardless of room status.
+- New Research now starts user-written objectives directly by default. Optional Add Context generation produces a 100-250 word cyber objective brief capped at 4,000 characters, uses only a bounded set of relevant assets, memories, prior outcomes, and source coverage, and leaves authorization, profile, AGENTS.md, tools, and full memory context to Honeycrisp's runtime injection.
+- Shell execution now supports complete platform shell commands, executable paths, and host HOME-family environment variables through Honeycrisp while retaining the selected Manual Approval, Auto-Review, or Danger Mode authorization flow.
+- Main headers now separate workspace, session, and active breakout-room names with vertical dividers, and breakout-room views no longer render a duplicate room header.
+- Active breakout-room names in the main header now match session-title styling, with brighter vertical dividers.
+- Breakout-room names now display with each word capitalized in the sidebar and main header.
+- Outbound agent-to-agent messages now render as right-aligned white bubbles in Commentary and breakout-room transcripts, while breakout-room incoming messages and outcomes use left-aligned dark bubbles with in-bubble provider, agent, display-model, type, and timestamp headers.
+- Session transcript search now opens as a centered Find a Session dialog matching the New Research modal shape and surface color instead of a bottom sheet.
+- Sidebar session lists now expand and collapse in place through animated Show N more and Show less actions matching summary-sidenav memory types.
+- Beale now permits bundled and host-approved research profiles to use Honeycrisp repository search and file reads by default; repository search may target any readable host directory, including repositories outside the workspace, while configured repositories remain context hints.
+- Removed borders from the Dream and Dejunk housekeeping buttons.
+- Breakout-room messages now use provider-attributed rows at the standard Commentary width, with Working/Worked-style divider headers, clickable subagent names that open detailed Commentary, message-kind labels, and 400px fade-truncated bodies that can be expanded instead of colored side rails.
+- Lead-provider routing now covers New Research prompt generation, workspace and session suggestions, Memory Dreaming, HackerOne scope review, and provider-omitted run starts instead of assuming OpenAI; Anthropic auxiliary work stays on Honeycrisp's official Claude Agent SDK and CLI boundary.
+- Research goal generation now defaults to OpenAI's configured small model at low effort, reuses a measured per-revision context, requests structured grounded candidate pools, and deterministically ranks them for workflow relevance, novelty, and semantic diversity. Cybersecurity Chaining requires an evidence-backed confirmed primitive, while Reporting requires a confirmed chain with impact, reachability, and proof evidence.
+- New Research now opens as a centered floating squircle dialog that layers its darker Suggestions surface beneath the right edge of its lighter prompt composer.
+- Collaboration now uses atomic rooms with simultaneous independent-memo release, targeted peer challenge and response rounds, and lead synthesis. Cybersecurity and Mathematics select separate workflow-specific role recipes from their active workspace profile, and only Cybersecurity requires provider policy acknowledgements for collaborator readiness.
+- Research profile catalogs now resolve through asynchronous parallel Honeycrisp processes and cache duplicate workspace/profile requests, avoiding main-process stalls when opening Profiles.
+- Agent Settings now presents research profiles in a two-level Profiles view. Each profile defaults to an Overview tab with profile-named details and Heat Palette forms; Heat Palette shows one variant at a time, defaults to Dark, and pairs generic level guidance with right-aligned color controls. Aligned memory-type tabs open centered forms for editable details and immutable IDs, togglable possible states, and level-oriented session heat with read-only Dark-palette previews plus per-level multi-select state triggers that default to Any State and remain disabled until their heat level is enabled.
+- Research profiles are now selected per workspace during onboarding, defaulting to Cybersecurity. Existing workspaces retain the previously active profile during registry migration, and workspace and session lists remain visible across profiles.
+- Provider subscription sign-in and API-key configuration now remain disabled until the provider's cybersecurity acknowledgement is confirmed, with an inline risk-acknowledgement prompt beside each action. Unauthenticated and unhealthy provider views now expose a compact removal control that cancels in-progress authentication and shows removal progress.
+- Main-session Commentary now places intermediate commentary and tool activity beneath a live `Working for` duration header and horizontal divider, then collapses that history behind an expandable `Worked for` header whenever the run is no longer active while keeping the prompt and final result visible.
+- Provider policy acknowledgements become read-only after authentication, serving as one-time proof of risk review until the provider is removed.
+- Completed-session suggestions now use a full-width flat section header with compact, flush-left, lightbulb-marked rows and white text-and-divider hover feedback instead of enclosing and per-suggestion cards.
+- Session and workspace summary sidenavs now rank Memory types by effective session-heat impact and count, initially show at least four or all heat-impacting types, and vertically reveal additional types on demand.
+- Provider Settings now persists a preferred Subscription or API key authentication source per provider, marks it in the authentication view, and sends that host-owned preference to every Honeycrisp run. Explicit subscription usage-cap and API-credit exhaustion errors may fall back to the configured alternate source.
+- Provider Settings now labels the global selector “Lead Provider” and groups provider-specific Large, Small, and Reasoning selectors behind a compact white “Defaults” label.
+- Checkbox and radio accents now consistently use the shared white text color instead of browser-default blue or muted per-view variants.
+- Provider Settings body copy, statuses, acknowledgements, optional-model rows, and authentication dialogs now use the same base font size as provider dropdown labels.
+- Provider Settings now separates Subscription and API key authentication into side-by-side live status areas for every provider. Subscription sessions can be forgotten through their official logout path, while API keys can be confirmed into OS-encrypted host storage or removed without ever rendering stored values or credential hints.
+- Claude Fable 5 is now an optional Anthropic model enabled by default, while access-restricted Claude Mythos 5 can be enabled explicitly in Provider Settings; explicit Fable disablement is persisted.
+- Provider Settings now labels providers by company name only, uses provider logos in view headings, and gives inactive provider tabs a clearer contrasting surface.
+- Provider Settings model and provider default selectors now match the compact inline styling used by New Research, share the authentication action-button surface, use concise labels, and show model display names without appended IDs.
+- Provider views now place model defaults in their headings and replace text status pills with compact healthy, unhealthy, or authenticating indicators.
+- Provider Settings content now uses a flat, unpadded surface instead of an outer card.
+- Provider views now place their policy description and acknowledgement under a dedicated Acknowledgment section heading instead of showing redundant source, transport, authentication, and boundary tiles.
+- Provider policy acknowledgement checkboxes now use compact left-aligned rows.
+- Optional provider models now use a flat, single-line checkbox list with detailed-sidenav heading typography.
+- Daybreak Blue is now an optional OpenAI model enabled by default for expected Trusted Access for Cyber availability, with explicit disablement persisted separately from opt-in models such as Daybreak Red.
+- New Research no longer exposes an independent-first-pass toggle; collaborative sessions always require independent room-member investigation before peer conclusions are shared.
+- New Research collaboration settings now use a single right-aligned compact row with descriptive label tooltips and borderless, consistently sized dropdowns.
+- Anthropic model labels now omit the implied leading `Claude` prefix, matching the existing compact OpenAI model labels.
+- New Research now starts with the lead model as its required default collaborator. The default remains editable and becomes removable after another collaborator is added; Add Collaborator fills unused providers before stacking further models from a represented provider, while exact provider/model duplicates remain prevented across Beale and Honeycrisp routing.
+- New Research now loads only the selected workflow's suggestions into a flat, borderless surface with left-aligned view buttons, separator-defined rows, and responsive top and bottom scroll fades. It pairs this with a borderless steering-style goal/prompt composer containing workflow, safety, and compact Goal and Generate toggles. Its model area separates the default provider's large lead model from an initially empty, explicitly added collaborator stack using inset squircle selectors. Generate is enabled by default and exposes footer actions to generate a draft or generate and start; disabling it starts directly from the manual prompt.
+- Workspace Dream and Dejunk housekeeping containers now use squircle corners.
+- The left sidebar now reveals breakout rooms only beneath the selected session, with vertical open and close transitions.
+- Provider Settings view tabs now show each provider's mark instead of a generic key icon.
+- The steering model and effort selector now shows the selected provider mark before the model name.
+- Single-worker delegation now remains a normal Subagent. Breakout rooms are exposed only after at least two collaborating subagents share the room, and lead agents are directed to delegate a same-model representative rather than join personally.
+- Breakout-room lists now load newest-first by room creation time in live detail, incremental updates, and workspace session summaries.
+- Breakout-room participant pills now show each provider mark, formatted Subagent name, and collaboration role.
+- Detailed Subagent catalogs and per-subagent sidenav headers now identify each worker with its OpenAI, Anthropic, or xAI provider mark and reveal the exact model on hover.
+- Breakout-room agents now retain provider-attributed commentary and evidence-oriented outcomes in a dedicated session view, while policy acknowledgements are checked for every enabled cybersecurity provider before a collaborative run starts.
+- Cybersecurity sessions now carry provider-specific policy-risk acknowledgements into Honeycrisp's authorization preflight: OpenAI requires Trusted Access for Cyber membership, Anthropic requires Cyber Verification Program membership, and xAI requires policy-use risk acceptance.
+- Provider Settings now persists explicit cybersecurity policy-use acknowledgements for OpenAI, Anthropic, and xAI; Anthropic subscription authentication continues to require its Cyber Verification Program acknowledgement before sign-in.
+- Cybersecurity reports now require an explicit confirmed vulnerability chain with reachability, impact, and proof evidence, preventing reports from being created directly from observations, hypotheses, or primitives.
+- Grok reasoning summaries now render as ordinary text in Commentary while retaining reasoning provenance in the detailed trace.
+- Detailed right-sidenav view tabs now expose a compact horizontal scrollbar when the open views exceed the available width.
+- The workspace Dream panel now sits beneath a compact Housekeeping header showing memories created since the latest dream, fills a spacious rounded inset, reuses the active profile's window heat gradient without a card border, and raises heat at 20, 50, 100, and 150 new memories.
+- The workspace Research Surface now uses a flat dashboard section with scope and research coverage counts in its compact divider header, plus contextual scroll fades around overflowing tile rows.
+- Session activity duration is now tracked per execution attempt. Continuing a terminal session adds a new workspace Gantt row while the completed or errored row and its result remain immutable; migration 19 assigns existing activity intervals to their originating attempts.
+- Workspace Gantt Memory, Runbook, and Report symbols now use a single-pixel separation border without an additional outer halo.
+- Workspace summaries now include workspace-scoped per-type Memory counts and status breakdowns matching session summaries.
+- Detailed Runbook, Report, Subagent, and Memory sidenav catalogs now omit empty result groups and show a single empty state when no results remain.
+- Workspace Gantt timelines now use the latest 12 cumulative hours of session activity, collapse inactive wall-clock gaps, and expose their legend from a compact hoverable or clickable info control beside the Activity heading.
+- Workspace Gantt session rows now use regular-weight titles, omit per-session duration totals, and form a contiguous grid rounded only along its outer edges.
+- Post-session next-step suggestions are now stored with their completed session and restored immediately when revisited. Workbench migration 18 adds the durable suggestion record.
+
+### Fixed
+
+- Z.ai subscription status now recognizes credentials shared by the official ZCode desktop app without requiring a separate CLI config file, and subscription sign-in opens ZCode's supported Model Settings flow instead of surfacing malformed CLI OAuth responses.
+- Removed the lifetime collaborator-invocation cap. Collaboration is now limited only by concurrent subagent, breakout-room, and room-member capacity, so completed turns never reduce later delegation capacity.
+- Research-goal suggestion requests no longer send the unsupported `uniqueItems` JSON Schema keyword to OpenAI Structured Outputs; duplicate grounding references remain rejected by host validation.
+- Breakout-room transcripts now remain locked to the bottom as new messages and live subagent history arrive, while preserving the reader's position after an intentional upward scroll.
+- Selecting a subagent from a breakout-room message now opens that subagent's Commentary directly instead of stopping at the detailed-sidenav view chooser.
+- Session forks now preserve the original run's provider route so later continuations cannot lose their assigned Lead provider.
+- xAI runs that prefer Subscription no longer fall through to an ambient API key when the OAuth credential is unavailable; API-key billing is exposed only after a recognized subscription usage-limit fallback.
+- Active-session detail polling now uses a trigger-maintained per-run revision introduced by workbench migration 21 instead of rescanning complete trace and transcript content.
+- Cross-workspace transcript search now queries each profile database once and applies the requested result limit globally while preserving complete workspace and match totals.
+- Workspace actions now treat their returned snapshot as authoritative and rely on change broadcasts for registry synchronization instead of immediately reloading both resources.
+- Removing a provider's final authentication method now clears its cybersecurity policy acknowledgement, while removing one of two configured methods preserves the acknowledgement and selects the remaining method.
+- Provider Settings now shows an explicit loading state until provider statuses and saved settings are both available, instead of briefly reporting that no providers are configured.
+- Provider Settings now waits for provider status and saved settings before choosing its initial view, then opens the available default provider without switching tabs during ordinary status refreshes.
+- Provider subscription sign-in notices now clear automatically when refreshed status confirms authentication, without affecting active or unrelated provider sign-ins.
+- Provider subscription sign-in now resolves the installed Codex Desktop CLI when OpenAI is absent from Beale's inherited `PATH`, uses Codex's standard local browser callback instead of device authorization, launches Anthropic's interactive official CLI in a visible Windows terminal, and prevents overlapping provider-status polls during authentication.
+- OpenAI subscription forgetting now works when Codex Desktop provides the shared OAuth session but its bundled CLI is absent from Beale's inherited `PATH`.
+
+- Large multi-repository sessions now support explicitly scoped, bounded repository searches with partial-result signaling, recover reasoning-only provider stalls automatically, validate model-specific subagent routes, and distinguish shell no-match results from command failures.
+- Anthropic lead and subagent progress text now carries explicit commentary phases into session transcripts, with Claude-specific guidance to emit concise visible updates without exposing private extended thinking.
+- Opening a breakout room in the selected session now preserves live room detail, while genuine session loads use neutral room markers instead of stale statuses that could make every room appear active.
+- Selected-session breakout rooms now appear in the workspace sidebar as soon as live session detail records them, without requiring a navigation refresh.
+- Repository searches across large multi-repository workspaces now use a bounded native Git path and respond to session interruption instead of leaving low-match scans running indefinitely.
+- Anthropic lead and breakout agents now receive readable bounded evidence from governed tools instead of status-only result summaries.
+- Git repository preparation now enables Git for Windows long-path checkout support, retries transient checkout publication and temporary-tree cleanup, reclaims abandoned partial checkouts, waits for terminated clone processes to close, safely reuses a concurrent checkout, and preserves the original Git failure when cleanup also fails.
+- Persisted the Anthropic Cyber Verification Program risk acknowledgement across Settings navigation and made configured-account re-authentication perform a fresh official Claude CLI login instead of silently retaining the existing session.
+- Session continuation now passes reconstructed fallback context through a private run-local file, preventing Windows `spawn ENAMETOOLONG` failures on long session histories.
+- Subagents left unresolved by a parent session interruption are now reconciled as interrupted after workspace recovery instead of remaining active indefinitely; later intentional pauses still preserve genuinely active subagents.
+- Removed application-level network profiles, destination allowlists, onboarding controls, per-run metadata, and Honeycrisp network vetoes. Beale now delegates network isolation to operator-managed system controls and migrates legacy network-policy columns out of its databases.
+- Session-title provider failures now recover a concise title from the research prompt instead of leaving the session labeled `No Title Yet`.
+- Scoped onboarding now retains a legacy workspace-placeholder subject ID when durable Honeycrisp memory already uses it, preserving Claude-first research memory when the workspace is later opened in Beale.
+- Profile-aware memory totals now exclude unknown, negative, and terminal non-positive statuses, matching recommendation activity semantics.
+- Recommendation jobs no longer load or expose Honeycrisp memory or memory-linked evidence context when the active research profile disables memory.
+- Memory Dreaming now refreshes the workspace research profile before curation and refuses to invoke the model when that profile disables memory.
+- Honeycrisp capture import now rejects missing, corrupt, mismatched, or workflow-incompatible research-profile provenance before importing artifacts, traces, or transcripts.
+- Historical session views now use each run's pinned research profile instead of the workspace's current profile, including profile-defined session heat behavior.
+- Session token totals and prompt-cache hit rates now count only active root-model calls, excluding Auto-Review, subagent, and other background-model usage.
+- Chaining and Reporting goal generation now accepts natural wording variants instead of rejecting otherwise valid suggestions that omit exact validator phrases such as `primitive`, `chain`, `triage-ready PoC`, or `submission.zip`.
+- Long Commentary histories now render a bounded virtual window with preserved follow-latest and search navigation, while incremental detail ingestion and repeated tool projection avoid unnecessary full-history map, sort, and array-copy work.
+- Aligned the editable memory taxonomy with active-agent validation by defining root-cause keys as lowercase-hyphenated and treating source, sink, and asset chain relationships as recommended rather than mandatory.
+- Memory Dreaming now requests one complete corrected plan after a model-output or pre-apply validation error, while retaining all-or-nothing application and persisting only a final failed attempt.
+- Memory Dreaming can now atomically add bounded, evidence-supported structural attributes while merging, revising, or reclassifying memories, allowing legacy primitives to gain required root-cause metadata without losing reversible history.
+- Dreaming reclassification now regenerates Honeycrisp's canonical type-derived node ID and atomically migrates or restores graph memberships, assets, tags, evidence, relationships, verifier contracts, and export references.
+- Memory Dreaming now acknowledges in-progress runs in the workspace dashboard and persists sanitized pre-apply failures so provider, parsing, and validation errors no longer appear as inert clicks.
+- Long-running sessions now commit incremental detail updates without transition starvation, keeping token totals, cache hit rate, and context usage current during sustained agent activity.
+- Honeycrisp sessions now automatically resume from their latest capture after a terminal provider WebSocket error, suppress the transient error as a final response, and cap consecutive host-level continuation attempts at two.
+- Session summary Completed subagent totals now include completed, errored, and interrupted agents, matching the detailed Completed list without a redundant Error subset count.
+- Active-session rounded-square window pulses now use a fixed compositor-friendly loop instead of random per-cycle rerolls or research momentum, preventing animation jumps and timing changes as research state updates while remaining hidden when no session is active.
+- macOS now reserves Command-V for native paste into the focused editable field, including repository URLs in New Workspace, while retaining Paste Steering as a separate explicit menu action.
+- Commentary follow-latest scrolling now survives layout-driven tool expansion, collapse, and output resizing while still disengaging for explicit user scrolling.
+- Session summary runbook and revision totals now include archived runbooks associated with the session.
+- Session-scoped memory catalogs now show every memory linked to the current session, matching the Session summary even when a memory is reusable at workspace or subject level.
+- Honeycrisp sessions now automatically apply Codex-compatible `AGENTS.md` guidance from the selected Beale workspace to root agents, subagents, and compatible continuations, while Beale also supplies bounded guidance to goal suggestions and generated-prompt construction so operational environment requirements are preserved.
+- macOS fullscreen windows now remove the header space reserved for unavailable traffic-light controls while retaining it in normal windowed mode.
+- Honeycrisp controls now carry acknowledged request IDs, record rejected or unacknowledged delivery, and defer safe steering recovery until the prior agent process exits while retaining bounded subagent results.
+- Research traces now preserve Honeycrisp goal lifecycle, post-compaction checkpoints, and repeated-read/tool-loop recovery events from both live streams and flow-capture recovery without duplicating shared event IDs.
+- Custom goal-objective derivation now preserves security-relevant identifier and glob syntax, joins hard-wrapped objective sentences, and distinguishes missing dispositions from disposition-driven continuations in the trace.
+- New Research goal tiles now grow and wrap long model-generated suggestions within their card bounds.
+- New Research recommendations now read persisted structural coverage without synchronously rescanning local repositories, and load bounded trace and verifier projections instead of full prior run details.
+- Memory Dreaming now allocates model context fairly across every workspace node and up to 100 recent sessions, retries with a smaller profile after context-window rejection, and retries transient provider failures before surfacing an error.
+- Honeycrisp continuations now restore compatible provider context from the prior flow capture and send only the new steering instruction, while retaining the bounded transcript reconstruction as a fallback for missing, legacy, or incompatible captures.
+- Steering a completed Honeycrisp session now continues root trace turn numbering and carries prior root reasoning summaries, responses, and steering into the continuation context.
+- Subagent counts and catalog statuses now follow only Honeycrisp lifecycle activity, prevent child tool result statuses from making running or interrupted agents appear complete, and mark unresolved agents from superseded attempts or terminal sessions as interrupted.
+- Subagent lists now always show every child from the current session regardless of status.
+
+### Changed
+
+- Session heat is now profile-defined: Cybersecurity retains its amber-to-red palette, Mathematics uses a cyan-to-violet palette, and Settings > Memory can override heat independently for each non-terminal memory status within a profile.
+- Commentary tool-call descriptions now use sentence case instead of title case.
+- Reordered the right sidenav summary into usage metadata, Runbooks and Subagents, and Memories sections divided by horizontal rules.
+- Standardized Memories and Runbooks terminology across research profiles, including historical sessions whose pinned presentation metadata used profile-specific names.
+- Mathematics workspace creation now always uses the Manual template and hides the HackerOne, Apple, Google OSS, and MSRC cybersecurity autofill controls.
+- Research-profile selection now swaps between isolated Honeycrisp databases at `~/.honeycrisp/profiles/<profile-id>/memory.sqlite`; the user-global registry retains the active selection and filters workspace/session summaries to it. Existing unscoped research is not migrated.
+- Removed the current-workspace information card from General Settings.
+- Provider model selectors now include Claude Opus 5 and OpenAI `gpt-daybreak-blue-latest`.
+- Provider settings now persist an authenticated default-provider selection, automatically assign the first configured provider, and preselect that provider for new research.
+- Each configured provider now has persisted default large-model, small-model, and reasoning-level controls; large-model defaults seed research and OpenAI host jobs, while small-model defaults route session titles and Auto-Review.
+- Provider settings now scale through provider tabs with per-tab refresh actions and an add-provider menu; choosing an unconfigured provider immediately creates its tab, shows authentication progress there, and retains the tab after confirmation.
+- Configured-provider details now omit secondary descriptive copy while retaining the Claude Pro/Max API-billing warning.
+- Renamed the lower-left Settings action to Agent Settings, added a static header identity showing Agent Settings and the active section, and removed duplicate section headings from the settings content.
+- Settings content now fills the full main workbench area without the standard horizontal gutters and uses the chat view's compact content inset instead of appearing as a centered, deeply padded panel.
+- Session detail actions and views now honor run-pinned memory, runbook, and collaboration feature switches; Memory Dreaming is disabled when memory is off while historical records remain visible and restorable.
+- Memory summaries and Dreaming now retain per-node catalog compatibility across presentation-only and unrelated additive catalog changes, while isolating incompatible and non-security-lineage legacy rows.
+- Research recommendations now derive active-memory status from the pinned profile catalog and reserve security-specific source/sink coverage ranking for the `security-research` profile lineage.
+- Research subjects are now durable workspace bindings independent of mutable authorization ownership; explicitly named subjects retain stable cross-workspace memory identity when scope owners change.
+- Beale now resolves Honeycrisp research profiles once per new run, stores the exact normalized snapshot and content hash, and pins continuations to that snapshot instead of re-reading mutable workspace configuration.
+- Research workflows, suggestion counts, prompt guidance, memory catalogs, workspace vocabulary, presentation labels, and supported background-model job defaults now come from the active research profile; the bundled profile preserves Beale's security-research behavior.
+- Added an explicit host-owned profile capability ceiling: shell and non-network effects remain the default, while trusted operators can allow additional built-in tool families or narrow effects without giving profile files authority to expand either boundary.
+- Settings > Memory now presents the active profile's immutable catalog and configuration source instead of a misleading global security-taxonomy editor.
+- Settings now replace the workspace sidebar and main workbench with section navigation and the active settings page, with a Back to App action and hidden workspace/session header identity.
+- Returned Honeycrisp memory creation, correction, and relationship controls to root agents and subagents so durable persistence is decided by the active model with full research context.
+- Replaced the New Research network-profile selector with the same Manual Approval, Auto-Review, and Danger Mode shell-safety choices used by session steering. Auto-Review remains the default, while a session's network boundary now comes only from its recorded workspace scope.
+- Discovery, Chaining, and Reporting goal suggestions now load through independent concurrent model requests with per-section caching, errors, and retry, so one failed phase does not hide successful suggestions from the others.
+- New Research is now a sliding bottom sheet with four model-generated goals in each of Discovery, Chaining, and Reporting, plus a custom-goal section. Selected phases carry into prompt generation; Chaining targets reportable chains with triage-ready PoCs, while Reporting requires an evidence-grounded report and `submission.zip` containing the PoC and supporting evidence.
+- Memory Dreaming now uses GPT-5.6 Sol with high reasoning, applies the editable memory taxonomy while consolidating root-cause duplicates, receives bounded root-cause attributes and graph relationships, and can reversibly reclassify invalid nodes only when the target type's structural invariants remain valid.
+- Launched Node-based Honeycrisp research runs with a Honeycrisp-only 128 GiB V8 old-space ceiling, without changing Beale or target-process environments.
+- Reworked Memory catalog rows to align the chat's Memory icon, colored by type, with a regular-weight ellipsized title on the left, place the type label beside the standard-sized timestamp on the right, and show a two-line description preview with chat-styled inline code beneath; every memory type now has a distinct color across detailed memory surfaces while the default session summary remains neutral.
+- Simplified Runbook catalog rows to a status-colored Runbook icon, regular-weight title, two-line description preview, and matching status label beside the standard artifact-sized timestamp, removing redundant metadata labels.
+- Split the Runbooks catalog into counted Active and Archived lists with flat divider-separated rows, grouping draft and completed runbooks with active work.
+- Ordered each Memory, Runbook, and Subagent status list newest-first using the timestamp displayed by its rows, with follow-latest scroll locking at the top of each catalog.
+- Split the Memories catalog into counted Suspected, Confirmed, and Rejected lists with five-row previews, inline Show-More expansion, and flat divider-separated rows without status badges; drafts remain visible under Suspected and stale records under Rejected.
+- Flattened Subagent catalog rows into divider-separated items with neutral names, a leading spinner for active work or status-colored robot icon for finished work, and matching colored status text beside each timestamp instead of card backgrounds.
+- Split the Subagents catalog into counted Active and Completed lists, grouping interrupted and errored subagents with completed work and showing a dedicated empty state for either list.
+- Memory selections now drill into the right sidenav with Back-to-Memories navigation and the selected memory title, matching Runbook and Subagent detail behavior instead of opening a bottom sheet.
+- Added Find a Runbook and Find a Subagent inputs to their detailed sidenav catalogs without additional type controls.
+- Added a Session/Workspace scope picker to the Runbooks sidenav, defaulting the detailed catalog to the current session.
+- Replaced Honeycrisp memory storage tiers with one required subject plus accumulated session and workspace membership lists; saves and corrections append the current context automatically, search uses Session, Workspace, or Subject scope, and Beale renders those associations directly.
+- Increased app-wide typography slightly, including rem-scaled text and fixed-size steering, picker, and shell-approval labels.
+- Made Commentary the default root and subagent session view, with the full event timeline retained as the optional Traces view under General settings; subagent previews now follow their latest commentary or final response in Commentary mode.
+- Added the Traces view's dynamic top and bottom scroll fades to Commentary, including updates while following new messages and expanding tool details.
+- Added concise tool-use activity to Commentary, with a brain icon for every consecutive reasoning trace in both Commentary and Traces views, distinct subagent, runbook, memory, command, and fallback tool icons, present-progressive tool-specific labels, paired-result deduplication, plural summaries for consecutive repeated calls, nested disclosures for each call's input and output, and automatic expansion while a tool is the latest chat item.
+- Preserved Honeycrisp `commentary` and `final_answer` message phases through live events and durable transcripts while keeping reasoning summaries as a distinct legacy progress fallback.
+- On macOS, removed the duplicate File, Edit, View, and Window menus from Beale's in-window header and moved their New Research Workspace, Copy, Paste Steering, zoom, and window actions into the native application menu bar.
+- Increased the steering input's resting height by one typed row and its auto-growing limit from six lines to seven.
+- Combined the session composer's model and reasoning controls into one hierarchical picker with provider, model, and effort flyout menus, with redundant `GPT-` prefixes omitted from OpenAI model-name labels; matched the adjacent safety selector's chevron spacing and muted styling.
+- Centered trace-list content and the steering composer within a shared 750px maximum width while keeping the trace scrollbar on the right edge of the full main content area, matching the composer's side inset to the right sidenav padding and its bottom inset to the main content's window-edge spacing.
+- Moved session duration and usage statistics from the main app header to the Session summary card, where token totals with complete in/out breakdowns, cache hit rate with cached-token totals, and context percentage with current token usage appear in a divided unlabeled section; removed the model-turn and trace-event header counters.
+- Replaced the default right-side research catalog with a borderless session summary card using balanced outer spacing and showing session memory totals with nonzero search and update activity counts plus primitive, chain, sink, and status-free Boring breakdowns with nonzero confirmed, suspected, and rejected counts on the first three categories, runbook and revision totals, and subagent totals with nonzero active, completed, and error counts at standard text size; detailed catalogs now expand into an animated 50/50 chat split and use closable icon tabs plus a filtered add-view picker for Memories, Runbooks, and Subagents, while the memory scope picker defaults to Session at the header's right edge and selected subagent chats and runbooks drill into the sidenav with Back-to-list navigation and follow new content without replacing the main agent chat.
+- Increased header title line heights without changing font sizes so letter descenders remain visible.
+- Changed the session composer placeholders to `Your move` for inactive sessions and `Steer the research` for active sessions.
+- Kept the header session-title hover surface fitted to its text and padding instead of expanding across available width.
+- Changed the header workspace name and memory-list type labels to regular font weight.
+- Increased the content-surface and steering-composer corner radius to a shared 16px value, and tightened the steering action shelf to matching 4px bottom and right insets without leaving space beneath the composer.
+- Reframed generated research directions around world-class researcher capability and broad subsystem-and-bug-class pairings, with prior findings used as context instead of binary prove-or-disprove objectives or prescribed workflows; host validation retries one nonconforming suggestion response.
+- Goal-enabled research now persists and forwards the concise selected direction separately from the expanded research prompt, preserves it across continuations and forks, and derives a bounded objective directly from user-authored custom prompts when needed.
+- New Research goal suggestions now prefetch in the background when a workspace or scope becomes active, refresh on later workspace activations and terminal research results, and remain cached for dialog reuse between research changes.
+- Research prompt generation now derives source coverage from a bounded local structural index of scoped paths, components, entry points, sinks, and exact function reads instead of asset mention counts.
+- Kept agent memory queries defaulted to current-workspace scope with explicit current-session and whole-subject overrides, while the detailed research memory catalog defaults to Session scope.
+- The session header context meter now presents 200k as its default context ceiling instead of 372k.
+- Beale now supplies the stable research run ID as Honeycrisp's provider session-affinity key across active turns and capture-backed continuations; Honeycrisp derives separate stable keys for subagents.
+- Honeycrisp provider failures now retry in the same session immediately, then after one and two minutes, with later attempts capped at three-minute intervals; safety or cyber guardrails add transcript-aware safer steering or continue an obvious authorized false positive.
+- Active sessions now replace the steering Send control with Stop.
+- Memory Save trace rows now show the memory type and status above a Markdown-formatted summary.
+- Memory Link trace rows now show their source, relationship, and target IDs with the recorded note beneath them.
+- Subagent catalog rows now mirror Memory row styling with status-colored names, neutral inline status labels, two-line descriptions, and shared timestamp/scrollbar behavior; rows sort by Honeycrisp spawn time and follow new agents.
+- Memory record details now open in the shared sliding bottom-sheet surface; memory catalog rows remain compact instead of expanding inline.
+- Beale traces now persist Honeycrisp research output as `research_event` and present it under a Research filter; generated files and exports use the separate Artifacts filter.
+- Deterministic fixture scenarios now describe exercised behavior (`multi_branch_trace`, `source_review`, `crash_artifact`, `scope_block`, and `verifier_pass`) instead of encoding hypothesis/finding lifecycle outcomes.
+- The default attempt strategy is now `iterative_research`, and disclosure exports use `artifact_bundle` terminology.
+- Added workbench migration 5 (`operational_trace_taxonomy`) to normalize legacy trace types, fixture aliases, attempt strategy, artifact bundles, and their search/graph projections.
+- Beale verifier contracts and disclosure exports now target optional Honeycrisp memory node IDs instead of Beale-owned hypothesis or finding rows; run prompts and export bundles consume visible Honeycrisp nodes and evidence references.
+- Added workbench migration 4 (`honeycrisp_owned_research_memory`), which preserves runs, traces, artifacts, verifier history, and exports while clearing legacy target links that cannot be mapped safely to Honeycrisp identities.
+- Session lists no longer compute or transport unused Beale-owned hypothesis, finding, verifier, policy, artifact, attempt-summary, or placeholder-cost aggregates.
+- Honeycrisp memory summaries now enforce Honeycrisp's session, workspace, and subject visibility rules before returning nodes, relationships, references, or counts to the renderer.
+- Trace selection no longer reconstructs Beale-owned hypothesis and finding records or renders their legacy CWE/priority inspector; trace details use recorded event payloads and durable knowledge remains in Honeycrisp Memory.
+- Reordered the steering actions so an icon-only circular Filters control aligns with the steering text on the left while the tightly grouped model, reasoning, and Send controls sit on the right, with hover and focus backgrounds for the Filters and dropdown controls.
+- Increased steering input and placeholder text size and matched its top, bottom, and side padding while leaving the action controls unchanged.
+- Subagent trace views now hide the main-session steering composer and use the recovered vertical space for the trace.
+- Newly selected research sessions now autofocus the steering input when their session view appears.
+- Removed the steering helper status and session-action bar, retaining Filters as an inline composer action beside model effort.
+- Standardized steering control typography and weight, muted its dropdown labels, preserved dropdown descenders, and padded the lower action shelf.
+- Rounded both sides of the steering composer and removed the gaps around its text-input row.
+- Changed the steering composer from black to the same raised grey surface used by the active sidebar view button.
+- Moved the memory sidebar level and type selectors inside its full-width search field and matched them to the floating text dropdown treatment.
+- Restyled the steering footer's model and reasoning selectors as floating text controls with adjacent rotating chevrons and upward-opening menus.
+- Runbook selection now opens a native in-agent notebook view in place of the session trace, with Back to Main navigation, full Markdown rendering, syntax-highlighted code cells, and visible recorded outputs.
+- Workspace summary, session summary, settings, and trace filters now use a reusable bottom sheet with bounded content scrolling, slide-in and slide-out transitions, and dismissal from the upper-right control or backdrop instead of redundant footer buttons.
+- Subagent rows now remain in creation order instead of reordering on activity, strip Markdown decoration from message previews, and keep short preview cards stretched to the sidebar width.
+- Split the steering footer's combined model/effort label into Pi-catalog-backed model and reasoning dropdowns; selections persist on the session and apply to the next active Honeycrisp turn or inactive continuation.
+- Consolidated Memory sidebar filtering into one search, type, and level control row; memory level now defaults to Session and replaces the previous context pills.
+- Moved Honeycrisp and Beale persistence to the user-global `~/.honeycrisp/memory.sqlite`, with explicit workspace ownership for operational scope records and in-database session/workspace/subject memory visibility. Existing data was adopted non-destructively and its source remains intact.
+- Workspace backup archives no longer embed the shared global database; their manifest records the external database path and that it is excluded.
+- Session header statistics now use rendered multiline hover tooltips that remain visible below Electron's draggable title bar.
+- Honeycrisp model usage now carries Pi prompt-cache reads, writes, and hit rate through live turns and captures; Beale shows the session cache hit rate and moves context/token usage from the footer into the header before turn, event, and duration metrics.
+- Honeycrisp response guidance now asks agents to write as sharp, curious research collaborators using concise, technically precise, cohesive prose, without narrating routine memory updates.
+- Stopping a Honeycrisp session now cancels the root and all running subagents through the control stream before Beale falls back to process-group termination; model calls that produce no response events for three minutes are retried instead of holding the agent tree indefinitely.
+- Honeycrisp agent sessions now compact older bulky tool results before context exhaustion, retry once with forced compaction after a context-window rejection, cap collaboration waits at one minute, and return leaf/idle waits immediately so root and child sessions cannot silently stall on irrelevant `wait_agent` calls.
+- Session heat now derives only from current-session Honeycrisp sinks, primitives, and chains: confirmed sinks map to low, suspected and confirmed primitives map to medium, suspected/confirmed chains map to high/critical, and rejected memories immediately stop contributing. Background pulse momentum now recognizes Honeycrisp graph mutations and recent session chains instead of legacy Beale hypothesis/finding records.
+- Subagent trace navigation now places Back to Main at the upper-right of the transcript instead of over the session sidebar.
+- Trace detail modals now open from the trace icon only, leaving trace content selectable and copyable while preserving row hover feedback.
+- Memory Correction traces now show type, id, and status metadata above their multiline payload summary.
+- Memory Get traces now show the returned memory summary beneath their type and id metadata.
+- Memory Search traces now show bounded, collapsible result-title lists beneath their query metadata.
+- Session content-view controls now float without an outline at the upper-right of the session content area instead of occupying the main header.
+- The main trace side panel now uses trace-scale typography, full-width two-line memory titles, and type-colored labels instead of colored card edges.
+- The memory catalog now orders entries chronologically, follows new entries at the bottom, and shows status and updated time without confidence percentages.
+- The session sidebar Memory and Subagents tabs now include active counts for faster orientation: Memory excludes stale records, while Subagents includes only pending and running children.
+- Shell traces now show full multiline commands, bounded stdout previews using the file-read treatment, and full captured stderr messages using the standard error treatment.
+- Agent response traces now use full Markdown block rendering with preserved line breaks and language-aware syntax highlighting for fenced code.
+- SSH shell traces now show the remote command with an `SSH` transport pill instead of connection and authentication prefixes.
+
+### Removed
+
+- Removed the unused per-session minute-limit control and its empty New Research settings section; new research remains unlimited by default.
+- Removed the redundant Honeycrisp host-privilege warning banner from the New Research dialog; safety-mode controls and documented execution posture remain unchanged.
+- Removed the experimental Shell Options and Developer sections from Agent Settings; host shell defaults and profiling internals remain unchanged.
+- Removed Beale's background memory-curator launch flags, live usage/event handling, advisory-request presentation, and curator-specific model defaults.
+- Removed HAM Mode, including its autonomous continuation scheduler, exploration/closure prompt workflow, retries, cooldowns, IPC and renderer surfaces, and shared contracts. Workbench migration 9 deletes persisted HAM metadata from the global database.
+
+### Added
+
+- Added workbench migration 15 with immutable per-run Memory Dreaming profile and memory-catalog provenance; legacy Dreaming runs retain null provenance.
+- Added workbench migration 14 with a durable research-subject binding; legacy workspaces adopt their existing subject identity without rewriting Honeycrisp memory.
+- Added workbench migration 13 with an immutable, workspace-owned research-profile snapshot registry and nullable run provenance for compatibility with legacy runs.
+- Added immutable Honeycrisp memory-catalog provenance so workflow-only profile changes can share compatible knowledge while incompatible catalogs remain isolated and legacy rows remain explicitly unrecorded.
+- Added dynamic memory type, status, lifecycle, alias, attribute, evidence, and relationship handling across Honeycrisp execution, Beale curation, and the workbench UI.
+- Added a synchronized right-sidenav toggle to the session header; it switches between the compact summary and detailed 50/50 sidebar, shows an empty first-view chooser for Memories, Runbooks, or Subagents, and returns to the summary when the final open view closes.
+- Added per-session shell safety modes in the steering composer: Manual Approval requires a researcher decision for every shell command, Auto-Review uses the active provider's assigned small model and is the default, and Danger Mode permits shell execution without per-command review.
+- Added a previous-research goal chooser to New Research. Beale proposes three distinct one-sentence directions from bounded workspace memory, session outcomes, verifier state, and source coverage; selecting one generates a full editable research prompt, while Something Else opens direct prompt entry.
+- Added a default-on Goal option to New Research. Beale persists and forwards the choice, while Honeycrisp owns the flat persistent objective, same-session continuation, completion audit, and repeated external-blocker validation.
+- Added structured final dispositions for every terminal research session, including typed blocker dependencies, an explicit external-state-required flag, Honeycrisp root-agent finalization, host fallbacks, registry mirroring, and workbench migration 8.
+- Added model-reasoned workspace-memory Dreaming on the workspace dashboard. The research model synthesizes workspace memories with up to 100 past session transcripts, proposes semantic pruning, revision, and de-duplication decisions, and Beale host-validates and applies them while preserving restorable originals through workbench migrations 6 and 7.
+- Added provider-native session title generation at research start using GPT-5.6 Luna Medium for OpenAI, Claude Haiku 4.5 Medium for Anthropic, and Grok 4.3 Medium for xAI.
+- Added Pi-native Anthropic (Claude) and xAI (Grok/X) provider readiness, subscription OAuth launch, environment API-key detection, and provider model selection to Beale while retaining Codex as the default. New Research now loads each provider's installed Pi model catalog and exposes the exact model-specific reasoning effort levels, including `max` where supported.
+- Added workspace-scoped Honeycrisp runbooks as revisioned Jupyter `nbformat 4` artifacts, with `runbook.list/get/create/append` tools, bounded recorded outputs, optimistic revision guards, dedicated traces, and a Beale Runbooks sidebar tab. Runbooks record procedures but execute only through `shell.run`.
+- Added Beale workbench migration 3 (`global_workspace_ownership`) and a global workspace identity table so multiple workspaces can safely share operational schema and migration history.
+- Added a draggable, keyboard-accessible divider between the session trace and Memory/Subagents sidebar, with bounded responsive sizing and a persisted width preference.
+- Formalized Honeycrisp `hypothesis` memory as a testable unproven proposition with suspected/rejected lifecycle guidance and required reclassification to a primitive or chain when proven; `evidence` and `finding` remain excluded as memory node types.
+- Added inline expand/collapse controls for truncated file-read excerpts and Shell stdout previews.
+- Added Settings > Shell Options with user-global default and per-utility concurrency limits; a limit of `0` disables the utility and `sudo` is disabled by default.
+- Added Honeycrisp's argv-based `shell.run` research tool with harness-wide cross-process utility leases, bounded runtime/output, and credential-like environment filtering.
+- Added concise memory-use guidance for Honeycrisp research sessions: search prior knowledge early, record sources, sinks, invariants, mitigations, bugs, and trajectories deliberately, require static support for primitives, and require an independently reviewed realistic proof-of-vulnerability before confirming a chain.
+- Added component-scoped, transactional SQLite migrations for the shared Honeycrisp database and user-global workspace registry, including in-place baseline adoption for existing data.
+- Added Memory and Subagents tabs to the session sidebar, including child summaries with latest activity, agent-scoped trace navigation, and a Back to Main control.
+- Added Codex-style Honeycrisp subagent orchestration with bounded concurrency, optional conversation inheritance, child model/effort selection, inter-agent messaging and follow-ups, interruption, waiting, agent-aware Beale traces, and captured child run metadata.
+- Added requested/observed trace pairs for all Honeycrisp collaboration tools, with caller attribution, concise targets and status metadata, task/message content, wait outcomes, and bounded agent-list results.
+- Added tiered Honeycrisp memory for session-local, workspace-reusable, and same-subject reusable knowledge within the shared global database.
+- Added run-start repository acquisition for explicit GitHub and GitLab repository URLs. Beale materializes source in the user-global repository store and records workspace-local source references before Honeycrisp starts.
+- Added structured recorded-scope authorization context to the Beale-to-Honeycrisp handoff so authorized workspace research does not depend on prompt-section wording.
+
+- Added a Honeycrisp-owned durable knowledge graph with typed nodes, directed relationships, asset links, tags, evidence references, and optimistic revisions.
+
+- Added live Honeycrisp host controls: pause/resume preserves the active process tree, and general steering is delivered over a schema-versioned JSONL control stream to the next model turn.
+- Added automatic context graph refresh for stale program overview snapshots and a manual refresh control in the Honeycrisp Memory view.
+- Added per-row file explorer controls for Honeycrisp memory storage directories.
+- Added a Honeycrisp host-process run engine that starts research prompts from the Beale UI, launches the Honeycrisp CLI through a plain Node runtime, streams Honeycrisp stdout/stderr into trace events, imports the final Honeycrisp capture as a Beale artifact, and records final assistant output in the transcript and notification flow.
+- Added opt-in developer performance instrumentation for renderer render counts, trace derivation timing, syntax/markdown timing, IPC payload sizing, and input latency probes.
+- Added dev-only renderer DevTools shortcuts and launch opt-ins for debugging performance instrumentation.
+- Added a cheap run-detail version IPC path and main-process timing logs for active-session performance diagnosis.
+- Added an incremental run-detail update IPC path that transfers only new trace/transcript rows plus small current collections when a run is already loaded.
+- Added opt-in production-capable profiling that writes renderer reports, main IPC timings, and OpenAI stream timings to local JSONL files from Settings > Developer through Developer Mode.
+- Added a profiling overview modal and Debug header button while profiling is enabled.
+- Added chunked `code_browser` reads for large textual files, including explicit `line_start` / `line_end` tool arguments and next-line continuation metadata.
+- Added Edit menu actions for Copy and Paste Steering, including platform shortcut labels and paste insertion into the steering input.
+- Added View menu Zoom Out and Zoom In commands backed by Electron `webFrame` page zoom.
+- Added a View menu zoom status row that shows the current page zoom percentage.
+- Added Window menu commands for Minimize, Maximize, and Close as a redundant path for window controls.
+- Added File menu New Research Program command that opens the same program onboarding flow as the sidebar action.
+- Added main-process profiling timings for `getProgramRegistry`, `getSnapshot`, and `openProgram`, plus renderer payload sizing for program-registry updates.
+- Added internal main-process snapshot profiling timings for workspace summary, OpenAI status, executor status, run rows, and notifications.
+- Added active trace-stream profiling for snapshot broadcasts, incremental run-detail merge/apply latency, snapshot event apply latency, and trace reveal queue batches.
+- Added a sampled pointer-move next-frame latency probe to measure hover responsiveness during active trace streams.
+- Added sidebar collapse/expand profiling for toggle request latency, React state commit, next-frame latency, and transition-end timing.
+- Added an optional New Research auto-start checkbox that starts the session immediately after prompt generation finishes.
+- Added renderer footer view-model tests for context metering and host/VM display formatting.
+- Added renderer program display tests for fixed program/session ownership and sidebar age formatting.
+- Added renderer notification preview tests for extracted notification display helpers.
+- Added renderer formatting tests for shared label, date, duration, priority, and truncation helpers.
+- Added renderer session header tests for status, configuration, timing, and trace turn display helpers.
+- Added renderer research item and session heat tests for hypothesis/finding provenance, scroll keys, and severity display helpers.
+- Added evidence sidebar sorting and scroll-key coverage to renderer research item tests.
+- Added renderer trace display tests for trace timeline grouping, filtering, rendered group packing, and turn status labels.
+- Added renderer trace content tests for trace labels, structured detail text, reasoning text cleanup, provenance lookup, and path compaction.
+- Added renderer trace visual tests for trace category filter metadata and trace type labels.
+- Added renderer trace display tests for transcript-to-trace synthesis, linked trace replacement, and transcript duplicate suppression.
+- Added main profiling service tests for structured JSONL output.
+- Added a sidebar Search modal with real-time session transcript search, current-program scoping by default, optional loaded-program search, program-grouped results with full per-program match counts and Show More paging, clickable results that focus and scroll to the matching trace row, shared search-term highlighting in the resulting trace list, a single-line search field, and wrapped left-aligned result previews.
+- Added a model-facing `resource_lookup` tool for current-run Beale artifacts, evidence, findings, hypotheses, verifier runs, verifier contracts, and trace events.
+- Added `reportable` as a verifier-gated final finding state for issues with certain reachability and exploitability.
+- Added program inventory and project metadata search tables for scoped files, manifests, binaries, scope assets, runs, transcripts, traces, artifacts, evidence, hypotheses, findings, and verifier records.
+- Added inventory freshness checks, structured manifest dependency extraction, and bounded binary-string indexing for project metadata search.
+- Added the first structural index pass with normalized source entities, imports, routes, line ranges, lightweight relationships, and mirrored `structure_entity` metadata search documents.
+- Added richer structural relationship extraction for exports, call sites, route middleware/handler links, permission markers, and sink markers.
+- Added structural-index navigation to `code_browser` so symbol reads can use stable entity ranges and return nearby entities, outgoing relationships, and incoming references.
+- Added parser-light structural indexing for Next.js route files, Express middleware routes, Android manifest records, OpenAPI-style endpoints, client-request endpoints, GraphQL operations, and binary-derived URLs, permissions, endpoints, and JNI symbols.
+- Added post-scan structural relation target resolution and structure summary status fields for indexed files, unresolved relations, and truncated entities.
+- Added the first SQLite-backed relationship graph tables for scope, inventory, and structural nodes plus derived graph edges.
+- Added internal relationship graph query APIs, lazy graph freshness rebuilds, Beale run-state graph nodes and edges, and graph neighborhood context in `code_browser`.
+- Added a per-program semantic index table backed by a local deterministic `local_hash` sparse-vector provider.
+- Added semantic index summaries with provider, model, namespace, chunk-count, and remote-embedding status fields.
+- Added Settings > General controls to enable, disable, inspect, and rebuild the active program's semantic index.
+- Added identifier-aware semantic tokenization and hybrid semantic ranking provenance for local semantic search matches.
+- Added semantic index stale detection, indexed-source counts, approximate index size, and rebuild-duration reporting.
+- Added cross-run retrieval feedback from accepted code reads, verifier-backed research outcomes, and corrected negative research states into search scoring and diagnostics.
+- Added layer-specific operational retrieval hints for source materialization, indexing, semantic, graph, structure, binary, and research-memory gaps.
+- Added prompt-generation guardrails for one-time scope verification, credential-aware fallback plans, and bounded external program-page exploration.
+- Added a model-facing `program_lookup` tool for bounded public vulnerability program metadata, including HackerOne GraphQL and generic MSRC/Apple/policy URL lookups.
+- Changed model-run source repository materialization to use non-blocking git clone execution so slow remote clone failures do not freeze the Electron main process.
+- Changed model-run source materialization to defer project inventory refresh after adding cloned repositories so large checkouts do not block the main process before the `source` result returns.
+- Changed active sessions to open on the Spawn view by default, with Trace Log as the secondary session view.
+- Changed HackerOne onboarding and `program_lookup` so imported program handles are preserved and preferred over guessed display-name identifiers.
+- Changed scoped search to accept multiple absolute/relative target roots in one target hint and report unresolved target parts.
+- Changed finding recording so a verifier-backed auto finding for the same hypothesis is updated instead of creating a second manual finding.
+- Added `code_browser` read-budget advice when the same file is paged repeatedly in one run.
+- Added post-source deferred indexing state, repeated broad-search advice, Python setup-state tracking, and verifier supersedence metadata for stronger canonical verifier runs.
+- Added evidence-level verifier supersedence fields, structured Python setup-state input, and delayed post-source inventory/graph refresh scheduling.
+- Added model-facing source version mismatch advice, reusable Python setup-state advice, post-source indexing deferred search hints, and reportability framing checks for disclosure-ready findings.
+- Added schema-backed finding reportability metadata, persisted run fixture setup records, and git checkout ref metadata for stronger version/ref discipline during source-backed research.
+- Added explicit source materialization recovery hints for clone timeouts, remote load failures, and requested refs that are not actually checked out.
+- Added source materialization backoff after transient clone failures so repeated source calls do not loop on the same remote outage.
+- Added setup-aware retrieval hints for recorded fixture paths, in-progress package installs, duplicate code reads, and repository/package version mismatches.
+- Added structured `packagesUnderTest` setup-state tracking so package versions are not conflated with framework versions.
+- Added schema-backed finding impact assessments with general impact classification, evidence-aware CVSS 3.1 draft scoring, and follow-up planning for verified findings with uncertain consequence.
+- Added large-file `code_browser` read-planning advice and stronger CVSS-metrics guidance for impact-supported findings with incomplete scoring.
+- Added a README-ready multi-layer project understanding diagram to the indexing planning chapter.
+- Added a wider New Program onboarding modal with repository listing, manual repository entry, default-on Index Now selections, HackerOne in-scope repository import, and background clone/index scheduling for selected repositories.
+- Added New Program repository onboarding progress tracking with per-repository Clone Later and Index Later actions.
+- Added a Program Understanding workspace with relationship graph, search memory, scope, repository, and session summaries.
+- Added workbench-header Program Understanding view toggles and a bounded relationship graph visualization backed by indexed graph nodes and edges.
+- Added a full relationship graph projection IPC endpoint with source-group clustering and label/edge quality diagnostics.
+- Added Program Relationship Graph search, source-group focus, and relationship-family visibility controls.
+- Added a session Spawn view with a centered thought squircle, floating evidence trails, and an expandable trail filter.
+- Added a transient Spawn agent-output sheet that slides up on newly completed session output with markdown rendering and background blur.
+- Added cumulative session token usage beside the footer context meter.
+
+### Security
+
+- Terminator UI mutations now require a correlated host decision, a fresh single-use target observation, exact window/element revalidation, and post-mutation lease invalidation. Sensitive Windows and agent surfaces and dangerous shortcuts are denied, and MCP screenshot bytes are omitted from model-invisible research audit events.
+- Updated the production WebSocket dependency to 8.21.x to include the upstream memory-disclosure and fragmented-message exhaustion fixes.
+- Honeycrisp-backed cybersecurity sessions and forks now require a recorded workspace authorization boundary before execution can begin.
+- Kept Auto-Review routing host-owned by always overriding profile-supplied shell-review models and effort at the Beale-to-Honeycrisp launch boundary.
+- Research profiles cannot independently grant tool families, side effects, network access, skills, MCP servers, credentials, or authorization; Beale's host-owned policy remains the authority ceiling.
+- Recognized shell network intent now fails closed in every shell-safety mode unless Beale directly grants process and network effects and supplies an active recorded authorization whose destinations satisfy the scoped network policy; this broker does not replace external OS network isolation for arbitrary binaries.
+- Shell safety authorization now occurs inside Honeycrisp before process spawn, records bounded redacted decision evidence, fails closed when review or safety-control delivery is unavailable, rejects commands that cannot be shown completely in Manual Approval, sanitizes ordinary shell lifecycle traces, surfaces background-session approvals, and keeps existing utility, protected-directory, and HOME-family guards active in every mode. Workbench migration 10 backfills existing sessions to Auto-Review.
+- Prohibited `$HOME` use in the Honeycrisp system prompt, rejected HOME-family references and assignments in shell inputs, and removed home-directory variables from spawned utility environments.
+- Added Honeycrisp pre-spawn folder deletion guards for direct `rm` and `rmdir`, destructive `find`, and non-dry-run `git clean` operations targeting filesystem roots, the current user directory, system directories, or active Beale/Honeycrisp workspace state.
+
+### Removed
+
+- Removed the renderer's hypothesis/finding tool-call formatting, duplicate-record previews, CWE formatting, and hypothesis/finding trace categories.
+- Removed Beale's parallel hypotheses, findings, evidence, weakness mappings, bundled CWE catalog, duplicate review, and discovery-scoring persistence and service layers. Honeycrisp memory nodes and evidence references are now the only research-memory model.
+- Removed the obsolete `planning/` book and research-note tree; current source, tests, README, and changelog now define product behavior and development boundaries.
+- Removed the secondary session context/dashboard view, its view toggle, and its renderer-to-main context-inspection API; selected sessions now always show the trace with Memory/Subagents.
+
+- Removed separate repository-search, file-read, code-intelligence, analysis, synthesis, storage, experiment, and MCP tools from Beale-launched research sessions, along with the inactive Skills and MCP sidebar controls; durable memory tools and `shell.run` remain.
+- Removed the redundant Honeycrisp `finding` memory type; Honeycrisp migrations convert existing nodes and their identifiers to trajectories while preserving graph references, and Beale migration 4 removes the former parallel operational finding records.
+
+- Removed the retired Honeycrisp `evidenceExtracted` and `claimsProposed` tool-observation fields and Beale's repository-search fallback; structured tool results are now the sole source of observation data.
+- Removed compatibility for Honeycrisp's retired derived-memory, proof, context-packet-v2, and early graph schemas; Beale now uses the current subject-and-membership graph-memory schema and schema-v4 capture contract.
+- Removed the footer momentum snake and strawberry, host-device label, and persistent notification icon. Context usage, session tokens, and Settings now form a compact lower-left cluster, while notifications continue to appear as transient alerts.
+- Removed Honeycrisp's retired events, episodes, claims, procedures, hypotheses, prospective, and scratch directory taxonomy from model-facing workspace context and new storage initialization.
+- Removed the right-side Evidence navigation pane, its footer toggle, and the collapsed sideways Trails/Evidence rail.
+- Removed the graphical Spawn trail view and its trail derivation layer; sessions now open to the list-only trace and Memory view.
+- Removed unused graph-visualization styling and dependencies from the renderer.
+
+- Removed the Honeycrisp goal/subgoal controller contract from Beale sessions, including mode, strategy, research-branch controls, goal checkpoints, and goal-shaped capture metadata.
+- Removed Beale's Honeycrisp memory CLI/raw-SQLite fallback chain and the event-derived record/proof vocabulary from workspace memory views.
+
+- Removed pre-alpha compatibility paths: the 19-step workspace database migration ladder, legacy Beale-to-Honeycrisp memory export, path-based session ownership, old `Program*` API aliases, and workspace-local managed checkout discovery.
+- Removed the mandatory `beale-skeptical-triage` Honeycrisp skill and its workspace-generated runbook; research triage is now owned by the selected model unless the user explicitly selects additional guidance.
+- Removed Beale-managed VM/Docker sandbox setup, executor runtime, vmctl tooling, and Settings > Sandboxes. Beale now treats Honeycrisp execution as host-process execution; users should launch Beale/Honeycrisp inside their own VM or container when OS isolation is required.
+- Removed the Beale benchmark/CyberGym prototype runner, harness scripts, IPC, settings, scenario UI, and tests. Domain-specific harnesses now belong in Honeycrisp skills, MCP servers, or external project tooling.
+- Removed Beale's parallel fake/OpenAI research-agent runtime and structured-tool router. New research sessions now route through Honeycrisp, with a guarded fixture engine retained only for deterministic tests.
+
+### Changed
+
+- Honeycrisp tool traces no longer show identifier-heavy event-envelope metadata beneath the trace title; useful structured previews remain visible, and observation failures show only their full error message in a multiline dark-red panel.
+- Reasoning trace rows now lead with their first summary and repeat the Model source label beside each uninterrupted continuation instead of showing a redundant Reasoning title.
+- Increased primary trace and session-context typography to match the left sidebar's readable text scale while keeping metadata, badges, and controls compact.
+- Honeycrisp tool trace titles now use the specific tool name, such as Repository Search Requested or File Read Observed, instead of the generic Honeycrisp Tool label.
+- Consolidated uninterrupted reasoning-summary traces under one trace-list header, preserving individual summary boundaries and removing repeated partial summary lines.
+- Removed the secondary content header, moved session view controls and statistics into the main application header, and moved session configuration pills into the Session Summary dialog.
+- Renamed the model trace category and summaries from Thought to Reasoning to reflect Pi's provider-generated reasoning-summary stream without implying access to hidden chain-of-thought.
+
+- Changed Honeycrisp session context to use bounded tiered graph memory with evidence and relationship anchors, hide internal storage paths, and rely on native tool definitions instead of duplicate storage and tool-policy prompt sections. Beale's Context view now distinguishes injected memory from the full workspace memory catalog and lists the tools actually available to the model; diagnostic flow captures are no longer model-visible artifacts.
+- Changed the lower-left footer cluster so Settings appears first and token usage appears whenever a session is selected, regardless of run status.
+- Honeycrisp sessions keep model tools available unless an explicit tool-call limit is configured, enforce their wall-clock session limit, and present compact turn/tool progress instead of raw agent lifecycle streams.
+- Active-session controls now expose Pause and Stop; continuing an inactive session extends it in place.
+
+- Replaced the always-visible hypothesis/finding/evidence trail column with a list-only Honeycrisp memory catalog supporting search, scope/type filters, inline record details, references, and textual relationships.
+
+- Changed steering for inactive Honeycrisp sessions to continue the existing run with a new attempt and bounded prior-session context instead of implicitly forking a new run.
+- Changed Honeycrisp session import to schema-v2 `request` and `agent` captures produced by Pi's native agent loop. Context views now show the request, workspace context, selected skills, and available tools without controller decisions or generated subgoals.
+- Changed Honeycrisp scope handling to treat a recorded Beale workspace scope as sufficient authorization for in-scope research, avoiding repeated authorization questions while retaining explicit scope boundaries and network-profile enforcement.
+
+- Changed durable memory to explicit model-managed reusable knowledge; run events, transcripts, goals, and bulk artifacts are no longer automatically promoted into memory.
+
+- Renamed renderer, IPC, registry, shared-type, profiling, and SQLite vocabulary from programs to workspaces and authorized scopes; the fresh schema now uses `workspaces`, `scope_versions`, `workspace_name`, `scope_owner`, and `registry_workspace_id`.
+- Changed the global registry filename to `workspace-registry.sqlite` so the clean pre-alpha schema does not open or partially modify an incompatible legacy `registry.sqlite` database.
+- Changed Honeycrisp workspace context to lead with operator-recorded authorization, neutral scope facts, rules, expiry, network posture, and in/out assets, while no longer presenting the whole workspace root as source code.
+- Changed newly materialized repositories to use only the user-global checkout store with workspace-local source references; requested refs use separate checkout paths.
+- Changed the no-session program overview to lead with Honeycrisp memory health, accepted event counts, derived record counts, storage directories, and retrieval/program tracking support panes.
+- Changed New Research and OpenAI provider defaults on the Honeycrisp harness branch to use GPT-5.6 Sol with high reasoning.
+- Changed trace row category pills so evidence rows display `Evidence` and reasoning rows display `Agent Output`.
+- Changed duplicate-blocked trace rows so attributes use compact trace styling while the blocked title keeps prose styling.
+- Changed thought trace formatting to keep bold thought titles on their own line and separate multiple thoughts with a blank line.
+- Changed thought trace rows to render title and description as explicit block elements instead of relying on markdown newlines.
+- Changed Python run trace previews to show five code lines with a fade, code/output headers, exit code, and captured output or an explicit no-output note.
+- Changed hypothesis/finding prepare trace marker icons to neutral white and recorded hypothesis/finding milestone markers to green.
+- Changed OpenAI Responses runs to stop creating Beale compacted replay checkpoints; context-window pressure now surfaces as a provider failure and context pruning is delegated to Honeycrisp.
+- Changed verifier/evidence lifecycle rows to non-standard by default and added structured verifier/evidence trace previews that emphasize outcomes over raw ids, with verifier execution rows using a stable title.
+- Changed duplicate-blocked trace bodies to show the blocked message first and compact attributes underneath.
+- Changed research prompt generation and refinement to use medium reasoning effort while preserving the selected session effort for actual run execution.
+- Changed active run-detail polling to check a cheap version first and use incremental updates instead of full detail refreshes when possible.
+- Changed production profiling so background JSONL flushes no longer update React state unless the Debug/Settings UI is observing reports.
+- Changed research session selection to avoid full snapshot and global program-registry refreshes when only the selected session changes.
+- Changed workspace switching to keep a small cache of recently opened program runtimes, reducing repeated cross-program session switch cold-open cost.
+- Changed streamed research prompt generation to throttle textarea renders while preserving live text updates.
+- Changed OpenAI stream consumption to yield back to the Electron main loop between event batches, reducing active-session IPC stalls.
+- Changed OpenAI host Python tool execution to use a non-blocking child process path and report per-tool execution timings.
+- Changed run-row snapshot construction to use grouped SQLite aggregate queries instead of per-run lookups.
+- Changed OpenAI provider status checks to use a short cache with explicit invalidation on provider refresh.
+- Changed active runtime trace updates so they no longer broadcast full workspace snapshots or global program registry payloads on every trace append.
+- Changed launch/session selection so Beale only auto-opens active or queued sessions, avoiding heavy completed trace loads during startup.
+- Changed the sidebar and modal label from New Research Session to New Research.
+- Changed the steering control row to show concise uppercase session statuses.
+- Changed Python trace rows so model-side calls read as preparation/queueing and the executed host result row owns the Python script preview.
+- Changed code-browser trace rows so model-side queue/argument lifecycle rows are non-standard by default and the executed source-read result owns a compact path, line metadata, and bounded excerpt preview.
+- Changed verifier and artifact guidance so models are directed to use returned Beale artifact ids instead of raw temporary artifact paths.
+- Changed search trace rows so the model-side request lifecycle row is non-standard by default, argument rows read as `Prepare Search`, and result rows use shorter `Examined ...` labels.
+- Changed the model-facing `search` tool to augment scoped file and binary-string results with indexed project metadata matches.
+- Changed the model-facing `search` tool to include local semantic chunk matches when semantic indexing is enabled for the active program.
+- Changed model-facing `search` results to dedupe direct file/artifact matches against project metadata matches for the same object.
+- Changed model-facing project metadata and semantic search to use existing indexes only, avoiding inline inventory or semantic rebuilds during active tool turns.
+- Changed model-facing code browser structural navigation to use existing structure indexes only, avoiding inline inventory rebuilds during active tool turns.
+- Changed background semantic indexing so queued rebuilds may start during active research sessions instead of waiting for sessions to finish.
+- Changed local semantic indexing to be enabled by default per program while preserving explicit per-program disables.
+- Changed New Program repository onboarding so cloned repositories are added without a synchronous main-process inventory refresh, and indexing refreshes inventory through the semantic indexing job.
+- Changed model-facing search to add bounded graph-proximity matches from metadata and semantic seed hits.
+- Changed Spawn view layout to reserve side lanes for evidence trails and pack trails with measured non-overlap spacing.
+- Changed Spawn secondary center previews to rotate between Python executions, file reads, and searches with dwell-timed slide transitions.
+- Changed trace and Spawn code blocks to render non-selectable line-number gutters outside copied code text.
+- Changed Spawn ambient highlight and evidence trail spawn origin to align with the top-centered thought stack.
+- Changed Spawn Python result previews to show captured output in the attached status squircle and allow Spawn code blocks to use more available vertical space.
+- Changed Spawn secondary preview containers under the thought squircle to rounded rectangles while preserving nested result squircles.
+- Changed Spawn secondary rounded rectangles to use tighter side and bottom padding.
+- Changed Spawn hypothesis squircles to render without border outlines.
+- Changed trace and Spawn evidence trail colors so high-severity/status surfaces use red, Spawn standalone evidence stays black, Spawn evidence rows use grey, and Spawn finding rows follow finding status.
+- Changed dismissed Spawn hypothesis trails to use lighter translucent neutral surfaces instead of red dismissal backgrounds.
+- Changed model-facing search ranking so graph seed and proximity signals can promote or diversify final search results instead of only filling remaining result slots.
+- Changed model-facing search to add graph-backed variant matches for entities that share important relationship targets such as sinks, permission checks, middleware, hypotheses, and findings.
+- Changed relationship graph research-memory coverage to add component and CWE anchor nodes plus explicit duplicate, evidence, verifier outcome, and artifact provenance edges.
+- Added relationship graph operational status with stale reasons, rebuild reasons, build counts, and node/edge family counts.
+- Changed graph variant search so source-backed code hits can surface related research-memory records through matching component anchors without refreshing the graph inline.
+- Added parser-light framework extraction for Fastify, Rails, Django, and Laravel routes plus request parsing, response serialization, and model read/write structural edges.
+- Added parser-light binary graph edges for imported symbols, exported symbols, notable strings, URLs, and Android permissions derived from bounded binary strings.
+- Added TypeScript compiler API-backed JS/TS structural extraction for method definitions and more accurate call-site graph edges during background indexing.
+- Added parser-light Java and Go structural extraction for class/type/function/method ranges, imports, and owner-aware call-site graph edges.
+- Changed search ranking to normalize lexical, artifact, metadata, semantic, graph, and graph-variant hits through a common internal retrieval candidate envelope before final tool output formatting.
+- Changed search retrieval to run in two phases: broad normalized Phase A candidates include initial graph proximity and variants, then Phase B expands only top seeds through source structure, binary inventory, graph proximity, and graph variants.
+- Changed search ranking to use a blended retrieval score across text relevance, exact identifier/path matches, structural fit, semantic similarity, graph proximity, research-memory linkage, security relevance, scope confidence, and recency signals.
+- Changed search dedupe to merge candidates that share an entity or precise file/range, preserving direct lexical, semantic, graph-adjacent, and variant contribution provenance while preferring richer entity-backed records over plain file hits.
+- Added lightweight search query intent hints for symbol, route/API, auth/permission, sink/data-flow, binary, prior research-memory, and variant/similarity queries, using them as ranking weights without excluding other retrieval layers.
+- Changed search result selection to preserve the top exact result, then diversify by source path and relationship family unless the query is clearly focused on one file or symbol.
+- Changed active-run search and code structural navigation to use the latest active scope version after source materialization instead of the run's original scope version.
+- Changed repeated broad `code_browser` reads so high-severity read-budget advice requires a symbol or explicit line range before returning more file content.
+- Changed source version mismatch detection so IPv4 addresses in prompts are not treated as release versions.
+- Changed managed source checkout reuse to fetch and detach-checkout requested refs before returning version-backed source material.
+- Changed Python setup-state handling so explicit in-progress dependency setup is preserved instead of being overwritten by a successful status probe.
+- Changed duplicate code-read detection to require the same file/range when line ranges are available, avoiding false duplicate warnings for continuation reads.
+- Added search retrieval diagnostics with candidate counts by layer, selected counts by layer, dedupe count, graph expansion count, top scoring signals, and selected relationship-family counts.
+- Added explicit retrieval missing-reason diagnostics for stale or empty semantic/graph indexes, missing graph seeds, and query-intent/index mismatches such as route/API queries without route entities or route graph edges.
+- Added bounded adaptive follow-up search planning for weak first-pass coverage such as no semantic hits, no graph hits, or same-file lexical-only results.
+- Added read-budget hints to top search matches with `readPriority`, `readReason`, and `suggestedNextRead` code-browser arguments.
+- Changed search scoring to apply a uniform negative/low-confidence penalty for duplicate, dismissed, false-positive, not-reproducible, out-of-scope, and needs-evidence research-memory states across metadata, semantic, and graph-backed candidates.
+- Changed hypothesis and finding router-accepted trace rows to use Queue language instead of duplicating Prepare labels.
+- Changed verbose model lifecycle, stream-delta, and queue trace rows to a non-standard filter category hidden by default but available from Trace Filters.
+- Increased small trace-row content text for compact details, prose, and Python previews.
+- Changed main-session separators to use rounded surface contrast instead of grey divider lines, with the trace footer acting as the darker compact auto-growing steering input surface, inset status/control row matching the hypotheses/findings surface, solid-black rounded input row, circular arrow send button, and subtly raised hypotheses/findings column background.
+- Changed the hypotheses/findings column to collapse into a clickable vertical ribbon while the right evidence sidebar is open, then restore automatically when that sidebar closes.
+- Changed evidence sidebar items to omit long summaries and clamp titles to two lines for denser scanning.
+- Changed the always-visible research column from separate hypothesis/finding lists into an Evidence Trail list that groups hypotheses, linked evidence, and promoted findings by recorded provenance IDs.
+- Changed the steering input to autofocus when a selected research session becomes active.
+- Changed the footer host and VM tags to sit flush without borders or arrow separator, using vertically centered contents and top-right rounded surfaces with the VM surface behind the host radius.
+- Increased the left padding before the footer momentum snake mascot.
+- Adjusted the steering textarea padding so its single-line input and placeholder are vertically centered.
+- Moved the current program and session title into the app header while keeping run status, session tags, and metrics in the session header.
+- Moved session mode, strategy, and network tags into the right-side session header metrics cluster and added left-side status and list/graph view toggles.
+- Changed the app-header program title into a button that opens Program Information.
+- Hid the incomplete Schedules quick action from the sidebar while leaving scheduler internals intact.
+- Removed the Evidence Trail header from the research side panel.
+- Moved Trace Filters from the window footer into the steering input control row.
+- Changed the session header trace metric to show total trace count instead of filtered/total fraction.
+- Changed the no-session workspace to show Program Understanding by default.
+- Changed program selection from the sidebar to open Program Understanding instead of implicitly selecting a session.
+- Changed the session graph toggle tooltip so program-level understanding is no longer described as a session view.
+- Changed the relationship graph visualization sample and layout to reduce dense node clustering and improve label readability.
+- Moved Program Understanding titles and index statuses into the workbench header, removing the duplicate header inside the program content area.
+- Changed relationship graph visualization to exclude self-edge/filler-node samples, diversify repeated targets, and list readable source-to-target relationship paths.
+- Changed Program Relationship Graph to render the full indexed graph through a D3 force-layout worker and canvas instead of a bounded SVG sample.
+- Changed Program Relationship Graph loading so a deterministic clustered preview and visible SVG overlay render before D3 force-layout refinement completes.
+- Changed Program Relationship Graph's default view to a source-group cluster overview, reserving node-level labels for search or focused groups.
+- Changed the session alternate view toggle from the placeholder graph view to Spawn.
+- Changed Spawn thoughts to render titled thought sections with inline code formatting, standalone evidence as evidence squircles, and an attached Python code preview with running/exit status.
+- Fixed compact-width shell clipping so heat and pulse background layers cannot bleed past the rounded app window corners.
+- Disabled the native transparent-window shadow on non-macOS builds so compositor-owned shadows cannot show behind the rounded app corners.
+- Added a conservative Linux/WSLg native window shape mask so transparent frameless window corners are clipped without replacing the CSS shell's anti-aliased rounded edge.
+- Changed Linux startup to show the window only after applying the native shape mask, refresh the mask during early compositor startup, and hide the light CSS outer border that made the shaped edge look grainy.
+- Retuned the Linux/WSLg native shape mask to cover compositor corner leakage while removing the Linux app-shell border entirely to avoid a visible window outline.
+- Limited Electron's native `roundedCorners` option to macOS and Windows so Linux/WSLg uses only the CSS radius plus the explicit native shape mask.
+- Removed the VM environment pill activity sheen animation from the footer.
+- Added initial memo boundaries for static app shell and footer surfaces to reduce unrelated rerenders.
+- Extracted the top bar/window controls and footer/status system from `App.tsx` into dedicated renderer app, momentum, and environment view-model modules.
+- Extracted app background pulses and program sidebar rendering from `App.tsx` into app/program feature modules.
+- Extracted shared modal infrastructure, notification modals, and the research prompt modal from `App.tsx`.
+- Extracted shared renderer formatting helpers from `App.tsx` into `src/renderer/lib/formatting.ts`.
+- Extracted the workbench session header and trace turn helpers from `App.tsx` into session feature and view-model modules.
+- Extracted trace timeline grouping and turn status helpers from `App.tsx` into the trace display view-model.
+- Extracted trace label, detail text, provenance lookup, and path compaction helpers from `App.tsx` into the trace content view-model.
+- Extracted trace row rendering, trace prose/code markup rendering, and trace category visual helpers from `App.tsx` into trace feature modules.
+- Extracted trace detail modal rendering and typed trace inspection panels from `App.tsx` into the trace feature module.
+- Extracted trace filter modal and trace turn group rendering from `App.tsx` into trace feature modules.
+- Extracted transcript-to-trace display event synthesis from `App.tsx` into the trace display view-model.
+- Extracted the virtualized trace view and steering footer from `App.tsx` into the trace feature module.
+- Extracted the settings modal, provider status view, and local VM enablement view from `App.tsx` into the settings feature module.
+- Extracted program information, session history, and onboarding modals plus onboarding template helpers from `App.tsx`.
+- Extracted the new research session modal and shared run-setting helpers from `App.tsx`.
+- Extracted the hypotheses/findings side panel, CWE pill, shared side scroll region, research item provenance helpers, and session heat helpers from `App.tsx`.
+- Extracted the evidence sidebar from `App.tsx` and made it consume already-built active trace events.
+- Extracted research momentum and host activity derivation from `App.tsx` into renderer view-model modules.
+- Extracted run detail selection, incremental update merge, cursor, and instrumentation summary helpers from `App.tsx`.
+- Extracted inset scrollbar activation and resizable sidebar state from `App.tsx` into renderer hooks.
+- Extracted the main session workspace grid from `App.tsx` into the session feature module.
+- Extracted app shell class, selected run detail/status, VM preference, and window platform derivation from `App.tsx`.
+- Extracted active run-detail polling, version checks, and incremental update application from `App.tsx` into a renderer hook.
+- Extracted trace selection state and selected trace finding/hypothesis context from `App.tsx`.
+- Extracted program menu, program information modal, and session history modal state from `App.tsx`.
+- Extracted app modal rendering from `App.tsx` into an app-level modal layer component.
+- Extracted workspace bootstrap, live snapshot subscriptions, and selected-run preservation from `App.tsx` into a renderer hook.
+- Extracted program action handlers and HackerOne onboarding lookup application from `App.tsx`.
+- Removed unreachable legacy run tracker, detail, inspector, and hardening code from `App.tsx`.
+
+### Fixed
+
+- Exiting Beale during an active Honeycrisp session now terminates the host process tree and suppresses late persistence callbacks before closing SQLite, preventing shutdown-time database lock errors.
+- Fixed provider-generated session titles so active sessions update their left-sidebar registry row immediately instead of remaining `No Title Yet` until completion.
+- Fixed Windows host compatibility for workspace database teardown, Node-based Git command overrides, native verifier shell and Python selection, workspace-rooted host execution, Honeycrisp process-tree cleanup, workspace-scoped shell home variables, shell-neutral test setup, and portable durable paths.
+- Removed an unsupported temperature parameter from provider-native session title requests and retained bounded non-fatal diagnostics when title generation fails.
+- Honeycrisp shell timeouts and aborts now terminate the utility's full process group so orphaned build or test descendants cannot hold sessions open; pending research-tool requests are streamed immediately while execution is still in progress.
+- Fixed subagent turns appearing inline between root-agent turns with raw `/root/...` timeline headers; the main trace now shows root and setup events while child traces remain in the Subagents view.
+- Reserved bug memories for confirmed historical flaw precedents with affected assets and precedent evidence; current-research flaws remain primitives or chains, and exact correction can reclassify a node without losing its graph relationships.
+- Fixed broad Honeycrisp memory queries being treated as one literal substring, added bounded retries for transient model-provider failures before substantive output, and made Beale mark errored Honeycrisp captures as failed even when the host process exits normally. A database migration repairs affected persisted run, attempt, and model-session statuses.
+- Fixed Memory sidebar context filters so Session, Workspace, and Subject use stored identity dimensions instead of inferred storage categories.
+- Fixed duplicate Honeycrisp tool lifecycle traces, doubled session token totals, event-stream stdout noise, nested repository source-root discovery, misleading tool byte schemas, and Memory/Subagents lists shrinking instead of scrolling.
+
+- Hidden host-only traces are no longer shown by default and can be restored through the Non-standard trace filter.
+- Fixed per-run network profiles in Honeycrisp workspace context, live Sol turn/token telemetry, duplicate live events during final capture import, excessive incremental thought snapshots, stale research-prompt evidence vocabulary, and underspecified memory node/status/evidence tool vocabularies.
+
+- Fixed Honeycrisp startup with the Sol default by bridging the fresher host Codex OAuth credential by file reference, releasing control-stream stdin after startup failures, and treating terminal-session Continue as a new continuation session rather than a paused-process resume.
+- Updated the default session context meter to Sol's 372k context window.
+
+- Fixed Honeycrisp session context tracking so the footer imports reported model usage when available and falls back to an explicitly marked serialized-capture estimate instead of showing zero.
+- Fixed Spawn center-stack alignment and Python preview spacing so attached Python code previews stay vertically centered and readable.
+- Fixed Spawn thought anchoring so attached Python/result squircles grow downward without moving the thought being read.
+- Fixed Spawn hypothesis trail rendering so card shadows no longer blur hypothesis text.
+- Fixed Spawn trail text clarity by removing the idle floating animation from trail cards.
+- Fixed Spawn Python status previews so running and exit states update in one attached status squircle without duplicate slides.
+- Fixed long Spawn code blocks crowding the bottom curves of their surrounding squircles.
+- Fixed Spawn rounded-rectangle preview content so global button centering no longer prevents summaries and codeblocks from stretching to the parent width.
+- Fixed Spawn codeblock alignment and Python output sizing so short output stretches to the result squircle sides.
+- Fixed Spawn Python output result layout so the exit marker floats below output while the result squircle rides farther under the code squircle.
+- Fixed Spawn Python output result width and added slide-in motion for the result squircle and output block.
+- Fixed tall Spawn evidence trails by capping compact trail rows, preserving the first evidence row, and opening hidden evidence/finding items in a full-trail modal.
+- Fixed Spawn trail title wrapping, row separators, and curved-corner layering so stacked evidence and finding rows do not bleed through to the workspace background.
+- Made markdown/prose trace line breaks explicit so bold thought titles render above their descriptions.
+- Applied thought-title line splitting to reasoning-summary events even when a trace row is otherwise categorized as agent output.
+- Shortened duplicate-blocked trace rows to `Duplicate Blocked` while rendering the proposed duplicate name as a prose detail line.
+- Fixed delayed post-source indexing so foreground OpenAI runs refresh project inventory, structure, and graph indexes after source materialization.
+- Fixed semantic indexing cancellation recovery so enabled indexes canceled by workspace disposal or shutdown are requeued instead of staying parked as `canceled`.
+- Fixed active-scope search and graph rebuilds so current-run research memory remains visible after source materialization advances the active scope version.
+- Made Electron startup show the shell before reopening the last workspace, so slow workspace/index state cannot make launch look dead.
+- Made `window.bealeDevPerformance.report()` return a structured report object instead of only logging grouped console tables.
+- Moved the sidebar render probe into the sidebar component so profiling reports real sidebar renders instead of app-shell renders.
+- Retried retryable OpenAI transport failures after `response.created` when no model output or tool call content has been committed for that turn.
+- Reduced model-run search stalls by prefiltering semantic candidates before JS reranking, adding graph/semantic search indexes, and recording structured tool calls as running until the final result is linked.
+- Reduced trace-list flicker during manual scrolling by sliding the rendered event window in anchored chunks instead of recalculating it from estimated row heights on every scroll event.
+- Reduced active trace-list churn by memoizing stable trace rows and cached syntax/prose markup.
+- Reduced sidebar toggle churn by memoizing the main session workspace, trace view, research lists, and evidence sidebar so unchanged session surfaces do not repaint during sidebar-only state changes.
+- Tightened the context mascot forced-lick endpoint so it no longer overshoots the strawberry at full context.
+- Displayed research prompt generation failures in the New Research Session modal and preserved OpenAI stream error reasons.
+- Reduced trace and side-panel paint scope with CSS containment to make hover feedback less sensitive to active trace updates.
+- Fixed sidebar transition profiling so unrelated later CSS transitions do not pollute collapse/expand timing.
+- Fixed transcript search status counts so they use the full matching transcript total instead of the capped visible result list.
+- Fixed large trace-list manual scrolling so virtualized window slides no longer bounce back to a selected or earlier trace.
+- Fixed failed verifier execution traces so their marker uses the red failure tone while remaining categorized under Verifier.
+- Fixed source materialization for requested refs in reused workspace checkouts by fetching tags/refs and detaching to the resolved commit.
+- Fixed new verifier run metadata so passing runs record `blockedIssue: confirmed` instead of the ambiguous `yes` value.
+- Fixed New Program repository onboarding so completed semantic refreshes do not immediately reappear as unindexed source-document notifications, and onboarding or first-session search-memory refreshes suppress duplicate global indexing alerts.
+- Fixed sidebar program selection so the Program Understanding view remains selected after the opened program snapshot is applied.
+- Fixed evidence sidebar card contents so rows stretch left-to-right instead of centering inside the card.
+- Fixed Evidence Trail hierarchy styling by removing the child connector rail and relying on indentation for structure.
+- Fixed Evidence Trail grouping visuals by removing the extra wrapper background around each trail.
+- Fixed `code_browser` read failures to distinguish missing paths, unknown artifact ids, directories, unsupported Beale resource ids, binary/non-text files, and scoped-policy blocks with targeted recovery hints.
+
+### Documentation
+
+- Expanded the root README for human readers with current status, setup, safety boundaries, and known incomplete surfaces.
+- Added MIT licensing metadata and a root `LICENSE`.

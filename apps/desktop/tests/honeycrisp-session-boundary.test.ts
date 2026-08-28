@@ -1,0 +1,1460 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { afterEach, describe, expect, it } from 'vitest';
+import { HoneycrispSessionStore } from '@honeycrisp/research-agent';
+import { WorkspaceDatabase } from '../src/main/database';
+import {
+  recoverInterruptedHoneycrispSessions
+} from '../src/main/honeycrispCliClient';
+import {
+  createHoneycrispSessionBoundary,
+  flushHoneycrispSessionWrites,
+  getHoneycrispRunDetailForClient,
+  getHoneycrispRunDetailUpdateForClient
+} from '../src/main/honeycrispSessionBoundary';
+import { WorkspaceService } from '../src/main/workspaceService';
+import { resolvedTestResearchProfile } from './researchProfileFixture';
+
+const createdDirectories: string[] = [];
+const createdAppServerStateFiles: string[] = [];
+const previousEnvironment = new Map<string, string | undefined>();
+
+function importHoneycrispSessionCapture(
+  sessionId: string,
+  attemptId: string,
+  capturePath: string,
+  storage: { databasePath: string; artifactDirectoryPath: string }
+): void {
+  const store = new HoneycrispSessionStore(storage);
+  try {
+    store.importCapture(sessionId, {
+      attemptId,
+      capture: JSON.parse(readFileSync(capturePath, 'utf8')) as unknown
+    });
+  } finally {
+    store.close();
+  }
+}
+
+afterEach(() => {
+  for (const stateFile of createdAppServerStateFiles.splice(0)) stopTestAppServer(stateFile);
+  for (const [name, value] of previousEnvironment) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  previousEnvironment.clear();
+  for (const directory of createdDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+describe('Honeycrisp session persistence boundary', () => {
+  it('captures and persists end-of-session suggestions for Honeycrisp-owned runs', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-next-steps-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId: 'workspace_next_steps'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_next_steps'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    try {
+      const context = database.createRun({
+        scopeVersionId: database.getActiveScope().id,
+        title: 'Canonical next-step session',
+        promptMarkdown: 'Inspect the parser.',
+        shellSafetyMode: 'auto_review',
+        mode: 'open_discovery',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        attemptStrategy: 'iterative_research',
+        sandboxProfile: 'host',
+        budget: { runEngine: 'honeycrisp', researchWorkflowId: 'discovery' }
+      });
+      const promptSuggestions = [1, 2, 3].map((index) => ({
+        title: `Follow-up direction ${index}`,
+        promptMarkdown: `Investigate follow-up direction ${index} with verifier-backed evidence.`
+      }));
+      const finalMessage = database.createTranscriptMessage({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        role: 'assistant',
+        phase: 'final_answer',
+        contentMarkdown: 'Session complete.',
+        source: 'honeycrisp',
+        metadata: { nextPromptSuggestions: promptSuggestions }
+      });
+      database.updateRunStatus(context.run.id, 'completed', 'Session complete.');
+
+      expect(rawDatabase.getRun(context.run.id)).toBeNull();
+      expect(database.getSessionNextStepSuggestions(context.run.id)).toBeNull();
+      expect(database.getCapturedSessionNextPromptSuggestions(context.run.id)).toEqual(promptSuggestions);
+      expect(database.listRunRows().find((row) => row.run.id === context.run.id)?.lastMessageAt)
+        .toBe(finalMessage.createdAt);
+
+      const saved = database.saveSessionNextStepSuggestions(context.run.id, {
+        phase: 'discovery',
+        suggestions: promptSuggestions.map((suggestion) => suggestion.title),
+        promptSuggestions
+      });
+      expect(database.getSessionNextStepSuggestions(context.run.id)).toEqual(saved);
+      expect(database.getRunDetail(context.run.id).nextStepSuggestions).toEqual(saved);
+
+      await flushHoneycrispSessionWrites(database, context.run.id);
+      expect(database.listRunRows().find((row) => row.run.id === context.run.id)?.lastMessageAt)
+        .toBe(finalMessage.createdAt);
+      await expect(getHoneycrispRunDetailForClient(database, context.run.id)).resolves.toMatchObject({
+        nextStepSuggestions: saved
+      });
+    } finally {
+      database.close();
+    }
+  }, 30_000);
+
+  it('retains optional diagnostic traces only while tracing is enabled', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-trace-retention-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: join(directory, 'artifacts'),
+      workspacePath: directory,
+      workspaceId: 'workspace_trace_retention'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_trace_retention'
+    });
+    rawDatabase.initialize();
+    let tracesEnabled = false;
+    const database = createHoneycrispSessionBoundary(rawDatabase, true, () => tracesEnabled);
+    try {
+      const context = database.createRun({
+        scopeVersionId: database.getActiveScope().id,
+        title: 'Trace retention',
+        promptMarkdown: 'Inspect the parser.',
+        shellSafetyMode: 'auto_review',
+        mode: 'open_discovery',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        attemptStrategy: 'iterative_research',
+        sandboxProfile: 'host',
+        budget: { runEngine: 'honeycrisp' }
+      });
+
+      database.appendTraceEvent({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        type: 'research_event',
+        source: 'executor',
+        summary: 'Discarded transport diagnostic.',
+        payload: { transport: 'websocket' },
+        modelVisible: false
+      });
+      database.appendTraceEvent({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        type: 'user_note',
+        source: 'user',
+        summary: 'Retained session-history event.',
+        payload: {}
+      });
+      await flushHoneycrispSessionWrites(database, context.run.id);
+
+      let summaries = database.getRunDetail(context.run.id).traceEvents.map((event) => event.summary);
+      expect(summaries).not.toContain('Discarded transport diagnostic.');
+      expect(summaries).toContain('Retained session-history event.');
+
+      tracesEnabled = true;
+      database.appendTraceEvent({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        type: 'research_event',
+        source: 'executor',
+        summary: 'Queryable transport diagnostic.',
+        payload: { transport: 'websocket' },
+        modelVisible: false
+      });
+      await flushHoneycrispSessionWrites(database, context.run.id);
+
+      summaries = database.getRunDetail(context.run.id).traceEvents.map((event) => event.summary);
+      expect(summaries).toContain('Queryable transport diagnostic.');
+    } finally {
+      database.close();
+    }
+  }, 30_000);
+
+  it('keeps completed subagents after their lifecycle events age out of the session tail', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-subagent-history-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId: 'workspace_subagent_history'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_subagent_history'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    try {
+      const context = database.createRun({
+        scopeVersionId: database.getActiveScope().id,
+        title: 'Durable subagent history',
+        promptMarkdown: 'Delegate a review.',
+        shellSafetyMode: 'auto_review',
+        mode: 'open_discovery',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        attemptStrategy: 'iterative_research',
+        sandboxProfile: 'host',
+        budget: { runEngine: 'honeycrisp' }
+      });
+      const store = new HoneycrispSessionStore({ databasePath });
+      try {
+        for (const [id, action, timestamp] of [
+          ['subagent_spawned', 'spawned', '2026-08-23T12:00:00.000Z'],
+          ['subagent_completed', 'completed', '2026-08-23T12:00:01.000Z']
+        ] as const) {
+          store.appendEventReceipt(context.run.id, {
+            id,
+            kind: 'agent.event',
+            timestamp,
+            summary: `Reviewer ${action}`,
+            payload: {
+              type: 'subagent.activity',
+              action,
+              agentId: 'agent_reviewer',
+              agentPath: '/root/reviewer',
+              status: action === 'completed' ? 'completed' : 'running'
+            },
+            agentId: 'agent_reviewer',
+            agentPath: '/root/reviewer'
+          });
+        }
+        for (let index = 0; index <= 1_000; index += 1) {
+          store.appendEventReceipt(context.run.id, {
+            id: `later_event_${index}`,
+            kind: 'agent.event',
+            timestamp: `2026-08-23T13:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
+            summary: `Later event ${index}`,
+            payload: { type: 'thought', index }
+          });
+        }
+      } finally {
+        store.close();
+      }
+
+      const detail = await getHoneycrispRunDetailForClient(database, context.run.id);
+      expect(detail?.traceEvents.map((event) => event.id)).toEqual(expect.arrayContaining([
+        'subagent_spawned',
+        'subagent_completed'
+      ]));
+    } finally {
+      database.close();
+    }
+  }, 30_000);
+
+  it('derives and persists interrupted canonical breakout-room state', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-breakout-interruption-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId: 'workspace_breakout_interruption'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_breakout_interruption'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    try {
+      const context = database.createRun({
+        scopeVersionId: database.getActiveScope().id,
+        title: 'Interrupted collaboration room',
+        promptMarkdown: 'Run a two-agent review.',
+        shellSafetyMode: 'auto_review',
+        mode: 'open_discovery',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        attemptStrategy: 'iterative_research',
+        sandboxProfile: 'host',
+        budget: { runEngine: 'honeycrisp' }
+      });
+      database.upsertBreakoutRoom({
+        id: 'room_interrupted',
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        name: 'interrupted_review',
+        title: 'Interrupted review',
+        phase: 'response'
+      });
+      for (const [id, status] of [['completed', 'completed'], ['worker', 'active']] as const) {
+        database.upsertBreakoutRoomMember({
+          id: `member_${id}`,
+          roomId: 'room_interrupted',
+          runId: context.run.id,
+          attemptId: context.attempt.id,
+          agentId: `agent_${id}`,
+          agentPath: `/root/${id}`,
+          provider: 'openai-codex',
+          model: 'gpt-5.6-sol',
+          role: 'researcher',
+          status,
+          startedAt: '2026-08-16T12:00:00.000Z',
+          endedAt: status === 'completed' ? '2026-08-16T12:01:00.000Z' : null
+        });
+      }
+      database.upsertBreakoutRoomMember({
+        id: 'member_worker',
+        roomId: 'room_interrupted',
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        agentId: 'agent_worker',
+        agentPath: '/root/worker',
+        provider: 'openai-codex',
+        model: 'gpt-5.6-sol',
+        role: 'researcher',
+        status: 'interrupted',
+        endedAt: '2026-08-16T12:02:00.000Z'
+      });
+      database.refreshBreakoutRoomStatus('room_interrupted');
+
+      expect(database.getRunDetail(context.run.id).breakoutRooms).toEqual([
+        expect.objectContaining({ id: 'room_interrupted', status: 'interrupted' })
+      ]);
+      await flushHoneycrispSessionWrites(database, context.run.id);
+      expect((await getHoneycrispRunDetailForClient(database, context.run.id))?.breakoutRooms).toEqual([
+        expect.objectContaining({ id: 'room_interrupted', status: 'interrupted' })
+      ]);
+    } finally {
+      database.close();
+    }
+  }, 30_000);
+
+  it('uses Honeycrisp as the only writer and batches live trace mirrors off the caller path', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-session-boundary-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: join(directory, 'artifacts'),
+      workspacePath: directory,
+      workspaceId: 'workspace_boundary'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_boundary'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const context = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Canonical Honeycrisp session',
+      promptMarkdown: 'Inspect the parser.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+
+    expect(rawDatabase.getRun(context.run.id)).toBeNull();
+    expect(database.getRun(context.run.id)).toMatchObject({ id: context.run.id, status: 'active' });
+
+    const modelSession = database.createModelSession({
+      runId: context.run.id,
+      provider: 'openai-codex',
+      transport: 'host_process',
+      status: 'active',
+      metadata: { initial: true }
+    });
+    database.updateModelSessionByRun(context.run.id, {
+      previousResponseId: 'response_usage',
+      metadata: {
+        latestReportedInputTokens: 40_000,
+        latestCacheHitRate: 0.75
+      }
+    });
+    expect(database.getRunDetail(context.run.id).modelSessions).toContainEqual(expect.objectContaining({
+      id: modelSession.id,
+      previousResponseId: 'response_usage',
+      metadata: {
+        initial: true,
+        latestReportedInputTokens: 40_000,
+        latestCacheHitRate: 0.75
+      }
+    }));
+
+    for (const summary of ['First live trace', 'Second live trace', 'Third live trace']) {
+      database.appendTraceEvent({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        type: 'research_event',
+        source: 'executor',
+        summary,
+        payload: {}
+      });
+    }
+    await flushHoneycrispSessionWrites(database, context.run.id);
+
+    const capturePath = join(directory, 'capture.json');
+    writeFileSync(capturePath, JSON.stringify({
+      schemaVersion: 5,
+      capturedAt: '2026-08-15T13:00:00.000Z',
+      request: { prompt: 'Inspect the parser.' },
+      agent: {
+        id: 'agent_boundary',
+        status: 'complete',
+        executorName: 'fixture',
+        startedAt: '2026-08-15T12:59:00.000Z',
+        completedAt: '2026-08-15T13:00:00.000Z',
+        outputText: 'The parser is safe.',
+        finalDisposition: {
+          outcome: 'objective_achieved',
+          summary: 'Inspection complete.',
+          externalStateRequired: false,
+          blockerDependencies: []
+        }
+      },
+      eventTimeline: []
+    }));
+    importHoneycrispSessionCapture(context.run.id, context.attempt.id, capturePath, {
+      databasePath,
+      artifactDirectoryPath: join(dirname(databasePath), 'artifacts')
+    });
+
+    expect(database.getRunDetail(context.run.id)).toMatchObject({
+      run: { status: 'completed', summary: 'Honeycrisp completed the research session.' },
+      transcriptMessages: [{ role: 'assistant', contentMarkdown: 'The parser is safe.' }]
+    });
+
+    const inspection = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(inspection.prepare('SELECT COUNT(*) AS count FROM honeycrisp_sessions').get()).toMatchObject({ count: 1 });
+      expect(inspection.prepare('SELECT COUNT(*) AS count FROM runs').get()).toMatchObject({ count: 0 });
+      const storedEvents = inspection.prepare(`
+        SELECT event_json FROM honeycrisp_session_events
+        WHERE session_id = ? ORDER BY event_offset ASC
+      `).all(context.run.id) as Array<{ event_json: string }>;
+      const traceBatches = storedEvents
+        .map(({ event_json }) => JSON.parse(event_json) as { kind: string; payload?: { records?: unknown[] } })
+        .filter((event) => event.kind === 'beale.trace_batch');
+      expect(traceBatches).toHaveLength(1);
+      expect(traceBatches[0]?.payload?.records).toHaveLength(3);
+    } finally {
+      inspection.close();
+      database.close();
+    }
+  }, 15_000);
+
+  it('does not replay a prior attempt final response while a continuation is active', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-active-continuation-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId: 'workspace_active_continuation'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_active_continuation'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const context = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Interrupted Honeycrisp session',
+      promptMarkdown: 'Inspect the parser.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+
+    try {
+      const capturePath = join(directory, 'aborted-capture.json');
+      writeFileSync(capturePath, JSON.stringify({
+        schemaVersion: 5,
+        capturedAt: '2026-08-16T21:00:00.000Z',
+        request: { prompt: 'Inspect the parser.' },
+        agent: {
+          id: 'agent_aborted',
+          status: 'error',
+          executorName: 'fixture',
+          startedAt: '2026-08-16T20:59:00.000Z',
+          completedAt: '2026-08-16T21:00:00.000Z',
+          outputText: 'Request was aborted'
+        },
+        eventTimeline: []
+      }));
+      importHoneycrispSessionCapture(context.run.id, context.attempt.id, capturePath, {
+        databasePath,
+        artifactDirectoryPath: join(dirname(databasePath), 'artifacts')
+      });
+      const failedDetail = database.getRunDetail(context.run.id);
+      expect(failedDetail.run.status).toBe('failed');
+      expect(failedDetail.transcriptMessages).toEqual(expect.arrayContaining([
+        expect.objectContaining({ phase: 'final_answer', contentMarkdown: 'Request was aborted' })
+      ]));
+
+      database.createAttempt({
+        runId: context.run.id,
+        parentAttemptId: context.attempt.id,
+        status: 'active',
+        shortState: 'Continue after interruption.',
+        strategyRole: 'session_continuation'
+      });
+      const activeDetail = database.getRunDetail(context.run.id);
+      expect(activeDetail.run.status).toBe('active');
+      expect(activeDetail.transcriptMessages.some((message) =>
+        message.phase === 'final_answer' && message.contentMarkdown === 'Request was aborted'
+      )).toBe(false);
+
+      const latestTrace = activeDetail.traceEvents.at(-1);
+      const update = await getHoneycrispRunDetailUpdateForClient(database, context.run.id, {
+        afterTraceSequence: latestTrace?.sequence ?? -1,
+        afterTranscriptCount: activeDetail.transcriptMessages.length,
+        afterTraceEventId: typeof latestTrace?.payload.honeycrispSessionEventId === 'string'
+          ? latestTrace.payload.honeycrispSessionEventId
+          : latestTrace?.id ?? null
+      });
+      expect(update?.run.status).toBe('active');
+      expect(update?.transcriptMessages).toEqual([]);
+    } finally {
+      database.close();
+    }
+  }, 15_000);
+
+  it('returns the successful terminal response after an app-recovered session resumes', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-recovered-completion-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    const storage = {
+      databasePath,
+      artifactDirectoryPath: join(dirname(databasePath), 'artifacts')
+    };
+    const workspaceId = 'workspace_recovered_completion';
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const context = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Recovered Honeycrisp session',
+      promptMarkdown: 'Verify the calculator.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+
+    try {
+      recoverInterruptedHoneycrispSessions(workspaceId, {
+        reason: 'app_shutdown',
+        at: '2026-08-18T22:28:42.542Z'
+      }, storage);
+      const pausedDetail = database.getRunDetail(context.run.id);
+      expect(pausedDetail.run.status).toBe('paused');
+      expect(pausedDetail.transcriptMessages).toContainEqual(expect.objectContaining({
+        contentMarkdown: 'Unexpected error',
+        metadata: expect.objectContaining({ interruptedByRecovery: true })
+      }));
+
+      const resumedAttempt = database.createAttempt({
+        runId: context.run.id,
+        parentAttemptId: context.attempt.id,
+        status: 'active',
+        shortState: 'Retry computer use after the patch.',
+        strategyRole: 'session_continuation'
+      });
+      expect(database.getRunDetail(context.run.id).transcriptMessages.some((message) =>
+        message.metadata.interruptedByRecovery === true
+      )).toBe(false);
+
+      const capturePath = join(directory, 'successful-continuation-capture.json');
+      writeFileSync(capturePath, JSON.stringify({
+        schemaVersion: 5,
+        capturedAt: '2026-08-18T22:56:44.289Z',
+        request: { prompt: 'Retry computer use after the patch.' },
+        agent: {
+          id: 'agent_recovered_root',
+          status: 'complete',
+          executorName: 'fixture',
+          startedAt: '2026-08-18T22:53:50.000Z',
+          completedAt: '2026-08-18T22:56:44.289Z',
+          outputText: 'The calculator displayed 6.'
+        },
+        eventTimeline: []
+      }));
+      importHoneycrispSessionCapture(context.run.id, resumedAttempt.id, capturePath, storage);
+
+      const latestPausedTrace = pausedDetail.traceEvents.at(-1);
+      const update = await getHoneycrispRunDetailUpdateForClient(database, context.run.id, {
+        afterTraceSequence: latestPausedTrace?.sequence ?? -1,
+        afterTranscriptCount: pausedDetail.transcriptMessages.length,
+        afterTraceEventId: typeof latestPausedTrace?.payload.honeycrispSessionEventId === 'string'
+          ? latestPausedTrace.payload.honeycrispSessionEventId
+          : latestPausedTrace?.id ?? null
+      });
+      expect(update?.run.status).toBe('completed');
+      expect(update?.transcriptMessages).toContainEqual(expect.objectContaining({
+        attemptId: resumedAttempt.id,
+        phase: 'final_answer',
+        contentMarkdown: 'The calculator displayed 6.'
+      }));
+
+      const completedDetail = database.getRunDetail(context.run.id);
+      expect(completedDetail.transcriptMessages.some((message) =>
+        message.metadata.interruptedByRecovery === true
+      )).toBe(false);
+      expect(completedDetail.transcriptMessages).toContainEqual(expect.objectContaining({
+        attemptId: resumedAttempt.id,
+        phase: 'final_answer',
+        contentMarkdown: 'The calculator displayed 6.'
+      }));
+    } finally {
+      database.close();
+    }
+  }, 20_000);
+
+  it('keeps the completed root response when a subagent already has a final transcript', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-root-final-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: join(directory, 'artifacts'),
+      workspacePath: directory,
+      workspaceId: 'workspace_root_final'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_root_final'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const context = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Root and subagent responses',
+      promptMarkdown: 'Inspect the parser with a reviewer.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+
+    try {
+      database.createTranscriptMessage({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        role: 'assistant',
+        phase: 'final_answer',
+        contentMarkdown: 'The reviewer found one issue.',
+        source: 'honeycrisp',
+        metadata: { agentPath: '/root/reviewer' }
+      });
+
+      const capturePath = join(directory, 'complete-capture.json');
+      writeFileSync(capturePath, JSON.stringify({
+        schemaVersion: 5,
+        capturedAt: '2026-08-16T22:24:40.699Z',
+        request: { prompt: 'Inspect the parser with a reviewer.' },
+        agent: {
+          id: 'agent_root',
+          status: 'complete',
+          executorName: 'fixture',
+          startedAt: '2026-08-16T22:20:00.000Z',
+          completedAt: '2026-08-16T22:24:40.699Z',
+          outputText: 'The root agent completed the inspection.'
+        },
+        eventTimeline: []
+      }));
+      importHoneycrispSessionCapture(context.run.id, context.attempt.id, capturePath, {
+        databasePath,
+        artifactDirectoryPath: join(dirname(databasePath), 'artifacts')
+      });
+
+      const finals = database.getRunDetail(context.run.id).transcriptMessages.filter((message) =>
+        message.role === 'assistant' && message.phase === 'final_answer'
+      );
+      expect(finals).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          contentMarkdown: 'The reviewer found one issue.',
+          metadata: expect.objectContaining({ agentPath: '/root/reviewer' })
+        }),
+        expect.objectContaining({
+          contentMarkdown: 'The root agent completed the inspection.',
+          metadata: expect.objectContaining({ agentPath: '/root' })
+        })
+      ]));
+    } finally {
+      database.close();
+    }
+  }, 15_000);
+
+  it('persists approval revisions as distinct events and reconciles legacy pending records from resolution traces', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-approval-boundary-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: join(directory, 'artifacts'),
+      workspacePath: directory,
+      workspaceId: 'workspace_approval_boundary'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_approval_boundary'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const context = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Canonical approval session',
+      promptMarkdown: 'Exercise approval persistence.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+
+    try {
+      const lock = new DatabaseSync(databasePath);
+      lock.exec('BEGIN IMMEDIATE;');
+      const released = new Promise<void>((resolveReleased) => {
+        setTimeout(() => {
+          lock.exec('COMMIT;');
+          lock.close();
+          resolveReleased();
+        }, 100);
+      });
+      const writeStartedAt = performance.now();
+      const revised = database.createApproval({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        requestKind: 'shell_command',
+        requestedAction: { approvalRequestId: 'shell_revision', approvalKind: 'auto_review_override' },
+        decision: 'denied',
+        reason: 'Waiting for the researcher.',
+        pending: true
+      });
+      expect(performance.now() - writeStartedAt).toBeLessThan(500);
+      database.updateApprovalDecision(revised.id, context.run.id, 'approved', 'Approved once.');
+      await released;
+
+      const reconciled = database.createApproval({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        requestKind: 'shell_command',
+        requestedAction: { approvalRequestId: 'shell_reconciled', approvalKind: 'auto_review_override' },
+        decision: 'denied',
+        reason: 'Waiting for the researcher.',
+        pending: true
+      });
+      database.appendTraceEvent({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        type: 'approval_event',
+        source: 'policy',
+        summary: 'Shell command approved by the researcher.',
+        payload: {
+          approvalRequestId: 'shell_reconciled',
+          decision: 'approved',
+          reason: 'The researcher approved this command once.'
+        },
+        approvalId: reconciled.id,
+        modelVisible: false
+      });
+      await flushHoneycrispSessionWrites(database, context.run.id);
+
+      expect(database.getRunDetail(context.run.id).policyEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: revised.id, decision: 'approved', reason: 'Approved once.' }),
+        expect.objectContaining({
+          id: reconciled.id,
+          decision: 'approved',
+          reason: 'The researcher approved this command once.',
+          decidedAt: expect.any(String)
+        })
+      ]));
+      expect(database.listPendingShellApprovals()).toEqual([]);
+
+      const inspection = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const storedEvents = inspection.prepare(`
+          SELECT event_json FROM honeycrisp_session_events
+          WHERE session_id = ? ORDER BY event_offset ASC
+        `).all(context.run.id) as Array<{ event_json: string }>;
+        const revisions = storedEvents.map(({ event_json }) => JSON.parse(event_json) as {
+          id: string;
+          kind: string;
+          payload?: { record?: { id?: string } };
+        }).filter((event) =>
+          event.kind === 'beale.approval' && event.payload?.record?.id === revised.id
+        );
+        expect(revisions).toHaveLength(2);
+        expect(new Set(revisions.map((event) => event.id)).size).toBe(2);
+      } finally {
+        inspection.close();
+      }
+    } finally {
+      database.close();
+    }
+  }, 15_000);
+
+  it('runs the Honeycrisp host adapter against the canonical store without creating a Beale run row', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-run-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-registry-'));
+    createdDirectories.push(workspace, registry);
+    setEnvironment('BEALE_HONEYCRISP_MOCK', '1');
+    configureIsolatedAppServer(registry);
+
+    const broadcastStatuses: string[] = [];
+    let service!: WorkspaceService;
+    service = new WorkspaceService(() => {
+      const currentRun = service.getSnapshot()?.runs.find(
+        ({ run }) => run.promptMarkdown === 'Inspect the canonical session boundary.'
+      );
+      if (currentRun) broadcastStatuses.push(currentRun.run.status);
+    }, {
+      workspaceRegistryDirectory: registry,
+      researchProfileResolver: () => resolvedTestResearchProfile()
+    });
+    try {
+      service.createWorkspace(workspace);
+      const databasePath = join(registry, 'honeycrisp', 'profiles', 'security-research', 'memory.sqlite');
+      const runtime = (service as unknown as {
+        getForegroundRuntime(): { honeycrispEngine: { hasActiveRuns(): boolean } } | null;
+      }).getForegroundRuntime();
+      expect(runtime).not.toBeNull();
+      runtime!.honeycrispEngine.hasActiveRuns = () => true;
+      const started = service.startRun({
+        runEngine: 'honeycrisp',
+        provider: 'openai-codex',
+        shellSafetyMode: 'auto_review',
+        goalEnabled: false,
+        goalObjective: null,
+        promptMarkdown: 'Inspect the canonical session boundary.',
+        mode: 'open_discovery',
+        attemptStrategy: 'iterative_research',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        sandboxProfile: 'host',
+        budget: { maxMinutes: 30, maxAttempts: 1, maxCostUsd: 0 },
+      });
+      const runId = started.runs.find(
+        ({ run }) => run.promptMarkdown === 'Inspect the canonical session boundary.'
+      )?.run.id;
+      if (!runId) throw new Error('Expected the canonical Honeycrisp session to start.');
+      await waitFor(() => service.getRunDetail(runId).run.status !== 'active');
+      try {
+        await waitFor(() => broadcastStatuses.includes('completed'));
+      } catch {
+        const detail = service.getRunDetail(runId);
+        throw new Error(
+          `Terminal session broadcast was not observed: ${JSON.stringify(broadcastStatuses)}; ${detail.run.status}: ${detail.run.summary}`
+        );
+      }
+      expect(service.getRunDetail(runId)).toMatchObject({
+        run: { status: 'completed' },
+        transcriptMessages: [{ role: 'assistant' }]
+      });
+      const completeDetail = service.getRunDetail(runId);
+      const incremental = await service.getRunDetailUpdateForClient(runId, {
+        afterTraceSequence: completeDetail.traceEvents.at(-2)?.sequence ?? -1,
+        afterTranscriptCount: Math.max(0, completeDetail.transcriptMessages.length - 1)
+      });
+      expect(incremental.traceEvents).toEqual(
+        completeDetail.traceEvents.filter((event) => event.sequence > (completeDetail.traceEvents.at(-2)?.sequence ?? -1))
+      );
+      expect(incremental.transcriptMessages).toEqual(completeDetail.transcriptMessages.slice(-1));
+      await expect(service.getRunDetailForClient(runId)).resolves.toMatchObject({
+        run: { status: 'completed' },
+        transcriptMessages: [{ role: 'assistant' }]
+      });
+
+      const registryDatabase = new DatabaseSync(join(registry, 'workspace-registry.sqlite'));
+      try {
+        registryDatabase.prepare(`
+          UPDATE research_sessions
+          SET status = 'active', ended_at = NULL, summary = 'Session is active.'
+          WHERE run_id = ?
+        `).run(runId);
+      } finally {
+        registryDatabase.close();
+      }
+      expect(service.getCachedWorkspaceRegistryState().researchSessions).toContainEqual(
+        expect.objectContaining({ runId, status: 'active', endedAt: null })
+      );
+      await expect(service.getRunDetailUpdateForClient(runId, {
+        afterTraceSequence: completeDetail.traceEvents.at(-1)?.sequence ?? -1,
+        afterTranscriptCount: completeDetail.transcriptMessages.length
+      })).resolves.toMatchObject({
+        run: { status: 'completed' }
+      });
+      expect(service.getCachedWorkspaceRegistryState().researchSessions).toContainEqual(
+        expect.objectContaining({ runId, status: 'completed', endedAt: expect.any(String) })
+      );
+
+      const inspection = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(inspection.prepare('SELECT COUNT(*) AS count FROM honeycrisp_sessions WHERE id = ?').get(runId)).toMatchObject({ count: 1 });
+        expect(inspection.prepare('SELECT COUNT(*) AS count FROM runs WHERE id = ?').get(runId)).toMatchObject({ count: 0 });
+      } finally {
+        inspection.close();
+      }
+    } finally {
+      service.close();
+    }
+  }, 30_000);
+
+  it('stops a newly started canonical session without querying full session aggregates from live events', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-stop-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-stop-registry-'));
+    createdDirectories.push(workspace, registry);
+    setEnvironment('BEALE_HONEYCRISP_MOCK', '1');
+    configureIsolatedAppServer(registry);
+
+    let watchForContinuedRegistry = false;
+    let sawContinuedActiveRegistry = false;
+    let service!: WorkspaceService;
+    service = new WorkspaceService((change) => {
+      if (!watchForContinuedRegistry || !change?.workspaceRegistryChanged) return;
+      sawContinuedActiveRegistry ||= service.getCachedWorkspaceRegistryState().researchSessions
+        .some((session) => session.status === 'active');
+    }, {
+      workspaceRegistryDirectory: registry,
+      researchProfileResolver: () => resolvedTestResearchProfile()
+    });
+    try {
+      service.createWorkspace(workspace);
+      const started = service.startRun({
+        runEngine: 'honeycrisp',
+        provider: 'openai-codex',
+        shellSafetyMode: 'auto_review',
+        goalEnabled: false,
+        goalObjective: null,
+        promptMarkdown: 'Stop this session immediately.',
+        mode: 'open_discovery',
+        attemptStrategy: 'iterative_research',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        sandboxProfile: 'host',
+        budget: { maxMinutes: 30, maxAttempts: 1, maxCostUsd: 0 }
+      });
+      const runId = started.runs[0]?.run.id;
+      expect(runId).toBeTruthy();
+
+      expect(() => service.steerRun({ type: 'pause', runId: runId!, note: '' })).not.toThrow();
+      await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
+        .some((session) => session.runId === runId && session.status === 'paused'));
+      expect(() => service.steerRun({ type: 'resume', runId: runId!, note: '' })).not.toThrow();
+      await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
+        .some((session) => session.runId === runId && session.status === 'active'));
+
+      expect(() => service.steerRun({ type: 'stop', runId: runId!, note: '' })).not.toThrow();
+      await waitFor(() => service.getRunDetail(runId!).run.status === 'stopped');
+      expect(service.getRunDetail(runId!)).toMatchObject({
+        run: { status: 'stopped' },
+        attempts: [expect.objectContaining({ status: 'stopped' })]
+      });
+      await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
+        .some((session) => session.runId === runId && session.status === 'stopped'));
+
+      watchForContinuedRegistry = true;
+      await service.steerRunForClient({
+        type: 'steer',
+        runId: runId!,
+        instruction: 'Continue after the stopped process has detached.'
+      });
+      expect(sawContinuedActiveRegistry).toBe(true);
+      expect(service.getRunDetail(runId!)).toMatchObject({
+        attempts: [
+          expect.objectContaining({ status: 'stopped' }),
+          expect.objectContaining({ strategyRole: 'session_continuation' })
+        ]
+      });
+
+      expect(() => service.steerRun({ type: 'stop', runId: runId!, note: '' })).not.toThrow();
+      await waitFor(() => service.getRunDetail(runId!).run.status === 'stopped');
+    } finally {
+      service.close();
+    }
+  }, 30_000);
+
+  it('loads a Honeycrisp session asynchronously while its runtime database writer is active', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-session-read-lock-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId: 'workspace_read_lock'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_read_lock'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const context = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Concurrent session read',
+      promptMarkdown: 'Keep the interface responsive.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+
+    const writer = new DatabaseSync(databasePath);
+    writer.exec('PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;');
+    writer.prepare('UPDATE honeycrisp_sessions SET summary = summary WHERE id = ?').run(context.run.id);
+    let mainLoopAdvanced = false;
+    const detailPromise = getHoneycrispRunDetailForClient(database, context.run.id);
+    setImmediate(() => { mainLoopAdvanced = true; });
+    try {
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      expect(mainLoopAdvanced).toBe(true);
+      await expect(detailPromise).resolves.toMatchObject({ run: { id: context.run.id } });
+    } finally {
+      writer.exec('ROLLBACK;');
+      writer.close();
+      database.close();
+    }
+  });
+
+  it('normalizes canonical nested research tool events for Desktop commentary', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-tool-commentary-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId: 'workspace_tool_commentary'
+  });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_tool_commentary'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    try {
+      const context = database.createRun({
+        scopeVersionId: database.getActiveScope().id,
+        title: 'Canonical tool commentary',
+        promptMarkdown: 'Read the parser.',
+        shellSafetyMode: 'auto_review',
+        mode: 'open_discovery',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        attemptStrategy: 'iterative_research',
+        sandboxProfile: 'host',
+        budget: { runEngine: 'honeycrisp' }
+      });
+      await flushHoneycrispSessionWrites(database, context.run.id);
+
+      const store = new HoneycrispSessionStore({ databasePath });
+      try {
+        for (const [kind, timestamp] of [
+          ['tool.requested', '2026-08-22T20:00:00.000Z'],
+          ['tool.observed', '2026-08-22T20:00:01.000Z']
+        ] as const) {
+          store.appendEventReceipt(context.run.id, {
+            id: `event_${kind}`,
+            kind: 'research.event',
+            timestamp,
+            summary: 'research.event',
+            payload: {
+              event: {
+                id: `nested_${kind}`,
+                kind,
+                timestamp,
+                payload: {
+                  toolActionId: 'read-parser',
+                  toolName: 'file.read',
+                  normalizedInputs: { path: 'src/parser.ts' },
+                  ...(kind === 'tool.observed' ? { result: { text: 'source' }, status: 'complete' } : {})
+                },
+                agentPath: '/root'
+              }
+            },
+            agentPath: '/root'
+          });
+        }
+      } finally {
+        store.close();
+      }
+
+      const detail = await getHoneycrispRunDetailForClient(database, context.run.id);
+      const tools = detail?.traceEvents.filter((event) => event.payload.honeycrispKind === 'tool.requested'
+        || event.payload.honeycrispKind === 'tool.observed') ?? [];
+      expect(tools.map((event) => [event.type, event.payload.toolName])).toEqual([
+        ['tool_call', 'file.read'],
+        ['tool_result', 'file.read']
+      ]);
+    } finally {
+      database.close();
+    }
+  }, 30_000);
+
+  it('restores canonical root and subagent commentary when Desktop was detached', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-detached-commentary-'));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, 'memory.sqlite');
+    const artifactRoot = join(directory, '.beale', 'artifacts');
+    mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
+    configureRealHoneycrisp({
+      registryDirectory: join(directory, 'registry'),
+      databasePath,
+      artifactDirectoryPath: artifactRoot,
+      workspacePath: directory,
+      workspaceId: 'workspace_detached_commentary'
+    });
+
+    const rawDatabase = new WorkspaceDatabase(databasePath, artifactRoot, {
+      workspacePath: directory,
+      workspaceId: 'workspace_detached_commentary'
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    try {
+      const context = database.createRun({
+        scopeVersionId: database.getActiveScope().id,
+        title: 'Detached commentary',
+        promptMarkdown: 'Inspect the parser.',
+        shellSafetyMode: 'auto_review',
+        mode: 'open_discovery',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        attemptStrategy: 'iterative_research',
+        sandboxProfile: 'host',
+        budget: { runEngine: 'honeycrisp' }
+      });
+      await flushHoneycrispSessionWrites(database, context.run.id);
+
+      const store = new HoneycrispSessionStore({ databasePath });
+      try {
+        store.appendEventReceipt(context.run.id, {
+          id: 'canonical_root_commentary',
+          kind: 'model.output',
+          timestamp: '2026-08-28T20:00:00.000Z',
+          summary: 'model.output',
+          payload: {
+            phase: 'completed',
+            messagePhase: 'commentary',
+            text: 'Root commentary from the canonical worker.',
+            responseId: 'response_root',
+            itemId: 'text:0',
+            turn: 2,
+            agentPath: '/root'
+          },
+          agentPath: '/root'
+        });
+        store.appendEventReceipt(context.run.id, {
+          id: 'canonical_subagent_reasoning',
+          kind: 'model.thought',
+          timestamp: '2026-08-28T20:00:01.000Z',
+          summary: 'model.thought',
+          payload: {
+            phase: 'completed',
+            text: 'Subagent reasoning from the canonical worker.',
+            responseId: 'response_reviewer',
+            itemId: 'thinking:0',
+            turn: 1,
+            agentPath: '/root/reviewer'
+          },
+          agentPath: '/root/reviewer'
+        });
+      } finally {
+        store.close();
+      }
+
+      const detail = await getHoneycrispRunDetailForClient(database, context.run.id);
+      expect(detail?.transcriptMessages).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          source: 'honeycrisp_commentary',
+          contentMarkdown: 'Root commentary from the canonical worker.',
+          metadata: expect.objectContaining({ agentPath: '/root' })
+        }),
+        expect.objectContaining({
+          source: 'openai_reasoning_summary',
+          contentMarkdown: 'Subagent reasoning from the canonical worker.',
+          metadata: expect.objectContaining({ agentPath: '/root/reviewer' })
+        })
+      ]));
+    } finally {
+      database.close();
+    }
+  });
+
+  it('defers Honeycrisp interruption classification to the app-server', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-restart-workspace-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-restart-registry-'));
+    createdDirectories.push(workspace, registry);
+    configureIsolatedAppServer(registry);
+
+    const initial = new WorkspaceService(() => undefined, {
+      workspaceRegistryDirectory: registry,
+      researchProfileResolver: () => resolvedTestResearchProfile()
+    });
+    const created = initial.createWorkspace(workspace);
+    initial.close();
+
+    const databasePath = join(registry, 'honeycrisp', 'profiles', 'security-research', 'memory.sqlite');
+    const rawDatabase = new WorkspaceDatabase(databasePath, join(workspace, '.beale', 'artifacts'), {
+      workspacePath: workspace,
+      workspaceId: created.workspace.workspaceId
+    });
+    rawDatabase.initialize();
+    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const interrupted = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Interrupted canonical session',
+      promptMarkdown: 'Exercise restart recovery.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+    database.close();
+
+    const reopened = new WorkspaceService(() => undefined, {
+      workspaceRegistryDirectory: registry,
+      researchProfileResolver: () => resolvedTestResearchProfile()
+    });
+    const recovered = reopened.openWorkspace(workspace);
+    expect(recovered.recovery).toMatchObject({ interruptedRuns: 0, interruptedAttempts: 0 });
+    await waitFor(() => reopened.getRunDetail(interrupted.run.id).run.status === 'paused');
+    const detail = reopened.getRunDetail(interrupted.run.id);
+    expect(detail.attempts).toContainEqual(expect.objectContaining({
+      id: interrupted.attempt.id,
+      status: 'paused'
+    }));
+    expect(detail.traceEvents).toContainEqual(expect.objectContaining({
+      attemptId: interrupted.attempt.id,
+      payload: expect.objectContaining({ interruptedByRecovery: true })
+    }));
+    reopened.close();
+  }, 20_000);
+
+  it('safely pauses a legacy cached session without app-server restart intent', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-registry-recovery-workspace-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-registry-recovery-registry-'));
+    createdDirectories.push(workspace, registry);
+    configureIsolatedAppServer(registry);
+
+    const initial = new WorkspaceService(() => undefined, {
+      workspaceRegistryDirectory: registry,
+      researchProfileResolver: () => resolvedTestResearchProfile()
+    });
+    initial.createWorkspace(workspace);
+    const database = (initial as unknown as { db: WorkspaceDatabase }).db;
+    const interrupted = database.createRun({
+      scopeVersionId: database.getActiveScope().id,
+      title: 'Cached active session',
+      promptMarkdown: 'Recover this session before rendering the startup sidebar.',
+      shellSafetyMode: 'auto_review',
+      mode: 'open_discovery',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      attemptStrategy: 'iterative_research',
+      sandboxProfile: 'host',
+      budget: { runEngine: 'honeycrisp' }
+    });
+    expect(initial.getWorkspaceRegistryState().researchSessions).toContainEqual(
+      expect.objectContaining({ runId: interrupted.run.id, status: 'active' })
+    );
+    initial.close();
+
+    const restarted = new WorkspaceService(() => undefined, {
+      workspaceRegistryDirectory: registry,
+      researchProfileResolver: () => resolvedTestResearchProfile()
+    });
+    const startupRegistry = await restarted.getWorkspaceRegistryStateForClient();
+    expect(restarted.getSnapshot()).toBeNull();
+    expect(startupRegistry.researchSessions).toContainEqual(
+      expect.objectContaining({ runId: interrupted.run.id, status: 'paused' })
+    );
+
+    const opened = restarted.openWorkspace(workspace);
+    expect(opened.runs.find(({ run }) => run.id === interrupted.run.id)?.run.status).toBe('paused');
+    restarted.close();
+  }, 20_000);
+});
+
+function configureRealHoneycrisp(options?: {
+  registryDirectory: string;
+  databasePath: string;
+  artifactDirectoryPath: string;
+  workspacePath: string;
+  workspaceId: string;
+}): void {
+  // Runs launch through the Beale app-server, which discovers the workspace
+  // CLI itself. Only session-ownership policy is pinned here.
+  setEnvironment('BEALE_HONEYCRISP_SESSION_OWNERSHIP', 'honeycrisp');
+  if (!options) return;
+
+  mkdirSync(options.registryDirectory, { recursive: true });
+  const registry = new DatabaseSync(join(options.registryDirectory, 'workspace-registry.sqlite'));
+  try {
+    registry.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        workspace_name TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        workspace_directories_json TEXT NOT NULL,
+        research_profile_id TEXT,
+        research_kit_id TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    registry.prepare(`
+      INSERT INTO workspaces (
+        id, workspace_id, workspace_name, workspace_path,
+        workspace_directories_json, research_profile_id, research_kit_id, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      `registry_${options.workspaceId}`,
+      options.workspaceId,
+      'Canonical session fixture',
+      options.workspacePath,
+      JSON.stringify([options.workspacePath]),
+      'security-research',
+      'general',
+      new Date().toISOString()
+    );
+  } finally {
+    registry.close();
+  }
+  configureIsolatedAppServer(options.registryDirectory);
+  setEnvironment('HONEYCRISP_DATABASE_PATH', options.databasePath);
+  setEnvironment('HONEYCRISP_ARTIFACT_DIRECTORY', options.artifactDirectoryPath);
+}
+
+function configureIsolatedAppServer(registry: string): void {
+  const stateFile = join(registry, 'app-server.json');
+  createdAppServerStateFiles.push(stateFile);
+  setEnvironment('BEALE_APP_SERVER_STATE_FILE', stateFile);
+  setEnvironment('BEALE_APP_SERVER_PARENT_PID', String(process.pid));
+  setEnvironment('BEALE_APP_SERVER_PORT', '0');
+  setEnvironment('BEALE_WORKSPACE_REGISTRY_DIR', registry);
+}
+
+function stopTestAppServer(stateFile: string): void {
+  if (!existsSync(stateFile)) return;
+  try {
+    const record = JSON.parse(readFileSync(stateFile, 'utf8')) as { pid?: unknown };
+    if (typeof record.pid === 'number' && record.pid > 0 && record.pid !== process.pid) {
+      try { process.kill(record.pid); } catch { /* already stopped */ }
+    }
+  } catch {
+    // Best-effort teardown for the detached test app-server.
+  }
+}
+
+function setEnvironment(name: string, value: string): void {
+  if (!previousEnvironment.has(name)) previousEnvironment.set(name, process.env[name]);
+  process.env[name] = value;
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  throw new Error('Timed out waiting for canonical Honeycrisp session completion.');
+}

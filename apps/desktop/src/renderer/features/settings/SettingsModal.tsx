@@ -1,0 +1,3133 @@
+import { useEffect, useRef, useState } from 'react';
+import type { JSX } from 'react';
+import type { CSSProperties } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
+import {
+  DEFAULT_RESEARCH_REASONING_EFFORT
+} from '../../../shared/modelDefaults';
+import { Archive, ArchiveRestore, ArrowLeft, Hash, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
+import type {
+  AgentPluginRegistryState,
+  AppServerRemoteAccessSettings,
+  AppServerRemoteAccessUpdate,
+  ComputerUsePermissionMode,
+  ComputerUseSettings,
+  HostEnvironment,
+  OpenAiAccountStatus,
+  OpenAiAuthReadiness,
+  OpenAiOAuthStartResult,
+  ProviderSettings,
+  ProviderAuthenticationMethod,
+  ProviderModelDefaults,
+  ResearchProfile,
+  ResearchProfileMemoryType,
+  ResearchProfileSessionHeatPalette,
+  ResolvedResearchProfile,
+  ResearchProfileSnapshot,
+  ResearchModelProviderId,
+  ResearchModelEffortLevel,
+  ResearchProviderModel,
+  ResearchProviderModelCatalog,
+  ResearchProviderId,
+  ResearchProviderOAuthStartResult,
+  ResearchProviderReadiness,
+  ResearchProviderStatus,
+  ShellSafetyMode,
+  ResearchChannelSummary,
+  ResearchSessionSummary,
+  WorkspaceRegistryEntry,
+  TicketingMode,
+  TicketingProviderId,
+  TicketingSettings,
+  TicketingTarget
+} from '@shared/types';
+import { ProviderIcon } from '../../app/ProviderIcon';
+import type { AppHeaderViewIcon } from '../../app/AppHeaderTitle';
+import { CenteredLoadingState } from '../../app/CenteredLoadingState';
+import { MemoryStatusDot } from '../research/MemoryStatusDot';
+import type { FloatingTextPickerOption } from '../../app/FloatingTextPicker';
+import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
+import { researchModelNameLabel, stateClass } from '../../lib/formatting';
+import {
+  filterEnabledProviderModelCatalogs,
+  isOptionalProviderModelEnabled,
+  OPTIONAL_PROVIDER_MODELS
+} from '../../../shared/optionalProviderModels';
+import { normalizeShellSafetyMode } from '../../../shared/shellSafety';
+import { permissionModeOptions } from '../../view-models/permissionSettings';
+import {
+  APPEARANCE_BACKGROUNDS,
+  APPEARANCE_TRANSPARENCY_PERCENTAGES,
+  APPEARANCE_THEMES,
+  normalizeAppearanceTransparencyPercentage,
+  type AppearanceBackground,
+  type AppearanceTransparencyPercentage,
+  type AppearanceTheme
+} from '../../view-models/appearance';
+import {
+  DEFAULT_SUGGESTION_PREFERENCES,
+  type SuggestionPreferenceKey,
+  type SuggestionPreferences
+} from '../../view-models/suggestionPreferences';
+import {
+  EMPTY_SESSION_HEAT_PREFERENCES,
+  SESSION_HEAT_COLOR_LEVELS,
+  SESSION_HEAT_THEMES,
+  normalizeHexColor,
+  sessionHeatPaletteForProfile,
+  type SessionHeat,
+  type SessionHeatColorLevel,
+  type SessionHeatPreferences,
+  type SessionHeatTheme
+} from '../../view-models/sessionHeat';
+
+export type SettingsSection = 'general' | 'appearance' | 'remote' | 'providers' | 'ticketing' | 'profile' | 'computer-use' | 'archive';
+
+const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'appearance', 'remote', 'providers', 'ticketing', 'profile', 'computer-use', 'archive'];
+
+export function SettingsSidebar({
+  collapsed,
+  section,
+  error,
+  onBack,
+  onChangeSection,
+  onResizePointerDown
+}: {
+  collapsed: boolean;
+  section: SettingsSection;
+  error: string | null;
+  onBack: () => void;
+  onChangeSection: (section: SettingsSection) => void;
+  onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+}): JSX.Element {
+  const activeSection = activeSettingsSection(section);
+
+  return (
+    <aside className="sidebar settings-sidebar" aria-hidden={collapsed} inert={collapsed}>
+      <button type="button" className="sidebar-new-research settings-back-button" onClick={onBack}>
+        <ArrowLeft size={15} />
+        <span>Back to Agent</span>
+      </button>
+      <div className="sidebar-section settings-sidebar-section">
+        <div className="workspace-list-title">Settings</div>
+        <MainSideScrollRegion
+          className="sidebar-list-scroll-region"
+          listClassName="sidebar-list-scroll"
+          updateKey={activeSection}
+        >
+          <nav className="settings-sections sidebar-list-scroll-content" aria-label="Settings sections">
+            {SETTINGS_SECTIONS.map((item) => (
+              <div className={`workspace-item-row no-menu ${activeSection === item ? 'active' : ''}`.trim()} key={item}>
+                <button
+                  type="button"
+                  className={`workspace-item ${activeSection === item ? 'active' : ''}`.trim()}
+                  aria-current={activeSection === item ? 'page' : undefined}
+                  onClick={() => onChangeSection(item)}
+                >
+                  {item === 'archive' ? (
+                    <Archive size={15} aria-hidden="true" />
+                  ) : item === 'computer-use' ? (
+                    <Monitor size={15} aria-hidden="true" />
+                  ) : item === 'appearance' ? (
+                    <Palette size={15} aria-hidden="true" />
+                  ) : item === 'remote' ? (
+                    <Wifi size={15} aria-hidden="true" />
+                  ) : item === 'providers' ? (
+                    <ServerCog size={15} aria-hidden="true" />
+                  ) : item === 'ticketing' ? (
+                    <Ticket size={15} aria-hidden="true" />
+                  ) : item === 'profile' ? (
+                    <UserRoundCog size={15} aria-hidden="true" />
+                  ) : (
+                    <Settings size={15} aria-hidden="true" />
+                  )}
+                  <span>{settingsSectionLabel(item)}</span>
+                </button>
+              </div>
+            ))}
+          </nav>
+        </MainSideScrollRegion>
+      </div>
+      {error ? <div className="error-box">{error}</div> : null}
+      <div className="sidebar-resize-handle" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" onPointerDown={onResizePointerDown} />
+    </aside>
+  );
+}
+
+export function SettingsView({
+  section,
+  appearanceBackground,
+  appearanceTransparencyPercentage,
+  appearanceTheme,
+  researchProfile,
+  tracesEnabled,
+  profilingEnabled,
+  suggestionPreferences,
+  dangerModeEnabled,
+  defaultShellSafetyMode,
+  researchProfiles,
+  researchProfilesLoading,
+  openAiStatus,
+  openAiOAuthResult,
+  researchProviderOAuthResults,
+  researchProviderStatuses,
+  researchProviderModelCatalog,
+  providerSettings,
+  providerStatusesLoaded,
+  computerUsePlatform,
+  computerUseSettings,
+  appServerRemoteAccessSettings = null,
+  appServerRemoteAccessBusy = false,
+  ticketingSettings = null,
+  ticketingTargets = [],
+  ticketingLoading = false,
+  ticketingError = null,
+  agentPluginState,
+  agentPluginsLoading,
+  agentPluginsBusy,
+  agentPluginsError,
+  sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
+  archivedSessions = [],
+  archivedChannels = [],
+  archivedQuickChats = [],
+  archiveWorkspaces = [],
+  archiveLoading = false,
+  busy,
+  onChangeAppearanceTheme,
+  onChangeAppearanceBackground,
+  onChangeAppearanceTransparencyPercentage,
+  onChangeTracesEnabled,
+  onChangeProfilingEnabled,
+  onChangeSuggestionPreference,
+  onChangeDangerModeEnabled,
+  onChangeDefaultShellSafetyMode,
+  onRefreshOpenAi,
+  onStartOpenAiOAuth,
+  onStartResearchProviderOAuth,
+  onForgetProviderSubscription = async () => undefined,
+  onRemoveProvider = async () => undefined,
+  onConfigureProviderApiKey = async () => undefined,
+  onRemoveProviderApiKey = async () => undefined,
+  onSetDefaultProviderId,
+  onSetProviderModelDefaults,
+  onSetProviderOptionalModelEnabled = async () => undefined,
+  onSetProviderCyberPolicyRiskAcknowledged = async () => undefined,
+  onSetProviderPreferredAuthenticationMethod = async () => undefined,
+  onSetAgentPluginEnabled,
+  onChangeComputerUsePermissionMode,
+  onDetectAppServerRemoteAccess = async () => undefined,
+  onSetAppServerRemoteAccess = async () => undefined,
+  onSetTicketingProvider = async () => undefined,
+  onSetTicketingHumanInTheLoop = async () => undefined,
+  onConfigureTicketingCredential = async () => undefined,
+  onRemoveTicketingCredential = async () => undefined,
+  onRefreshTicketingTargets = async () => undefined,
+  onSetTicketingTarget = async () => undefined,
+  onSetSessionHeatPreference = () => undefined,
+  onSetSessionHeatPalettePreference = () => undefined,
+  onRestoreResearchSession = async () => undefined,
+  onRestoreResearchChannel = async () => undefined,
+  onResumeQuickChat = async () => undefined
+}: {
+  section: SettingsSection;
+  appearanceBackground: AppearanceBackground;
+  appearanceTransparencyPercentage: AppearanceTransparencyPercentage;
+  appearanceTheme: AppearanceTheme;
+  researchProfile: ResearchProfileSnapshot | null;
+  researchProfiles: ResolvedResearchProfile[];
+  researchProfilesLoading: boolean;
+  tracesEnabled: boolean;
+  profilingEnabled: boolean;
+  suggestionPreferences: SuggestionPreferences;
+  dangerModeEnabled: boolean;
+  defaultShellSafetyMode: ShellSafetyMode;
+  openAiStatus: OpenAiAccountStatus | null;
+  openAiOAuthResult: OpenAiOAuthStartResult | null;
+  researchProviderOAuthResults: Partial<Record<ResearchProviderId, ResearchProviderOAuthStartResult>>;
+  researchProviderStatuses: ResearchProviderStatus[];
+  researchProviderModelCatalog: ResearchProviderModelCatalog[];
+  providerSettings: ProviderSettings | null;
+  providerStatusesLoaded: boolean;
+  computerUsePlatform: HostEnvironment['platform'] | null;
+  computerUseSettings: ComputerUseSettings | null;
+  appServerRemoteAccessSettings?: AppServerRemoteAccessSettings | null;
+  appServerRemoteAccessBusy?: boolean;
+  ticketingSettings?: TicketingSettings | null;
+  ticketingTargets?: TicketingTarget[];
+  ticketingLoading?: boolean;
+  ticketingError?: string | null;
+  agentPluginState: AgentPluginRegistryState | null;
+  agentPluginsLoading: boolean;
+  agentPluginsBusy: boolean;
+  agentPluginsError: string | null;
+  sessionHeatPreferences?: SessionHeatPreferences;
+  archivedSessions?: readonly ResearchSessionSummary[];
+  archivedChannels?: readonly ResearchChannelSummary[];
+  archivedQuickChats?: readonly ResearchSessionSummary[];
+  archiveWorkspaces?: readonly WorkspaceRegistryEntry[];
+  archiveLoading?: boolean;
+  busy: boolean;
+  onChangeAppearanceTheme: (theme: AppearanceTheme) => void;
+  onChangeAppearanceBackground: (background: AppearanceBackground) => void;
+  onChangeAppearanceTransparencyPercentage: (percentage: AppearanceTransparencyPercentage) => void;
+  onChangeTracesEnabled: (enabled: boolean) => void;
+  onChangeProfilingEnabled: (enabled: boolean) => void;
+  onChangeSuggestionPreference: (key: SuggestionPreferenceKey, enabled: boolean) => void;
+  onChangeDangerModeEnabled: (enabled: boolean) => void;
+  onChangeDefaultShellSafetyMode: (mode: ShellSafetyMode) => void;
+  onRefreshOpenAi: () => Promise<void>;
+  onStartOpenAiOAuth: () => Promise<void>;
+  onStartResearchProviderOAuth: (providerId: ResearchProviderId) => Promise<void>;
+  onForgetProviderSubscription?: (providerId: ResearchModelProviderId) => Promise<void>;
+  onRemoveProvider?: (providerId: ResearchModelProviderId) => Promise<void>;
+  onConfigureProviderApiKey?: (providerId: ResearchModelProviderId, apiKey: string) => Promise<void>;
+  onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
+  onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
+  onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
+  onSetProviderOptionalModelEnabled?: (
+    providerId: ResearchModelProviderId,
+    modelId: string,
+    enabled: boolean
+  ) => Promise<void>;
+  onSetProviderCyberPolicyRiskAcknowledged?: (
+    providerId: ResearchModelProviderId,
+    acknowledged: boolean
+  ) => Promise<void>;
+  onSetProviderPreferredAuthenticationMethod?: (
+    providerId: ResearchModelProviderId,
+    method: ProviderAuthenticationMethod
+  ) => Promise<void>;
+  onSetAgentPluginEnabled: (pluginId: string, enabled: boolean) => void;
+  onChangeComputerUsePermissionMode: (permissionMode: ComputerUsePermissionMode) => void;
+  onDetectAppServerRemoteAccess?: () => Promise<void>;
+  onSetAppServerRemoteAccess?: (update: AppServerRemoteAccessUpdate) => Promise<void>;
+  onSetTicketingProvider?: (providerId: TicketingMode) => Promise<void>;
+  onSetTicketingHumanInTheLoop?: (enabled: boolean) => Promise<void>;
+  onConfigureTicketingCredential?: (providerId: TicketingProviderId, apiKey: string) => Promise<void>;
+  onRemoveTicketingCredential?: (providerId: TicketingProviderId) => Promise<void>;
+  onRefreshTicketingTargets?: (providerId: TicketingProviderId) => Promise<void>;
+  onSetTicketingTarget?: (providerId: TicketingProviderId, target: TicketingTarget) => Promise<void>;
+  onSetSessionHeatPreference?: (profileId: string, memoryTypeId: string, status: string, heat: SessionHeat | null) => void;
+  onSetSessionHeatPalettePreference?: (
+    profileId: string,
+    theme: SessionHeatTheme,
+    level: SessionHeatColorLevel,
+    color: string | null
+  ) => void;
+  onRestoreResearchSession?: (session: ResearchSessionSummary) => Promise<void>;
+  onRestoreResearchChannel?: (channel: ResearchChannelSummary) => Promise<void>;
+  onResumeQuickChat?: (session: ResearchSessionSummary) => Promise<void>;
+}): JSX.Element {
+  const activeSection = activeSettingsSection(section);
+
+  return (
+    <div className="settings-workspace">
+      <section className="settings-view settings-main-view" aria-label={`${settingsSectionLabel(activeSection)} settings`}>
+        {activeSection === 'archive' ? (
+          <ArchiveSettingsView
+            sessions={archivedSessions}
+            channels={archivedChannels}
+            quickChats={archivedQuickChats}
+            workspaces={archiveWorkspaces}
+            loading={archiveLoading}
+            onRestoreSession={onRestoreResearchSession}
+            onRestoreChannel={onRestoreResearchChannel}
+            onResumeQuickChat={onResumeQuickChat}
+          />
+        ) : activeSection === 'general' ? (
+          <GeneralSettingsView
+            tracesEnabled={tracesEnabled}
+            profilingEnabled={profilingEnabled}
+            suggestionPreferences={suggestionPreferences}
+            dangerModeEnabled={dangerModeEnabled}
+            defaultShellSafetyMode={defaultShellSafetyMode}
+            onChangeTracesEnabled={onChangeTracesEnabled}
+            onChangeProfilingEnabled={onChangeProfilingEnabled}
+            onChangeSuggestionPreference={onChangeSuggestionPreference}
+            onChangeDangerModeEnabled={onChangeDangerModeEnabled}
+            onChangeDefaultShellSafetyMode={onChangeDefaultShellSafetyMode}
+          />
+        ) : activeSection === 'appearance' ? (
+          <AppearanceSettingsView
+            background={appearanceBackground}
+            transparencyPercentage={appearanceTransparencyPercentage}
+            theme={appearanceTheme}
+            sessionHeatPreferences={sessionHeatPreferences}
+            onChangeBackground={onChangeAppearanceBackground}
+            onChangeTransparencyPercentage={onChangeAppearanceTransparencyPercentage}
+            onChangeTheme={onChangeAppearanceTheme}
+            onSetSessionHeatPalettePreference={onSetSessionHeatPalettePreference}
+          />
+        ) : activeSection === 'remote' ? (
+          <RemoteAccessSettingsView
+            settings={appServerRemoteAccessSettings}
+            busy={appServerRemoteAccessBusy}
+            onDetect={onDetectAppServerRemoteAccess}
+            onSave={onSetAppServerRemoteAccess}
+          />
+        ) : activeSection === 'providers' ? (
+          <ProvidersSettingsView
+            busy={busy}
+            openAiOAuthResult={openAiOAuthResult}
+            openAiStatus={openAiStatus}
+            researchProviderOAuthResults={researchProviderOAuthResults}
+            researchProviderStatuses={researchProviderStatuses}
+            researchProviderModelCatalog={researchProviderModelCatalog}
+            providerSettings={providerSettings}
+            providerStatusesLoaded={providerStatusesLoaded}
+            onRefreshOpenAi={onRefreshOpenAi}
+            onStartOpenAiOAuth={onStartOpenAiOAuth}
+            onStartResearchProviderOAuth={onStartResearchProviderOAuth}
+            onForgetProviderSubscription={onForgetProviderSubscription}
+            onRemoveProvider={onRemoveProvider}
+            onConfigureProviderApiKey={onConfigureProviderApiKey}
+            onRemoveProviderApiKey={onRemoveProviderApiKey}
+            onSetDefaultProviderId={onSetDefaultProviderId}
+            onSetProviderModelDefaults={onSetProviderModelDefaults}
+            onSetProviderOptionalModelEnabled={onSetProviderOptionalModelEnabled}
+            onSetProviderCyberPolicyRiskAcknowledged={onSetProviderCyberPolicyRiskAcknowledged}
+            onSetProviderPreferredAuthenticationMethod={onSetProviderPreferredAuthenticationMethod}
+          />
+        ) : activeSection === 'ticketing' ? (
+          <TicketingSettingsView
+            settings={ticketingSettings}
+            targets={ticketingTargets}
+            loading={ticketingLoading}
+            error={ticketingError}
+            onSetProvider={onSetTicketingProvider}
+            onSetHumanInTheLoop={onSetTicketingHumanInTheLoop}
+            onConfigureCredential={onConfigureTicketingCredential}
+            onRemoveCredential={onRemoveTicketingCredential}
+            onRefreshTargets={onRefreshTicketingTargets}
+            onSetTarget={onSetTicketingTarget}
+          />
+        ) : activeSection === 'profile' ? (
+          <ProfileSettingsView
+            researchProfile={researchProfile}
+            researchProfiles={researchProfiles}
+            loading={researchProfilesLoading}
+            sessionHeatPreferences={sessionHeatPreferences}
+            appearanceTheme={appearanceTheme}
+            onSetSessionHeatPreference={onSetSessionHeatPreference}
+            onSetSessionHeatPalettePreference={onSetSessionHeatPalettePreference}
+          />
+        ) : (
+          <ComputerUseSettingsView
+            platform={computerUsePlatform}
+            settings={computerUseSettings}
+            pluginState={agentPluginState}
+            loading={agentPluginsLoading}
+            busy={agentPluginsBusy}
+            error={agentPluginsError}
+            onSetEnabled={onSetAgentPluginEnabled}
+            onChangePermissionMode={onChangeComputerUsePermissionMode}
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function activeSettingsSection(section: SettingsSection): SettingsSection {
+  return SETTINGS_SECTIONS.includes(section) ? section : 'general';
+}
+
+const TICKETING_MODE_DETAILS: ReadonlyArray<{ id: TicketingMode; name: string; description: string }> = [
+  {
+    id: 'local',
+    name: 'Local Reports Only',
+    description: 'Keep reports in Beale without creating external tickets.'
+  },
+  {
+    id: 'github',
+    name: 'GitHub Issues',
+    description: 'Create issues in a repository available to a GitHub token.'
+  },
+  {
+    id: 'linear',
+    name: 'Linear',
+    description: 'Create issues for a team available to a Linear API key.'
+  }
+];
+
+export function TicketingSettingsView({
+  settings,
+  targets,
+  loading,
+  error,
+  onSetProvider,
+  onSetHumanInTheLoop,
+  onConfigureCredential,
+  onRemoveCredential,
+  onRefreshTargets,
+  onSetTarget
+}: {
+  settings: TicketingSettings | null;
+  targets: readonly TicketingTarget[];
+  loading: boolean;
+  error: string | null;
+  onSetProvider: (providerId: TicketingMode) => Promise<void>;
+  onSetHumanInTheLoop: (enabled: boolean) => Promise<void>;
+  onConfigureCredential: (providerId: TicketingProviderId, apiKey: string) => Promise<void>;
+  onRemoveCredential: (providerId: TicketingProviderId) => Promise<void>;
+  onRefreshTargets: (providerId: TicketingProviderId) => Promise<void>;
+  onSetTarget: (providerId: TicketingProviderId, target: TicketingTarget) => Promise<void>;
+}): JSX.Element {
+  const [apiKey, setApiKey] = useState('');
+  const selectedMode = settings?.provider ?? 'local';
+  const selectedProvider = selectedMode === 'local' ? null : selectedMode;
+  const providerSettings = selectedProvider ? settings?.[selectedProvider] ?? null : null;
+  const destinationLabel = selectedProvider === 'github' ? 'Repository' : 'Team';
+  const credentialLabel = selectedProvider === 'github' ? 'GitHub token' : 'Linear API key';
+
+  useEffect(() => setApiKey(''), [selectedProvider]);
+
+  return (
+    <div className="settings-page general-settings-page ticketing-settings-page" aria-busy={loading}>
+      <section className="settings-form">
+        <header className="settings-form-heading">
+          <h2 id="ticketing-system-heading">Ticketing</h2>
+          <p>Choose where completed Beale reports can be submitted.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="ticketing-system-heading" disabled={loading}>
+          <div className="settings-form-radio-list">
+            {TICKETING_MODE_DETAILS.map((option) => (
+              <label className="settings-form-control-row" key={option.id}>
+                <span className="settings-form-control-copy">
+                  <strong>{option.name}</strong>
+                  <small>{option.description}</small>
+                </span>
+                <input
+                  aria-label={option.name}
+                  checked={selectedMode === option.id}
+                  name="ticketing-system"
+                  onChange={() => void onSetProvider(option.id)}
+                  type="radio"
+                />
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      </section>
+
+      {selectedProvider && providerSettings ? (
+        <section className="settings-form ticketing-connection-form">
+          <header className="settings-form-heading">
+            <h2 id="ticketing-connection-heading">Connection</h2>
+            <p>Credentials stay encrypted in the trusted host process and are never exposed to research agents.</p>
+          </header>
+          <div className="settings-form-squircle" aria-labelledby="ticketing-connection-heading">
+            <div className="settings-form-control-list">
+              <div className="settings-form-control-row ticketing-credential-row">
+                <span className="settings-form-control-copy">
+                  <strong>{credentialLabel}</strong>
+                  <small>{providerSettings.credentialConfigured
+                    ? providerSettings.credentialSource === 'environment'
+                      ? 'Configured by the host environment.'
+                      : 'Stored securely by Beale.'
+                    : selectedProvider === 'github'
+                      ? 'Use a fine-grained token with Issues write access to the destination repository.'
+                      : 'Use a personal API key with access to the destination team.'}</small>
+                </span>
+                <span className="ticketing-inline-controls">
+                  <input
+                    aria-label={credentialLabel}
+                    autoComplete="off"
+                    disabled={loading}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    placeholder={providerSettings.credentialConfigured ? 'Replace token' : 'Paste token'}
+                    type="password"
+                    value={apiKey}
+                  />
+                  <button
+                    disabled={loading || !apiKey.trim()}
+                    onClick={async () => {
+                      try {
+                        await onConfigureCredential(selectedProvider, apiKey);
+                        setApiKey('');
+                      } catch {
+                        // The owning settings view renders the host validation error.
+                      }
+                    }}
+                    type="button"
+                  >Save</button>
+                  {providerSettings.credentialConfigured ? (
+                    <button
+                      disabled={loading || providerSettings.credentialSource === 'environment'}
+                      onClick={() => void onRemoveCredential(selectedProvider)}
+                      type="button"
+                    >Remove</button>
+                  ) : null}
+                </span>
+              </div>
+              <label className="settings-form-control-row ticketing-target-row">
+                <span className="settings-form-control-copy">
+                  <strong>{destinationLabel}</strong>
+                  <small>{providerSettings.credentialConfigured
+                    ? `Choose the ${destinationLabel.toLowerCase()} that receives new report tickets.`
+                    : `Configure a credential before choosing a ${destinationLabel.toLowerCase()}.`}</small>
+                </span>
+                <span className="ticketing-inline-controls">
+                  <select
+                    aria-label={`Ticketing ${destinationLabel.toLowerCase()}`}
+                    disabled={loading || !providerSettings.credentialConfigured || targets.length === 0}
+                    onChange={(event) => {
+                      const target = targets.find((candidate) => candidate.id === event.target.value);
+                      if (target) void onSetTarget(selectedProvider, target);
+                    }}
+                    value={providerSettings.targetId ?? ''}
+                  >
+                    <option value="">Select {destinationLabel.toLowerCase()}</option>
+                    {targets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
+                  </select>
+                  <button
+                    aria-label={`Refresh ${destinationLabel.toLowerCase()} list`}
+                    disabled={loading || !providerSettings.credentialConfigured}
+                    onClick={() => void onRefreshTargets(selectedProvider)}
+                    title={`Refresh ${destinationLabel.toLowerCase()} list`}
+                    type="button"
+                  ><RefreshCw aria-hidden="true" size={14} /></button>
+                </span>
+              </label>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="settings-form ticketing-automation-form">
+        <header className="settings-form-heading">
+          <h2 id="ticketing-automation-heading">Automation</h2>
+          <p>Control how completed reports are submitted to the configured ticketing system.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="ticketing-automation-heading" disabled={loading}>
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Human In The Loop</strong>
+                <small>Require an explicit Create action before a completed report is submitted. When disabled, newly completed reports are submitted automatically.</small>
+              </span>
+              <input
+                aria-label="Human In The Loop"
+                checked={settings?.automation.humanInTheLoop ?? true}
+                onChange={(event) => void onSetHumanInTheLoop(event.target.checked)}
+                type="checkbox"
+              />
+            </label>
+          </div>
+        </fieldset>
+      </section>
+      {error ? <p className="ticketing-settings-error" role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
+const SESSION_HEAT_THEME_LABELS: Record<SessionHeatTheme, string> = {
+  light: 'Light Heat',
+  dark: 'Dark Heat',
+  cream: 'Cream Heat',
+  midnight: 'Midnight Heat'
+};
+
+const APPEARANCE_THEME_DETAILS: Record<AppearanceTheme, { name: string; description: string }> = {
+  light: {
+    name: 'Light',
+    description: 'A bright interface with cool neutral surfaces.'
+  },
+  dark: {
+    name: 'Dark',
+    description: 'The default low-light Beale interface.'
+  },
+  cream: {
+    name: 'Cream',
+    description: 'A warm light interface with soft brown surfaces.'
+  },
+  midnight: {
+    name: 'Midnight',
+    description: 'A dark interface with deep blue surfaces.'
+  }
+};
+
+const APPEARANCE_BACKGROUND_DETAILS: Record<AppearanceBackground, { name: string; description: string }> = {
+  solid: {
+    name: 'Solid',
+    description: 'Use the current opaque Beale window surface.'
+  },
+  'semi-transparent': {
+    name: 'Semi-Transparent',
+    description: 'Let some of the desktop show through the window.'
+  },
+  gradient: {
+    name: 'Gradient',
+    description: 'Blend complementary surfaces from the active theme.'
+  },
+  blur: {
+    name: 'Blur',
+    description: 'Use a translucent, softly blurred window surface.'
+  }
+};
+
+const SESSION_HEAT_LEVEL_DESCRIPTIONS: Record<SessionHeatColorLevel, string> = {
+  low: 'A subtle signal for sessions with light activity.',
+  medium: 'A moderate signal for sessions with sustained activity.',
+  high: 'A strong signal for sessions with heavy activity.',
+  critical: 'The strongest signal for sessions with exceptional activity.'
+};
+
+export function AppearanceSettingsView({
+  background,
+  transparencyPercentage,
+  theme,
+  sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
+  onChangeBackground,
+  onChangeTransparencyPercentage,
+  onChangeTheme,
+  onSetSessionHeatPalettePreference = () => undefined
+}: {
+  background: AppearanceBackground;
+  transparencyPercentage: AppearanceTransparencyPercentage;
+  theme: AppearanceTheme;
+  sessionHeatPreferences?: SessionHeatPreferences;
+  onChangeBackground: (background: AppearanceBackground) => void;
+  onChangeTransparencyPercentage: (percentage: AppearanceTransparencyPercentage) => void;
+  onChangeTheme: (theme: AppearanceTheme) => void;
+  onSetSessionHeatPalettePreference?: (profileId: string, theme: SessionHeatTheme, level: SessionHeatColorLevel, color: string | null) => void;
+}): JSX.Element {
+  return (
+    <div className="settings-page general-settings-page appearance-settings-page">
+      <section className="settings-form appearance-settings-form">
+        <header className="settings-form-heading">
+          <h2 id="appearance-theme-heading">Theme</h2>
+          <p>Choose the color theme used throughout Beale.</p>
+        </header>
+        <fieldset className="settings-form-squircle appearance-theme-settings" aria-labelledby="appearance-theme-heading">
+          <div className="settings-form-control-list appearance-theme-list">
+            {APPEARANCE_THEMES.map((candidate) => {
+              const details = APPEARANCE_THEME_DETAILS[candidate];
+              return (
+                <label
+                  className="settings-form-control-row appearance-theme-row"
+                  data-appearance-theme={candidate}
+                  key={candidate}
+                >
+                  <span className="settings-form-control-copy">
+                    <strong>{details.name}</strong>
+                    <small>{details.description}</small>
+                  </span>
+                  <span className="appearance-theme-control">
+                    <span className="appearance-theme-preview" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                    <input
+                      type="radio"
+                      name="appearance-theme"
+                      aria-label={`${details.name} theme`}
+                      checked={theme === candidate}
+                      onChange={() => onChangeTheme(candidate)}
+                    />
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+      </section>
+      <SessionHeatPaletteSettings
+        appearanceTheme={theme}
+        sessionHeatPreferences={sessionHeatPreferences}
+        onSetColor={onSetSessionHeatPalettePreference}
+      />
+      <section className="settings-form appearance-settings-form">
+        <header className="settings-form-heading">
+          <h2 id="appearance-background-heading">Background</h2>
+          <p>Choose how the Beale window surface is rendered.</p>
+        </header>
+        <fieldset className="settings-form-squircle appearance-background-settings" aria-labelledby="appearance-background-heading">
+          <div className="settings-form-control-list appearance-background-list">
+            {APPEARANCE_BACKGROUNDS.map((candidate) => {
+              const details = APPEARANCE_BACKGROUND_DETAILS[candidate];
+              return (
+                <div
+                  className="settings-form-control-row appearance-background-row"
+                  data-appearance-background={candidate}
+                  key={candidate}
+                >
+                  <label
+                    className="settings-form-control-copy appearance-background-copy"
+                    htmlFor={`appearance-background-${candidate}`}
+                  >
+                    <strong>{details.name}</strong>
+                    <small>{details.description}</small>
+                  </label>
+                  <span className="appearance-theme-control">
+                    {candidate === 'semi-transparent' ? (
+                      <select
+                        className="appearance-transparency-select"
+                        aria-label="Background transparency"
+                        value={transparencyPercentage}
+                        onChange={(event) => {
+                          onChangeTransparencyPercentage(normalizeAppearanceTransparencyPercentage(event.target.value));
+                          onChangeBackground(candidate);
+                        }}
+                      >
+                        {APPEARANCE_TRANSPARENCY_PERCENTAGES.map((percentage) => (
+                          <option value={percentage} key={percentage}>{percentage}%</option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <span className="appearance-background-preview" aria-hidden="true">
+                      <span />
+                      <span />
+                    </span>
+                    <input
+                      type="radio"
+                      id={`appearance-background-${candidate}`}
+                      name="appearance-background"
+                      aria-label={`${details.name} background`}
+                      checked={background === candidate}
+                      onChange={() => onChangeBackground(candidate)}
+                    />
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </fieldset>
+      </section>
+    </div>
+  );
+}
+
+export function ProfileSettingsView({
+  researchProfile,
+  researchProfiles,
+  loading = false,
+  appearanceTheme = 'dark',
+  sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
+  onSetSessionHeatPalettePreference = () => undefined
+}: {
+  researchProfile: ResearchProfileSnapshot | null;
+  researchProfiles: readonly ResolvedResearchProfile[];
+  loading?: boolean;
+  appearanceTheme?: AppearanceTheme;
+  sessionHeatPreferences?: SessionHeatPreferences;
+  onSetSessionHeatPreference?: (profileId: string, memoryTypeId: string, status: string, heat: SessionHeat | null) => void;
+  onSetSessionHeatPalettePreference?: (
+    profileId: string,
+    theme: SessionHeatTheme,
+    level: SessionHeatColorLevel,
+    color: string | null
+  ) => void;
+}): JSX.Element {
+  const profiles = profileSettingsCatalog(researchProfiles, researchProfile);
+  const initialProfile = profiles.find((profile) => profile.profile.id === researchProfile?.profileId) ?? profiles[0] ?? null;
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(initialProfile?.profile.id ?? null);
+  const [selectedMemoryTypeId, setSelectedMemoryTypeId] = useState<string | null>(null);
+  const [profileDetailDrafts, setProfileDetailDrafts] = useState<Record<string, { name: string; description: string }>>({});
+  const profileCatalogKey = profiles.map((profile) => `${profile.profile.id}:${profile.hash}`).join('|');
+  const selectedProfile = profiles.find((profile) => profile.profile.id === selectedProfileId) ?? initialProfile;
+  const memoryTypes = sortedProfileMemoryTypes(selectedProfile);
+  const selectedMemoryType = selectedMemoryTypeId
+    ? memoryTypes.find((memoryType) => memoryType.id === selectedMemoryTypeId) ?? null
+    : null;
+  const memoryTypeKey = memoryTypes.map((memoryType) => memoryType.id).join('|');
+  useEffect(() => {
+    if (profiles.some((profile) => profile.profile.id === selectedProfileId)) return;
+    const nextProfile = profiles.find((profile) => profile.profile.id === researchProfile?.profileId) ?? profiles[0] ?? null;
+    setSelectedProfileId(nextProfile?.profile.id ?? null);
+    setSelectedMemoryTypeId(null);
+  }, [profileCatalogKey, researchProfile?.profileId, selectedProfileId]);
+
+  useEffect(() => {
+    if (selectedMemoryTypeId === null || memoryTypes.some((memoryType) => memoryType.id === selectedMemoryTypeId)) return;
+    setSelectedMemoryTypeId(null);
+  }, [memoryTypeKey, selectedMemoryTypeId, selectedProfile?.profile.id]);
+
+  if (profiles.length === 0 || !selectedProfile) {
+    return (
+      <div className="settings-page profile-settings-page" aria-busy={loading}>
+        <section className="profile-settings-empty" role="status">
+          {loading ? <span className="provider-settings-loading-indicator" aria-hidden="true" /> : null}
+          <span>{loading ? 'Loading profiles...' : 'No research profiles are available.'}</span>
+        </section>
+      </div>
+    );
+  }
+
+  const selectProfile = (profileId: string): void => {
+    setSelectedProfileId(profileId);
+    setSelectedMemoryTypeId(null);
+  };
+  const profileName = profileSettingsName(selectedProfile.profile.id, selectedProfile.profile.name);
+  const profileDetailDraft = profileDetailDrafts[selectedProfile.profile.id] ?? {
+    name: profileName,
+    description: selectedProfile.profile.description
+  };
+  const updateProfileDetailDraft = (update: Partial<typeof profileDetailDraft>): void => {
+    setProfileDetailDrafts((current) => ({
+      ...current,
+      [selectedProfile.profile.id]: {
+        ...profileDetailDraft,
+        ...update
+      }
+    }));
+  };
+  const overviewTabId = `profile-overview-tab-${selectedProfile.profile.id}`;
+
+  return (
+    <div className="settings-page profile-settings-page">
+      <div className="profile-settings-tab-stack">
+        <div className="profile-settings-tab-row research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Research profiles">
+          {profiles.map((profile) => {
+            const selected = profile.profile.id === selectedProfile.profile.id;
+            return (
+              <div
+                className={`research-side-view-tab provider-settings-tab profile-settings-tab ${selected ? 'active' : ''}`.trim()}
+                key={profile.profile.id}
+              >
+                <button
+                  className="research-side-view-tab-activate"
+                  type="button"
+                  role="tab"
+                  id={`profile-settings-tab-${profile.profile.id}`}
+                  aria-selected={selected}
+                  aria-controls="profile-settings-profile-panel"
+                  onClick={() => selectProfile(profile.profile.id)}
+                >
+                  <span>{profileSettingsName(profile.profile.id, profile.profile.name)}</span>
+                </button>
+              </div>
+            );
+          })}
+          {loading ? <span className="profile-settings-loading" role="status">Loading profiles...</span> : null}
+        </div>
+      </div>
+      <div
+        className="profile-settings-profile-view"
+        id="profile-settings-profile-panel"
+        role="tabpanel"
+        aria-labelledby={`profile-settings-tab-${selectedProfile.profile.id}`}
+      >
+        <div className="profile-settings-tab-row profile-settings-view-tab-row research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label={`${profileName} profile views`}>
+          <div className={`research-side-view-tab provider-settings-tab profile-settings-tab ${selectedMemoryType ? '' : 'active'}`.trim()}>
+            <button
+              className="research-side-view-tab-activate"
+              type="button"
+              role="tab"
+              id={overviewTabId}
+              aria-selected={!selectedMemoryType}
+              aria-controls="profile-settings-view-panel"
+              onClick={() => setSelectedMemoryTypeId(null)}
+            >
+              <span>Overview</span>
+            </button>
+          </div>
+          {memoryTypes.map((memoryType) => {
+            const selected = memoryType.id === selectedMemoryType?.id;
+            return (
+              <div
+                className={`research-side-view-tab provider-settings-tab profile-settings-tab ${selected ? 'active' : ''}`.trim()}
+                key={memoryType.id}
+              >
+                <button
+                  className="research-side-view-tab-activate"
+                  type="button"
+                  role="tab"
+                  id={`profile-memory-tab-${selectedProfile.profile.id}-${memoryType.id}`}
+                  aria-selected={selected}
+                  aria-controls="profile-settings-view-panel"
+                  onClick={() => setSelectedMemoryTypeId(memoryType.id)}
+                >
+                  <span>{memoryType.name}</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {selectedMemoryType ? (
+          <MemoryTypeSettingsView
+            key={`${selectedProfile.profile.id}:${selectedMemoryType.id}`}
+            id="profile-settings-view-panel"
+            labelledBy={`profile-memory-tab-${selectedProfile.profile.id}-${selectedMemoryType.id}`}
+            profile={selectedProfile.profile}
+            memoryType={selectedMemoryType}
+            sessionHeatPreferences={sessionHeatPreferences}
+            appearanceTheme={appearanceTheme}
+          />
+        ) : (
+          <article
+            className="profile-overview-view"
+            id="profile-settings-view-panel"
+            role="tabpanel"
+            aria-labelledby={overviewTabId}
+          >
+            <section className="settings-form profile-basic-details-form">
+              <header className="settings-form-heading">
+                <h2 id="profile-basic-details-heading">{profileDetailDraft.name || profileName}</h2>
+                <p>Set the name and description presented for this research profile.</p>
+              </header>
+              <div className="settings-form-squircle profile-basic-details-squircle" aria-labelledby="profile-basic-details-heading">
+                <div className="settings-form-control-list">
+                  <label className="settings-form-control-row">
+                    <span className="settings-form-control-copy">
+                      <strong>Profile Name</strong>
+                      <small>Choose the name used to identify this research profile.</small>
+                    </span>
+                    <input
+                      className="profile-basic-details-name-input"
+                      type="text"
+                      aria-label="Profile Name"
+                      value={profileDetailDraft.name}
+                      onChange={(event) => updateProfileDetailDraft({ name: event.currentTarget.value })}
+                    />
+                  </label>
+                  <label className="settings-form-control-row profile-basic-details-description-row">
+                    <span className="settings-form-control-copy">
+                      <strong>Profile Description</strong>
+                      <small>Describe the profile's research purpose and intended use.</small>
+                    </span>
+                    <textarea
+                      aria-label="Profile Description"
+                      value={profileDetailDraft.description}
+                      onChange={(event) => updateProfileDetailDraft({ description: event.currentTarget.value })}
+                    />
+                  </label>
+                </div>
+              </div>
+            </section>
+          </article>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ComputerUseSettingsView({
+  platform,
+  settings,
+  pluginState,
+  loading,
+  busy,
+  error,
+  onSetEnabled,
+  onChangePermissionMode
+}: {
+  platform: HostEnvironment['platform'] | null;
+  settings: ComputerUseSettings | null;
+  pluginState: AgentPluginRegistryState | null;
+  loading: boolean;
+  busy: boolean;
+  error: string | null;
+  onSetEnabled: (pluginId: string, enabled: boolean) => void;
+  onChangePermissionMode: (permissionMode: ComputerUsePermissionMode) => void;
+}): JSX.Element {
+  const terminator = pluginState?.plugins.find((plugin) => (
+    plugin.id === 'beale-terminator-builtin' || plugin.name === 'beale-terminator'
+  )) ?? null;
+  const resolving = platform === null || (platform === 'win32' && (loading || pluginState === null || settings === null));
+
+  return (
+    <div className="settings-page general-settings-page computer-use-settings-page">
+      <section className="settings-form computer-use-settings-form" aria-busy={resolving || busy}>
+        <header className="settings-form-heading">
+          <h2 id="computer-use-settings-heading">Terminator</h2>
+          <p>Control whether Beale can use Terminator for computer interaction.</p>
+        </header>
+        <fieldset className="settings-form-squircle computer-use-settings" aria-labelledby="computer-use-settings-heading">
+          {resolving ? (
+            <CenteredLoadingState label="Loading computer use…" />
+          ) : platform !== 'win32' ? (
+            <p className="computer-use-settings-message">Computer use is not available on this operating system.</p>
+          ) : error ? (
+            <p className="computer-use-settings-message state-error">{error}</p>
+          ) : terminator ? (
+            <div className="settings-form-control-list">
+              <label className="settings-form-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Enable Terminator</strong>
+                  <small>Allow research sessions to interact with the Windows desktop through Terminator.</small>
+                </span>
+                <input
+                  aria-label="Enable Terminator"
+                  type="checkbox"
+                  checked={terminator.enabled}
+                  disabled={busy || terminator.status === 'invalid'}
+                  onChange={(event) => onSetEnabled(terminator.id, event.currentTarget.checked)}
+                />
+              </label>
+            </div>
+          ) : (
+            <p className="computer-use-settings-message state-error">Terminator is not available.</p>
+          )}
+        </fieldset>
+      </section>
+      {platform === 'win32' && settings ? (
+        <section className="settings-form computer-permissions-settings-form" aria-busy={busy}>
+          <header className="settings-form-heading">
+            <h2 id="computer-permissions-settings-heading">Computer Permissions</h2>
+            <p>Choose how often Beale asks before changing an application.</p>
+          </header>
+          <fieldset
+            className="settings-form-squircle computer-permissions-settings"
+            aria-labelledby="computer-permissions-settings-heading"
+          >
+            <div className="settings-form-radio-list">
+              <label className="settings-form-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Every Action</strong>
+                  <small>Ask before every computer action. This is the safer default.</small>
+                </span>
+                <input
+                  type="radio"
+                  name="computer-use-permission-mode"
+                  aria-label="Every Action"
+                  checked={settings.permissionMode === 'every_action'}
+                  disabled={busy}
+                  onChange={() => onChangePermissionMode('every_action')}
+                />
+              </label>
+              <label className="settings-form-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Once Per Session</strong>
+                  <small>Ask once for each target binary, then allow later actions against that binary for the session.</small>
+                </span>
+                <input
+                  type="radio"
+                  name="computer-use-permission-mode"
+                  aria-label="Once Per Session"
+                  checked={settings.permissionMode === 'once_per_session'}
+                  disabled={busy}
+                  onChange={() => onChangePermissionMode('once_per_session')}
+                />
+              </label>
+            </div>
+          </fieldset>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+export function MemoryTypeSettingsView({
+  id,
+  labelledBy,
+  profile,
+  memoryType,
+  appearanceTheme = 'dark',
+  sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES
+}: {
+  id: string;
+  labelledBy: string;
+  profile: ResearchProfile;
+  memoryType: ResearchProfileMemoryType;
+  appearanceTheme?: AppearanceTheme;
+  sessionHeatPreferences?: SessionHeatPreferences;
+}): JSX.Element {
+  const [draft, setDraft] = useState(() => ({
+    name: memoryType.name,
+    description: memoryType.description,
+    allowedStatuses: [...memoryType.allowedStatuses],
+    sessionHeatLevels: SESSION_HEAT_COLOR_LEVELS.filter((level) =>
+      Object.values(memoryType.sessionHeat ?? {}).includes(level)
+    ),
+    sessionHeatStates: {
+      low: [],
+      medium: [],
+      high: [],
+      critical: []
+    } as Record<SessionHeatColorLevel, string[]>
+  }));
+  const statuses = [...profile.memory.statuses].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  const activePalette = sessionHeatPaletteForProfile(profile, sessionHeatPreferences, appearanceTheme);
+  const toggleAllowedStatus = (statusId: string): void => {
+    setDraft((current) => {
+      const allowedStatuses = toggleStringValue(current.allowedStatuses, statusId);
+      return {
+        ...current,
+        allowedStatuses,
+        sessionHeatStates: Object.fromEntries(
+          SESSION_HEAT_COLOR_LEVELS.map((level) => [
+            level,
+            current.sessionHeatStates[level].filter((candidate) => allowedStatuses.includes(candidate))
+          ])
+        ) as Record<SessionHeatColorLevel, string[]>
+      };
+    });
+  };
+  const toggleSessionHeatLevel = (level: SessionHeatColorLevel): void => {
+    setDraft((current) => ({
+      ...current,
+      sessionHeatLevels: toggleStringValue(current.sessionHeatLevels, level) as SessionHeatColorLevel[]
+    }));
+  };
+  const headingName = draft.name.trim() || memoryType.name;
+  const allowedStatuses = statuses.filter((status) => draft.allowedStatuses.includes(status.id));
+
+  return (
+    <article
+      className="profile-memory-type-view"
+      id={id}
+      role="tabpanel"
+      aria-labelledby={labelledBy}
+      aria-label={`${memoryType.name} memory definition`}
+    >
+      <section className="settings-form profile-basic-details-form profile-memory-details-form">
+        <header className="settings-form-heading">
+          <h2 id="profile-memory-details-heading">{headingName}</h2>
+          <p>Set the name, description, and stable identifier for this memory type.</p>
+        </header>
+        <div className="settings-form-squircle" aria-labelledby="profile-memory-details-heading">
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Memory Type Name</strong>
+                <small>Choose the name used to identify this memory type.</small>
+              </span>
+              <input
+                className="profile-basic-details-name-input"
+                type="text"
+                aria-label="Memory Type Name"
+                value={draft.name}
+                onChange={(event) => setDraft((current) => ({ ...current, name: event.currentTarget.value }))}
+              />
+            </label>
+            <label className="settings-form-control-row profile-basic-details-description-row">
+              <span className="settings-form-control-copy">
+                <strong>Memory Type Description</strong>
+                <small>Describe what this memory type represents and when it should be used.</small>
+              </span>
+              <textarea
+                aria-label="Memory Type Description"
+                value={draft.description}
+                onChange={(event) => setDraft((current) => ({ ...current, description: event.currentTarget.value }))}
+              />
+            </label>
+            <label className="settings-form-control-row profile-memory-id-row">
+              <span className="settings-form-control-copy">
+                <strong>Immutable ID</strong>
+                <small>The stable identifier used by memory records and profile contracts.</small>
+              </span>
+              <input
+                className="profile-basic-details-name-input"
+                type="text"
+                aria-label="Immutable Memory Type ID"
+                value={memoryType.id}
+                disabled
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+      <section className="settings-form profile-memory-states-form">
+        <header className="settings-form-heading">
+          <h2 id="profile-memory-states-heading">Possible States</h2>
+          <p>Choose which profile states this memory type supports.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="profile-memory-states-heading">
+          <div className="settings-form-control-list">
+            {statuses.map((status) => (
+              <label className="settings-form-control-row" key={status.id}>
+                <span className="settings-form-control-copy">
+                  <strong className="profile-memory-status-label">
+                    <MemoryStatusDot status={status.id} definitions={statuses} decorative />
+                    <span>{status.name}</span>
+                  </strong>
+                  <small>{status.description}</small>
+                </span>
+                <input
+                  type="checkbox"
+                  aria-label={`Allow ${status.name}`}
+                  checked={draft.allowedStatuses.includes(status.id)}
+                  onChange={() => toggleAllowedStatus(status.id)}
+                />
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      </section>
+    </article>
+  );
+}
+
+function MemoryHeatStatePicker({
+  level,
+  statuses,
+  selectedStateIds,
+  disabled,
+  onChange
+}: {
+  level: SessionHeatColorLevel;
+  statuses: readonly { id: string; name: string }[];
+  selectedStateIds: readonly string[];
+  disabled: boolean;
+  onChange: (stateIds: string[]) => void;
+}): JSX.Element {
+  const selectedStatuses = statuses.filter((status) => selectedStateIds.includes(status.id));
+  const selectionLabel = selectedStatuses.length === 0
+    ? 'Any State'
+    : selectedStatuses.length === 1
+      ? selectedStatuses[0]!.name
+      : `${selectedStatuses.length} States`;
+  const ariaLabel = `${sessionHeatLabel(level)} heat trigger states`;
+
+  return (
+    <details className={`profile-memory-heat-state-picker${disabled ? ' disabled' : ''}`}>
+      <summary
+        aria-label={`${ariaLabel}: ${selectionLabel}`}
+        aria-disabled={disabled}
+        tabIndex={disabled ? -1 : undefined}
+        onClick={(event) => {
+          if (disabled) event.preventDefault();
+        }}
+      >
+        <span>{selectionLabel}</span>
+      </summary>
+      <div className="profile-memory-heat-state-menu" role="group" aria-label={ariaLabel}>
+        <label>
+          <input
+            type="checkbox"
+            checked={selectedStateIds.length === 0}
+            disabled={disabled}
+            onChange={() => onChange([])}
+          />
+          <span>Any State</span>
+        </label>
+        {statuses.map((status) => (
+          <label key={status.id}>
+            <input
+              type="checkbox"
+              checked={selectedStateIds.includes(status.id)}
+              disabled={disabled}
+              onChange={() => onChange(toggleStringValue(selectedStateIds, status.id))}
+            />
+            <span>{status.name}</span>
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function SessionHeatPaletteSettings({
+  appearanceTheme,
+  sessionHeatPreferences,
+  onSetColor
+}: {
+  appearanceTheme: AppearanceTheme;
+  sessionHeatPreferences: SessionHeatPreferences;
+  onSetColor: (profileId: string, theme: SessionHeatTheme, level: SessionHeatColorLevel, color: string | null) => void;
+}): JSX.Element {
+  const [theme, setTheme] = useState<SessionHeatTheme>(appearanceTheme);
+  const palette: ResearchProfileSessionHeatPalette = sessionHeatPaletteForProfile(null, sessionHeatPreferences, theme);
+
+  useEffect(() => {
+    setTheme(appearanceTheme);
+  }, [appearanceTheme]);
+
+  return (
+    <section className="settings-form profile-heat-form" aria-label="Research attention colors">
+      <header className="settings-form-heading profile-heat-form-heading">
+        <div className="profile-heat-form-title">
+          <h2 id="profile-heat-heading">Heat Palette</h2>
+          <div className="profile-heat-form-controls">
+            <button
+              className="profile-heat-reset"
+              type="button"
+              aria-label={`Reset ${SESSION_HEAT_THEME_LABELS[theme]} colors`}
+              title={`Reset ${SESSION_HEAT_THEME_LABELS[theme]} colors`}
+              onClick={() => SESSION_HEAT_COLOR_LEVELS.forEach((level) => onSetColor('attention', theme, level, null))}
+            >
+              <RefreshCw size={13} aria-hidden="true" />
+            </button>
+            <div className="profile-heat-theme-toggle" role="group" aria-label="Heat variant">
+              {SESSION_HEAT_THEMES.map((candidate) => (
+                <button
+                  className={candidate === theme ? 'active' : ''}
+                  type="button"
+                  aria-pressed={candidate === theme}
+                  onClick={() => setTheme(candidate)}
+                  key={candidate}
+                >
+                  {APPEARANCE_THEME_DETAILS[candidate].name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <p>Customize Beale's product-wide colors for claim-driven research attention.</p>
+      </header>
+      <div className="settings-form-squircle profile-heat-form-squircle" aria-labelledby="profile-heat-heading">
+        <div className="settings-form-control-list profile-session-heat-color-list">
+          {SESSION_HEAT_COLOR_LEVELS.map((level) => (
+            <SessionHeatColorControl
+              key={`${theme}-${level}`}
+              profileId="attention"
+              theme={theme}
+              level={level}
+              color={palette[level]}
+              onSetColor={onSetColor}
+            />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SessionHeatColorControl({
+  profileId,
+  theme,
+  level,
+  color,
+  onSetColor
+}: {
+  profileId: string;
+  theme: SessionHeatTheme;
+  level: SessionHeatColorLevel;
+  color: string;
+  onSetColor: (profileId: string, theme: SessionHeatTheme, level: SessionHeatColorLevel, color: string | null) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState(color);
+
+  useEffect(() => {
+    setDraft(color);
+  }, [color]);
+
+  const commitColor = (value: string): void => {
+    const normalized = normalizeHexColor(value);
+    if (!normalized) return;
+    onSetColor(profileId, theme, level, normalized);
+  };
+
+  const colorLabel = `${SESSION_HEAT_THEME_LABELS[theme]} ${sessionHeatLabel(level)} session heat color`;
+
+  return (
+    <div className="settings-form-control-row profile-session-heat-color-row" role="group" aria-label={colorLabel}>
+      <span className="settings-form-control-copy">
+        <strong>{sessionHeatLabel(level)}</strong>
+        <small>{SESSION_HEAT_LEVEL_DESCRIPTIONS[level]}</small>
+      </span>
+      <span className="profile-session-heat-color-controls">
+        <label
+          className="profile-session-heat-color-picker"
+          data-heat-level={level}
+          style={{ '--profile-session-heat-color': color } as CSSProperties}
+        >
+          <input
+            type="color"
+            aria-label={colorLabel}
+            value={color}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              onSetColor(profileId, theme, level, event.target.value);
+            }}
+          />
+        </label>
+        <input
+          className="profile-session-heat-color-hex"
+          type="text"
+          aria-label={`${colorLabel} hex`}
+          spellCheck={false}
+          value={draft}
+          onChange={(event) => {
+            const nextDraft = event.target.value;
+            setDraft(nextDraft);
+            commitColor(nextDraft);
+          }}
+          onBlur={() => setDraft(normalizeHexColor(draft) ?? color)}
+        />
+      </span>
+    </div>
+  );
+}
+
+function profileSettingsCatalog(
+  researchProfiles: readonly ResolvedResearchProfile[],
+  activeProfile: ResearchProfileSnapshot | null
+): ResolvedResearchProfile[] {
+  const catalog = [...researchProfiles];
+  if (!activeProfile) return catalog;
+  const resolvedActiveProfile: ResolvedResearchProfile = {
+    profile: activeProfile.profile,
+    hash: activeProfile.profileHash,
+    source: activeProfile.source,
+    ...(activeProfile.sourcePath ? { path: activeProfile.sourcePath } : {})
+  };
+  const activeIndex = catalog.findIndex((profile) => profile.profile.id === activeProfile.profileId);
+  if (activeIndex >= 0) catalog[activeIndex] = resolvedActiveProfile;
+  else catalog.unshift(resolvedActiveProfile);
+  return catalog;
+}
+
+function sortedProfileMemoryTypes(profile: ResolvedResearchProfile | null) {
+  return profile
+    ? profile.profile.memory.types
+      .filter((memoryType) => memoryType.lifecycle === 'active')
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+    : [];
+}
+
+function profileSettingsName(profileId: string, name: string): string {
+  return profileId === 'security-research' ? 'Security' : name;
+}
+
+function sessionHeatLabel(heat: SessionHeat): string {
+  return heat.charAt(0).toUpperCase() + heat.slice(1);
+}
+
+function toggleStringValue(values: readonly string[], value: string): string[] {
+  return values.includes(value) ? values.filter((candidate) => candidate !== value) : [...values, value];
+}
+
+export function GeneralSettingsView({
+  tracesEnabled,
+  profilingEnabled = false,
+  suggestionPreferences = DEFAULT_SUGGESTION_PREFERENCES,
+  dangerModeEnabled,
+  defaultShellSafetyMode,
+  onChangeTracesEnabled,
+  onChangeProfilingEnabled = () => undefined,
+  onChangeSuggestionPreference = () => undefined,
+  onChangeDangerModeEnabled,
+  onChangeDefaultShellSafetyMode
+}: {
+  tracesEnabled: boolean;
+  profilingEnabled?: boolean;
+  suggestionPreferences?: SuggestionPreferences;
+  dangerModeEnabled: boolean;
+  defaultShellSafetyMode: ShellSafetyMode;
+  onChangeTracesEnabled: (enabled: boolean) => void;
+  onChangeProfilingEnabled?: (enabled: boolean) => void;
+  onChangeSuggestionPreference?: (key: SuggestionPreferenceKey, enabled: boolean) => void;
+  onChangeDangerModeEnabled: (enabled: boolean) => void;
+  onChangeDefaultShellSafetyMode: (mode: ShellSafetyMode) => void;
+}): JSX.Element {
+  const permissionOptions = permissionModeOptions({ dangerModeEnabled, defaultShellSafetyMode });
+  return (
+    <div className="settings-page general-settings-page">
+      <section className="settings-form debugging-settings-form">
+        <header className="settings-form-heading">
+          <h2 id="debugging-settings-heading">Debugging</h2>
+          <p>Control optional diagnostic data retained for research sessions.</p>
+        </header>
+        <fieldset className="settings-form-squircle debugging-settings" aria-labelledby="debugging-settings-heading">
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Traces</strong>
+                <small>Retain detailed diagnostic events for querying and debugging. Commentary is always available.</small>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="Traces"
+                checked={tracesEnabled}
+                onChange={(event) => onChangeTracesEnabled(event.currentTarget.checked)}
+              />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Lag Profiling</strong>
+                <small>Capture bounded renderer long tasks, frame gaps, React commit costs, polling work, and correlated timing samples in a temporary JSONL report.</small>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="Lag Profiling"
+                checked={profilingEnabled}
+                onChange={(event) => onChangeProfilingEnabled(event.currentTarget.checked)}
+              />
+            </label>
+          </div>
+        </fieldset>
+      </section>
+      <section className="settings-form suggestions-settings-form">
+        <header className="settings-form-heading">
+          <h2 id="suggestions-settings-heading">Suggestions</h2>
+          <p>Choose which optional suggestions Beale shows while you research.</p>
+        </header>
+        <fieldset className="settings-form-squircle suggestions-settings" aria-labelledby="suggestions-settings-heading">
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Session Ending Suggestions</strong>
+                <small>Show generated follow-up research ideas after a session ends.</small>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="Session Ending Suggestions"
+                checked={suggestionPreferences.sessionEndingSuggestionsEnabled}
+                onChange={(event) => onChangeSuggestionPreference('sessionEndingSuggestionsEnabled', event.currentTarget.checked)}
+              />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Response Suggestions</strong>
+                <small>Show suggested responses in session and report composers.</small>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="Response Suggestions"
+                checked={suggestionPreferences.responseSuggestionsEnabled}
+                onChange={(event) => onChangeSuggestionPreference('responseSuggestionsEnabled', event.currentTarget.checked)}
+              />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>New Research Prompt Suggestions</strong>
+                <small>Show generated prompt ideas in the New Research form.</small>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="New Research Prompt Suggestions"
+                checked={suggestionPreferences.newResearchPromptSuggestionsEnabled}
+                onChange={(event) => onChangeSuggestionPreference('newResearchPromptSuggestionsEnabled', event.currentTarget.checked)}
+              />
+            </label>
+          </div>
+        </fieldset>
+      </section>
+      <section className="settings-form permissions-settings-form">
+        <header className="settings-form-heading">
+          <h2 id="permissions-settings-heading">Permissions</h2>
+          <p>Set the default permission behavior for new research sessions.</p>
+        </header>
+        <fieldset className="settings-form-squircle permissions-settings" aria-labelledby="permissions-settings-heading">
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Enable Danger Mode</strong>
+                <small>Allow sessions to run shell commands without approval or automatic review.</small>
+              </span>
+              <input
+                aria-label="Enable Danger Mode"
+                type="checkbox"
+                checked={dangerModeEnabled}
+                onChange={(event) => onChangeDangerModeEnabled(event.currentTarget.checked)}
+              />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Default Permissions</strong>
+                <small>Choose the permission mode applied when a research session starts.</small>
+              </span>
+              <select
+                aria-label="Default Permissions"
+                value={defaultShellSafetyMode}
+                onChange={(event) => onChangeDefaultShellSafetyMode(normalizeShellSafetyMode(event.currentTarget.value))}
+              >
+                {permissionOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </fieldset>
+      </section>
+    </div>
+  );
+}
+
+export function ArchiveSettingsView({
+  sessions,
+  channels,
+  quickChats,
+  workspaces,
+  loading,
+  onRestoreSession,
+  onRestoreChannel,
+  onResumeQuickChat
+}: {
+  sessions: readonly ResearchSessionSummary[];
+  channels: readonly ResearchChannelSummary[];
+  quickChats: readonly ResearchSessionSummary[];
+  workspaces: readonly WorkspaceRegistryEntry[];
+  loading: boolean;
+  onRestoreSession: (session: ResearchSessionSummary) => Promise<void>;
+  onRestoreChannel: (channel: ResearchChannelSummary) => Promise<void>;
+  onResumeQuickChat: (session: ResearchSessionSummary) => Promise<void>;
+}): JSX.Element {
+  const workspaceName = (workspaceId: string): string => (
+    workspaces.find((workspace) => workspace.workspaceId === workspaceId)?.workspaceName ?? 'Unknown workspace'
+  );
+  return (
+    <div className="settings-page general-settings-page archive-settings-page">
+      <section className="settings-form">
+        <header className="settings-form-heading">
+          <h2 id="archived-sessions-settings-heading">Archived Sessions</h2>
+          <p>Sessions hidden from workspace lists. Restore one to make it available again.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="archived-sessions-settings-heading">
+          <div className="settings-form-control-list archive-settings-list">
+            {sessions.map((session) => (
+              <div className="settings-form-control-row archive-settings-row" key={session.id}>
+                <span className="settings-form-control-copy">
+                  <strong>{session.title || session.promptMarkdown || 'Untitled Session'}</strong>
+                  <small>{workspaceName(session.workspaceId)}</small>
+                </span>
+                <button type="button" disabled={loading} onClick={() => void onRestoreSession(session)}>
+                  <ArchiveRestore size={14} aria-hidden="true" />
+                  <span>Restore</span>
+                </button>
+              </div>
+            ))}
+            {!loading && sessions.length === 0 ? <p className="archive-settings-empty">No archived sessions.</p> : null}
+            {loading && sessions.length === 0 ? <p className="archive-settings-empty">Loading archived sessions…</p> : null}
+          </div>
+        </fieldset>
+      </section>
+      <section className="settings-form">
+        <header className="settings-form-heading">
+          <h2 id="archived-quick-chats-settings-heading">Archived Quick Chats</h2>
+          <p>Closed Quick Chats retain their conversation history. Resume one to continue the same chat.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="archived-quick-chats-settings-heading">
+          <div className="settings-form-control-list archive-settings-list">
+            {quickChats.map((quickChat) => (
+              <div className="settings-form-control-row archive-settings-row" key={quickChat.id}>
+                <span className="settings-form-control-copy">
+                  <strong className="archive-settings-item-name"><MessageSquare size={14} aria-hidden="true" />{archivedQuickChatTitle(quickChat)}</strong>
+                  <small>{quickChat.promptMarkdown || quickChat.model}</small>
+                </span>
+                <button type="button" disabled={loading} onClick={() => void onResumeQuickChat(quickChat)}>
+                  <ArchiveRestore size={14} aria-hidden="true" />
+                  <span>Resume</span>
+                </button>
+              </div>
+            ))}
+            {!loading && quickChats.length === 0 ? <p className="archive-settings-empty">No archived Quick Chats.</p> : null}
+            {loading && quickChats.length === 0 ? <p className="archive-settings-empty">Loading archived Quick Chats…</p> : null}
+          </div>
+        </fieldset>
+      </section>
+      <section className="settings-form">
+        <header className="settings-form-heading">
+          <h2 id="archived-channels-settings-heading">Archived Channels</h2>
+          <p>Channels remain available to restore with their messages and shared research intact.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="archived-channels-settings-heading">
+          <div className="settings-form-control-list archive-settings-list">
+            {channels.map((channel) => (
+              <div className="settings-form-control-row archive-settings-row" key={channel.id}>
+                <span className="settings-form-control-copy">
+                  <strong className="archive-settings-item-name"><Hash size={14} aria-hidden="true" />{channel.name}</strong>
+                  <small>{workspaceName(channel.workspaceId)}</small>
+                </span>
+                <button type="button" disabled={loading} onClick={() => void onRestoreChannel(channel)}>
+                  <ArchiveRestore size={14} aria-hidden="true" />
+                  <span>Restore</span>
+                </button>
+              </div>
+            ))}
+            {!loading && channels.length === 0 ? <p className="archive-settings-empty">No archived channels.</p> : null}
+            {loading && channels.length === 0 ? <p className="archive-settings-empty">Loading archived channels…</p> : null}
+          </div>
+        </fieldset>
+      </section>
+    </div>
+  );
+}
+
+function archivedQuickChatTitle(quickChat: ResearchSessionSummary): string {
+  const title = quickChat.title.trim();
+  return title && title !== 'Untitled research run'
+    ? title
+    : quickChat.promptMarkdown.trim() || 'Quick Chat';
+}
+
+export function RemoteAccessSettingsView({
+  settings,
+  busy,
+  onDetect,
+  onSave
+}: {
+  settings: AppServerRemoteAccessSettings | null;
+  busy: boolean;
+  onDetect: () => Promise<void>;
+  onSave: (update: AppServerRemoteAccessUpdate) => Promise<void>;
+}): JSX.Element {
+  const [enabled, setEnabled] = useState(settings?.enabled ?? false);
+  const [magicDnsName, setMagicDnsName] = useState(settings?.magicDnsName ?? '');
+
+  useEffect(() => {
+    setEnabled(settings?.enabled ?? false);
+    setMagicDnsName(settings?.magicDnsName ?? '');
+  }, [settings]);
+
+  return (
+    <div className="settings-page remote-access-settings-page">
+      <section className="settings-form remote-access-settings-form">
+        <header className="settings-form-heading">
+          <h2 id="remote-access-heading">iPhone Remote Access</h2>
+          <p>Publish the loopback app-server to this tailnet through HTTPS and MagicDNS.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="remote-access-heading" disabled={busy}>
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>Tailscale Serve</strong>
+                <small>Keep the app-server on 127.0.0.1 and let Tailscale terminate HTTPS for iPhone clients.</small>
+              </span>
+              <input
+                type="checkbox"
+                aria-label="Tailscale Serve"
+                checked={enabled}
+                onChange={(event) => setEnabled(event.currentTarget.checked)}
+              />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>MagicDNS Name</strong>
+                <small>The full device name reported by Tailscale, ending in .ts.net.</small>
+              </span>
+              <input
+                type="text"
+                aria-label="MagicDNS Name"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="mac-name.tailnet.ts.net"
+                value={magicDnsName}
+                onChange={(event) => setMagicDnsName(event.currentTarget.value)}
+              />
+            </label>
+            <div className="settings-form-control-row">
+              <span className="settings-form-control-copy">
+                <strong>HTTPS Endpoint</strong>
+                <small>{settings?.publicUrl ?? 'Detect or enter a MagicDNS name to create the endpoint.'}</small>
+              </span>
+              <button type="button" className="secondary-button" disabled={busy} onClick={() => void onDetect()}>
+                <RefreshCw size={14} aria-hidden="true" />
+                Detect
+              </button>
+            </div>
+          </div>
+        </fieldset>
+        {settings?.detail ? <div className="error-box">{settings.detail}</div> : null}
+        <div className="settings-form-actions">
+          <span className="settings-form-control-copy">
+            <small>Applying this setting restarts the app-server. The dedicated HTTPS port avoids replacing other Tailscale Serve routes.</small>
+          </span>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy || (enabled && !magicDnsName.trim())}
+            onClick={() => void onSave({ enabled, magicDnsName })}
+          >
+            {busy ? 'Applying…' : 'Apply'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type ProviderSettingsId = ResearchModelProviderId;
+
+interface ProviderSettingsOption {
+  id: ProviderSettingsId;
+  name: string;
+  configured: boolean;
+  authenticationRunning: boolean;
+}
+
+function providerCompanyName(providerId: ResearchModelProviderId): string {
+  if (providerId === 'openai-codex') return 'OpenAI';
+  if (providerId === 'anthropic') return 'Anthropic';
+  if (providerId === 'xai') return 'xAI';
+  if (providerId === 'zai') return 'Z.ai';
+  return 'OpenRouter';
+}
+
+type ProviderHealthState = 'healthy' | 'unhealthy' | 'authenticating';
+type ProviderAuthenticationState = 'configured' | 'not-configured' | 'authenticating' | 'needs-attention' | 'unavailable';
+
+function ProviderHealthIndicator({ state }: { state: ProviderHealthState }): JSX.Element {
+  const label = state === 'healthy'
+    ? 'Healthy'
+    : state === 'authenticating'
+      ? 'Authentication in progress'
+      : 'Unhealthy';
+  return (
+    <span
+      className={`provider-health-indicator state-${state}`}
+      role="img"
+      aria-label={label}
+      title={label}
+    />
+  );
+}
+
+export function ProviderRemoveControl({
+  providerName,
+  disabled,
+  removing = false,
+  onRemove
+}: {
+  providerName: string;
+  disabled: boolean;
+  removing?: boolean;
+  onRemove: () => void;
+}): JSX.Element {
+  if (removing) {
+    return <span className="provider-removing-status" role="status" aria-live="polite">Removing provider...</span>;
+  }
+  return (
+    <button
+      className="provider-remove-button"
+      type="button"
+      aria-label={`Remove ${providerName} provider`}
+      title={`Remove ${providerName} provider`}
+      disabled={disabled}
+      onClick={onRemove}
+    ><X size={11} aria-hidden="true" /></button>
+  );
+}
+
+function ProviderAuthenticationStatus({ state, preferred = false }: { state: ProviderAuthenticationState; preferred?: boolean }): JSX.Element {
+  const label = state === 'configured'
+    ? 'Configured'
+    : state === 'authenticating'
+      ? 'Authenticating'
+      : state === 'needs-attention'
+        ? 'Needs attention'
+        : state === 'unavailable'
+          ? 'Unavailable'
+          : 'Missing';
+  return (
+    <span className="provider-authentication-statuses">
+      {preferred ? (
+        <span className="provider-authentication-status state-preferred">
+          <span aria-hidden="true" />
+          Preferred
+        </span>
+      ) : null}
+      <span className={`provider-authentication-status state-${state}`}>
+        <span aria-hidden="true" />
+        {label}
+      </span>
+    </span>
+  );
+}
+
+function ProviderAuthenticationSection({
+  providerId,
+  subscriptionSupported = true,
+  subscriptionState,
+  apiKeyConfigured,
+  busy,
+  subscriptionDisabled,
+  result,
+  policyRiskAcknowledged,
+  preferredMethod,
+  onAuthenticate,
+  onForgetSubscription,
+  onConfigureApiKey,
+  onRemoveApiKey,
+  onMarkPreferred
+}: {
+  providerId: ResearchModelProviderId;
+  subscriptionSupported?: boolean;
+  subscriptionState: ProviderAuthenticationState;
+  apiKeyConfigured: boolean;
+  busy: boolean;
+  subscriptionDisabled: boolean;
+  result: OpenAiOAuthStartResult | ResearchProviderOAuthStartResult | null;
+  policyRiskAcknowledged: boolean;
+  preferredMethod: ProviderAuthenticationMethod;
+  onAuthenticate: () => void;
+  onForgetSubscription: () => void;
+  onConfigureApiKey: (providerId: ResearchModelProviderId) => void;
+  onRemoveApiKey: () => void;
+  onMarkPreferred: (method: ProviderAuthenticationMethod) => void;
+}): JSX.Element {
+  const subscriptionConfigured = subscriptionState === 'configured';
+  const showPreferenceControls = subscriptionSupported && subscriptionConfigured && apiKeyConfigured;
+  const providerName = providerCompanyName(providerId);
+  return (
+    <section className="settings-form provider-settings-form provider-authentication-section" aria-label="Authentication">
+      <header className="settings-form-heading">
+        <div className="provider-authentication-form-title">
+          <h2>Authentication</h2>
+          {!policyRiskAcknowledged ? (
+            <small className="provider-authentication-warning" role="status">Acknowledge the risks first</small>
+          ) : null}
+        </div>
+        <p>Choose how Beale authenticates with this provider.</p>
+      </header>
+      <div className="settings-form-squircle provider-settings-form-squircle">
+        <div className="provider-authentication-options">
+          {subscriptionSupported ? <div className="provider-authentication-option">
+            <div className="provider-authentication-copy">
+              <div className="provider-authentication-option-heading">
+                <strong>Subscription</strong>
+                <ProviderAuthenticationStatus state={subscriptionState} preferred={showPreferenceControls && preferredMethod === 'subscription'} />
+              </div>
+              <small>Use your {providerName} subscription account.</small>
+              {result ? <ProviderOAuthResult result={result} /> : null}
+            </div>
+            <div className="provider-authentication-actions">
+              {subscriptionState === 'configured' ? (
+                <button className="secondary-button provider-authentication-action" type="button" disabled={busy} onClick={onForgetSubscription}>
+                  Forget
+                </button>
+              ) : (
+                <button
+                  className="secondary-button provider-authentication-action"
+                  type="button"
+                  disabled={busy || subscriptionDisabled || !policyRiskAcknowledged}
+                  onClick={onAuthenticate}
+                >
+                  Sign in
+                </button>
+              )}
+              {showPreferenceControls && preferredMethod !== 'subscription' ? (
+                <button className="secondary-button provider-authentication-action" type="button" disabled={busy} onClick={() => onMarkPreferred('subscription')}>
+                  Prefer
+                </button>
+              ) : null}
+            </div>
+          </div> : null}
+          <div className="provider-authentication-option">
+            <div className="provider-authentication-copy">
+              <div className="provider-authentication-option-heading">
+                <strong>API Key</strong>
+                <ProviderAuthenticationStatus state={apiKeyConfigured ? 'configured' : 'not-configured'} preferred={showPreferenceControls && preferredMethod === 'api_key'} />
+              </div>
+              <small>Use an API key encrypted by the operating system and retained by Beale's host process.</small>
+            </div>
+            <div className="provider-authentication-actions">
+              {apiKeyConfigured ? (
+                <button className="secondary-button provider-authentication-action" type="button" disabled={busy} onClick={onRemoveApiKey}>
+                  Forget
+                </button>
+              ) : (
+                <button className="secondary-button provider-authentication-action" type="button" disabled={busy || !policyRiskAcknowledged} onClick={() => onConfigureApiKey(providerId)}>
+                  Configure
+                </button>
+              )}
+              {showPreferenceControls && preferredMethod !== 'api_key' ? (
+                <button className="secondary-button provider-authentication-action" type="button" disabled={busy} onClick={() => onMarkPreferred('api_key')}>
+                  Prefer
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function ProviderApiKeyDialog({
+  providerId,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  providerId: ResearchModelProviderId;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (apiKey: string) => Promise<void>;
+}): JSX.Element {
+  const [apiKey, setApiKey] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !submitting) onCancel();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onCancel, submitting]);
+  const submit = async (): Promise<void> => {
+    const normalized = apiKey.trim();
+    if (!normalized || submitting) return;
+    setSubmitting(true);
+    try {
+      await onConfirm(normalized);
+      setApiKey('');
+    } catch {
+      // The parent surfaces the host error; keep the dialog open for correction.
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  return (
+    <div className="modal-backdrop provider-api-key-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !submitting) onCancel();
+    }}>
+      <form className="modal-panel provider-api-key-dialog" role="dialog" aria-modal="true" aria-label={`Configure ${providerCompanyName(providerId)} API key`} onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}>
+        <header className="modal-header">
+          <h2>Configure {providerCompanyName(providerId)} API key</h2>
+        </header>
+        <div className="modal-body">
+          <label className="provider-api-key-field">
+            <span>API key</span>
+            <input
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              type="password"
+              value={apiKey}
+              disabled={busy || submitting}
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </label>
+          <p>Beale will ask the operating system to encrypt this key for secure storage. After you continue, the operating system may show a “Beale Safe Storage” password prompt.</p>
+        </div>
+        <footer className="modal-footer">
+          <button className="secondary-button" type="button" disabled={busy || submitting} onClick={onCancel}>Cancel</button>
+          <button className="primary-button" type="submit" disabled={busy || submitting || !apiKey.trim()}>Continue</button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+export function providerSettingsOptions(
+  openAiStatus: OpenAiAccountStatus | null,
+  researchProviderStatuses: readonly ResearchProviderStatus[]
+): ProviderSettingsOption[] {
+  return [
+    {
+      id: 'openai-codex',
+      name: providerCompanyName('openai-codex'),
+      configured: openAiStatus?.configured ?? false,
+      authenticationRunning: openAiStatus?.loginInProgress ?? false
+    },
+    ...researchProviderStatuses.map((provider) => ({
+      id: provider.id,
+      name: providerCompanyName(provider.id),
+      configured: provider.configured,
+      authenticationRunning: provider.loginInProgress
+    }))
+  ];
+}
+
+export function defaultProviderPickerOptions(
+  configuredProviders: readonly ProviderSettingsOption[]
+): FloatingTextPickerOption[] {
+  if (configuredProviders.length === 0) return [{ value: '', label: 'None' }];
+  return configuredProviders.map((provider) => ({ value: provider.id, label: provider.name }));
+}
+
+export function resolvedDefaultProviderId(
+  configuredProviders: readonly ProviderSettingsOption[],
+  defaultProviderId: ResearchModelProviderId | null
+): ResearchModelProviderId | null {
+  return configuredProviders.some((provider) => provider.id === defaultProviderId)
+    ? defaultProviderId
+    : configuredProviders[0]?.id ?? null;
+}
+
+export function nextConfiguredProviderIdAfterRemoval(
+  configuredProviderIds: readonly ResearchModelProviderId[],
+  removedProviderId: ResearchModelProviderId,
+  defaultProviderId: ResearchModelProviderId | null
+): ResearchModelProviderId | null {
+  const remainingProviderIds = configuredProviderIds.filter((providerId) => providerId !== removedProviderId);
+  return remainingProviderIds.includes(defaultProviderId as ResearchModelProviderId)
+    ? defaultProviderId
+    : remainingProviderIds[0] ?? null;
+}
+
+export function resolvedProviderModelDefaults(
+  providerId: ResearchModelProviderId,
+  catalog: ResearchProviderModelCatalog | null,
+  configuredLargeModel: string | null,
+  configuredReasoningEffort: string | null,
+  stored: ProviderModelDefaults | undefined
+): ProviderModelDefaults | null {
+  const models = catalog?.models ?? [];
+  if (models.length === 0) return null;
+  const largeModel = models.find((model) => model.id === stored?.largeModel)?.id
+    ?? models.find((model) => model.id === configuredLargeModel)?.id
+    ?? models[0]!.id;
+  const smallModel = models.find((model) => model.id === stored?.smallModel)?.id
+    ?? models.find((model) => model.id === catalog?.defaultSmallModel)?.id
+    ?? models[0]!.id;
+  const largeModelEntry = models.find((model) => model.id === largeModel)!;
+  const desiredEffort = stored?.reasoningEffort ?? normalizeReasoningEffort(configuredReasoningEffort) ?? DEFAULT_RESEARCH_REASONING_EFFORT;
+  const reasoningEffort = largeModelEntry.effortLevels.includes(desiredEffort)
+    ? desiredEffort
+    : preferredProviderReasoningEffort(largeModelEntry.effortLevels);
+  return { largeModel, smallModel, reasoningEffort };
+}
+
+export function ProvidersSettingsView({
+  openAiStatus,
+  openAiOAuthResult,
+  researchProviderOAuthResults,
+  researchProviderStatuses,
+  researchProviderModelCatalog,
+  providerSettings,
+  providerStatusesLoaded,
+  busy,
+  onRefreshOpenAi,
+  onStartOpenAiOAuth,
+  onStartResearchProviderOAuth,
+  onForgetProviderSubscription = async () => undefined,
+  onRemoveProvider = async () => undefined,
+  onConfigureProviderApiKey = async () => undefined,
+  onRemoveProviderApiKey = async () => undefined,
+  onSetDefaultProviderId,
+  onSetProviderModelDefaults,
+  onSetProviderOptionalModelEnabled = async () => undefined,
+  onSetProviderCyberPolicyRiskAcknowledged = async () => undefined,
+  onSetProviderPreferredAuthenticationMethod = async () => undefined
+}: {
+  openAiStatus: OpenAiAccountStatus | null;
+  openAiOAuthResult: OpenAiOAuthStartResult | null;
+  researchProviderOAuthResults: Partial<Record<ResearchProviderId, ResearchProviderOAuthStartResult>>;
+  researchProviderStatuses: ResearchProviderStatus[];
+  researchProviderModelCatalog: ResearchProviderModelCatalog[];
+  providerSettings: ProviderSettings | null;
+  providerStatusesLoaded: boolean;
+  busy: boolean;
+  onRefreshOpenAi: () => Promise<void>;
+  onStartOpenAiOAuth: () => Promise<void>;
+  onStartResearchProviderOAuth: (providerId: ResearchProviderId) => Promise<void>;
+  onForgetProviderSubscription?: (providerId: ResearchModelProviderId) => Promise<void>;
+  onRemoveProvider?: (providerId: ResearchModelProviderId) => Promise<void>;
+  onConfigureProviderApiKey?: (providerId: ResearchModelProviderId, apiKey: string) => Promise<void>;
+  onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
+  onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
+  onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
+  onSetProviderOptionalModelEnabled?: (
+    providerId: ResearchModelProviderId,
+    modelId: string,
+    enabled: boolean
+  ) => Promise<void>;
+  onSetProviderCyberPolicyRiskAcknowledged?: (
+    providerId: ResearchModelProviderId,
+    acknowledged: boolean
+  ) => Promise<void>;
+  onSetProviderPreferredAuthenticationMethod?: (
+    providerId: ResearchModelProviderId,
+    method: ProviderAuthenticationMethod
+  ) => Promise<void>;
+}): JSX.Element {
+  const providers = providerSettingsOptions(openAiStatus, researchProviderStatuses);
+  const configuredProviders = providers.filter((provider) => provider.configured);
+  const availableProviders = providers.filter((provider) => !provider.configured);
+  const configuredProviderKey = configuredProviders.map((provider) => provider.id).join('|');
+  const providerSelectionReady = providerStatusesLoaded && providerSettings !== null;
+  const preferredProviderId = providerSelectionReady
+    ? resolvedDefaultProviderId(configuredProviders, providerSettings.defaultProviderId)
+    : null;
+  const providerSelectionInitialized = useRef(providerSelectionReady);
+  const previouslyConfiguredProviderIds = useRef(new Set(
+    providerSelectionReady ? configuredProviders.map((provider) => provider.id) : []));
+  const initialAuthenticationProviderId = (() => {
+    const runningProvider = researchProviderStatuses.find((provider) => provider.loginInProgress);
+    if (runningProvider) return runningProvider.id;
+    if (!openAiStatus?.configured && openAiOAuthResult) return 'openai-codex';
+    return null;
+  })();
+  const [activeProviderId, setActiveProviderId] = useState<ProviderSettingsId | null>(
+    initialAuthenticationProviderId ?? preferredProviderId
+  );
+  const [authenticationProviderId, setAuthenticationProviderId] = useState<ProviderSettingsId | null>(initialAuthenticationProviderId);
+  const [apiKeyDialogProviderId, setApiKeyDialogProviderId] = useState<ResearchModelProviderId | null>(null);
+  const [removingProviderId, setRemovingProviderId] = useState<ResearchModelProviderId | null>(null);
+  const defaultProviderUpdateRef = useRef<ResearchModelProviderId | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!providerStatusesLoaded || !providerSettings) return;
+    const nextDefaultProviderId = resolvedDefaultProviderId(configuredProviders, providerSettings.defaultProviderId);
+    if (nextDefaultProviderId === providerSettings.defaultProviderId || defaultProviderUpdateRef.current === nextDefaultProviderId) return;
+    defaultProviderUpdateRef.current = nextDefaultProviderId;
+    void onSetDefaultProviderId(nextDefaultProviderId).finally(() => {
+      defaultProviderUpdateRef.current = undefined;
+    });
+  }, [configuredProviderKey, onSetDefaultProviderId, providerSettings, providerStatusesLoaded]);
+
+  useEffect(() => {
+    if (!providerSelectionReady) return;
+    const configuredProviderIds = new Set(configuredProviders.map((provider) => provider.id));
+    if (!providerSelectionInitialized.current) {
+      providerSelectionInitialized.current = true;
+      previouslyConfiguredProviderIds.current = configuredProviderIds;
+      setActiveProviderId((current) => current ?? preferredProviderId);
+      return;
+    }
+    const newlyConfiguredProvider = configuredProviders.find((provider) => !previouslyConfiguredProviderIds.current.has(provider.id));
+    previouslyConfiguredProviderIds.current = configuredProviderIds;
+    setActiveProviderId((current) => newlyConfiguredProvider?.id
+      ?? (current && configuredProviderIds.has(current) ? current : preferredProviderId));
+    if (newlyConfiguredProvider) {
+      setAuthenticationProviderId((current) => current === newlyConfiguredProvider.id ? null : current);
+    }
+  }, [configuredProviderKey, preferredProviderId, providerSelectionReady]);
+
+  const runningResearchProviderId = researchProviderStatuses.find((provider) => provider.loginInProgress)?.id ?? null;
+  useEffect(() => {
+    if (!runningResearchProviderId) return;
+    setAuthenticationProviderId(runningResearchProviderId);
+    setActiveProviderId(runningResearchProviderId);
+  }, [runningResearchProviderId]);
+
+  const authenticationProvider = availableProviders.find((provider) => provider.id === authenticationProviderId) ?? null;
+  const viewProviders = authenticationProvider
+    ? [...configuredProviders, authenticationProvider]
+    : configuredProviders;
+  const addableProviders = availableProviders.filter((provider) => provider.id !== authenticationProvider?.id);
+  const activeProvider = viewProviders.find((provider) => provider.id === activeProviderId) ?? null;
+  const activeModelCatalog = researchProviderModelCatalog.find((catalog) => catalog.providerId === activeProvider?.id) ?? null;
+  const activeEnabledModelCatalog = activeModelCatalog
+    ? filterEnabledProviderModelCatalogs([activeModelCatalog], providerSettings)[0] ?? null
+    : null;
+  const activeProviderStatus = activeProvider?.id && activeProvider.id !== 'openai-codex'
+    ? researchProviderStatuses.find((provider) => provider.id === activeProvider.id) ?? null
+    : null;
+  const activeModelDefaults = activeProvider
+    ? resolvedProviderModelDefaults(
+        activeProvider.id,
+        activeEnabledModelCatalog,
+        activeProvider.id === 'openai-codex' ? openAiStatus?.defaultModel ?? null : activeProviderStatus?.defaultModel ?? null,
+        activeProvider.id === 'openai-codex' ? openAiStatus?.defaultReasoningEffort ?? null : null,
+        providerSettings?.modelDefaults[activeProvider.id]
+      )
+    : null;
+  const authenticateProvider = (providerId: ProviderSettingsId): void => {
+    setAuthenticationProviderId(providerId);
+    setActiveProviderId(providerId);
+    if (providerId === 'openai-codex') {
+      void onStartOpenAiOAuth();
+    } else {
+      void onStartResearchProviderOAuth(providerId);
+    }
+  };
+  const removeProvider = async (providerId: ProviderSettingsId): Promise<void> => {
+    setRemovingProviderId(providerId);
+    const nextProviderId = nextConfiguredProviderIdAfterRemoval(
+      configuredProviders.map((provider) => provider.id),
+      providerId,
+      providerSettings?.defaultProviderId ?? null
+    );
+    try {
+      await onRemoveProvider(providerId);
+      setAuthenticationProviderId((current) => current === providerId ? null : current);
+      setActiveProviderId((current) => current === providerId ? nextProviderId : current);
+      setApiKeyDialogProviderId((current) => current === providerId ? null : current);
+    } finally {
+      setRemovingProviderId((current) => current === providerId ? null : current);
+    }
+  };
+  const showProvider = (providerId: ProviderSettingsId): void => {
+    setAuthenticationProviderId(providerId);
+    setActiveProviderId(providerId);
+  };
+  const refresh = (): void => {
+    void onRefreshOpenAi();
+  };
+
+  if (!providerSelectionReady) {
+    return (
+      <div className="settings-page provider-settings-page" aria-busy="true">
+        <CenteredLoadingState label="Loading providers…" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-page provider-settings-page">
+      <ProviderSettingsTabs
+        activeProviderId={activeProviderId}
+        availableProviders={addableProviders}
+        busy={busy}
+        viewProviders={viewProviders}
+        configuredProviders={configuredProviders}
+        defaultProviderId={providerSettings?.defaultProviderId ?? null}
+        onActivate={setActiveProviderId}
+        onAuthenticate={showProvider}
+        onSetDefaultProviderId={(providerId) => void onSetDefaultProviderId(providerId)}
+      />
+      {activeProvider?.id === 'openai-codex' ? (
+        <OpenAiProviderCard
+          busy={busy}
+          removing={removingProviderId === 'openai-codex'}
+          openAiOAuthResult={openAiOAuthResult}
+          openAiStatus={openAiStatus}
+          onRefresh={refresh}
+          onAuthenticate={() => authenticateProvider('openai-codex')}
+          onForgetSubscription={() => void onForgetProviderSubscription('openai-codex')}
+          onRemoveProvider={() => void removeProvider('openai-codex')}
+          onConfigureApiKey={setApiKeyDialogProviderId}
+          onRemoveApiKey={() => void onRemoveProviderApiKey('openai-codex')}
+          modelCatalog={activeEnabledModelCatalog}
+          fullModelCatalog={activeModelCatalog}
+          modelDefaults={activeModelDefaults}
+          onSetModelDefaults={(defaults) => void onSetProviderModelDefaults('openai-codex', defaults)}
+          enabledOptionalModelIds={providerSettings?.enabledOptionalModels?.['openai-codex'] ?? []}
+          disabledOptionalModelIds={providerSettings?.disabledOptionalModels?.['openai-codex'] ?? []}
+          onSetOptionalModelEnabled={(modelId, enabled) =>
+            void onSetProviderOptionalModelEnabled('openai-codex', modelId, enabled)}
+          policyRiskAcknowledged={providerSettings?.cyberPolicyRiskAcknowledgements?.['openai-codex'] === true}
+          onSetPolicyRiskAcknowledged={(acknowledged) =>
+            void onSetProviderCyberPolicyRiskAcknowledged('openai-codex', acknowledged)}
+          preferredAuthenticationMethod={providerSettings?.preferredAuthenticationMethods?.['openai-codex'] ?? 'subscription'}
+          onSetPreferredAuthenticationMethod={(method) =>
+            void onSetProviderPreferredAuthenticationMethod('openai-codex', method)}
+        />
+      ) : activeProvider ? (
+        <ResearchProviderCard
+          busy={busy}
+          removing={removingProviderId === activeProvider.id}
+          provider={researchProviderStatuses.find((provider) => provider.id === activeProvider.id)!}
+          result={researchProviderOAuthResults[activeProvider.id] ?? null}
+          onRefresh={refresh}
+          onAuthenticate={() => authenticateProvider(activeProvider.id)}
+          onForgetSubscription={() => void onForgetProviderSubscription(activeProvider.id)}
+          onRemoveProvider={() => void removeProvider(activeProvider.id)}
+          onConfigureApiKey={setApiKeyDialogProviderId}
+          onRemoveApiKey={() => void onRemoveProviderApiKey(activeProvider.id)}
+          modelCatalog={activeEnabledModelCatalog}
+          fullModelCatalog={activeModelCatalog}
+          modelDefaults={activeModelDefaults}
+          onSetModelDefaults={(defaults) => void onSetProviderModelDefaults(activeProvider.id, defaults)}
+          enabledOptionalModelIds={providerSettings?.enabledOptionalModels?.[activeProvider.id] ?? []}
+          disabledOptionalModelIds={providerSettings?.disabledOptionalModels?.[activeProvider.id] ?? []}
+          onSetOptionalModelEnabled={(modelId, enabled) =>
+            void onSetProviderOptionalModelEnabled(activeProvider.id, modelId, enabled)}
+          policyRiskAcknowledged={providerSettings?.cyberPolicyRiskAcknowledgements?.[activeProvider.id] === true}
+          onSetPolicyRiskAcknowledged={(acknowledged) =>
+            void onSetProviderCyberPolicyRiskAcknowledged(activeProvider.id, acknowledged)}
+          preferredAuthenticationMethod={providerSettings?.preferredAuthenticationMethods?.[activeProvider.id]
+            ?? (activeProvider.id === 'openrouter' ? 'api_key' : 'subscription')}
+          onSetPreferredAuthenticationMethod={(method) =>
+            void onSetProviderPreferredAuthenticationMethod(activeProvider.id, method)}
+        />
+      ) : (
+        <section className="provider-card provider-settings-empty">
+          <KeyRound size={20} aria-hidden="true" />
+          <div>
+            <h4>No providers configured</h4>
+            <p>Use the plus button above to configure a research provider.</p>
+          </div>
+        </section>
+      )}
+      {apiKeyDialogProviderId ? (
+        <ProviderApiKeyDialog
+          providerId={apiKeyDialogProviderId}
+          busy={busy}
+          onCancel={() => setApiKeyDialogProviderId(null)}
+          onConfirm={async (apiKey) => {
+            await onConfigureProviderApiKey(apiKeyDialogProviderId, apiKey);
+            setApiKeyDialogProviderId(null);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ProviderSettingsTabs({
+  activeProviderId,
+  availableProviders,
+  busy,
+  viewProviders,
+  configuredProviders,
+  defaultProviderId,
+  onActivate,
+  onAuthenticate,
+  onSetDefaultProviderId
+}: {
+  activeProviderId: ProviderSettingsId | null;
+  availableProviders: readonly ProviderSettingsOption[];
+  busy: boolean;
+  viewProviders: readonly ProviderSettingsOption[];
+  configuredProviders: readonly ProviderSettingsOption[];
+  defaultProviderId: ResearchModelProviderId | null;
+  onActivate: (providerId: ProviderSettingsId) => void;
+  onAuthenticate: (providerId: ProviderSettingsId) => void;
+  onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => void;
+}): JSX.Element {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!pickerOpen) return undefined;
+    const closeOnPointerDown = (event: PointerEvent): void => {
+      if (!pickerRef.current?.contains(event.target as Node)) setPickerOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setPickerOpen(false);
+    };
+    window.addEventListener('pointerdown', closeOnPointerDown);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('pointerdown', closeOnPointerDown);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [pickerOpen]);
+
+  useEffect(() => {
+    if (availableProviders.length === 0) setPickerOpen(false);
+  }, [availableProviders.length]);
+
+  return (
+    <header className="research-side-view-header provider-settings-tab-header">
+      <div className="research-side-view-tabs" role="tablist" aria-label="Provider views">
+        {viewProviders.map((provider) => (
+          <div
+            className={`research-side-view-tab provider-settings-tab ${activeProviderId === provider.id ? 'active' : ''} ${provider.authenticationRunning ? 'authenticating' : ''}`.trim()}
+            key={provider.id}
+          >
+            <button
+              type="button"
+              className="research-side-view-tab-activate"
+              role="tab"
+              aria-selected={activeProviderId === provider.id}
+              aria-busy={provider.authenticationRunning}
+              onClick={() => onActivate(provider.id)}
+            >
+              <ProviderIcon
+                className="provider-settings-tab-icon"
+                provider={provider.id}
+                size={15}
+                aria-hidden="true"
+              />
+              <span>{provider.name}</span>
+            </button>
+          </div>
+        ))}
+      </div>
+      {availableProviders.length > 0 ? (
+        <div className={`research-side-view-picker ${pickerOpen ? 'open' : ''}`} ref={pickerRef}>
+          <button
+            type="button"
+            className="research-side-view-picker-trigger"
+            aria-label="Add provider"
+            aria-haspopup="menu"
+            aria-expanded={pickerOpen}
+            title="Add provider"
+            onClick={() => setPickerOpen((current) => !current)}
+          >
+            <Plus size={16} aria-hidden="true" />
+          </button>
+          {pickerOpen ? (
+            <div className="research-side-view-picker-menu provider-settings-picker-menu" role="menu">
+              {availableProviders.map((provider) => (
+                <button
+                  type="button"
+                  role="menuitem"
+                  key={provider.id}
+                  disabled={busy || provider.authenticationRunning}
+                  onClick={() => {
+                    onAuthenticate(provider.id);
+                    setPickerOpen(false);
+                  }}
+                >
+                  <ProviderIcon
+                    className="provider-settings-picker-icon"
+                    provider={provider.id}
+                    size={15}
+                    aria-hidden="true"
+                  />
+                  <span>{provider.name}{provider.authenticationRunning ? ' — authenticating' : ''}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <label className="research-side-view-trailing provider-settings-default-control">
+        <span>Lead</span>
+        <select
+          value={configuredProviders.some((provider) => provider.id === defaultProviderId) ? defaultProviderId ?? '' : ''}
+          disabled={busy}
+          title="Lead"
+          aria-label="Lead"
+          onChange={(event) => onSetDefaultProviderId(event.target.value ? event.target.value as ResearchModelProviderId : null)}
+        >
+          {defaultProviderPickerOptions(configuredProviders).map((option) => (
+            <option value={option.value} key={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </label>
+    </header>
+  );
+}
+
+function ProviderSettingsProviderPanel({
+  providerId,
+  providerName,
+  readiness,
+  healthState,
+  removing,
+  busy,
+  onRefresh,
+  onRemoveProvider,
+  modelCatalog,
+  fullModelCatalog,
+  modelDefaults,
+  onSetModelDefaults,
+  enabledOptionalModelIds,
+  disabledOptionalModelIds,
+  onSetOptionalModelEnabled,
+  policyRiskAcknowledged,
+  onSetPolicyRiskAcknowledged,
+  policyBusy,
+  policyLocked,
+  authentication
+}: {
+  providerId: ResearchModelProviderId;
+  providerName: string;
+  readiness: OpenAiAuthReadiness | ResearchProviderReadiness;
+  healthState: ProviderHealthState;
+  removing: boolean;
+  busy: boolean;
+  onRefresh: () => void;
+  onRemoveProvider: () => void;
+  modelCatalog: ResearchProviderModelCatalog | null;
+  fullModelCatalog: ResearchProviderModelCatalog | null;
+  modelDefaults: ProviderModelDefaults | null;
+  onSetModelDefaults: (defaults: ProviderModelDefaults) => void;
+  enabledOptionalModelIds: readonly string[];
+  disabledOptionalModelIds: readonly string[];
+  onSetOptionalModelEnabled: (modelId: string, enabled: boolean) => void;
+  policyRiskAcknowledged: boolean;
+  onSetPolicyRiskAcknowledged: (acknowledged: boolean) => void;
+  policyBusy: boolean;
+  policyLocked: boolean;
+  authentication: JSX.Element;
+}): JSX.Element {
+  return (
+    <div
+      className={`provider-card provider-settings-provider-panel readiness-${stateClass(readiness)}`}
+      role="tabpanel"
+      aria-label={`${providerName} provider settings`}
+    >
+      <section className="settings-form provider-settings-form provider-acknowledgment-form">
+        <header className="settings-form-heading provider-settings-form-heading">
+          <div className="provider-settings-form-title">
+            <ProviderIcon className="provider-settings-heading-icon" provider={providerId} size={18} aria-hidden="true" />
+            <h2>{providerName}</h2>
+            <button
+              className="provider-settings-heading-refresh"
+              type="button"
+              aria-label={`Refresh ${providerName}`}
+              title={`Refresh ${providerName}`}
+              disabled={busy}
+              onClick={onRefresh}
+            >
+              <RefreshCw size={16} aria-hidden="true" />
+              <ProviderHealthIndicator state={healthState} />
+            </button>
+            {healthState !== 'healthy' || removing ? (
+              <ProviderRemoveControl
+                providerName={providerName}
+                disabled={busy && healthState !== 'authenticating'}
+                removing={removing}
+                onRemove={onRemoveProvider}
+              />
+            ) : null}
+          </div>
+          <p>
+            {policyRiskAcknowledged
+              ? `You have accepted the ${providerName} provider acknowledgment.`
+              : `Please accept the ${providerName} provider acknowledgment before configuring authentication.`}
+          </p>
+        </header>
+        <div className="settings-form-squircle provider-settings-form-squircle">
+          <ProviderCyberPolicyAcknowledgement
+            providerId={providerId}
+            acknowledged={policyRiskAcknowledged}
+            busy={policyBusy}
+            locked={policyLocked}
+            onChange={onSetPolicyRiskAcknowledged}
+          />
+        </div>
+      </section>
+      {authentication}
+      <section className="settings-form provider-settings-form provider-default-models-form">
+        <header className="settings-form-heading">
+          <h2>Default Models</h2>
+          <p>Choose the models and reasoning level used by default for this provider.</p>
+        </header>
+        <div className="settings-form-squircle provider-settings-form-squircle">
+          <ProviderModelDefaultsControls
+            busy={busy}
+            catalog={modelCatalog}
+            defaults={modelDefaults}
+            onChange={onSetModelDefaults}
+          />
+        </div>
+      </section>
+      <section className="settings-form provider-settings-form provider-optional-models-form">
+        <header className="settings-form-heading">
+          <h2>Optional Models</h2>
+          <p>Enable additional provider models when they are available to your account.</p>
+        </header>
+        <div className="settings-form-squircle provider-settings-form-squircle">
+          <ProviderOptionalModelsControls
+            busy={policyBusy}
+            catalog={fullModelCatalog}
+            enabledModelIds={enabledOptionalModelIds}
+            disabledModelIds={disabledOptionalModelIds}
+            providerId={providerId}
+            onChange={onSetOptionalModelEnabled}
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function OpenAiProviderCard({
+  busy,
+  removing,
+  openAiOAuthResult,
+  openAiStatus,
+  onRefresh,
+  onAuthenticate,
+  onForgetSubscription,
+  onRemoveProvider,
+  onConfigureApiKey,
+  onRemoveApiKey,
+  modelCatalog,
+  fullModelCatalog,
+  modelDefaults,
+  onSetModelDefaults,
+  enabledOptionalModelIds,
+  disabledOptionalModelIds,
+  onSetOptionalModelEnabled,
+  policyRiskAcknowledged,
+  onSetPolicyRiskAcknowledged,
+  preferredAuthenticationMethod,
+  onSetPreferredAuthenticationMethod
+}: {
+  removing: boolean;
+  busy: boolean;
+  openAiOAuthResult: OpenAiOAuthStartResult | null;
+  openAiStatus: OpenAiAccountStatus | null;
+  onRefresh: () => void;
+  onAuthenticate: () => void;
+  onForgetSubscription: () => void;
+  onRemoveProvider: () => void;
+  onConfigureApiKey: (providerId: ResearchModelProviderId) => void;
+  onRemoveApiKey: () => void;
+  modelCatalog: ResearchProviderModelCatalog | null;
+  fullModelCatalog: ResearchProviderModelCatalog | null;
+  modelDefaults: ProviderModelDefaults | null;
+  onSetModelDefaults: (defaults: ProviderModelDefaults) => void;
+  enabledOptionalModelIds: readonly string[];
+  disabledOptionalModelIds: readonly string[];
+  onSetOptionalModelEnabled: (modelId: string, enabled: boolean) => void;
+  policyRiskAcknowledged: boolean;
+  onSetPolicyRiskAcknowledged: (acknowledged: boolean) => void;
+  preferredAuthenticationMethod: ProviderAuthenticationMethod;
+  onSetPreferredAuthenticationMethod: (method: ProviderAuthenticationMethod) => void;
+}): JSX.Element {
+  const readiness = openAiStatus?.readiness ?? 'not_configured';
+  const healthState: ProviderHealthState = openAiStatus?.loginInProgress ? 'authenticating' : openAiStatus?.configured && (readiness === 'oauth_ready' || readiness === 'development_fallback') ? 'healthy' : 'unhealthy';
+  const subscriptionState: ProviderAuthenticationState = openAiStatus?.loginInProgress
+    ? 'authenticating'
+    : openAiStatus?.subscriptionConfigured
+      ? 'configured'
+      : readiness === 'oauth_command_failed'
+        ? 'needs-attention'
+        : openAiStatus?.codexCliAvailable === false
+          ? 'unavailable'
+          : 'not-configured';
+  return (
+    <ProviderSettingsProviderPanel
+      providerId="openai-codex"
+      providerName="OpenAI"
+      readiness={readiness}
+      healthState={healthState}
+      removing={removing}
+      busy={busy}
+      onRefresh={onRefresh}
+      onRemoveProvider={onRemoveProvider}
+      modelCatalog={modelCatalog}
+      fullModelCatalog={fullModelCatalog}
+      modelDefaults={modelDefaults}
+      onSetModelDefaults={onSetModelDefaults}
+      enabledOptionalModelIds={enabledOptionalModelIds}
+      disabledOptionalModelIds={disabledOptionalModelIds}
+      onSetOptionalModelEnabled={onSetOptionalModelEnabled}
+      policyRiskAcknowledged={policyRiskAcknowledged}
+      onSetPolicyRiskAcknowledged={onSetPolicyRiskAcknowledged}
+      policyBusy={busy}
+      policyLocked={policyRiskAcknowledged && Boolean(openAiStatus?.subscriptionConfigured || openAiStatus?.apiKeyConfigured)}
+      authentication={(
+        <ProviderAuthenticationSection
+          providerId="openai-codex"
+          subscriptionState={subscriptionState}
+          apiKeyConfigured={openAiStatus?.apiKeyConfigured ?? false}
+          busy={busy}
+          subscriptionDisabled={false}
+          policyRiskAcknowledged={policyRiskAcknowledged}
+          result={openAiOAuthResult}
+          preferredMethod={preferredAuthenticationMethod}
+          onAuthenticate={onAuthenticate}
+          onForgetSubscription={onForgetSubscription}
+          onConfigureApiKey={onConfigureApiKey}
+          onRemoveApiKey={onRemoveApiKey}
+          onMarkPreferred={onSetPreferredAuthenticationMethod}
+        />
+      )}
+    />
+  );
+}
+
+function ProviderOptionalModelsControls({
+  busy,
+  catalog,
+  enabledModelIds,
+  disabledModelIds,
+  providerId,
+  onChange
+}: {
+  busy: boolean;
+  catalog: ResearchProviderModelCatalog | null;
+  enabledModelIds: readonly string[];
+  disabledModelIds: readonly string[];
+  providerId: ResearchModelProviderId;
+  onChange: (modelId: string, enabled: boolean) => void;
+}): JSX.Element {
+  const availableModelIds = new Set((catalog?.models ?? []).map((model) => model.id));
+  const optionalModels = OPTIONAL_PROVIDER_MODELS.filter((model) => model.providerId === providerId);
+  return (
+    <div className="provider-optional-models" aria-label="Optional Models">
+      {optionalModels.length === 0 ? (
+        <p className="provider-optional-models-empty">No optional models are available for this provider.</p>
+      ) : null}
+      {optionalModels.map((model) => {
+        const available = availableModelIds.has(model.modelId);
+        return (
+          <label key={model.modelId}>
+            <span className="provider-optional-model-copy">
+              <strong>{model.name}</strong>
+              <small>{model.accessNote}{available ? '' : ' Not available in the installed Honeycrisp model catalog.'}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={isOptionalProviderModelEnabled({
+                enabledOptionalModels: { [providerId]: [...enabledModelIds] },
+                disabledOptionalModels: { [providerId]: [...disabledModelIds] }
+              }, providerId, model.modelId)}
+              disabled={busy || !available}
+              onChange={(event) => onChange(model.modelId, event.target.checked)}
+            />
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function ResearchProviderCard({
+  provider,
+  result,
+  removing,
+  busy,
+  onRefresh,
+  onAuthenticate,
+  onForgetSubscription,
+  onRemoveProvider,
+  onConfigureApiKey,
+  onRemoveApiKey,
+  modelCatalog,
+  fullModelCatalog,
+  modelDefaults,
+  onSetModelDefaults,
+  enabledOptionalModelIds,
+  disabledOptionalModelIds,
+  onSetOptionalModelEnabled,
+  policyRiskAcknowledged,
+  onSetPolicyRiskAcknowledged,
+  preferredAuthenticationMethod,
+  onSetPreferredAuthenticationMethod
+}: {
+  provider: ResearchProviderStatus;
+  removing: boolean;
+  result: ResearchProviderOAuthStartResult | null;
+  busy: boolean;
+  onRefresh: () => void;
+  onAuthenticate: () => void;
+  onForgetSubscription: () => void;
+  onRemoveProvider: () => void;
+  onConfigureApiKey: (providerId: ResearchModelProviderId) => void;
+  onRemoveApiKey: () => void;
+  modelCatalog: ResearchProviderModelCatalog | null;
+  fullModelCatalog: ResearchProviderModelCatalog | null;
+  modelDefaults: ProviderModelDefaults | null;
+  onSetModelDefaults: (defaults: ProviderModelDefaults) => void;
+  enabledOptionalModelIds: readonly string[];
+  disabledOptionalModelIds: readonly string[];
+  onSetOptionalModelEnabled: (modelId: string, enabled: boolean) => void;
+  policyRiskAcknowledged: boolean;
+  onSetPolicyRiskAcknowledged: (acknowledged: boolean) => void;
+  preferredAuthenticationMethod: ProviderAuthenticationMethod;
+  onSetPreferredAuthenticationMethod: (method: ProviderAuthenticationMethod) => void;
+}): JSX.Element {
+  const providerName = providerCompanyName(provider.id);
+  const healthState: ProviderHealthState = provider.loginInProgress ? 'authenticating' : provider.configured && provider.readiness === 'ready' ? 'healthy' : 'unhealthy';
+  const subscriptionState: ProviderAuthenticationState = provider.loginInProgress
+    ? 'authenticating'
+    : provider.subscriptionConfigured
+      ? 'configured'
+      : provider.readiness === 'unavailable'
+        ? 'unavailable'
+        : 'not-configured';
+  return (
+    <ProviderSettingsProviderPanel
+      providerId={provider.id}
+      providerName={providerName}
+      readiness={provider.readiness}
+      healthState={healthState}
+      removing={removing}
+      busy={busy}
+      onRefresh={onRefresh}
+      onRemoveProvider={onRemoveProvider}
+      modelCatalog={modelCatalog}
+      fullModelCatalog={fullModelCatalog}
+      modelDefaults={modelDefaults}
+      onSetModelDefaults={onSetModelDefaults}
+      enabledOptionalModelIds={enabledOptionalModelIds}
+      disabledOptionalModelIds={disabledOptionalModelIds}
+      onSetOptionalModelEnabled={onSetOptionalModelEnabled}
+      policyRiskAcknowledged={policyRiskAcknowledged}
+      onSetPolicyRiskAcknowledged={onSetPolicyRiskAcknowledged}
+      policyBusy={busy || provider.loginInProgress}
+      policyLocked={policyRiskAcknowledged && (provider.subscriptionConfigured || provider.apiKeyConfigured)}
+      authentication={(
+        <ProviderAuthenticationSection
+          providerId={provider.id}
+          subscriptionSupported={provider.authMethods.includes('oauth')}
+          subscriptionState={subscriptionState}
+          apiKeyConfigured={provider.apiKeyConfigured}
+          busy={busy}
+          subscriptionDisabled={provider.loginInProgress}
+          policyRiskAcknowledged={policyRiskAcknowledged}
+          result={result}
+          preferredMethod={preferredAuthenticationMethod}
+          onAuthenticate={onAuthenticate}
+          onForgetSubscription={onForgetSubscription}
+          onConfigureApiKey={onConfigureApiKey}
+          onRemoveApiKey={onRemoveApiKey}
+          onMarkPreferred={onSetPreferredAuthenticationMethod}
+        />
+      )}
+    />
+  );
+}
+
+function ProviderCyberPolicyAcknowledgement({
+  providerId,
+  acknowledged,
+  busy,
+  locked,
+  onChange
+}: {
+  providerId: ResearchModelProviderId;
+  acknowledged: boolean;
+  busy: boolean;
+  locked: boolean;
+  onChange: (acknowledged: boolean) => void;
+}): JSX.Element {
+  const detail = providerId === 'openai-codex'
+    ? 'Cybersecurity use is intended for OpenAI Trusted Access for Cyber members. Program membership does not waive OpenAI policy requirements: requests may still be blocked or treated as usage violations.'
+    : providerId === 'anthropic'
+      ? 'Subscription sign-in is experimental and only intended for Anthropic Cyber Verification Program members. CVP membership does not waive Anthropic\'s Usage Policy: requests may still be blocked or treated as usage violations. Beale delegates Claude sessions to the official Claude Agent SDK and Claude Code CLI; it does not copy or replay subscription tokens.'
+      : providerId === 'xai'
+        ? 'Cybersecurity use remains subject to xAI policy requirements. Requests may be blocked or treated as usage violations.'
+        : providerId === 'zai'
+          ? 'Cybersecurity use remains subject to Z.ai policy and Coding Plan terms. Requests may be blocked or treated as usage violations. Subscription sessions are delegated to the official ZCode agent; Beale does not copy or replay subscription credentials.'
+          : 'Requests sent through OpenRouter remain subject to OpenRouter terms and the policies of the selected model provider. Requests may be blocked or treated as usage violations by either service.';
+  const label = providerId === 'openai-codex'
+    ? 'I confirm this account has OpenAI Trusted Access for Cyber membership and I accept the policy-use risk.'
+    : providerId === 'anthropic'
+      ? 'I confirm this account is enrolled in Anthropic\'s Cyber Verification Program and I accept the usage-policy risk.'
+      : providerId === 'xai'
+        ? 'I accept the policy-use risk for cybersecurity research with xAI.'
+        : providerId === 'zai'
+          ? 'I accept the policy-use risk for cybersecurity research with Z.ai.'
+          : 'I accept the OpenRouter and routed-provider policy-use risk for cybersecurity research.';
+  return (
+    <div className="provider-policy-warning">
+      <p className="provider-detail provider-billing-note">{detail}</p>
+      <label
+        className={`provider-risk-acknowledgement ${locked ? 'is-locked' : ''}`.trim()}
+        title={locked ? 'Acknowledgment is recorded until this provider is removed.' : undefined}
+      >
+        <input
+          type="checkbox"
+          checked={acknowledged}
+          disabled={busy || locked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span>{label}</span>
+      </label>
+    </div>
+  );
+}
+
+function ProviderModelDefaultsControls({
+  busy,
+  catalog,
+  defaults,
+  onChange
+}: {
+  busy: boolean;
+  catalog: ResearchProviderModelCatalog | null;
+  defaults: ProviderModelDefaults | null;
+  onChange: (defaults: ProviderModelDefaults) => void;
+}): JSX.Element {
+  const models = catalog?.models ?? [];
+  const largeModel = models.find((model) => model.id === defaults?.largeModel) ?? null;
+  const smallModel = models.find((model) => model.id === defaults?.smallModel) ?? null;
+  const effortLevels = largeModel?.effortLevels ?? [];
+  const smallEffortLevels = smallModel?.effortLevels ?? [];
+  const smallReasoningEffort = preferredProviderReasoningEffort(smallEffortLevels);
+  const disabled = busy || !defaults || models.length === 0;
+  return (
+    <div className="provider-model-defaults" aria-label="Provider model defaults">
+      <div className="provider-model-defaults-controls">
+        <div className="provider-model-default-row" role="group" aria-label="Large model defaults">
+          <span className="provider-model-default-copy">
+            <strong>Large Model</strong>
+            <small>Primary model for complex research work.</small>
+          </span>
+          <div className="provider-model-default-row-controls">
+            <select
+              aria-label="Large model"
+              value={defaults?.largeModel ?? ''}
+              disabled={disabled}
+              onChange={(event) => {
+                if (!defaults) return;
+                const model = models.find((candidate) => candidate.id === event.target.value);
+                if (!model) return;
+                const reasoningEffort = model.effortLevels.includes(defaults.reasoningEffort)
+                  ? defaults.reasoningEffort
+                  : preferredProviderReasoningEffort(model.effortLevels);
+                onChange({ ...defaults, largeModel: model.id, reasoningEffort });
+              }}
+            >
+              {models.map((model) => <option value={model.id} key={model.id}>{providerModelOptionLabel(catalog?.providerId, model)}</option>)}
+            </select>
+            <select
+              className="provider-model-reasoning-select"
+              aria-label="Large model reasoning"
+              value={defaults?.reasoningEffort ?? ''}
+              disabled={disabled || effortLevels.length === 0}
+              onChange={(event) => defaults && onChange({ ...defaults, reasoningEffort: event.target.value as ResearchModelEffortLevel })}
+            >
+              {effortLevels.map((effort) => <option value={effort} key={effort}>{reasoningEffortLabel(effort)}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="provider-model-default-row" role="group" aria-label="Small model default">
+          <span className="provider-model-default-copy">
+            <strong>Small Model</strong>
+            <small>Lighter model for supporting research tasks.</small>
+          </span>
+          <div className="provider-model-default-row-controls">
+            <select
+              aria-label="Small model"
+              value={defaults?.smallModel ?? ''}
+              disabled={disabled}
+              onChange={(event) => defaults && onChange({ ...defaults, smallModel: event.target.value })}
+            >
+              {models.map((model) => <option value={model.id} key={model.id}>{providerModelOptionLabel(catalog?.providerId, model)}</option>)}
+            </select>
+            <select
+              className="provider-model-reasoning-select"
+              aria-label="Small model reasoning"
+              title="Small-model reasoning is not configurable yet"
+              value={smallReasoningEffort}
+              disabled
+            >
+              {smallEffortLevels.map((effort) => <option value={effort} key={effort}>{reasoningEffortLabel(effort)}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function providerModelOptionLabel(providerId: ResearchModelProviderId | undefined, model: ResearchProviderModel): string {
+  return providerId ? researchModelNameLabel(providerId, model.name) : model.name;
+}
+
+function normalizeReasoningEffort(value: string | null): ResearchModelEffortLevel | null {
+  return value === 'off' || value === 'minimal' || value === 'low' || value === 'medium'
+    || value === 'high' || value === 'xhigh' || value === 'max'
+    ? value
+    : null;
+}
+
+function preferredProviderReasoningEffort(levels: readonly ResearchModelEffortLevel[]): ResearchModelEffortLevel {
+  if (levels.includes('high')) return 'high';
+  if (levels.includes('medium')) return 'medium';
+  return levels[0] ?? 'off';
+}
+
+function reasoningEffortLabel(effort: ResearchModelEffortLevel): string {
+  if (effort === 'xhigh') return 'XHigh';
+  return `${effort.slice(0, 1).toUpperCase()}${effort.slice(1)}`;
+}
+
+function ProviderOAuthResult({ result }: { result: OpenAiOAuthStartResult | ResearchProviderOAuthStartResult }): JSX.Element {
+  return (
+    <div className="provider-oauth-result">
+      <strong>{result.detail}</strong>
+      {result.verificationUri ? <code>{result.verificationUri}</code> : null}
+      {result.userCode ? (
+        <div>
+          <span>Code</span>
+          <code>{result.userCode}</code>
+        </div>
+      ) : null}
+      {result.instructions && !result.verificationUri ? <pre>{result.instructions}</pre> : null}
+    </div>
+  );
+}
+
+export function settingsSectionLabel(section: SettingsSection): string {
+  switch (section) {
+    case 'appearance':
+      return 'Appearance';
+    case 'computer-use':
+      return 'Computer Use';
+    case 'remote':
+      return 'Remote';
+    case 'providers':
+      return 'Providers';
+    case 'ticketing':
+      return 'Ticketing';
+    case 'profile':
+      return 'Profiles';
+    case 'archive':
+      return 'Archive';
+    default:
+      return 'General';
+  }
+}
+
+export function settingsSectionHeaderIcon(section: SettingsSection): AppHeaderViewIcon {
+  switch (section) {
+    case 'appearance':
+      return 'settings-appearance';
+    case 'computer-use':
+      return 'settings-computer-use';
+    case 'remote':
+      return 'settings-remote';
+    case 'providers':
+      return 'settings-providers';
+    case 'ticketing':
+      return 'settings-ticketing';
+    case 'profile':
+      return 'settings-profiles';
+    case 'archive':
+      return 'settings-archive';
+    default:
+      return 'settings';
+  }
+}

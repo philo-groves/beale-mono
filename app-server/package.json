@@ -1,0 +1,41 @@
+{
+  "name": "@beale/app-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone tray-resident Honeycrisp execution host and client-neutral control plane.",
+  "type": "module",
+  "main": "./dist/trayBootstrap.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "resources"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "tsc -b --clean",
+    "prestart": "node ../apps/desktop/scripts/brand-electron.mjs",
+    "start": "electron .",
+    "start:headless": "node dist/headlessMain.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "honeycrisp": "workspace:*",
+    "qrcode": "1.5.4",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.5",
+    "@types/ws": "8.18.1",
+    "electron": "^41.3.0"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

@@ -1,0 +1,203 @@
+import type { TraceEventRecord } from '@shared/types';
+
+export type TraceCategoryId =
+  | 'agent_output'
+  | 'reasoning'
+  | 'tools'
+  | 'execution'
+  | 'research'
+  | 'artifacts'
+  | 'verifier'
+  | 'policy_scope'
+  | 'code_navigation'
+  | 'failure_recovery'
+  | 'non_standard'
+  | 'events';
+
+export type TraceEventOutcome = 'success' | 'failure' | null;
+export type HoneycrispToolEventKind = 'tool.requested' | 'tool.observed';
+
+const SUCCESS_STATUSES = new Set(['success', 'completed', 'complete', 'pass', 'passed', 'ok']);
+const FAILURE_STATUSES = new Set(['failure', 'failed', 'timeout', 'timed_out', 'policy_blocked', 'executor_error', 'error', 'blocked']);
+const CODE_NAVIGATION_TOOLS = new Set(['source', 'search', 'code_browser', 'resource_lookup']);
+const FAILURE_SUMMARY_PATTERN = /\b(failed|failure|timeout|timed out|blocked|errored|error|could not|unable to|requires setup|missing)\b/i;
+const RECOVERY_SUMMARY_PATTERN = /\b(retry|retried|recover|recovered|recovery|fallback)\b/i;
+
+export function traceCategoryForEvent(event: TraceEventRecord): TraceCategoryId {
+  if (honeycrispToolEventKind(event) === 'tool.requested' || isNonStandardLifecycleEvent(event)) return 'non_standard';
+
+  const transcriptRole = tracePayloadPrimitive(event.payload, 'transcriptRole');
+  const transcriptSource = tracePayloadPrimitive(event.payload, 'transcriptSource');
+  if (transcriptSource === 'openai_reasoning_summary') return 'reasoning';
+  if (transcriptRole === 'assistant') return 'agent_output';
+  if (transcriptRole === 'user' || transcriptRole === 'system') return 'events';
+
+  const toolName = traceToolName(event);
+  if (traceEventOutcome(event) === 'failure' || summaryIndicatesRecovery(event.summary)) return 'failure_recovery';
+  if (isPolicyScopeEvent(event)) return 'policy_scope';
+  if (event.type === 'verifier_result' || event.source === 'verifier') return 'verifier';
+  if (event.type === 'research_event') return 'research';
+  if (isArtifactEvent(event)) return 'artifacts';
+  if (isExecutionEvent(event)) return 'execution';
+  if (isToolEvent(event)) return isCodeNavigationEvent(event, toolName) ? 'code_navigation' : 'tools';
+  if (event.source === 'model' || event.type === 'model_message') {
+    return modelEventLooksLikeReasoning(event) ? 'reasoning' : 'agent_output';
+  }
+  return 'events';
+}
+
+export function traceEventOutcome(event: TraceEventRecord): TraceEventOutcome {
+  const status = normalizeStatus(tracePayloadPrimitive(event.payload, 'status'));
+  if (status && SUCCESS_STATUSES.has(status)) return 'success';
+  if (status && FAILURE_STATUSES.has(status)) return 'failure';
+  if (hasStructuredFailureField(event.payload)) return 'failure';
+
+  if (summaryIndicatesFailure(event.summary)) return 'failure';
+  if (summaryIndicatesSuccess(event.summary)) return 'success';
+  if (event.source === 'tool' && event.type === 'tool_result') return 'success';
+  return null;
+}
+
+export function tracePayloadPrimitive(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return null;
+}
+
+export function tracePayloadRecord(payload: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = payload[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+export function tracePayloadArray(payload: Record<string, unknown>, key: string): unknown[] | null {
+  const value = payload[key];
+  return Array.isArray(value) ? value : null;
+}
+
+export function stringRecordValue(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return null;
+}
+
+export function honeycrispToolEventKind(event: TraceEventRecord): HoneycrispToolEventKind | null {
+  const explicitKind = tracePayloadPrimitive(event.payload, 'honeycrispKind');
+  if (explicitKind === 'tool.requested' || explicitKind === 'tool.observed') return explicitKind;
+  const summary = typeof event.summary === 'string' ? event.summary : '';
+  if (summary.startsWith('Honeycrisp tool.requested')) return 'tool.requested';
+  if (summary.startsWith('Honeycrisp tool.observed')) return 'tool.observed';
+  return null;
+}
+
+export function honeycrispToolPayload(event: TraceEventRecord): Record<string, unknown> | null {
+  return honeycrispToolEventKind(event) ? tracePayloadRecord(event.payload, 'payload') : null;
+}
+
+export function honeycrispToolName(event: TraceEventRecord): string | null {
+  const payload = honeycrispToolPayload(event);
+  return tracePayloadPrimitive(event.payload, 'toolName') ?? (payload ? stringRecordValue(payload, 'toolName') : null);
+}
+
+export function honeycrispToolPairingKey(event: TraceEventRecord): string | null {
+  const payload = honeycrispToolPayload(event);
+  if (!payload) return null;
+  const actionId = stringRecordValue(payload, 'toolActionId');
+  const toolName = honeycrispToolName(event);
+  const actionKey = actionId ? `action:${actionId}` : toolName ? `tool:${toolName}` : null;
+  if (!actionKey) return null;
+  const agentIdentity = tracePayloadPrimitive(event.payload, 'agentPath') ?? tracePayloadPrimitive(event.payload, 'agentId') ?? '/root';
+  return `${event.attemptId ?? ''}\u0000${agentIdentity}\u0000${actionKey}`;
+}
+
+export function toolNameFromSummary(summary: string): string | null {
+  const requested = summary.match(/OpenAI requested Beale tool: ([^.]+)\./);
+  if (requested) return requested[1];
+  const completed = summary.match(/OpenAI completed function call arguments for ([^.]+)\./);
+  if (completed) return completed[1];
+  if (/^Code browser\b/i.test(summary)) return 'code_browser';
+  if (/^Search\b/i.test(summary)) return 'search';
+  if (/^Source repository\b/i.test(summary)) return 'source';
+  if (/^(Host|Guest) python\b/i.test(summary)) return 'python';
+  return null;
+}
+
+export function isToolCallNamed(event: TraceEventRecord, toolName: string): boolean {
+  return event.type === 'tool_call' && traceToolName(event) === toolName;
+}
+
+function traceToolName(event: TraceEventRecord): string | null {
+  return honeycrispToolName(event) ?? tracePayloadPrimitive(event.payload, 'toolName') ?? toolNameFromSummary(event.summary);
+}
+
+function isPolicyScopeEvent(event: TraceEventRecord): boolean {
+  return event.source === 'policy' || event.type === 'approval_event' || event.type === 'network_event' || event.type === 'user_scope';
+}
+
+function isArtifactEvent(event: TraceEventRecord): boolean {
+  const summary = event.summary.toLowerCase();
+  return event.type === 'artifact_created' || /\b(artifact|export|reference)\b/.test(summary);
+}
+
+function isExecutionEvent(event: TraceEventRecord): boolean {
+  return event.source === 'executor';
+}
+
+function isToolEvent(event: TraceEventRecord): boolean {
+  return event.source === 'tool' || event.type === 'tool_call' || event.type === 'tool_result';
+}
+
+function isNonStandardLifecycleEvent(event: TraceEventRecord): boolean {
+  return (
+    event.summary === 'OpenAI response created.' ||
+    event.summary === 'OpenAI response completed.' ||
+    event.summary === 'OpenAI streamed model output delta.' ||
+    event.summary === 'OpenAI requested Beale tool: python.' ||
+    event.summary === 'OpenAI requested Beale tool: code_browser.' ||
+    event.summary === 'OpenAI requested Beale tool: resource_lookup.' ||
+    event.summary === 'OpenAI requested Beale tool: search.' ||
+    event.summary === 'OpenAI requested Beale tool: verifier.' ||
+    /^OpenAI completed function call arguments for (code_browser|resource_lookup|verifier)\.$/.test(event.summary) ||
+    /^OpenAI Responses request sent for turn \d+\.$/.test(event.summary)
+  );
+}
+
+function isCodeNavigationEvent(event: TraceEventRecord, toolName: string | null): boolean {
+  if (toolName && CODE_NAVIGATION_TOOLS.has(toolName)) return true;
+  if (tracePayloadPrimitive(event.payload, 'sourcePath') || tracePayloadPrimitive(event.payload, 'query')) return true;
+  if (tracePayloadArray(event.payload, 'availableRepositories')) return true;
+  return (
+    /\b(code browser|resource lookup|search examined|source repository|repository materialized)\b/i.test(event.summary) ||
+    /\bexamined \d+ files? and returned \d+ matches\b/i.test(event.summary)
+  );
+}
+
+function modelEventLooksLikeReasoning(event: TraceEventRecord): boolean {
+  return /\b(plan|planned|prepared|objective|rationale|reason|reasoning|strategy|hypothesis|intent)\b/i.test(event.summary);
+}
+
+function normalizeStatus(status: string | null): string | null {
+  return status ? status.trim().toLowerCase().replace(/[-\s]+/g, '_') : null;
+}
+
+function hasStructuredFailureField(payload: Record<string, unknown>): boolean {
+  return Boolean(
+    tracePayloadPrimitive(payload, 'error') ||
+      tracePayloadPrimitive(payload, 'blockedIssue') ||
+      tracePayloadPrimitive(payload, 'blockedReason') ||
+      normalizeStatus(tracePayloadPrimitive(payload, 'decision')) === 'blocked'
+  );
+}
+
+function summaryIndicatesFailure(summary: string): boolean {
+  return FAILURE_SUMMARY_PATTERN.test(summary);
+}
+
+function summaryIndicatesRecovery(summary: string): boolean {
+  return RECOVERY_SUMMARY_PATTERN.test(summary);
+}
+
+function summaryIndicatesSuccess(summary: string): boolean {
+  return /\b(finished with success|returned \d+ bounded lines|materialized for scoped analysis|succeeded)\b/i.test(summary);
+}

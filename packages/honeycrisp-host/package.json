@@ -1,0 +1,48 @@
+{
+  "name": "honeycrisp",
+  "version": "0.1.0",
+  "description": "Shared Honeycrisp protocol and app-server-hosted runtime, with an optional app-server client.",
+  "type": "module",
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
+  "bin": {
+    "honeycrisp": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    },
+    "./websocket-protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js"
+    },
+    "./runtime": {
+      "types": "./dist/sessionRuntime.d.ts",
+      "import": "./dist/sessionRuntime.js"
+    },
+    "./runtime-services": {
+      "types": "./dist/runtime-services.d.ts",
+      "import": "./dist/runtime-services.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@honeycrisp/research-agent": "workspace:*",
+    "ws": "8.21.0"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

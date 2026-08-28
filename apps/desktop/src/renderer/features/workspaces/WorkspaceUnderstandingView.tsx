@@ -1,0 +1,2229 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent, JSX } from 'react';
+import { BadgeCheck, Binary, BookOpen, Boxes, Brain, Columns3, Download, GitBranch, Globe2, Info, Layers3, ListChecks, MoonStar, Plus, RefreshCw, Server, Settings, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../shared/types';
+import { researchKitDefinition, researchKitLabel } from '../../../shared/researchKits';
+import type {
+  HoneycrispMemorySummary,
+  MemoryDreamingProgressPhase,
+  MemoryDreamingProgressUpdate,
+  ResearchProfile,
+  ResearchKitId,
+  ResearchKitRefreshInput,
+  ResearchKitRefreshResult,
+  RepositoryCloneMode,
+  ResearchProviderModelCatalog,
+  RunRow,
+  ScopeAsset,
+  ScopeAssetInput,
+  ScopeAssetKind,
+  WorkspaceDejunkSummary,
+  WorkspaceMemoryBackendId,
+  WorkspaceScopeDraft,
+  WorkspaceScopeVersion,
+  WorkspaceRule
+} from '@shared/types';
+import { Modal } from '../../app/Modal';
+import { memoryTypeDefinition, memoryTypeLabel } from '../research/MemoryTypeLabel';
+import { CampaignClaimCatalogLists, filterCampaignClaims, MemoryCatalogItem, RunbookCatalogItem } from '../research/MemorySidePanel';
+import { memoryTypeGroupsByHeat } from '../../view-models/memoryCatalog';
+import { EMPTY_SESSION_HEAT_PREFERENCES } from '../../view-models/sessionHeat';
+import type { SessionHeat, SessionHeatPreferences } from '../../view-models/sessionHeat';
+import { errorMessage } from '../../lib/errors';
+import { renderTraceProseText } from '../traces/traceMarkup';
+import { WorkspaceDirectoriesField } from './WorkspaceDirectoriesWidget';
+import { CampaignBoardView, CampaignGraphView } from './CampaignGraphView';
+
+const WORKSPACE_ACTIVITY_DAY_COUNT = 365;
+const DAY_DURATION_MS = 24 * 60 * 60 * 1_000;
+const WORKSPACE_DASHBOARD_VIEWS = ['campaign', 'resources', 'rules', 'utilities', 'overview', 'kit'] as const;
+const WORKSPACE_CAMPAIGN_VIEWS = ['trail', 'board', 'claims', 'memory', 'runbooks'] as const;
+
+type WorkspaceTopLevelView = typeof WORKSPACE_DASHBOARD_VIEWS[number];
+type WorkspaceCampaignView = typeof WORKSPACE_CAMPAIGN_VIEWS[number];
+export type WorkspaceDashboardView = WorkspaceTopLevelView | Exclude<WorkspaceCampaignView, 'trail'> | 'activity';
+
+const WORKSPACE_DASHBOARD_VIEW_ICONS: Record<WorkspaceTopLevelView, typeof Info> = {
+  overview: Settings,
+  campaign: GitBranch,
+  resources: Boxes,
+  kit: RefreshCw,
+  rules: ListChecks,
+  utilities: Wrench
+};
+
+const WORKSPACE_CAMPAIGN_VIEW_ICONS: Record<WorkspaceCampaignView, typeof Info> = {
+  trail: GitBranch,
+  board: Columns3,
+  claims: BadgeCheck,
+  memory: Brain,
+  runbooks: BookOpen
+};
+
+export interface WorkspaceConfigurationInput {
+  workspaceName: string;
+  descriptionMarkdown: string;
+}
+
+export interface WorkspaceHeatmapDay {
+  dateKey: string;
+  timestamp: number;
+  value: number;
+  heatLevel: 0 | 1 | 2 | 3 | 4;
+}
+
+export interface WorkspaceHeatmapActivity {
+  days: WorkspaceHeatmapDay[];
+  leadingEmptyDays: number;
+  total: number;
+}
+
+export interface WorkspaceTokenActivityDay extends WorkspaceHeatmapDay {
+  totalTokens: number;
+}
+
+export interface WorkspaceTokenActivity extends WorkspaceHeatmapActivity {
+  days: WorkspaceTokenActivityDay[];
+  totalTokens: number;
+}
+
+export function workspaceTokenActivity(runs: readonly RunRow[], nowMs: number): WorkspaceTokenActivity {
+  const activity = workspaceDailyActivity(runs.map(({ run, tokenUsage }) => ({
+    occurredAt: run.endedAt ?? run.startedAt ?? run.createdAt,
+    value: tokenUsage?.totalTokens ?? 0
+  })), nowMs);
+  return {
+    ...activity,
+    days: activity.days.map((day) => ({ ...day, totalTokens: day.value })),
+    totalTokens: activity.total
+  };
+}
+
+export function workspaceCreationActivity(
+  items: readonly { createdAt: string }[],
+  nowMs: number
+): WorkspaceHeatmapActivity {
+  return workspaceDailyActivity(items.map((item) => ({ occurredAt: item.createdAt, value: 1 })), nowMs);
+}
+
+function workspaceDailyActivity(
+  events: readonly { occurredAt: string; value: number }[],
+  nowMs: number
+): WorkspaceHeatmapActivity {
+  const end = startOfUtcDay(nowMs);
+  const start = end - ((WORKSPACE_ACTIVITY_DAY_COUNT - 1) * DAY_DURATION_MS);
+  const totalsByDate = new Map<string, number>();
+  for (const event of events) {
+    if (event.value <= 0) continue;
+    const activityAt = Date.parse(event.occurredAt);
+    if (!Number.isFinite(activityAt) || activityAt < start || activityAt >= end + DAY_DURATION_MS) continue;
+    const dateKey = utcDateKey(activityAt);
+    totalsByDate.set(dateKey, (totalsByDate.get(dateKey) ?? 0) + event.value);
+  }
+  const maximum = Math.max(0, ...totalsByDate.values());
+  const days = Array.from({ length: WORKSPACE_ACTIVITY_DAY_COUNT }, (_, index): WorkspaceHeatmapDay => {
+    const timestamp = start + (index * DAY_DURATION_MS);
+    const dateKey = utcDateKey(timestamp);
+    const value = totalsByDate.get(dateKey) ?? 0;
+    return {
+      dateKey,
+      timestamp,
+      value,
+      heatLevel: workspaceHeatLevel(value, maximum)
+    };
+  });
+  return {
+    days,
+    leadingEmptyDays: new Date(start).getUTCDay(),
+    total: days.reduce((total, day) => total + day.value, 0)
+  };
+}
+
+function workspaceHeatLevel(value: number, maximum: number): 0 | 1 | 2 | 3 | 4 {
+  if (value <= 0 || maximum <= 0) return 0;
+  return Math.max(1, Math.min(4, Math.ceil((Math.log1p(value) / Math.log1p(maximum)) * 4))) as 1 | 2 | 3 | 4;
+}
+
+function startOfUtcDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function utcDateKey(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+export function workspaceScopeDraftForConfigurationUpdate(
+  scope: WorkspaceScopeVersion,
+  configuration: WorkspaceConfigurationInput
+): WorkspaceScopeDraft {
+  return {
+    workspaceName: configuration.workspaceName,
+    scopeOwner: scope.scopeOwner,
+    descriptionMarkdown: configuration.descriptionMarkdown,
+    rulesMarkdown: '',
+    expiresAt: scope.expiresAt,
+    assets: scope.assets.map((asset) => ({
+      direction: asset.direction,
+      kind: asset.kind,
+      value: asset.value,
+      sensitivity: asset.sensitivity,
+      attributes: asset.attributes
+    }))
+  };
+}
+
+export function WorkspaceUnderstandingView({
+  busy,
+  honeycrispMemory,
+  activeScope = null,
+  workspaceRules = [],
+  researchProfile = null,
+  researchKitId = 'general',
+  sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
+  researchSubjectName = '',
+  workspacePath = '',
+  workspaceDirectories,
+  memoryBackend = 'honeycrisp',
+  providerModelCatalog = [],
+  selectedClaimId = null,
+  workspaceName,
+  runs,
+  workspaceDejunk = null,
+  workspaceDejunkInProgress = false,
+  memoryDreamingInProgress,
+  memoryDreamingProgress = null,
+  onAddResource = async () => undefined,
+  onChangeResource = async () => undefined,
+  onCloneRepository = async () => undefined,
+  onRefreshResearchKit = async () => { throw new Error('Research Kit refresh is unavailable.'); },
+  onAddRule = async () => undefined,
+  onSaveConfiguration = async () => undefined,
+  onChangeWorkspaceDirectories = async () => undefined,
+  onChangeMemoryBackend = async () => undefined,
+  onRemoveWorkspace = async () => undefined,
+  onOpenClaim = () => undefined,
+  onOpenMemory = () => undefined,
+  onOpenRunbook = () => undefined,
+  onActiveViewChange,
+  onRunWorkspaceDejunk = () => undefined,
+  onRunMemoryDreaming,
+  initialView = 'campaign',
+  nowMs
+}: {
+  busy: boolean;
+  workspaceDejunk?: WorkspaceDejunkSummary | null;
+  workspaceDejunkInProgress?: boolean;
+  memoryDreamingInProgress: boolean;
+  memoryDreamingProgress?: MemoryDreamingProgressUpdate | null;
+  honeycrispMemory: HoneycrispMemorySummary | null;
+  activeScope?: WorkspaceScopeVersion | null;
+  workspaceRules?: readonly WorkspaceRule[];
+  researchProfile?: ResearchProfile | null;
+  researchKitId?: ResearchKitId;
+  sessionHeatPreferences?: SessionHeatPreferences;
+  researchSubjectName?: string;
+  workspacePath?: string;
+  workspaceDirectories?: readonly string[];
+  memoryBackend?: WorkspaceMemoryBackendId;
+  providerModelCatalog?: readonly ResearchProviderModelCatalog[];
+  selectedClaimId?: string | null;
+  workspaceName: string;
+  runs: RunRow[];
+  onRunWorkspaceDejunk?: () => void;
+  onRunMemoryDreaming: () => void;
+  initialView?: WorkspaceDashboardView;
+  onAddResource?: (asset: ScopeAssetInput) => Promise<void>;
+  onChangeResource?: (assetIds: string[], asset: ScopeAssetInput | null) => Promise<void>;
+  onCloneRepository?: (assetId: string, cloneMode: RepositoryCloneMode) => Promise<void>;
+  onRefreshResearchKit?: (input: ResearchKitRefreshInput) => Promise<ResearchKitRefreshResult>;
+  onAddRule?: (text: string) => Promise<void>;
+  onSaveConfiguration?: (configuration: WorkspaceConfigurationInput) => Promise<void>;
+  onChangeWorkspaceDirectories?: (directories: string[]) => Promise<void>;
+  onChangeMemoryBackend?: (memoryBackend: WorkspaceMemoryBackendId) => Promise<void>;
+  onRemoveWorkspace?: () => Promise<void>;
+  onOpenSession?: (runId: string) => void;
+  onOpenClaim?: (claimId: string) => void;
+  onOpenMemory?: (nodeId: string) => void;
+  onOpenRunbook?: (runbookId: string) => void;
+  onActiveViewChange?: (viewName: string) => void;
+  nowMs?: number;
+}): JSX.Element {
+  const [activeView, setActiveView] = useState<WorkspaceTopLevelView>(() => workspaceTopLevelView(initialView));
+  const [activeCampaignView, setActiveCampaignView] = useState<WorkspaceCampaignView>(() => workspaceCampaignView(initialView));
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const researchKit = researchKitDefinition(researchKitId);
+  const dashboardViews = researchKit.refresh
+    ? WORKSPACE_DASHBOARD_VIEWS
+    : WORKSPACE_DASHBOARD_VIEWS.filter((view) => view !== 'kit');
+  useEffect(() => {
+    if (nowMs !== undefined) return undefined;
+    const timer = window.setInterval(() => setClockNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [nowMs]);
+  useEffect(() => {
+    onActiveViewChange?.(workspaceDashboardViewLabel(activeView, researchKitId));
+  }, [activeView, onActiveViewChange, researchKitId]);
+  const timelineNowMs = nowMs ?? clockNowMs;
+  const memoryTypes = researchProfile?.memory.types ?? [];
+  const campaignActive = activeView === 'campaign';
+  const workspaceId = honeycrispMemory?.contextWorkspaceId ?? null;
+  const workspaceFindings = useMemo(
+    () => campaignActive && activeCampaignView === 'claims'
+      ? filterCampaignClaims(honeycrispMemory?.findings ?? [], {
+          query: '',
+          scope: 'workspace',
+          sessionId: '',
+          workspaceId,
+          subjectId: honeycrispMemory?.contextSubjectId ?? null
+        })
+      : [],
+    [activeCampaignView, campaignActive, honeycrispMemory?.contextSubjectId, honeycrispMemory?.findings, workspaceId]
+  );
+  const workspaceLeads = useMemo(
+    () => campaignActive && activeCampaignView === 'claims'
+      ? filterCampaignClaims(honeycrispMemory?.leads ?? [], {
+          query: '',
+          scope: 'workspace',
+          sessionId: '',
+          workspaceId,
+          subjectId: honeycrispMemory?.contextSubjectId ?? null
+        })
+      : [],
+    [activeCampaignView, campaignActive, honeycrispMemory?.contextSubjectId, honeycrispMemory?.leads, workspaceId]
+  );
+  const workspaceMemoryNodes = useMemo(
+    () => campaignActive && activeCampaignView === 'memory'
+      ? (honeycrispMemory?.nodes ?? [])
+          .filter((node) => workspaceId !== null && node.workspaces.some((workspace) => workspace.id === workspaceId))
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      : [],
+    [activeCampaignView, campaignActive, honeycrispMemory?.nodes, workspaceId]
+  );
+  const workspaceRunbooks = useMemo(
+    () => campaignActive && activeCampaignView === 'runbooks'
+      ? (honeycrispMemory?.runbooks ?? [])
+          .filter((runbook) => workspaceId !== null && runbook.workspaceId === workspaceId)
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      : [],
+    [activeCampaignView, campaignActive, honeycrispMemory?.runbooks, workspaceId]
+  );
+
+  return (
+    <main className={`workspace-dashboard${campaignActive ? ' campaign-active' : ''}`} aria-label="Workspace dashboard">
+      <div className="workspace-dashboard-tabs research-side-view-tabs" role="tablist" aria-label="Workspace dashboard views">
+        {dashboardViews.map((view) => {
+          const selected = activeView === view;
+          const ViewIcon = WORKSPACE_DASHBOARD_VIEW_ICONS[view];
+          return (
+            <div className={`research-side-view-tab provider-settings-tab workspace-dashboard-tab ${view === 'kit' ? 'workspace-dashboard-kit-tab ' : ''}${selected ? 'active' : ''}`.trim()} key={view}>
+              <button
+                aria-controls={view === 'campaign' ? 'workspace-dashboard-campaign-subviews' : `workspace-dashboard-${view}-panel`}
+                aria-selected={selected}
+                className="research-side-view-tab-activate"
+                onClick={() => setActiveView(view)}
+                role="tab"
+                type="button"
+              >
+                <ViewIcon aria-hidden="true" className="workspace-dashboard-tab-icon" size={14} />
+                <span>{workspaceDashboardViewLabel(view, researchKitId)}</span>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {campaignActive ? (
+        <div className="workspace-campaign-subview-navigation" id="workspace-dashboard-campaign-subviews" role="tabpanel">
+          <div className="workspace-campaign-subview-tabs research-side-view-tabs" role="tablist" aria-label="Campaign views">
+            {WORKSPACE_CAMPAIGN_VIEWS.map((view) => {
+              const selected = activeCampaignView === view;
+              const ViewIcon = WORKSPACE_CAMPAIGN_VIEW_ICONS[view];
+              return (
+                <div className={`research-side-view-tab provider-settings-tab workspace-campaign-subview-tab ${selected ? 'active' : ''}`.trim()} key={view}>
+                  <button
+                    aria-controls={`workspace-dashboard-campaign-${view}-panel`}
+                    aria-selected={selected}
+                    className="research-side-view-tab-activate"
+                    onClick={() => setActiveCampaignView(view)}
+                    role="tab"
+                    type="button"
+                  >
+                    <ViewIcon aria-hidden="true" className="workspace-dashboard-tab-icon" size={14} />
+                    <span>{workspaceCampaignViewLabel(view)}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {activeView === 'overview' ? <WorkspaceOverviewPanel
+        activeScope={activeScope}
+        busy={busy}
+        hidden={false}
+        onSave={onSaveConfiguration}
+        onChangeDirectories={onChangeWorkspaceDirectories}
+        onChangeMemoryBackend={onChangeMemoryBackend}
+        memoryBackend={memoryBackend}
+        memoryBackendLocked={runs.some(({ run }) => isLiveResearchRunStatus(run.status) || run.status === 'paused')}
+        researchProfile={researchProfile}
+        researchKitId={researchKitId}
+        researchSubjectName={researchSubjectName}
+        workspaceName={workspaceName}
+        workspacePath={workspacePath}
+        workspaceDirectories={workspaceDirectories ?? (workspacePath ? [workspacePath] : [])}
+      /> : null}
+
+      {activeView === 'resources' ? <WorkspaceResearchSurface
+        activeScope={activeScope}
+        hidden={false}
+        honeycrispMemory={honeycrispMemory}
+        nowMs={timelineNowMs}
+        runs={runs}
+        onAddResource={onAddResource}
+        onChangeResource={onChangeResource}
+        onCloneRepository={onCloneRepository}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+      /> : null}
+
+      {campaignActive && activeCampaignView === 'trail' ? <CampaignGraphView
+        memory={honeycrispMemory}
+        providerModelCatalog={providerModelCatalog}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+        onOpenClaim={onOpenClaim}
+        onOpenRunbook={onOpenRunbook}
+      /> : null}
+
+      {campaignActive && activeCampaignView === 'board' ? <CampaignBoardView
+        memory={honeycrispMemory}
+        providerModelCatalog={providerModelCatalog}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+        onOpenClaim={onOpenClaim}
+      /> : null}
+
+      {campaignActive && activeCampaignView === 'claims' ? <WorkspaceClaimsPanel
+        findings={workspaceFindings}
+        leads={workspaceLeads}
+        loading={honeycrispMemory === null || honeycrispMemory.loading === true}
+        nowMs={timelineNowMs}
+        onOpen={onOpenClaim}
+        providerModelCatalog={providerModelCatalog}
+        selectedClaimId={selectedClaimId}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+      /> : null}
+
+      {activeView === 'kit' && researchKit.refresh ? <WorkspaceResearchKitPanel
+        activeScope={activeScope}
+        busy={busy}
+        onRefresh={onRefreshResearchKit}
+        researchKitId={researchKitId}
+      /> : null}
+
+      {activeView === 'rules' ? <WorkspaceRulesPanel
+        busy={busy}
+        onAddRule={onAddRule}
+        rules={workspaceRules}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+      /> : null}
+
+      {campaignActive && activeCampaignView === 'memory' ? <WorkspaceMemoryPanel
+        enabled={memoryBackend !== 'disabled'}
+        hidden={false}
+        loading={honeycrispMemory === null || honeycrispMemory.loading === true}
+        memoryTypes={memoryTypes}
+        nowMs={timelineNowMs}
+        nodes={workspaceMemoryNodes}
+        onOpen={onOpenMemory}
+        profileId={researchProfile?.id}
+        sessionHeatPreferences={sessionHeatPreferences}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+      /> : null}
+
+      {campaignActive && activeCampaignView === 'runbooks' ? <WorkspaceRunbooksPanel
+        hidden={false}
+        loading={honeycrispMemory === null || honeycrispMemory.loading === true}
+        nowMs={timelineNowMs}
+        runbooks={workspaceRunbooks}
+        onOpen={onOpenRunbook}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+      /> : null}
+
+      {activeView === 'utilities' ? <WorkspaceUtilitiesPanel
+        busy={busy}
+        hidden={false}
+        honeycrispMemory={honeycrispMemory}
+        memoryDreamingInProgress={memoryDreamingInProgress}
+        memoryDreamingProgress={memoryDreamingProgress}
+        memoryBackend={memoryBackend}
+        researchProfile={researchProfile}
+        runs={runs}
+        workspaceDejunk={workspaceDejunk}
+        workspaceDejunkInProgress={workspaceDejunkInProgress}
+        onRunMemoryDreaming={onRunMemoryDreaming}
+        onRunWorkspaceDejunk={onRunWorkspaceDejunk}
+        onRemoveWorkspace={onRemoveWorkspace}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+      /> : null}
+    </main>
+  );
+}
+
+function workspaceDashboardViewLabel(view: WorkspaceDashboardView, researchKitId: ResearchKitId): string {
+  if (view === 'overview') return 'Settings';
+  if (view === 'kit') return researchKitLabel(researchKitId);
+  return view.charAt(0).toUpperCase() + view.slice(1);
+}
+
+function workspaceTopLevelView(initialView: WorkspaceDashboardView): WorkspaceTopLevelView {
+  return initialView === 'activity' || initialView === 'board' || initialView === 'claims' || initialView === 'memory' || initialView === 'runbooks'
+    ? 'campaign'
+    : initialView;
+}
+
+function workspaceCampaignView(initialView: WorkspaceDashboardView): WorkspaceCampaignView {
+  return initialView === 'board' || initialView === 'claims' || initialView === 'memory' || initialView === 'runbooks'
+    ? initialView
+    : 'trail';
+}
+
+function workspaceCampaignViewLabel(view: WorkspaceCampaignView): string {
+  if (view === 'memory') return 'Memories';
+  return view.charAt(0).toUpperCase() + view.slice(1);
+}
+
+export function hackerOneProgramIdentifier(scope: WorkspaceScopeVersion | null): string {
+  if (!scope) return '';
+  for (const asset of scope.assets) {
+    const handle = asset.attributes?.hackerOneHandle;
+    if (typeof handle === 'string' && handle.trim()) return handle.trim();
+  }
+  return '';
+}
+
+export function WorkspaceResearchKitPanel({
+  activeScope,
+  busy,
+  onRefresh,
+  researchKitId
+}: {
+  activeScope: WorkspaceScopeVersion | null;
+  busy: boolean;
+  onRefresh: (input: ResearchKitRefreshInput) => Promise<ResearchKitRefreshResult>;
+  researchKitId: ResearchKitId;
+}): JSX.Element {
+  const kit = researchKitDefinition(researchKitId);
+  const refresh = kit.refresh;
+  const initialSource = researchKitId === 'hackerone' ? hackerOneProgramIdentifier(activeScope) : (refresh?.fixedSource ?? '');
+  const [sourceIdentifier, setSourceIdentifier] = useState(initialSource);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ResearchKitRefreshResult | null>(null);
+  useEffect(() => setSourceIdentifier(initialSource), [initialSource]);
+  if (!refresh) throw new Error(`Research Kit ${researchKitId} does not define refresh behavior.`);
+  const editableSource = Boolean(refresh.sourceIdentifierPlaceholder);
+  const submit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (editableSource && !sourceIdentifier.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    setResult(null);
+    try {
+      setResult(await onRefresh({ ...(editableSource ? { sourceIdentifier: sourceIdentifier.trim() } : {}) }));
+    } catch (caught: unknown) {
+      setError(errorMessage(caught));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  const importLabels = refresh.imports.map((kind) => kind === 'guidance' ? 'workspace guidance' : kind).join(', ');
+  return (
+    <section
+      aria-label={`${kit.label} Research Kit`}
+      className="workspace-dashboard-panel workspace-research-kit-view"
+      id="workspace-dashboard-kit-panel"
+      role="tabpanel"
+    >
+      <form className="settings-form workspace-research-kit-form" onSubmit={(event) => void submit(event)}>
+        <header className="settings-form-heading">
+          <h2>{kit.label} Research Kit</h2>
+          <p>{kit.description}</p>
+        </header>
+        <div className="settings-form-squircle">
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row workspace-research-kit-source">
+              <span className="settings-form-control-copy">
+                <strong>{refresh.sourceLabel}</strong>
+                <small>{refresh.sourceDescription}</small>
+              </span>
+              <input
+                aria-label={refresh.sourceLabel}
+                disabled={busy || submitting || !editableSource}
+                onChange={(event) => setSourceIdentifier(event.target.value)}
+                placeholder={refresh.sourceIdentifierPlaceholder}
+                value={sourceIdentifier}
+              />
+            </label>
+            <div className="settings-form-control-row workspace-research-kit-refresh">
+              <span className="settings-form-control-copy">
+                <strong>Refresh Imports</strong>
+                <small>Refresh {importLabels}. Manually added resources and cloned directories are preserved.</small>
+              </span>
+              <button className="secondary-button" disabled={busy || submitting || (editableSource && !sourceIdentifier.trim())} type="submit">
+                <RefreshCw aria-hidden="true" className={submitting ? 'is-spinning' : ''} size={14} />
+                {submitting ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          {error ? <p className="workspace-research-kit-status is-error" role="alert">{error}</p> : null}
+          {result ? <p className="workspace-research-kit-status" role="status">
+            Refreshed {result.resourcesRefreshed} resources and {result.rulesRefreshed} rules{result.guidanceRefreshed ? ', plus workspace guidance' : ''}.
+          </p> : null}
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function WorkspaceRulesPanel({
+  busy,
+  onAddRule,
+  rules,
+  workspaceName
+}: {
+  busy: boolean;
+  onAddRule: (text: string) => Promise<void>;
+  rules: readonly WorkspaceRule[];
+  workspaceName: string;
+}): JSX.Element {
+  const [draft, setDraft] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text || busy || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onAddRule(text);
+      setDraft('');
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  return (
+    <section
+      aria-label={`${workspaceName} rules`}
+      className="workspace-dashboard-panel workspace-rules"
+      id="workspace-dashboard-rules-panel"
+      role="tabpanel"
+    >
+      <div className="workspace-rules-layout settings-form">
+        <header className="settings-form-heading">
+          <h2>{workspaceName} Rules</h2>
+          <p>Append concise operating constraints for every research session in this workspace.</p>
+        </header>
+        <div className="settings-form-squircle workspace-rules-surface">
+          <form className="workspace-rule-composer" onSubmit={(event) => void submit(event)}>
+            <input
+              aria-label="New workspace rule"
+              disabled={busy || submitting}
+              maxLength={2000}
+              placeholder="Add a rule"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <button disabled={busy || submitting || !draft.trim()} type="submit">
+              <Plus aria-hidden="true" size={14} />
+              Add Rule
+            </button>
+          </form>
+          {error ? <p className="workspace-rules-error" role="alert">{error}</p> : null}
+          {rules.length > 0 ? (
+            <ol aria-label="Workspace rules" className="workspace-rule-list">
+              {rules.map((rule) => <li key={rule.id}>{rule.text}</li>)}
+            </ol>
+          ) : <p className="workspace-rules-empty">No workspace rules recorded.</p>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceOverviewPanel({
+  activeScope,
+  busy,
+  hidden,
+  onChangeDirectories,
+  onChangeMemoryBackend,
+  onSave,
+  memoryBackend,
+  memoryBackendLocked,
+  researchProfile,
+  researchKitId,
+  researchSubjectName,
+  workspaceName,
+  workspacePath,
+  workspaceDirectories
+}: {
+  activeScope: WorkspaceScopeVersion | null;
+  busy: boolean;
+  hidden: boolean;
+  onChangeDirectories: (directories: string[]) => Promise<void>;
+  onChangeMemoryBackend: (memoryBackend: WorkspaceMemoryBackendId) => Promise<void>;
+  onSave: (configuration: WorkspaceConfigurationInput) => Promise<void>;
+  memoryBackend: WorkspaceMemoryBackendId;
+  memoryBackendLocked: boolean;
+  researchProfile: ResearchProfile | null;
+  researchKitId: ResearchKitId;
+  researchSubjectName: string;
+  workspaceName: string;
+  workspacePath: string;
+  workspaceDirectories: readonly string[];
+}): JSX.Element {
+  const resolvedWorkspaceName = activeScope?.workspaceName || workspaceName;
+  const resolvedDescription = activeScope?.descriptionMarkdown ?? '';
+  const [workspaceNameDraft, setWorkspaceNameDraft] = useState(resolvedWorkspaceName);
+  const [descriptionDraft, setDescriptionDraft] = useState(resolvedDescription);
+  const [guidanceEditing, setGuidanceEditing] = useState(false);
+  const [guidanceHeight, setGuidanceHeight] = useState(150);
+  const [saving, setSaving] = useState(false);
+  const [memorySaving, setMemorySaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const guidancePreviewRef = useRef<HTMLDivElement>(null);
+  const guidanceEditorRef = useRef<HTMLTextAreaElement>(null);
+  const resolvedConfigurationRef = useRef({
+    workspaceName: resolvedWorkspaceName,
+    descriptionMarkdown: resolvedDescription
+  });
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSaveCountRef = useRef(0);
+  const lastQueuedConfigurationRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = resolvedConfigurationRef.current;
+    setWorkspaceNameDraft((current) => current === previous.workspaceName ? resolvedWorkspaceName : current);
+    setDescriptionDraft((current) => current === previous.descriptionMarkdown ? resolvedDescription : current);
+    setGuidanceEditing(false);
+    setGuidanceHeight(150);
+    resolvedConfigurationRef.current = {
+      workspaceName: resolvedWorkspaceName,
+      descriptionMarkdown: resolvedDescription
+    };
+    if (lastQueuedConfigurationRef.current === JSON.stringify(resolvedConfigurationRef.current)) {
+      lastQueuedConfigurationRef.current = null;
+    }
+    setSaveError(null);
+  }, [activeScope?.id, resolvedDescription, resolvedWorkspaceName]);
+  const saveInPlace = (): void => {
+    const configuration = {
+      workspaceName: workspaceNameDraft,
+      descriptionMarkdown: descriptionDraft
+    };
+    const configurationKey = JSON.stringify(configuration);
+    const dirty = configuration.workspaceName !== resolvedWorkspaceName
+      || configuration.descriptionMarkdown !== resolvedDescription;
+    if (!configuration.workspaceName.trim()) {
+      setSaveError('Workspace name is required.');
+      return;
+    }
+    if (!dirty || busy || configurationKey === lastQueuedConfigurationRef.current) return;
+    lastQueuedConfigurationRef.current = configurationKey;
+    pendingSaveCountRef.current += 1;
+    setSaving(true);
+    setSaveError(null);
+    saveQueueRef.current = saveQueueRef.current
+      .catch(() => undefined)
+      .then(() => onSave(configuration))
+      .catch((caught: unknown) => {
+        lastQueuedConfigurationRef.current = null;
+        setSaveError(errorMessage(caught));
+      })
+      .finally(() => {
+        pendingSaveCountRef.current -= 1;
+        if (pendingSaveCountRef.current === 0) setSaving(false);
+      });
+  };
+  const showGuidanceEditor = (): void => {
+    if (busy) return;
+    const previewHeight = guidancePreviewRef.current?.getBoundingClientRect().height;
+    if (previewHeight && previewHeight >= 150) setGuidanceHeight(previewHeight);
+    setGuidanceEditing(true);
+  };
+  const changeMemoryBackend = async (nextMemoryBackend: WorkspaceMemoryBackendId): Promise<void> => {
+    if (busy || memoryBackendLocked || memorySaving || nextMemoryBackend === memoryBackend) return;
+    setMemorySaving(true);
+    setSaveError(null);
+    try {
+      await onChangeMemoryBackend(nextMemoryBackend);
+    } catch (caught) {
+      setSaveError(errorMessage(caught));
+    } finally {
+      setMemorySaving(false);
+    }
+  };
+  const showGuidancePreview = (): void => {
+    const editorHeight = guidanceEditorRef.current?.getBoundingClientRect().height;
+    if (editorHeight && editorHeight >= 150) setGuidanceHeight(editorHeight);
+    setGuidanceEditing(false);
+  };
+  return (
+    <section
+      aria-label="Workspace settings"
+      className="workspace-dashboard-panel workspace-overview"
+      hidden={hidden}
+      id="workspace-dashboard-overview-panel"
+      role="tabpanel"
+    >
+      <div className="workspace-overview-layout settings-form">
+        <header className="settings-form-heading workspace-overview-heading">
+          <h2 id="workspace-overview-heading">{workspaceNameDraft.trim() || resolvedWorkspaceName} Settings</h2>
+          <p>Review the workspace context and authorized research boundary.</p>
+        </header>
+        <div className="workspace-overview-form">
+          <div className="settings-form-squircle" aria-labelledby="workspace-overview-heading">
+            <div className="settings-form-control-list">
+              <label className="settings-form-control-row workspace-overview-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Research Profile</strong>
+                  <small>The research profile that defines this workspace.</small>
+                </span>
+                <input
+                  aria-label="Research Profile"
+                  className="workspace-overview-input"
+                  disabled
+                  value={workspaceResearchProfileLabel(researchProfile)}
+                />
+              </label>
+              <label className="settings-form-control-row workspace-overview-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Research Kit</strong>
+                  <small>The fixed resource, scope, and rule acquisition kit selected when this workspace was created.</small>
+                </span>
+                <input
+                  aria-label="Research Kit"
+                  className="workspace-overview-input"
+                  disabled
+                  value={researchKitLabel(researchKitId)}
+                />
+              </label>
+              <label className="settings-form-control-row workspace-overview-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Memory</strong>
+                  <small>Disabling memory retains existing data and removes recall, claim, and campaign tools from new sessions.</small>
+                </span>
+                <select
+                  aria-label="Memory"
+                  className="workspace-overview-input"
+                  disabled={busy || memoryBackendLocked || memorySaving}
+                  title={memoryBackendLocked ? 'Memory cannot be changed while a research session is queued, active, or paused' : undefined}
+                  value={memoryBackend}
+                  onChange={(event) => void changeMemoryBackend(event.target.value as WorkspaceMemoryBackendId)}
+                >
+                  <option value="honeycrisp">Enabled</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </label>
+              <label className="settings-form-control-row workspace-overview-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Research Subject</strong>
+                  <small>The research subject shared across related workspaces.</small>
+                </span>
+                <input
+                  aria-label="Research Subject"
+                  className="workspace-overview-input"
+                  disabled
+                  value={researchSubjectName}
+                />
+              </label>
+              <label className="settings-form-control-row workspace-overview-control-row">
+                <span className="settings-form-control-copy">
+                  <strong>Workspace Name</strong>
+                  <small>Choose the name shown throughout Beale.</small>
+                </span>
+                <input
+                  aria-label="Workspace Name"
+                  className="workspace-overview-input"
+                  disabled={busy}
+                  required
+                  value={workspaceNameDraft}
+                  onChange={(event) => setWorkspaceNameDraft(event.target.value)}
+                  onBlur={saveInPlace}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur();
+                  }}
+                />
+              </label>
+              <WorkspaceDirectoriesField
+                directories={workspaceDirectories}
+                disabled={busy}
+                lockedDirectory={workspacePath}
+                onAdd={async (selection) => {
+                  const selectedPath = selection.path;
+                  if (!selectedPath || workspaceDirectories.some((directory) => workspaceDirectoryKey(directory) === workspaceDirectoryKey(selectedPath))) return;
+                  if (selection.knownWorkspace) {
+                    throw new Error(`Directory already belongs to workspace ${selection.knownWorkspace.workspaceName}.`);
+                  }
+                  await onChangeDirectories([...workspaceDirectories, selectedPath]);
+                }}
+                onRemove={(directory) => onChangeDirectories(workspaceDirectories.filter((item) => workspaceDirectoryKey(item) !== workspaceDirectoryKey(directory)))}
+              />
+              <div className="settings-form-control-row workspace-overview-control-row workspace-overview-textarea-row">
+                <div className="workspace-guidance-field-heading">
+                  <span className="settings-form-control-copy">
+                    <strong>Workspace Guidance</strong>
+                    <small>Reads and writes the primary workspace's AGENTS.md instructions.</small>
+                  </span>
+                  {guidanceEditing ? (
+                    <button className="workspace-guidance-show-markdown" onClick={showGuidancePreview} type="button">
+                      Show Markdown
+                    </button>
+                  ) : null}
+                </div>
+                {guidanceEditing ? (
+                  <textarea
+                    aria-label="Workspace Guidance"
+                    autoFocus
+                    className="workspace-guidance-editor"
+                    disabled={busy}
+                    ref={guidanceEditorRef}
+                    rows={5}
+                    style={{ height: guidanceHeight }}
+                    value={descriptionDraft}
+                    onChange={(event) => setDescriptionDraft(event.target.value)}
+                    onBlur={saveInPlace}
+                  />
+                ) : (
+                  <div
+                    className="workspace-guidance-preview"
+                    ref={guidancePreviewRef}
+                    style={{ height: guidanceHeight }}
+                  >
+                    <div
+                      aria-label="Workspace Guidance"
+                      aria-disabled={busy || undefined}
+                      className="workspace-guidance-preview-content"
+                      onClick={showGuidanceEditor}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+                        event.preventDefault();
+                        showGuidanceEditor();
+                      }}
+                      role="button"
+                      tabIndex={busy ? -1 : 0}
+                      title="Edit Workspace Guidance"
+                    >
+                      {descriptionDraft.trim()
+                        ? renderTraceProseText(descriptionDraft, 'agent_output')
+                        : <p className="workspace-guidance-preview-empty">Click to add workspace guidance.</p>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          {saveError ? <p className="workspace-overview-error" role="alert">{saveError}</p> : null}
+          {saving ? <span className="workspace-overview-saving" role="status">Saving…</span> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function workspaceDirectoryKey(directory: string): string {
+  return directory.replace(/[\\/]+$/u, '').toLowerCase();
+}
+
+function workspaceResearchProfileLabel(profile: ResearchProfile | null): string {
+  if (!profile) return '';
+  if (profile.id === 'security-research') return 'Security';
+  if (profile.id === 'mathematics') return 'Mathematics';
+  return profile.name;
+}
+
+function WorkspaceActivityForm({
+  activity,
+  metric,
+  viewLabel,
+  workspaceName
+}: {
+  activity: WorkspaceHeatmapActivity;
+  metric: WorkspaceHeatmapMetric;
+  viewLabel: string;
+  workspaceName: string;
+}): JSX.Element {
+  const metricCopy = workspaceHeatmapMetricCopy(metric);
+  return (
+    <section className="settings-form workspace-activity-form" aria-label={`${workspaceName} ${viewLabel.toLowerCase()} yearly ${metricCopy.activityLabel}`}>
+      <header className="settings-form-heading">
+        <h2>{workspaceName} {viewLabel}</h2>
+        <p>{workspaceHeatmapValueLabel(activity.total, metric)} over the past year.</p>
+      </header>
+      <div className="workspace-activity-grid-scroll">
+        <div className="workspace-activity-grid" role="grid" aria-label={`Daily ${metricCopy.activityLabel} over the past year`}>
+          {Array.from({ length: activity.leadingEmptyDays }, (_, index) => (
+            <span aria-hidden="true" className="workspace-activity-cell is-empty" key={`empty-${index}`} />
+          ))}
+          {activity.days.map((day) => {
+            const dateLabel = new Date(day.timestamp).toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              timeZone: 'UTC'
+            });
+            const label = `${dateLabel}: ${workspaceHeatmapValueLabel(day.value, metric)}`;
+            return (
+              <span
+                aria-label={label}
+                className={`workspace-activity-cell heat-${day.heatLevel}`}
+                data-activity-count={day.value}
+                data-date={day.dateKey}
+                data-metric={metric}
+                key={day.dateKey}
+                role="gridcell"
+                title={label}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+type WorkspaceHeatmapMetric = 'tokens' | 'resources' | 'memories' | 'runbooks';
+
+function workspaceHeatmapMetricCopy(metric: WorkspaceHeatmapMetric): { activityLabel: string } {
+  switch (metric) {
+    case 'tokens': return { activityLabel: 'token usage' };
+    case 'resources': return { activityLabel: 'resource creation' };
+    case 'memories': return { activityLabel: 'memory creation' };
+    case 'runbooks': return { activityLabel: 'runbook creation' };
+  }
+}
+
+function workspaceHeatmapValueLabel(value: number, metric: WorkspaceHeatmapMetric): string {
+  const formattedValue = value.toLocaleString();
+  switch (metric) {
+    case 'tokens': return `${formattedValue} ${value === 1 ? 'token' : 'tokens'} used`;
+    case 'resources': return `${formattedValue} ${value === 1 ? 'resource' : 'resources'} created`;
+    case 'memories': return `${formattedValue} ${value === 1 ? 'memory' : 'memories'} created`;
+    case 'runbooks': return `${formattedValue} ${value === 1 ? 'runbook' : 'runbooks'} created`;
+  }
+}
+
+export interface WorkspaceMemoryTypeGroup {
+  type: string;
+  nodes: HoneycrispMemorySummary['nodes'];
+}
+
+export function workspaceMemoryTypeGroups(
+  nodes: HoneycrispMemorySummary['nodes'],
+  memoryTypes: ResearchProfile['memory']['types'],
+  profileId: string | null | undefined,
+  sessionHeatPreferences: SessionHeatPreferences
+): WorkspaceMemoryTypeGroup[] {
+  return memoryTypeGroupsByHeat(nodes, memoryTypes, profileId, sessionHeatPreferences.heatOverrides);
+}
+
+function WorkspaceMemoryPanel({
+  enabled,
+  hidden,
+  loading,
+  memoryTypes,
+  nowMs,
+  nodes,
+  onOpen,
+  profileId,
+  sessionHeatPreferences,
+  workspaceName
+}: {
+  enabled: boolean;
+  hidden: boolean;
+  loading: boolean;
+  memoryTypes: ResearchProfile['memory']['types'];
+  nowMs: number;
+  nodes: HoneycrispMemorySummary['nodes'];
+  onOpen: (nodeId: string) => void;
+  profileId?: string | null;
+  sessionHeatPreferences: SessionHeatPreferences;
+  workspaceName: string;
+}): JSX.Element {
+  const activity = useMemo(() => workspaceCreationActivity(nodes, nowMs), [nodes, nowMs]);
+  const groups = useMemo(
+    () => workspaceMemoryTypeGroups(nodes, memoryTypes, profileId, sessionHeatPreferences),
+    [memoryTypes, nodes, profileId, sessionHeatPreferences]
+  );
+  return (
+    <section
+      aria-label="Workspace memories"
+      className="workspace-dashboard-panel workspace-catalog-view workspace-campaign-catalog-view workspace-memories-view"
+      hidden={hidden}
+      id="workspace-dashboard-campaign-memory-panel"
+      role="tabpanel"
+    >
+      <WorkspaceActivityForm activity={activity} metric="memories" viewLabel="Memories" workspaceName={workspaceName} />
+      <div className="workspace-catalog-list memory-catalog-list workspace-memory-type-lists">
+        {groups.map((group) => (
+          <WorkspaceMemoryTypeSection
+            group={group}
+            key={group.type}
+            memoryTypes={memoryTypes}
+            onOpen={onOpen}
+          />
+        ))}
+        {nodes.length === 0 ? (
+          <p className="workspace-catalog-empty">{!enabled ? 'Memory is disabled for this workspace.' : loading ? 'Loading memory.' : 'No workspace memory yet.'}</p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceMemoryTypeSection({
+  group,
+  memoryTypes,
+  onOpen
+}: {
+  group: WorkspaceMemoryTypeGroup;
+  memoryTypes: ResearchProfile['memory']['types'];
+  onOpen: (nodeId: string) => void;
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const visibleNodes = group.nodes.slice(0, 4);
+  const overflowNodes = group.nodes.slice(4);
+  const definition = memoryTypeDefinition(group.type, memoryTypes);
+  const fallbackLabel = memoryTypeLabel(group.type, memoryTypes);
+  const typeLabel = group.nodes.length === 1
+    ? definition?.name ?? fallbackLabel
+    : definition?.pluralName ?? workspaceMemoryTypePluralLabel(fallbackLabel);
+  const renderNode = (node: HoneycrispMemorySummary['nodes'][number]): JSX.Element => (
+    <MemoryCatalogItem
+      key={node.id}
+      node={node}
+      selected={false}
+      onOpen={() => onOpen(node.id)}
+    />
+  );
+  return (
+    <section className="workspace-memory-type-section" aria-label={`${group.nodes.length} ${typeLabel}`}>
+      <h3>{group.nodes.length.toLocaleString()} {typeLabel}</h3>
+      <div className="workspace-memory-type-primary-items">
+        {visibleNodes.map(renderNode)}
+      </div>
+      {overflowNodes.length > 0 ? (
+        <>
+          <div
+            aria-hidden={!expanded}
+            className={`workspace-memory-type-overflow ${expanded ? 'expanded' : ''}`.trim()}
+            inert={expanded ? undefined : true}
+          >
+            <div>{overflowNodes.map(renderNode)}</div>
+          </div>
+          <button
+            aria-expanded={expanded}
+            className="session-memory-type-toggle workspace-memory-type-toggle"
+            onClick={() => setExpanded((current) => !current)}
+            type="button"
+          >
+            {expanded ? 'Show less' : `Show ${overflowNodes.length.toLocaleString()} more`}
+          </button>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function workspaceMemoryTypePluralLabel(label: string): string {
+  if (label.startsWith('Unknown type (')) return label.replace('Unknown type (', 'Unknown types (');
+  return label.endsWith('s') ? label : `${label}s`;
+}
+
+function WorkspaceClaimsPanel({
+  findings,
+  leads,
+  loading,
+  nowMs,
+  onOpen,
+  providerModelCatalog,
+  selectedClaimId,
+  workspaceName
+}: {
+  findings: HoneycrispMemorySummary['findings'];
+  leads: HoneycrispMemorySummary['leads'];
+  loading: boolean;
+  nowMs: number;
+  onOpen: (claimId: string) => void;
+  providerModelCatalog: readonly ResearchProviderModelCatalog[];
+  selectedClaimId: string | null;
+  workspaceName: string;
+}): JSX.Element {
+  return (
+    <section
+      aria-label="Workspace claims"
+      className="workspace-dashboard-panel workspace-catalog-view workspace-claims-view"
+      id="workspace-dashboard-campaign-claims-panel"
+      role="tabpanel"
+    >
+      <header className="settings-form-heading workspace-claims-heading">
+        <h2>{workspaceName} Claims</h2>
+      </header>
+      <div className="workspace-catalog-list memory-catalog-list memory-type-groups workspace-claim-lists">
+        {loading ? (
+          <p className="workspace-catalog-empty">Loading claims.</p>
+        ) : (
+          <CampaignClaimCatalogLists
+            findings={findings}
+            leads={leads}
+            nowMs={nowMs}
+            previewLimit={4}
+            providerModelCatalog={providerModelCatalog}
+            selectedClaimId={selectedClaimId}
+            showEmptySections
+            onOpen={onOpen}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceRunbooksPanel({
+  hidden,
+  loading,
+  nowMs,
+  runbooks,
+  onOpen,
+  workspaceName
+}: {
+  hidden: boolean;
+  loading: boolean;
+  nowMs: number;
+  runbooks: HoneycrispMemorySummary['runbooks'];
+  onOpen: (runbookId: string) => void;
+  workspaceName: string;
+}): JSX.Element {
+  const activity = useMemo(() => workspaceCreationActivity(runbooks, nowMs), [nowMs, runbooks]);
+  return (
+    <section
+      aria-label="Workspace runbooks"
+      className="workspace-dashboard-panel workspace-catalog-view workspace-campaign-catalog-view workspace-runbooks-view"
+      hidden={hidden}
+      id="workspace-dashboard-campaign-runbooks-panel"
+      role="tabpanel"
+    >
+      <WorkspaceActivityForm activity={activity} metric="runbooks" viewLabel="Runbooks" workspaceName={workspaceName} />
+      <div className="workspace-catalog-list runbook-catalog-list">
+        {runbooks.map((runbook) => (
+          <RunbookCatalogItem
+            key={runbook.id}
+            runbook={runbook}
+            selected={false}
+            onOpen={() => onOpen(runbook.id)}
+          />
+        ))}
+        {runbooks.length === 0 ? (
+          <p className="workspace-catalog-empty">{loading ? 'Loading runbooks.' : 'No workspace runbooks yet.'}</p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceUtilitiesPanel({
+  busy,
+  hidden,
+  honeycrispMemory,
+  memoryDreamingInProgress,
+  memoryDreamingProgress,
+  memoryBackend,
+  researchProfile,
+  runs,
+  workspaceDejunk,
+  workspaceDejunkInProgress,
+  onRunMemoryDreaming,
+  onRunWorkspaceDejunk,
+  onRemoveWorkspace,
+  workspaceName
+}: {
+  busy: boolean;
+  hidden: boolean;
+  honeycrispMemory: HoneycrispMemorySummary | null;
+  memoryDreamingInProgress: boolean;
+  memoryDreamingProgress: MemoryDreamingProgressUpdate | null;
+  memoryBackend: WorkspaceMemoryBackendId;
+  researchProfile: ResearchProfile | null;
+  runs: RunRow[];
+  workspaceDejunk: WorkspaceDejunkSummary | null;
+  workspaceDejunkInProgress: boolean;
+  onRunMemoryDreaming: () => void;
+  onRunWorkspaceDejunk: () => void;
+  onRemoveWorkspace: () => Promise<void>;
+  workspaceName: string;
+}): JSX.Element {
+  const memoryEnabled = memoryBackend !== 'disabled' && researchProfile?.capabilities.memoryEnabled !== false;
+  const memoryLoading = honeycrispMemory?.loading === true;
+  const dreamDisabled = busy || memoryDreamingInProgress || memoryLoading || !memoryEnabled || honeycrispMemory?.dreaming.available === false;
+  const dreamProgressPhase = memoryDreamingProgress?.phase ?? (memoryDreamingInProgress ? 'preparing' : null);
+  const dreamProgressLabel = dreamProgressPhase ? memoryDreamingProgressLabel(dreamProgressPhase) : null;
+  const memoriesSinceDream = memoryCountSinceLastDream(honeycrispMemory);
+  const newFileCount = workspaceDejunk?.newFileCount ?? 0;
+  const activeSession = runs.some(({ run }) => isLiveResearchRunStatus(run.status));
+  const dejunkLoading = workspaceDejunk?.loading === true;
+  const dejunkDisabled = busy || workspaceDejunkInProgress || dejunkLoading || activeSession || workspaceDejunk?.available === false;
+  const dejunkStatus = workspaceDejunkInProgress ? 'Dejunking workspace files…' : dejunkLoading ? 'Checking workspace files…' : null;
+  return (
+    <section
+      aria-label="Workspace utilities"
+      className="workspace-dashboard-panel workspace-cleaning-view"
+      hidden={hidden}
+      id="workspace-dashboard-utilities-panel"
+      role="tabpanel"
+    >
+      <div className="settings-form workspace-cleaning-form">
+        <header className="settings-form-heading">
+          <h2>{workspaceName} Utilities</h2>
+          <p>Organize loose files and consolidate workspace memory.</p>
+        </header>
+        <div className="settings-form-squircle">
+          <div className="settings-form-control-list">
+            <div className="settings-form-control-row workspace-cleaning-row">
+              <span className="settings-form-control-copy">
+                <strong>Dejunk</strong>
+                {dejunkStatus ? <WorkspaceCleaningStatus label={dejunkStatus} /> : (
+                  <small>{workspaceDejunk?.newFileCountCapped ? `${newFileCount.toLocaleString()}+` : newFileCount.toLocaleString()} New {newFileCount === 1 ? 'File' : 'Files'}</small>
+                )}
+              </span>
+              <button className="workspace-cleaning-action" disabled={dejunkDisabled} onClick={onRunWorkspaceDejunk} type="button">Dejunk Now</button>
+            </div>
+            <div className="settings-form-control-row workspace-cleaning-row">
+              <span className="settings-form-control-copy">
+                <strong>Dream</strong>
+                {dreamProgressLabel || memoryLoading ? (
+                  <WorkspaceCleaningStatus label={dreamProgressLabel ?? 'Loading workspace memory…'} />
+                ) : (
+                  <small>{memoryBackend === 'disabled' ? 'Memory is disabled for this workspace' : `${memoriesSinceDream.toLocaleString()} New ${memoriesSinceDream === 1 ? 'Memory' : 'Memories'}`}</small>
+                )}
+              </span>
+              <button className="workspace-cleaning-action" disabled={dreamDisabled} onClick={onRunMemoryDreaming} type="button">Dream Now</button>
+            </div>
+            <WorkspaceRemovalForm busy={busy} onRemove={onRemoveWorkspace} workspaceName={workspaceName} />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceRemovalForm({
+  busy,
+  onRemove,
+  workspaceName
+}: {
+  busy: boolean;
+  onRemove: () => Promise<void>;
+  workspaceName: string;
+}): JSX.Element {
+  const [confirmation, setConfirmation] = useState('');
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const confirmed = workspaceRemovalConfirmationMatches(confirmation, workspaceName);
+  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    if (!confirmed || busy || removing) return;
+    setRemoving(true);
+    setError(null);
+    try {
+      await onRemove();
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setRemoving(false);
+    }
+  };
+  return (
+    <form className="settings-form-control-row workspace-cleaning-row workspace-removal-form" onSubmit={(event) => void submit(event)}>
+      <span className="settings-form-control-copy">
+        <strong>Remove Workspace</strong>
+        <small>
+          Unregisters this workspace from Beale only. Directories, .beale metadata, repository clones, scoped resources, and Honeycrisp memory remain on disk.
+        </small>
+      </span>
+      <div className="workspace-removal-controls">
+        <input
+          aria-label={`Type ${workspaceName} to confirm workspace removal`}
+          autoComplete="off"
+          disabled={busy || removing}
+          placeholder={`Type "${workspaceName}" to confirm`}
+          spellCheck={false}
+          value={confirmation}
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+        <button
+          className="workspace-removal-action"
+          disabled={busy || removing || !confirmed}
+          type="submit"
+        >
+          {removing ? 'Removing…' : 'Remove from Beale'}
+        </button>
+        {error ? <p className="workspace-removal-error" role="alert">{error}</p> : null}
+      </div>
+    </form>
+  );
+}
+
+export function workspaceRemovalConfirmationMatches(confirmation: string, workspaceName: string): boolean {
+  return normalizedWorkspaceRemovalName(confirmation) === normalizedWorkspaceRemovalName(workspaceName);
+}
+
+function normalizedWorkspaceRemovalName(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function WorkspaceCleaningStatus({ label }: { label: string }): JSX.Element {
+  return (
+    <span aria-live="polite" className="workspace-cleaning-status" role="status">
+      <span aria-hidden="true" className="provider-settings-loading-indicator" />
+      {label}
+    </span>
+  );
+}
+
+export function WorkspaceHousekeepingPanel({
+  busy,
+  workspaceDejunk = null,
+  workspaceDejunkInProgress = false,
+  memoryDreamingInProgress,
+  memoryDreamingProgress = null,
+  honeycrispMemory,
+  researchProfile = null,
+  runs,
+  onRunWorkspaceDejunk = () => undefined,
+  onRunMemoryDreaming
+}: {
+  busy: boolean;
+  workspaceDejunk?: WorkspaceDejunkSummary | null;
+  workspaceDejunkInProgress?: boolean;
+  memoryDreamingInProgress: boolean;
+  memoryDreamingProgress?: MemoryDreamingProgressUpdate | null;
+  honeycrispMemory: HoneycrispMemorySummary | null;
+  researchProfile?: ResearchProfile | null;
+  runs: RunRow[];
+  onRunWorkspaceDejunk?: () => void;
+  onRunMemoryDreaming: () => void;
+}): JSX.Element {
+  const memoryEnabled = researchProfile?.capabilities.memoryEnabled !== false;
+  const memoryLoading = honeycrispMemory?.loading === true;
+  const dreamDisabled = busy || memoryDreamingInProgress || memoryLoading || !memoryEnabled || honeycrispMemory?.dreaming.available === false;
+  const dreamProgressPhase = memoryDreamingProgress?.phase ?? (memoryDreamingInProgress ? 'preparing' : null);
+  const dreamProgressLabel = dreamProgressPhase ? memoryDreamingProgressLabel(dreamProgressPhase) : null;
+  const memoriesSinceDream = memoryCountSinceLastDream(honeycrispMemory);
+  const dreamHeat = memoryDreamHeat(memoriesSinceDream);
+  const newFileCount = workspaceDejunk?.newFileCount ?? 0;
+  const dejunkHeat = workspaceDejunkHeat(newFileCount);
+  const activeSession = runs.some(({ run }) => isLiveResearchRunStatus(run.status));
+  const dejunkLoading = workspaceDejunk?.loading === true;
+  const dejunkDisabled = busy || workspaceDejunkInProgress || dejunkLoading || activeSession || workspaceDejunk?.available === false;
+
+  return (
+    <section className="workspace-side-housekeeping workspace-dream-area" aria-label="Workspace housekeeping">
+      <div className="workspace-dream-content">
+        <button
+          className="workspace-dejunk-card workspace-housekeeping-card"
+          data-dejunk-heat={dejunkHeat}
+          data-new-file-count={newFileCount}
+          disabled={dejunkDisabled}
+          onClick={onRunWorkspaceDejunk}
+          title={activeSession ? 'Dejunk is unavailable while a research session is active' : 'Organize loose research files and remove large reclaimable artifacts'}
+          type="button"
+        >
+          <span className="workspace-housekeeping-card-count">
+            {dejunkLoading
+              ? 'Loading workspace files…'
+              : <>{workspaceDejunk?.newFileCountCapped ? `${newFileCount.toLocaleString()}+` : newFileCount.toLocaleString()} New {newFileCount === 1 ? 'File' : 'Files'}</>}
+          </span>
+          <span className="workspace-housekeeping-card-label">
+            <Sparkles aria-hidden="true" size={18} />
+            {workspaceDejunkInProgress ? 'Dejunking…' : dejunkLoading ? 'Loading…' : 'Dejunk'}
+          </span>
+        </button>
+        <button
+          className="workspace-dream-card workspace-housekeeping-card"
+          data-dream-heat={dreamHeat}
+          data-memory-count-since-dream={memoriesSinceDream}
+          disabled={dreamDisabled}
+          onClick={onRunMemoryDreaming}
+          title={!memoryEnabled ? 'Memory Dreaming is disabled by the active research profile' : 'Dream across workspace memories'}
+          type="button"
+        >
+          <span className="workspace-housekeeping-card-count">
+            {memoryLoading
+              ? 'Loading workspace memory…'
+              : <>{memoriesSinceDream.toLocaleString()} New {memoriesSinceDream === 1 ? 'Memory' : 'Memories'}</>}
+          </span>
+          {dreamProgressLabel ? (
+            <span
+              aria-live="polite"
+              className={`workspace-dream-state is-${dreamProgressPhase}`}
+              data-dream-phase={dreamProgressPhase}
+              key={dreamProgressPhase}
+              role="status"
+            >
+              {dreamProgressLabel}
+            </span>
+          ) : (
+            <span className="workspace-housekeeping-card-label">
+              <MoonStar aria-hidden="true" size={18} />
+              {memoryLoading ? 'Loading…' : 'Dream'}
+            </span>
+          )}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+interface WorkspaceResearchSurfaceItem {
+  asset: ScopeAsset;
+  assetIds: string[];
+  label: string;
+  repositoryCloned: boolean | null;
+  repositoryCloneAssetId: string | null;
+  repositoryLocalPath: string | null;
+  sessionCount: number;
+  memoryCount: number;
+  lastResearchedAt: string | null;
+}
+
+export function workspaceResearchSurfaceItems(
+  assets: readonly ScopeAsset[],
+  runs: readonly RunRow[],
+  memory: HoneycrispMemorySummary | null | undefined
+): WorkspaceResearchSurfaceItem[] {
+  const assetGroups = new Map<string, ScopeAsset[]>();
+  for (const asset of assets) {
+    const key = workspaceAssetGroupKey(asset);
+    assetGroups.set(key, [...(assetGroups.get(key) ?? []), asset]);
+  }
+  const runStatsByAssetId = new Map<string, { count: number; lastResearchedAt: string | null }>();
+  for (const { run } of runs) {
+    if (!run.targetAssetId) continue;
+    const researchedAt = run.startedAt ?? run.createdAt;
+    const current = runStatsByAssetId.get(run.targetAssetId) ?? { count: 0, lastResearchedAt: null };
+    runStatsByAssetId.set(run.targetAssetId, {
+      count: current.count + 1,
+      lastResearchedAt: latestTimestamp(current.lastResearchedAt, researchedAt)
+    });
+  }
+  const memoryIdsByAssetId = new Map<string, Set<string>>();
+  for (const node of memory?.nodes ?? []) {
+    for (const assetId of node.assetIds) {
+      const memoryIds = memoryIdsByAssetId.get(assetId) ?? new Set<string>();
+      memoryIds.add(node.id);
+      memoryIdsByAssetId.set(assetId, memoryIds);
+    }
+  }
+  return [...assetGroups.values()].map((groupAssets) => {
+    const asset = preferredWorkspaceSurfaceAsset(groupAssets);
+    const assetIds = groupAssets.map((candidate) => candidate.id);
+    const repositorySourceAsset = asset.kind === 'repo'
+      ? groupAssets.find((candidate) => repositoryNameFromUrl(candidate.value)) ?? null
+      : null;
+    const repositoryLocalAsset = asset.kind === 'repo'
+      ? groupAssets.find((candidate) => !repositoryNameFromUrl(candidate.value) && repositoryIdentityFromPath(candidate.value)) ?? null
+      : null;
+    const clonedDirectory = asset.kind === 'repo'
+      ? repositoryClonedDirectory(repositorySourceAsset ?? asset) ?? repositoryLocalAsset?.value ?? null
+      : null;
+    const memoryIds = new Set(assetIds.flatMap((assetId) => [...(memoryIdsByAssetId.get(assetId) ?? [])]));
+    const runStats = assetIds.map((assetId) => runStatsByAssetId.get(assetId));
+    return {
+      asset,
+      assetIds,
+      label: workspaceAssetLabel(asset),
+      repositoryCloned: asset.kind === 'repo' ? clonedDirectory !== null : null,
+      repositoryCloneAssetId: repositorySourceAsset?.id ?? null,
+      repositoryLocalPath: clonedDirectory,
+      sessionCount: runStats.reduce((count, stats) => count + (stats?.count ?? 0), 0),
+      memoryCount: memoryIds.size,
+      lastResearchedAt: runStats.reduce<string | null>(
+        (latest, stats) => latestTimestamp(latest, stats?.lastResearchedAt ?? null),
+        null
+      )
+    };
+  }).sort((left, right) => {
+    if (left.asset.direction !== right.asset.direction) return left.asset.direction === 'in_scope' ? -1 : 1;
+    return workspaceAssetKindOrder(left.asset.kind) - workspaceAssetKindOrder(right.asset.kind)
+      || left.label.localeCompare(right.label);
+  });
+}
+
+function latestTimestamp(left: string | null, right: string | null): string | null {
+  const leftMs = left ? Date.parse(left) : Number.NaN;
+  const rightMs = right ? Date.parse(right) : Number.NaN;
+  if (!Number.isFinite(rightMs)) return Number.isFinite(leftMs) ? left : null;
+  return !Number.isFinite(leftMs) || rightMs > leftMs ? right : left;
+}
+
+function workspaceAssetGroupKey(asset: ScopeAsset): string {
+  if (asset.kind === 'repo') {
+    const repositoryIdentity = repositoryIdentityFromAsset(asset);
+    if (repositoryIdentity) return `${asset.direction}:repo:${repositoryIdentity}`;
+  }
+  return `${asset.direction}:${asset.kind}:${asset.id}`;
+}
+
+function preferredWorkspaceSurfaceAsset(assets: ScopeAsset[]): ScopeAsset {
+  return assets.find((asset) => typeof asset.attributes?.displayName === 'string' && asset.attributes.displayName.trim())
+    ?? assets.find((asset) => repositoryNameFromUrl(asset.value))
+    ?? assets[0];
+}
+
+export const WORKSPACE_ASSET_KINDS: ScopeAssetKind[] = [
+  'repo',
+  'documentation',
+  'binary',
+  'service',
+  'domain',
+  'other'
+];
+
+export function workspaceResearchSurfaceKinds(items: readonly WorkspaceResearchSurfaceItem[]): ScopeAssetKind[] {
+  const representedKinds = new Set(items.map((item) => item.asset.kind));
+  return WORKSPACE_ASSET_KINDS.filter((kind) => representedKinds.has(kind));
+}
+
+function WorkspaceResearchSurface({
+  activeScope,
+  hidden,
+  honeycrispMemory,
+  nowMs,
+  runs,
+  onAddResource,
+  onChangeResource,
+  onCloneRepository,
+  workspaceName
+}: {
+  activeScope: WorkspaceScopeVersion | null;
+  hidden: boolean;
+  honeycrispMemory: HoneycrispMemorySummary | null;
+  nowMs: number;
+  runs: RunRow[];
+  onAddResource: (asset: ScopeAssetInput) => Promise<void>;
+  onChangeResource: (assetIds: string[], asset: ScopeAssetInput | null) => Promise<void>;
+  onCloneRepository: (assetId: string, cloneMode: RepositoryCloneMode) => Promise<void>;
+  workspaceName: string;
+}): JSX.Element {
+  const items = useMemo(
+    () => workspaceResearchSurfaceItems(activeScope?.assets ?? [], runs, honeycrispMemory),
+    [activeScope?.assets, honeycrispMemory, runs]
+  );
+  const resourceActivity = useMemo(
+    () => workspaceCreationActivity(items.map((item) => item.asset), nowMs),
+    [items, nowMs]
+  );
+  const representedKinds = useMemo(() => workspaceResearchSurfaceKinds(items), [items]);
+  const [activeKind, setActiveKind] = useState<ScopeAssetKind | null>(() => representedKinds[0] ?? null);
+  const [dialogState, setDialogState] = useState<{ kind: ScopeAssetKind; item: WorkspaceResearchSurfaceItem | null } | null>(null);
+  const [cloneDialogState, setCloneDialogState] = useState<{ item: WorkspaceResearchSurfaceItem; mode: RepositoryCloneMode } | null>(null);
+  const [kindPickerOpen, setKindPickerOpen] = useState(false);
+  const [cloningAssetIds, setCloningAssetIds] = useState<Set<string>>(() => new Set());
+  const [cloneErrors, setCloneErrors] = useState<Map<string, string>>(() => new Map());
+  const kindPickerRef = useRef<HTMLDivElement>(null);
+  const visibleItems = activeKind ? items.filter((item) => item.asset.kind === activeKind) : [];
+  const missingKinds = WORKSPACE_ASSET_KINDS.filter((kind) => !representedKinds.includes(kind));
+  const surfaceScrollRef = useRef<HTMLDivElement>(null);
+  const surfaceListRef = useRef<HTMLDivElement>(null);
+  const updateScrollFades = useCallback((): void => {
+    const scroll = surfaceScrollRef.current;
+    const list = surfaceListRef.current;
+    if (!scroll || !list) return;
+    const scrollableDistance = list.scrollHeight - list.clientHeight;
+    const canScroll = scrollableDistance > 8;
+    scroll.classList.toggle('has-top-fade', canScroll && list.scrollTop > 8);
+    scroll.classList.toggle('has-bottom-fade', canScroll && list.scrollTop < scrollableDistance - 8);
+  }, []);
+
+  useEffect(() => {
+    updateScrollFades();
+    const list = surfaceListRef.current;
+    if (!list || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(updateScrollFades);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [activeKind, visibleItems.length, updateScrollFades]);
+
+  useEffect(() => {
+    if (activeKind && representedKinds.includes(activeKind)) return;
+    setActiveKind(representedKinds[0] ?? null);
+  }, [activeKind, representedKinds]);
+
+  useEffect(() => {
+    if (!kindPickerOpen) return undefined;
+    const closeOnOutsidePointer = (event: PointerEvent): void => {
+      if (!kindPickerRef.current?.contains(event.target as Node)) setKindPickerOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setKindPickerOpen(false);
+    };
+    window.addEventListener('pointerdown', closeOnOutsidePointer);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutsidePointer);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [kindPickerOpen]);
+
+  const openResourceDialog = (kind: ScopeAssetKind, item: WorkspaceResearchSurfaceItem | null = null): void => {
+    setKindPickerOpen(false);
+    setDialogState({ kind, item });
+  };
+  const cloneRepository = async (item: WorkspaceResearchSurfaceItem, cloneMode: RepositoryCloneMode): Promise<void> => {
+    const assetId = item.repositoryCloneAssetId;
+    if (!assetId || cloningAssetIds.has(assetId)) return;
+    setCloningAssetIds((current) => new Set(current).add(assetId));
+    setCloneErrors((current) => {
+      const next = new Map(current);
+      next.delete(assetId);
+      return next;
+    });
+    try {
+      await onCloneRepository(assetId, cloneMode);
+    } catch (caught) {
+      setCloneErrors((current) => new Map(current).set(assetId, errorMessage(caught)));
+    } finally {
+      setCloningAssetIds((current) => {
+        const next = new Set(current);
+        next.delete(assetId);
+        return next;
+      });
+    }
+  };
+
+  return (
+    <section
+      aria-label="Workspace resources"
+      className="workspace-dashboard-panel workspace-surface-area"
+      hidden={hidden}
+      id="workspace-dashboard-resources-panel"
+      role="tabpanel"
+    >
+      <WorkspaceActivityForm activity={resourceActivity} metric="resources" viewLabel="Resources" workspaceName={workspaceName} />
+      <div className="workspace-resource-tabs-bar">
+        <div className="research-side-view-tabs workspace-resource-tabs" role="tablist" aria-label="Workspace resource types">
+          {representedKinds.map((kind) => (
+            <div className={`research-side-view-tab workspace-resource-tab ${activeKind === kind ? 'active' : ''}`.trim()} key={kind}>
+              <button
+                aria-selected={activeKind === kind}
+                className="research-side-view-tab-activate"
+                onClick={() => setActiveKind(kind)}
+                role="tab"
+                type="button"
+              >
+                <WorkspaceAssetIcon kind={kind} size={14} />
+                <span>{workspaceAssetKindLabel(kind)}</span>
+              </button>
+              <button
+                aria-label={`Add ${workspaceAssetKindLabel(kind).toLowerCase()}`}
+                className="research-side-view-tab-close workspace-resource-tab-add"
+                onClick={() => openResourceDialog(kind)}
+                title={`Add ${workspaceAssetKindLabel(kind).toLowerCase()}`}
+                type="button"
+              >
+                <Plus aria-hidden="true" size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="research-side-view-picker workspace-resource-kind-picker" ref={kindPickerRef}>
+          <button
+            aria-expanded={kindPickerOpen}
+            aria-haspopup="menu"
+            aria-label="Add resource type"
+            className="research-side-view-picker-trigger"
+            disabled={missingKinds.length === 0}
+            onClick={() => setKindPickerOpen((open) => !open)}
+            title="Add resource type"
+            type="button"
+          >
+            <Plus aria-hidden="true" size={16} />
+          </button>
+          {kindPickerOpen ? (
+            <div className="research-side-view-picker-menu workspace-resource-kind-menu" role="menu">
+              {missingKinds.map((kind) => (
+                <button key={kind} onClick={() => openResourceDialog(kind)} role="menuitem" type="button">
+                  <WorkspaceAssetIcon kind={kind} />
+                  <span>{workspaceAssetKindLabel(kind)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {visibleItems.length > 0 ? (
+        <div className="workspace-surface-scroll" ref={surfaceScrollRef}>
+          <div
+            aria-label={`${workspaceAssetKindLabel(activeKind as ScopeAssetKind)} resources`}
+            className="workspace-surface-list"
+            onScroll={updateScrollFades}
+            ref={surfaceListRef}
+            role="tabpanel"
+          >
+            {visibleItems.map((item) => (
+              <article
+                className={`workspace-surface-item is-${item.asset.direction}${item.asset.direction === 'in_scope' && item.repositoryCloned === false && item.repositoryCloneAssetId ? ' has-repository-action' : ''}`}
+                key={item.asset.id}
+              >
+                <button
+                  className="workspace-surface-item-open"
+                  onClick={() => openResourceDialog(item.asset.kind, item)}
+                  title={`Edit ${item.label}`}
+                  type="button"
+                >
+                  <span className="workspace-surface-item-icon" aria-hidden="true">
+                    <WorkspaceAssetIcon kind={item.asset.kind} />
+                  </span>
+                  <div className="workspace-surface-item-main">
+                    <div className="workspace-surface-item-heading">
+                      <strong title={item.asset.value}>{item.label}</strong>
+                      <span>{workspaceAssetKindLabel(item.asset.kind)}</span>
+                    </div>
+                    <small title={item.asset.value}>{item.asset.value}</small>
+                    <div className="workspace-surface-item-meta">
+                      <span>{item.asset.direction === 'in_scope' ? 'In scope' : 'Out of scope'}</span>
+                      {item.repositoryCloned !== null ? (
+                        <span title={item.repositoryLocalPath ?? undefined}>{item.repositoryCloned ? 'Cloned' : 'Not cloned'}</span>
+                      ) : null}
+                      <span>{item.sessionCount} {item.sessionCount === 1 ? 'session' : 'sessions'}</span>
+                      <span>{item.memoryCount} {item.memoryCount === 1 ? 'memory' : 'memories'}</span>
+                      <span>{item.lastResearchedAt ? `Last ${formatSurfaceRecency(item.lastResearchedAt, nowMs)}` : 'Never researched'}</span>
+                    </div>
+                  </div>
+                </button>
+                {item.asset.direction === 'in_scope' && item.repositoryCloned === false && item.repositoryCloneAssetId ? (
+                  <button
+                    className="workspace-repository-clone-button"
+                    disabled={cloningAssetIds.has(item.repositoryCloneAssetId)}
+                    onClick={() => setCloneDialogState({ item, mode: 'deep' })}
+                    title="Clone this repository into Beale source storage"
+                    type="button"
+                  >
+                    <Download aria-hidden="true" size={14} />
+                    <span>{cloningAssetIds.has(item.repositoryCloneAssetId) ? 'Cloning…' : 'Clone'}</span>
+                  </button>
+                ) : null}
+                {item.repositoryCloneAssetId && cloneErrors.has(item.repositoryCloneAssetId) ? (
+                  <small className="workspace-repository-clone-error" role="alert">
+                    {cloneErrors.get(item.repositoryCloneAssetId)}
+                  </small>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="workspace-surface-empty">
+          {items.length > 0 ? 'No resources of this type recorded.' : 'No workspace resources recorded.'}
+        </div>
+      )}
+      {dialogState ? (
+        <WorkspaceResourceDialog
+          initialClonedDirectory={dialogState.item?.repositoryLocalPath ?? null}
+          initialAsset={dialogState.item?.asset ?? null}
+          kind={dialogState.kind}
+          onClose={() => setDialogState(null)}
+          onRemove={dialogState.item
+            ? () => onChangeResource(dialogState.item?.assetIds ?? [], null)
+            : undefined}
+          onSubmit={dialogState.item
+            ? (asset) => onChangeResource(dialogState.item?.assetIds ?? [], asset)
+            : onAddResource}
+        />
+      ) : null}
+      {cloneDialogState ? (
+        <Modal
+          className="workspace-repository-clone-dialog"
+          footer={(
+            <>
+              <button className="secondary-button" onClick={() => setCloneDialogState(null)} type="button">Cancel</button>
+              <button
+                className="primary-button"
+                onClick={() => {
+                  const { item, mode } = cloneDialogState;
+                  setCloneDialogState(null);
+                  void cloneRepository(item, mode);
+                }}
+                type="button"
+              >Clone repository</button>
+            </>
+          )}
+          onClose={() => setCloneDialogState(null)}
+          title="Clone repository"
+        >
+          <p className="workspace-repository-clone-description">Choose how much Git history to keep for {cloneDialogState.item.label}.</p>
+          <div className="settings-form-radio-list workspace-repository-clone-options">
+            <label className="settings-form-control-row">
+              <span className="settings-form-radio-copy">
+                <strong>Deep clone</strong>
+                <small>Complete history for research, blame, and prior-fix analysis. Recommended by default.</small>
+              </span>
+              <input
+                checked={cloneDialogState.mode === 'deep'}
+                name="repository-clone-mode"
+                onChange={() => setCloneDialogState((current) => current ? { ...current, mode: 'deep' } : null)}
+                type="radio"
+                value="deep"
+              />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-radio-copy">
+                <strong>Shallow clone</strong>
+                <small>Current history tip only. Reserve this for repositories whose full history is prohibitively large.</small>
+              </span>
+              <input
+                checked={cloneDialogState.mode === 'shallow'}
+                name="repository-clone-mode"
+                onChange={() => setCloneDialogState((current) => current ? { ...current, mode: 'shallow' } : null)}
+                type="radio"
+                value="shallow"
+              />
+            </label>
+          </div>
+        </Modal>
+      ) : null}
+    </section>
+  );
+}
+
+export function WorkspaceResourceDialog({
+  initialClonedDirectory,
+  initialAsset,
+  kind,
+  onClose,
+  onRemove,
+  onSubmit
+}: {
+  initialClonedDirectory?: string | null;
+  initialAsset: ScopeAsset | null;
+  kind: ScopeAssetKind;
+  onClose: () => void;
+  onRemove?: () => Promise<void>;
+  onSubmit: (asset: ScopeAssetInput) => Promise<void>;
+}): JSX.Element {
+  const editing = initialAsset !== null;
+  const initialDisplayName = typeof initialAsset?.attributes?.displayName === 'string'
+    ? initialAsset.attributes.displayName
+    : '';
+  const [value, setValue] = useState(initialAsset?.value ?? '');
+  const [displayName, setDisplayName] = useState(initialDisplayName);
+  const [clonedDirectory, setClonedDirectory] = useState(
+    initialClonedDirectory ?? (initialAsset ? repositoryClonedDirectory(initialAsset) : null) ?? ''
+  );
+  const [direction, setDirection] = useState<ScopeAssetInput['direction']>(initialAsset?.direction ?? 'in_scope');
+  const [sensitivity, setSensitivity] = useState(initialAsset?.sensitivity ?? 'internal');
+  const [pendingAction, setPendingAction] = useState<'save' | 'remove' | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const submit = async (): Promise<void> => {
+    const trimmedValue = value.trim();
+    if (!trimmedValue || pendingAction) return;
+    setPendingAction('save');
+    setSubmitError(null);
+    try {
+      const attributes: Record<string, unknown> = {
+        ...(initialAsset?.attributes ?? {}),
+        source: 'manual',
+      };
+      if (displayName.trim()) attributes.displayName = displayName.trim();
+      else delete attributes.displayName;
+      if (kind === 'repo') {
+        const previousRepositoryUrl = typeof initialAsset?.attributes?.repositoryUrl === 'string'
+          ? initialAsset.attributes.repositoryUrl.trim()
+          : initialAsset?.value.trim() ?? '';
+        attributes.repositoryUrl = trimmedValue;
+        if (previousRepositoryUrl && previousRepositoryUrl.toLowerCase() !== trimmedValue.toLowerCase()) {
+          clearRepositoryCheckoutAttributes(attributes);
+        }
+        if (clonedDirectory.trim()) attributes.clonedDirectory = clonedDirectory.trim();
+        else clearRepositoryCheckoutAttributes(attributes);
+      }
+      await onSubmit({ direction, kind, value: trimmedValue, sensitivity, attributes });
+      onClose();
+    } catch (caught) {
+      setSubmitError(errorMessage(caught));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const remove = async (): Promise<void> => {
+    if (!onRemove || pendingAction) return;
+    setPendingAction('remove');
+    setSubmitError(null);
+    try {
+      await onRemove();
+      onClose();
+    } catch (caught) {
+      setSubmitError(errorMessage(caught));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  return (
+    <Modal
+      className="start-run-dialog workspace-resource-dialog"
+      closeDisabled={pendingAction !== null}
+      footer={(
+        <>
+          {onRemove ? (
+            <button
+              className="workspace-resource-remove-button modal-footer-leading"
+              disabled={pendingAction !== null}
+              onClick={() => void remove()}
+              type="button"
+            >
+              <Trash2 aria-hidden="true" size={15} />
+              <span>{pendingAction === 'remove' ? 'Removing…' : 'Remove'}</span>
+            </button>
+          ) : null}
+          <button className="primary-button" disabled={pendingAction !== null || !value.trim()} onClick={() => void submit()} type="button">
+            {pendingAction === 'save' ? (editing ? 'Saving…' : 'Adding…') : (editing ? 'Save changes' : 'Add resource')}
+          </button>
+        </>
+      )}
+      onClose={onClose}
+      title={`${editing ? 'Edit' : 'Add'} ${workspaceAssetKindLabel(kind)}`}
+    >
+      <form className="modal-form workspace-resource-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+        <label>
+          Resource type
+          <input disabled readOnly value={workspaceAssetKindLabel(kind)} />
+        </label>
+        <label>
+          Reference
+          <input
+            autoFocus
+            onChange={(event) => setValue(event.target.value)}
+            placeholder={workspaceAssetPlaceholder(kind)}
+            required
+            value={value}
+          />
+        </label>
+        <label>
+          Display name
+          <input onChange={(event) => setDisplayName(event.target.value)} placeholder="Optional" value={displayName} />
+        </label>
+        {kind === 'repo' ? (
+          <label>
+            Cloned directory
+            <input
+              onChange={(event) => setClonedDirectory(event.target.value)}
+              placeholder="Optional local checkout directory"
+              value={clonedDirectory}
+            />
+          </label>
+        ) : null}
+        <div className="workspace-resource-form-row">
+          <label>
+            Scope
+            <select onChange={(event) => setDirection(event.target.value as ScopeAssetInput['direction'])} value={direction}>
+              <option value="in_scope">In scope</option>
+              <option value="out_of_scope">Out of scope</option>
+            </select>
+          </label>
+          <label>
+            Sensitivity
+            <select onChange={(event) => setSensitivity(event.target.value)} value={sensitivity}>
+              <option value="public">Public</option>
+              <option value="internal">Internal</option>
+              <option value="restricted">Restricted</option>
+            </select>
+          </label>
+        </div>
+        {submitError ? <p className="form-error" role="alert">{submitError}</p> : null}
+      </form>
+    </Modal>
+  );
+}
+
+function workspaceAssetPlaceholder(kind: ScopeAssetKind): string {
+  if (kind === 'repo') return 'https://github.com/owner/repository';
+  if (kind === 'domain') return 'example.com';
+  if (kind === 'service') return 'https://service.example.com';
+  if (kind === 'documentation') return 'https://docs.example.com';
+  return `Enter ${workspaceAssetKindLabel(kind).toLowerCase()} reference`;
+}
+
+export function WorkspaceAssetIcon({ kind, size = 16 }: { kind: ScopeAssetKind; size?: number }): JSX.Element {
+  if (kind === 'repo') return <GitBranch size={size} />;
+  if (kind === 'documentation') return <BookOpen size={size} />;
+  if (kind === 'binary') return <Binary size={size} />;
+  if (kind === 'service') return <Server size={size} />;
+  if (kind === 'domain') return <Globe2 size={size} />;
+  return <Layers3 size={size} />;
+}
+
+function workspaceAssetLabel(asset: ScopeAsset): string {
+  const displayName = typeof asset.attributes?.displayName === 'string' ? asset.attributes.displayName.trim() : '';
+  if (displayName) return displayName;
+  if (asset.kind === 'repo') {
+    const repositoryName = repositoryNameFromAsset(asset);
+    if (repositoryName) return repositoryName;
+  }
+  return asset.value;
+}
+
+function repositoryNameFromAsset(asset: ScopeAsset): string | null {
+  const repositoryUrl = typeof asset.attributes?.repositoryUrl === 'string' ? asset.attributes.repositoryUrl : '';
+  const urlName = repositoryNameFromUrl(repositoryUrl);
+  if (urlName) return urlName;
+  const directUrlName = repositoryNameFromUrl(asset.value);
+  if (directUrlName) return directUrlName;
+  return repositoryNameFromPath(asset.value);
+}
+
+function repositoryIdentityFromAsset(asset: ScopeAsset): string | null {
+  const repositoryUrl = typeof asset.attributes?.repositoryUrl === 'string' ? asset.attributes.repositoryUrl : '';
+  return repositoryIdentityFromUrl(repositoryUrl)
+    ?? repositoryIdentityFromUrl(asset.value)
+    ?? repositoryIdentityFromPath(asset.value);
+}
+
+function repositoryNameFromUrl(value: string): string | null {
+  const trimmed = value.trim().replace(/\.git$/iu, '').replace(/\/+$/u, '');
+  if (!trimmed || !/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)) return null;
+  const name = trimmed.split('/').filter(Boolean).at(-1);
+  return name && !/^[a-z][a-z0-9+.-]*:$/iu.test(name) ? name : null;
+}
+
+function repositoryIdentityFromUrl(value: string): string | null {
+  const trimmed = value.trim().replace(/\.git$/iu, '').replace(/\/+$/u, '');
+  if (!trimmed || !/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)) return null;
+  try {
+    const parsed = new URL(trimmed);
+    const pathname = parsed.pathname.split('/').filter(Boolean).join('/').toLowerCase();
+    return pathname ? `${parsed.hostname.toLowerCase()}/${pathname}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function repositoryNameFromPath(value: string): string | null {
+  const parts = value.replace(/[\\/]+$/u, '').split(/[\\/]/u).filter(Boolean);
+  const leaf = parts.at(-1)?.replace(/\.git$/iu, '');
+  const parent = parts.at(-2);
+  const materializedName = parent ? repositoryNameFromMaterializedSlug(parent) : null;
+  if (materializedName && (!leaf || leaf === 'default' || /^[A-Za-z0-9_.-]+-[a-f0-9]{12}$/u.test(leaf))) {
+    return materializedName;
+  }
+  return leaf || materializedName;
+}
+
+function repositoryIdentityFromPath(value: string): string | null {
+  const parts = value.replace(/[\\/]+$/u, '').split(/[\\/]/u).filter(Boolean);
+  const leaf = parts.at(-1)?.replace(/\.git$/iu, '') ?? '';
+  const parent = parts.at(-2) ?? '';
+  const materializedIdentity = repositoryIdentityFromMaterializedSlug(parent);
+  if (materializedIdentity && (!leaf || leaf === 'default' || /^[A-Za-z0-9_.-]+-[a-f0-9]{12}$/u.test(leaf))) {
+    return materializedIdentity;
+  }
+  return repositoryIdentityFromMaterializedSlug(leaf);
+}
+
+function repositoryNameFromMaterializedSlug(value: string): string | null {
+  const segments = value.split('_').filter(Boolean);
+  if (segments.length < 3 || !/^(?:github|gitlab)\.com$/iu.test(segments[0])) return null;
+  const name = segments.at(-1)?.replace(/\.git$/iu, '');
+  return name || null;
+}
+
+function repositoryIdentityFromMaterializedSlug(value: string): string | null {
+  const segments = value.split('_').filter(Boolean);
+  if (segments.length < 3 || !/^(?:github|gitlab)\.com$/iu.test(segments[0])) return null;
+  return `${segments[0].toLowerCase()}/${segments.slice(1).join('/').replace(/\.git$/iu, '').toLowerCase()}`;
+}
+
+function workspaceAssetKindOrder(kind: ScopeAssetKind): number {
+  const order: ScopeAssetKind[] = ['repo', 'documentation', 'binary', 'service', 'domain', 'other'];
+  return order.indexOf(kind);
+}
+
+export function workspaceAssetKindLabel(kind: ScopeAssetKind): string {
+  if (kind === 'repo') return 'Repository';
+  return `${kind.slice(0, 1).toUpperCase()}${kind.slice(1)}`;
+}
+
+function clearRepositoryCheckoutAttributes(attributes: Record<string, unknown>): void {
+  for (const key of [
+    'clonedDirectory',
+    'cloneSource',
+    'sourceStorage',
+    'sourceReferenceVersion',
+    'head',
+    'materializedRef',
+    'cloned',
+    'headRefName',
+    'headDescribe',
+    'requestedRefHead',
+    'requestedRefMatchesHead'
+  ]) {
+    delete attributes[key];
+  }
+}
+
+function formatSurfaceRecency(value: string, nowMs: number): string {
+  const elapsedMs = Math.max(0, nowMs - Date.parse(value));
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(Date.parse(value));
+}
+
+export function memoryCountSinceLastDream(memory: HoneycrispMemorySummary | null | undefined): number {
+  if (!memory || memory.status === 'missing' || memory.status === 'error') return 0;
+  const lastDreamAt = Date.parse(memory.dreaming.lastRun?.completedAt ?? '');
+  if (!Number.isFinite(lastDreamAt)) return memory.nodes.length;
+  return memory.nodes.filter((node) => {
+    const createdAt = Date.parse(node.createdAt);
+    return Number.isFinite(createdAt) && createdAt > lastDreamAt;
+  }).length;
+}
+
+export function memoryDreamHeat(memoryCount: number): SessionHeat {
+  if (memoryCount >= 150) return 'critical';
+  if (memoryCount >= 100) return 'high';
+  if (memoryCount >= 50) return 'medium';
+  if (memoryCount >= 20) return 'low';
+  return 'none';
+}
+
+export function memoryDreamingProgressLabel(phase: MemoryDreamingProgressPhase): string {
+  if (phase === 'preparing') return 'Preparing…';
+  if (phase === 'gathering') return 'Gathering memories…';
+  if (phase === 'synthesizing') return 'Dreaming across memories…';
+  if (phase === 'compacting') return 'Compacting context…';
+  if (phase === 'retrying') return 'Trying again…';
+  if (phase === 'correcting') return 'Refining the plan…';
+  if (phase === 'validating') return 'Validating changes…';
+  if (phase === 'applying') return 'Applying changes…';
+  if (phase === 'completed') return 'Dream complete';
+  return 'Dream failed';
+}
+
+export function workspaceDejunkHeat(newFileCount: number): SessionHeat {
+  if (newFileCount >= 1_000) return 'critical';
+  if (newFileCount >= 200) return 'high';
+  if (newFileCount >= 50) return 'medium';
+  if (newFileCount >= 10) return 'low';
+  return 'none';
+}

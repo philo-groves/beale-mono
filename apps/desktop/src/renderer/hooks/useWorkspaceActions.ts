@@ -1,0 +1,183 @@
+import { useCallback } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
+import type { ResearchKitId, WorkspaceOnboardingProgressUpdate, WorkspaceRegistryEntry, ResearchSessionSummary, WorkspaceSnapshot } from '@shared/types';
+import { researchKitDefinition, researchKitSupportsProfile } from '../../shared/researchKits';
+import {
+  applyGitHubRepositoryCatalog,
+  applyResearchKit,
+  emptyWorkspaceOnboardingForm,
+  onboardingFormFromHackerOneLookup,
+  workspaceOnboardingFormForProfile,
+  onboardingInputFromForm,
+  type WorkspaceOnboardingFormState
+} from '../view-models/workspaceOnboarding';
+import { errorMessage } from '../lib/errors';
+
+export interface WorkspaceActions {
+  addWorkspace: () => void;
+  openRegisteredWorkspace: (workspace: WorkspaceRegistryEntry) => void;
+  openResearchSession: (workspace: WorkspaceRegistryEntry, session: ResearchSessionSummary) => void;
+  removeRegisteredWorkspace: (workspace: WorkspaceRegistryEntry) => Promise<void>;
+  submitWorkspaceOnboarding: () => void;
+  applyOnboardingResearchKit: (researchKitId: ResearchKitId) => void;
+  lookupHackerOneScope: (identifier: string) => Promise<void>;
+}
+
+export interface WorkspaceActionOptions {
+  markBusy?: boolean;
+  reloadRegistry?: boolean;
+  missingDirectoryWorkspace?: WorkspaceRegistryEntry;
+}
+
+export function useWorkspaceActions({
+  snapshot,
+  selectedRunId,
+  workspaceDraft,
+  runWorkspaceAction,
+  applySnapshot,
+  clearRunDetail,
+  setSelectedRunId,
+  setWorkspaceDraft,
+  setWorkspaceOnboardingProgress
+}: {
+  snapshot: WorkspaceSnapshot | null;
+  selectedRunId: string | null;
+  workspaceDraft: WorkspaceOnboardingFormState | null;
+  runWorkspaceAction: (action: () => Promise<void>, options?: WorkspaceActionOptions) => Promise<void>;
+  applySnapshot: (next: WorkspaceSnapshot | null, selectedRunIdOverride?: string) => void;
+  clearRunDetail: () => void;
+  setSelectedRunId: Dispatch<SetStateAction<string | null>>;
+  setWorkspaceDraft: Dispatch<SetStateAction<WorkspaceOnboardingFormState | null>>;
+  setWorkspaceOnboardingProgress: Dispatch<SetStateAction<WorkspaceOnboardingProgressUpdate | null>>;
+}): WorkspaceActions {
+  const addWorkspace = useCallback((): void => {
+    setWorkspaceOnboardingProgress(null);
+    setWorkspaceDraft(emptyWorkspaceOnboardingForm());
+  }, [setWorkspaceDraft, setWorkspaceOnboardingProgress]);
+
+  const openRegisteredWorkspace = useCallback(
+    (workspace: WorkspaceRegistryEntry): void => {
+      setWorkspaceDraft(null);
+      setWorkspaceOnboardingProgress(null);
+      const previousSelectedRunId = selectedRunId;
+      clearRunDetail();
+      setSelectedRunId(null);
+      void runWorkspaceAction(async () => {
+        try {
+          const next = await window.beale.openRegisteredWorkspace(workspace.id);
+          applySnapshot(next);
+          setSelectedRunId(null);
+        } catch (caught) {
+          setSelectedRunId(previousSelectedRunId);
+          throw caught;
+        }
+      }, { reloadRegistry: false, missingDirectoryWorkspace: workspace });
+    },
+    [applySnapshot, clearRunDetail, runWorkspaceAction, selectedRunId, setSelectedRunId, setWorkspaceDraft, setWorkspaceOnboardingProgress]
+  );
+
+  const openResearchSession = useCallback(
+    (workspace: WorkspaceRegistryEntry, session: ResearchSessionSummary): void => {
+      setWorkspaceDraft(null);
+      setWorkspaceOnboardingProgress(null);
+      if (!researchSessionNeedsLoading(snapshot, selectedRunId, workspace, session)) return;
+      const previousSelectedRunId = selectedRunId;
+      clearRunDetail();
+      setSelectedRunId(session.runId);
+      void runWorkspaceAction(async () => {
+        try {
+          const activeWorkspace = snapshot?.workspace.workspacePath === workspace.workspacePath;
+          if (!activeWorkspace) {
+            const next = await window.beale.openRegisteredWorkspace(workspace.id);
+            applySnapshot(next, session.runId);
+          }
+        } catch (caught) {
+          setSelectedRunId(previousSelectedRunId);
+          throw caught;
+        }
+      }, { markBusy: false, reloadRegistry: false, missingDirectoryWorkspace: workspace });
+    },
+    [applySnapshot, clearRunDetail, runWorkspaceAction, selectedRunId, setSelectedRunId, setWorkspaceDraft, setWorkspaceOnboardingProgress, snapshot]
+  );
+
+  const removeRegisteredWorkspace = useCallback(
+    (workspace: WorkspaceRegistryEntry): Promise<void> => {
+      return runWorkspaceAction(async () => {
+        applySnapshot(await window.beale.removeRegisteredWorkspace(workspace.id));
+      });
+    },
+    [applySnapshot, runWorkspaceAction]
+  );
+
+  const submitWorkspaceOnboarding = useCallback((): void => {
+    if (!workspaceDraft) return;
+    const submittedDraft = workspaceOnboardingFormForProfile(workspaceDraft, workspaceDraft.researchProfileId);
+    void runWorkspaceAction(async () => {
+      setWorkspaceOnboardingProgress(null);
+      try {
+        const next = await window.beale.createScopedWorkspace(onboardingInputFromForm(submittedDraft));
+        clearRunDetail();
+        setSelectedRunId(null);
+        applySnapshot(next);
+        setSelectedRunId(null);
+        setWorkspaceDraft(null);
+      } catch (error) {
+        setWorkspaceOnboardingProgress(null);
+        throw error;
+      }
+    });
+  }, [applySnapshot, clearRunDetail, workspaceDraft, runWorkspaceAction, setWorkspaceDraft, setWorkspaceOnboardingProgress, setSelectedRunId]);
+
+  const applyOnboardingResearchKit = useCallback(
+    (researchKitId: ResearchKitId): void => {
+      if (workspaceDraft && !researchKitSupportsProfile(researchKitId, workspaceDraft.researchProfileId)) return;
+      const kit = researchKitDefinition(researchKitId);
+      setWorkspaceDraft((current) => (current ? applyResearchKit(current, researchKitId) : current));
+      if (!kit.repositoryCatalog || kit.repositoryCatalog.provider !== 'github-organization') return;
+      void window.beale.listGitHubOrganizationRepositories(kit.repositoryCatalog.organization)
+        .then((repositories) => {
+          setWorkspaceDraft((current) => (
+            current?.researchKitId === researchKitId ? applyGitHubRepositoryCatalog(current, repositories) : current
+          ));
+        })
+        .catch((caught: unknown) => {
+          setWorkspaceDraft((current) => (
+            current?.researchKitId === researchKitId
+              ? { ...current, repositoryCatalogLoading: false, repositoryCatalogError: errorMessage(caught) }
+              : current
+          ));
+        });
+    },
+    [setWorkspaceDraft, workspaceDraft?.researchProfileId]
+  );
+
+  const lookupHackerOneScope = useCallback(
+    async (identifier: string): Promise<void> => {
+      if (workspaceDraft?.researchProfileId === 'mathematics') {
+        throw new Error('HackerOne workspace autofill is unavailable for the Mathematics research profile.');
+      }
+      const lookup = await window.beale.lookupHackerOneScope(identifier);
+      setWorkspaceDraft((current) => (current ? onboardingFormFromHackerOneLookup(current, lookup) : current));
+    },
+    [setWorkspaceDraft, workspaceDraft?.researchProfileId]
+  );
+
+  return {
+    addWorkspace,
+    openRegisteredWorkspace,
+    openResearchSession,
+    removeRegisteredWorkspace,
+    submitWorkspaceOnboarding,
+    applyOnboardingResearchKit,
+    lookupHackerOneScope
+  };
+}
+
+export function researchSessionNeedsLoading(
+  snapshot: WorkspaceSnapshot | null,
+  selectedRunId: string | null,
+  workspace: Pick<WorkspaceRegistryEntry, 'workspacePath'>,
+  session: Pick<ResearchSessionSummary, 'runId'>
+): boolean {
+  return snapshot?.workspace.workspacePath !== workspace.workspacePath || selectedRunId !== session.runId;
+}

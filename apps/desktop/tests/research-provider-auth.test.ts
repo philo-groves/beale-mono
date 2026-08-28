@@ -1,0 +1,195 @@
+import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  ResearchProviderAuthService,
+  claudeSubscriptionLoginInvocation,
+  parseHoneycrispAuthStatus,
+  parseHoneycrispAuthVerification,
+  parseHoneycrispModelCatalog,
+  parseProviderOAuthInstructions,
+  resolveBundledClaudeCliExecutable,
+  resolveClaudeCliExecutable,
+  zcodeCliInvocation,
+  zcodeDesktopInvocation,
+  zcodeSubscriptionConfigured
+} from '../src/main/researchProviderAuth';
+
+describe('research provider auth parsing', () => {
+  it('launches Windows Claude subscription login in a visible tracked terminal', () => {
+    const invocation = claudeSubscriptionLoginInvocation(
+      'win32',
+      'C:\\Windows',
+      'C:\\workspace',
+      'C:\\Users\\researcher\\.local\\bin\\claude.exe'
+    );
+
+    expect(invocation?.command).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+    expect(invocation?.displayCommand).toBe('claude auth login --claudeai');
+    expect(invocation?.args.join(' ')).toContain('Start-Process');
+    expect(invocation?.args.join(' ')).toContain("'C:\\Users\\researcher\\.local\\bin\\claude.exe'");
+    expect(invocation?.args.join(' ')).toContain("@('auth', 'login', '--claudeai')");
+    expect(invocation?.args.join(' ')).toContain('WaitForExit');
+  });
+
+  it('resolves native and npm-installed Windows Claude CLIs outside Electron PATH', () => {
+    const existing = new Set([
+      'C:\\Users\\researcher\\.local\\bin\\claude.exe',
+      'C:\\Users\\researcher\\AppData\\Roaming\\npm\\claude.cmd'
+    ]);
+    const environment = {
+      USERPROFILE: 'C:\\Users\\researcher',
+      APPDATA: 'C:\\Users\\researcher\\AppData\\Roaming',
+      PATH: 'C:\\Windows\\System32'
+    };
+
+    expect(resolveClaudeCliExecutable('win32', environment, (path) => existing.has(path)))
+      .toBe('C:\\Users\\researcher\\.local\\bin\\claude.exe');
+    existing.delete('C:\\Users\\researcher\\.local\\bin\\claude.exe');
+    expect(resolveClaudeCliExecutable('win32', environment, (path) => existing.has(path)))
+      .toBe('C:\\Users\\researcher\\AppData\\Roaming\\npm\\claude.cmd');
+  });
+
+  it('resolves the Claude CLI bundled with the Windows Agent SDK dependency', () => {
+    const executable = resolveBundledClaudeCliExecutable('win32', process.arch);
+
+    expect(executable).toMatch(/claude-agent-sdk-win32-(?:x64|arm64).*[\\/]claude\.exe$/u);
+  });
+
+  it('does not construct a Windows Claude login when the CLI is unavailable', () => {
+    expect(claudeSubscriptionLoginInvocation('win32', 'C:\\Windows', 'C:\\workspace', null)).toBeNull();
+  });
+
+  it('cancels only the selected provider login process', () => {
+    const auth = new ResearchProviderAuthService();
+    const kill = vi.fn();
+    const otherKill = vi.fn();
+    const internals = auth as unknown as {
+      loginProcesses: Map<'anthropic' | 'xai' | 'zai' | 'openrouter', { kill: () => void }>;
+      latestStarts: Map<'anthropic' | 'xai' | 'zai' | 'openrouter', unknown>;
+    };
+    internals.loginProcesses.set('anthropic', { kill });
+    internals.loginProcesses.set('xai', { kill: otherKill });
+    internals.latestStarts.set('anthropic', { started: true });
+
+    auth.cancelOAuthLogin('anthropic');
+
+    expect(kill).toHaveBeenCalledOnce();
+    expect(otherKill).not.toHaveBeenCalled();
+    expect(internals.loginProcesses.has('anthropic')).toBe(false);
+    expect(internals.latestStarts.has('anthropic')).toBe(false);
+  });
+
+  it('uses the official ZCode CLI for subscription authentication', () => {
+    const invocation = zcodeCliInvocation(['login'], 'linux', '/home/researcher', undefined, '/workspace');
+    expect(invocation).toEqual({ command: 'zcode', args: ['login'], cwd: '/workspace' });
+  });
+
+  it('does not offer subscription authentication for OpenRouter', async () => {
+    const auth = new ResearchProviderAuthService();
+    await expect(auth.startOAuthLogin('openrouter')).rejects.toThrow('API key authentication only');
+  });
+
+  it('uses the official ZCode desktop app for interactive subscription sign-in when installed', () => {
+    const localAppData = mkdtempSync(join(tmpdir(), 'beale-zcode-app-'));
+    try {
+      const executable = join(localAppData, 'Programs', 'ZCode', 'ZCode.exe');
+      mkdirSync(join(localAppData, 'Programs', 'ZCode'), { recursive: true });
+      writeFileSync(executable, '');
+
+      expect(zcodeDesktopInvocation('win32', localAppData, 'C:\\workspace')).toEqual({
+        command: executable,
+        args: [],
+        cwd: 'C:\\workspace',
+        displayCommand: 'ZCode'
+      });
+    } finally {
+      rmSync(localAppData, { recursive: true, force: true });
+    }
+  });
+
+  it('recognizes shared ZCode desktop credentials without requiring CLI configuration', () => {
+    const userHome = mkdtempSync(join(tmpdir(), 'beale-zcode-auth-'));
+    try {
+      const credentialsDirectory = join(userHome, '.zcode', 'v2');
+      mkdirSync(credentialsDirectory, { recursive: true });
+      writeFileSync(
+        join(credentialsDirectory, 'credentials.json'),
+        JSON.stringify({ 'oauth:zai:access_token': 'test-token' })
+      );
+
+      expect(zcodeSubscriptionConfigured(userHome)).toBe(true);
+    } finally {
+      rmSync(userHome, { recursive: true, force: true });
+    }
+  });
+
+  it('parses Honeycrisp stored OAuth state', () => {
+    expect(
+      parseHoneycrispAuthStatus(
+        'Auth file: /Users/researcher/.honeycrisp/auth.json\nanthropic\tAnthropic\tapi_key, oauth\toauth\n'
+      )
+    ).toEqual({
+      providerId: 'anthropic',
+      providerName: 'Anthropic',
+      authMethods: ['api_key', 'oauth'],
+      storedCredentialType: 'oauth'
+    });
+  });
+
+  it('parses ambient API-key verification without reading the key', () => {
+    expect(
+      parseHoneycrispAuthVerification(
+        'Anthropic (anthropic) model claude-sonnet-4-6: configured via ANTHROPIC_API_KEY\n'
+      )
+    ).toEqual({
+      providerId: 'anthropic',
+      providerName: 'Anthropic',
+      modelId: 'claude-sonnet-4-6',
+      configured: true,
+      source: 'ANTHROPIC_API_KEY'
+    });
+  });
+
+  it('parses an xAI device-code prompt', () => {
+    expect(
+      parseProviderOAuthInstructions(
+        'Open this URL in your browser:\nhttps://auth.x.ai/device?code=ABCD-EFGH\nEnter code: ABCD-EFGH\n'
+      )
+    ).toEqual({
+      verificationUri: 'https://auth.x.ai/device?code=ABCD-EFGH',
+      userCode: 'ABCD-EFGH'
+    });
+  });
+
+  it('parses Pi model catalogs with model-specific effort levels', () => {
+    expect(
+      parseHoneycrispModelCatalog(JSON.stringify({
+        providers: [{
+          providerId: 'xai',
+          providerName: 'xAI',
+          models: [{
+            id: 'grok-4.5',
+            name: 'Grok 4.5',
+            reasoning: true,
+            effortLevels: ['low', 'medium', 'high'],
+            contextWindow: 2_000_000,
+            maxTokens: 32_000
+          }]
+        }]
+      }))
+    ).toEqual([{
+      providerId: 'xai',
+      providerName: 'xAI',
+      models: [{
+        id: 'grok-4.5',
+        name: 'Grok 4.5',
+        reasoning: true,
+        effortLevels: ['low', 'medium', 'high'],
+        contextWindow: 2_000_000,
+        maxTokens: 32_000
+      }]
+    }]);
+  });
+});

@@ -1,0 +1,35 @@
+{
+  "name": "beale-mono",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Beale authorized vulnerability research workbench and Honeycrisp research agent.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false",
+    "clean": "tsc -b --clean",
+    "start": "pnpm --filter @beale/app-server start",
+    "test": "pnpm run test:fast",
+    "test:fast": "pnpm run test:honeycrisp:fast && pnpm run test:app-server && pnpm run test:desktop",
+    "test:integration": "pnpm run test:honeycrisp:integration && pnpm run test:desktop:integration",
+    "test:all": "pnpm run test:fast && pnpm run test:integration",
+    "test:honeycrisp:fast": "tsc -b && node --import ./tests/test-environment.mjs --test tests/*.test.mjs",
+    "test:honeycrisp:integration": "tsc -b && node --import ./tests/test-environment.mjs --test tests/*.integration.mjs",
+    "test:honeycrisp:all": "tsc -b && node --import ./tests/test-environment.mjs --test tests/*.test.mjs tests/*.integration.mjs",
+    "test:desktop": "pnpm --filter @beale/desktop test",
+    "test:desktop:integration": "pnpm --filter @beale/desktop test:integration",
+    "typecheck:desktop": "pnpm --filter @beale/desktop typecheck",
+    "dev:desktop": "pnpm --filter @beale/desktop dev",
+    "build:desktop": "pnpm --filter @beale/desktop build",
+    "start:desktop": "pnpm --filter @beale/desktop start",
+    "test:app-server": "pnpm --filter @beale/app-server test"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

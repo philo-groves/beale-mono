@@ -1,0 +1,574 @@
+import { contextBridge, ipcRenderer, webFrame } from 'electron';
+import { IPC_CHANNELS } from '@shared/ipc';
+import type {
+  BealeApi,
+  ComputerUsePermissionMode,
+  ComputerUseSettings,
+  DebuggingSettings,
+  DeveloperSettings,
+  ProviderCredentialAccessRequest,
+  ProviderSettings,
+  ProviderAuthenticationMethod,
+  ProviderModelDefaults,
+  TicketingMode,
+  TicketingProviderId,
+  TicketingSettings,
+  TicketingTarget,
+  TicketSubmissionResult,
+  AgentPluginRegistryState,
+  AppServerRemoteAccessSettings,
+  AppServerRemoteAccessUpdate,
+  MemorySettings,
+  MemoryTypeDescriptions,
+  ShellOptions,
+  GeneratedResearchGoalSuggestions,
+  GeneratedResearchPrompt,
+  HostEnvironment,
+  WorkspaceEditorCatalog,
+  WorkspaceEditorId,
+  WorkspaceTerminalDataEvent,
+  WorkspaceTerminalExitEvent,
+  WorkspaceTerminalStartResult,
+  WorkspaceMemoryBackendId,
+  IosDeviceCaptureFrame,
+  IosDeviceCaptureState,
+  HackerOneScopeLookupResult,
+  ResearchKitRefreshInput,
+  ResearchKitRefreshResult,
+  GitHubRepositorySummary,
+  HoneycrispMemoryDirectorySummary,
+  AutomationSummary,
+  AutomationUpdateInput,
+  MemoryDreamingProgressUpdate,
+  HoneycrispRunbookDocument,
+  HoneycrispReportDocument,
+  HoneycrispReportLocator,
+  HoneycrispReportSummary,
+  ReportContentUpdateInput,
+  ReportTriageStatusUpdateInput,
+  ReportSessionStartInput,
+  ReportSessionStartResult,
+  HoneycrispToolingConfigUpdate,
+  WorkspaceDejunkSummary,
+  NativeMenuAction,
+  WorkspaceOnboardingInput,
+  WorkspaceOnboardingProgressUpdate,
+  WorkspaceOnboardingSkipInput,
+  WorkspaceRegistryState,
+  ResearchChannelSummary,
+  ResearchChannelDetail,
+  ResearchChannelRecord,
+  ResearchChannelMessageRecord,
+  ResearchSessionSummary,
+  CreateResearchChannelInput,
+  PostResearchChannelMessageInput,
+  ProfilingReport,
+  ProfilingState,
+  WorkspaceScopeDraft,
+  ResolvedResearchProfile,
+  ResearchPromptGenerationInput,
+  ResearchPromptGenerationUpdate,
+  ResearchGoalSuggestionInput,
+  ResearchGoalSuggestionSelectionInput,
+  ResearchProviderId,
+  RepositoryCloneMode,
+  ResearchModelProviderId,
+  ResearchProviderModelCatalog,
+  ResearchProviderOAuthStartResult,
+  ResearchProviderStatus,
+  QuickChatStartInput,
+  QuickChatStartResult,
+  RunDetail,
+  RunDetailProjection,
+  RunDetailUpdate,
+  RunMessageDetail,
+  RunMessageDetailRequest,
+  SessionTranscriptSearchInput,
+  SessionTranscriptSearchResponse,
+  StartRunInput,
+  SteeringAction,
+  WindowChromeState,
+  WindowBackgroundEffect,
+  WorkspacePickerMode,
+  WorkspaceSnapshot,
+  ZoomState
+} from '@shared/types';
+
+function zoomState(): ZoomState {
+  return {
+    level: webFrame.getZoomLevel(),
+    percent: Math.round(webFrame.getZoomFactor() * 100)
+  };
+}
+
+async function invokeRunDetail<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const result = await ipcRenderer.invoke(channel, ...args) as
+    | { canceled: true }
+    | { canceled: false; value: T };
+  if (result.canceled) throw new Error('Beale session detail request was canceled.');
+  return result.value;
+}
+
+const api: BealeApi = {
+  selectWorkspace(mode: WorkspacePickerMode) {
+    return ipcRenderer.invoke(IPC_CHANNELS.selectWorkspace, mode);
+  },
+  selectWorkspaceDirectory() {
+    return ipcRenderer.invoke(IPC_CHANNELS.selectWorkspaceDirectory);
+  },
+  getWorkspaceRegistry() {
+    return ipcRenderer.invoke(IPC_CHANNELS.getWorkspaceRegistry);
+  },
+  listResearchChannels(workspaceId: string): Promise<ResearchChannelSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listResearchChannels, workspaceId);
+  },
+  listArchivedResearchChannels(workspaceId: string): Promise<ResearchChannelSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listArchivedResearchChannels, workspaceId);
+  },
+  listArchivedQuickChats(): Promise<ResearchSessionSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listArchivedQuickChats);
+  },
+  getResearchChannel(workspaceId: string, channelId: string): Promise<ResearchChannelDetail> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getResearchChannel, workspaceId, channelId);
+  },
+  createResearchChannel(workspaceId: string, input: CreateResearchChannelInput): Promise<ResearchChannelRecord> {
+    return ipcRenderer.invoke(IPC_CHANNELS.createResearchChannel, workspaceId, input);
+  },
+  postResearchChannelMessage(workspaceId: string, channelId: string, input: PostResearchChannelMessageInput): Promise<ResearchChannelMessageRecord> {
+    return ipcRenderer.invoke(IPC_CHANNELS.postResearchChannelMessage, workspaceId, channelId, input);
+  },
+  deleteResearchChannel(workspaceId: string, channelId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.deleteResearchChannel, workspaceId, channelId);
+  },
+  archiveResearchChannel(workspaceId: string, channelId: string): Promise<ResearchChannelRecord> {
+    return ipcRenderer.invoke(IPC_CHANNELS.archiveResearchChannel, workspaceId, channelId);
+  },
+  restoreResearchChannel(workspaceId: string, channelId: string): Promise<ResearchChannelRecord> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restoreResearchChannel, workspaceId, channelId);
+  },
+  archiveResearchSession(sessionId: string): Promise<WorkspaceRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.archiveResearchSession, sessionId);
+  },
+  restoreResearchSession(sessionId: string): Promise<WorkspaceRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restoreResearchSession, sessionId);
+  },
+  markResearchSessionViewed(sessionId: string): Promise<WorkspaceRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.markResearchSessionViewed, sessionId);
+  },
+  getDeveloperSettings(): Promise<DeveloperSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getDeveloperSettings);
+  },
+  setDeveloperModeEnabled(enabled: boolean): Promise<DeveloperSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setDeveloperModeEnabled, enabled);
+  },
+  getDebuggingSettings(): Promise<DebuggingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getDebuggingSettings);
+  },
+  setTracesEnabled(enabled: boolean): Promise<DebuggingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setTracesEnabled, enabled);
+  },
+  getAppServerRemoteAccessSettings(detect = false): Promise<AppServerRemoteAccessSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getAppServerRemoteAccessSettings, detect);
+  },
+  setAppServerRemoteAccessSettings(update: AppServerRemoteAccessUpdate): Promise<AppServerRemoteAccessSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setAppServerRemoteAccessSettings, update);
+  },
+  getComputerUseSettings(): Promise<ComputerUseSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getComputerUseSettings);
+  },
+  setComputerUsePermissionMode(permissionMode: ComputerUsePermissionMode): Promise<ComputerUseSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setComputerUsePermissionMode, permissionMode);
+  },
+  getProviderSettings(): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getProviderSettings);
+  },
+  setDefaultProviderId(providerId: ResearchModelProviderId | null): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setDefaultProviderId, providerId);
+  },
+  setProviderModelDefaults(providerId: ResearchModelProviderId, defaults: ProviderModelDefaults): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setProviderModelDefaults, providerId, defaults);
+  },
+  setProviderOptionalModelEnabled(
+    providerId: ResearchModelProviderId,
+    modelId: string,
+    enabled: boolean
+  ): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setProviderOptionalModelEnabled, providerId, modelId, enabled);
+  },
+  setProviderCyberPolicyRiskAcknowledged(providerId: ResearchModelProviderId, acknowledged: boolean): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setProviderCyberPolicyRiskAcknowledged, providerId, acknowledged);
+  },
+  setProviderPreferredAuthenticationMethod(
+    providerId: ResearchModelProviderId,
+    method: ProviderAuthenticationMethod
+  ): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setProviderPreferredAuthenticationMethod, providerId, method);
+  },
+  getTicketingSettings(): Promise<TicketingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getTicketingSettings);
+  },
+  setTicketingProvider(providerId: TicketingMode): Promise<TicketingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setTicketingProvider, providerId);
+  },
+  setTicketingHumanInTheLoop(enabled: boolean): Promise<TicketingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setTicketingHumanInTheLoop, enabled);
+  },
+  configureTicketingCredential(providerId: TicketingProviderId, apiKey: string): Promise<TicketingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.configureTicketingCredential, providerId, apiKey);
+  },
+  removeTicketingCredential(providerId: TicketingProviderId): Promise<TicketingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.removeTicketingCredential, providerId);
+  },
+  listTicketingTargets(providerId: TicketingProviderId): Promise<TicketingTarget[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listTicketingTargets, providerId);
+  },
+  setTicketingTarget(providerId: TicketingProviderId, target: TicketingTarget): Promise<TicketingSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setTicketingTarget, providerId, target);
+  },
+  getResearchProfiles(): Promise<ResolvedResearchProfile[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getResearchProfiles);
+  },
+  getAgentPlugins(): Promise<AgentPluginRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getAgentPlugins);
+  },
+  addAgentPluginFromFilesystem(): Promise<AgentPluginRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.addAgentPluginFromFilesystem);
+  },
+  addAgentPluginFromRepository(repositoryUrl: string): Promise<AgentPluginRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.addAgentPluginFromRepository, repositoryUrl);
+  },
+  setAgentPluginEnabled(pluginId: string, enabled: boolean): Promise<AgentPluginRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setAgentPluginEnabled, pluginId, enabled);
+  },
+  removeAgentPlugin(pluginId: string): Promise<AgentPluginRegistryState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.removeAgentPlugin, pluginId);
+  },
+  getMemorySettings(): Promise<MemorySettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getMemorySettings);
+  },
+  setMemoryTypeDescriptions(descriptions: MemoryTypeDescriptions): Promise<MemorySettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setMemoryTypeDescriptions, descriptions);
+  },
+  getShellOptions(): Promise<ShellOptions> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getShellOptions);
+  },
+  setShellOptions(options: ShellOptions): Promise<ShellOptions> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setShellOptions, options);
+  },
+  lookupHackerOneScope(identifier: string): Promise<HackerOneScopeLookupResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.lookupHackerOneScope, identifier);
+  },
+  refreshResearchKit(input: ResearchKitRefreshInput): Promise<ResearchKitRefreshResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.refreshResearchKit, input);
+  },
+  listGitHubOrganizationRepositories(organization: string): Promise<GitHubRepositorySummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listGitHubOrganizationRepositories, organization);
+  },
+  createScopedWorkspace(input: WorkspaceOnboardingInput) {
+    return ipcRenderer.invoke(IPC_CHANNELS.createScopedWorkspace, input);
+  },
+  updateWorkspaceDirectories(directories: string[]) {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateWorkspaceDirectories, directories);
+  },
+  updateWorkspaceMemoryBackend(memoryBackend: WorkspaceMemoryBackendId) {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateWorkspaceMemoryBackend, memoryBackend);
+  },
+  cloneWorkspaceRepository(assetId: string, cloneMode: RepositoryCloneMode): Promise<WorkspaceSnapshot> {
+    return ipcRenderer.invoke(IPC_CHANNELS.cloneWorkspaceRepository, assetId, cloneMode);
+  },
+  skipWorkspaceOnboardingRepository(input: WorkspaceOnboardingSkipInput): Promise<WorkspaceOnboardingProgressUpdate | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.skipWorkspaceOnboardingRepository, input);
+  },
+  onWorkspaceOnboardingUpdate(listener: (update: WorkspaceOnboardingProgressUpdate) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, update: WorkspaceOnboardingProgressUpdate): void => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.workspaceOnboardingUpdated, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.workspaceOnboardingUpdated, wrapped);
+  },
+  openRegisteredWorkspace(registryWorkspaceId: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.openRegisteredWorkspace, registryWorkspaceId);
+  },
+  removeRegisteredWorkspace(registryWorkspaceId: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.removeRegisteredWorkspace, registryWorkspaceId);
+  },
+  openWorkspace(path: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.openWorkspace, path);
+  },
+  createWorkspace(path: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.createWorkspace, path);
+  },
+  restoreLastWorkspace(): Promise<WorkspaceSnapshot | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restoreLastWorkspace);
+  },
+  getSnapshot() {
+    return ipcRenderer.invoke(IPC_CHANNELS.getSnapshot);
+  },
+  getHostEnvironment(): Promise<HostEnvironment> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getHostEnvironment);
+  },
+  getWorkspaceEditors(): Promise<WorkspaceEditorCatalog> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getWorkspaceEditors);
+  },
+  openWorkspaceInEditor(editorId: WorkspaceEditorId): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.openWorkspaceInEditor, editorId);
+  },
+  startWorkspaceTerminal(sessionId: string, columns: number, rows: number): Promise<WorkspaceTerminalStartResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startWorkspaceTerminal, sessionId, columns, rows);
+  },
+  writeWorkspaceTerminal(sessionId: string, data: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.writeWorkspaceTerminal, sessionId, data);
+  },
+  resizeWorkspaceTerminal(sessionId: string, columns: number, rows: number): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.resizeWorkspaceTerminal, sessionId, columns, rows);
+  },
+  closeWorkspaceTerminal(sessionId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.closeWorkspaceTerminal, sessionId);
+  },
+  onWorkspaceTerminalData(listener: (event: WorkspaceTerminalDataEvent) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, terminalEvent: WorkspaceTerminalDataEvent): void => listener(terminalEvent);
+    ipcRenderer.on(IPC_CHANNELS.workspaceTerminalData, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.workspaceTerminalData, wrapped);
+  },
+  onWorkspaceTerminalExit(listener: (event: WorkspaceTerminalExitEvent) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, terminalEvent: WorkspaceTerminalExitEvent): void => listener(terminalEvent);
+    ipcRenderer.on(IPC_CHANNELS.workspaceTerminalExit, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.workspaceTerminalExit, wrapped);
+  },
+  getIosDeviceCaptureState(): Promise<IosDeviceCaptureState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getIosDeviceCaptureState);
+  },
+  startIosDeviceCapture(): Promise<IosDeviceCaptureState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startIosDeviceCapture);
+  },
+  stopIosDeviceCapture(): Promise<IosDeviceCaptureState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.stopIosDeviceCapture);
+  },
+  onIosDeviceCaptureUpdate(listener: (state: IosDeviceCaptureState) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: IosDeviceCaptureState): void => listener(state);
+    ipcRenderer.on(IPC_CHANNELS.iosDeviceCaptureUpdated, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.iosDeviceCaptureUpdated, wrapped);
+  },
+  onIosDeviceCaptureFrame(listener: (frame: IosDeviceCaptureFrame) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, frame: IosDeviceCaptureFrame): void => listener(frame);
+    ipcRenderer.on(IPC_CHANNELS.iosDeviceCaptureFrame, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.iosDeviceCaptureFrame, wrapped);
+  },
+  getOpenAiStatus() {
+    return ipcRenderer.invoke(IPC_CHANNELS.getOpenAiStatus);
+  },
+  startOpenAiOAuth() {
+    return ipcRenderer.invoke(IPC_CHANNELS.startOpenAiOAuth);
+  },
+  forgetProviderSubscription(providerId: ResearchModelProviderId): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.forgetProviderSubscription, providerId);
+  },
+  removeProvider(providerId: ResearchModelProviderId): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.removeProvider, providerId);
+  },
+  configureProviderApiKey(providerId: ResearchModelProviderId, apiKey: string): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.configureProviderApiKey, providerId, apiKey);
+  },
+  removeProviderApiKey(providerId: ResearchModelProviderId): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.removeProviderApiKey, providerId);
+  },
+  getProviderCredentialAccessRequest(providerIds: ResearchModelProviderId[]): Promise<ProviderCredentialAccessRequest> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getProviderCredentialAccessRequest, providerIds);
+  },
+  unlockProviderApiKeys(providerIds: ResearchModelProviderId[]): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.unlockProviderApiKeys, providerIds);
+  },
+  refreshOpenAiStatus() {
+    return ipcRenderer.invoke(IPC_CHANNELS.refreshOpenAiStatus);
+  },
+  getResearchProviderStatuses(): Promise<ResearchProviderStatus[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getResearchProviderStatuses);
+  },
+  getResearchProviderModelCatalog(): Promise<ResearchProviderModelCatalog[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getResearchProviderModelCatalog);
+  },
+  startResearchProviderOAuth(providerId: ResearchProviderId): Promise<ResearchProviderOAuthStartResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startResearchProviderOAuth, providerId);
+  },
+  getProfilingState(): Promise<ProfilingState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getProfilingState);
+  },
+  setProfilingEnabled(enabled: boolean): Promise<ProfilingState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setProfilingEnabled, enabled);
+  },
+  recordProfilingReport(report: ProfilingReport): Promise<ProfilingState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.recordProfilingReport, report);
+  },
+  openHoneycrispMemoryDirectory(name: HoneycrispMemoryDirectorySummary['name']) {
+    return ipcRenderer.invoke(IPC_CHANNELS.openHoneycrispMemoryDirectory, name);
+  },
+  getHoneycrispRunbook(runbookId: string): Promise<HoneycrispRunbookDocument> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getHoneycrispRunbook, runbookId);
+  },
+  listAutomations(): Promise<AutomationSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listAutomations);
+  },
+  updateAutomation(input: AutomationUpdateInput): Promise<AutomationSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateAutomation, input);
+  },
+  listReportingReports(): Promise<HoneycrispReportSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listReportingReports);
+  },
+  getHoneycrispReport(locator: HoneycrispReportLocator): Promise<HoneycrispReportDocument> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getHoneycrispReport, locator);
+  },
+  updateReportContent(input: ReportContentUpdateInput): Promise<HoneycrispReportSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateReportContent, input);
+  },
+  updateReportTriageStatus(input: ReportTriageStatusUpdateInput): Promise<HoneycrispReportSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateReportTriageStatus, input);
+  },
+  openReportSubmissionPacket(locator: HoneycrispReportLocator): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.openReportSubmissionPacket, locator);
+  },
+  chooseReportSubmissionPacket(locator: HoneycrispReportLocator): Promise<HoneycrispReportSummary | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.chooseReportSubmissionPacket, locator);
+  },
+  chooseReportRecording(locator: HoneycrispReportLocator): Promise<HoneycrispReportSummary | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.chooseReportRecording, locator);
+  },
+  submitReportTicket(locator: HoneycrispReportLocator): Promise<TicketSubmissionResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.submitReportTicket, locator);
+  },
+  openExternalUrl(url: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.openExternalUrl, url);
+  },
+  startReportSession(input: ReportSessionStartInput): Promise<ReportSessionStartResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startReportSession, input);
+  },
+  getWorkspaceDejunkSummary(workspaceId: string): Promise<WorkspaceDejunkSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getWorkspaceDejunkSummary, workspaceId);
+  },
+  runWorkspaceDejunk() {
+    return ipcRenderer.invoke(IPC_CHANNELS.runWorkspaceDejunk);
+  },
+  runMemoryDreaming() {
+    return ipcRenderer.invoke(IPC_CHANNELS.runMemoryDreaming);
+  },
+  onMemoryDreamingProgress(listener: (update: MemoryDreamingProgressUpdate) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, update: MemoryDreamingProgressUpdate): void => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.memoryDreamingUpdated, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.memoryDreamingUpdated, wrapped);
+  },
+  restoreMemoryDreamingChange(changeId: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.restoreMemoryDreamingChange, changeId);
+  },
+  getHoneycrispToolingSummary() {
+    return ipcRenderer.invoke(IPC_CHANNELS.getHoneycrispToolingSummary);
+  },
+  updateHoneycrispToolingConfig(update: HoneycrispToolingConfigUpdate) {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateHoneycrispToolingConfig, update);
+  },
+  generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions> {
+    return ipcRenderer.invoke(IPC_CHANNELS.generateResearchGoalSuggestions, input);
+  },
+  selectResearchGoalSuggestion(input: ResearchGoalSuggestionSelectionInput): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.selectResearchGoalSuggestion, input);
+  },
+  generateResearchPrompt(input?: ResearchPromptGenerationInput): Promise<GeneratedResearchPrompt> {
+    return ipcRenderer.invoke(IPC_CHANNELS.generateResearchPrompt, input);
+  },
+  cancelResearchPromptGeneration(requestId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.cancelResearchPromptGeneration, requestId);
+  },
+  onResearchPromptGenerationUpdate(listener: (update: ResearchPromptGenerationUpdate) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, update: ResearchPromptGenerationUpdate): void => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.researchPromptGenerationUpdated, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.researchPromptGenerationUpdated, wrapped);
+  },
+  saveScope(scope: WorkspaceScopeDraft) {
+    return ipcRenderer.invoke(IPC_CHANNELS.saveScope, scope);
+  },
+  addWorkspaceRule(text: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.addWorkspaceRule, text);
+  },
+  startRun(input: StartRunInput) {
+    return ipcRenderer.invoke(IPC_CHANNELS.startRun, input);
+  },
+  startQuickChat(input: QuickChatStartInput): Promise<QuickChatStartResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startQuickChat, input);
+  },
+  exportWorkspaceBackup(note?: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.exportWorkspaceBackup, note);
+  },
+  getRunDetail(runId: string, projection: RunDetailProjection = 'full') {
+    return invokeRunDetail<RunDetail>(IPC_CHANNELS.getRunDetail, runId, projection);
+  },
+  getRunDetailVersion(runId: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.getRunDetailVersion, runId);
+  },
+  getRunDetailUpdate(runId: string, cursor, projection: RunDetailProjection = 'full') {
+    return invokeRunDetail<RunDetailUpdate>(IPC_CHANNELS.getRunDetailUpdate, runId, cursor, projection);
+  },
+  getRunMessageDetail(input: RunMessageDetailRequest): Promise<RunMessageDetail> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getRunMessageDetail, input);
+  },
+  cancelRunDetailRequests(runId?: string) {
+    ipcRenderer.send(IPC_CHANNELS.cancelRunDetailRequests, runId);
+  },
+  searchSessionTranscripts(input: SessionTranscriptSearchInput): Promise<SessionTranscriptSearchResponse> {
+    return ipcRenderer.invoke(IPC_CHANNELS.searchSessionTranscripts, input);
+  },
+  steerRun(action: SteeringAction) {
+    return ipcRenderer.invoke(IPC_CHANNELS.steerRun, action);
+  },
+  openNotification(notificationId: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.openNotification, notificationId);
+  },
+  dismissNotification(notificationId: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.dismissNotification, notificationId);
+  },
+  setWindowBackgroundEffect(effect: WindowBackgroundEffect): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setWindowBackgroundEffect, effect);
+  },
+  minimizeWindow() {
+    return ipcRenderer.invoke(IPC_CHANNELS.minimizeWindow);
+  },
+  toggleMaximizeWindow() {
+    return ipcRenderer.invoke(IPC_CHANNELS.toggleMaximizeWindow);
+  },
+  closeWindow() {
+    return ipcRenderer.invoke(IPC_CHANNELS.closeWindow);
+  },
+  getZoomState() {
+    return zoomState();
+  },
+  zoomIn() {
+    const nextLevel = Math.min(6, webFrame.getZoomLevel() + 1);
+    webFrame.setZoomLevel(nextLevel);
+    return zoomState();
+  },
+  zoomOut() {
+    const nextLevel = Math.max(-4, webFrame.getZoomLevel() - 1);
+    webFrame.setZoomLevel(nextLevel);
+    return zoomState();
+  },
+  getWindowChromeState(): Promise<WindowChromeState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getWindowChromeState);
+  },
+  onWindowChromeState(listener: (state: WindowChromeState) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: WindowChromeState): void => listener(state);
+    ipcRenderer.on(IPC_CHANNELS.windowChromeStateUpdated, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.windowChromeStateUpdated, wrapped);
+  },
+  onNativeMenuAction(listener: (action: NativeMenuAction) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, action: NativeMenuAction): void => listener(action);
+    ipcRenderer.on(IPC_CHANNELS.nativeMenuAction, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.nativeMenuAction, wrapped);
+  },
+  onSnapshot(listener: (snapshot: WorkspaceSnapshot | null) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, snapshot: WorkspaceSnapshot | null): void => listener(snapshot);
+    ipcRenderer.on(IPC_CHANNELS.snapshotUpdated, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.snapshotUpdated, wrapped);
+  },
+  onWorkspaceRegistry(listener: (state: WorkspaceRegistryState) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: WorkspaceRegistryState): void => listener(state);
+    ipcRenderer.on(IPC_CHANNELS.workspaceRegistryUpdated, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.workspaceRegistryUpdated, wrapped);
+  }
+};
+
+contextBridge.exposeInMainWorld('beale', api);

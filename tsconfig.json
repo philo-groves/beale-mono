@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/research-agent"
+    },
+    {
+      "path": "./packages/honeycrisp-host"
+    },
+    {
+      "path": "./app-server"
+    }
+  ]
+}

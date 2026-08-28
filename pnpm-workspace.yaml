@@ -1,0 +1,16 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "app-server"
+allowBuilds:
+  '@google/genai': false
+  esbuild: false
+  protobufjs: false
+  '@mediar-ai/terminator': true
+  electron: true
+  node-pty: true
+minimumReleaseAgeExclude:
+  - '@earendil-works/pi-agent-core@0.80.2'
+  - '@earendil-works/pi-ai@0.80.2'
+patchedDependencies:
+  '@earendil-works/pi-ai@0.80.10': patches/@earendil-works__pi-ai@0.80.10.patch

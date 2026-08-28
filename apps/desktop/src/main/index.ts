@@ -1,0 +1,1218 @@
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from 'electron';
+import type { IpcMainInvokeEvent, Rectangle } from 'electron';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { IPC_CHANNELS } from '@shared/ipc';
+import { runDetailProjectionMetricLabel } from '../shared/runDetailProjection';
+import type {
+  ComputerUsePermissionMode,
+  HoneycrispMemoryDirectorySummary,
+  AutomationUpdateInput,
+  AppServerRemoteAccessUpdate,
+  HoneycrispToolingConfigUpdate,
+  NativeMenuAction,
+  ProfilingReport,
+  WorkspaceRegistryState,
+  WorkspaceOnboardingInput,
+  WorkspaceOnboardingSkipInput,
+  WorkspaceScopeDraft,
+  GeneratedResearchGoalSuggestions,
+  ResearchGoalSuggestionInput,
+  ResearchGoalSuggestionSelectionInput,
+  ResearchPromptGenerationInput,
+  ResearchKitRefreshInput,
+  ResearchProviderId,
+  QuickChatStartInput,
+  ResearchModelProviderId,
+  ProviderModelDefaults,
+  ProviderAuthenticationMethod,
+  TicketingMode,
+  TicketingProviderId,
+  TicketingTarget,
+  HoneycrispReportLocator,
+  ReportContentUpdateInput,
+  ReportTriageStatusUpdateInput,
+  ReportSessionStartInput,
+  RunDetailUpdateCursor,
+  RunDetailProjection,
+  RunMessageDetailRequest,
+  SessionTranscriptSearchInput,
+  MemoryTypeDescriptions,
+  ShellOptions,
+  StartRunInput,
+  SteeringAction,
+  WorkspaceSnapshot,
+  WorkspacePickerMode,
+  WorkspaceEditorId,
+  WorkspaceMemoryBackendId,
+  RepositoryCloneMode,
+  ResearchChannelSummary,
+  ResearchChannelDetail,
+  ResearchChannelRecord,
+  ResearchChannelMessageRecord,
+  ResearchSessionSummary,
+  CreateResearchChannelInput,
+  PostResearchChannelMessageInput
+} from '@shared/types';
+import { getHostEnvironment, WorkspaceService, type WorkspaceChange } from './workspaceService';
+import { nativeMacApplicationMenuTemplate } from './nativeApplicationMenu';
+import {
+  ProviderCredentialStore,
+  unlockProviderApiKeysForAppServerStartup
+} from './providerCredentialStore';
+import { restoreAndFocusWindow } from './windowLifecycle';
+import { IosDeviceCaptureService } from './iosDeviceCaptureService';
+import { getWorkspaceEditorCatalogForHost, openWorkspaceInEditor } from './workspaceEditors';
+import { WorkspaceTerminalService } from './workspaceTerminalService';
+import { TicketingService } from './ticketingService';
+import {
+  BealeDesktopRestartRequiredError,
+  ensureBealeAppServerRunning,
+  fetchAppServerCanonicalResultWithRecovery,
+  invokeAppServerOperation,
+  restartBealeAppServer,
+  setBealeDesktopRestartRequiredHandler
+} from './bealeAppServerClient';
+import {
+  detectAppServerMagicDnsName,
+  readAppServerRemoteAccessSettings,
+  updateAppServerRemoteAccess
+} from './appServerRemoteAccess';
+
+const APP_NAME = 'Beale';
+let mainWindow: BrowserWindow | null = null;
+let workspaceService: WorkspaceService;
+let iosDeviceCaptureService: IosDeviceCaptureService;
+let workspaceTerminalService: WorkspaceTerminalService;
+let ticketingService: TicketingService;
+let appServerRestartDialog: Promise<boolean> | null = null;
+const runDetailRequestControllers = new Map<string, AbortController>();
+const researchGoalSuggestionControllers = new Map<string, AbortController>();
+const smokeTestMode = process.argv.includes('--smoke-test');
+const NATIVE_WINDOW_SHAPE_RADIUS_PX = 8;
+const WINDOW_BACKGROUND_EFFECTS = new Set(['solid', 'semi-transparent', 'gradient', 'blur']);
+
+// Keep the established storage location stable while correcting the displayed app identity.
+app.setPath('userData', join(app.getPath('appData'), 'beale'));
+app.setName(APP_NAME);
+process.title = APP_NAME;
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+function normalizedRunDetailProjection(value: unknown): RunDetailProjection {
+  if (value === 'commentary') return value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'full';
+  const candidate = value as Record<string, unknown>;
+  if (candidate.mode !== 'commentary') return 'full';
+  if (candidate.agentPath === null) return { mode: 'commentary', agentPath: null };
+  if (typeof candidate.agentPath !== 'string') return 'full';
+  const agentPath = candidate.agentPath.trim();
+  return agentPath.startsWith('/root/') && agentPath.length <= 512
+    ? { mode: 'commentary', agentPath }
+    : 'full';
+}
+
+function createWindow(): void {
+  const isMac = process.platform === 'darwin';
+  const needsNativeWindowShape = process.platform === 'linux';
+  const supportsNativeRoundedCorners = process.platform === 'darwin' || process.platform === 'win32';
+  const appIcon = createAppIcon();
+  const window = new BrowserWindow({
+    width: 1440,
+    height: 940,
+    minWidth: 1120,
+    minHeight: 760,
+    show: false,
+    title: APP_NAME,
+    backgroundColor: '#00000000',
+    autoHideMenuBar: true,
+    transparent: true,
+    hasShadow: isMac,
+    roundedCorners: supportsNativeRoundedCorners,
+    ...(appIcon ? { icon: appIcon } : {}),
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 12, y: 13 }
+        }
+      : {
+          frame: false
+        }),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  mainWindow = window;
+  const webContentsId = window.webContents.id;
+  window.webContents.on('destroyed', () => workspaceTerminalService?.closeOwner(webContentsId));
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null;
+  });
+  window.setBackgroundColor('#00000000');
+  window.setMenuBarVisibility(false);
+  registerRoundedWindowShape(window, needsNativeWindowShape);
+  registerWindowStartupShow(window, needsNativeWindowShape);
+  registerWindowChromeStateEvents(window);
+  registerRendererDevToolsControls(window);
+  registerRendererNavigationPolicy(window);
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    window.loadURL(process.env.ELECTRON_RENDERER_URL);
+  } else {
+    window.loadFile(join(__dirname, '../renderer/index.html'));
+  }
+  installApplicationMenu();
+}
+
+function setWindowBackgroundEffect(window: BrowserWindow, value: unknown): void {
+  const effect = typeof value === 'string' && WINDOW_BACKGROUND_EFFECTS.has(value) ? value : 'solid';
+  const blurEnabled = effect === 'blur';
+  if (process.platform === 'darwin') {
+    window.setVibrancy(blurEnabled ? 'under-window' : null);
+  } else if (process.platform === 'win32') {
+    window.setBackgroundMaterial(blurEnabled ? 'acrylic' : 'none');
+  }
+}
+
+function registerRendererNavigationPolicy(window: BrowserWindow): void {
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  const allowedOrigin = rendererUrl ? new URL(rendererUrl).origin : null;
+  const allowedFile = join(__dirname, '../renderer/index.html').replaceAll('\\', '/');
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, target) => {
+    let allowed = false;
+    try {
+      const url = new URL(target);
+      allowed = allowedOrigin !== null
+        ? url.origin === allowedOrigin
+        : url.protocol === 'file:' && decodeURIComponent(url.pathname).replaceAll('\\', '/').endsWith(allowedFile);
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) event.preventDefault();
+  });
+}
+
+function reopenMainWindow(): void {
+  const existingWindow = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null;
+  if (restoreAndFocusWindow(existingWindow)) {
+    mainWindow = existingWindow;
+    return;
+  }
+  if (app.isReady()) {
+    createWindow();
+  }
+}
+
+function installApplicationMenu(): void {
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+  const window = nativeMenuWindow();
+  const zoomPercent = window && !window.isDestroyed()
+    ? Math.round(window.webContents.getZoomFactor() * 100)
+    : 100;
+  Menu.setApplicationMenu(Menu.buildFromTemplate(nativeMacApplicationMenuTemplate(zoomPercent, {
+    dispatchRendererAction: sendNativeMenuAction,
+    zoomOut: () => adjustNativeZoom(-1),
+    zoomIn: () => adjustNativeZoom(1),
+    minimizeWindow: () => nativeMenuWindow()?.minimize(),
+    maximizeWindow: toggleNativeWindowMaximize,
+    closeWindow: () => nativeMenuWindow()?.close()
+  })));
+}
+
+function nativeMenuWindow(): BrowserWindow | null {
+  return BrowserWindow.getFocusedWindow() ?? mainWindow;
+}
+
+function sendNativeMenuAction(action: NativeMenuAction): void {
+  const window = nativeMenuWindow();
+  if (!window || window.isDestroyed()) return;
+  window.webContents.send(IPC_CHANNELS.nativeMenuAction, action);
+}
+
+function adjustNativeZoom(delta: -1 | 1): void {
+  const window = nativeMenuWindow();
+  if (!window || window.isDestroyed()) return;
+  const nextLevel = Math.max(-4, Math.min(6, window.webContents.getZoomLevel() + delta));
+  window.webContents.setZoomLevel(nextLevel);
+  installApplicationMenu();
+}
+
+function toggleNativeWindowMaximize(): void {
+  const window = nativeMenuWindow();
+  if (!window || window.isDestroyed()) return;
+  if (window.isMaximized()) {
+    window.unmaximize();
+  } else {
+    window.maximize();
+  }
+}
+
+function createAppIcon(): Electron.NativeImage | null {
+  const sourcePath = appIconSourcePath();
+  if (!sourcePath) return null;
+  const source = nativeImage.createFromPath(sourcePath);
+  if (source.isEmpty()) return null;
+
+  const size = source.getSize();
+  const cropSize = Math.min(size.width, size.height);
+  if (cropSize <= 0) return null;
+  const cropped = source.crop({
+    x: Math.max(0, Math.floor((size.width - cropSize) / 2)),
+    y: Math.max(0, Math.floor((size.height - cropSize) / 2)),
+    width: cropSize,
+    height: cropSize
+  });
+  return cropped.resize({ width: 256, height: 256, quality: 'best' });
+}
+
+function applyAppIcon(window?: BrowserWindow): void {
+  const appIcon = createAppIcon();
+  if (!appIcon) return;
+  if (process.platform === 'darwin' && app.dock) app.dock.setIcon(appIcon);
+  else if (window && !window.isDestroyed()) window.setIcon(appIcon);
+}
+
+function appIconSourcePath(): string | null {
+  const candidates = [
+    join(app.getAppPath(), 'resources/app-icon.png'),
+    join(process.cwd(), 'resources/app-icon.png'),
+    join(__dirname, '../../resources/app-icon.png'),
+    join(process.resourcesPath, 'app-icon.png'),
+    join(process.resourcesPath, 'resources/app-icon.png')
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+function windowForEvent(event: IpcMainInvokeEvent): BrowserWindow | null {
+  return BrowserWindow.fromWebContents(event.sender);
+}
+
+function registerRoundedWindowShape(window: BrowserWindow, enabled: boolean): void {
+  if (!enabled) return;
+
+  let pending = false;
+  const apply = (): void => {
+    if (window.isDestroyed() || pending) return;
+    pending = true;
+    setImmediate(() => {
+      pending = false;
+      applyRoundedWindowShape(window);
+    });
+  };
+
+  window.on('resize', apply);
+  window.on('move', apply);
+  window.on('maximize', apply);
+  window.on('unmaximize', apply);
+  window.on('enter-full-screen', apply);
+  window.on('leave-full-screen', apply);
+  window.webContents.once('did-finish-load', apply);
+  apply();
+}
+
+function registerWindowStartupShow(window: BrowserWindow, needsNativeWindowShape: boolean): void {
+  let shown = false;
+  const show = (): void => {
+    if (shown || window.isDestroyed()) return;
+    shown = true;
+    if (needsNativeWindowShape) {
+      applyRoundedWindowShape(window);
+      primeRoundedWindowShapeCompositor(window);
+      refreshRoundedWindowShape(window);
+    }
+    restoreAndFocusWindow(window);
+    if (needsNativeWindowShape) {
+      refreshRoundedWindowShape(window);
+      setTimeout(() => refreshRoundedWindowShape(window), 120);
+      setTimeout(() => refreshRoundedWindowShape(window), 360);
+    }
+  };
+
+  window.once('ready-to-show', show);
+  window.webContents.once('did-finish-load', () => setImmediate(show));
+}
+
+function applyRoundedWindowShape(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  const { width, height } = window.getContentBounds();
+  if (width <= 0 || height <= 0) return;
+  if (window.isMaximized() || window.isFullScreen()) {
+    window.setShape([{ x: 0, y: 0, width, height }]);
+    return;
+  }
+  window.setShape(roundedRectShape(width, height, NATIVE_WINDOW_SHAPE_RADIUS_PX));
+}
+
+function refreshRoundedWindowShape(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  applyRoundedWindowShape(window);
+  if (window.isMaximized() || window.isFullScreen()) return;
+  const bounds = window.getBounds();
+  window.setBounds(bounds, false);
+}
+
+function primeRoundedWindowShapeCompositor(window: BrowserWindow): void {
+  if (window.isDestroyed() || window.isMaximized() || window.isFullScreen()) return;
+  const bounds = window.getBounds();
+  window.setBounds({ ...bounds, x: bounds.x + 1 }, false);
+  window.setBounds(bounds, false);
+}
+
+function roundedRectShape(width: number, height: number, radius: number): Rectangle[] {
+  const safeRadius = Math.max(0, Math.min(radius, Math.floor(width / 2), Math.floor(height / 2)));
+  if (safeRadius <= 0) return [{ x: 0, y: 0, width, height }];
+
+  const rects: Rectangle[] = [];
+  for (let y = 0; y < safeRadius; y += 1) {
+    const distanceFromCenter = safeRadius - y - 0.5;
+    const inset = Math.ceil(safeRadius - Math.sqrt(Math.max(0, safeRadius * safeRadius - distanceFromCenter * distanceFromCenter)));
+    rects.push({ x: inset, y, width: Math.max(0, width - inset * 2), height: 1 });
+  }
+
+  const centerHeight = height - safeRadius * 2;
+  if (centerHeight > 0) {
+    rects.push({ x: 0, y: safeRadius, width, height: centerHeight });
+  }
+
+  for (let y = safeRadius - 1; y >= 0; y -= 1) {
+    const distanceFromCenter = safeRadius - y - 0.5;
+    const inset = Math.ceil(safeRadius - Math.sqrt(Math.max(0, safeRadius * safeRadius - distanceFromCenter * distanceFromCenter)));
+    rects.push({ x: inset, y: height - y - 1, width: Math.max(0, width - inset * 2), height: 1 });
+  }
+  return rects;
+}
+
+function windowChromeState(window: BrowserWindow | null): { isMaximized: boolean; isFullScreen: boolean } {
+  return {
+    isMaximized: window?.isMaximized() ?? false,
+    isFullScreen: window?.isFullScreen() ?? false
+  };
+}
+
+function sendWindowChromeState(window: BrowserWindow): void {
+  if (!window.isDestroyed()) {
+    window.webContents.send(IPC_CHANNELS.windowChromeStateUpdated, windowChromeState(window));
+  }
+}
+
+function registerWindowChromeStateEvents(window: BrowserWindow): void {
+  const send = (): void => sendWindowChromeState(window);
+  window.on('maximize', send);
+  window.on('unmaximize', send);
+  window.on('enter-full-screen', send);
+  window.on('leave-full-screen', send);
+  window.webContents.once('did-finish-load', send);
+}
+
+function registerRendererDevToolsControls(window: BrowserWindow): void {
+  if (!rendererDevToolsAllowed()) return;
+
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = input.key.toLowerCase();
+    const toggleRequested = input.key === 'F12' || ((input.control || input.meta) && input.shift && key === 'i');
+    if (!toggleRequested) return;
+
+    event.preventDefault();
+    toggleRendererDevTools(window);
+  });
+
+  window.webContents.once('did-finish-load', () => {
+    if (rendererDevToolsAutoOpen()) {
+      toggleRendererDevTools(window, true);
+    }
+  });
+}
+
+function rendererDevToolsAllowed(): boolean {
+  return !app.isPackaged || process.env.BEALE_ENABLE_DEVTOOLS === '1';
+}
+
+function rendererDevToolsAutoOpen(): boolean {
+  return process.argv.includes('--open-devtools') || process.env.BEALE_OPEN_DEVTOOLS === '1';
+}
+
+function toggleRendererDevTools(window: BrowserWindow, openOnly = false): void {
+  if (window.isDestroyed()) return;
+  if (window.webContents.isDevToolsOpened()) {
+    if (!openOnly) {
+      window.webContents.closeDevTools();
+    }
+    return;
+  }
+  window.webContents.openDevTools({ mode: 'detach' });
+}
+
+function timedMainIpc<T>(name: string, detail: Record<string, string | number | boolean>, operation: () => T): T {
+  const startedAt = performance.now();
+  try {
+    return operation();
+  } finally {
+    const durationMs = performance.now() - startedAt;
+    if (mainPerformanceLoggingEnabled()) {
+      console.info(`[Beale main perf] ${name} ${roundMetricMs(durationMs)}ms ${formatMainMetricDetail(detail)}`);
+    }
+    workspaceService?.recordProfilingMainTiming(name, durationMs, detail);
+  }
+}
+
+async function timedMainIpcAsync<T>(name: string, detail: Record<string, string | number | boolean>, operation: () => Promise<T>): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await operation();
+  } finally {
+    const durationMs = performance.now() - startedAt;
+    if (mainPerformanceLoggingEnabled()) {
+      console.info(`[Beale main perf] ${name} ${roundMetricMs(durationMs)}ms ${formatMainMetricDetail(detail)}`);
+    }
+    workspaceService?.recordProfilingMainTiming(name, durationMs, detail);
+  }
+}
+
+function mainPerformanceLoggingEnabled(): boolean {
+  return process.env.BEALE_MAIN_PERF === '1' || process.env.BEALE_DEV_PERFORMANCE === '1';
+}
+
+function formatMainMetricDetail(detail: Record<string, string | number | boolean>): string {
+  return Object.entries(detail)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' ');
+}
+
+function roundMetricMs(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function shortMetricId(id: string): string {
+  return id.length <= 12 ? id : `${id.slice(0, 6)}...${id.slice(-4)}`;
+}
+
+function broadcastSnapshot(change: WorkspaceChange = { workspaceRegistryChanged: true }): void {
+  const snapshotChanged = change.snapshotChanged !== false;
+  if (!snapshotChanged && !change.workspaceRegistryChanged) return;
+  timedMainIpc('broadcastSnapshot.total', { registry: change.workspaceRegistryChanged, snapshot: snapshotChanged }, () => {
+    const snapshot = snapshotChanged
+      ? timedMainIpc('broadcastSnapshot.getSnapshot', {}, () => workspaceService.getSnapshot())
+      : null;
+    const workspaceRegistry = change.workspaceRegistryChanged
+      ? timedMainIpc('broadcastSnapshot.getWorkspaceRegistry', snapshotBroadcastMetricDetail(snapshot), () => workspaceService.getCachedWorkspaceRegistryState())
+      : null;
+    const windows = BrowserWindow.getAllWindows();
+    timedMainIpc(
+      'broadcastSnapshot.sendAll',
+      {
+        ...snapshotBroadcastMetricDetail(snapshot),
+        ...(workspaceRegistry ? workspaceRegistryBroadcastMetricDetail(workspaceRegistry) : { registryWorkspaces: 0, registrySessions: 0 }),
+        registry: Boolean(workspaceRegistry),
+        windows: windows.length
+      },
+      () => {
+        for (const window of windows) {
+          if (snapshotChanged) {
+            window.webContents.send(IPC_CHANNELS.snapshotUpdated, snapshot);
+          }
+          if (workspaceRegistry) {
+            window.webContents.send(IPC_CHANNELS.workspaceRegistryUpdated, workspaceRegistry);
+          }
+        }
+      }
+    );
+  });
+}
+
+function broadcastIosDeviceCaptureState(state: import('@shared/types').IosDeviceCaptureState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send(IPC_CHANNELS.iosDeviceCaptureUpdated, state);
+  }
+}
+
+function broadcastIosDeviceCaptureFrame(frame: import('@shared/types').IosDeviceCaptureFrame): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send(IPC_CHANNELS.iosDeviceCaptureFrame, frame);
+  }
+}
+
+function snapshotBroadcastMetricDetail(snapshot: WorkspaceSnapshot | null): Record<string, string | number | boolean> {
+  return {
+    active: Boolean(snapshot),
+    runs: snapshot?.runs.length ?? 0,
+    notifications: snapshot?.notifications.length ?? 0,
+    workspace: Boolean(snapshot?.workspace)
+  };
+}
+
+function workspaceRegistryBroadcastMetricDetail(workspaceRegistry: WorkspaceRegistryState): Record<string, string | number | boolean> {
+  return {
+    registryWorkspaces: workspaceRegistry.workspaces.length,
+    registrySessions: workspaceRegistry.researchSessions.length
+  };
+}
+
+function registerIpc(): void {
+  ipcMain.handle(IPC_CHANNELS.selectWorkspace, async (_event, mode: WorkspacePickerMode) => {
+    const result = await dialog.showOpenDialog({
+      title: mode === 'create' ? 'Create Beale workspace' : 'Import Beale workspace',
+      properties: mode === 'create' ? ['openDirectory', 'createDirectory'] : ['openDirectory']
+    });
+    return {
+      canceled: result.canceled,
+      path: result.filePaths[0] ?? null
+    };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.selectWorkspaceDirectory, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Add Beale workspace',
+      properties: ['openDirectory', 'createDirectory']
+    });
+    const path = result.filePaths[0] ?? null;
+    return result.canceled || !path
+      ? {
+          canceled: true,
+          path: null,
+          knownWorkspace: null,
+          requiresOnboarding: false,
+          defaults: null
+        }
+      : workspaceService.inspectWorkspaceDirectory(path);
+  });
+  ipcMain.handle(IPC_CHANNELS.getWorkspaceRegistry, () =>
+    timedMainIpcAsync('getWorkspaceRegistry', {}, () => workspaceService.getWorkspaceRegistryStateForClient())
+  );
+  ipcMain.handle(IPC_CHANNELS.listResearchChannels, async (_event, workspaceId: string): Promise<ResearchChannelSummary[]> => {
+    const server = await ensureBealeAppServerRunning();
+    return fetchAppServerCanonicalResultWithRecovery<ResearchChannelSummary[]>(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels`
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.listArchivedResearchChannels, async (_event, workspaceId: string): Promise<ResearchChannelSummary[]> => {
+    const server = await ensureBealeAppServerRunning();
+    return fetchAppServerCanonicalResultWithRecovery<ResearchChannelSummary[]>(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels?archived=true`
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.listArchivedQuickChats, (): ResearchSessionSummary[] => (
+    workspaceService.listArchivedQuickChats()
+  ));
+  ipcMain.handle(IPC_CHANNELS.getResearchChannel, async (_event, workspaceId: string, channelId: string): Promise<ResearchChannelDetail> => {
+    const server = await ensureBealeAppServerRunning();
+    return fetchAppServerCanonicalResultWithRecovery<ResearchChannelDetail>(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}`
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.createResearchChannel, async (_event, workspaceId: string, input: CreateResearchChannelInput): Promise<ResearchChannelRecord> => {
+    const server = await ensureBealeAppServerRunning();
+    return fetchAppServerCanonicalResultWithRecovery<ResearchChannelRecord>(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels`,
+      { method: 'POST', body: input }
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.postResearchChannelMessage, async (_event, workspaceId: string, channelId: string, input: PostResearchChannelMessageInput): Promise<ResearchChannelMessageRecord> => {
+    const server = await ensureBealeAppServerRunning();
+    return fetchAppServerCanonicalResultWithRecovery<ResearchChannelMessageRecord>(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}`,
+      { method: 'POST', body: input }
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.deleteResearchChannel, async (_event, workspaceId: string, channelId: string): Promise<void> => {
+    const server = await ensureBealeAppServerRunning();
+    await fetchAppServerCanonicalResultWithRecovery(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}`,
+      { method: 'DELETE' }
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.archiveResearchChannel, async (_event, workspaceId: string, channelId: string): Promise<ResearchChannelRecord> => {
+    const server = await ensureBealeAppServerRunning();
+    return fetchAppServerCanonicalResultWithRecovery<ResearchChannelRecord>(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/archive`,
+      { method: 'POST' }
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.restoreResearchChannel, async (_event, workspaceId: string, channelId: string): Promise<ResearchChannelRecord> => {
+    const server = await ensureBealeAppServerRunning();
+    return fetchAppServerCanonicalResultWithRecovery<ResearchChannelRecord>(
+      server,
+      `/v1/workspaces/${encodeURIComponent(workspaceId)}/channels/${encodeURIComponent(channelId)}/restore`,
+      { method: 'POST' }
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.archiveResearchSession, (_event, sessionId: string) =>
+    workspaceService.archiveResearchSession(sessionId)
+  );
+  ipcMain.handle(IPC_CHANNELS.restoreResearchSession, (_event, sessionId: string) =>
+    workspaceService.restoreResearchSession(sessionId)
+  );
+  ipcMain.handle(IPC_CHANNELS.markResearchSessionViewed, (_event, sessionId: string) =>
+    workspaceService.markResearchSessionViewed(sessionId)
+  );
+  ipcMain.handle(IPC_CHANNELS.getDeveloperSettings, () => workspaceService.getDeveloperSettings());
+  ipcMain.handle(IPC_CHANNELS.setDeveloperModeEnabled, (_event, enabled: boolean) => workspaceService.setDeveloperModeEnabled(enabled));
+  ipcMain.handle(IPC_CHANNELS.getDebuggingSettings, () => workspaceService.getDebuggingSettings());
+  ipcMain.handle(IPC_CHANNELS.setTracesEnabled, (_event, enabled: boolean) => workspaceService.setTracesEnabled(enabled));
+  ipcMain.handle(IPC_CHANNELS.getAppServerRemoteAccessSettings, (_event, detect: boolean) => (
+    detect ? detectAppServerMagicDnsName() : readAppServerRemoteAccessSettings()
+  ));
+  ipcMain.handle(IPC_CHANNELS.setAppServerRemoteAccessSettings, async (
+    _event,
+    update: AppServerRemoteAccessUpdate
+  ) => {
+    const settings = await updateAppServerRemoteAccess(update);
+    await restartBealeAppServer();
+    return settings;
+  });
+  ipcMain.handle(IPC_CHANNELS.getComputerUseSettings, () => workspaceService.getComputerUseSettings());
+  ipcMain.handle(IPC_CHANNELS.setComputerUsePermissionMode, (
+    _event,
+    permissionMode: ComputerUsePermissionMode
+  ) => workspaceService.setComputerUsePermissionMode(permissionMode));
+  ipcMain.handle(IPC_CHANNELS.getProviderSettings, () => workspaceService.getProviderSettings());
+  ipcMain.handle(IPC_CHANNELS.setDefaultProviderId, (_event, providerId: ResearchModelProviderId | null) => workspaceService.setDefaultProviderId(providerId));
+  ipcMain.handle(IPC_CHANNELS.setProviderModelDefaults, (_event, providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) =>
+    workspaceService.setProviderModelDefaults(providerId, defaults)
+  );
+  ipcMain.handle(IPC_CHANNELS.setProviderOptionalModelEnabled, (
+    _event,
+    providerId: ResearchModelProviderId,
+    modelId: string,
+    enabled: boolean
+  ) => workspaceService.setProviderOptionalModelEnabled(providerId, modelId, enabled));
+  ipcMain.handle(IPC_CHANNELS.setProviderCyberPolicyRiskAcknowledged, (
+    _event,
+    providerId: ResearchModelProviderId,
+    acknowledged: boolean
+  ) =>
+    workspaceService.setProviderCyberPolicyRiskAcknowledged(providerId, acknowledged)
+  );
+  ipcMain.handle(IPC_CHANNELS.setProviderPreferredAuthenticationMethod, (
+    _event,
+    providerId: ResearchModelProviderId,
+    method: ProviderAuthenticationMethod
+  ) => workspaceService.setProviderPreferredAuthenticationMethod(providerId, method));
+  ipcMain.handle(IPC_CHANNELS.getTicketingSettings, () => ticketingService.getSettings());
+  ipcMain.handle(IPC_CHANNELS.setTicketingProvider, (_event, providerId: TicketingMode) =>
+    ticketingService.setProvider(providerId)
+  );
+  ipcMain.handle(IPC_CHANNELS.setTicketingHumanInTheLoop, (_event, enabled: boolean) =>
+    ticketingService.setHumanInTheLoop(enabled)
+  );
+  ipcMain.handle(IPC_CHANNELS.configureTicketingCredential, (_event, providerId: TicketingProviderId, apiKey: string) =>
+    ticketingService.configureCredential(providerId, apiKey)
+  );
+  ipcMain.handle(IPC_CHANNELS.removeTicketingCredential, (_event, providerId: TicketingProviderId) =>
+    ticketingService.removeCredential(providerId)
+  );
+  ipcMain.handle(IPC_CHANNELS.listTicketingTargets, (_event, providerId: TicketingProviderId) =>
+    ticketingService.listTargets(providerId)
+  );
+  ipcMain.handle(IPC_CHANNELS.setTicketingTarget, (_event, providerId: TicketingProviderId, target: TicketingTarget) =>
+    ticketingService.setTarget(providerId, target)
+  );
+  ipcMain.handle(IPC_CHANNELS.getResearchProfiles, () => workspaceService.getResearchProfiles());
+  ipcMain.handle(IPC_CHANNELS.getAgentPlugins, () => workspaceService.getAgentPlugins());
+  ipcMain.handle(IPC_CHANNELS.addAgentPluginFromFilesystem, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Add Agent Plugin',
+      properties: ['openDirectory']
+    });
+    const path = result.filePaths[0] ?? null;
+    return result.canceled || !path
+      ? workspaceService.getAgentPlugins()
+      : workspaceService.addAgentPluginFromFilesystem(path);
+  });
+  ipcMain.handle(IPC_CHANNELS.addAgentPluginFromRepository, (_event, repositoryUrl: string) =>
+    workspaceService.addAgentPluginFromRepository(repositoryUrl)
+  );
+  ipcMain.handle(IPC_CHANNELS.setAgentPluginEnabled, (_event, pluginId: string, enabled: boolean) =>
+    workspaceService.setAgentPluginEnabled(pluginId, enabled)
+  );
+  ipcMain.handle(IPC_CHANNELS.removeAgentPlugin, (_event, pluginId: string) => workspaceService.removeAgentPlugin(pluginId));
+  ipcMain.handle(IPC_CHANNELS.getMemorySettings, () => workspaceService.getMemorySettings());
+  ipcMain.handle(IPC_CHANNELS.setMemoryTypeDescriptions, (_event, descriptions: MemoryTypeDescriptions) => workspaceService.setMemoryTypeDescriptions(descriptions));
+  ipcMain.handle(IPC_CHANNELS.getShellOptions, () => workspaceService.getShellOptions());
+  ipcMain.handle(IPC_CHANNELS.setShellOptions, (_event, options: ShellOptions) => workspaceService.setShellOptions(options));
+  ipcMain.handle(IPC_CHANNELS.lookupHackerOneScope, (_event, identifier: string) => workspaceService.lookupHackerOneScope(identifier));
+  ipcMain.handle(IPC_CHANNELS.refreshResearchKit, (_event, input: ResearchKitRefreshInput) => workspaceService.refreshResearchKit(input));
+  ipcMain.handle(IPC_CHANNELS.listGitHubOrganizationRepositories, (_event, organization: string) =>
+    workspaceService.listGitHubOrganizationRepositories(organization)
+  );
+  ipcMain.handle(IPC_CHANNELS.createScopedWorkspace, (event, input: WorkspaceOnboardingInput) =>
+    workspaceService.createScopedWorkspace(input, (update) => event.sender.send(IPC_CHANNELS.workspaceOnboardingUpdated, update))
+  );
+  ipcMain.handle(IPC_CHANNELS.updateWorkspaceDirectories, (_event, directories: string[]) =>
+    workspaceService.updateWorkspaceDirectories(directories)
+  );
+  ipcMain.handle(IPC_CHANNELS.updateWorkspaceMemoryBackend, (_event, memoryBackend: WorkspaceMemoryBackendId) =>
+    workspaceService.updateWorkspaceMemoryBackend(memoryBackend)
+  );
+  ipcMain.handle(IPC_CHANNELS.cloneWorkspaceRepository, (_event, assetId: string, cloneMode: RepositoryCloneMode) =>
+    workspaceService.cloneWorkspaceRepository(assetId, cloneMode)
+  );
+  ipcMain.handle(IPC_CHANNELS.skipWorkspaceOnboardingRepository, (_event, input: WorkspaceOnboardingSkipInput) => workspaceService.skipWorkspaceOnboardingRepository(input));
+  ipcMain.handle(IPC_CHANNELS.openRegisteredWorkspace, (_event, registryWorkspaceId: string) =>
+    timedMainIpc('openRegisteredWorkspace', { workspace: shortMetricId(registryWorkspaceId) }, () => workspaceService.openRegisteredWorkspace(registryWorkspaceId))
+  );
+  ipcMain.handle(IPC_CHANNELS.removeRegisteredWorkspace, (_event, registryWorkspaceId: string) => workspaceService.removeRegisteredWorkspace(registryWorkspaceId));
+  ipcMain.handle(IPC_CHANNELS.openWorkspace, (_event, path: string) => workspaceService.openWorkspace(path));
+  ipcMain.handle(IPC_CHANNELS.createWorkspace, (_event, path: string) => workspaceService.createWorkspace(path));
+  ipcMain.handle(IPC_CHANNELS.restoreLastWorkspace, () =>
+    timedMainIpc('restoreLastWorkspace', {}, () => workspaceService.openLastWorkspaceIfAvailable())
+  );
+  ipcMain.handle(IPC_CHANNELS.getSnapshot, () => timedMainIpc('getSnapshot', {}, () => workspaceService.getSnapshot()));
+  ipcMain.handle(IPC_CHANNELS.getHostEnvironment, () => getHostEnvironment());
+  ipcMain.handle(IPC_CHANNELS.getWorkspaceEditors, () => getWorkspaceEditorCatalogForHost({}, async (path) => {
+    if (path.toLowerCase().endsWith('.icns')) {
+      const source = nativeImage.createFromPath(path);
+      if (source.isEmpty()) return null;
+      return source.resize({ width: 32, height: 32, quality: 'best' }).toDataURL();
+    }
+    const icon = await app.getFileIcon(path, { size: 'normal' });
+    return icon.isEmpty() ? null : icon.toDataURL();
+  }));
+  ipcMain.handle(IPC_CHANNELS.openWorkspaceInEditor, async (_event, editorId: WorkspaceEditorId) => {
+    const workspacePath = workspaceService.getSnapshot()?.workspace.workspacePath;
+    if (!workspacePath) throw new Error('No Beale workspace is open.');
+    await openWorkspaceInEditor(editorId, workspacePath);
+  });
+  ipcMain.handle(IPC_CHANNELS.startWorkspaceTerminal, (event, sessionId: string, columns: number, rows: number) => {
+    const workspacePath = workspaceService.getSnapshot()?.workspace.workspacePath;
+    if (!workspacePath) throw new Error('No Beale workspace is open.');
+    const sender = event.sender;
+    return workspaceTerminalService.start(
+      sender.id,
+      sessionId,
+      workspacePath,
+      columns,
+      rows,
+      (terminalEvent) => {
+        if (!sender.isDestroyed()) sender.send(IPC_CHANNELS.workspaceTerminalData, terminalEvent);
+      },
+      (terminalEvent) => {
+        if (!sender.isDestroyed()) sender.send(IPC_CHANNELS.workspaceTerminalExit, terminalEvent);
+      }
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.writeWorkspaceTerminal, (event, sessionId: string, data: string) =>
+    workspaceTerminalService.write(event.sender.id, sessionId, data)
+  );
+  ipcMain.handle(IPC_CHANNELS.resizeWorkspaceTerminal, (event, sessionId: string, columns: number, rows: number) =>
+    workspaceTerminalService.resize(event.sender.id, sessionId, columns, rows)
+  );
+  ipcMain.handle(IPC_CHANNELS.closeWorkspaceTerminal, (event, sessionId: string) =>
+    workspaceTerminalService.close(event.sender.id, sessionId)
+  );
+  ipcMain.handle(IPC_CHANNELS.getIosDeviceCaptureState, () => iosDeviceCaptureService.getState());
+  ipcMain.handle(IPC_CHANNELS.startIosDeviceCapture, () => iosDeviceCaptureService.start());
+  ipcMain.handle(IPC_CHANNELS.stopIosDeviceCapture, () => iosDeviceCaptureService.stop());
+  ipcMain.handle(IPC_CHANNELS.getOpenAiStatus, () => workspaceService.getOpenAiStatus());
+  ipcMain.handle(IPC_CHANNELS.startOpenAiOAuth, () => workspaceService.startOpenAiOAuth());
+  ipcMain.handle(IPC_CHANNELS.forgetProviderSubscription, (_event, providerId: ResearchModelProviderId) =>
+    workspaceService.forgetProviderSubscription(providerId));
+  ipcMain.handle(IPC_CHANNELS.removeProvider, (_event, providerId: ResearchModelProviderId) =>
+    workspaceService.removeProvider(providerId));
+  ipcMain.handle(IPC_CHANNELS.configureProviderApiKey, (_event, providerId: ResearchModelProviderId, apiKey: string) =>
+    workspaceService.configureProviderApiKey(providerId, apiKey));
+  ipcMain.handle(IPC_CHANNELS.removeProviderApiKey, (_event, providerId: ResearchModelProviderId) =>
+    workspaceService.removeProviderApiKey(providerId));
+  ipcMain.handle(IPC_CHANNELS.getProviderCredentialAccessRequest, (_event, providerIds: ResearchModelProviderId[]) =>
+    workspaceService.getProviderCredentialAccessRequest(providerIds));
+  ipcMain.handle(IPC_CHANNELS.unlockProviderApiKeys, (_event, providerIds: ResearchModelProviderId[]) =>
+    workspaceService.unlockProviderApiKeys(providerIds));
+  ipcMain.handle(IPC_CHANNELS.refreshOpenAiStatus, () => workspaceService.refreshOpenAiStatus());
+  ipcMain.handle(IPC_CHANNELS.getResearchProviderStatuses, () => workspaceService.getResearchProviderStatuses());
+  ipcMain.handle(IPC_CHANNELS.getResearchProviderModelCatalog, () => workspaceService.getResearchProviderModelCatalog());
+  ipcMain.handle(IPC_CHANNELS.startResearchProviderOAuth, async (_event, providerId: ResearchProviderId) => {
+    const result = await workspaceService.startResearchProviderOAuth(providerId);
+    if (result.verificationUri) {
+      const url = new URL(result.verificationUri);
+      if (url.protocol !== 'https:') throw new Error('Provider authentication returned an untrusted URL.');
+      await shell.openExternal(url.href);
+    }
+    return result;
+  });
+  ipcMain.handle(IPC_CHANNELS.getProfilingState, () => workspaceService.getProfilingState());
+  ipcMain.handle(IPC_CHANNELS.setProfilingEnabled, (_event, enabled: boolean) => workspaceService.setProfilingEnabled(enabled));
+  ipcMain.handle(IPC_CHANNELS.recordProfilingReport, (_event, report: ProfilingReport) => workspaceService.recordProfilingReport(report));
+  ipcMain.handle(IPC_CHANNELS.openHoneycrispMemoryDirectory, (_event, name: HoneycrispMemoryDirectorySummary['name']) =>
+    timedMainIpcAsync('openHoneycrispMemoryDirectory', { directory: String(name) }, async () => {
+      const path = workspaceService.resolveHoneycrispMemoryDirectoryPath(name);
+      const error = await shell.openPath(path);
+      if (error) throw new Error(error);
+    })
+  );
+  ipcMain.handle(IPC_CHANNELS.getHoneycrispRunbook, (_event, runbookId: string) =>
+    timedMainIpcAsync('getHoneycrispRunbook', { runbook: shortMetricId(runbookId) }, () =>
+      workspaceService.getHoneycrispRunbook(runbookId)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.listAutomations, () =>
+    timedMainIpcAsync('listAutomations', {}, () => workspaceService.listAutomations())
+  );
+    ipcMain.handle(IPC_CHANNELS.updateAutomation, (_event, input: AutomationUpdateInput) =>
+      timedMainIpc('updateAutomation', { run: shortMetricId(input.runId) }, () => workspaceService.updateAutomation(input))
+    );
+    ipcMain.handle(IPC_CHANNELS.listReportingReports, () =>
+    timedMainIpcAsync('listReportingReports', {}, async () => {
+      const reports = await workspaceService.listReportingReports();
+      void ticketingService.submitAutomatically(reports, (report) => workspaceService.getHoneycrispReport({
+        workspaceId: report.workspaceId,
+        reportId: report.id
+      }));
+      return reports;
+    })
+  );
+  ipcMain.handle(IPC_CHANNELS.getHoneycrispReport, (_event, locator: HoneycrispReportLocator) =>
+    timedMainIpc('getHoneycrispReport', { report: shortMetricId(locator.reportId) }, () =>
+      workspaceService.getHoneycrispReport(locator)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.updateReportContent, (_event, input: ReportContentUpdateInput) =>
+    timedMainIpcAsync('updateReportContent', { report: shortMetricId(input.reportId) }, () =>
+      workspaceService.updateReportContent(input)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.updateReportTriageStatus, (_event, input: ReportTriageStatusUpdateInput) =>
+    timedMainIpcAsync('updateReportTriageStatus', { report: shortMetricId(input.reportId) }, () =>
+      workspaceService.updateReportTriageStatus(input)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.openReportSubmissionPacket, async (_event, locator: HoneycrispReportLocator) =>
+    timedMainIpcAsync('openReportSubmissionPacket', { report: shortMetricId(locator.reportId) }, async () => {
+      const path = await workspaceService.resolveReportSubmissionPacketPath(locator);
+      const error = await shell.openPath(path);
+      if (error) throw new Error(error);
+    })
+  );
+  ipcMain.handle(IPC_CHANNELS.chooseReportSubmissionPacket, async (_event, locator: HoneycrispReportLocator) => {
+    const result = await dialog.showOpenDialog({
+      title: 'Choose report submission packet',
+      properties: ['openFile'],
+      filters: [{ name: 'ZIP archives', extensions: ['zip'] }]
+    });
+    const path = result.filePaths[0] ?? null;
+    return result.canceled || !path ? null : workspaceService.replaceReportSubmissionPacket(locator, path);
+  });
+  ipcMain.handle(IPC_CHANNELS.chooseReportRecording, async (_event, locator: HoneycrispReportLocator) => {
+    const result = await dialog.showOpenDialog({
+      title: 'Choose report recording',
+      properties: ['openFile'],
+      filters: [{
+        name: 'Media files',
+        extensions: ['aac', 'flac', 'm4a', 'm4v', 'mkv', 'mov', 'mp3', 'mp4', 'ogg', 'opus', 'wav', 'webm']
+      }]
+    });
+    const path = result.filePaths[0] ?? null;
+    return result.canceled || !path ? null : workspaceService.replaceReportRecording(locator, path);
+  });
+  ipcMain.handle(IPC_CHANNELS.submitReportTicket, async (_event, locator: HoneycrispReportLocator) => {
+    const report = (await workspaceService.listReportingReports()).find((candidate) =>
+      candidate.workspaceId === locator.workspaceId.trim() && candidate.id === locator.reportId.trim());
+    if (!report) throw new Error(`Report not found: ${locator.reportId}`);
+    return ticketingService.submit(report, workspaceService.getHoneycrispReport(locator));
+  });
+  ipcMain.handle(IPC_CHANNELS.openExternalUrl, async (_event, value: string) => {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || (url.hostname !== 'github.com' && url.hostname !== 'linear.app')) {
+      throw new Error('Only GitHub and Linear HTTPS ticket links can be opened externally.');
+    }
+    await shell.openExternal(url.toString());
+  });
+  ipcMain.handle(IPC_CHANNELS.startReportSession, (_event, input: ReportSessionStartInput) =>
+    timedMainIpc('startReportSession', { report: shortMetricId(input.reportId) }, () =>
+      workspaceService.startReportSession(input)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.getWorkspaceDejunkSummary, (_event, workspaceId: string) =>
+    timedMainIpcAsync('getWorkspaceDejunkSummary', { workspace: shortMetricId(workspaceId) }, () =>
+      workspaceService.getWorkspaceDejunkSummary(workspaceId)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.runWorkspaceDejunk, () =>
+    timedMainIpc('runWorkspaceDejunk', {}, () => workspaceService.runWorkspaceDejunk())
+  );
+  ipcMain.handle(IPC_CHANNELS.runMemoryDreaming, (event) =>
+    timedMainIpcAsync('runMemoryDreaming', {}, () => workspaceService.runMemoryDreaming((update) => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC_CHANNELS.memoryDreamingUpdated, update);
+    }))
+  );
+  ipcMain.handle(IPC_CHANNELS.restoreMemoryDreamingChange, (_event, changeId: string) =>
+    timedMainIpc('restoreMemoryDreamingChange', { change: shortMetricId(changeId) }, () =>
+      workspaceService.restoreMemoryDreamingChange(changeId)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.getHoneycrispToolingSummary, () =>
+    timedMainIpc('getHoneycrispToolingSummary', {}, () => workspaceService.getHoneycrispToolingSummary())
+  );
+  ipcMain.handle(IPC_CHANNELS.updateHoneycrispToolingConfig, (_event, update: HoneycrispToolingConfigUpdate) =>
+    timedMainIpc('updateHoneycrispToolingConfig', { type: update.type }, () => workspaceService.updateHoneycrispToolingConfig(update))
+  );
+  ipcMain.handle(IPC_CHANNELS.generateResearchGoalSuggestions, async (_event, input: ResearchGoalSuggestionInput) => {
+    const workspaceId = workspaceService.getSnapshot()?.workspace.workspaceId;
+    if (!workspaceId) throw new Error('No Beale workspace is open');
+    const requestId = input.requestId?.trim() || null;
+    const controller = new AbortController();
+    if (requestId) {
+      researchGoalSuggestionControllers.get(requestId)?.abort();
+      researchGoalSuggestionControllers.set(requestId, controller);
+    }
+    try {
+      return await timedMainIpcAsync('generateResearchGoalSuggestions', {}, () =>
+        invokeAppServerOperation<GeneratedResearchGoalSuggestions>({
+          operation: 'suggestion.generate',
+          input: { ...input, workspaceId },
+          signal: controller.signal
+        })
+      );
+    } finally {
+      if (requestId && researchGoalSuggestionControllers.get(requestId) === controller) {
+        researchGoalSuggestionControllers.delete(requestId);
+      }
+    }
+  });
+  ipcMain.handle(IPC_CHANNELS.selectResearchGoalSuggestion, async (_event, input: ResearchGoalSuggestionSelectionInput) => {
+    await timedMainIpcAsync('selectResearchGoalSuggestion', {}, () =>
+      invokeAppServerOperation<{ selected: true }>({ operation: 'suggestion.select', input })
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.generateResearchPrompt, (event, input?: ResearchPromptGenerationInput) =>
+    timedMainIpcAsync('generateResearchPrompt', { hasInput: Boolean(input) }, () =>
+      workspaceService.generateResearchPrompt(input, (update) => event.sender.send(IPC_CHANNELS.researchPromptGenerationUpdated, update))
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.cancelResearchPromptGeneration, (_event, requestId: string) => {
+    researchGoalSuggestionControllers.get(requestId)?.abort();
+    researchGoalSuggestionControllers.delete(requestId);
+    workspaceService.cancelResearchPromptGeneration(requestId);
+  });
+  ipcMain.handle(IPC_CHANNELS.saveScope, (_event, scope: WorkspaceScopeDraft) => workspaceService.saveScope(scope));
+  ipcMain.handle(IPC_CHANNELS.addWorkspaceRule, (_event, text: string) => workspaceService.addWorkspaceRule(text));
+  ipcMain.handle(IPC_CHANNELS.startRun, (_event, input: StartRunInput) =>
+    timedMainIpcAsync('startRun', { engine: input.runEngine, mode: input.mode }, () =>
+      workspaceService.startRunWithSourcePreparation(input)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.startQuickChat, (_event, input: QuickChatStartInput) =>
+    timedMainIpcAsync('startQuickChat', {}, () => workspaceService.startQuickChat(input))
+  );
+  ipcMain.handle(IPC_CHANNELS.exportWorkspaceBackup, (_event, note?: string) => workspaceService.exportWorkspaceBackup(note));
+  ipcMain.handle(IPC_CHANNELS.getRunDetail, (event, runId: string, projection: RunDetailProjection = 'full') => {
+    const normalizedProjection = normalizedRunDetailProjection(projection);
+    return withLatestRunDetailRequest(event, runId, (signal) =>
+      timedMainIpcAsync('getRunDetail', { run: shortMetricId(runId), projection: runDetailProjectionMetricLabel(normalizedProjection) }, () =>
+        workspaceService.getRunDetailForClient(runId, signal, normalizedProjection)
+      )
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.getRunDetailVersion, (_event, runId: string) =>
+    timedMainIpcAsync('getRunDetailVersion', { run: shortMetricId(runId) }, () => workspaceService.getRunDetailVersionForClient(runId))
+  );
+  ipcMain.handle(IPC_CHANNELS.getRunDetailUpdate, (event, runId: string, cursor: RunDetailUpdateCursor, projection: RunDetailProjection = 'full') => {
+    const normalizedProjection = normalizedRunDetailProjection(projection);
+    return withLatestRunDetailRequest(event, runId, (signal) =>
+      timedMainIpcAsync('getRunDetailUpdate', { run: shortMetricId(runId), projection: runDetailProjectionMetricLabel(normalizedProjection), afterTrace: cursor.afterTraceSequence, afterTranscript: cursor.afterTranscriptCount }, () =>
+        workspaceService.getRunDetailUpdateForClient(runId, cursor, signal, normalizedProjection)
+      )
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.getRunMessageDetail, (_event, input: RunMessageDetailRequest) =>
+    timedMainIpcAsync('getRunMessageDetail', { run: shortMetricId(input.runId), events: Array.isArray(input.traceEventIds) ? input.traceEventIds.length : 0 }, () =>
+      workspaceService.getRunMessageDetailForClient(input)
+    )
+  );
+  ipcMain.on(IPC_CHANNELS.cancelRunDetailRequests, (event, runId?: string) => cancelRunDetailRequest(event.sender.id, runId));
+  ipcMain.handle(IPC_CHANNELS.searchSessionTranscripts, (_event, input: SessionTranscriptSearchInput) =>
+    timedMainIpc('searchSessionTranscripts', { chars: input.query.length, limit: input.limit ?? 24, currentWorkspaceOnly: input.currentWorkspaceOnly !== false }, () =>
+      workspaceService.searchSessionTranscripts(input)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.steerRun, (_event, action: SteeringAction) =>
+    timedMainIpcAsync('steerRun', { type: action.type, run: shortMetricId(action.runId) }, () => workspaceService.steerRunForClient(action))
+  );
+  ipcMain.handle(IPC_CHANNELS.openNotification, (_event, notificationId: string) => workspaceService.openNotification(notificationId));
+  ipcMain.handle(IPC_CHANNELS.dismissNotification, (_event, notificationId: string) => workspaceService.dismissNotification(notificationId));
+  ipcMain.handle(IPC_CHANNELS.setWindowBackgroundEffect, (event, effect: unknown) => {
+    const window = windowForEvent(event);
+    if (window) setWindowBackgroundEffect(window, effect);
+  });
+  ipcMain.handle(IPC_CHANNELS.minimizeWindow, (event) => {
+    windowForEvent(event)?.minimize();
+  });
+  ipcMain.handle(IPC_CHANNELS.toggleMaximizeWindow, (event) => {
+    const window = windowForEvent(event);
+    if (!window) return;
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+  });
+  ipcMain.handle(IPC_CHANNELS.closeWindow, (event) => {
+    windowForEvent(event)?.close();
+  });
+  ipcMain.handle(IPC_CHANNELS.getWindowChromeState, (event) => windowChromeState(windowForEvent(event)));
+}
+
+async function withLatestRunDetailRequest<T>(
+  event: IpcMainInvokeEvent,
+  runId: string,
+  operation: (signal: AbortSignal) => Promise<T>
+): Promise<{ canceled: true } | { canceled: false; value: T }> {
+  const senderId = event.sender.id;
+  const key = runDetailRequestKey(senderId, runId);
+  cancelRunDetailRequest(senderId, runId);
+  const controller = new AbortController();
+  runDetailRequestControllers.set(key, controller);
+  try {
+    return { canceled: false, value: await operation(controller.signal) };
+  } catch (error) {
+    if (controller.signal.aborted) return { canceled: true };
+    throw error;
+  } finally {
+    if (runDetailRequestControllers.get(key) === controller) {
+      runDetailRequestControllers.delete(key);
+    }
+  }
+}
+
+function cancelRunDetailRequest(senderId: number, runId?: string): void {
+  if (runId) {
+    const key = runDetailRequestKey(senderId, runId);
+    const controller = runDetailRequestControllers.get(key);
+    if (!controller) return;
+    runDetailRequestControllers.delete(key);
+    controller.abort();
+    return;
+  }
+  const prefix = `${senderId}:`;
+  for (const [key, controller] of runDetailRequestControllers) {
+    if (!key.startsWith(prefix)) continue;
+    runDetailRequestControllers.delete(key);
+    controller.abort();
+  }
+}
+
+function runDetailRequestKey(senderId: number, runId: string): string {
+  return `${senderId}:${runId}`;
+}
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', reopenMainWindow);
+
+  app.whenReady().then(async () => {
+    applyAppIcon();
+    setBealeDesktopRestartRequiredHandler((error) => {
+      void promptForDesktopRestart(error);
+    });
+    const providerCredentialStore = new ProviderCredentialStore(
+      join(app.getPath('userData'), 'provider-credentials.json'),
+      {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (value) => safeStorage.encryptString(value),
+        decrypt: (value) => safeStorage.decryptString(value)
+      },
+      { deferLoad: true }
+    );
+    let refreshProviderEnvironment = false;
+    try {
+      refreshProviderEnvironment = unlockProviderApiKeysForAppServerStartup(providerCredentialStore);
+    } catch (error) {
+      process.stderr.write(
+        `Beale could not unlock saved provider API keys during Windows startup: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    }
+    if (!await ensureAppServerContract(refreshProviderEnvironment)) return;
+    workspaceService = new WorkspaceService(broadcastSnapshot, {
+      providerCredentialStore,
+      providerEnvironmentChanged: async () => {
+        await restartBealeAppServer();
+      }
+    });
+    ticketingService = new TicketingService(
+      join(app.getPath('userData'), 'ticketing-settings.json'),
+      {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (value) => safeStorage.encryptString(value),
+        decrypt: (value) => safeStorage.decryptString(value)
+      }
+    );
+    iosDeviceCaptureService = new IosDeviceCaptureService(
+      broadcastIosDeviceCaptureState,
+      broadcastIosDeviceCaptureFrame
+    );
+    workspaceTerminalService = new WorkspaceTerminalService();
+    registerIpc();
+    createWindow();
+    if (smokeTestMode) {
+      setTimeout(() => app.quit(), 1500);
+    }
+
+    app.on('activate', reopenMainWindow);
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+
+  app.on('before-quit', () => {
+    workspaceTerminalService?.dispose();
+    iosDeviceCaptureService?.dispose();
+    workspaceService?.dispose();
+  });
+}
+
+async function ensureAppServerContract(refreshProviderEnvironment = false): Promise<boolean> {
+  try {
+    if (refreshProviderEnvironment) await restartBealeAppServer();
+    else await ensureBealeAppServerRunning();
+    return true;
+  } catch (error) {
+    if (!(error instanceof BealeDesktopRestartRequiredError)) {
+      // Session startup retains its detailed error path if the server cannot
+      // be launched for an environmental reason.
+      return true;
+    }
+    return promptForDesktopRestart(error);
+  }
+}
+
+function promptForDesktopRestart(_error: BealeDesktopRestartRequiredError): Promise<boolean> {
+  if (appServerRestartDialog) return appServerRestartDialog;
+  appServerRestartDialog = dialog.showMessageBox({
+    type: 'warning',
+    title: 'Restart Beale',
+    message: 'Beale needs to restart to finish updating.',
+    detail: 'The running app-server uses a newer control contract than this Beale process. Restart Beale to load the matching desktop code.',
+    buttons: ['Restart Beale', 'Not Now'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  }).then((result) => {
+    if (result.response !== 0) return true;
+    app.relaunch();
+    app.exit(0);
+    return false;
+  }).finally(() => {
+    appServerRestartDialog = null;
+  });
+  return appServerRestartDialog;
+}

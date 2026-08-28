@@ -1,0 +1,443 @@
+import type {
+  MemoryEdge,
+  MemoryEvidenceRef,
+  MemoryGraphStore,
+  MemoryNode,
+} from "./memory-graph.js";
+import { DEFAULT_SECURITY_RESEARCH_PROFILE } from "./research-profile.js";
+import type { ResearchProfileMemory } from "./research-profile.js";
+import type {
+  ResearchSelectedSkill,
+  ResearchToolDescriptor,
+  ResearchWorkspaceAuthorizationContext,
+  ResearchWorkspaceContext,
+  ResearchWorkspaceRepositoryContext,
+} from "./types.js";
+
+const DEFAULT_MEMORY_NODE_LIMIT = 8;
+const DEFAULT_MEMORY_CHARACTER_BUDGET = 6_000;
+const MAX_BODY_CHARACTERS = 3_000;
+const MAX_CARD_TITLE_CHARACTERS = 240;
+const MAX_CARD_SUMMARY_CHARACTERS = 700;
+const MAX_CARD_TAGS = 6;
+const MAX_CARD_EVIDENCE_REFS = 3;
+const MAX_CARD_RELATIONSHIPS = 4;
+const MAX_RELATIONSHIPS_PER_NODE = 8;
+const MAX_EVIDENCE_REFS_PER_NODE = 8;
+
+const QUERY_STOP_WORDS = new Set([
+  "about",
+  "against",
+  "also",
+  "and",
+  "been",
+  "continue",
+  "from",
+  "have",
+  "into",
+  "module",
+  "next",
+  "research",
+  "that",
+  "the",
+  "this",
+  "through",
+  "using",
+  "with",
+]);
+
+export interface ResearchModelWorkspaceContext {
+  schemaVersion: 1;
+  authorization?: ResearchWorkspaceAuthorizationContext;
+  memory?: {
+    sessionId?: string;
+    workspace: { id: string; name: string };
+    subject?: { id: string; name: string };
+  };
+  knownRepositories: readonly ResearchWorkspaceRepositoryContext[];
+  materializedSourcePaths: readonly string[];
+  projectNotes: readonly string[];
+}
+
+export interface ResearchModelMemoryRelationship {
+  direction: "incoming" | "outgoing";
+  relation: string;
+  memoryId: string;
+  note?: string;
+}
+
+export interface ResearchModelMemoryContextNode {
+  id: string;
+  scope?: {
+    sessions: readonly string[];
+    workspaces: readonly { id: string; name: string }[];
+    subject: { id: string; name: string };
+  };
+  type: MemoryNode["type"];
+  title: string;
+  summary: string;
+  body?: string;
+  status: MemoryNode["status"];
+  confidence: number;
+  assetIds?: readonly string[];
+  tags?: readonly string[];
+  attributes?: Record<string, unknown>;
+  evidence?: readonly MemoryEvidenceRef[];
+  relationships?: readonly ResearchModelMemoryRelationship[];
+  evidenceRefs?: readonly Pick<MemoryEvidenceRef, "id" | "kind">[];
+  evidenceCount: number;
+  relationshipCount: number;
+  relatedMemoryIds?: readonly string[];
+  provenance?: {
+    state: MemoryNode["provenance"]["state"];
+    catalogHash: string | null;
+    activeCatalog: boolean;
+  };
+  updatedAt: string;
+  revision: number;
+}
+
+export interface ResearchAvailableToolContext {
+  name: string;
+  description: string;
+  actionClasses: ResearchToolDescriptor["actionClasses"];
+  sideEffects: ResearchToolDescriptor["sideEffects"];
+}
+
+export interface ResearchModelSkillContext {
+  id: string;
+  description: string;
+  instructions: string;
+  runbook?: string;
+}
+
+export function createModelWorkspaceContext(
+  context: ResearchWorkspaceContext,
+): ResearchModelWorkspaceContext {
+  const memory = context.memoryContext;
+  return {
+    schemaVersion: 1,
+    ...(context.authorization ? { authorization: context.authorization } : {}),
+    ...(memory
+      ? {
+          memory: {
+            ...(memory.sessionId ? { sessionId: memory.sessionId } : {}),
+            workspace: {
+              id: memory.workspaceId,
+              name: memory.workspaceName,
+            },
+            ...(memory.subjectId && memory.subjectName
+              ? {
+                  subject: {
+                    id: memory.subjectId,
+                    name: memory.subjectName,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    knownRepositories: context.knownRepositories,
+    materializedSourcePaths: context.materializedSourcePaths,
+    projectNotes: context.projectNotes,
+  };
+}
+
+export function createAvailableToolContext(
+  tools: readonly ResearchToolDescriptor[],
+): ResearchAvailableToolContext[] {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    actionClasses: tool.actionClasses,
+    sideEffects: tool.sideEffects,
+  }));
+}
+
+export function createModelSkillContext(
+  skills: readonly ResearchSelectedSkill[],
+): ResearchModelSkillContext[] {
+  return skills.map((skill) => ({
+    id: skill.id,
+    description: skill.description,
+    instructions: skill.instructions,
+    ...(skill.runbook ? { runbook: skill.runbook } : {}),
+  }));
+}
+
+export function compileMemoryModelContext(
+  store: MemoryGraphStore,
+  prompt: string,
+  options: {
+    maxNodes?: number;
+    maxCharacters?: number;
+    detail?: "summary" | "full";
+  } = {},
+): ResearchModelMemoryContextNode[] {
+  const profileMemory = store.getProfileMemory();
+  const nodes = new Map<string, MemoryNode>();
+  const current = store.getContext();
+  for (const node of store.search({ scope: "workspace", limit: 100 })) nodes.set(node.id, node);
+  for (const node of store.search({ scope: "session", limit: 100 })) nodes.set(node.id, node);
+  const terms = queryTerms(prompt).slice(0, 12);
+  if (terms.length > 0) {
+    for (const node of store.search({ query: terms.join(" "), scope: "subject", limit: 100 })) {
+      nodes.set(node.id, node);
+    }
+  }
+  const candidateNodes = [...nodes.values()];
+  return selectMemoryModelContext({
+    nodes: candidateNodes,
+    edges: store.listEdgesForNodes(candidateNodes.map((node) => node.id)),
+    prompt,
+    ...(current.sessionId ? { sessionId: current.sessionId } : {}),
+    workspaceId: current.workspaceId,
+    profileMemory,
+    ...(options.detail ? { detail: options.detail } : {}),
+    ...options,
+  });
+}
+
+export function selectMemoryModelContext(input: {
+  nodes: readonly MemoryNode[];
+  edges: readonly MemoryEdge[];
+  prompt: string;
+  maxNodes?: number;
+  maxCharacters?: number;
+  sessionId?: string;
+  workspaceId?: string;
+  profileMemory?: ResearchProfileMemory;
+  detail?: "summary" | "full";
+}): ResearchModelMemoryContextNode[] {
+  const profileMemory = input.profileMemory ?? DEFAULT_SECURITY_RESEARCH_PROFILE.memory;
+  const maxNodes = clampInteger(
+    input.maxNodes,
+    profileMemory.defaultNodeLimit ?? DEFAULT_MEMORY_NODE_LIMIT,
+    1,
+    100,
+  );
+  const maxCharacters = clampInteger(
+    input.maxCharacters,
+    profileMemory.defaultCharacterBudget ?? DEFAULT_MEMORY_CHARACTER_BUDGET,
+    1_000,
+    200_000,
+  );
+  const visibleNodes = input.nodes.filter((node) => {
+    const definition = profileMemory.types.find((type) => type.id === node.type || type.aliases?.includes(node.type));
+    return definition?.lifecycle !== "retired";
+  });
+  const terms = queryTerms(input.prompt);
+  const relevance = new Map(
+    visibleNodes.map((node) => [node.id, relevanceScore(node, terms)]),
+  );
+  const seedIds = new Set(
+    visibleNodes
+      .filter((node) => (input.sessionId ? node.sessionIds.includes(input.sessionId) : false) || (relevance.get(node.id) ?? 0) > 0)
+      .map((node) => node.id),
+  );
+  const linkedIds = new Set(
+    input.edges.flatMap((edge) => {
+      if (seedIds.has(edge.fromId)) return [edge.toId];
+      if (seedIds.has(edge.toId)) return [edge.fromId];
+      return [];
+    }),
+  );
+  const ranked = visibleNodes
+    .filter((node) =>
+      (input.workspaceId ? node.workspaces.some((workspace) => workspace.id === input.workspaceId) : true) ||
+      (relevance.get(node.id) ?? 0) > 0 ||
+      linkedIds.has(node.id),
+    )
+    .sort((left, right) => {
+      const scoreDifference =
+        rankScore(right, relevance.get(right.id) ?? 0, linkedIds.has(right.id), input.sessionId, input.workspaceId, profileMemory) -
+        rankScore(left, relevance.get(left.id) ?? 0, linkedIds.has(left.id), input.sessionId, input.workspaceId, profileMemory);
+      return (
+        scoreDifference ||
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        left.id.localeCompare(right.id)
+      );
+    });
+
+  const selected: ResearchModelMemoryContextNode[] = [];
+  let usedCharacters = 2;
+  for (const node of ranked) {
+    if (selected.length >= maxNodes) break;
+    const projected = projectMemoryNode(node, input.edges, input.detail !== "full");
+    const projectedSize = JSON.stringify(projected).length + 1;
+    if (usedCharacters + projectedSize <= maxCharacters) {
+      selected.push(projected);
+      usedCharacters += projectedSize;
+      continue;
+    }
+
+    const compact = projectMemoryNode(node, input.edges, true);
+    const compactSize = JSON.stringify(compact).length + 1;
+    if (usedCharacters + compactSize <= maxCharacters) {
+      selected.push(compact);
+      usedCharacters += compactSize;
+    }
+  }
+  return selected;
+}
+
+function projectMemoryNode(
+  node: MemoryNode,
+  edges: readonly MemoryEdge[],
+  compact: boolean,
+): ResearchModelMemoryContextNode {
+  const attributes = Object.keys(node.attributes).length > 0 ? node.attributes : undefined;
+  const relationships = relationshipsForNode(node.id, edges);
+  if (compact) {
+    return {
+      id: node.id,
+      type: node.type,
+      title: truncate(node.title, MAX_CARD_TITLE_CHARACTERS),
+      summary: truncate(node.summary, MAX_CARD_SUMMARY_CHARACTERS),
+      status: node.status,
+      confidence: node.confidence,
+      ...(node.tags.length > 0 ? { tags: node.tags.slice(0, MAX_CARD_TAGS) } : {}),
+      ...(node.evidence.length > 0
+        ? {
+            evidenceRefs: node.evidence
+              .slice(0, MAX_CARD_EVIDENCE_REFS)
+              .map(({ id, kind }) => ({ id, kind })),
+          }
+        : {}),
+      evidenceCount: node.evidence.length,
+      relationshipCount: relationships.length,
+      ...(relationships.length > 0
+        ? {
+            relatedMemoryIds: [...new Set(
+              relationships.slice(0, MAX_CARD_RELATIONSHIPS).map((relationship) => relationship.memoryId),
+            )],
+          }
+        : {}),
+      updatedAt: node.updatedAt,
+      revision: node.revision,
+    };
+  }
+  return {
+    id: node.id,
+    scope: {
+      sessions: node.sessionIds,
+      workspaces: node.workspaces,
+      subject: { id: node.subjectId, name: node.subjectName },
+    },
+    type: node.type,
+    title: node.title,
+    summary: node.summary,
+    ...(!compact && node.body
+      ? { body: truncate(node.body, MAX_BODY_CHARACTERS) }
+      : {}),
+    status: node.status,
+    confidence: node.confidence,
+    assetIds: node.assetIds,
+    tags: node.tags,
+    ...(attributes ? { attributes } : {}),
+    evidence: node.evidence.slice(0, MAX_EVIDENCE_REFS_PER_NODE),
+    relationships: relationships.slice(0, MAX_RELATIONSHIPS_PER_NODE),
+    evidenceCount: node.evidence.length,
+    relationshipCount: relationships.length,
+    ...(node.provenance
+      ? {
+          provenance: {
+            state: node.provenance.state,
+            catalogHash: node.provenance.catalogHash,
+            activeCatalog: node.provenance.activeCatalog,
+          },
+        }
+      : {}),
+    updatedAt: node.updatedAt,
+    revision: node.revision,
+  };
+}
+
+function relationshipsForNode(
+  nodeId: string,
+  edges: readonly MemoryEdge[],
+): ResearchModelMemoryRelationship[] {
+  const relationships: ResearchModelMemoryRelationship[] = [];
+  for (const edge of edges) {
+    if (edge.fromId === nodeId) {
+      relationships.push({
+        direction: "outgoing",
+        relation: edge.relation,
+        memoryId: edge.toId,
+        ...(edge.note ? { note: edge.note } : {}),
+      });
+    }
+    if (edge.toId === nodeId) {
+      relationships.push({
+        direction: "incoming",
+        relation: edge.relation,
+        memoryId: edge.fromId,
+        ...(edge.note ? { note: edge.note } : {}),
+      });
+    }
+  }
+  return relationships;
+}
+
+function relevanceScore(node: MemoryNode, terms: readonly string[]): number {
+  if (terms.length === 0) return 0;
+  const title = node.title.toLowerCase();
+  const summary = node.summary.toLowerCase();
+  const body = node.body.toLowerCase();
+  const metadata = [
+    ...node.tags,
+    ...node.assetIds,
+    ...node.evidence.flatMap((evidence) => [
+      evidence.summary,
+      evidence.path ?? "",
+      JSON.stringify(evidence.locator),
+    ]),
+  ].join(" ").toLowerCase();
+  return terms.reduce((score, term) =>
+    score +
+    (title.includes(term) ? 8 : 0) +
+    (summary.includes(term) ? 5 : 0) +
+    (body.includes(term) ? 2 : 0) +
+    (metadata.includes(term) ? 3 : 0), 0);
+}
+
+function rankScore(
+  node: MemoryNode,
+  relevance: number,
+  linked: boolean,
+  sessionId: string | undefined,
+  workspaceId: string | undefined,
+  profileMemory: ResearchProfileMemory,
+): number {
+  const contextWeight = sessionId && node.sessionIds.includes(sessionId)
+    ? 1_000
+    : workspaceId && node.workspaces.some((workspace) => workspace.id === workspaceId)
+      ? 80
+      : 0;
+  const statusPolarity = profileMemory.statuses.find((status) => status.id === node.status)?.polarity;
+  const statusWeight = statusPolarity === "positive" ? 20 : statusPolarity === "negative" ? -20 : 0;
+  const typeWeight = profileMemory.types.find((type) => type.id === node.type)?.contextWeight ?? 0;
+  return contextWeight + relevance * 100 + (linked ? 40 : 0) + statusWeight + typeWeight;
+}
+
+function queryTerms(prompt: string): string[] {
+  return [...new Set(
+    (prompt.toLowerCase().match(/[a-z0-9_.:/-]{3,}/g) ?? [])
+      .filter((term) => !QUERY_STOP_WORDS.has(term)),
+  )].slice(0, 40);
+}
+
+function truncate(value: string, maxCharacters: number): string {
+  return value.length <= maxCharacters
+    ? value
+    : `${value.slice(0, Math.max(0, maxCharacters - 1))}…`;
+}
+
+function clampInteger(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return Math.max(minimum, Math.min(maximum, Math.floor(value ?? fallback)));
+}

@@ -1,0 +1,108 @@
+import type { ResearchModelProviderId, ResearchProviderModelCatalog } from '@shared/types';
+
+const SESSION_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MAX_PRIORITY_SCORE = 64;
+
+export function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+export function traceLabel(value: string): string {
+  return value
+    .split('_')
+    .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1)}` : part))
+    .join(' ');
+}
+
+export function researchModelNameLabel(providerId: ResearchModelProviderId, name: string): string {
+  if (providerId === 'openai-codex') return name.replace(/^GPT-/u, '');
+  if (providerId === 'anthropic') return name.replace(/^Claude\s+/u, '');
+  return name;
+}
+
+export function researchModelDisplayName(
+  provider: string | null,
+  model: string | null,
+  catalogs: readonly ResearchProviderModelCatalog[]
+): string {
+  if (!model) return 'Unknown model';
+  const normalizedProvider = provider?.trim().toLowerCase();
+  const catalogProvider = normalizedProvider === 'openai' ? 'openai-codex' : normalizedProvider;
+  const matchingCatalog = catalogs.find((catalog) =>
+    catalog.providerId === catalogProvider
+    && catalog.models.some((candidate) => candidate.id === model)
+  ) ?? catalogs.find((catalog) => catalog.models.some((candidate) => candidate.id === model));
+  const matchingModel = matchingCatalog?.models.find((candidate) => candidate.id === model);
+  return matchingCatalog && matchingModel
+    ? researchModelNameLabel(matchingCatalog.providerId, matchingModel.name)
+    : model;
+}
+
+export function formatSessionStart(date: Date): string {
+  return `${SESSION_MONTHS[date.getMonth()]} ${date.getDate()}, ${formatSessionTime(date)}`;
+}
+
+export function formatSessionDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return formatSessionStart(date);
+}
+
+export function formatCompactTimeSince(value: string, nowMs = Date.now()): string {
+  const timestampMs = Date.parse(value);
+  if (!Number.isFinite(timestampMs)) return '--';
+  const elapsedMs = Math.max(0, nowMs - timestampMs);
+  const units = [
+    { durationMs: 365 * 24 * 60 * 60 * 1_000, suffix: 'y' },
+    { durationMs: 30 * 24 * 60 * 60 * 1_000, suffix: 'M' },
+    { durationMs: 7 * 24 * 60 * 60 * 1_000, suffix: 'w' },
+    { durationMs: 24 * 60 * 60 * 1_000, suffix: 'd' },
+    { durationMs: 60 * 60 * 1_000, suffix: 'h' },
+    { durationMs: 60 * 1_000, suffix: 'm' }
+  ] as const;
+  const unit = units.find((candidate) => elapsedMs >= candidate.durationMs) ?? units.at(-1)!;
+  return `${Math.max(1, Math.floor(elapsedMs / unit.durationMs))}${unit.suffix}`;
+}
+
+export function formatSessionTime(date: Date): string {
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const hour24 = date.getHours();
+  const hour12 = hour24 % 12 || 12;
+  const suffix = hour24 < 12 ? 'a' : 'p';
+  return `${hour12}:${minutes}${suffix}`;
+}
+
+export function formatDurationHms(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+export function formatPriorityPill(priorityScore: number): string {
+  return `P${clampPriorityScoreForDisplay(priorityScore)}`;
+}
+
+export function clampPriorityScoreForDisplay(priorityScore: number): number {
+  if (!Number.isFinite(priorityScore)) return 0;
+  return Math.max(0, Math.min(MAX_PRIORITY_SCORE, Math.round(priorityScore)));
+}
+
+export function stateClass(state: string): string {
+  return state.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+}
+
+export function formatPercent(value: number): string {
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${Math.round(value * 100)}%`;
+}
+
+export function shortDate(value: string): string {
+  return value.slice(0, 10);
+}
+
+export function emptyDateClass(value: string): string | undefined {
+  return value.trim() ? undefined : 'date-input-empty';
+}

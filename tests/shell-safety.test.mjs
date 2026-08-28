@@ -1,0 +1,855 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  classifyShellNetworkIntent,
+  createShellSafetyAuthorizer,
+  DEFAULT_SHELL_REVIEW_MODELS,
+  sanitizeShellAuthorizationDecision,
+} from "../packages/research-agent/dist/index.js";
+
+const BASE_REQUEST = {
+  actionId: "shell_action_1",
+  workspaceRoot: "/tmp/authorized-workspace",
+  utility: "printf",
+  args: ["%s", "safe"],
+  cwd: "/tmp/authorized-workspace",
+  timeoutMs: 1_000,
+};
+
+test("standalone Auto-Review defaults cover each supported provider", () => {
+  assert.deepEqual(DEFAULT_SHELL_REVIEW_MODELS, {
+    "openai-codex": "gpt-5.6-luna",
+    anthropic: "claude-haiku-4-5",
+    xai: "grok-4.3",
+    zai: "glm-5-turbo",
+    openrouter: "auto",
+  });
+});
+
+test("Danger Mode approves without a reviewer or human decision", async () => {
+  let modelCalls = 0;
+  let manualCalls = 0;
+  const resolved = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "danger",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => {
+      manualCalls += 1;
+      return { decision: "denied", reason: "unused" };
+    },
+    onResolved: (event) => resolved.push(event),
+    models: {
+      getModel() {
+        modelCalls += 1;
+        return undefined;
+      },
+      async completeSimple() {
+        modelCalls += 1;
+        throw new Error("Danger Mode must not call a model.");
+      },
+    },
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(decision.decision, "approved");
+  assert.equal(decision.source, "danger");
+  assert.equal(modelCalls, 0);
+  assert.equal(manualCalls, 0);
+  assert.equal(resolved[0]?.type, "shell_authorization_resolved");
+});
+
+test("Anthropic Auto-Review always uses the Claude Agent SDK completion route", async () => {
+  const calls = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      reasoningEffort: "low",
+    }),
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: unreachableModels(),
+    async completeClaudeText(options) {
+      calls.push(options);
+      return {
+        text: "unstructured fallback text",
+        structuredOutput: { decision: "approved", proofing: false, reason: "Bounded workspace inspection." },
+        usage: { inputTokens: 20 },
+      };
+    },
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(decision.decision, "approved");
+  assert.equal(decision.reviewer?.provider, "anthropic");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.model, "claude-haiku-4-5");
+  assert.deepEqual(calls[0]?.outputFormat, {
+    type: "json_schema",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["decision", "proofing", "reason"],
+      properties: {
+        decision: { type: "string", enum: ["approved", "denied"] },
+        proofing: { type: "boolean" },
+        reason: { type: "string", minLength: 1, maxLength: 1_000 },
+      },
+    },
+  });
+});
+
+test("network intent is audit metadata and does not create an application-level denial", async () => {
+  const baseOptions = {
+    getMode: () => "danger",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => ({ decision: "approved", reason: "unused" }),
+    models: unreachableModels(),
+  };
+  const request = {
+    ...BASE_REQUEST,
+    utility: "curl",
+    args: ["https://api.example.test/status"],
+  };
+
+  const direct = await createShellSafetyAuthorizer(baseOptions)(request);
+  assert.equal(direct.decision, "approved");
+  assert.equal(direct.source, "danger");
+  assert.equal(direct.network.intent, "network");
+  assert.equal(direct.network.permitted, true);
+  assert.match(direct.network.reason, /host environment/);
+
+  const windowsExecutable = await createShellSafetyAuthorizer(baseOptions)({
+    ...request,
+    utility: "CuRl.ExE",
+  });
+  assert.equal(windowsExecutable.decision, "approved");
+  assert.equal(windowsExecutable.network.classification, "network utility curl");
+
+  const pathExecutable = await createShellSafetyAuthorizer(baseOptions)({
+    ...request,
+    utility: process.platform === "win32" ? "C:\\Tools\\curl.exe" : "/usr/bin/curl",
+  });
+  assert.equal(pathExecutable.decision, "approved");
+  assert.equal(pathExecutable.network.classification, "network utility curl");
+
+  const commandInterpreter = await createShellSafetyAuthorizer(baseOptions)({
+    ...request,
+    utility: "cmd.exe",
+    args: ["/c", "curl api.example.test/status"],
+  });
+  assert.equal(commandInterpreter.decision, "approved");
+  assert.match(commandInterpreter.network.classification, /network API in cmd input/);
+});
+
+test("shell network intent classification is deterministic and does not treat Windows paths as SCP destinations", () => {
+  const request = {
+    utility: "printf",
+    args: ["https://api.example.test/status"],
+  };
+  const first = classifyShellNetworkIntent(request);
+  const second = classifyShellNetworkIntent(request);
+  assert.deepEqual(second, first);
+  assert.deepEqual(first.destinations, ["api.example.test"]);
+
+  assert.deepEqual(classifyShellNetworkIntent({
+    utility: "printf",
+    args: ["C:\\fixtures\\report.txt"],
+  }), {
+    intent: "none",
+    classification: "no recognized network intent",
+    destinations: [],
+  });
+
+  assert.deepEqual(classifyShellNetworkIntent({
+    utility: "wsl.exe",
+    args: ["--distribution", "Ubuntu", "--cd", "/mnt/c/repo", "--exec", "git", "fetch", "origin"],
+  }), {
+    intent: "network",
+    classification: "network subcommand git fetch",
+    destinations: [],
+  });
+
+  const wslCommand = classifyShellNetworkIntent({
+    utility: "wsl.exe",
+    args: ["--distribution", "Ubuntu", "--exec", "/bin/sh", "-lc", "curl api.example.test/status"],
+  });
+  assert.equal(wslCommand.intent, "network");
+  assert.match(wslCommand.classification, /network API in sh input/);
+  assert.deepEqual(wslCommand.destinations, []);
+});
+
+test("network commands continue through the configured shell approval mode without scope policy", async () => {
+  const calls = [];
+  const reviewer = {
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium",
+  };
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: fixtureModels('{"decision":"approved","proofing":false,"reason":"Command is acceptable."}', calls),
+  });
+
+  const approved = await authorize({
+    ...BASE_REQUEST,
+    utility: "curl",
+    args: ["https://api.example.test/status"],
+  });
+  assert.equal(approved.decision, "approved");
+  assert.deepEqual(approved.network.destinations, ["api.example.test"]);
+  assert.match(calls[0].context.messages[0].content, /"classification":"network utility curl"/);
+  assert.match(calls[0].context.messages[0].content, /"authorizationRecorded":false/);
+  assert.doesNotMatch(calls[0].context.messages[0].content, /scopeId|networkProfile/);
+});
+
+test("Manual Approval waits for one correlated human decision", async () => {
+  let resolveManual;
+  const requested = [];
+  const resolved = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "manual_approval",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: () => new Promise((resolve) => {
+      resolveManual = resolve;
+    }),
+    onRequested: (event) => requested.push(event),
+    onResolved: (event) => resolved.push(event),
+    models: unreachableModels(),
+  });
+
+  let settled = false;
+  const pending = authorize(BASE_REQUEST).then((decision) => {
+    settled = true;
+    return decision;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].type, "shell_authorization_requested");
+  assert.match(requested[0].approvalRequestId, /^shell_approval_/);
+
+  resolveManual({
+    decision: "approved",
+    reason: "The researcher approved this shell command.",
+  });
+  const decision = await pending;
+  assert.equal(decision.decision, "approved");
+  assert.equal(decision.source, "human");
+  assert.equal(resolved[0]?.approvalRequestId, requested[0].approvalRequestId);
+});
+
+test("Manual Approval attributes an ended host approval channel to policy", async () => {
+  const requested = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "manual_approval",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => {
+      throw new Error("approval channel ended");
+    },
+    onRequested: (event) => requested.push(event),
+    models: unreachableModels(),
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(requested.length, 1);
+  assert.equal(decision.decision, "denied");
+  assert.equal(decision.source, "policy");
+  assert.match(decision.reason, /host approval channel ended/);
+});
+
+test("Manual Approval denies every Beale-parity redaction before waiter or request emission", async () => {
+  let manualWaiters = 0;
+  const requested = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "manual_approval",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => {
+      manualWaiters += 1;
+      return { decision: "approved", reason: "must not be reached" };
+    },
+    onRequested: (event) => requested.push(event),
+    models: unreachableModels(),
+  });
+
+  const vectors = [];
+  for (const flag of ["--refresh-token", "--credential", "--credentials", "--userpwd"]) {
+    const name = flag.slice(2);
+    vectors.push(
+      { args: [`  ${flag.toUpperCase()}  `, `${name}-paired-secret`], secrets: [`${name}-paired-secret`] },
+      { args: [` ${flag}=${name}-inline-secret `], secrets: [`${name}-inline-secret`] },
+      { args: ["-c", `client ${flag} '${name}-embedded-secret' target`], secrets: [`${name}-embedded-secret`] },
+    );
+  }
+  vectors.push(
+    {
+      args: ["--header", "X-Api-Key: x-api-key-header-secret"],
+      secrets: ["x-api-key-header-secret"],
+    },
+    {
+      args: ["--proxy-header", "Api-Key: api-key-header-secret"],
+      secrets: ["api-key-header-secret"],
+    },
+    {
+      args: ["Basic QWxhZGRpbjpPcGVuU2VzYW1l"],
+      secrets: ["QWxhZGRpbjpPcGVuU2VzYW1l"],
+    },
+    {
+      args: ["github_pat_1234567890ABCDEF"],
+      secrets: ["1234567890ABCDEF"],
+    },
+    {
+      args: ["ghr_1234567890ABCDEF"],
+      secrets: ["1234567890ABCDEF"],
+    },
+    {
+      args: ["access_token='access assignment secret'"],
+      secrets: ["access assignment secret"],
+    },
+    {
+      args: ["refresh-token=refresh-assignment-secret"],
+      secrets: ["refresh-assignment-secret"],
+    },
+  );
+
+  for (const vector of vectors) {
+    const decision = await authorize({ ...BASE_REQUEST, args: vector.args });
+    assert.equal(decision.decision, "denied");
+    assert.equal(decision.source, "policy");
+    const audit = JSON.stringify(decision.command);
+    for (const secret of vector.secrets) assert.doesNotMatch(audit, new RegExp(secret));
+  }
+  assert.equal(manualWaiters, 0);
+  assert.equal(requested.length, 0);
+});
+
+test("Manual Approval denies lossy or sanitized command displays before creating a human waiter", async () => {
+  let manualWaiters = 0;
+  const requested = [];
+  const resolved = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "manual_approval",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => {
+      manualWaiters += 1;
+      return { decision: "approved", reason: "must not be reached" };
+    },
+    onRequested: (event) => requested.push(event),
+    onResolved: (event) => resolved.push(event),
+    models: unreachableModels(),
+  });
+
+  const hiddenCommands = [
+    { ...BASE_REQUEST, stdin: "hidden-stdin-secret" },
+    { ...BASE_REQUEST, args: Array.from({ length: 257 }, (_, index) => String(index)) },
+    { ...BASE_REQUEST, utility: "u".repeat(2_049) },
+    { ...BASE_REQUEST, cwd: "/" + "c".repeat(2_049) },
+    { ...BASE_REQUEST, args: ["a".repeat(2_049)] },
+    { ...BASE_REQUEST, args: ["-c", "password=$(touch /tmp/manual-review-mismatch)"] },
+    { ...BASE_REQUEST, args: ["--password", "paired-password-secret"] },
+    { ...BASE_REQUEST, cwd: "/tmp/token=credential-path-secret" },
+  ];
+  for (const request of hiddenCommands) {
+    const decision = await authorize(request);
+    assert.equal(decision.decision, "denied");
+    assert.equal(decision.source, "policy");
+    assert.match(decision.reason, /Manual Approval denied/);
+  }
+
+  assert.equal(manualWaiters, 0);
+  assert.equal(requested.length, 0);
+  assert.equal(resolved.length, hiddenCommands.length);
+  assert.doesNotMatch(JSON.stringify(resolved), /hidden-stdin-secret/);
+});
+
+test("shell audit argv redaction removes paired credentials, cookies, and auth headers", async () => {
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "danger",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: unreachableModels(),
+  });
+  const decision = await authorize({
+    ...BASE_REQUEST,
+    utility: "curl",
+    args: [
+      "--password",
+      "hunter2",
+      "--token",
+      "token-value-secret",
+      "-H",
+      "Authorization: Basic header-credential-secret",
+      "--user",
+      "researcher:user-password-secret",
+      "--api-key=inline-api-secret",
+      "sh -c 'curl --password embedded-password-secret example.test'",
+      "--cookie",
+      "session=cookie-pair-secret",
+      "-b",
+      "cookie-short-secret",
+      "-H",
+      "Cookie: session=cookie-header-secret",
+      "--cookie=inline-cookie-secret",
+      "sh -c 'curl -b embedded-cookie-secret example.test'",
+    ],
+  });
+
+  const serialized = JSON.stringify(decision.command);
+  for (const secret of [
+    "hunter2",
+    "token-value-secret",
+    "header-credential-secret",
+    "researcher:user-password-secret",
+    "inline-api-secret",
+    "embedded-password-secret",
+    "cookie-pair-secret",
+    "cookie-short-secret",
+    "cookie-header-secret",
+    "inline-cookie-secret",
+    "embedded-cookie-secret",
+  ]) {
+    assert.doesNotMatch(serialized, new RegExp(secret));
+  }
+  assert.deepEqual(decision.command.args.slice(0, 8), [
+    "--password",
+    "[REDACTED]",
+    "--token",
+    "[REDACTED]",
+    "-H",
+    "Authorization: [REDACTED]",
+    "--user",
+    "[REDACTED]",
+  ]);
+});
+
+test("Auto-Review uses the active provider small model and emits a redacted audit", async () => {
+  const calls = [];
+  let reviewer = {
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium",
+  };
+  const models = fixtureModels(
+    '{"decision":"approved","proofing":false,"reason":"Scoped command; token=reviewer-secret is not retained."}',
+    calls,
+  );
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    reviewContext: {
+      authorizationRecorded: true,
+      executionPosture: "operator_managed",
+    },
+    models,
+  });
+
+  const request = {
+    ...BASE_REQUEST,
+    utility: "bash",
+    args: ["-c", "printf token=command-secret"],
+    stdin: "password=stdin-secret",
+  };
+  const approved = await authorize(request);
+  assert.equal(approved.decision, "approved");
+  assert.equal(approved.source, "small_model");
+  assert.deepEqual(approved.reviewer, reviewer);
+  assert.match(approved.command.commandHash, /^sha256:/);
+  assert.match(approved.command.stdinHash, /^sha256:/);
+  assert.equal(approved.command.stdinPresent, true);
+  assert.equal(approved.command.stdinBytes, Buffer.byteLength(request.stdin));
+  assert.equal("stdin" in approved.command, false);
+  assert.match(approved.command.args[1], /\[REDACTED\]/);
+  assert.doesNotMatch(approved.reason, /reviewer-secret/);
+  assert.match(approved.reason, /\[REDACTED\]/);
+  assert.equal(calls[0].provider, "openai-codex");
+  assert.equal(calls[0].modelId, "gpt-5.6-luna");
+  assert.equal(calls[0].options.reasoning, "medium");
+  assert.equal(calls[0].options.maxTokens, 1_024);
+  assert.match(calls[0].context.messages[0].content, /password=stdin-secret/);
+  assert.match(calls[0].context.messages[0].content, /"authorizationRecorded":true/);
+  assert.match(calls[0].context.messages[0].content, /"executionPosture":"operator_managed"/);
+  assert.match(calls[0].context.systemPrompt, /existing target-admin access/);
+
+  reviewer = {
+    provider: "xai",
+    model: "grok-4.3",
+    reasoningEffort: "medium",
+  };
+  await authorize(BASE_REQUEST);
+  assert.equal(calls[1].provider, "xai");
+  assert.equal(calls[1].modelId, "grok-4.3");
+});
+
+test("Pi Auto-Review routes every non-Anthropic provider with the bounded review budget", async () => {
+  for (const reviewer of [
+    { provider: "openai-codex", model: "gpt-5.6-luna", reasoningEffort: "medium" },
+    { provider: "xai", model: "grok-4.3", reasoningEffort: "medium" },
+    { provider: "zai", model: "glm-5-turbo", reasoningEffort: "medium" },
+    { provider: "openrouter", model: "auto", reasoningEffort: "medium" },
+  ]) {
+    const calls = [];
+    const authorize = createShellSafetyAuthorizer({
+      getMode: () => "auto_review",
+      getReviewerSelection: () => reviewer,
+      requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+      models: fixtureModels(
+        '{"decision":"approved","proofing":false,"reason":"Bounded inspection."}',
+        calls,
+      ),
+    });
+
+    const decision = await authorize(BASE_REQUEST);
+    assert.equal(decision.decision, "approved");
+    assert.equal(calls[0]?.provider, reviewer.provider);
+    assert.equal(calls[0]?.modelId, reviewer.model);
+    assert.equal(calls[0]?.options.maxTokens, 1_024);
+  }
+});
+
+test("Auto-Review repairs one malformed provider response before failing closed", async () => {
+  const calls = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "xai",
+      model: "grok-4.3",
+      reasoningEffort: "medium",
+    }),
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: fixtureModels([
+      "I approve this command.",
+      '{"decision":"approved","proofing":false,"reason":"Bounded inspection."}',
+    ], calls),
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(decision.decision, "approved");
+  assert.equal(calls[0].completionCount, 2);
+  assert.doesNotMatch(calls[0].contexts[0].messages[0].content, /prior response/i);
+  assert.match(calls[0].contexts[1].messages[0].content, /prior response did not match/i);
+});
+
+test("Auto-Review retries one transient provider error before failing closed", async () => {
+  const reviewer = {
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    reasoningEffort: "medium",
+  };
+  const calls = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    completeClaudeText: async (options) => {
+      calls.push(options);
+      if (calls.length === 1) throw new Error("temporary Claude Agent SDK execution failure");
+      return {
+        text: "",
+        structuredOutput: {
+          decision: "approved",
+          proofing: false,
+          reason: "Bounded inspection.",
+        },
+        usage: {},
+      };
+    },
+  });
+
+  const approved = await authorize(BASE_REQUEST);
+  assert.equal(approved.decision, "approved");
+  assert.equal(calls.length, 2);
+  assert.doesNotMatch(calls[1].prompt, /prior response did not match/i);
+
+  let failureCalls = 0;
+  const alwaysFailing = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    completeClaudeText: async () => {
+      failureCalls += 1;
+      throw new Error("temporary Claude Agent SDK execution failure: secret-provider-detail");
+    },
+  });
+
+  const denied = await alwaysFailing(BASE_REQUEST);
+  assert.equal(failureCalls, 2);
+  assert.deepEqual(denied.reviewFailure, {
+    category: "provider_error",
+    phase: "request",
+    attempts: 2,
+  });
+  assert.doesNotMatch(JSON.stringify(denied), /secret-provider-detail/);
+});
+
+test("Auto-Review requires proofing commands to originate from a runbook cell", async () => {
+  let manualCalls = 0;
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "openai-codex",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+    }),
+    requestManualApproval: async () => {
+      manualCalls += 1;
+      return { decision: "approved", reason: "unused" };
+    },
+    models: fixtureModels(
+      '{"decision":"approved","proofing":true,"reason":"Bounded vulnerability reproduction."}',
+      [],
+    ),
+  });
+
+  const denied = await authorize({ ...BASE_REQUEST, utility: "python3", args: ["proof.py"] });
+  assert.equal(denied.decision, "denied");
+  assert.equal(denied.source, "policy");
+  assert.match(denied.reason, /recorded runbook cell/);
+  assert.equal(manualCalls, 0);
+
+  const approved = await authorize({
+    ...BASE_REQUEST,
+    utility: "python3",
+    args: ["proof.py"],
+    runbookContext: {
+      runbookId: "runbook-1",
+      runId: "runbook-run-1",
+      cellId: "cell-1",
+    },
+  });
+  assert.equal(approved.decision, "approved");
+  assert.equal(approved.source, "small_model");
+});
+
+test("Auto-Review fails closed with sanitized diagnostics for missing, malformed, oversized, and timed-out reviews", async () => {
+  const reviewer = {
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium",
+  };
+  for (const [response, category] of [
+    ["approved", "invalid_json"],
+    [String.fromCharCode(96).repeat(3) + 'json\n{"decision":"approved","reason":"safe"}\n' + String.fromCharCode(96).repeat(3), "invalid_json"],
+    ['{"decision":"approved","reason":"safe","extra":true}', "invalid_schema"],
+    ['{"decision":"unknown","reason":"safe"}', "invalid_schema"],
+  ]) {
+    const calls = [];
+    const authorize = createShellSafetyAuthorizer({
+      getMode: () => "auto_review",
+      getReviewerSelection: () => reviewer,
+      requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+      models: fixtureModels(response, calls),
+    });
+    const decision = await authorize(BASE_REQUEST);
+    assert.equal(decision.decision, "denied");
+    assert.match(decision.reason, /failed closed/);
+    assert.doesNotMatch(decision.reason, /approved|unknown/);
+    assert.deepEqual(decision.reviewFailure, {
+      category,
+      phase: "response",
+      attempts: 2,
+    });
+    assert.equal(calls[0].completionCount, 2);
+  }
+
+  let calls = 0;
+  const missing = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => undefined,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: {
+      getModel() {
+        calls += 1;
+        return undefined;
+      },
+      async completeSimple() {
+        calls += 1;
+        throw new Error("unreachable");
+      },
+    },
+  });
+  assert.equal((await missing(BASE_REQUEST)).decision, "denied");
+  assert.equal(calls, 0);
+
+  const oversized = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    maxReviewInputBytes: 32,
+    models: {
+      getModel() {
+        calls += 1;
+        return { provider: reviewer.provider, id: reviewer.model };
+      },
+      async completeSimple() {
+        calls += 1;
+        throw new Error("oversized input must not reach the model");
+      },
+    },
+  });
+  const oversizedDecision = await oversized({ ...BASE_REQUEST, stdin: "x".repeat(100) });
+  assert.equal(oversizedDecision.decision, "denied");
+  assert.match(oversizedDecision.reason, /exceeds the review limit/);
+
+  const timedOut = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    reviewTimeoutMs: 10,
+    models: {
+      getModel() {
+        return { provider: reviewer.provider, id: reviewer.model };
+      },
+      async completeSimple(_model, _context, options) {
+        await new Promise((resolve) => options.signal.addEventListener("abort", resolve, { once: true }));
+        return {
+          role: "assistant",
+          content: [],
+          api: "fixture",
+          provider: reviewer.provider,
+          model: reviewer.model,
+          usage: {},
+          stopReason: "aborted",
+          timestamp: Date.now(),
+        };
+      },
+    },
+  });
+  const timedOutDecision = await timedOut(BASE_REQUEST);
+  assert.equal(timedOutDecision.decision, "denied");
+  assert.equal(timedOutDecision.reviewFailure?.category, "timeout");
+});
+
+test("Auto-Review classifies provider failures without retaining provider error text", async () => {
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "xai",
+      model: "grok-4.3",
+      reasoningEffort: "medium",
+    }),
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    models: {
+      getModel(provider, id) {
+        return { provider, id };
+      },
+      async completeSimple() {
+        throw new Error("401 Unauthorized: secret-provider-detail");
+      },
+    },
+  });
+
+  const decision = await authorize(BASE_REQUEST);
+  assert.equal(decision.decision, "denied");
+  assert.deepEqual(decision.reviewFailure, {
+    category: "authentication",
+    phase: "request",
+    attempts: 1,
+  });
+  assert.doesNotMatch(JSON.stringify(decision), /secret-provider-detail/);
+  const sanitized = sanitizeShellAuthorizationDecision({
+    ...decision,
+    reviewFailure: {
+      ...decision.reviewFailure,
+      providerDetail: "must-not-survive",
+    },
+  });
+  assert.deepEqual(sanitized.reviewFailure, decision.reviewFailure);
+  assert.doesNotMatch(JSON.stringify(sanitized), /must-not-survive/);
+  assert.equal(sanitizeShellAuthorizationDecision({
+    ...decision,
+    reviewFailure: { category: "raw_provider_error", phase: "response", attempts: 1 },
+  }).reviewFailure, undefined);
+});
+
+test("Auto-Review timeout and outer abort fail closed when a provider ignores AbortSignal", async () => {
+  const reviewer = {
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium",
+  };
+  let calls = 0;
+  const stubbornModels = {
+    getModel() {
+      return { provider: reviewer.provider, id: reviewer.model };
+    },
+    async completeSimple() {
+      calls += 1;
+      return new Promise(() => {});
+    },
+  };
+  const timedOut = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    reviewTimeoutMs: 10,
+    models: stubbornModels,
+  });
+  const startedAt = Date.now();
+  assert.equal((await timedOut(BASE_REQUEST)).decision, "denied");
+  assert.ok(Date.now() - startedAt < 1_000, "stubborn reviewer must not outlive the host timeout");
+
+  const aborted = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => reviewer,
+    requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
+    reviewTimeoutMs: 30_000,
+    models: stubbornModels,
+  });
+  const controller = new AbortController();
+  const pending = aborted(BASE_REQUEST, controller.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  const abortedDecision = await pending;
+  assert.equal(abortedDecision.decision, "denied");
+  assert.equal(abortedDecision.reviewFailure?.category, "aborted");
+  assert.equal(calls, 2);
+});
+
+function fixtureModels(responseText, calls) {
+  let completionCount = 0;
+  return {
+    getModel(provider, modelId) {
+      calls.push({ provider, modelId });
+      return { provider, id: modelId };
+    },
+    async completeSimple(selectedModel, context, options) {
+      completionCount += 1;
+      const call = calls.at(-1);
+      Object.assign(call, {
+        selectedModel,
+        context,
+        contexts: [...(call.contexts ?? []), context],
+        options,
+        completionCount,
+      });
+      const selectedResponse = Array.isArray(responseText)
+        ? responseText[Math.min(completionCount - 1, responseText.length - 1)]
+        : responseText;
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: selectedResponse }],
+        api: "fixture",
+        provider: selectedModel.provider,
+        model: selectedModel.id,
+        usage: { input: 10, output: 5 },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+    },
+  };
+}
+
+function unreachableModels() {
+  return {
+    getModel() {
+      assert.fail("This safety mode must not select a reviewer.");
+    },
+    async completeSimple() {
+      assert.fail("This safety mode must not call a reviewer.");
+    },
+  };
+}
