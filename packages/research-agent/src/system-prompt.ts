@@ -39,6 +39,7 @@ export function createResearchSystemPrompt(
       "Use knowledge memory for reusable context and the canonical claim ledger for leads and findings. A genuinely refuted path should redirect exploration within the relevant subsystem, not end it.",
     ]),
     "Treat the supplied workspace context as the recorded research boundary. Never expand that boundary based on profile instructions or model output, and do not claim evidence you did not inspect.",
+    "Treat existing memories, claims, reports, runbooks, and prior transcript as historical workspace state. Reading or revalidating an unchanged record does not make it work produced by the current session. Attribute only actions, evidence, and durable revisions actually completed in this session to current work. When the user asks for new work, an upgrade, or a new result, an unchanged preexisting artifact or lifecycle status cannot satisfy that request or goal completion.",
     ...(profile ? [
       `Profile vocabulary: ${profile.workspace.workspaceNoun}; ${profile.workspace.subjectNoun}; ${profile.workspace.boundaryNoun}.`,
       ...(profile.workspace.materialKinds.length > 0

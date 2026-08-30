@@ -368,6 +368,8 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.match(contexts[0].systemPrompt, /use the commentary channel for short, concrete, user-visible progress updates/);
   assert.match(contexts[0].systemPrompt, /Repository checkouts live at the host-supplied known repository or materialized-source paths in the user-global repository store, not beneath workspaceRoot/);
   assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
+  assert.match(contexts[0].systemPrompt, /unchanged record does not make it work produced by the current session/i);
+  assert.match(contexts[0].systemPrompt, /unchanged preexisting artifact or lifecycle status cannot satisfy/i);
   assert.match(contexts[0].systemPrompt, /Collaboration is optional/);
   assert.match(contexts[0].systemPrompt, /expected evidence gain justifies the added context and coordination cost/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use collaboration tools for independent work/);
@@ -844,6 +846,54 @@ test("Pi Agent restores a host research checkpoint after native compaction", asy
   assert.doesNotMatch(
     JSON.stringify(result.agentRun.output.raw.resumableState.messages),
     new RegExp(legacyContextSentinel),
+  );
+});
+
+test("Pi Agent preserves authoritative user steering after native compaction", async () => {
+  const contexts = [];
+  const tool = createFixtureInspectTool([]);
+  let steeringPoll = 0;
+  const directive = "User steering for the active research run:\n\nAlready-verified primitives do not count. Produce a new primitive upgrade.";
+  const result = await runResearchAgent({
+    prompt: "Upgrade an existing command-injection primitive.",
+    tools: [tool.descriptor],
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant("## Progress\nOriented to the existing campaign."),
+        assistant([
+          {
+            type: "thinking",
+            thinking: "",
+            redacted: true,
+            thinkingSignature: JSON.stringify({
+              type: "compaction",
+              id: "cmp_preserve_user_steering",
+              encrypted_content: "opaque-provider-state",
+            }),
+          },
+          toolCall("fixture_inspect", { path: "new-candidate.c" }, "inspect_new_candidate"),
+        ], "toolUse"),
+        assistant("## Result\nContinued with the new-work constraint intact."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry([tool]),
+      async getSteeringMessages() {
+        steeringPoll += 1;
+        return steeringPoll === 2
+          ? [{ role: "user", content: directive, timestamp: Date.now() }]
+          : [];
+      },
+    }),
+  });
+
+  assert.equal(contexts.length, 3);
+  assert.match(contexts[1].messageContents.join("\n"), /Already-verified primitives do not count/);
+  assert.match(contexts[2].messageContents.join("\n"), /Already-verified primitives do not count/);
+  assert.match(contexts[2].messageContents.join("\n"), /Do not fall back to an older, broader goal interpretation/);
+  assert.deepEqual(
+    result.agentRun.output.raw.resumableState.researchFocus.authoritativeUserSteering,
+    [directive],
   );
 });
 

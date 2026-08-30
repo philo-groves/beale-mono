@@ -71,6 +71,7 @@ export interface ResearchFocusPersistedState {
   progressEntries: ProgressEntry[];
   explorationCallsSinceConvergence?: number;
   convergencePending?: boolean;
+  authoritativeUserSteering?: string[];
 }
 
 const DEFAULT_MAX_DUPLICATE_READS_PER_EPOCH = 2;
@@ -80,6 +81,9 @@ const DEFAULT_STEERING_COOLDOWN_TURNS = 4;
 const DEFAULT_CHECKPOINT_ENTRIES = 8;
 const DEFAULT_CHECKPOINT_MAX_CHARS = 4_800;
 const DEFAULT_CONVERGENCE_EXPLORATION_CALLS = 50;
+const MAX_AUTHORITATIVE_USER_STEERING_MESSAGES = 8;
+const MAX_AUTHORITATIVE_USER_STEERING_CHARS = 16_000;
+const MAX_AUTHORITATIVE_USER_STEERING_MESSAGE_CHARS = 8_000;
 export const RESEARCH_CHECKPOINT_PREFIX = "# Research checkpoint after context compaction";
 export const RESEARCH_FOCUS_STEERING_PREFIX = "# Research-focus recovery";
 
@@ -94,6 +98,7 @@ export class ResearchFocusGuard {
   private readonly turns = new Map<number, TrackedTurn>();
   private readonly outcomeDigests = new Map<string, string>();
   private readonly progressEntries: ProgressEntry[] = [];
+  private readonly authoritativeUserSteering: string[] = [];
   private externalProbeAvailable = false;
   private consecutiveRecallOnlyTurns = 0;
   private lastSteeringTurn = Number.NEGATIVE_INFINITY;
@@ -257,6 +262,34 @@ export class ResearchFocusGuard {
     this.externalProbeAvailable = true;
   }
 
+  /**
+   * Preserves host-delivered user steering outside provider context so a
+   * native or local compaction boundary cannot silently restore an older goal
+   * interpretation. These strings are re-injected only as user-role messages;
+   * they are never mixed into the untrusted research checkpoint payload.
+   */
+  public noteAuthoritativeUserSteering(messages: readonly string[]): void {
+    for (const message of messages) {
+      const normalized = boundedUserSteering(message);
+      if (!normalized) continue;
+      this.authoritativeUserSteering.push(normalized);
+    }
+    while (this.authoritativeUserSteering.length > MAX_AUTHORITATIVE_USER_STEERING_MESSAGES) {
+      this.authoritativeUserSteering.shift();
+    }
+    while (
+      this.authoritativeUserSteering.length > 1
+      && this.authoritativeUserSteering.reduce((total, message) => total + message.length, 0)
+        > MAX_AUTHORITATIVE_USER_STEERING_CHARS
+    ) {
+      this.authoritativeUserSteering.shift();
+    }
+  }
+
+  public currentAuthoritativeUserSteering(): string[] {
+    return [...this.authoritativeUserSteering];
+  }
+
   public finishTurn(turnNumber: number, options: { toolOnly: boolean }): ResearchFocusTurnResult {
     const turn = this.turns.get(turnNumber);
     if (!turn || turn.calls.length === 0) {
@@ -327,6 +360,9 @@ export class ResearchFocusGuard {
       progressEntries: structuredClone(this.progressEntries.slice(-Math.max(this.checkpointEntries * 3, 24))),
       explorationCallsSinceConvergence: this.explorationCallsSinceConvergence,
       convergencePending: this.convergencePending,
+      ...(this.authoritativeUserSteering.length > 0
+        ? { authoritativeUserSteering: [...this.authoritativeUserSteering] }
+        : {}),
     };
   }
 
@@ -373,6 +409,7 @@ export class ResearchFocusGuard {
     this.progressEntries.push(...structuredClone(state.progressEntries.slice(-Math.max(this.checkpointEntries * 3, 24))));
     this.explorationCallsSinceConvergence = state.explorationCallsSinceConvergence ?? 0;
     this.convergencePending = state.convergencePending === true;
+    this.authoritativeUserSteering.push(...(state.authoritativeUserSteering ?? []));
   }
 
   private turn(turnNumber: number): TrackedTurn {
@@ -469,6 +506,16 @@ function boundedText(value: string, maxChars: number): string {
   const normalized = value.trim().replace(/[ \t]+/g, " ");
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function boundedUserSteering(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  if (normalized.length <= MAX_AUTHORITATIVE_USER_STEERING_MESSAGE_CHARS) return normalized;
+  const marker = "\n[...middle omitted by host...]\n";
+  const retainedChars = MAX_AUTHORITATIVE_USER_STEERING_MESSAGE_CHARS - marker.length;
+  const leadingChars = Math.ceil(retainedChars / 2);
+  return `${normalized.slice(0, leadingChars)}${marker}${normalized.slice(-Math.floor(retainedChars / 2))}`;
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -568,6 +615,22 @@ export function isResearchFocusPersistedState(value: unknown): value is Research
     && !nonNegativeInteger(value.explorationCallsSinceConvergence)
   ) return false;
   if (value.convergencePending !== undefined && typeof value.convergencePending !== "boolean") return false;
+  if (
+    value.authoritativeUserSteering !== undefined
+    && (
+      !Array.isArray(value.authoritativeUserSteering)
+      || value.authoritativeUserSteering.length > MAX_AUTHORITATIVE_USER_STEERING_MESSAGES
+      || value.authoritativeUserSteering.some((message) =>
+        typeof message !== "string"
+        || !message.trim()
+        || message.length > MAX_AUTHORITATIVE_USER_STEERING_MESSAGE_CHARS
+      )
+      || value.authoritativeUserSteering.reduce(
+        (total, message) => total + (typeof message === "string" ? message.length : 0),
+        0,
+      ) > MAX_AUTHORITATIVE_USER_STEERING_CHARS
+    )
+  ) return false;
   if (!value.outcomeDigests.every((entry) =>
     Array.isArray(entry)
     && entry.length === 2
