@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   applyNativeOpenAiCompaction,
+  applyOpenAiFastMode,
   compactAgentContext,
   DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
@@ -186,6 +187,74 @@ test("OpenAI-compatible providers do not inherit native OpenAI compaction", () =
     );
     assert.equal("context_management" in payload, false);
   }
+});
+
+test("OpenAI Fast mode adds the request service tier only to native OpenAI Responses models", () => {
+  const payload = { model: "gpt-5.6-sol", input: [] };
+  assert.deepEqual(
+    applyOpenAiFastMode(payload, {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      contextWindow: 400_000,
+    }, true),
+    { ...payload, service_tier: "priority" },
+  );
+  assert.equal(
+    applyOpenAiFastMode(payload, {
+      api: "openai-responses",
+      provider: "xai",
+      contextWindow: 500_000,
+    }, true),
+    payload,
+  );
+  assert.equal(
+    applyOpenAiFastMode(payload, {
+      api: "openai-responses",
+      provider: "openai",
+      contextWindow: 400_000,
+    }, false),
+    payload,
+  );
+});
+
+test("Pi Agent applies OpenAI Fast mode to Lead-model request payloads", async () => {
+  const model = {
+    ...FAUX_MODEL,
+    id: "gpt-5.6-sol",
+    name: "GPT-5.6 Sol",
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    contextWindow: 400_000,
+  };
+  let streamOptions;
+  await runResearchAgent({
+    prompt: "Inspect the parser boundary.",
+    executor: createPiAgentExecutor({
+      provider: model.provider,
+      model: model.id,
+      fastMode: true,
+      models: {
+        getModel() {
+          return model;
+        },
+        streamSimple(_model, _context, options) {
+          streamOptions = options;
+          return streamFrom(assistant("Inspection complete."));
+        },
+      },
+    }),
+  });
+
+  assert.equal(typeof streamOptions?.onPayload, "function");
+  assert.deepEqual(
+    await streamOptions.onPayload({ model: model.id, input: [] }, model),
+    {
+      model: model.id,
+      input: [],
+      context_management: [{ type: "compaction", compact_threshold: 96_000 }],
+      service_tier: "priority",
+    },
+  );
 });
 
 test("patched Responses stream preserves and replays opaque compaction items", async () => {

@@ -6,6 +6,7 @@
 
 #### Added
 
+- Desktop Lead-model settings now offer OpenAI Fast mode for new research and Quick Chat sessions. The choice persists across continuations, forks, recovery, and repeated automation launches; the typed launch preference, `session.openai-fast-mode.v1` capability, and advanced app-server contract timestamp keep Desktop and its host synchronized.
 - Beale iOS active-session composers now expose the shared app-server Stop action in the Send button position, including while a shell or computer-use approval is pending; typing a steering message changes the same control back to Send.
 - Beale iOS session headers now use an icon-only status circle that opens Desktop-style Active and Completed subagent rows with status, latest message, channel, model, and activity age; selecting a row opens that subagent's filtered commentary stream.
 - Beale iOS New Research now shows canonical workspace suggestions that fill the request, offers a checked Add Context launch option that expands the goal with bounded campaign-aware host context, and can launch it as a persistent Goal whose original objective survives context expansion.
@@ -1038,6 +1039,7 @@
 
 #### Changed
 
+- OpenAI-led hosted sessions now map the app-server-owned Fast mode preference to the Responses API `service_tier=priority` request field while rejecting the option for non-OpenAI Lead providers.
 - Hosted research sessions now recover automatically from up to two unexpected worker or provider failures without replacing the client transport, and app-server startup automatically continues sessions interrupted by its prior process. Recovery continues as a canonical child attempt, resumes compatible native provider state or falls back through the durable-context preflight, preserves steering received during handoff, and excludes explicit pauses and stops as well as approvals, policy or scope blocks, credential failures, integrity faults, and invalid configuration.
 - Workspace research suggestions now track novelty across prior scope versions and profile snapshots, expose generation and selection history to the suggestion model, over-generate grounded candidates, reject semantic paraphrases and generic surveys, rank concrete evidence-linked goals, and retry once with validator feedback before updating the cache.
 - New research sessions now run an isolated read-only context preflight that selects a bounded, canonical subset of workspace resources, repositories, prior research, and AGENTS-declared directories before the lead model starts. Preflight progress appears in normal session commentary; invalid selections fall back to a compact deterministic projection, while native provider resumes retain their existing context.

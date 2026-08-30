@@ -788,6 +788,60 @@ test("rejects a client profile that differs from the registered workspace profil
   );
 });
 
+test("app-server preserves OpenAI Fast mode through restart metadata and runtime arguments", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-fast-mode-"));
+  temporaryDirectories.push(directory);
+  const calls = [];
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation, options) => {
+      calls.push({ operation, options });
+      if (operation === "provider.describe") {
+        return {
+          defaultSmallModels: { "openai-codex": "gpt-5.6-luna" },
+          sessionTitleEffort: "medium",
+          shellReviewEffort: "medium",
+        };
+      }
+      if (operation === "plugin.runtime") {
+        return { skillDirs: [], selectedSkillIds: [], allowedMcpServers: [] };
+      }
+      if (operation === "session.get") throw new Error("Session not found: session-fast-mode");
+      if (operation === "session.create") return { revision: 1 };
+      throw new Error(`Unexpected operation: ${operation}`);
+    },
+  });
+  const request = sessionLaunchRequest(directory, { sessionId: "session-fast-mode" });
+  request.launch.provider = {
+    id: "openai-codex",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    fastMode: true,
+  };
+
+  const prepared = await service.prepareSession(request, "generated-session");
+
+  assert.equal(prepared.launch.provider.fastMode, true);
+  assert.ok(honeycrispSessionArgs(prepared.launch, {}).includes("--fast-mode"));
+  const createCall = calls.find((call) => call.operation === "session.create");
+  assert.equal(
+    createCall.options.input.metadata.appServerRestartLaunch.launch.provider.fastMode,
+    true,
+  );
+
+  await assert.rejects(
+    service.prepareSession({
+      ...request,
+      sessionId: "session-invalid-fast-mode",
+      launch: {
+        ...request.launch,
+        provider: { id: "xai", model: "grok-4.6", fastMode: true },
+      },
+    }, "generated-invalid-session"),
+    /Fast mode is available only when OpenAI is the Lead provider/,
+  );
+});
+
 test("app-server owns built-in plugins and pins canonical session profile identity", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-host-policy-"));
   temporaryDirectories.push(directory);
@@ -1041,6 +1095,7 @@ test("discovers overdue automations from canonical session metadata and rebuilds
             shellSafetyMode: "auto_review",
             budget: {
               repeatSchedule: { type: "hourly", interval: 2 },
+              fastMode: true,
               goalEnabled: true,
               goalObjective: "Keep the parser audit moving.",
               collaboration: { mode: "always", providers: [] },
@@ -1064,7 +1119,7 @@ test("discovers overdue automations from canonical session metadata and rebuilds
       workspaceId: "workspace-test",
       promptMarkdown: "Recheck the parser boundary.",
       goal: { objective: "Keep the parser audit moving." },
-      provider: { id: "openai-codex", model: "gpt-5.6-sol", reasoningEffort: "high" },
+      provider: { id: "openai-codex", model: "gpt-5.6-sol", reasoningEffort: "high", fastMode: true },
       shellSafetyMode: "auto_review",
       workflowId: "discovery",
       researchProfileId: "security-research",
@@ -1450,7 +1505,10 @@ test("expands typed session intent into app-server-owned Honeycrisp policy", () 
     researchProfileHash: request.launch.researchProfileHash,
     workflowId: request.launch.workflowId,
   });
-  const args = honeycrispSessionArgs(launch, {
+  const args = honeycrispSessionArgs({
+    ...launch,
+    provider: { ...launch.provider, fastMode: true },
+  }, {
     BEALE_HONEYCRISP_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["repository-search", "file-read"]),
     BEALE_HONEYCRISP_PROFILE_SIDE_EFFECT_CEILING_JSON: JSON.stringify(["none", "read"]),
     BEALE_HONEYCRISP_TOOL_MAX_BYTES: "123456",
@@ -1467,6 +1525,7 @@ test("expands typed session intent into app-server-owned Honeycrisp policy", () 
   assert.equal(args[args.indexOf("--attempt-id") + 1], "attempt-test");
   assert.equal(args[args.indexOf("--memory-backend") + 1], "honeycrisp");
   assert.ok(args.includes("--no-default-tool-config"));
+  assert.ok(args.includes("--fast-mode"));
   assert.ok(args.includes("--profile-tool-family-ceiling"));
   assert.ok(args.includes("--profile-side-effect-ceiling"));
   assert.equal(args.includes("--disable-tool-family"), false);

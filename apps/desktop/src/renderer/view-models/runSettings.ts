@@ -16,6 +16,7 @@ export const defaultRunInput: StartRunInput = {
   attemptStrategy: 'iterative_research',
   model: '',
   reasoningEffort: DEFAULT_RESEARCH_REASONING_EFFORT,
+  fastMode: false,
   collaboration: { ...DEFAULT_RESEARCH_COLLABORATION, providers: [] },
   sandboxProfile: 'host',
   budget: {

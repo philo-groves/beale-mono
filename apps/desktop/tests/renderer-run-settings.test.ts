@@ -20,6 +20,7 @@ describe('renderer run settings view model', () => {
     expect(defaultRunInput.shellSafetyMode).toBe('auto_review');
     expect(defaultRunInput.model).toBe('');
     expect(defaultRunInput.reasoningEffort).toBe('high');
+    expect(defaultRunInput.fastMode).toBe(false);
   });
 
   it('parses optional positive integers and preserves unbounded budget extension', () => {

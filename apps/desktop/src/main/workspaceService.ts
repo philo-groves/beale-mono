@@ -3286,6 +3286,7 @@ export class WorkspaceService {
     normalizedInput = {
       ...normalizedInput,
       provider: leadProvider,
+      fastMode: leadProvider === 'openai-codex' && normalizedInput.fastMode === true,
       ...(!explicitProvider && leadDefaults?.largeModel ? { model: leadDefaults.largeModel } : {}),
       ...(!explicitProvider && leadDefaults?.reasoningEffort ? { reasoningEffort: leadDefaults.reasoningEffort } : {})
     };
@@ -3330,6 +3331,7 @@ export class WorkspaceService {
       attemptStrategy: 'interactive',
       model: input.modelSelection.model,
       reasoningEffort: input.modelSelection.reasoningEffort,
+      fastMode: input.modelSelection.fastMode === true,
       sandboxProfile: 'workspace-write',
       budget: {
         maxMinutes: UNBOUNDED_RUN_MINUTES,
@@ -3989,6 +3991,7 @@ export class WorkspaceService {
           attemptStrategy: run.attemptStrategy,
           model: run.model,
           reasoningEffort: run.reasoningEffort,
+          fastMode: run.budget.fastMode === true,
           ...(run.budget.collaboration ? { collaboration: normalizeResearchCollaboration(run.budget.collaboration) } : {}),
           sandboxProfile: run.sandboxProfile,
           targetAssetId: run.targetAssetId,
@@ -7638,6 +7641,7 @@ function automationSettingsFromSession(
     attemptStrategy: stringFromRecord(storedRun ?? {}, 'attemptStrategy') || 'iterative_research',
     model: session.model,
     reasoningEffort: session.reasoningEffort,
+    fastMode: budget.fastMode === true,
     ...(budget.collaboration ? { collaboration: normalizeResearchCollaboration(budget.collaboration) } : {}),
     sandboxProfile: stringFromRecord(storedRun ?? {}, 'sandboxProfile') || 'host',
     targetAssetId: stringFromRecord(storedRun ?? {}, 'targetAssetId') || null,
@@ -7662,6 +7666,7 @@ function automationSettingsFromRun(run: RunRecord, schedule: ActiveRepeatSchedul
     attemptStrategy: run.attemptStrategy,
     model: run.model,
     reasoningEffort: run.reasoningEffort,
+    fastMode: run.budget.fastMode === true,
     ...(run.budget.collaboration ? { collaboration: normalizeResearchCollaboration(run.budget.collaboration) } : {}),
     sandboxProfile: run.sandboxProfile,
     targetAssetId: run.targetAssetId,

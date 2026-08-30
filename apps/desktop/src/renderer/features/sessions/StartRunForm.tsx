@@ -566,7 +566,13 @@ export function ResearchSettingsForm({
       if (current.provider === selectedProvider.id && current.model === model.id && current.reasoningEffort === effort) {
         return current;
       }
-      return { ...current, provider: selectedProvider.id, model: model.id, reasoningEffort: effort };
+      return {
+        ...current,
+        provider: selectedProvider.id,
+        model: model.id,
+        reasoningEffort: effort,
+        fastMode: selectedProvider.id === 'openai-codex' && current.fastMode === true
+      };
     });
   }, [defaultProviderId, openAiStatus, providerModelDefaults, researchProviderStatuses, selectedProvider]);
 
@@ -715,6 +721,7 @@ export function ResearchSettingsForm({
         ...current,
         provider: providerId,
         model: model.id,
+        fastMode: providerId === 'openai-codex' && current.fastMode === true,
         reasoningEffort: inputValueForEffort(preferredEffort(
           model.effortLevels,
           providerModelDefaults?.[providerId]?.reasoningEffort ?? effortLevelFromInput(current.reasoningEffort)
@@ -856,7 +863,8 @@ export function ResearchSettingsForm({
     const initialModelSelection: ResearchModelSelection | undefined = selectedProviderId && selectedModel ? {
       provider: selectedProviderId,
       model: selectedModel.id,
-      reasoningEffort: selectedEffort
+      reasoningEffort: selectedEffort,
+      fastMode: selectedProviderId === 'openai-codex' && input.fastMode === true
     } : undefined;
     const startFromSessionComposer = (
       promptMarkdown: string,
@@ -869,6 +877,7 @@ export function ResearchSettingsForm({
         provider: modelSelection.provider,
         model: modelSelection.model,
         reasoningEffort: inputValueForEffort(modelSelection.reasoningEffort),
+        fastMode: modelSelection.provider === 'openai-codex' && modelSelection.fastMode === true,
         shellSafetyMode
       };
       inputRef.current = next;
@@ -1069,6 +1078,7 @@ export function ResearchSettingsForm({
                   providerValue={selectedProviderId ?? ''}
                   modelValue={selectedModel?.id ?? ''}
                   effortValue={selectedEffort}
+                  fastModeValue={selectedProviderId === 'openai-codex' ? input.fastMode === true : undefined}
                   title="Lead provider, model, and effort"
                   ariaLabel="Lead model settings"
                   disabled={!selectedModel || generatingPrompt}
@@ -1085,6 +1095,7 @@ export function ResearchSettingsForm({
                   onSelectProvider={(value) => selectProvider(value as ResearchModelProviderId)}
                   onSelectModel={selectModel}
                   onSelectEffort={(value) => selectEffort(value as ResearchModelEffortLevel)}
+                  onSelectFastMode={(enabled) => update('fastMode', enabled)}
                 />
               </div>
               <div className="research-model-team-column research-collaborator-model-column">

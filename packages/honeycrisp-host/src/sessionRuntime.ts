@@ -266,6 +266,7 @@ interface ParsedArgs {
   zaiPolicyRiskAcknowledged: boolean;
   openrouterPolicyRiskAcknowledged: boolean;
   model: string | undefined;
+  fastMode: boolean;
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
   titleModelDefault: string | undefined;
@@ -381,6 +382,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let zaiPolicyRiskAcknowledged = false;
   let openrouterPolicyRiskAcknowledged = false;
   let model: string | undefined;
+  let fastMode = false;
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
   let titleModelDefault: string | undefined;
@@ -506,6 +508,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--model") {
       model = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--fast-mode") {
+      fastMode = true;
     } else if (arg === "--title-model") {
       titleModel = readOptionValue(argv, index, arg);
       index += 1;
@@ -718,6 +722,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     zaiPolicyRiskAcknowledged,
     openrouterPolicyRiskAcknowledged,
     model,
+    fastMode,
     titleModel,
     titleEffort,
     titleModelDefault,
@@ -1506,6 +1511,7 @@ function usage(): string {
     "  --zai-policy-risk-acknowledged  Confirm host-recorded Z.ai policy-risk acceptance",
     "  --openrouter-policy-risk-acknowledged  Confirm host-recorded OpenRouter and routed-provider policy-risk acceptance",
     "  --model <model>        Override configured/default model for real mode",
+    "  --fast-mode            Use OpenAI Fast mode for Lead-model requests",
     "  --title-model <model>  Generate a session title with this model from the selected provider",
     "  --title-effort <level> Reasoning effort for session title generation (default: medium)",
     "  --title-model-default <model>  Host fallback used only when the profile has no applicable title model",
@@ -2551,6 +2557,7 @@ function createContextPreflightExecutor(input: {
   return createPiAgentExecutor({
     provider: input.modelConfig.provider,
     model: input.modelConfig.model,
+    ...(input.args.fastMode ? { fastMode: true } : {}),
     ...(input.modelConfig.effort ? { reasoning: input.modelConfig.effort } : {}),
     toolRegistry: input.toolRegistry,
     researchProfile: input.resolvedResearchProfile.profile,
@@ -2647,6 +2654,7 @@ function createRealAgentExecutor(
   const executorInput = {
     provider: modelConfig.provider,
     model: modelConfig.model,
+    ...(args.fastMode ? { fastMode: true } : {}),
     ...(providerSessionId ? { sessionId: providerSessionId } : {}),
     ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
     ...(modelConfig.effort ? { reasoning: modelConfig.effort } : {}),
@@ -3787,6 +3795,9 @@ function validateCybersecurityRunPreflight(
   workspaceContext: ResearchWorkspaceContext,
   isCybersecurityRun: boolean,
 ): void {
+  if (args.fastMode && modelConfig.provider !== "openai-codex") {
+    throw new Error("--fast-mode requires the openai-codex Lead provider.");
+  }
   if (!isCybersecurityRun) return;
   if (!workspaceContext.authorization) {
     throw new Error(

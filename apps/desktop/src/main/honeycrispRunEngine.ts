@@ -231,6 +231,7 @@ export class HoneycrispRunEngine {
         ...input.budget,
         runEngine: 'honeycrisp',
         modelProvider: input.provider?.trim() || null,
+        fastMode: input.fastMode === true,
         goalEnabled: input.goalEnabled,
         goalObjective,
         researchWorkflowId: workflowId,
@@ -248,6 +249,7 @@ export class HoneycrispRunEngine {
         provider: input.provider?.trim() || null,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
+        fastMode: input.fastMode === true,
         goalEnabled: input.goalEnabled,
         goalObjective,
         researchProfileSnapshotId: researchProfile.id,
@@ -448,6 +450,7 @@ export class HoneycrispRunEngine {
         provider: launchRequest.launch.provider?.id ?? null,
         model: launchRequest.launch.provider?.model ?? null,
         reasoningEffort: launchRequest.launch.provider?.reasoningEffort ?? null,
+        fastMode: launchRequest.launch.provider?.fastMode === true,
         goalEnabled: Boolean(launchRequest.launch.goal),
         shellSafetyMode: launchRequest.launch.shellSafetyMode,
         workspaceId: launchRequest.launch.workspaceId,
@@ -2661,12 +2664,13 @@ function honeycrispSessionLaunchRequest(
       promptMarkdown: input.promptMarkdown,
       ...(input.goalEnabled ? { goal: { ...(objective ? { objective } : {}) } } : {}),
       ...(
-        input.provider?.trim() || input.model.trim() || input.reasoningEffort.trim()
+        input.provider?.trim() || input.model.trim() || input.reasoningEffort.trim() || input.fastMode
           ? {
               provider: {
                 ...(input.provider?.trim() ? { id: input.provider.trim() } : {}),
                 ...(input.model.trim() ? { model: input.model.trim() } : {}),
-                ...(input.reasoningEffort.trim() ? { reasoningEffort: input.reasoningEffort.trim() } : {})
+                ...(input.reasoningEffort.trim() ? { reasoningEffort: input.reasoningEffort.trim() } : {}),
+                ...(input.fastMode ? { fastMode: true } : {})
               }
             }
           : {}
@@ -2707,6 +2711,7 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
     attemptStrategy: run.attemptStrategy,
     model: run.model,
     reasoningEffort: run.reasoningEffort,
+    fastMode: run.budget.fastMode === true,
     ...(run.budget.collaboration ? { collaboration: normalizeResearchCollaboration(run.budget.collaboration) } : {}),
     sandboxProfile: run.sandboxProfile,
     targetAssetId: run.targetAssetId,

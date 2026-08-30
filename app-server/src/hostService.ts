@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   BEALE_APP_SERVER_CONTROL_VERSION,
+  HONEYCRISP_SESSION_LAUNCH_VERSION,
   type BealeAppServerCanonicalResult,
   type BealeAppServerProviderCatalog,
   type BealeMemoryNotificationFeed,
@@ -316,6 +317,10 @@ export class AppServerHostService {
       || providerDefaults?.leadModel;
     const reasoningEffort = request.launch.provider?.reasoningEffort?.trim()
       || providerDefaults?.reasoningEffort;
+    const fastMode = request.launch.provider?.fastMode === true;
+    if (fastMode && providerId !== 'openai-codex') {
+      throw new Error('Fast mode is available only when OpenAI is the Lead provider.');
+    }
     const shellReviewModels = {
       ...providerSemantics.defaultSmallModels,
       ...Object.fromEntries(Object.entries(providerSettings.modelDefaults).flatMap(([id, defaults]) => (
@@ -367,6 +372,7 @@ export class AppServerHostService {
       providerId,
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(fastMode ? { fastMode: true } : {}),
       profileId
     });
     await this.ensureCanonicalSession({
@@ -401,6 +407,7 @@ export class AppServerHostService {
           id: providerId,
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(fastMode ? { fastMode: true } : {}),
           riskAcknowledgements: providerSettings.riskAcknowledgements,
           authenticationPreferences: providerSettings.authenticationPreferences,
           ...(request.launch.generateTitle
@@ -521,7 +528,7 @@ export class AppServerHostService {
             continue;
           }
           const request: HoneycrispSessionLaunchRequest = {
-            launchVersion: 2,
+            launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
             sessionId,
             launch: restart.launch
           };
@@ -1308,6 +1315,7 @@ function restartLaunchDescriptor(
     providerId: string;
     model?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
     profileId: string;
   }
 ): StoredRestartLaunchDescriptor {
@@ -1322,7 +1330,8 @@ function restartLaunchDescriptor(
       provider: {
         id: resolved.providerId,
         ...(resolved.model ? { model: resolved.model } : {}),
-        ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {})
+        ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
+        ...(resolved.fastMode ? { fastMode: true } : {})
       },
       shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
       ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
@@ -1371,6 +1380,7 @@ function dueAutomation(
   const researchProfileHash = nonEmpty(profile.hash);
   const workflowId = nonEmpty(session.workflowId);
   const collaboration = isRecord(budget.collaboration) ? budget.collaboration : null;
+  const fastMode = budget.fastMode === true && providerId === 'openai-codex';
   const shellSafetyMode = nonEmpty(metadata.shellSafetyMode)
     ?? nonEmpty(storedRun.shellSafetyMode)
     ?? 'auto_review';
@@ -1380,17 +1390,18 @@ function dueAutomation(
   return {
     dueAt: dueAt.toISOString(),
     request: {
-      launchVersion: 2,
+      launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
       sessionId,
       launch: {
         workspaceId,
         promptMarkdown,
         ...(goalEnabled ? { goal: { objective: goalObjective } } : {}),
-        ...(providerId || model || reasoningEffort ? {
+        ...(providerId || model || reasoningEffort || fastMode ? {
           provider: {
             ...(providerId ? { id: providerId } : {}),
             ...(model ? { model } : {}),
-            ...(reasoningEffort ? { reasoningEffort } : {})
+            ...(reasoningEffort ? { reasoningEffort } : {}),
+            ...(fastMode ? { fastMode: true } : {})
           }
         } : {}),
         shellSafetyMode,
@@ -1448,7 +1459,7 @@ function decodeRestartLaunchDescriptor(value: unknown): StoredRestartLaunchDescr
   if (!isRecord(stored) || stored.schemaVersion !== 1 || typeof stored.eligible !== 'boolean') return null;
   try {
     const decoded = decodeHoneycrispSessionLaunchRequest({
-      launchVersion: 2,
+      launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
       sessionId: 'startup-recovery-validation',
       launch: stored.launch
     });

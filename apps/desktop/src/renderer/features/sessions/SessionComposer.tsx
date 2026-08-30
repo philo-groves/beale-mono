@@ -119,6 +119,7 @@ export const MainSteerArea = memo(function MainSteerArea({
   const [selectedEffort, setSelectedEffort] = useState<ResearchModelEffortLevel>(() => detail
     ? researchEffort(detail.run.reasoningEffort)
     : preferredResearchEffort(initialModel?.effortLevels ?? [], initialModelSelection?.reasoningEffort ?? 'high'));
+  const [fastMode, setFastMode] = useState(initialModelSelection?.fastMode === true);
   const [initialShellSafetyMode, setInitialShellSafetyMode] = useState<ShellSafetyMode>(() =>
     normalizeShellSafetyMode(detail?.run.shellSafetyMode ?? initialSafetyMode)
   );
@@ -164,7 +165,8 @@ export const MainSteerArea = memo(function MainSteerArea({
   const modelSelection: ResearchModelSelection = {
     provider: selectedProviderId,
     model: selectedModel?.id ?? detail?.run.model ?? '',
-    reasoningEffort: selectedEffort
+    reasoningEffort: selectedEffort,
+    fastMode: selectedProviderId === 'openai-codex' && fastMode
   };
   const collaboration = normalizeResearchCollaboration(collaborationInput ?? detail?.run.budget.collaboration);
 
@@ -181,6 +183,7 @@ export const MainSteerArea = memo(function MainSteerArea({
         nextModel.effortLevels,
         initialModelSelection?.reasoningEffort ?? (current === 'off' ? 'high' : current)
       ));
+      setFastMode(initialModelSelection?.fastMode === true && nextProvider.providerId === 'openai-codex');
       return;
     }
     const nextModel = providerModelCatalog
@@ -200,6 +203,7 @@ export const MainSteerArea = memo(function MainSteerArea({
     initialModelSelection?.model,
     initialModelSelection?.provider,
     initialModelSelection?.reasoningEffort,
+    initialModelSelection?.fastMode,
     providerModelCatalog
   ]);
 
@@ -318,6 +322,7 @@ export const MainSteerArea = memo(function MainSteerArea({
           providerValue={selectedProviderId}
           modelValue={selectedModel?.id ?? ''}
           effortValue={selectedEffort}
+          fastModeValue={!detail && selectedProviderId === 'openai-codex' ? fastMode : undefined}
           title="Model settings for the next agent turn"
           ariaLabel="Model settings for the next agent turn"
           disabled={!selectedModel || composerControlsDisabled}
@@ -336,6 +341,7 @@ export const MainSteerArea = memo(function MainSteerArea({
             setSelectedProviderId(providerId);
             setSelectedModelId(nextModel.id);
             setSelectedEffort((current) => preferredResearchEffort(nextModel.effortLevels, current));
+            if (providerId !== 'openai-codex') setFastMode(false);
           }}
           onSelectModel={(value) => {
             const model = modelOptions.find((candidate) => candidate.id === value);
@@ -344,6 +350,7 @@ export const MainSteerArea = memo(function MainSteerArea({
             setSelectedEffort((current) => preferredResearchEffort(model.effortLevels, current));
           }}
           onSelectEffort={(value) => setSelectedEffort(value as ResearchModelEffortLevel)}
+          onSelectFastMode={setFastMode}
         />
         {showCollaboration ? (
           <CollaborationSelector

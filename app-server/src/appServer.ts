@@ -330,6 +330,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       const providerId = residentText(explicit.provider);
       const model = residentText(explicit.model);
       const reasoningEffort = residentText(explicit.reasoningEffort);
+      const fastMode = explicit.fastMode === true;
       const workflowId = residentText(explicit.workflowId);
       const requestedWorkspace = residentText(args.registryWorkspaceId);
       if (requestedWorkspace) {
@@ -346,12 +347,13 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         launch: {
           workspaceId: binding.workspaceId,
           promptMarkdown,
-          ...(providerId || model || reasoningEffort
+          ...(providerId || model || reasoningEffort || fastMode
             ? {
                 provider: {
                   ...(providerId ? { id: providerId } : {}),
                   ...(model ? { model } : {}),
-                  ...(reasoningEffort ? { reasoningEffort } : {})
+                  ...(reasoningEffort ? { reasoningEffort } : {}),
+                  ...(fastMode ? { fastMode: true } : {})
                 }
               }
             : {}),

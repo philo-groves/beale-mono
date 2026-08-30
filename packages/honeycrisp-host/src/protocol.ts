@@ -55,10 +55,11 @@ export const HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX = "HONEYCRISP_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-08-28T22:00:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-08-30T22:00:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
+  "session.openai-fast-mode.v1",
   "session.introspection-runtime.v1",
   "session.exit-diagnostics",
   "session.transport-path.v1",
@@ -521,6 +522,7 @@ export interface HoneycrispSessionLaunchProvider {
   id?: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 export interface HoneycrispSessionLaunchContinuation {
@@ -597,6 +599,9 @@ export function decodeHoneycrispSessionLaunchRequest(value: unknown): Honeycrisp
     optionalBoundedString(provider, "id", 128);
     optionalBoundedString(provider, "model", 512);
     optionalBoundedString(provider, "reasoningEffort", 64);
+    if (provider.fastMode !== undefined && typeof provider.fastMode !== "boolean") {
+      throw new Error("launch.provider.fastMode must be a boolean.");
+    }
   }
 
   if (launch.collaboration !== undefined && !isRecord(launch.collaboration)) {

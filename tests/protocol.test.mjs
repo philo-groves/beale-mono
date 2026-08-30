@@ -19,6 +19,7 @@ import {
   decodeBealeAppServerSessionStopResult,
   decodeBealeAppServerShutdownResult,
   decodeHoneycrispProtocolEnvelope,
+  decodeHoneycrispSessionLaunchRequest,
   decodeHoneycrispServerMessage,
   HONEYCRISP_PROTOCOL_OPERATIONS,
   HONEYCRISP_PROTOCOL_VERSION,
@@ -74,6 +75,7 @@ test("protocol describe exposes a runtime-bound v12 repository contract for app-
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.channels.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.goal-suggestions.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.startup-recovery.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-fast-mode.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.prompt-expansion.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.campaign-tracks.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("source.clone-modes.v1"));
@@ -104,6 +106,25 @@ test("protocol argument and WebSocket DTO decoders share correlation and error s
     error: { code: "invalid_message", message: "Bad message.", retryable: false },
     message: "Bad message.",
   }).error, { code: "invalid_message", message: "Bad message.", retryable: false });
+});
+
+test("the typed session launch carries an OpenAI Fast mode preference", () => {
+  const request = {
+    launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+    launch: {
+      workspaceId: "workspace-example",
+      promptMarkdown: "Inspect the parser boundary.",
+      provider: { id: "openai-codex", model: "gpt-5.6-sol", fastMode: true },
+    },
+  };
+  assert.deepEqual(decodeHoneycrispSessionLaunchRequest(request), request);
+  assert.throws(
+    () => decodeHoneycrispSessionLaunchRequest({
+      ...request,
+      launch: { ...request.launch, provider: { ...request.launch.provider, fastMode: "yes" } },
+    }),
+    /fastMode must be a boolean/,
+  );
 });
 
 test("app-server control DTOs share strict version, route, replay, and error semantics", () => {

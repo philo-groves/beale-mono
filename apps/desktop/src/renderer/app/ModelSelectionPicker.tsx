@@ -10,7 +10,7 @@ export interface ModelSelectionPickerOption {
   disabled?: boolean;
 }
 
-type ModelSelectionSection = 'provider' | 'model' | 'effort';
+type ModelSelectionSection = 'provider' | 'model' | 'effort' | 'fastMode';
 
 interface ModelSelectionSectionDefinition {
   id: ModelSelectionSection;
@@ -45,13 +45,15 @@ export function ModelSelectionPicker({
   providerOptions,
   modelOptions,
   effortOptions,
+  fastModeValue,
   disabled = false,
   title,
   ariaLabel,
   menuAction,
   onSelectProvider,
   onSelectModel,
-  onSelectEffort
+  onSelectEffort,
+  onSelectFastMode
 }: {
   className?: string;
   providerValue: string;
@@ -60,6 +62,7 @@ export function ModelSelectionPicker({
   providerOptions: ModelSelectionPickerOption[];
   modelOptions: ModelSelectionPickerOption[];
   effortOptions: ModelSelectionPickerOption[];
+  fastModeValue?: boolean;
   disabled?: boolean;
   title: string;
   ariaLabel: string;
@@ -67,6 +70,7 @@ export function ModelSelectionPicker({
   onSelectProvider: (value: string) => void;
   onSelectModel: (value: string) => void;
   onSelectEffort: (value: string) => void;
+  onSelectFastMode?: (enabled: boolean) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<ModelSelectionSection | null>(null);
@@ -79,7 +83,8 @@ export function ModelSelectionPicker({
   const rowRefs = useRef<Record<ModelSelectionSection, HTMLButtonElement | null>>({
     provider: null,
     model: null,
-    effort: null
+    effort: null,
+    fastMode: null
   });
   const sections: ModelSelectionSectionDefinition[] = [
     {
@@ -102,7 +107,19 @@ export function ModelSelectionPicker({
       value: effortValue,
       options: effortOptions,
       onSelect: onSelectEffort
-    }
+    },
+    ...(fastModeValue !== undefined && onSelectFastMode
+      ? [{
+          id: 'fastMode' as const,
+          label: 'Fast mode',
+          value: fastModeValue ? 'on' : 'off',
+          options: [
+            { value: 'off', label: 'Off' },
+            { value: 'on', label: 'On' }
+          ],
+          onSelect: (value: string) => onSelectFastMode(value === 'on')
+        }]
+      : [])
   ];
   const activeDefinition = sections.find((section) => section.id === activeSection) ?? null;
   const modelLabel = selectedLabel(modelOptions, modelValue);
@@ -346,13 +363,15 @@ export function ModelSelectionPicker({
         onKeyDown={(event) => {
           if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
           event.preventDefault();
-          const section = event.key === 'ArrowDown' ? 'provider' : 'effort';
+          const section = event.key === 'ArrowDown' ? sections[0]?.id : sections[sections.length - 1]?.id;
+          if (!section) return;
           openPicker(section, true);
         }}
       >
         <ProviderIcon className="model-selection-picker-provider-icon" provider={providerValue} size={13} aria-hidden="true" />
         <span className="model-selection-picker-model">{modelLabel}</span>
         <span className="model-selection-picker-effort">{effortLabel}</span>
+        {fastModeValue ? <span className="model-selection-picker-fast-mode">Fast</span> : null}
         <ChevronDown className="model-selection-picker-trigger-chevron" size={13} aria-hidden="true" />
       </button>
       {menu}

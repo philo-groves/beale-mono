@@ -10330,6 +10330,7 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
 }
 
 .model-selection-picker-effort,
+.model-selection-picker-fast-mode,
 .model-selection-picker-trigger-chevron,
 .main-steer-safety-mode-picker .floating-text-picker-chevron {
   flex: 0 0 auto;
@@ -10361,15 +10362,18 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
 
 .main-steer-model-selection-picker .model-selection-picker-trigger:hover:not(:disabled) :is(
   .model-selection-picker-model,
-  .model-selection-picker-effort
+  .model-selection-picker-effort,
+  .model-selection-picker-fast-mode
 ),
 .main-steer-model-selection-picker .model-selection-picker-trigger:focus-visible :is(
   .model-selection-picker-model,
-  .model-selection-picker-effort
+  .model-selection-picker-effort,
+  .model-selection-picker-fast-mode
 ),
 .main-steer-model-selection-picker.is-open .model-selection-picker-trigger :is(
   .model-selection-picker-model,
-  .model-selection-picker-effort
+  .model-selection-picker-effort,
+  .model-selection-picker-fast-mode
 ) {
   color: var(--text);
 }
@@ -10388,6 +10392,7 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
 .model-selection-picker-trigger:disabled .model-selection-picker-model,
 .model-selection-picker-trigger:disabled .model-selection-picker-provider-icon,
 .model-selection-picker-trigger:disabled .model-selection-picker-effort,
+.model-selection-picker-trigger:disabled .model-selection-picker-fast-mode,
 .model-selection-picker-trigger:disabled .model-selection-picker-trigger-chevron,
 .main-steer-safety-mode-picker .floating-text-picker-trigger:disabled .floating-text-picker-chevron {
   color: var(--gray-55);

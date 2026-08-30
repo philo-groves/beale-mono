@@ -87,6 +87,7 @@ export interface CreatePiAgentExecutorOptions {
   authFile?: string;
   maxTokens?: number;
   reasoning?: SimpleStreamOptions["reasoning"];
+  fastMode?: boolean;
   sessionId?: string;
   initialMessages?: readonly AgentMessage[];
   models?: Pick<Models, "getModel" | "streamSimple">;
@@ -168,6 +169,15 @@ export function applyNativeOpenAiCompaction(
       { type: "compaction", compact_threshold: compactThreshold },
     ],
   };
+}
+
+export function applyOpenAiFastMode(
+  payload: unknown,
+  model: NativeOpenAiCompactionModel,
+  enabled: boolean,
+): unknown {
+  if (!enabled || !isNativeOpenAiResponsesModel(model) || !isRecord(payload)) return payload;
+  return { ...payload, service_tier: "priority" };
 }
 
 export function extractCompatiblePiAgentResumableState(
@@ -576,6 +586,7 @@ export function createPiAgentExecutor(
                 routedModel,
                 { ...streamOptions, ...(apiKey ? { apiKey } : {}) },
                 providerSessionId,
+                options.fastMode === true,
               ),
             );
           }
@@ -591,6 +602,7 @@ export function createPiAgentExecutor(
                 ...(active.reasoningEffort && active.reasoningEffort !== "off" ? { reasoning: active.reasoningEffort } : {}),
               },
               providerSessionId,
+              options.fastMode === true,
             ),
           );
         };
@@ -2661,8 +2673,20 @@ function withProviderSession(
   model: NativeOpenAiCompactionModel,
   options: SimpleStreamOptions | undefined,
   sessionId: string,
+  fastMode: boolean,
 ): SimpleStreamOptions {
-  return withNativeOpenAiCompaction(model, { ...options, sessionId }) ?? { ...options, sessionId };
+  const sessionOptions = withNativeOpenAiCompaction(model, { ...options, sessionId }) ?? { ...options, sessionId };
+  if (!fastMode || !isNativeOpenAiResponsesModel(model)) return sessionOptions;
+  const previousOnPayload = sessionOptions.onPayload;
+  return {
+    ...sessionOptions,
+    onPayload: async (payload, payloadModel) => {
+      const transformed = previousOnPayload
+        ? await previousOnPayload(payload, payloadModel)
+        : payload;
+      return applyOpenAiFastMode(transformed ?? payload, model, true);
+    },
+  };
 }
 
 function providerSessionIdForAgent(rootSessionId: string, agentId: string, root: boolean): string {

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { HoneycrispMemoryNodeSummary, ResearchCollaborationProviderPreference, ResearchGoalSuggestionsByPhase, RunDetail, TraceEventRecord, WorkspaceSnapshot } from '@shared/types';
 import { BottomSheet, Modal } from '../src/renderer/app/Modal';
+import { ModelSelectionPicker } from '../src/renderer/app/ModelSelectionPicker';
 import { MemoryDetailView } from '../src/renderer/features/research/MemorySidePanel';
 import { expandedDeviceCapturePanelWidth, isIosDeviceOs, latestOverallRunbookExecution, mainSessionViewState, sessionContentAvailable, shouldShowSessionNextSteps } from '../src/renderer/features/sessions/MainSessionWorkspace';
 import {
@@ -19,6 +20,26 @@ import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollba
 import { applyResearchKit, emptyWorkspaceOnboardingForm, onboardingFormFromDefaults } from '../src/renderer/view-models/workspaceOnboarding';
 
 describe('renderer dialog surfaces', () => {
+  it('shows OpenAI Fast mode in the lead-model picker summary when enabled', () => {
+    const html = renderToStaticMarkup(createElement(ModelSelectionPicker, {
+      providerValue: 'openai-codex',
+      modelValue: 'gpt-5.6-sol',
+      effortValue: 'high',
+      providerOptions: [{ value: 'openai-codex', label: 'OpenAI' }],
+      modelOptions: [{ value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' }],
+      effortOptions: [{ value: 'high', label: 'High' }],
+      fastModeValue: true,
+      title: 'Lead provider, model, effort, and processing mode',
+      ariaLabel: 'Lead model settings',
+      onSelectProvider: () => undefined,
+      onSelectModel: () => undefined,
+      onSelectEffort: () => undefined,
+      onSelectFastMode: () => undefined
+    }));
+
+    expect(html).toContain('class="model-selection-picker-fast-mode">Fast</span>');
+  });
+
   it('sizes expanded device capture from the available height instead of half the workspace', () => {
     expect(expandedDeviceCapturePanelWidth(1440, 900, 1290 / 2796)).toBe(423);
     expect(expandedDeviceCapturePanelWidth(1000, 900, 2)).toBe(634);

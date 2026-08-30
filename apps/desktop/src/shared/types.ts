@@ -1629,6 +1629,7 @@ export interface ResearchModelSelection {
   provider: ResearchModelProviderId;
   model: string;
   reasoningEffort: ResearchModelEffortLevel;
+  fastMode?: boolean;
 }
 
 export type ResearchCollaborationMode = 'solo' | 'adaptive' | 'always';
@@ -1697,6 +1698,7 @@ export interface StartRunInput {
   attemptStrategy: string;
   model: string;
   reasoningEffort: string;
+  fastMode?: boolean;
   collaboration?: ResearchCollaborationPreferences;
   sandboxProfile: string;
   targetAssetId?: string | null;
