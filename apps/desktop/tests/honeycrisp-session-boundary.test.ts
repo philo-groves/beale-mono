@@ -116,8 +116,50 @@ describe('Honeycrisp session persistence boundary', () => {
       await flushHoneycrispSessionWrites(database, context.run.id);
       expect(database.listRunRows().find((row) => row.run.id === context.run.id)?.lastMessageAt)
         .toBe(finalMessage.createdAt);
+      const sessionStore = new HoneycrispSessionStore({ databasePath });
+      try {
+        sessionStore.appendEvent(context.run.id, {
+          id: 'event_canonical_session_usage',
+          kind: 'agent.event',
+          timestamp: new Date().toISOString(),
+          summary: 'Model turn completed.',
+          payload: {
+            type: 'turn_completed',
+            usage: {
+              input: 500_000,
+              output: 100_000,
+              cacheRead: 1_900_000,
+              cacheWrite: 0,
+              totalTokens: 2_500_000
+            }
+          }
+        });
+        sessionStore.appendEvent(context.run.id, {
+          id: 'event_canonical_memory_search',
+          kind: 'research.event',
+          timestamp: new Date().toISOString(),
+          summary: 'Memory search completed.',
+          payload: {
+            event: {
+              id: 'nested_canonical_memory_search',
+              kind: 'tool.observed',
+              payload: { toolActionId: 'memory_search_one', toolName: 'memory.search' }
+            }
+          }
+        });
+      } finally {
+        sessionStore.close();
+      }
       await expect(getHoneycrispRunDetailForClient(database, context.run.id)).resolves.toMatchObject({
-        nextStepSuggestions: saved
+        nextStepSuggestions: saved,
+        tokenUsage: {
+          totalTokens: 2_500_000,
+          inputTokens: 2_400_000,
+          outputTokens: 100_000,
+          cacheReadTokens: 1_900_000,
+          cachePromptTokens: 2_400_000
+        },
+        activityCounts: { memorySearches: 1, memoryUpdates: 0 }
       });
     } finally {
       database.close();
@@ -349,7 +391,19 @@ describe('Honeycrisp session persistence boundary', () => {
         status: 'interrupted',
         endedAt: '2026-08-16T12:02:00.000Z'
       });
-      database.refreshBreakoutRoomStatus('room_interrupted');
+      const previousProtocolCommand = process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND;
+      process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = '/definitely-not-a-honeycrisp-protocol-client';
+      try {
+        expect(database.findBreakoutRoomMember(context.run.id, context.attempt.id, '/root/worker')).toEqual(
+          expect.objectContaining({ id: 'member_worker', status: 'interrupted' })
+        );
+        expect(database.refreshBreakoutRoomStatus('room_interrupted')).toEqual(
+          expect.objectContaining({ id: 'room_interrupted', status: 'interrupted' })
+        );
+      } finally {
+        if (previousProtocolCommand === undefined) delete process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND;
+        else process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = previousProtocolCommand;
+      }
 
       expect(database.getRunDetail(context.run.id).breakoutRooms).toEqual([
         expect.objectContaining({ id: 'room_interrupted', status: 'interrupted' })

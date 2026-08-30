@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
+import { installUndiciTypeOfServiceCompatibility } from 'honeycrisp/node-network-compatibility';
 import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTROL_VERSION,
@@ -60,6 +61,8 @@ import {
   longSessionRecoveryDelayMs,
   longSessionRecoveryFallbackPrompt
 } from './sessionRecovery.js';
+
+installUndiciTypeOfServiceCompatibility();
 
 const DEFAULT_HOST = '127.0.0.1';
 const MAX_REQUEST_BODY_BYTES = 524_288;
@@ -155,6 +158,12 @@ interface SessionRuntime {
   currentAttemptWasInitial: boolean;
   recoveryCount: number;
   recoveryTimer: NodeJS.Timeout | null;
+  introspectionToken: string | null;
+}
+
+interface ResidentIntrospectionBinding {
+  sessionId: string;
+  workspaceId: string;
 }
 
 function isTerminal(state: SessionState): boolean {
@@ -181,6 +190,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     ? null
     : options.automationScheduler ?? {};
   const sessions = new Map<string, SessionRuntime>();
+  const introspectionBindings = new Map<string, ResidentIntrospectionBinding>();
   let discoveryRecord: AppServerDiscoveryRecord | null = null;
   let automationTimer: NodeJS.Timeout | null = null;
   let automationScanInProgress = false;
@@ -266,6 +276,107 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     }
   }
 
+  function requireResidentIntrospection(request: IncomingMessage): ResidentIntrospectionBinding {
+    for (const [token, binding] of introspectionBindings) {
+      if (authorizedBearer(request.headers.authorization, token)) return binding;
+    }
+    throw new HttpError(401, 'A valid Beale introspection bearer token is required.');
+  }
+
+  async function invokeResidentIntrospectionTool(
+    binding: ResidentIntrospectionBinding,
+    tool: string,
+    args: Record<string, unknown>
+  ): Promise<unknown> {
+    if (tool === 'list_workspaces') return hostService.listWorkspaces();
+    if (tool === 'get_workspace') {
+      const requested = residentText(args.registryWorkspaceId);
+      const workspace = hostService.listWorkspaces().workspaces.find((candidate) => (
+        requested ? candidate.id === requested || candidate.workspaceId === requested : candidate.workspaceId === binding.workspaceId
+      ));
+      if (!workspace || workspace.workspaceId !== binding.workspaceId) {
+        throw new Error('Resident introspection can only access the automation workspace.');
+      }
+      return { workspace };
+    }
+    if (tool === 'list_sessions') {
+      const requestedStatus = residentText(args.status);
+      const rawLimit = typeof args.limit === 'number' ? args.limit : 50;
+      const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, Math.floor(rawLimit))) : 50;
+      const projected = [...sessions.values()]
+        .filter((runtime) => runtime.sessionId !== binding.sessionId)
+        .filter((runtime) => runtime.request.launch.workspaceId === binding.workspaceId)
+        .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+        .map((runtime) => ({
+          ...catalogEntry(runtime),
+          runId: runtime.sessionId,
+          status: runtime.state === 'running' ? 'active' : runtime.state === 'starting' ? 'queued' : runtime.state
+        }))
+        .filter((session) => !requestedStatus || session.status === requestedStatus)
+        .slice(0, limit);
+      return { sessions: projected };
+    }
+    if (tool === 'stop_session') {
+      const sessionId = residentRequiredText(args.runId, 'runId');
+      const runtime = sessions.get(sessionId);
+      if (!runtime || runtime.request.launch.workspaceId !== binding.workspaceId || runtime.sessionId === binding.sessionId) {
+        throw new Error(`No other active session in this workspace matched ${sessionId}.`);
+      }
+      return { runId: sessionId, stopped: stopSession(sessionId) === true };
+    }
+    if (tool === 'launch_session') {
+      const explicit = isRecord(args.startRunInput) ? args.startRunInput : args;
+      const promptMarkdown = residentRequiredText(explicit.promptMarkdown, 'promptMarkdown');
+      const providerId = residentText(explicit.provider);
+      const model = residentText(explicit.model);
+      const reasoningEffort = residentText(explicit.reasoningEffort);
+      const workflowId = residentText(explicit.workflowId);
+      const requestedWorkspace = residentText(args.registryWorkspaceId);
+      if (requestedWorkspace) {
+        const match = hostService.listWorkspaces().workspaces.find((workspace) => (
+          workspace.id === requestedWorkspace || workspace.workspaceId === requestedWorkspace
+        ));
+        if (!match || match.workspaceId !== binding.workspaceId) {
+          throw new Error('Resident introspection can only launch sessions in the automation workspace.');
+        }
+      }
+      const goalObjective = residentText(explicit.goalObjective);
+      const started = await startSession({
+        launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+        launch: {
+          workspaceId: binding.workspaceId,
+          promptMarkdown,
+          ...(providerId || model || reasoningEffort
+            ? {
+                provider: {
+                  ...(providerId ? { id: providerId } : {}),
+                  ...(model ? { model } : {}),
+                  ...(reasoningEffort ? { reasoningEffort } : {})
+                }
+              }
+            : {}),
+          shellSafetyMode: residentText(explicit.shellSafetyMode) || 'auto_review',
+          ...(workflowId ? { workflowId } : {}),
+          ...(explicit.goalEnabled === true
+            ? { goal: { ...(goalObjective ? { objective: goalObjective } : {}) } }
+            : {})
+        }
+      }, false);
+      return { runId: started.session.sessionId, session: started.session };
+    }
+    throw new Error(`Beale introspection tool ${tool} is unavailable from a resident automation.`);
+  }
+
+  function residentText(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function residentRequiredText(value: unknown, name: string): string {
+    const normalized = residentText(value);
+    if (!normalized) throw new Error(`${name} is required.`);
+    return normalized;
+  }
+
   function healthResponse(): BealeAppServerHealth {
     return {
       ok: true,
@@ -300,6 +411,26 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     const url = new URL(request.url ?? '/', 'http://localhost');
     if (request.method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, healthResponse());
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/introspection/tool') {
+      const binding = requireResidentIntrospection(request);
+      const body = await readJsonBody(request);
+      if (!isRecord(body) || typeof body.tool !== 'string' || !isRecord(body.args)) {
+        sendJson(response, 400, { ok: false, error: 'A Beale introspection tool and arguments are required.' });
+        return;
+      }
+      try {
+        sendJson(response, 200, {
+          ok: true,
+          result: await invokeResidentIntrospectionTool(binding, body.tool, body.args)
+        });
+      } catch (error) {
+        sendJson(response, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
       return;
     }
     requireOperator(request);
@@ -572,25 +703,49 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     return { sessionId, request };
   }
 
-  async function startSession(input: unknown): Promise<StartedSession> {
+  async function startSession(input: unknown, residentIntrospection = false): Promise<StartedSession> {
     const normalized = normalizeSessionRequest(input);
+    let request = normalized.request;
+    let residentIntrospectionToken: string | null = null;
+    if (residentIntrospection && !request.launch.introspection) {
+      residentIntrospectionToken = generateSessionToken();
+      request = {
+        ...request,
+        launch: {
+          ...request.launch,
+          introspection: {
+            url: `${localUrl}/v1/introspection`,
+            token: residentIntrospectionToken,
+            runtimeMode: 'standard'
+          }
+        }
+      };
+      introspectionBindings.set(residentIntrospectionToken, {
+        sessionId: normalized.sessionId,
+        workspaceId: request.launch.workspaceId
+      });
+    }
     const prepared = await hostCall(() => hostService.prepareSession(
-      normalized.request,
+      request,
       normalized.sessionId
-    ));
+    )).catch((error) => {
+      if (residentIntrospectionToken) introspectionBindings.delete(residentIntrospectionToken);
+      throw error;
+    });
     const { sessionId, attemptId } = prepared;
     const existing = sessions.get(sessionId);
     if (existing && !isTerminal(existing.state)) {
+      if (residentIntrospectionToken) introspectionBindings.delete(residentIntrospectionToken);
       throw new HttpError(409, `Session ${sessionId} already exists.`);
     }
     if (existing) {
       sessions.delete(sessionId);
     }
-    const runtime = createSessionRuntime(normalized.request, prepared);
+    const runtime = createSessionRuntime(request, prepared);
     sessions.set(sessionId, runtime);
     evictOldestTerminalSessions();
     try {
-      await launchPreparedSession(runtime, prepared, normalized.request.launch.continuation === undefined);
+      await launchPreparedSession(runtime, prepared, request.launch.continuation === undefined);
       notifyChange();
       return {
         controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
@@ -601,6 +756,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     } catch (error) {
       runtime.state = 'failed';
       runtime.endedAt = new Date().toISOString();
+      if (runtime.introspectionToken) introspectionBindings.delete(runtime.introspectionToken);
       notifyChange();
       const detail = error instanceof Error ? error.message : String(error);
       runtime.diagnostic = boundedDiagnostic(detail);
@@ -624,7 +780,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         const runtime = sessions.get(sessionId);
         if (runtime && !isTerminal(runtime.state)) continue;
         try {
-          await startSession(automation.request);
+          await startSession(automation.request, true);
         } catch {
           // A later scan retries transient preparation or provider failures.
         }
@@ -660,7 +816,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       currentAttemptId: prepared.attemptId,
       currentAttemptWasInitial: false,
       recoveryCount: 0,
-      recoveryTimer: null
+      recoveryTimer: null,
+      introspectionToken: request.launch.introspection?.runtimeMode === 'standard'
+        && request.launch.introspection.url === `${localUrl}/v1/introspection`
+        ? request.launch.introspection.token
+        : null
     };
   }
 
@@ -1108,6 +1268,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       if (client.readyState === WebSocket.OPEN) client.close(clientCode);
     }
     runtime.readyClientSockets.clear();
+    if (runtime.introspectionToken) introspectionBindings.delete(runtime.introspectionToken);
   }
 
   function sessionTransport(runtime: SessionRuntime, token: string): BealeAppServerSessionStartResult['transport'] {

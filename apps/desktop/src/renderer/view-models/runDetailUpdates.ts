@@ -55,6 +55,8 @@ export function runDetailUpdateCursor(detail: RunDetail): RunDetailUpdateCursor 
 export function mergeRunDetailUpdate(current: RunDetail, update: RunDetailUpdate): RunDetail {
   return {
     run: update.run,
+    tokenUsage: update.tokenUsage ?? current.tokenUsage,
+    activityCounts: update.activityCounts ?? current.activityCounts,
     researchProfile: update.researchProfile ?? current.researchProfile ?? null,
     nextStepSuggestions: update.nextStepSuggestions === undefined
       ? current.nextStepSuggestions ?? null

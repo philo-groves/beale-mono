@@ -185,6 +185,15 @@
 
 #### Fixed
 
+- Desktop no longer synchronously spawns a Honeycrisp collaboration query for each live subagent commentary or room-status event. Queued room/member state serves the live projection, and projection failures are contained so a protocol timeout cannot crash Desktop or interrupt the app-server-owned run.
+- Resumed Desktop sessions now load a complete workspace memory summary through the canonical app-server control plane and filter it by durable session links, preventing both `0 Memories` and renderer failure from incomplete catalog projections.
+- On macOS and Windows, Desktop now attaches a menu-bar/tray controller to a compatible headless app-server when active research prevents replacing it. The controller exposes live session status and a safe restart action, then relaunches as the canonical tray host without interrupting the active session.
+- Session token totals, input/output breakdowns, cache rates, and memory search/update counts now come from app-server-owned aggregates instead of Desktop event-tail subtotals or the latest root turn. Honeycrisp session migrations 6 and 7 backfill durable usage and deduplicated memory-tool activity so Desktop projection resets do not lower long-running counts.
+- Desktop now imports and periodically refreshes canonical Honeycrisp session summaries for every registered workspace, so sessions created from Beale iOS appear in the Desktop sidebar without requiring Desktop to have created them first.
+- Desktop now replaces an unresponsive resident app-server when its discovery record and lock verify the same process owner, escalating from graceful tray shutdown only when the verified stale host does not exit, and allowing canonical startup recovery to resume interrupted sessions instead of leaving the stale process blocking launch.
+- Desktop and resident research sessions now contain the affected Node/Undici macOS `setTypeOfService EINVAL` socket failure instead of crashing the Electron host during long-running HTTP traffic.
+- Beale iOS session transcripts now reconcile synthesized live events with their later canonical records, preventing messages, reasoning, responses, and tool summaries from appearing twice after polling or refresh.
+- Resident automations now receive an app-server-owned authenticated introspection runtime, allowing session preflight, stop, and launch operations without unresolved Desktop-only endpoint placeholders.
 - The resident app-server now scans canonical repeat schedules, starts one overdue automation attempt after downtime, and continues triggering later intervals without requiring Desktop to remain open.
 - Canonical completed model-output and reasoning events now project back into root and subagent commentary for Desktop and iOS, including events produced while Desktop was detached from the app-server session.
 - Beale iOS now accepts the current v3 canonical workspace-memory and notification schemas, restoring Claims and Findings lookup against current app-server hosts.

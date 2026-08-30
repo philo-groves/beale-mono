@@ -541,7 +541,7 @@ test("session summaries expose the latest transcript message time", () => {
   }
 });
 
-test("session summaries and live updates aggregate completed-turn usage when model-session totals are absent", () => {
+test("session summaries and live updates prefer aggregate completed-turn usage over the latest root turn", () => {
   const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
@@ -553,7 +553,10 @@ test("session summaries and live updates aggregate completed-turn usage when mod
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
     });
-    for (const [turn, totalTokens, cost] of [[1, 1_200, 0.12], [2, 800, 0.08]]) {
+    for (const [turn, usage, cost] of [
+      [1, { input: 100, output: 200, cacheRead: 900, cacheWrite: 0, totalTokens: 1_200 }, 0.12],
+      [2, { input: 200, output: 100, cacheRead: 500, cacheWrite: 0, totalTokens: 800 }, 0.08],
+    ]) {
       store.appendEvent("session_turn_usage", {
         id: `event_turn_usage_${turn}`,
         kind: "agent.event",
@@ -562,14 +565,92 @@ test("session summaries and live updates aggregate completed-turn usage when mod
         payload: {
           type: "turn_completed",
           turn,
-          usage: { totalTokens, cost: { total: cost } },
+          usage: { ...usage, cost: { total: cost } },
         },
       });
     }
+    store.appendEvent("session_turn_usage", {
+      id: "event_latest_root_turn_usage",
+      kind: "beale.model_session_update",
+      timestamp: "2026-08-16T12:03:00.000Z",
+      summary: "Latest root model usage updated.",
+      payload: {
+        record: {
+          patch: { metadata: { latestReportedTotalTokens: 800 } },
+        },
+      },
+    });
 
-    assert.deepEqual(store.getSummary("session_turn_usage")?.tokenUsage, { totalTokens: 2_000, totalCostUsd: 0.2 });
-    assert.deepEqual(store.getUpdate("session_turn_usage")?.session.tokenUsage, { totalTokens: 2_000, totalCostUsd: 0.2 });
-    assert.deepEqual(store.listSummaries("workspace_turn_usage")[0]?.tokenUsage, { totalTokens: 2_000, totalCostUsd: 0.2 });
+    const expectedUsage = {
+      totalTokens: 2_000,
+      totalCostUsd: 0.2,
+      inputTokens: 1_700,
+      outputTokens: 300,
+      cacheReadTokens: 1_400,
+      cachePromptTokens: 1_700,
+    };
+    assert.deepEqual(store.getSummary("session_turn_usage")?.tokenUsage, expectedUsage);
+    assert.deepEqual(store.getUpdate("session_turn_usage")?.session.tokenUsage, expectedUsage);
+    assert.deepEqual(store.listSummaries("workspace_turn_usage")[0]?.tokenUsage, expectedUsage);
+  } finally {
+    store.close();
+  }
+});
+
+test("session summaries durably deduplicate canonical memory activity", () => {
+  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  try {
+    store.create({
+      id: "session_memory_activity",
+      workspaceId: "workspace_memory_activity",
+      attemptId: "attempt_memory_activity",
+      title: "Memory activity",
+      prompt: "Count canonical memory activity.",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    for (const [id, kind, toolActionId, toolName] of [
+      ["search_requested", "tool.requested", "search_one", "memory.search"],
+      ["search_observed", "tool.observed", "search_one", "memory.search"],
+      ["save_observed", "tool.observed", "save_one", "memory.save"],
+      ["correct_observed", "tool.observed", "correct_one", "memory.correct"],
+    ]) {
+      store.appendEvent("session_memory_activity", {
+        id,
+        kind: "research.event",
+        timestamp: "2026-08-16T12:00:00.000Z",
+        summary: kind,
+        payload: {
+          event: {
+            id: `nested_${id}`,
+            kind,
+            payload: { toolActionId, toolName },
+          },
+        },
+      });
+    }
+    store.appendEvent("session_memory_activity", {
+      id: "duplicate_trace_batch",
+      kind: "beale.trace_batch",
+      timestamp: "2026-08-16T12:01:00.000Z",
+      summary: "Duplicate Desktop trace projection.",
+      payload: {
+        records: [{
+          id: "duplicate_search_trace",
+          type: "tool_result",
+          payload: {
+            honeycrispKind: "tool.observed",
+            toolName: "memory.search",
+            payload: { toolActionId: "search_one", toolName: "memory.search" },
+          },
+        }],
+      },
+    });
+
+    const expected = { memorySearches: 1, memoryUpdates: 2 };
+    assert.deepEqual(store.getSummary("session_memory_activity")?.activityCounts, expected);
+    assert.deepEqual(store.getUpdate("session_memory_activity")?.session.activityCounts, expected);
+    assert.deepEqual(store.listSummaries("workspace_memory_activity")[0]?.activityCounts, expected);
   } finally {
     store.close();
   }
@@ -626,13 +707,28 @@ test("session migration transactionally normalizes legacy embedded event histori
       },
       metadata: {},
     }],
-    events: [{
-      id: "event_legacy",
-      kind: "agent.event",
-      timestamp,
-      summary: "Legacy event",
-      payload: { retained: true },
-    }],
+    events: [
+      {
+        id: "event_legacy",
+        kind: "agent.event",
+        timestamp,
+        summary: "Legacy event",
+        payload: { retained: true },
+      },
+      {
+        id: "event_legacy_memory_search",
+        kind: "research.event",
+        timestamp,
+        summary: "Legacy memory search",
+        payload: {
+          event: {
+            id: "nested_legacy_memory_search",
+            kind: "tool.observed",
+            payload: { toolActionId: "legacy_search", toolName: "memory.search" },
+          },
+        },
+      },
+    ],
     createdAt: timestamp,
     startedAt: timestamp,
     endedAt: null,
@@ -664,6 +760,10 @@ test("session migration transactionally normalizes legacy embedded event histori
     assert.equal(capture?.schemaVersion, 5);
     assert.equal(capture?.raw.retained, true);
     assert.equal(capture?.eventStreams.timeline.source, "honeycrisp_session_events");
+    assert.deepEqual(migrated.getSummary("session_legacy")?.activityCounts, {
+      memorySearches: 1,
+      memoryUpdates: 0,
+    });
   } finally {
     migrated.close();
   }
@@ -680,7 +780,10 @@ test("session migration transactionally normalizes legacy embedded event histori
       inspection.prepare(`
         SELECT event_id, event_offset FROM honeycrisp_session_events WHERE session_id = ?
       `).all("session_legacy").map((event) => ({ ...event })),
-      [{ event_id: "event_legacy", event_offset: 0 }],
+      [
+        { event_id: "event_legacy", event_offset: 0 },
+        { event_id: "event_legacy_memory_search", event_offset: 1 },
+      ],
     );
     assert.deepEqual(
       inspection.prepare(`

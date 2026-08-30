@@ -68,6 +68,10 @@ export interface ResolvedHoneycrispSessionLaunch {
     mcpConfigPath?: string;
     allowedMcpServers?: readonly string[];
   };
+  introspection?: {
+    url: string;
+    token: string;
+  };
   memoryTypeDescriptions?: Readonly<Record<string, string>>;
   storage: { databasePath: string; artifactDirectoryPath: string };
 }
@@ -181,6 +185,10 @@ export function honeycrispSessionEnvironment(
       openrouter: launch.provider.authenticationPreferences?.openrouter ?? 'api_key'
     })
   };
+  if (launch.introspection) {
+    env.BEALE_INTROSPECTION_URL = launch.introspection.url;
+    env.BEALE_INTROSPECTION_TOKEN = launch.introspection.token;
+  }
   if (!env.HONEYCRISP_CODEX_AUTH_FILE?.trim()) {
     const codexAuthFile = resolveHoneycrispCodexAuthFile(environment);
     if (codexAuthFile) env.HONEYCRISP_CODEX_AUTH_FILE = codexAuthFile;

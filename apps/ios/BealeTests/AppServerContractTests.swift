@@ -775,6 +775,98 @@ final class AppServerContractTests: XCTestCase {
         XCTAssertEqual(subagent.map(\.contentMarkdown), ["Mapped the parser boundary."])
     }
 
+    func testProjectsEachCanonicalTranscriptItemOnceWhenPagesContainAliases() {
+        func message(
+            _ id: String,
+            content: String,
+            source: String,
+            phase: String? = nil,
+            responseId: String? = nil,
+            itemId: String? = nil,
+            traceEventId: String? = nil,
+            toolName: String? = nil,
+            createdAt: String
+        ) -> AppServerTranscriptMessage {
+            AppServerTranscriptMessage(
+                id: id,
+                runId: "session-1",
+                attemptId: "attempt-1",
+                traceEventId: traceEventId,
+                role: "assistant",
+                phase: phase,
+                contentMarkdown: content,
+                source: source,
+                metadata: .init(
+                    agentPath: "/root",
+                    responseId: responseId,
+                    itemId: itemId,
+                    toolName: toolName,
+                    toolCount: toolName == nil ? nil : 1
+                ),
+                createdAt: createdAt
+            )
+        }
+
+        let projected = AppServerTranscriptProjection.rootMessages([
+            message(
+                "synthesized-commentary",
+                content: "Checking the parser boundary.",
+                source: "honeycrisp_commentary",
+                phase: "commentary",
+                responseId: "response-1",
+                itemId: "message:0",
+                createdAt: "2026-08-28T20:00:00.000Z"
+            ),
+            message(
+                "persisted-commentary",
+                content: "Checking the parser boundary.",
+                source: "honeycrisp_commentary",
+                phase: "commentary",
+                responseId: "response-1",
+                itemId: "message:0",
+                createdAt: "2026-08-28T20:00:00.100Z"
+            ),
+            message(
+                "synthesized-final",
+                content: "The boundary is guarded.",
+                source: "honeycrisp",
+                phase: "final_answer",
+                traceEventId: "model-output-2",
+                createdAt: "2026-08-28T20:00:01.000Z"
+            ),
+            message(
+                "persisted-final",
+                content: "The boundary is guarded.",
+                source: "honeycrisp",
+                phase: "final_answer",
+                traceEventId: "model-output-2",
+                createdAt: "2026-08-28T20:00:01.100Z"
+            ),
+            message(
+                "tool-alias-1",
+                content: "Read parser.c",
+                source: "honeycrisp_tool_summary",
+                phase: "tool",
+                toolName: "file.read",
+                createdAt: "2026-08-28T20:00:02.000Z"
+            ),
+            message(
+                "tool-alias-2",
+                content: "Read parser.c",
+                source: "honeycrisp_tool_summary",
+                phase: "tool",
+                toolName: "file.read",
+                createdAt: "2026-08-28T20:00:02.000Z"
+            )
+        ])
+
+        XCTAssertEqual(projected.map(\.contentMarkdown), [
+            "Checking the parser boundary.",
+            "The boundary is guarded.",
+            "Read parser.c"
+        ])
+    }
+
     func testDecodesAndProjectsDesktopStyleSubagentSummaries() throws {
         let data = try XCTUnwrap(
             """

@@ -372,6 +372,8 @@ test("configured stdio MCP client tolerates diagnostics and executes a live fixt
   const serverPath = join(root, "fixture-mcp.mjs");
   const configPath = join(root, "mcp.json");
   await writeFile(serverPath, createFixtureMcpServerSource(), "utf8");
+  const previousFixtureValue = process.env.HONEYCRISP_TEST_MCP_VALUE;
+  process.env.HONEYCRISP_TEST_MCP_VALUE = "resolved-runtime-value";
   await writeFile(
     configPath,
     JSON.stringify({
@@ -381,6 +383,9 @@ test("configured stdio MCP client tolerates diagnostics and executes a live fixt
         fixture: {
           command: process.execPath,
           args: [serverPath],
+          env: {
+            FIXTURE_RUNTIME_VALUE: "${HONEYCRISP_TEST_MCP_VALUE}",
+          },
         },
       },
     }),
@@ -413,9 +418,11 @@ test("configured stdio MCP client tolerates diagnostics and executes a live fixt
     assert.equal(descriptor.metadata.untrustedOutput, true);
     assert.equal(discovery.resourceTemplates.length, 1);
     assert.equal(result.result.status, "complete");
-    assert.equal(result.result.output.output.content[0].text, "echo:parser");
+    assert.equal(result.result.output.output.content[0].text, "echo:parser:resolved-runtime-value");
   } finally {
     await client.close();
+    if (previousFixtureValue === undefined) delete process.env.HONEYCRISP_TEST_MCP_VALUE;
+    else process.env.HONEYCRISP_TEST_MCP_VALUE = previousFixtureValue;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -451,7 +458,7 @@ function handle(message) {
   }
   if (message.method === "tools/call") {
     process.stdout.write("2026-08-18T22:32:03.372Z WARN fixture diagnostic\\n");
-    send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + message.params.arguments.query }] } });
+    send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + message.params.arguments.query + ":" + process.env.FIXTURE_RUNTIME_VALUE }] } });
     return;
   }
   if (message.method === "resources/list") {

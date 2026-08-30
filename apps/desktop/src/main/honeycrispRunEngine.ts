@@ -1339,7 +1339,27 @@ export class HoneycrispRunEngine {
       onEvent: (rawEvent) => {
         if (this.activeRuns.get(active.context.run.id) !== active) return;
         const event = decodeHoneycrispLiveEvent(rawEvent);
-        if (event) this.recordLiveEvent(active.context, event);
+        if (!event) return;
+        try {
+          this.recordLiveEvent(active.context, event);
+        } catch (error) {
+          const message = `Desktop could not project a Honeycrisp live event: ${errorMessage(error)}`;
+          active.lastProcessDiagnostic = message.slice(0, 500);
+          try {
+            this.db.appendTraceEvent({
+              runId: active.context.run.id,
+              attemptId: active.context.attempt.id,
+              type: 'research_event',
+              source: 'executor',
+              summary: 'Desktop skipped a failed live-event projection while Honeycrisp continued running.',
+              payload: { eventKind: event.kind ?? null, error: errorMessage(error) },
+              modelVisible: false
+            });
+            this.onChange();
+          } catch {
+            // A renderer mirror failure must not escape the transport callback.
+          }
+        }
       },
       onError: (error) => {
         if (this.activeRuns.get(active.context.run.id) !== active) return;

@@ -1717,6 +1717,7 @@ export interface StartRunInput {
   introspection?: {
     url: string;
     token: string;
+    runtimeMode?: 'isolated' | 'standard';
   };
 }
 
@@ -2131,8 +2132,22 @@ export interface RunRow {
   engine: RunEngineKind;
   lastMessageAt?: string | null;
   sessionRuns: SessionRunActivity[];
-  tokenUsage?: { totalTokens: number; totalCostUsd?: number };
+  tokenUsage?: SessionTokenUsage;
   breakoutRooms?: BreakoutRoomSummary[];
+}
+
+export interface SessionTokenUsage {
+  totalTokens: number;
+  totalCostUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cachePromptTokens?: number;
+}
+
+export interface SessionActivityCounts {
+  memorySearches: number;
+  memoryUpdates: number;
 }
 
 export interface SessionRunActivity {
@@ -2154,6 +2169,10 @@ export interface SessionActivityInterval {
 
 export interface RunDetail {
   run: RunRecord;
+  /** Canonical, durable session usage reported by the app-server. */
+  tokenUsage?: SessionTokenUsage;
+  /** Canonical, durable session activity reported by the app-server. */
+  activityCounts?: SessionActivityCounts;
   researchProfile?: ResearchProfileSnapshot | null;
   nextStepSuggestions?: GeneratedResearchGoalSuggestions | null;
   attempts: AttemptRecord[];
@@ -2216,6 +2235,10 @@ export interface RunDetailUpdateCursor {
 
 export interface RunDetailUpdate {
   run: RunRecord;
+  /** Canonical, durable session usage reported by the app-server. */
+  tokenUsage?: SessionTokenUsage;
+  /** Canonical, durable session activity reported by the app-server. */
+  activityCounts?: SessionActivityCounts;
   researchProfile?: ResearchProfileSnapshot | null;
   nextStepSuggestions?: GeneratedResearchGoalSuggestions | null;
   version: RunDetailVersion;

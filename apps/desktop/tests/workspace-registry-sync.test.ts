@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WorkspaceRegistry } from '../src/main/workspaceRegistry';
+import type { HoneycrispSessionSummary } from '../src/main/honeycrispCliClient';
 import type { WorkspaceSnapshot } from '../src/shared/types';
 
 const temporaryDirectories: string[] = [];
@@ -117,6 +118,40 @@ describe('workspace registry synchronization', () => {
         status: 'active',
         updatedAt: '2026-08-27T15:30:00.000Z'
       });
+    } finally {
+      registry.close();
+    }
+  });
+
+  it('imports canonical sessions created by another app-server client', () => {
+    const registryDirectory = mkdtempSync(join(tmpdir(), 'beale-registry-cross-client-session-'));
+    temporaryDirectories.push(registryDirectory);
+    const registry = new WorkspaceRegistry(registryDirectory);
+    const snapshot = registrySnapshot();
+    snapshot.runs = [];
+
+    try {
+      registry.syncWorkspace(snapshot);
+      registry.reconcileHoneycrispSessions(
+        'security-research',
+        snapshot.workspace.workspaceId,
+        [canonicalSessionSummary()]
+      );
+
+      expect(registry.getState().researchSessions).toMatchObject([{
+        runId: 'session_ios',
+        registryWorkspaceId: registry.getState().workspaces[0]?.id,
+        workspaceId: snapshot.workspace.workspaceId,
+        title: 'iOS research session',
+        status: 'active',
+        runEngine: 'honeycrisp',
+        mode: 'open_discovery',
+        promptMarkdown: 'Inspect the authorized target from iOS.',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'high',
+        sandboxProfile: 'host',
+        updatedAt: '2026-08-28T12:01:00.000Z'
+      }]);
     } finally {
       registry.close();
     }
@@ -285,4 +320,38 @@ function registrySnapshot(): WorkspaceSnapshot {
       }
     }]
   } as unknown as WorkspaceSnapshot;
+}
+
+function canonicalSessionSummary(): HoneycrispSessionSummary {
+  return {
+    schemaVersion: 1,
+    id: 'session_ios',
+    workspaceId: 'workspace_atomic',
+    status: 'active',
+    title: 'iOS research session',
+    prompt: 'Inspect the authorized target from iOS.',
+    summary: 'Research is active.',
+    provider: 'openai-codex',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    workflowId: null,
+    profile: { id: 'security-research' },
+    metadata: { source: 'beale-app-server' },
+    finalDisposition: null,
+    attempts: [{
+      id: 'attempt_ios',
+      parentAttemptId: null,
+      status: 'active',
+      summary: 'Starting the Honeycrisp research session.',
+      startedAt: '2026-08-28T12:00:00.000Z',
+      endedAt: null,
+      metadata: {}
+    }],
+    lastMessageAt: '2026-08-28T12:01:00.000Z',
+    createdAt: '2026-08-28T12:00:00.000Z',
+    startedAt: '2026-08-28T12:00:00.000Z',
+    endedAt: null,
+    updatedAt: '2026-08-28T12:01:00.000Z',
+    revision: 2
+  };
 }

@@ -1,7 +1,10 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { PassThrough } from 'node:stream';
+import { installUndiciTypeOfServiceCompatibility } from 'honeycrisp/node-network-compatibility';
 import type { ResearchLiveEventSink } from 'honeycrisp/runtime-services';
 import type { HoneycrispRuntimeTransport } from 'honeycrisp/runtime';
+
+installUndiciTypeOfServiceCompatibility();
 
 interface RuntimeWorkerData {
   args: string[];

@@ -104,6 +104,15 @@ export type HoneycrispSessionAttemptSummary = Omit<HoneycrispSessionAttempt, "ca
 export interface HoneycrispSessionTokenUsage {
   totalTokens: number;
   totalCostUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cachePromptTokens?: number;
+}
+
+export interface HoneycrispSessionActivityCounts {
+  memorySearches: number;
+  memoryUpdates: number;
 }
 
 export type HoneycrispSessionSummary = Omit<
@@ -113,6 +122,7 @@ export type HoneycrispSessionSummary = Omit<
   attempts: HoneycrispSessionAttemptSummary[];
   lastMessageAt: string | null;
   tokenUsage: HoneycrispSessionTokenUsage;
+  activityCounts: HoneycrispSessionActivityCounts;
 };
 
 export interface HoneycrispSessionUpdate {
@@ -470,6 +480,152 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 6,
+    name: "materialize_session_usage_breakdown",
+    up(database: DatabaseSync): void {
+      database.exec(`
+        ALTER TABLE honeycrisp_session_summary_metrics
+          ADD COLUMN completed_turn_input_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE honeycrisp_session_summary_metrics
+          ADD COLUMN completed_turn_output_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE honeycrisp_session_summary_metrics
+          ADD COLUMN completed_turn_cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE honeycrisp_session_summary_metrics
+          ADD COLUMN completed_turn_cache_prompt_tokens INTEGER NOT NULL DEFAULT 0;
+
+        WITH completed_turns AS (
+          SELECT
+            session_id,
+            COALESCE(SUM(COALESCE(
+              json_extract(event_json, '$.payload.usage.promptTokens'),
+              json_extract(event_json, '$.payload.usage.prompt_tokens'),
+              COALESCE(
+                json_extract(event_json, '$.payload.usage.inputTokens'),
+                json_extract(event_json, '$.payload.usage.input'),
+                json_extract(event_json, '$.payload.usage.input_tokens'),
+                0
+              ) + COALESCE(
+                json_extract(event_json, '$.payload.usage.cacheReadTokens'),
+                json_extract(event_json, '$.payload.usage.cacheRead'),
+                json_extract(event_json, '$.payload.usage.cache_read_tokens'),
+                0
+              ) + COALESCE(
+                json_extract(event_json, '$.payload.usage.cacheWriteTokens'),
+                json_extract(event_json, '$.payload.usage.cacheWrite'),
+                json_extract(event_json, '$.payload.usage.cache_write_tokens'),
+                0
+              )
+            )), 0) AS input_tokens,
+            COALESCE(SUM(COALESCE(
+              json_extract(event_json, '$.payload.usage.outputTokens'),
+              json_extract(event_json, '$.payload.usage.output'),
+              json_extract(event_json, '$.payload.usage.output_tokens'),
+              0
+            )), 0) AS output_tokens,
+            COALESCE(SUM(COALESCE(
+              json_extract(event_json, '$.payload.usage.cacheReadTokens'),
+              json_extract(event_json, '$.payload.usage.cacheRead'),
+              json_extract(event_json, '$.payload.usage.cache_read_tokens'),
+              0
+            )), 0) AS cache_read_tokens,
+            COALESCE(SUM(COALESCE(
+              json_extract(event_json, '$.payload.usage.promptTokens'),
+              json_extract(event_json, '$.payload.usage.prompt_tokens'),
+              COALESCE(
+                json_extract(event_json, '$.payload.usage.inputTokens'),
+                json_extract(event_json, '$.payload.usage.input'),
+                json_extract(event_json, '$.payload.usage.input_tokens'),
+                0
+              ) + COALESCE(
+                json_extract(event_json, '$.payload.usage.cacheReadTokens'),
+                json_extract(event_json, '$.payload.usage.cacheRead'),
+                json_extract(event_json, '$.payload.usage.cache_read_tokens'),
+                0
+              ) + COALESCE(
+                json_extract(event_json, '$.payload.usage.cacheWriteTokens'),
+                json_extract(event_json, '$.payload.usage.cacheWrite'),
+                json_extract(event_json, '$.payload.usage.cache_write_tokens'),
+                0
+              )
+            )), 0) AS cache_prompt_tokens
+          FROM honeycrisp_session_events
+          WHERE json_extract(event_json, '$.kind') = 'agent.event'
+            AND json_extract(event_json, '$.payload.type') = 'turn_completed'
+          GROUP BY session_id
+        )
+        UPDATE honeycrisp_session_summary_metrics
+        SET
+          completed_turn_input_tokens = COALESCE((
+            SELECT input_tokens FROM completed_turns
+            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+          ), 0),
+          completed_turn_output_tokens = COALESCE((
+            SELECT output_tokens FROM completed_turns
+            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+          ), 0),
+          completed_turn_cache_read_tokens = COALESCE((
+            SELECT cache_read_tokens FROM completed_turns
+            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+          ), 0),
+          completed_turn_cache_prompt_tokens = COALESCE((
+            SELECT cache_prompt_tokens FROM completed_turns
+            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+          ), 0);
+      `);
+    },
+  },
+  {
+    version: 7,
+    name: "materialize_session_tool_activity",
+    up(database: DatabaseSync): void {
+      database.exec(`
+        CREATE TABLE honeycrisp_session_tool_activity (
+          session_id TEXT NOT NULL REFERENCES honeycrisp_sessions(id) ON DELETE CASCADE,
+          activity_key TEXT NOT NULL,
+          tool_name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(session_id, activity_key, tool_name)
+        );
+        CREATE INDEX honeycrisp_session_tool_activity_tool_idx
+          ON honeycrisp_session_tool_activity(session_id, tool_name);
+      `);
+      const eventPage = database.prepare(`
+        SELECT rowid AS row_id, session_id, event_json
+        FROM honeycrisp_session_events
+        WHERE rowid > ?
+        ORDER BY rowid ASC
+        LIMIT 1000
+      `);
+      const insert = database.prepare(`
+        INSERT OR IGNORE INTO honeycrisp_session_tool_activity (
+          session_id, activity_key, tool_name, created_at
+        ) VALUES (?, ?, ?, ?)
+      `);
+      let afterRowId = 0;
+      while (true) {
+        const events = eventPage.all(afterRowId) as Array<{
+          row_id?: unknown;
+          session_id?: unknown;
+          event_json?: unknown;
+        }>;
+        if (events.length === 0) break;
+        for (const row of events) {
+          const sessionId = requiredStoredString(row.session_id, "Honeycrisp session tool activity session id");
+          const document = requiredStoredString(row.event_json, "Honeycrisp session tool activity event");
+          const event = normalizeEvent(JSON.parse(document) as HoneycrispSessionEvent);
+          for (const activity of sessionToolActivityEntries(event)) {
+            insert.run(sessionId, activity.key, activity.toolName, event.timestamp);
+          }
+        }
+        const lastRowId = events.at(-1)?.row_id;
+        if (typeof lastRowId !== "number" || !Number.isFinite(lastRowId) || lastRowId <= afterRowId) {
+          throw new Error("Honeycrisp session tool activity migration cursor did not advance.");
+        }
+        afterRowId = lastRowId;
+      }
+    },
+  },
 ] as const;
 
 export class HoneycrispSessionStore {
@@ -479,6 +635,8 @@ export class HoneycrispSessionStore {
   private readonly normalizedCaptureStorage: boolean;
   private readonly sessionDocumentHashes: boolean;
   private readonly summaryMetricsStorage: boolean;
+  private readonly summaryUsageBreakdownStorage: boolean;
+  private readonly sessionToolActivityStorage: boolean;
 
   public constructor(options: HoneycrispSessionStoreOptions = {}) {
     this.databasePath = options.databasePath
@@ -500,6 +658,9 @@ export class HoneycrispSessionStore {
         this.normalizedCaptureStorage = tableExists(readDatabase, "honeycrisp_session_captures");
         this.sessionDocumentHashes = columnExists(readDatabase, "honeycrisp_sessions", "document_hash");
         this.summaryMetricsStorage = tableExists(readDatabase, "honeycrisp_session_summary_metrics");
+        this.summaryUsageBreakdownStorage = this.summaryMetricsStorage
+          && columnExists(readDatabase, "honeycrisp_session_summary_metrics", "completed_turn_input_tokens");
+        this.sessionToolActivityStorage = tableExists(readDatabase, "honeycrisp_session_tool_activity");
         return;
       }
       readDatabase.close();
@@ -515,6 +676,8 @@ export class HoneycrispSessionStore {
     this.normalizedCaptureStorage = true;
     this.sessionDocumentHashes = true;
     this.summaryMetricsStorage = true;
+    this.summaryUsageBreakdownStorage = true;
+    this.sessionToolActivityStorage = true;
   }
 
   public close(): void {
@@ -592,6 +755,7 @@ export class HoneycrispSessionStore {
       session,
       this.readSummaryTokenUsage([session.id]).get(session.id),
       this.readSummaryLastMessageAt([session.id]).get(session.id),
+      this.readSummaryActivityCounts([session.id]).get(session.id),
     );
   }
 
@@ -651,7 +815,13 @@ export class HoneycrispSessionStore {
     const sessions = rows.map((row) => this.decodeSessionRow(row));
     const tokenUsage = this.readSummaryTokenUsage(sessions.map((session) => session.id));
     const lastMessageAt = this.readSummaryLastMessageAt(sessions.map((session) => session.id));
-    return sessions.map((session) => sessionSummary(session, tokenUsage.get(session.id), lastMessageAt.get(session.id)));
+    const activityCounts = this.readSummaryActivityCounts(sessions.map((session) => session.id));
+    return sessions.map((session) => sessionSummary(
+      session,
+      tokenUsage.get(session.id),
+      lastMessageAt.get(session.id),
+      activityCounts.get(session.id),
+    ));
   }
 
   public listForWorkspaces(workspaceIds: readonly string[], limitPerWorkspace = 100): HoneycrispSessionRecord[] {
@@ -703,7 +873,13 @@ export class HoneycrispSessionStore {
     const sessions = rows.map((row) => this.decodeSessionRow(row));
     const tokenUsage = this.readSummaryTokenUsage(sessions.map((session) => session.id));
     const lastMessageAt = this.readSummaryLastMessageAt(sessions.map((session) => session.id));
-    return sessions.map((session) => sessionSummary(session, tokenUsage.get(session.id), lastMessageAt.get(session.id)));
+    const activityCounts = this.readSummaryActivityCounts(sessions.map((session) => session.id));
+    return sessions.map((session) => sessionSummary(
+      session,
+      tokenUsage.get(session.id),
+      lastMessageAt.get(session.id),
+      activityCounts.get(session.id),
+    ));
   }
 
   public getUpdate(
@@ -726,6 +902,7 @@ export class HoneycrispSessionStore {
           session,
           this.readSummaryTokenUsage([session.id]).get(session.id),
           this.readSummaryLastMessageAt([session.id]).get(session.id),
+          this.readSummaryActivityCounts([session.id]).get(session.id),
         ),
         finalResponse: session.finalResponse,
         events: page.events,
@@ -747,6 +924,7 @@ export class HoneycrispSessionStore {
         session,
         this.readSummaryTokenUsage([session.id]).get(session.id),
         this.readSummaryLastMessageAt([session.id]).get(session.id),
+        this.readSummaryActivityCounts([session.id]).get(session.id),
       ),
       finalResponse: session.finalResponse,
       events: session.events.slice(eventOffset),
@@ -1275,6 +1453,10 @@ export class HoneycrispSessionStore {
       const placeholders = sessionIds.map(() => "?").join(", ");
       const rows = this.database.prepare(`
         SELECT session_id, completed_turn_tokens, completed_turn_cost_usd, latest_reported_total_tokens
+          ${this.summaryUsageBreakdownStorage ? `,
+            completed_turn_input_tokens, completed_turn_output_tokens,
+            completed_turn_cache_read_tokens, completed_turn_cache_prompt_tokens
+          ` : ""}
         FROM honeycrisp_session_summary_metrics
         WHERE session_id IN (${placeholders})
       `).all(...sessionIds) as Array<{
@@ -1282,16 +1464,32 @@ export class HoneycrispSessionStore {
         completed_turn_tokens?: unknown;
         completed_turn_cost_usd?: unknown;
         latest_reported_total_tokens?: unknown;
+        completed_turn_input_tokens?: unknown;
+        completed_turn_output_tokens?: unknown;
+        completed_turn_cache_read_tokens?: unknown;
+        completed_turn_cache_prompt_tokens?: unknown;
       }>;
       for (const row of rows) {
         const sessionId = optionalString(row.session_id);
         if (!sessionId) continue;
-        const reportedTokens = finiteNonNegativeNumber(row.latest_reported_total_tokens);
         const turnTokens = finiteNonNegativeNumber(row.completed_turn_tokens) ?? 0;
+        const reportedTokens = finiteNonNegativeNumber(row.latest_reported_total_tokens);
         const totalCostUsd = finiteNonNegativeNumber(row.completed_turn_cost_usd) ?? 0;
+        const inputTokens = finiteNonNegativeNumber(row.completed_turn_input_tokens) ?? 0;
+        const outputTokens = finiteNonNegativeNumber(row.completed_turn_output_tokens) ?? 0;
+        const cacheReadTokens = finiteNonNegativeNumber(row.completed_turn_cache_read_tokens) ?? 0;
+        const cachePromptTokens = finiteNonNegativeNumber(row.completed_turn_cache_prompt_tokens) ?? 0;
+        const hasCompleteBreakdown = turnTokens > 0 && inputTokens + outputTokens === turnTokens;
         totals.set(sessionId, {
-          totalTokens: reportedTokens !== null && reportedTokens > 0 ? reportedTokens : turnTokens,
+          // Completed-turn usage is the durable session aggregate. The latest
+          // model-session value describes one root turn and is only a legacy
+          // fallback for sessions without canonical turn events.
+          totalTokens: turnTokens > 0 ? turnTokens : reportedTokens ?? 0,
           ...(totalCostUsd > 0 ? { totalCostUsd } : {}),
+          ...(hasCompleteBreakdown ? { inputTokens, outputTokens } : {}),
+          ...(hasCompleteBreakdown && cachePromptTokens > 0
+            ? { cacheReadTokens, cachePromptTokens }
+            : {}),
         });
       }
       return totals;
@@ -1320,7 +1518,37 @@ export class HoneycrispSessionStore {
             json_extract(event_json, '$.payload.usage.cost.total'),
             json_extract(event_json, '$.payload.usage.totalCostUsd'),
             0
-          ) ELSE 0 END), 0) AS total_cost
+          ) ELSE 0 END), 0) AS total_cost,
+        COALESCE(SUM(CASE
+          WHEN json_extract(event_json, '$.kind') = 'agent.event'
+            AND json_extract(event_json, '$.payload.type') = 'turn_completed'
+          THEN COALESCE(
+            json_extract(event_json, '$.payload.usage.promptTokens'),
+            json_extract(event_json, '$.payload.usage.prompt_tokens'),
+            COALESCE(json_extract(event_json, '$.payload.usage.inputTokens'), json_extract(event_json, '$.payload.usage.input'), json_extract(event_json, '$.payload.usage.input_tokens'), 0)
+              + COALESCE(json_extract(event_json, '$.payload.usage.cacheReadTokens'), json_extract(event_json, '$.payload.usage.cacheRead'), json_extract(event_json, '$.payload.usage.cache_read_tokens'), 0)
+              + COALESCE(json_extract(event_json, '$.payload.usage.cacheWriteTokens'), json_extract(event_json, '$.payload.usage.cacheWrite'), json_extract(event_json, '$.payload.usage.cache_write_tokens'), 0)
+          ) ELSE 0 END), 0) AS input_tokens,
+        COALESCE(SUM(CASE
+          WHEN json_extract(event_json, '$.kind') = 'agent.event'
+            AND json_extract(event_json, '$.payload.type') = 'turn_completed'
+          THEN COALESCE(json_extract(event_json, '$.payload.usage.outputTokens'), json_extract(event_json, '$.payload.usage.output'), json_extract(event_json, '$.payload.usage.output_tokens'), 0)
+          ELSE 0 END), 0) AS output_tokens,
+        COALESCE(SUM(CASE
+          WHEN json_extract(event_json, '$.kind') = 'agent.event'
+            AND json_extract(event_json, '$.payload.type') = 'turn_completed'
+          THEN COALESCE(json_extract(event_json, '$.payload.usage.cacheReadTokens'), json_extract(event_json, '$.payload.usage.cacheRead'), json_extract(event_json, '$.payload.usage.cache_read_tokens'), 0)
+          ELSE 0 END), 0) AS cache_read_tokens,
+        COALESCE(SUM(CASE
+          WHEN json_extract(event_json, '$.kind') = 'agent.event'
+            AND json_extract(event_json, '$.payload.type') = 'turn_completed'
+          THEN COALESCE(
+            json_extract(event_json, '$.payload.usage.promptTokens'),
+            json_extract(event_json, '$.payload.usage.prompt_tokens'),
+            COALESCE(json_extract(event_json, '$.payload.usage.inputTokens'), json_extract(event_json, '$.payload.usage.input'), json_extract(event_json, '$.payload.usage.input_tokens'), 0)
+              + COALESCE(json_extract(event_json, '$.payload.usage.cacheReadTokens'), json_extract(event_json, '$.payload.usage.cacheRead'), json_extract(event_json, '$.payload.usage.cache_read_tokens'), 0)
+              + COALESCE(json_extract(event_json, '$.payload.usage.cacheWriteTokens'), json_extract(event_json, '$.payload.usage.cacheWrite'), json_extract(event_json, '$.payload.usage.cache_write_tokens'), 0)
+          ) ELSE 0 END), 0) AS cache_prompt_tokens
       FROM honeycrisp_session_events WHERE session_id = ?
     `);
     for (const sessionId of sessionIds) {
@@ -1334,13 +1562,29 @@ export class HoneycrispSessionStore {
         const metadata = recordValue(patch?.metadata);
         reportedTokens = finiteNonNegativeNumber(metadata?.latestReportedTotalTokens);
       }
-      const aggregate = completedTurnUsage.get(sessionId) as { total_tokens?: unknown; total_cost?: unknown } | undefined;
+      const aggregate = completedTurnUsage.get(sessionId) as {
+        total_tokens?: unknown;
+        total_cost?: unknown;
+        input_tokens?: unknown;
+        output_tokens?: unknown;
+        cache_read_tokens?: unknown;
+        cache_prompt_tokens?: unknown;
+      } | undefined;
       const turnTokens = finiteNonNegativeNumber(aggregate?.total_tokens) ?? 0;
       const totalCostUsd = finiteNonNegativeNumber(aggregate?.total_cost) ?? 0;
-      const totalTokens = reportedTokens !== null && reportedTokens > 0 ? reportedTokens : turnTokens;
+      const inputTokens = finiteNonNegativeNumber(aggregate?.input_tokens) ?? 0;
+      const outputTokens = finiteNonNegativeNumber(aggregate?.output_tokens) ?? 0;
+      const cacheReadTokens = finiteNonNegativeNumber(aggregate?.cache_read_tokens) ?? 0;
+      const cachePromptTokens = finiteNonNegativeNumber(aggregate?.cache_prompt_tokens) ?? 0;
+      const hasCompleteBreakdown = turnTokens > 0 && inputTokens + outputTokens === turnTokens;
+      const totalTokens = turnTokens > 0 ? turnTokens : reportedTokens ?? 0;
       totals.set(sessionId, {
         totalTokens,
         ...(totalCostUsd > 0 ? { totalCostUsd } : {}),
+        ...(hasCompleteBreakdown ? { inputTokens, outputTokens } : {}),
+        ...(hasCompleteBreakdown && cachePromptTokens > 0
+          ? { cacheReadTokens, cachePromptTokens }
+          : {}),
       });
     }
     return totals;
@@ -1382,6 +1626,35 @@ export class HoneycrispSessionStore {
     return timestamps;
   }
 
+  private readSummaryActivityCounts(sessionIds: readonly string[]): Map<string, HoneycrispSessionActivityCounts> {
+    const counts = new Map<string, HoneycrispSessionActivityCounts>();
+    for (const sessionId of sessionIds) counts.set(sessionId, { memorySearches: 0, memoryUpdates: 0 });
+    if (!this.sessionToolActivityStorage || sessionIds.length === 0) return counts;
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const rows = this.database.prepare(`
+      SELECT
+        session_id,
+        SUM(CASE WHEN tool_name = 'memory.search' THEN 1 ELSE 0 END) AS memory_searches,
+        SUM(CASE WHEN tool_name IN ('memory.save', 'memory.correct', 'memory.link') THEN 1 ELSE 0 END) AS memory_updates
+      FROM honeycrisp_session_tool_activity
+      WHERE session_id IN (${placeholders})
+      GROUP BY session_id
+    `).all(...sessionIds) as Array<{
+      session_id?: unknown;
+      memory_searches?: unknown;
+      memory_updates?: unknown;
+    }>;
+    for (const row of rows) {
+      const sessionId = optionalString(row.session_id);
+      if (!sessionId) continue;
+      counts.set(sessionId, {
+        memorySearches: finiteNonNegativeNumber(row.memory_searches) ?? 0,
+        memoryUpdates: finiteNonNegativeNumber(row.memory_updates) ?? 0,
+      });
+    }
+    return counts;
+  }
+
   private insertEvents(sessionId: string, events: readonly HoneycrispSessionEvent[]): void {
     if (events.length === 0) return;
     const offsetRow = this.database.prepare(`
@@ -1400,6 +1673,7 @@ export class HoneycrispSessionStore {
       const result = insert.run(sessionId, offset, normalized.id, document, hashJson(document));
       if (Number(result.changes) === 1) {
         this.updateSessionSummaryMetrics(sessionId, normalized);
+        this.updateSessionToolActivity(sessionId, normalized);
         offset += 1;
       }
     }
@@ -1432,13 +1706,39 @@ export class HoneycrispSessionStore {
       const cost = recordValue(usage?.cost);
       const totalTokens = finiteNonNegativeNumber(usage?.totalTokens ?? usage?.total_tokens) ?? 0;
       const totalCostUsd = finiteNonNegativeNumber(cost?.total ?? usage?.totalCostUsd) ?? 0;
+      const uncachedInputTokens = finiteNonNegativeNumber(
+        usage?.inputTokens ?? usage?.input ?? usage?.input_tokens,
+      ) ?? 0;
+      const outputTokens = finiteNonNegativeNumber(
+        usage?.outputTokens ?? usage?.output ?? usage?.output_tokens,
+      ) ?? 0;
+      const cacheReadTokens = finiteNonNegativeNumber(
+        usage?.cacheReadTokens ?? usage?.cacheRead ?? usage?.cache_read_tokens,
+      ) ?? 0;
+      const cacheWriteTokens = finiteNonNegativeNumber(
+        usage?.cacheWriteTokens ?? usage?.cacheWrite ?? usage?.cache_write_tokens,
+      ) ?? 0;
+      const inputTokens = finiteNonNegativeNumber(usage?.promptTokens ?? usage?.prompt_tokens)
+        ?? uncachedInputTokens + cacheReadTokens + cacheWriteTokens;
       this.database.prepare(`
         UPDATE honeycrisp_session_summary_metrics
         SET
           completed_turn_tokens = completed_turn_tokens + ?,
-          completed_turn_cost_usd = completed_turn_cost_usd + ?
+          completed_turn_cost_usd = completed_turn_cost_usd + ?,
+          completed_turn_input_tokens = completed_turn_input_tokens + ?,
+          completed_turn_output_tokens = completed_turn_output_tokens + ?,
+          completed_turn_cache_read_tokens = completed_turn_cache_read_tokens + ?,
+          completed_turn_cache_prompt_tokens = completed_turn_cache_prompt_tokens + ?
         WHERE session_id = ?
-      `).run(totalTokens, totalCostUsd, sessionId);
+      `).run(
+        totalTokens,
+        totalCostUsd,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        inputTokens,
+        sessionId,
+      );
     }
     if (event.kind === "beale.transcript") {
       const record = recordValue(payload?.record);
@@ -1447,6 +1747,18 @@ export class HoneycrispSessionStore {
         UPDATE honeycrisp_session_summary_metrics
         SET last_message_at = ? WHERE session_id = ?
       `).run(createdAt, sessionId);
+    }
+  }
+
+  private updateSessionToolActivity(sessionId: string, event: HoneycrispSessionEvent): void {
+    if (!this.sessionToolActivityStorage) return;
+    const insert = this.database.prepare(`
+      INSERT OR IGNORE INTO honeycrisp_session_tool_activity (
+        session_id, activity_key, tool_name, created_at
+      ) VALUES (?, ?, ?, ?)
+    `);
+    for (const activity of sessionToolActivityEntries(event)) {
+      insert.run(sessionId, activity.key, activity.toolName, event.timestamp);
     }
   }
 
@@ -1528,6 +1840,7 @@ function sessionSummary(
   session: HoneycrispSessionRecord,
   tokenUsage: HoneycrispSessionTokenUsage = { totalTokens: 0 },
   lastMessageAt = latestTranscriptTimestamp(session.events),
+  activityCounts: HoneycrispSessionActivityCounts = sessionActivityCounts(session.events),
 ): HoneycrispSessionSummary {
   return {
     schemaVersion: session.schemaVersion,
@@ -1547,6 +1860,7 @@ function sessionSummary(
     attempts: session.attempts.map(({ capture: _capture, ...attempt }) => attempt),
     lastMessageAt,
     tokenUsage,
+    activityCounts,
     createdAt: session.createdAt,
     startedAt: session.startedAt,
     endedAt: session.endedAt,
@@ -1563,6 +1877,85 @@ function latestTranscriptTimestamp(events: readonly HoneycrispSessionEvent[]): s
     return optionalString(record?.createdAt) ?? event.timestamp;
   }
   return null;
+}
+
+function sessionActivityCounts(events: readonly HoneycrispSessionEvent[]): HoneycrispSessionActivityCounts {
+  const activities = new Set<string>();
+  for (const event of events) {
+    for (const activity of sessionToolActivityEntries(event)) {
+      activities.add(`${activity.toolName}\u0000${activity.key}`);
+    }
+  }
+  let memorySearches = 0;
+  let memoryUpdates = 0;
+  for (const activity of activities) {
+    const toolName = activity.slice(0, activity.indexOf("\u0000"));
+    if (toolName === "memory.search") memorySearches += 1;
+    if (toolName === "memory.save" || toolName === "memory.correct" || toolName === "memory.link") {
+      memoryUpdates += 1;
+    }
+  }
+  return { memorySearches, memoryUpdates };
+}
+
+function sessionToolActivityEntries(
+  event: HoneycrispSessionEvent,
+): Array<{ key: string; toolName: string }> {
+  const entries = new Map<string, { key: string; toolName: string }>();
+  const add = (
+    kind: string | null,
+    payload: Record<string, unknown> | null,
+    fallbackKey: string,
+    outer: Record<string, unknown> | null = null,
+  ): void => {
+    if (kind !== "tool.requested" && kind !== "tool.observed") return;
+    const toolName = optionalString(payload?.toolName) ?? optionalString(outer?.toolName);
+    if (!toolName || ![
+      "memory.search",
+      "memory.save",
+      "memory.correct",
+      "memory.link",
+    ].includes(toolName)) return;
+    const key = optionalString(payload?.toolActionId)
+      ?? optionalString(outer?.toolActionId)
+      ?? optionalString(outer?.toolCallId)
+      ?? fallbackKey;
+    entries.set(`${toolName}\u0000${key}`, { key, toolName });
+  };
+
+  const payload = recordValue(event.payload);
+  if (event.kind === "research.event") {
+    const researchEvent = recordValue(payload?.event);
+    add(
+      optionalString(researchEvent?.kind),
+      recordValue(researchEvent?.payload),
+      event.id,
+      researchEvent,
+    );
+  }
+
+  const traceRecords = event.kind === "beale.trace_batch" && Array.isArray(payload?.records)
+    ? payload.records
+    : event.kind === "beale.trace" && payload?.record
+      ? [payload.record]
+      : [];
+  for (const candidate of traceRecords) {
+    const trace = recordValue(candidate);
+    const tracePayload = recordValue(trace?.payload);
+    const toolPayload = recordValue(tracePayload?.payload) ?? tracePayload;
+    const traceType = optionalString(trace?.type);
+    add(
+      optionalString(tracePayload?.honeycrispKind)
+        ?? (traceType === "tool_call" ? "tool.requested" : traceType === "tool_result" ? "tool.observed" : null),
+      toolPayload,
+      optionalString(trace?.id) ?? event.id,
+      {
+        ...(tracePayload ?? {}),
+        toolCallId: trace?.toolCallId,
+      },
+    );
+  }
+  return [...entries.values()];
 }
 
 function finiteNonNegativeNumber(value: unknown): number | null {

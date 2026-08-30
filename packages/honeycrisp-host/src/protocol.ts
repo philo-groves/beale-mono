@@ -543,10 +543,11 @@ export interface HoneycrispSessionLaunchIntent {
   collaboration?: Record<string, unknown>;
   continuation?: HoneycrispSessionLaunchContinuation;
   generateTitle?: boolean;
-  /** Host-only endpoint used by Beale quick chats to load workspace introspection tools. */
+  /** Host-only endpoint used by Beale sessions to load workspace introspection tools. */
   introspection?: {
     url: string;
     token: string;
+    runtimeMode?: "isolated" | "standard";
   };
 }
 
@@ -577,6 +578,13 @@ export function decodeHoneycrispSessionLaunchRequest(value: unknown): Honeycrisp
     const introspection = requiredRecord(launch, "introspection");
     requiredBoundedString(introspection, "url", 2_048);
     requiredBoundedString(introspection, "token", 4_096);
+    if (
+      introspection.runtimeMode !== undefined
+      && introspection.runtimeMode !== "isolated"
+      && introspection.runtimeMode !== "standard"
+    ) {
+      throw new Error("launch.introspection.runtimeMode must be isolated or standard.");
+    }
   }
 
   if (launch.goal !== undefined) {

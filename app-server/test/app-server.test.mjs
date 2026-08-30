@@ -13,6 +13,7 @@ import {
   discoveryLockPath,
   honeycrispWorkerEnvironment,
   honeycrispSessionArgs,
+  honeycrispSessionEnvironment,
   operatorTokenPath,
   nextAutomationRunAt,
   releaseDiscoveryLock,
@@ -812,7 +813,11 @@ test("app-server owns built-in plugins and pins canonical session profile identi
         };
       }
       if (operation === "plugin.runtime") {
-        return { skillDirs: [], selectedSkillIds: [], allowedMcpServers: [] };
+        return {
+          skillDirs: [],
+          selectedSkillIds: [],
+          allowedMcpServers: ["beale-introspection.beale", "example.tools"],
+        };
       }
       if (operation === "session.get") throw new Error("Session not found: session-policy");
       if (operation === "session.create") return { revision: 1 };
@@ -836,6 +841,7 @@ test("app-server owns built-in plugins and pins canonical session profile identi
   assert.equal(prepared.launch.researchProfileId, "security-research");
   assert.equal(prepared.launch.researchProfileHash, hash);
   assert.equal(prepared.launch.memoryBackend, "disabled");
+  assert.deepEqual(prepared.launch.pluginRuntime.allowedMcpServers, ["example.tools"]);
   assert.deepEqual(prepared.launch.provider, {
     id: "xai",
     model: "grok-4.6",
@@ -1078,6 +1084,12 @@ test("automatically launches due automations while the app-server is resident", 
   temporaryDirectories.push(directory);
   const upstream = await createFakeHoneycrispSessionHost();
   const hostService = testHostService(directory);
+  const prepareSession = hostService.prepareSession.bind(hostService);
+  let automationRequest;
+  hostService.prepareSession = async (request, generatedSessionId) => {
+    if ((request.sessionId ?? generatedSessionId) === "session-automation-loop") automationRequest = request;
+    return await prepareSession(request, generatedSessionId);
+  };
   let scanned = false;
   hostService.dueAutomations = async () => {
     if (scanned) return [];
@@ -1093,6 +1105,49 @@ test("automatically launches due automations while the app-server is resident", 
 
   await waitFor(() => server.listSessions().some((session) => session.sessionId === "session-automation-loop"));
   assert.equal(server.listSessions().find((session) => session.sessionId === "session-automation-loop")?.state, "running");
+  assert.equal(automationRequest.launch.introspection.runtimeMode, "standard");
+  assert.equal(automationRequest.launch.introspection.url, `${server.url}/v1/introspection`);
+
+  const listResponse = await fetch(`${automationRequest.launch.introspection.url}/tool`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${automationRequest.launch.introspection.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ tool: "list_sessions", args: {} }),
+  });
+  assert.equal(listResponse.status, 200);
+  assert.deepEqual(await listResponse.json(), { ok: true, result: { sessions: [] } });
+
+  const launchResponse = await fetch(`${automationRequest.launch.introspection.url}/tool`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${automationRequest.launch.introspection.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      tool: "launch_session",
+      args: { promptMarkdown: "Investigate the next parser vulnerability." },
+    }),
+  });
+  assert.equal(launchResponse.status, 200);
+  const launched = await launchResponse.json();
+  assert.equal(launched.ok, true);
+  assert.ok(server.listSessions().some((session) => session.sessionId === launched.result.runId));
+
+  const stopResponse = await fetch(`${automationRequest.launch.introspection.url}/tool`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${automationRequest.launch.introspection.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ tool: "stop_session", args: { runId: launched.result.runId } }),
+  });
+  assert.equal(stopResponse.status, 200);
+  assert.deepEqual(await stopResponse.json(), {
+    ok: true,
+    result: { runId: launched.result.runId, stopped: true },
+  });
   upstream.complete();
 });
 
@@ -1195,10 +1250,56 @@ test("quick-chat launches receive an isolated authenticated Beale introspection 
   const pluginCall = calls.find((call) => call.operation === "plugin.runtime");
 
   assert.equal(prepared.launch.pluginRuntime.allowedMcpServers[0], "beale-introspection.beale");
+  assert.deepEqual(prepared.launch.introspection, {
+    url: "http://127.0.0.1:42123",
+    token: "quick-chat-token",
+  });
   assert.equal(pluginCall.options.input.registryDirectory, join(directory, "quick-chat-plugin-runtime"));
-  assert.deepEqual(pluginCall.options.input.runtimeEnvironment["beale-introspection-builtin"], {
-    BEALE_INTROSPECTION_URL: "http://127.0.0.1:42123",
-    BEALE_INTROSPECTION_TOKEN: "quick-chat-token",
+  assert.equal(pluginCall.options.input.runtimeEnvironment, undefined);
+});
+
+test("workspace launches retain the standard plugin runtime while authenticating introspection", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-workspace-introspection-"));
+  temporaryDirectories.push(directory);
+  const calls = [];
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation, options) => {
+      calls.push({ operation, options });
+      if (operation === "provider.describe") {
+        return { defaultSmallModels: {}, sessionTitleEffort: "medium", shellReviewEffort: "medium" };
+      }
+      if (operation === "plugin.runtime") {
+        return {
+          skillDirs: [join(directory, "standard-skill")],
+          selectedSkillIds: ["standard-skill"],
+          mcpConfigPath: join(directory, "standard-mcp.json"),
+          allowedMcpServers: ["beale-introspection.beale", "example.tools"],
+        };
+      }
+      if (operation === "session.get") throw new Error("Session not found: session-workspace-introspection");
+      if (operation === "session.create") return { revision: 1 };
+      throw new Error(`Unexpected operation: ${operation}`);
+    },
+  });
+
+  const request = sessionLaunchRequest(directory, { sessionId: "session-workspace-introspection" });
+  request.launch.introspection = {
+    url: "http://127.0.0.1:42124",
+    token: "workspace-introspection-token",
+    runtimeMode: "standard",
+  };
+  const prepared = await service.prepareSession(request, "session-workspace-introspection");
+  const pluginCall = calls.find((call) => call.operation === "plugin.runtime");
+
+  assert.equal(pluginCall.options.input.registryDirectory, directory);
+  assert.deepEqual(prepared.launch.pluginRuntime.allowedMcpServers, [
+    "beale-introspection.beale",
+    "example.tools",
+  ]);
+  assert.deepEqual(prepared.launch.introspection, {
+    url: "http://127.0.0.1:42124",
+    token: "workspace-introspection-token",
   });
 });
 
@@ -1230,6 +1331,23 @@ test("session requests validate their input before spawning Honeycrisp", async (
     }),
   });
   assert.equal(invalidProvider.status, 400);
+
+  const invalidIntrospectionMode = await fetch(`${server.url}/v1/sessions`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      ...sessionLaunchRequest(tmpdir()),
+      launch: {
+        ...sessionLaunchRequest(tmpdir()).launch,
+        introspection: {
+          url: "http://127.0.0.1:42126",
+          token: "test-token",
+          runtimeMode: "shared",
+        },
+      },
+    }),
+  });
+  assert.equal(invalidIntrospectionMode.status, 400);
 
   const malformed = await fetch(`${server.url}/v1/sessions`, {
     method: "POST",
@@ -1356,6 +1474,16 @@ test("expands typed session intent into app-server-owned Honeycrisp policy", () 
   assert.throws(() => honeycrispSessionArgs(launch, {
     BEALE_HONEYCRISP_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["unknown-family"]),
   }), /unsupported capability: unknown-family/);
+
+  const introspectionEnvironment = honeycrispSessionEnvironment({
+    ...launch,
+    introspection: {
+      url: "http://127.0.0.1:42125",
+      token: "session-introspection-token",
+    },
+  }, {});
+  assert.equal(introspectionEnvironment.BEALE_INTROSPECTION_URL, "http://127.0.0.1:42125");
+  assert.equal(introspectionEnvironment.BEALE_INTROSPECTION_TOKEN, "session-introspection-token");
 });
 
 test("proxies a real mock run over the versioned session transport and retains its terminal state", async () => {

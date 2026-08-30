@@ -69,6 +69,44 @@ describe('renderer session usage view models', () => {
     expect(sessionTokenLabelForTotal(1_100_000_000)).toBe('1.1b');
   });
 
+  it('uses the canonical app-server total instead of a bounded trace-event subtotal', () => {
+    const meter = contextMeterForDetail(
+      runDetail({
+        tokenUsage: { totalTokens: 12_345_678 },
+        traceEvents: [
+          traceEvent({ payload: { usage: { input: 80_000, output: 5_000, totalTokens: 85_000 } } })
+        ]
+      })
+    );
+
+    expect(meter.totalSessionTokens).toBe(12_345_678);
+    expect(visibleSessionTokenUsageLabel(meter)).toBe('12.3m');
+    expect(meter.sessionInputTokens).toBeNull();
+    expect(meter.sessionOutputTokens).toBeNull();
+    expect(visibleSessionTokenBreakdownLabel(meter)).toBe('');
+  });
+
+  it('uses the canonical app-server input, output, and cache aggregates', () => {
+    const meter = contextMeterForDetail(
+      runDetail({
+        tokenUsage: {
+          totalTokens: 12_345_678,
+          inputTokens: 12_000_000,
+          outputTokens: 345_678,
+          cacheReadTokens: 9_000_000,
+          cachePromptTokens: 12_000_000
+        },
+        traceEvents: [
+          traceEvent({ payload: { usage: { input: 80_000, output: 5_000, cacheRead: 20_000, totalTokens: 105_000 } } })
+        ]
+      })
+    );
+
+    expect(visibleSessionTokenBreakdownLabel(meter)).toBe('12m In, 346k Out');
+    expect(visibleSessionCachedTokenLabel(meter)).toBe('9m Cached');
+    expect(visibleCacheHitRateLabel(meter)).toBe('75%');
+  });
+
   it('does not count aggregate capture usage again when summing model calls', () => {
     const meter = contextMeterForDetail(
       runDetail({
@@ -341,6 +379,7 @@ describe('renderer session usage view models', () => {
 });
 
 function runDetail(input: {
+  tokenUsage?: RunDetail['tokenUsage'];
   traceEvents?: TraceEventRecord[];
   contextCompactions?: Array<Record<string, unknown>>;
   modelSessions?: Array<Record<string, unknown>>;
@@ -350,6 +389,7 @@ function runDetail(input: {
     run: {
       status: input.status ?? 'active'
     },
+    tokenUsage: input.tokenUsage,
     traceEvents: input.traceEvents ?? [],
     contextCompactions: input.contextCompactions ?? [],
     modelSessions: input.modelSessions ?? []

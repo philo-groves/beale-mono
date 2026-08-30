@@ -16,6 +16,8 @@ import {
 
 export type WorkspaceStartupPhase = 'shell' | 'registry' | 'ready';
 
+const WORKSPACE_REGISTRY_REFRESH_INTERVAL_MS = 5_000;
+
 export function useWorkspaceRuntime(onError: (message: string) => void): {
   snapshot: WorkspaceSnapshot | null;
   workspaceRegistry: WorkspaceRegistryState | null;
@@ -106,6 +108,25 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
     devInstrumentation.recordPayload('ipc.workspaceRegistry.apply', next, workspaceRegistryMetricDetail(next));
     setWorkspaceRegistry(next);
   }, []);
+
+  useEffect(() => {
+    let refreshInFlight = false;
+    const refresh = (): void => {
+      if (document.visibilityState !== 'visible' || refreshInFlight) return;
+      refreshInFlight = true;
+      void loadWorkspaceRegistry()
+        .catch((caught: unknown) => onError(errorMessage(caught)))
+        .finally(() => {
+          refreshInFlight = false;
+        });
+    };
+    const interval = window.setInterval(refresh, WORKSPACE_REGISTRY_REFRESH_INTERVAL_MS);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [loadWorkspaceRegistry, onError]);
 
   useEffect(() => {
     const unsubscribeSnapshot = window.beale.onSnapshot((next) => {

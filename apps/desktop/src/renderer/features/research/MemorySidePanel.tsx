@@ -390,8 +390,8 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
     [detail?.run.createdAt, detail?.run.endedAt, detail?.run.startedAt, sessionMemoryNodes]
   );
   const sessionMemoryActivity = useMemo(
-    () => sessionMemoryActivitySummary(summaryEvents, sessionMemoryCreations),
-    [sessionMemoryCreations, summaryEvents]
+    () => sessionMemoryActivitySummary(summaryEvents, sessionMemoryCreations, detail?.activityCounts),
+    [detail?.activityCounts, sessionMemoryCreations, summaryEvents]
   );
   const sessionMemoryTypes = useMemo(
     () => memoryTypeSummaryPresentation(

@@ -60,7 +60,6 @@ import {
   getHoneycrispProviderSemantics,
   getHoneycrispReportDocument,
   getHoneycrispRunbookDocument,
-  listHoneycrispSessionSummariesAsync,
   listHoneycrispSessionSummariesForWorkspacesAsync,
   parseHoneycrispMemoryDreamingPlan,
   prepareHoneycrispMemoryDreaming,
@@ -739,7 +738,10 @@ export class WorkspaceService {
     const registry = this.getWorkspaceRegistry();
     this.syncWorkspaceRegistry();
     if (!this.registryLifecycleReconciliation) {
-      this.registryLifecycleReconciliation = this.reconcileCachedActiveSessions(registry);
+      this.registryLifecycleReconciliation = this.reconcileCanonicalSessions(registry)
+        .finally(() => {
+          this.registryLifecycleReconciliation = null;
+        });
     }
     await this.registryLifecycleReconciliation;
     return registry.getState();
@@ -1404,6 +1406,8 @@ export class WorkspaceService {
         ? await this.memorySummaryForRuntimeAsync(runtime)
         : await getHoneycrispMemorySummaryAsync({
             workspaceId: workspace.workspaceId,
+            workspaceRoot: workspace.workspacePath,
+            researchProfileId: workspace.researchProfileId,
             subjectId: null
           }, {
             databasePath: this.globalHoneycrispDatabasePath(workspace.researchProfileId),
@@ -1480,7 +1484,12 @@ export class WorkspaceService {
     const runtime = this.runtimeForWorkspacePath(workspace.workspacePath);
     const summary = runtime
       ? await this.memorySummaryForRuntimeAsync(runtime)
-      : await getHoneycrispMemorySummaryAsync({ workspaceId, subjectId: null }, {
+      : await getHoneycrispMemorySummaryAsync({
+          workspaceId,
+          workspaceRoot: workspace.workspacePath,
+          researchProfileId: workspace.researchProfileId,
+          subjectId: null
+        }, {
           databasePath: this.globalHoneycrispDatabasePath(workspace.researchProfileId),
           artifactDirectoryPath: this.globalHoneycrispArtifactDirectory(workspace.researchProfileId)
         });
@@ -3328,7 +3337,10 @@ export class WorkspaceService {
         maxCostUsd: 0,
         repeatSchedule: { type: 'none' }
       },
-      introspection
+      introspection: {
+        ...introspection,
+        runtimeMode: 'isolated'
+      }
     }, runtime);
     await handle.transportReady;
     this.syncWorkspaceRegistryForRuntime(runtime, false);
@@ -4091,45 +4103,54 @@ export class WorkspaceService {
     return this.snapshotForRuntime(runtime);
   }
 
-  private async reconcileCachedActiveSessions(registry: WorkspaceRegistry): Promise<void> {
+  private async reconcileCanonicalSessions(registry: WorkspaceRegistry): Promise<void> {
     const state = registry.getState();
-    const activeSessions = state.researchSessions.filter(
-      (session) => session.runEngine === 'honeycrisp' && session.status === 'active'
-    );
-    const groups = new Map<string, { profileId: ResearchProfileId; workspaceId: string; runIds: string[] }>();
-    for (const session of activeSessions) {
-      const workspace = state.workspaces.find((candidate) => candidate.id === session.registryWorkspaceId);
-      if (!workspace) continue;
-      const runtime = this.runtimeForWorkspacePath(workspace.workspacePath);
-      if (runtime?.honeycrispEngine.hasActiveRuns()) continue;
-      const key = `${workspace.researchProfileId}\0${session.workspaceId}`;
-      const group = groups.get(key) ?? {
-        profileId: workspace.researchProfileId,
-        workspaceId: session.workspaceId,
-        runIds: []
-      };
-      group.runIds.push(session.runId);
-      groups.set(key, group);
+    const workspacesByProfile = new Map<ResearchProfileId, WorkspaceRegistryEntry[]>();
+    for (const workspace of state.workspaces) {
+      if (!workspace.workspaceId) continue;
+      const entries = workspacesByProfile.get(workspace.researchProfileId) ?? [];
+      entries.push(workspace);
+      workspacesByProfile.set(workspace.researchProfileId, entries);
     }
 
-    await Promise.all([...groups.values()].map(async ({ profileId, workspaceId, runIds }) => {
-      const storage = {
-        databasePath: this.globalHoneycrispDatabasePath(profileId),
-        artifactDirectoryPath: this.globalHoneycrispArtifactDirectory(profileId)
-      };
+    await Promise.all([...workspacesByProfile].map(async ([profileId, workspaces]) => {
       try {
-        const sessions = await listHoneycrispSessionSummariesAsync(workspaceId, storage);
-        registry.reconcileHoneycrispSessions(profileId, workspaceId, sessions);
-        const canonicalIds = new Set(sessions.map((session) => session.id));
-        registry.markHoneycrispSessionsInterrupted(
-          profileId,
-          workspaceId,
-          runIds.filter((runId) => !canonicalIds.has(runId))
+        const sessions = await listHoneycrispSessionSummariesForWorkspacesAsync(
+          workspaces.map((workspace) => workspace.workspaceId),
+          {
+            databasePath: this.globalHoneycrispDatabasePath(profileId),
+            artifactDirectoryPath: this.globalHoneycrispArtifactDirectory(profileId),
+            profileId
+          }
         );
+        const sessionsByWorkspace = new Map<string, HoneycrispSessionSummary[]>();
+        for (const session of sessions) {
+          const entries = sessionsByWorkspace.get(session.workspaceId) ?? [];
+          entries.push(session);
+          sessionsByWorkspace.set(session.workspaceId, entries);
+        }
+        for (const workspace of workspaces) {
+          const canonicalSessions = sessionsByWorkspace.get(workspace.workspaceId) ?? [];
+          registry.reconcileHoneycrispSessions(profileId, workspace.workspaceId, canonicalSessions);
+          const runtime = this.runtimeForWorkspacePath(workspace.workspacePath);
+          if (runtime?.honeycrispEngine.hasActiveRuns()) continue;
+          const canonicalIds = new Set(canonicalSessions.map((session) => session.id));
+          const missingActiveRunIds = state.researchSessions
+            .filter((session) => session.registryWorkspaceId === workspace.id
+              && session.runEngine === 'honeycrisp'
+              && session.status === 'active'
+              && !canonicalIds.has(session.runId))
+            .map((session) => session.runId);
+          registry.markHoneycrispSessionsInterrupted(
+            profileId,
+            workspace.workspaceId,
+            missingActiveRunIds
+          );
+        }
       } catch {
         // The app-server owns interruption recovery before Desktop initializes.
-        // Preserve the cached active state when canonical storage is temporarily
-        // unavailable; falsely pausing it would suppress app-server reattachment.
+        // Preserve cached rows when canonical storage is temporarily unavailable;
+        // falsely pausing or hiding them would suppress app-server reattachment.
       }
     }));
   }
@@ -5107,13 +5128,25 @@ export class WorkspaceService {
         ? this.disabledMemorySummaryForRuntime(runtime, summary)
         : summary;
     }
-    const promise = getHoneycrispMemorySummaryAsync({
-      ...(sessionId ? { sessionId } : {}),
-      workspaceId: runtime.db.getWorkspaceId(),
-      subjectId: runtime.db.getResearchSubject().id,
-      researchProfile,
-      assetIds: revisionContext.assetIds
-    }, storage).then((summary) => {
+    // Load the complete workspace summary through the app-server. The renderer
+    // applies sessionIds itself; Honeycrisp's session-scoped summary query only
+    // covers legacy origin rows and omits memories linked by later activity.
+    const appServerMemoryContext = sessionId
+      ? {
+          workspaceId: runtime.db.getWorkspaceId(),
+          workspaceRoot: runtime.workspacePath,
+          researchProfileId: researchProfile?.profileId ?? runtime.researchProfile.profileId,
+          subjectId: null
+        }
+      : {
+          workspaceId: runtime.db.getWorkspaceId(),
+          workspaceRoot: runtime.workspacePath,
+          researchProfileId: researchProfile?.profileId ?? runtime.researchProfile.profileId,
+          subjectId: runtime.db.getResearchSubject().id,
+          researchProfile,
+          assetIds: revisionContext.assetIds
+        };
+    const promise = getHoneycrispMemorySummaryAsync(appServerMemoryContext, storage).then((summary) => {
       if (this.honeycrispMemorySummaryCache.size >= 64) this.honeycrispMemorySummaryCache.clear();
       this.honeycrispMemorySummaryCache.set(cacheKey, {
         fingerprint: honeycrispStorageFingerprint(storage),

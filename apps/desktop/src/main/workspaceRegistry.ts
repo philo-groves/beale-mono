@@ -495,53 +495,37 @@ export class WorkspaceRegistry {
     workspaceId: string,
     sessions: readonly HoneycrispSessionSummary[]
   ): void {
+    const workspace = rowOrUndefined(this.db.prepare(`
+      SELECT id, workspace_path FROM workspaces
+      WHERE research_profile_id = ? AND workspace_id = ?
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(researchProfileId, workspaceId));
+    if (!workspace) return;
+    const registryWorkspaceId = text(workspace, 'id');
+    const workspacePath = text(workspace, 'workspace_path');
     const selectBreakoutRooms = this.db.prepare(`
       SELECT breakout_rooms_json FROM research_sessions
       WHERE research_profile_id = ? AND workspace_id = ? AND run_id = ? AND run_engine = 'honeycrisp'
     `);
-    const update = this.db.prepare(`
-      UPDATE research_sessions SET
-        title = ?,
-        result_viewed_at = CASE
-          WHEN status NOT IN ('blocked', 'completed', 'failed', 'stopped')
-            AND ? IN ('blocked', 'completed', 'failed', 'stopped') THEN NULL
-          ELSE result_viewed_at
-        END,
-        status = ?,
-        summary = ?,
-        model = ?,
-        reasoning_effort = ?,
-        started_at = ?,
-        ended_at = ?,
-        updated_at = ?,
-        breakout_rooms_json = ?
-      WHERE research_profile_id = ?
-        AND workspace_id = ?
-        AND run_id = ?
-        AND run_engine = 'honeycrisp'
-    `);
     this.db.exec('BEGIN IMMEDIATE;');
     try {
       for (const session of sessions) {
+        if (session.workspaceId !== workspaceId) continue;
+        const row = registryRowFromHoneycrispSession(session);
+        if (isUntrackedResourceSession(row)) continue;
         const current = rowOrUndefined(selectBreakoutRooms.get(researchProfileId, workspaceId, session.id));
-        const breakoutRooms = breakoutRoomSummariesForRunStatus(
+        row.breakoutRooms = breakoutRoomSummariesForRunStatus(
           current ? parseBreakoutRoomSummaries(current.breakout_rooms_json) : [],
           session.status
         );
-        update.run(
-          session.title,
-          session.status,
-          session.status,
-          session.summary,
-          session.model,
-          session.reasoningEffort,
-          session.startedAt,
-          session.endedAt,
-          session.updatedAt,
-          JSON.stringify(breakoutRooms),
+        this.upsertResearchSession(
           researchProfileId,
+          registryWorkspaceId,
+          workspacePath,
           workspaceId,
-          session.id
+          row,
+          session.updatedAt
         );
       }
       this.db.exec('COMMIT;');
@@ -1051,6 +1035,53 @@ export class WorkspaceRegistry {
 
 function sessionBecameFinal(previous: RunStatus, current: RunStatus): boolean {
   return !isFinalRunStatus(previous) && isFinalRunStatus(current);
+}
+
+function registryRowFromHoneycrispSession(
+  session: HoneycrispSessionSummary
+): WorkspaceSnapshot['runs'][number] {
+  const storedRun = objectRecord(session.metadata.bealeRun);
+  return {
+    engine: 'honeycrisp',
+    lastMessageAt: session.lastMessageAt ?? session.updatedAt,
+    sessionRuns: [],
+    run: {
+      id: session.id,
+      scopeVersionId: storedString(storedRun?.scopeVersionId) ?? '',
+      researchProfileSnapshotId: storedString(storedRun?.researchProfileSnapshotId),
+      shellSafetyMode: session.metadata.shellSafetyMode === 'manual_approval' || session.metadata.shellSafetyMode === 'danger'
+        ? session.metadata.shellSafetyMode
+        : storedRun?.shellSafetyMode === 'manual_approval' || storedRun?.shellSafetyMode === 'danger'
+          ? storedRun.shellSafetyMode
+          : 'auto_review',
+      mode: storedString(storedRun?.mode) ?? 'open_discovery',
+      status: session.status,
+      title: session.title,
+      promptMarkdown: session.prompt,
+      model: session.model,
+      reasoningEffort: session.reasoningEffort,
+      attemptStrategy: storedString(storedRun?.attemptStrategy) ?? 'iterative_research',
+      sandboxProfile: storedString(storedRun?.sandboxProfile) ?? 'host',
+      targetAssetId: storedString(storedRun?.targetAssetId),
+      targetPath: storedString(storedRun?.targetPath),
+      budget: objectRecord(storedRun?.budget) ?? {},
+      summary: session.summary,
+      finalDisposition: parseSessionFinalDisposition(JSON.stringify(session.finalDisposition)),
+      createdAt: session.createdAt,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt
+    }
+  };
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function storedString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 function isFinalRunStatus(status: RunStatus): boolean {

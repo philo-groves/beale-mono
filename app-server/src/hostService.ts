@@ -347,9 +347,22 @@ export class AppServerHostService {
             : `${sessionId}.${continuation.resumeAttemptId}.capture.json`
         )
       : undefined;
-    const pluginRuntime = request.launch.introspection
-      ? await this.loadIntrospectionPluginRuntime(request.launch.introspection)
+    const introspection = validatedIntrospectionEndpoint(request.launch.introspection);
+    const loadedPluginRuntime = introspection?.runtimeMode === 'isolated'
+      ? await this.loadIntrospectionPluginRuntime()
       : await this.resolvePluginRuntime();
+    const pluginRuntime = loadedPluginRuntime
+      ? {
+          ...loadedPluginRuntime,
+          ...(!introspection && loadedPluginRuntime.allowedMcpServers
+            ? {
+                allowedMcpServers: loadedPluginRuntime.allowedMcpServers.filter(
+                  (name) => name !== 'beale-introspection.beale'
+                )
+              }
+            : {})
+        }
+      : null;
     const restartLaunch = restartLaunchDescriptor(request, {
       providerId,
       ...(model ? { model } : {}),
@@ -418,6 +431,9 @@ export class AppServerHostService {
         profileAware: Boolean(profileId),
         memoryBackend: workspace.memoryBackend,
         ...(pluginRuntime ? { pluginRuntime } : {}),
+        ...(introspection
+          ? { introspection: { url: introspection.url, token: introspection.token } }
+          : {}),
         ...(!profileId && this.registry.memoryTypeDescriptions()
           ? { memoryTypeDescriptions: this.registry.memoryTypeDescriptions()! }
           : {}),
@@ -867,13 +883,7 @@ export class AppServerHostService {
     }
   }
 
-  private async loadIntrospectionPluginRuntime(
-    endpoint: { url: string; token: string }
-  ): Promise<ResolvedHoneycrispSessionLaunch['pluginRuntime'] | null> {
-    const endpointUrl = new URL(endpoint.url);
-    if (endpointUrl.protocol !== 'http:' || endpointUrl.hostname !== '127.0.0.1' || !endpoint.token.trim()) {
-      throw new Error('Quick Chat introspection requires an authenticated loopback endpoint.');
-    }
+  private async loadIntrospectionPluginRuntime(): Promise<ResolvedHoneycrispSessionLaunch['pluginRuntime'] | null> {
     const plugin = builtinPlugin('beale-introspection-builtin', 'beale-introspection', false);
     if (!existsSync(plugin.path)) {
       throw new Error('Beale introspection plugin is unavailable for Quick Chat.');
@@ -882,13 +892,7 @@ export class AppServerHostService {
       args: ['harness', 'plugin-runtime'],
       input: {
         registryDirectory: join(this.registry.registryDirectory, 'quick-chat-plugin-runtime'),
-        builtinPlugins: [plugin],
-        runtimeEnvironment: {
-          'beale-introspection-builtin': {
-            BEALE_INTROSPECTION_URL: endpointUrl.toString().replace(/\/$/u, ''),
-            BEALE_INTROSPECTION_TOKEN: endpoint.token
-          }
-        }
+        builtinPlugins: [plugin]
       }
     });
     const mcpConfigPath = nonEmpty(runtime.mcpConfigPath);
@@ -1275,6 +1279,29 @@ function generatedTitle(prompt: string): string {
   return normalized.slice(0, 120) || 'Beale research session';
 }
 
+function validatedIntrospectionEndpoint(
+  endpoint: HoneycrispSessionLaunchRequest['launch']['introspection']
+): { url: string; token: string; runtimeMode: 'isolated' | 'standard' } | undefined {
+  if (!endpoint) return undefined;
+  const endpointUrl = new URL(endpoint.url);
+  if (
+    endpointUrl.protocol !== 'http:'
+    || endpointUrl.hostname !== '127.0.0.1'
+    || endpointUrl.username
+    || endpointUrl.password
+    || endpointUrl.search
+    || endpointUrl.hash
+    || !endpoint.token.trim()
+  ) {
+    throw new Error('Beale introspection requires an authenticated loopback endpoint.');
+  }
+  return {
+    url: endpointUrl.toString().replace(/\/$/u, ''),
+    token: endpoint.token,
+    runtimeMode: endpoint.runtimeMode ?? 'isolated'
+  };
+}
+
 function restartLaunchDescriptor(
   request: HoneycrispSessionLaunchRequest,
   resolved: {
@@ -1286,7 +1313,8 @@ function restartLaunchDescriptor(
 ): StoredRestartLaunchDescriptor {
   return {
     schemaVersion: 1,
-    eligible: request.launch.introspection === undefined,
+    eligible: request.launch.introspection === undefined
+      || request.launch.introspection.runtimeMode === 'standard',
     launch: {
       workspaceId: request.launch.workspaceId,
       promptMarkdown: request.launch.promptMarkdown,

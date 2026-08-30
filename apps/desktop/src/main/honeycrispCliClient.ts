@@ -40,6 +40,20 @@ export type {
 
 export type HoneycrispSessionStatus = 'active' | 'paused' | 'blocked' | 'completed' | 'failed' | 'stopped';
 
+export interface HoneycrispSessionTokenUsage {
+  totalTokens: number;
+  totalCostUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cachePromptTokens?: number;
+}
+
+export interface HoneycrispSessionActivityCounts {
+  memorySearches: number;
+  memoryUpdates: number;
+}
+
 export interface HoneycrispSessionEvent {
   id: string;
   kind: string;
@@ -85,6 +99,10 @@ export interface HoneycrispSessionRecord {
   endedAt: string | null;
   updatedAt: string;
   revision: number;
+  /** Present when materialized from a canonical session summary/update. */
+  tokenUsage?: HoneycrispSessionTokenUsage;
+  /** Present when materialized from a canonical session summary/update. */
+  activityCounts?: HoneycrispSessionActivityCounts;
 }
 
 export type HoneycrispSessionSummary = Omit<
@@ -93,7 +111,8 @@ export type HoneycrispSessionSummary = Omit<
 > & {
   attempts: Array<Omit<HoneycrispSessionAttempt, 'capture'>>;
   lastMessageAt: string | null;
-  tokenUsage?: { totalTokens: number; totalCostUsd?: number };
+  tokenUsage?: HoneycrispSessionTokenUsage;
+  activityCounts?: HoneycrispSessionActivityCounts;
 };
 
 export interface HoneycrispSessionUpdate {
@@ -620,6 +639,8 @@ export function getHoneycrispMemorySummary(
 export async function getHoneycrispMemorySummaryAsync(
   input: {
     workspaceId: string;
+    workspaceRoot?: string;
+    researchProfileId?: string;
     subjectId: string | null;
     sessionId?: string;
     researchProfile?: ResearchProfileSnapshot | null;

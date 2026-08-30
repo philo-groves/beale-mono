@@ -22,6 +22,7 @@ import {
   readLiveBealeAppServerDiscovery,
   requireBuiltAppServerTrayEntry,
   setBealeDesktopRestartRequiredHandler,
+  shouldLaunchAppServerTrayController,
   shouldReplaceAppServerWithTray,
   startAppServerSession,
   stopAppServerSession,
@@ -106,6 +107,15 @@ describe('beale app-server client', () => {
     expect(shouldReplaceAppServerWithTray(discoveryRecord({ hostMode: 'headless' }), 'darwin', undefined)).toBe(true);
     expect(shouldReplaceAppServerWithTray(discoveryRecord({ hostMode: 'headless' }), 'win32', undefined)).toBe(true);
     expect(shouldReplaceAppServerWithTray(discoveryRecord({ hostMode: 'headless' }), 'darwin', '/custom/server')).toBe(false);
+  });
+
+  it('launches a tray controller when an active session prevents replacing a headless macOS host', () => {
+    const headless = discoveryRecord({ hostMode: 'headless' });
+    expect(shouldLaunchAppServerTrayController(headless, 1, 'darwin', undefined)).toBe(true);
+    expect(shouldLaunchAppServerTrayController(headless, 0, 'darwin', undefined)).toBe(false);
+    expect(shouldLaunchAppServerTrayController(headless, 1, 'linux', undefined)).toBe(false);
+    expect(shouldLaunchAppServerTrayController(headless, 1, 'darwin', '/custom/server')).toBe(false);
+    expect(shouldLaunchAppServerTrayController(discoveryRecord({ hostMode: 'tray' }), 1, 'darwin', undefined)).toBe(false);
   });
 
   it('rejects a missing built tray entry before Electron is launched', () => {
@@ -362,6 +372,63 @@ describe('beale app-server client', () => {
     await expect(ensureBealeAppServerRunning({ readyTimeoutMs: 500 }))
       .rejects.toThrow(/did not confirm that no research sessions are active/);
     expect(shutdownRequests).toBe(0);
+  });
+
+  it('replaces an unresponsive app-server only when its discovery lock verifies the process owner', async () => {
+    const oldProcess = spawn(process.execPath, ['-e', [
+      ...(process.platform === 'win32' ? [] : ["process.on('SIGTERM', () => undefined);"]),
+      "process.send?.('ready');",
+      'setInterval(() => undefined, 1000);'
+    ].join('')], {
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      windowsHide: true
+    });
+    try {
+      await new Promise<void>((resolve) => oldProcess.once('message', () => resolve()));
+      const stateFile = process.env.BEALE_APP_SERVER_STATE_FILE!;
+      writeFileSync(stateFile, JSON.stringify(discoveryRecord({
+        pid: oldProcess.pid!,
+        url: 'http://127.0.0.1:9'
+      })), 'utf8');
+      writeFileSync(`${stateFile}.lock`, JSON.stringify({ pid: oldProcess.pid }), 'utf8');
+      process.env.BEALE_APP_SERVER_COMMAND = 'definitely-not-a-real-beale-launcher';
+
+      await expect(ensureBealeAppServerRunning({
+        healthTimeoutMs: 100,
+        readyTimeoutMs: 500
+      })).rejects.toThrow(/did not become ready/);
+      await new Promise<void>((resolve) => {
+        if (oldProcess.exitCode !== null || oldProcess.signalCode !== null) resolve();
+        else oldProcess.once('exit', () => resolve());
+      });
+      expect(oldProcess.exitCode !== null || oldProcess.signalCode !== null).toBe(true);
+    } finally {
+      if (oldProcess.exitCode === null && oldProcess.signalCode === null) oldProcess.kill();
+    }
+  });
+
+  it('preserves an unresponsive process when discovery-lock ownership cannot be verified', async () => {
+    const oldProcess = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    try {
+      const stateFile = process.env.BEALE_APP_SERVER_STATE_FILE!;
+      writeFileSync(stateFile, JSON.stringify(discoveryRecord({
+        pid: oldProcess.pid!,
+        url: 'http://127.0.0.1:9'
+      })), 'utf8');
+      writeFileSync(`${stateFile}.lock`, JSON.stringify({ pid: process.pid }), 'utf8');
+
+      await expect(ensureBealeAppServerRunning({ healthTimeoutMs: 100 }))
+        .rejects.toThrow(/does not own its discovery lock/);
+      expect(oldProcess.exitCode).toBeNull();
+    } finally {
+      if (oldProcess.exitCode === null && oldProcess.signalCode === null) {
+        oldProcess.kill();
+        await new Promise<void>((resolve) => oldProcess.once('exit', () => resolve()));
+      }
+    }
   });
 
   it('defers replacement of an older app-server while a research session is active', async () => {

@@ -253,7 +253,7 @@ class StdioMcpServerConnection {
       cwd: this.config.cwd,
       env: {
         ...process.env,
-        ...(this.config.env ?? {}),
+        ...resolveServerEnvironment(this.config),
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -427,6 +427,19 @@ class StdioMcpServerConnection {
       "utf8",
     );
   }
+}
+
+function resolveServerEnvironment(config: ResearchMcpServerConfig): Record<string, string> {
+  return Object.fromEntries(Object.entries(config.env ?? {}).map(([name, value]) => [
+    name,
+    value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu, (_placeholder, variableName: string) => {
+      const replacement = process.env[variableName];
+      if (replacement === undefined) {
+        throw new Error(`MCP server ${config.name} requires unavailable runtime environment variable ${variableName}.`);
+      }
+      return replacement;
+    }),
+  ]));
 }
 
 function parseMcpServers(

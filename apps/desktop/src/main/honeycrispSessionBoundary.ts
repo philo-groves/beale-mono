@@ -271,6 +271,8 @@ export function createHoneycrispSessionBoundary(
   const ownedRunIds = new Set(sessionSummaries.map((session) => session.id));
   const nextTraceSequence = new Map(sessionSummaries.map((session) => [session.id, session.revision]));
   const sessionWrites = new HoneycrispSessionWriteQueue(storage);
+  const queuedBreakoutRooms = new Map<string, BreakoutRoomRecord>();
+  const queuedBreakoutRoomMembers = new Map<string, BreakoutRoomMemberRecord>();
   let boundary!: WorkspaceDatabase;
 
   const getSessionMetadata = (runId: string): HoneycrispSessionRecord | null => {
@@ -285,15 +287,6 @@ export function createHoneycrispSessionBoundary(
       storage,
       { tail: true, limit: 1_000, maxBytes: 2 * 1024 * 1024 }
     )), sessionWrites);
-  };
-  const getCollaborationSession = (runId: string): HoneycrispSessionRecord | null => {
-    const session = getSessionMetadata(runId);
-    if (!session) return null;
-    const collaboration = getHoneycrispSessionCollaborationState(runId, storage);
-    return sessionWithQueuedEvents({
-      ...session,
-      events: [...collaboration.rooms, ...collaboration.members, ...collaboration.messages]
-    }, sessionWrites);
   };
   const appendRecordEvent = (runId: string, kind: string, record: Record<string, unknown>): void => {
     sessionWrites.enqueueEvent(runId, {
@@ -700,6 +693,7 @@ export function createHoneycrispSessionBoundary(
         createdAt: input.createdAt ?? new Date().toISOString(),
         closedAt: input.closedAt ?? null
       };
+      queuedBreakoutRooms.set(record.id, record);
       appendRecordEvent(input.runId, 'beale.breakout_room', record as unknown as Record<string, unknown>);
       return record;
     }) as WorkspaceDatabase['upsertBreakoutRoom'],
@@ -722,6 +716,7 @@ export function createHoneycrispSessionBoundary(
         endedAt: input.endedAt ?? null,
         error: input.error ?? null
       };
+      queuedBreakoutRoomMembers.set(record.id, record);
       appendRecordEvent(input.runId, 'beale.breakout_member', record as unknown as Record<string, unknown>);
       return record;
     }) as WorkspaceDatabase['upsertBreakoutRoomMember'],
@@ -748,17 +743,26 @@ export function createHoneycrispSessionBoundary(
 
     findBreakoutRoomMember: ((runId: string, attemptId: string | null, agentPath: string): BreakoutRoomMemberRecord | null => {
       if (!ownedRunIds.has(runId)) return database.findBreakoutRoomMember(runId, attemptId, agentPath);
-      const session = getCollaborationSession(runId);
-      return (session ? sessionDetail(session, database).breakoutRoomMembers : [])
-        ?.filter((member) => member.attemptId === attemptId && member.agentPath === agentPath)
+      return [...queuedBreakoutRoomMembers.values()]
+        .filter((member) => member.runId === runId && member.attemptId === attemptId && member.agentPath === agentPath)
+        .sort((left, right) => (left.startedAt ?? '').localeCompare(right.startedAt ?? '') || left.id.localeCompare(right.id))
         .at(-1) ?? null;
     }) as WorkspaceDatabase['findBreakoutRoomMember'],
 
     refreshBreakoutRoomStatus: ((roomId: string): BreakoutRoomRecord | null => {
-      for (const runId of ownedRunIds) {
-        const session = getCollaborationSession(runId);
-        const room = session ? sessionDetail(session, database).breakoutRooms?.find((candidate) => candidate.id === roomId) : null;
-        if (room) return room;
+      const room = queuedBreakoutRooms.get(roomId);
+      if (room) {
+        const members = [...queuedBreakoutRoomMembers.values()].filter((member) => member.roomId === roomId);
+        const status = resolvedBreakoutRoomStatus(room, members);
+        const resolved = {
+          ...room,
+          status,
+          closedAt: status === 'active'
+            ? null
+            : room.closedAt ?? members.flatMap((member) => member.endedAt ? [member.endedAt] : []).sort().at(-1) ?? new Date().toISOString()
+        };
+        queuedBreakoutRooms.set(roomId, resolved);
+        return resolved;
       }
       return database.refreshBreakoutRoomStatus(roomId);
     }) as WorkspaceDatabase['refreshBreakoutRoomStatus'],
@@ -1386,6 +1390,8 @@ function sessionDetail(
   });
   return {
     run,
+    ...(session.tokenUsage ? { tokenUsage: session.tokenUsage } : {}),
+    ...(session.activityCounts ? { activityCounts: session.activityCounts } : {}),
     researchProfile: run.researchProfileSnapshotId
       ? database.getResearchProfileSnapshot(run.researchProfileSnapshotId)
       : null,

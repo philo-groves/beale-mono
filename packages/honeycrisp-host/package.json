@@ -28,6 +28,10 @@
     "./runtime-services": {
       "types": "./dist/runtime-services.d.ts",
       "import": "./dist/runtime-services.js"
+    },
+    "./node-network-compatibility": {
+      "types": "./dist/node-network-compatibility.d.ts",
+      "import": "./dist/node-network-compatibility.js"
     }
   },
   "files": [

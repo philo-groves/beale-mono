@@ -4,6 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { extname, join } from 'node:path';
 import QRCode from 'qrcode';
 import {
+  BEALE_APP_SERVER_SESSIONS_PATH,
+  BEALE_APP_SERVER_SHUTDOWN_PATH,
+  decodeBealeAppServerSessionCatalog
+} from 'honeycrisp/protocol';
+import {
   acquireDiscoveryLock,
   defaultDiscoveryPath,
   isProcessAlive,
@@ -17,19 +22,28 @@ import { PairingWindowController } from './pairingWindowController.js';
 import { readPersistedRemoteAccessLaunchOptions } from './remoteAccessConfig.js';
 
 const CHECK_EXIT_DELAY_MS = 1_500;
+const ATTACH_EXISTING_FLAG = '--attach-existing';
+const ATTACHED_SERVER_POLL_MS = 2_000;
+const ATTACHED_SERVER_SHUTDOWN_TIMEOUT_MS = 5_000;
 const MACOS_TRAY_ICON_SIZE = 18;
 const MACOS_TRAY_ICON_SCALE_FACTOR = 2;
 
 let server: AppServerHandle | null = null;
+let attachedServer: AppServerDiscoveryRecord | null = null;
+let attachedSessions: SessionCatalogEntry[] = [];
 let tray: Tray | null = null;
 const pairingWindowController = new PairingWindowController<BrowserWindow>();
 let shuttingDown = false;
 let discoveryLockHeld = false;
+let trayControllerLockHeld = false;
 let discoveryMonitor: NodeJS.Timeout | null = null;
 let appSuspensionBlockerId: number | null = null;
+let restarting = false;
 
 const checkOnly = process.argv.includes('--check');
+const attachExisting = process.argv.includes(ATTACH_EXISTING_FLAG);
 const stateFile = process.env.BEALE_APP_SERVER_STATE_FILE?.trim() || defaultDiscoveryPath();
+const trayControllerLockFile = `${stateFile}.tray-controller`;
 
 // The tray host and Beale Desktop are separate Electron applications. The
 // branded Electron runtime otherwise gives both processes the same default
@@ -44,11 +58,29 @@ if (process.platform === 'darwin') {
   app.dock?.hide();
 }
 
+process.once('SIGINT', () => app.quit());
+process.once('SIGTERM', () => app.quit());
+
 // The discovery lock is the cross-host startup authority. Do not layer
 // Electron's single-instance lock on top of it: a legacy or orphaned tray
 // process can retain that app-wide lock after losing discovery ownership and
 // prevent a replacement host from ever reaching this recoverable gate.
 void app.whenReady().then(async () => {
+  const existing = readDiscoveryRecord(stateFile);
+  if (attachExisting && existing && existing.hostMode !== 'tray' && isProcessAlive(existing.pid)) {
+    if (!acquireDiscoveryLock(trayControllerLockFile, process.pid)) {
+      app.exit(0);
+      return;
+    }
+    trayControllerLockHeld = true;
+    attachedServer = existing;
+    await createTray();
+    await refreshAttachedServer();
+    discoveryMonitor = setInterval(() => void refreshAttachedServer(), ATTACHED_SERVER_POLL_MS);
+    discoveryMonitor.unref();
+    return;
+  }
+
   if (!acquireDiscoveryLock(stateFile, process.pid)) {
     // Another host is starting or still completing shutdown. This is a normal
     // duplicate-launch race; never hold the process open with a modal dialog.
@@ -57,8 +89,8 @@ void app.whenReady().then(async () => {
   }
   discoveryLockHeld = true;
 
-  const existing = readDiscoveryRecord(stateFile);
-  if (!checkOnly && existing && isProcessAlive(existing.pid)) {
+  const current = readDiscoveryRecord(stateFile);
+  if (!checkOnly && current && isProcessAlive(current.pid)) {
     releaseTrayDiscoveryLock();
     app.exit(1);
     return;
@@ -120,6 +152,7 @@ app.on('before-quit', (event) => {
   if (!server) {
     releaseAppSuspensionBlocker();
     releaseTrayDiscoveryLock();
+    releaseTrayControllerLock();
     return;
   }
   event.preventDefault();
@@ -130,11 +163,13 @@ app.on('before-quit', (event) => {
     () => {
       releaseAppSuspensionBlocker();
       releaseTrayDiscoveryLock();
+      releaseTrayControllerLock();
       app.exit(0);
     },
     () => {
       releaseAppSuspensionBlocker();
       releaseTrayDiscoveryLock();
+      releaseTrayControllerLock();
       app.exit(1);
     }
   );
@@ -152,6 +187,12 @@ function releaseTrayDiscoveryLock(): void {
   if (!discoveryLockHeld) return;
   releaseDiscoveryLock(stateFile, process.pid);
   discoveryLockHeld = false;
+}
+
+function releaseTrayControllerLock(): void {
+  if (!trayControllerLockHeld) return;
+  releaseDiscoveryLock(trayControllerLockFile, process.pid);
+  trayControllerLockHeld = false;
 }
 
 async function createTray(): Promise<void> {
@@ -291,12 +332,15 @@ function trayIconPaths(): string[] {
 }
 
 function refreshTrayMenu(): void {
-  if (!tray || !server) return;
-  const sessions: SessionCatalogEntry[] = server.listSessions();
+  if (!tray) return;
+  const connection = activeServerConnection();
+  if (!connection) return;
+  const sessions: SessionCatalogEntry[] = server ? server.listSessions() : attachedSessions;
   const activeSessions = sessions.filter((session) => session.state === 'starting' || session.state === 'running');
+  const restartEnabled = activeSessions.length === 0 && !restarting;
 
   const menu = Menu.buildFromTemplate([
-    { label: `Beale App Server — ${server.url}`, enabled: false },
+    { label: `Beale App Server — ${connection.url}`, enabled: false },
     {
       label: sessionSummaryLine(activeSessions),
       enabled: false
@@ -304,11 +348,11 @@ function refreshTrayMenu(): void {
     { type: 'separator' },
     {
       label: 'Copy Endpoint URL',
-      click: () => clipboard.writeText(server!.url)
+      click: () => clipboard.writeText(connection.url)
     },
     {
       label: 'Copy Operator Token',
-      click: () => clipboard.writeText(server!.operatorToken)
+      click: () => clipboard.writeText(connection.operatorToken)
     },
     {
       label: 'Show QR Code',
@@ -324,7 +368,18 @@ function refreshTrayMenu(): void {
     ...(activeSessions.length > 0 ? [{ type: 'separator' as const }, ...activeSessionItems(activeSessions)] : []),
     { type: 'separator' },
     {
-      label: process.platform === 'darwin' ? 'Quit Beale App Server' : 'Quit',
+      label: restarting
+        ? 'Restarting Beale App Server…'
+        : activeSessions.length > 0
+          ? 'Restart Beale App Server (when sessions finish)'
+          : 'Restart Beale App Server',
+      enabled: restartEnabled,
+      click: () => void restartAppServerFromTray()
+    },
+    {
+      label: attachedServer
+        ? (process.platform === 'darwin' ? 'Hide Beale App Server Menu' : 'Close Beale App Server Controller')
+        : (process.platform === 'darwin' ? 'Quit Beale App Server' : 'Quit'),
       click: () => app.quit()
     }
   ]);
@@ -332,8 +387,8 @@ function refreshTrayMenu(): void {
 }
 
 async function showPairingWindow(): Promise<void> {
-  if (!server) return;
-  const activeServer = server;
+  const activeServer = activeServerConnection();
+  if (!activeServer) return;
   await pairingWindowController.show(
     () => createPairingBrowserWindow(),
     async (window) => {
@@ -385,6 +440,85 @@ async function showPairingWindow(): Promise<void> {
       await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     }
   );
+}
+
+function activeServerConnection(): Pick<AppServerDiscoveryRecord, 'url' | 'operatorToken'> | null {
+  if (server) return server;
+  return attachedServer;
+}
+
+async function refreshAttachedServer(): Promise<void> {
+  const attached = attachedServer;
+  if (!attached) return;
+  const discovery = readDiscoveryRecord(stateFile);
+  if (!discovery || !sameAppServerInstance(discovery, attached) || !isProcessAlive(discovery.pid)) {
+    app.quit();
+    return;
+  }
+  try {
+    const response = await fetch(`${appServerControlUrl(attached)}${BEALE_APP_SERVER_SESSIONS_PATH}`, {
+      headers: { authorization: `Bearer ${attached.operatorToken}` },
+      signal: AbortSignal.timeout(1_500)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    attachedSessions = decodeBealeAppServerSessionCatalog(await response.json()).sessions;
+    refreshTrayMenu();
+  } catch (error) {
+    process.stderr.write(
+      `Beale App Server menu could not refresh the attached host: ${error instanceof Error ? error.message : String(error)}\n`
+    );
+  }
+}
+
+async function restartAppServerFromTray(): Promise<void> {
+  if (restarting) return;
+  const activeSessions = (server ? server.listSessions() : attachedSessions)
+    .filter((session) => session.state === 'starting' || session.state === 'running');
+  if (activeSessions.length > 0) return;
+  restarting = true;
+  refreshTrayMenu();
+
+  try {
+    if (attachedServer) await requestAttachedServerShutdown(attachedServer);
+    app.relaunch();
+    app.quit();
+  } catch (error) {
+    restarting = false;
+    refreshTrayMenu();
+    dialog.showErrorBox(
+      'Beale App Server',
+      `The app-server could not be restarted: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+async function requestAttachedServerShutdown(attached: AppServerDiscoveryRecord): Promise<void> {
+  const response = await fetch(`${appServerControlUrl(attached)}${BEALE_APP_SERVER_SHUTDOWN_PATH}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${attached.operatorToken}` },
+    signal: AbortSignal.timeout(2_000)
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(detail.trim() || `HTTP ${response.status}`);
+  }
+  const deadline = Date.now() + ATTACHED_SERVER_SHUTDOWN_TIMEOUT_MS;
+  while (Date.now() < deadline && isProcessAlive(attached.pid)) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (isProcessAlive(attached.pid)) {
+    throw new Error(`process ${attached.pid} did not stop within 5 seconds`);
+  }
+}
+
+function appServerControlUrl(record: AppServerDiscoveryRecord): string {
+  return record.localUrl?.trim() || record.url;
+}
+
+function sameAppServerInstance(first: AppServerDiscoveryRecord, second: AppServerDiscoveryRecord): boolean {
+  return first.pid === second.pid
+    && first.startedAt === second.startedAt
+    && first.operatorToken === second.operatorToken;
 }
 
 function createPairingBrowserWindow(): BrowserWindow {

@@ -129,17 +129,34 @@ function sessionTokenUsageForDetail(detail: RunDetail | null): { totalTokens: nu
   const classifiedRecords = usageRecords
     .map((usage) => ({ total: usageTotalTokens(usage), breakdown: usageTokenBreakdown(usage) }))
     .filter((entry) => entry.total !== null && entry.total > 0);
-  const totalTokens = classifiedRecords.reduce((total, entry) => total + (entry.total ?? 0), 0);
-  const hasCompleteBreakdown = totalTokens > 0 && classifiedRecords.every((entry) =>
+  const projectedTotalTokens = classifiedRecords.reduce((total, entry) => total + (entry.total ?? 0), 0);
+  const canonicalTotalTokens = detail.tokenUsage?.totalTokens;
+  const totalTokens = typeof canonicalTotalTokens === 'number' && Number.isFinite(canonicalTotalTokens)
+    ? Math.max(0, canonicalTotalTokens)
+    : projectedTotalTokens;
+  const canonicalInputTokens = detail.tokenUsage?.inputTokens;
+  const canonicalOutputTokens = detail.tokenUsage?.outputTokens;
+  const hasCanonicalBreakdown = typeof canonicalInputTokens === 'number'
+    && Number.isFinite(canonicalInputTokens)
+    && typeof canonicalOutputTokens === 'number'
+    && Number.isFinite(canonicalOutputTokens)
+    && canonicalInputTokens + canonicalOutputTokens === totalTokens;
+  const hasCompleteBreakdown = projectedTotalTokens > 0
+    && projectedTotalTokens === totalTokens
+    && classifiedRecords.every((entry) =>
     entry.breakdown !== null && entry.breakdown.inputTokens + entry.breakdown.outputTokens === entry.total
   );
 
   return {
     totalTokens,
-    inputTokens: hasCompleteBreakdown
+    inputTokens: hasCanonicalBreakdown
+      ? canonicalInputTokens
+      : hasCompleteBreakdown
       ? classifiedRecords.reduce((total, entry) => total + (entry.breakdown?.inputTokens ?? 0), 0)
       : null,
-    outputTokens: hasCompleteBreakdown
+    outputTokens: hasCanonicalBreakdown
+      ? canonicalOutputTokens
+      : hasCompleteBreakdown
       ? classifiedRecords.reduce((total, entry) => total + (entry.breakdown?.outputTokens ?? 0), 0)
       : null
   };
@@ -154,6 +171,21 @@ function usageTokenBreakdown(usage: Record<string, unknown> | null): { inputToke
 
 function cacheUsageForDetail(detail: RunDetail | null): { cacheReadTokens: number; promptTokens: number; cacheHitRate: number | null } {
   if (!detail) return { cacheReadTokens: 0, promptTokens: 0, cacheHitRate: null };
+  const canonicalCacheReadTokens = detail.tokenUsage?.cacheReadTokens;
+  const canonicalCachePromptTokens = detail.tokenUsage?.cachePromptTokens;
+  if (
+    typeof canonicalCacheReadTokens === 'number'
+    && Number.isFinite(canonicalCacheReadTokens)
+    && typeof canonicalCachePromptTokens === 'number'
+    && Number.isFinite(canonicalCachePromptTokens)
+    && canonicalCachePromptTokens > 0
+  ) {
+    return {
+      cacheReadTokens: canonicalCacheReadTokens,
+      promptTokens: canonicalCachePromptTokens,
+      cacheHitRate: canonicalCacheReadTokens / canonicalCachePromptTokens
+    };
+  }
   const turnUsage = detail.traceEvents
     .filter(traceEventSessionModelUsageEligible)
     .map((event) => tracePayloadRecord(event.payload, 'usage'))

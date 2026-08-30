@@ -27,8 +27,10 @@ const DEFAULT_READY_TIMEOUT_MS = 20_000;
 const SESSION_REQUEST_TIMEOUT_MS = 35_000;
 const POLL_INTERVAL_MS = 250;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 5_000;
+const UNRESPONSIVE_APP_SERVER_GRACEFUL_TIMEOUT_MS = 1_500;
 const REQUIRED_APP_SERVER_CAPABILITIES = BEALE_APP_SERVER_CAPABILITIES;
 const APP_SERVER_LAUNCH_ENVIRONMENT_FLAG = '--beale-launch-environment-file';
+const APP_SERVER_ATTACH_EXISTING_FLAG = '--attach-existing';
 const APP_SERVER_LAUNCH_ENVIRONMENT_TTL_MS = 30_000;
 const appServerEnsureRequests = new Map<string, Promise<BealeAppServerDiscovery>>();
 const validatedAppServerDiscoveries = new Map<string, BealeAppServerDiscovery>();
@@ -137,13 +139,18 @@ async function ensureBealeAppServerRunningOnce(options: EnsureBealeAppServerOpti
     }
     const activeSessionCount = await fetchActiveAppServerSessionCount(existing, healthTimeoutMs);
     if (activeSessionCount === null) {
-      throw appServerSessionStateUnavailable();
+      if (compatibility.status !== 'unreachable') throw appServerSessionStateUnavailable();
+      await stopUnresponsiveAppServer(existing, stateFile);
+    } else {
+      if (activeSessionCount > 0) {
+        if (compatibility.status === 'compatible') {
+          if (shouldLaunchAppServerTrayController(existing, activeSessionCount)) launchAppServerTrayController();
+          return existing;
+        }
+        throw appServerRestartDeferred(activeSessionCount);
+      }
+      await stopAppServerForUpgrade(existing);
     }
-    if (activeSessionCount > 0) {
-      if (compatibility.status === 'compatible') return existing;
-      throw appServerRestartDeferred(activeSessionCount);
-    }
-    await stopAppServerForUpgrade(existing);
   }
 
   const launch: LaunchDiagnostics = { stderrTail: '', launchError: null };
@@ -401,7 +408,10 @@ interface AppServerLaunch {
   launchServices?: boolean;
 }
 
-function launchAppServerProcess(diagnostics: LaunchDiagnostics): void {
+function launchAppServerProcess(
+  diagnostics: LaunchDiagnostics,
+  options: { attachExisting?: boolean } = {}
+): boolean {
   const childEnv: NodeJS.ProcessEnv = {
     ...appServerRemoteAccessLaunchEnvironment(),
     ...process.env
@@ -412,6 +422,8 @@ function launchAppServerProcess(diagnostics: LaunchDiagnostics): void {
   const launch = configuredCommand
     ? { command: configuredCommand, args: parseEnvironmentArgs('BEALE_APP_SERVER_ARGS_JSON'), trayHost: false }
     : defaultAppServerLaunch();
+  if (options.attachExisting && !launch.trayHost) return false;
+  if (options.attachExisting) launch.args.push(APP_SERVER_ATTACH_EXISTING_FLAG);
   if (launch.trayIconPath && !childEnv.BEALE_APP_SERVER_ICON?.trim()) {
     childEnv.BEALE_APP_SERVER_ICON = launch.trayIconPath;
   }
@@ -452,6 +464,11 @@ function launchAppServerProcess(diagnostics: LaunchDiagnostics): void {
   if (process.platform !== 'win32') {
     child.unref();
   }
+  return true;
+}
+
+function launchAppServerTrayController(): void {
+  launchAppServerProcess({ stderrTail: '', launchError: null }, { attachExisting: true });
 }
 
 function defaultAppServerLaunch(): AppServerLaunch {
@@ -531,6 +548,16 @@ export function shouldReplaceAppServerWithTray(
   return isAppServerTrayPlatform(platform)
     && !configuredCommand?.trim()
     && record.hostMode !== 'tray';
+}
+
+export function shouldLaunchAppServerTrayController(
+  record: BealeAppServerDiscovery,
+  activeSessionCount: number,
+  platform: NodeJS.Platform = process.platform,
+  configuredCommand: string | undefined = process.env.BEALE_APP_SERVER_COMMAND
+): boolean {
+  return activeSessionCount > 0
+    && shouldReplaceAppServerWithTray(record, platform, configuredCommand);
 }
 
 function parseEnvironmentArgs(name: string): string[] {
@@ -726,6 +753,67 @@ async function stopAppServerForUpgrade(record: BealeAppServerDiscovery): Promise
   }
   if (isBealeAppServerAlive(record)) {
     throw new Error(`The older Beale app-server process ${record.pid} did not stop.`);
+  }
+}
+
+async function stopUnresponsiveAppServer(
+  record: BealeAppServerDiscovery,
+  stateFile: string
+): Promise<void> {
+  const current = readBealeAppServerDiscovery(stateFile);
+  if (!current || !sameAppServerInstance(record, current)) {
+    throw new Error('The unresponsive Beale app-server discovery changed before it could be restarted. Retry startup.');
+  }
+  if (readAppServerDiscoveryLockOwner(stateFile) !== record.pid) {
+    throw new Error('The unresponsive Beale app-server does not own its discovery lock. Refusing to terminate an unverified process.');
+  }
+  if (record.pid === process.pid) {
+    throw new Error('Refusing to terminate the current process while recovering the Beale app-server.');
+  }
+  try {
+    process.kill(record.pid, 'SIGTERM');
+  } catch (error) {
+    if (isBealeAppServerAlive(record)) {
+      throw new Error(`Unable to stop the unresponsive Beale app-server process ${record.pid}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const gracefulDeadline = Date.now() + UNRESPONSIVE_APP_SERVER_GRACEFUL_TIMEOUT_MS;
+  while (Date.now() < gracefulDeadline && isBealeAppServerAlive(record)) {
+    await delay(100);
+  }
+  if (isBealeAppServerAlive(record)) {
+    if (!appServerOwnershipMatches(record, stateFile)) {
+      throw new Error('The unresponsive Beale app-server ownership changed during shutdown. Refusing to force-terminate it.');
+    }
+    try {
+      process.kill(record.pid, 'SIGKILL');
+    } catch (error) {
+      if (isBealeAppServerAlive(record)) {
+        throw new Error(`Unable to force-stop the unresponsive Beale app-server process ${record.pid}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  const forcedDeadline = Date.now() + APP_SERVER_SHUTDOWN_TIMEOUT_MS;
+  while (Date.now() < forcedDeadline && isBealeAppServerAlive(record)) {
+    await delay(100);
+  }
+  if (isBealeAppServerAlive(record)) {
+    throw new Error(`The unresponsive Beale app-server process ${record.pid} did not stop.`);
+  }
+}
+
+function appServerOwnershipMatches(record: BealeAppServerDiscovery, stateFile: string): boolean {
+  const current = readBealeAppServerDiscovery(stateFile);
+  return Boolean(current && sameAppServerInstance(record, current))
+    && readAppServerDiscoveryLockOwner(stateFile) === record.pid;
+}
+
+function readAppServerDiscoveryLockOwner(stateFile: string): number | null {
+  try {
+    const parsed = JSON.parse(readFileSync(`${stateFile}.lock`, 'utf8')) as { pid?: unknown };
+    return Number.isInteger(parsed.pid) && Number(parsed.pid) > 0 ? Number(parsed.pid) : null;
+  } catch {
+    return null;
   }
 }
 

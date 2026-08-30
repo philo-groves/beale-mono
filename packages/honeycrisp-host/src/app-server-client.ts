@@ -14,6 +14,9 @@ import {
   honeycrispProtocolSuccess,
   type HoneycrispProtocolOperation
 } from './protocol.js';
+import { installUndiciTypeOfServiceCompatibility } from './node-network-compatibility.js';
+
+installUndiciTypeOfServiceCompatibility();
 
 interface DiscoveryRecord { localUrl?: string; url: string; operatorToken: string }
 

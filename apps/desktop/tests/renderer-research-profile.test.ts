@@ -20,12 +20,20 @@ import {
 import { AppearanceSettingsView } from '../src/renderer/features/settings/SettingsModal';
 import {
   memoryCatalogStatusSections,
+  sessionMemoryActivitySummary,
   sessionMemoryTypeSummaries
 } from '../src/renderer/view-models/memoryCatalog';
 import { researchGoalSuggestionCacheKey } from '../src/renderer/view-models/researchGoalSuggestions';
 import { testResearchProfile } from './researchProfileFixture';
 
 describe('renderer research profile presentation', () => {
+  it('uses canonical session memory activity instead of the current trace projection', () => {
+    expect(sessionMemoryActivitySummary([], 0, {
+      memorySearches: 37,
+      memoryUpdates: 12
+    })).toBe('37 Searches, 12 Updates');
+  });
+
   it('renders arbitrary workflows and bounded profile-sized loading states', () => {
     const workflows: ResearchProfileWorkflow[] = [
       workflow('survey', 'Survey', 2, true),

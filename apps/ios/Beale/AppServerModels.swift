@@ -969,15 +969,22 @@ enum AppServerTranscriptProjection {
 
     private static func project(_ messages: [AppServerTranscriptMessage]) -> [AppServerTranscriptMessage] {
         let nativeCommentaryKeys = Set(messages.compactMap(nativeCommentaryKey))
+        var latestMessageIndexByKey: [String: Int] = [:]
         var latestReasoningIndexByKey: [String: Int] = [:]
 
         for (index, message) in messages.enumerated() {
+            if let key = duplicateMessageKey(message) {
+                latestMessageIndexByKey[key] = index
+            }
             if let key = reasoningSnapshotKey(message) {
                 latestReasoningIndexByKey[key] = index
             }
         }
 
         let projected: [AppServerTranscriptMessage] = messages.enumerated().compactMap { index, message in
+            if let key = duplicateMessageKey(message), latestMessageIndexByKey[key] != index {
+                return nil
+            }
             if let key = reasoningSnapshotKey(message), latestReasoningIndexByKey[key] != index {
                 return nil
             }
@@ -989,6 +996,38 @@ enum AppServerTranscriptProjection {
             return message
         }
         return coalesceToolSummaries(projected)
+    }
+
+    private static func duplicateMessageKey(_ message: AppServerTranscriptMessage) -> String? {
+        let agentPath = message.metadata?.agentPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAgentPath = agentPath.flatMap { $0.isEmpty ? nil : $0 } ?? "/root"
+        let responseId = message.metadata?.responseId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let itemId = message.metadata?.itemId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if responseId?.isEmpty == false || itemId?.isEmpty == false {
+            return [
+                "model",
+                message.role,
+                message.source,
+                normalizedAgentPath,
+                responseId ?? "",
+                itemId ?? ""
+            ].joined(separator: "\u{0}")
+        }
+        if let traceEventId = message.traceEventId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !traceEventId.isEmpty {
+            return ["trace", message.role, message.source, traceEventId].joined(separator: "\u{0}")
+        }
+        guard !message.createdAt.isEmpty, !message.contentMarkdown.isEmpty else { return nil }
+        return [
+            "exact",
+            message.role,
+            message.phase ?? "",
+            message.source,
+            normalizedAgentPath,
+            message.metadata?.toolName ?? "",
+            message.createdAt,
+            message.contentMarkdown
+        ].joined(separator: "\u{0}")
     }
 
     private static func isRootMessage(_ message: AppServerTranscriptMessage) -> Bool {

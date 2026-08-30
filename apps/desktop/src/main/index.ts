@@ -3,6 +3,7 @@ import type { IpcMainInvokeEvent, Rectangle } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { installUndiciTypeOfServiceCompatibility } from 'honeycrisp/node-network-compatibility';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { runDetailProjectionMetricLabel } from '../shared/runDetailProjection';
 import type {
@@ -79,6 +80,8 @@ import {
   readAppServerRemoteAccessSettings,
   updateAppServerRemoteAccess
 } from './appServerRemoteAccess';
+
+installUndiciTypeOfServiceCompatibility();
 
 const APP_NAME = 'Beale';
 let mainWindow: BrowserWindow | null = null;

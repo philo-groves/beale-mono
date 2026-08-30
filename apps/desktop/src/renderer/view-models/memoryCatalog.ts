@@ -4,6 +4,7 @@ import type {
   ResearchProfileMemory,
   ResearchProfileMemoryStatus,
   ResearchProfileMemoryType,
+  SessionActivityCounts,
   TraceEventRecord
 } from '@shared/types';
 import { honeycrispToolEventKind, honeycrispToolName, honeycrispToolPairingKey, honeycrispToolPayload, stringRecordValue } from '../traceClassification';
@@ -240,8 +241,15 @@ export function sessionMemoryTypeSummaries(
 
 export function sessionMemoryActivitySummary(
   events: readonly TraceEventRecord[],
-  creationCount = 0
+  creationCount = 0,
+  canonicalCounts?: SessionActivityCounts
 ): string {
+  if (canonicalCounts) {
+    return [
+      activityCountLabel(canonicalCounts.memorySearches, 'Search', 'Searches'),
+      activityCountLabel(canonicalCounts.memoryUpdates, 'Update')
+    ].filter((label): label is string => label !== null).join(', ');
+  }
   const counts = {
     search: { paired: new Set<string>(), requested: 0, observed: 0 },
     save: { paired: new Set<string>(), requested: 0, observed: 0 },

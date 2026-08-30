@@ -59,6 +59,17 @@ describe('renderer workspace actions', () => {
     expect(detailSource).toContain('if (isCommentaryRunDetailProjection(projection))');
     expect(detailSource.indexOf('if (isCommentaryRunDetailProjection(projection))'))
       .toBeLessThan(detailSource.indexOf('const withMemory = attachHoneycrispMemory('));
+
+    const memoryStart = serviceSource.indexOf('  private async memorySummaryForRuntimeAsync(');
+    const memoryEnd = serviceSource.indexOf('  private scheduleMemorySummaryRefresh(', memoryStart);
+    const memorySource = serviceSource.slice(memoryStart, memoryEnd);
+    expect(memorySource).toContain('const appServerMemoryContext = sessionId');
+    expect(memorySource).toContain('workspaceId: runtime.db.getWorkspaceId()');
+    expect(memorySource).toContain('workspaceRoot: runtime.workspacePath');
+    expect(memorySource).toContain('researchProfileId: researchProfile?.profileId ?? runtime.researchProfile.profileId');
+    expect(memorySource).toContain('subjectId: null');
+    expect(memorySource).toContain('getHoneycrispMemorySummaryAsync(appServerMemoryContext, storage)');
+    expect(memorySource).not.toContain('{ sessionId }');
   });
 
   it('moves navigation state before awaiting a workspace or session open', () => {
