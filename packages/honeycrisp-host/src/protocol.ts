@@ -47,7 +47,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const HONEYCRISP_PROTOCOL_NAME = "honeycrisp" as const;
 export const HONEYCRISP_PROTOCOL_VERSION = 1 as const;
-export const HONEYCRISP_CONTRACT_VERSION = 12 as const;
+export const HONEYCRISP_CONTRACT_VERSION = 13 as const;
 export const HONEYCRISP_RUNTIME_VERSION = "0.1.0" as const;
 export const HONEYCRISP_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX = "HONEYCRISP_TRANSPORT " as const;
@@ -88,6 +88,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "knowledge.report-triage-status.v1",
   "knowledge.report-packet-replace.v1",
   "knowledge.report-recording-replace.v1",
+  "knowledge.report-list.v1",
 ] as const;
 export const BEALE_APP_SERVER_SERVER_PATH = "/v1/server" as const;
 export const BEALE_APP_SERVER_SESSIONS_PATH = "/v1/sessions" as const;
@@ -347,6 +348,7 @@ export const HONEYCRISP_PROTOCOL_CAPABILITIES = [
   "knowledge.report-triage-status.v1",
   "knowledge.report-packet-replace.v1",
   "knowledge.report-recording-replace.v1",
+  "knowledge.report-list.v1",
 ] as const;
 
 /** @deprecated Import the protocol-named constants from `honeycrisp/protocol`. */
@@ -362,7 +364,7 @@ export const HONEYCRISP_PROTOCOL_OPERATIONS = [
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
   "channel.list", "channel.get", "channel.create", "channel.join", "channel.post", "channel.share", "channel.archive", "channel.restore", "channel.delete",
   "memory.summary", "memory.notification_feed", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
-  "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
+  "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
   "investigation.list", "investigation.get", "investigation.replay",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",
   "suggestion.generate", "suggestion.select", "prompt.expand",

@@ -12,6 +12,7 @@ import {
   createResearchStorageLayout,
   extractSourceRepositoryUrls,
   getHoneycrispMemorySummary,
+  listHoneycrispReportSummaries,
   getAuthStatus,
   getProviderModelCatalog,
   getKnowledgeReport,
@@ -114,8 +115,7 @@ async function invokeOperation(operation: HoneycrispProtocolOperation, options: 
   }
   if (operation.startsWith('memory.') || operation.startsWith('dreaming.')
     || operation.startsWith('investigation.')
-    || operation === 'runbook.get' || operation === 'report.get' || operation === 'report.revise_content' || operation === 'report.update_triage_status'
-    || operation === 'report.replace_packet' || operation === 'report.replace_recording'
+    || operation === 'runbook.get' || operation.startsWith('report.')
     || operation === 'artifact.resolve') {
     return knowledgeOperation(operation, options);
   }
@@ -302,6 +302,10 @@ async function knowledgeOperation(operation: HoneycrispProtocolOperation, option
   const layout = createResearchStorageLayout({ databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath });
   const input = requiredRecord(options.input, `${operation} input`);
   switch (operation) {
+    case 'report.list': return listHoneycrispReportSummaries(
+      layout.databasePath,
+      requiredText(input.workspaceId, 'workspaceId')
+    );
     case 'memory.summary': {
       const workspaceId = requiredText(input.workspaceId, 'workspaceId');
       migrateWorkspaceResearchClaims(layout.databasePath, workspaceId);

@@ -57,6 +57,21 @@ export interface HoneycrispMemorySummaryOptions {
   assetIds?: readonly string[];
 }
 
+export function listHoneycrispReportSummaries(
+  databasePath: string,
+  workspaceId: string
+): HoneycrispReportSummary[] {
+  if (!existsSync(databasePath)) return [];
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    database.exec('PRAGMA busy_timeout = 5000;');
+    if (!tableExists(database, 'honeycrisp_reports')) return [];
+    return readReports(database, workspaceId, readArtifactRevisions(database, workspaceId));
+  } finally {
+    database.close();
+  }
+}
+
 export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptions): HoneycrispMemorySummary {
   const { databasePath, artifactDirectoryPath, sessionId, workspaceId, subjectId } = options;
   const contextSubjectId = subjectId ?? fallbackMemorySubjectId(workspaceId);
@@ -360,7 +375,9 @@ function readReports(
     title: requiredString(row.title),
     summary: requiredString(row.summary),
     status: requiredReportStatus(row.status),
-    triageStatus: requiredReportTriageStatus(row.triage_status),
+    triageStatus: optionalString(row.triage_status) === null
+      ? 'editing'
+      : requiredReportTriageStatus(row.triage_status),
     artifactId: requiredString(row.artifact_id),
     submissionPacket: reportSubmissionPacket(row),
     recording: reportRecording(row),

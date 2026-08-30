@@ -61,6 +61,7 @@ import {
   getHoneycrispReportDocument,
   getHoneycrispRunbookDocument,
   listHoneycrispSessionSummariesForWorkspacesAsync,
+  listHoneycrispReportSummariesAsync,
   parseHoneycrispMemoryDreamingPlan,
   prepareHoneycrispMemoryDreaming,
   recordHoneycrispMemoryDreamingFailure,
@@ -1401,19 +1402,16 @@ export class WorkspaceService {
   public async listReportingReports(): Promise<HoneycrispReportSummary[]> {
     const workspaces = this.getWorkspaceRegistry().getState().workspaces.filter((workspace) => workspace.workspaceId.length > 0);
     const catalogs = await Promise.all(workspaces.map(async (workspace) => {
-      const runtime = this.runtimeForWorkspacePath(workspace.workspacePath);
-      const summary = runtime
-        ? await this.memorySummaryForRuntimeAsync(runtime)
-        : await getHoneycrispMemorySummaryAsync({
-            workspaceId: workspace.workspaceId,
-            workspaceRoot: workspace.workspacePath,
-            researchProfileId: workspace.researchProfileId,
-            subjectId: null
-          }, {
-            databasePath: this.globalHoneycrispDatabasePath(workspace.researchProfileId),
-            artifactDirectoryPath: this.globalHoneycrispArtifactDirectory(workspace.researchProfileId)
-          });
-      return summary.reports.filter((report) => report.workspaceId === workspace.workspaceId);
+      const reports = await listHoneycrispReportSummariesAsync({
+        workspaceId: workspace.workspaceId,
+        workspaceRoot: workspace.workspacePath,
+        researchProfileId: workspace.researchProfileId
+      }, {
+        databasePath: this.globalHoneycrispDatabasePath(workspace.researchProfileId),
+        artifactDirectoryPath: this.globalHoneycrispArtifactDirectory(workspace.researchProfileId),
+        profileId: workspace.researchProfileId
+      });
+      return reports.filter((report) => report.workspaceId === workspace.workspaceId);
     }));
     const reports = new Map<string, HoneycrispReportSummary>();
     for (const report of catalogs.flat()) reports.set(`${report.workspaceId}:${report.id}`, report);

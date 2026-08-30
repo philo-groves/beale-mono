@@ -11,6 +11,7 @@ import type {
   HoneycrispMemoryEdgeSummary,
   HoneycrispMemoryNodeSummary,
   HoneycrispReportDocument,
+  HoneycrispReportSummary,
   HoneycrispRunbookDocument,
   MemoryDreamingRunSummary,
   ResearchProfileSnapshot,
@@ -660,6 +661,29 @@ export async function getHoneycrispMemorySummaryAsync(
   )).result);
 }
 
+export async function listHoneycrispReportSummariesAsync(
+  input: {
+    workspaceId: string;
+    workspaceRoot?: string;
+    researchProfileId?: string;
+  },
+  storage: HoneycrispSessionStorage,
+  signal?: AbortSignal
+): Promise<HoneycrispReportSummary[]> {
+  const value = (await invokeWithJsonInputAsync<unknown>(
+    'report.list',
+    ['knowledge', 'report-list'],
+    input,
+    storage,
+    signal,
+    10_000
+  )).result;
+  if (!Array.isArray(value) || !value.every(validReportSummary)) {
+    throw new Error('Honeycrisp returned an invalid report catalog payload.');
+  }
+  return value as HoneycrispReportSummary[];
+}
+
 export function prepareHoneycrispMemoryDreaming(
   typeDescriptions: Record<string, string>,
   profileInput: MemoryDreamingProfileInput,
@@ -1248,6 +1272,42 @@ function validRunbookSummary(value: unknown): boolean {
     && (latest.status === 'running' || latest.status === 'succeeded'
       || latest.status === 'failed' || latest.status === 'blocked')
     && nonEmptyText(latest.startedAt));
+}
+
+function validReportSummary(value: unknown): boolean {
+  return isPlainRecord(value)
+    && nonEmptyText(value.id)
+    && nonEmptyText(value.workspaceId)
+    && nonEmptyText(value.workspaceName)
+    && (value.subjectId === null || typeof value.subjectId === 'string')
+    && (value.subjectName === null || typeof value.subjectName === 'string')
+    && (value.sessionId === null || typeof value.sessionId === 'string')
+    && nonEmptyText(value.title)
+    && typeof value.summary === 'string'
+    && (value.status === 'complete' || value.status === 'stale')
+    && ['editing', 'submitted', 'reviewing', 'rejected', 'accepted'].includes(String(value.triageStatus))
+    && nonEmptyText(value.artifactId)
+    && Number.isInteger(value.revision) && (value.revision as number) > 0
+    && validReportAttachment(value.submissionPacket)
+    && validReportAttachment(value.recording)
+    && Array.isArray(value.revisions)
+    && value.revisions.every((revision) => isPlainRecord(revision)
+      && Number.isInteger(revision.revision) && (revision.revision as number) > 0
+      && (revision.sessionId === null || typeof revision.sessionId === 'string')
+      && typeof revision.createdAt === 'string')
+    && (value.authors === undefined || (Array.isArray(value.authors)
+      && value.authors.every((author) => isPlainRecord(author)
+        && nonEmptyText(author.provider) && nonEmptyText(author.model))))
+    && typeof value.createdAt === 'string'
+    && typeof value.updatedAt === 'string';
+}
+
+function validReportAttachment(value: unknown): boolean {
+  return value === null || (isPlainRecord(value)
+    && nonEmptyText(value.artifactId)
+    && nonEmptyText(value.filename)
+    && nonNegativeNumber(value.sizeBytes)
+    && nonEmptyText(value.contentHash));
 }
 
 function validFindingSummary(value: unknown): boolean {
