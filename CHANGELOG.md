@@ -13,7 +13,7 @@
 - Beale iOS workspace views can now start a new research session from a multiline request, using app-server-owned provider and safety policy before opening the live session commentary.
 - Desktop Lag Profiling can now be enabled from General settings and captures bounded renderer long tasks, event-loop delay, dropped-frame gaps, React commit cost, session projection work, input latency, and a correlated timing timeline. Its profiling overview ranks likely lag causes and writes the complete structured session to temporary JSONL.
 - Repository Resources now open an explicit Deep or Shallow clone dialog. Deep clones are the default for full-history research, while depth-one shallow clones remain available for prohibitively large repositories.
-- Desktop workspace Campaign views now include a four-lane Board beside Trail for Refuted, Observed, Reproduced, and Verified findings. Equal-width, independently scrolling swimlanes show their filtered finding counts, reuse Priority Claim cards with compact rating and classification metadata, explicitly exclude proposed Leads, and support inline Class and untrusted Rating filters; Trail and Board headings identify their active subview.
+- Desktop workspace Campaign views now include a four-lane Board beside Trail for Refuted, Observed, Reproduced, and Verified findings. Equal-width, independently scrolling swimlanes show their filtered finding counts, reuse Priority Claim cards with compact rating metadata and filtering that prefer the latest CVSS qualitative severity, explicitly exclude proposed Leads, and support inline Class and Rating filters; Trail and Board headings identify their active subview.
 - Active Desktop session titles in the app header now open a wide squircle Session Overview dialog with the session's Campaign Trail activity projection.
 - Desktop workspace Campaign views now include a centered Claims sub-view after Trail, with separate expandable Findings and Leads lists that initially show four items and open canonical claim details. The Memories label is now consistently plural, and Memories and Runbooks headings align with Trail and Claims.
 - Desktop Quick Chat opens compact, collapsible, closeable chat cards from the left sidenav and stacks concurrent chats leftward from the bottom-right corner. Quick chats run in an unlisted internal workspace with authenticated introspection tools for querying and editing registered Beale workspaces.
@@ -185,6 +185,7 @@
 
 #### Fixed
 
+- Desktop session continuations now acknowledge and persist follow-up instructions immediately while the prior hosted process detaches, show a preparation commentary status, and replace provisional terminal responses with their canonical transcript record instead of rendering the same agent response twice.
 - Desktop no longer synchronously spawns a Honeycrisp collaboration query for each live subagent commentary or room-status event. Queued room/member state serves the live projection, and projection failures are contained so a protocol timeout cannot crash Desktop or interrupt the app-server-owned run.
 - Resumed Desktop sessions now load a complete workspace memory summary through the canonical app-server control plane and filter it by durable session links, preventing both `0 Memories` and renderer failure from incomplete catalog projections.
 - On macOS and Windows, Desktop now attaches a menu-bar/tray controller to a compatible headless app-server when active research prevents replacing it. The controller exposes live session status and a safe restart action, then relaunches as the canonical tray host without interrupting the active session.
@@ -1085,6 +1086,7 @@
 
 #### Fixed
 
+- Honeycrisp lead agents now remain active while delegated reviewers or other subagents are still running, consume their terminal results, and re-read canonical state before the visible final response; provider-backed collaboration continuations also receive results that complete during terminal settling instead of returning an earlier claim-status snapshot.
 - Host-specific research guidance now excludes PowerShell and WSL from macOS and Linux shell and runbook tool contracts while retaining it on Windows.
 - Session catalogs now read incrementally maintained token, cost, and last-message summary metrics instead of repeatedly scanning every canonical event, preventing active Desktop and iOS polling from starving live commentary on large Honeycrisp databases.
 - Windows shell execution now detects PowerShell 7 or inbox Windows PowerShell by absolute host path, resolves bare `pwsh` and `powershell` runbook runners through that detection, and uses PowerShell as the default Windows command shell; WSL remains available through an explicit runtime selection.

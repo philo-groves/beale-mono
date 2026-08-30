@@ -1091,12 +1091,27 @@ describe('Honeycrisp session persistence boundary', () => {
         .some((session) => session.runId === runId && session.status === 'stopped'));
 
       watchForContinuedRegistry = true;
-      await service.steerRunForClient({
+      const accepted = await service.steerRunForClient({
         type: 'steer',
         runId: runId!,
         instruction: 'Continue after the stopped process has detached.'
       });
-      expect(sawContinuedActiveRegistry).toBe(true);
+      expect(accepted.runs.some((row) => row.run.id === runId)).toBe(true);
+      expect(service.getRunDetail(runId!).transcriptMessages).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          contentMarkdown: 'Continue after the stopped process has detached.',
+          metadata: expect.objectContaining({ continuation: true })
+        }),
+        expect.objectContaining({
+          role: 'assistant',
+          phase: 'commentary',
+          contentMarkdown: 'Follow-up accepted. Beale is preparing the next agent turn.',
+          source: 'beale_status'
+        })
+      ]));
+      await waitFor(() => sawContinuedActiveRegistry);
+      await waitFor(() => service.getRunDetail(runId!).attempts.length === 2);
       expect(service.getRunDetail(runId!)).toMatchObject({
         attempts: [
           expect.objectContaining({ status: 'stopped' }),

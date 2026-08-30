@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { layoutCampaignGraph } from '../src/renderer/view-models/campaignGraph';
+import { campaignClaimRatingPresentation } from '../src/renderer/view-models/campaignClaims';
+import { campaignBoardClaimMetadata, campaignBoardFindings, campaignPriorityClaimMetadata } from '../src/renderer/features/workspaces/CampaignGraphView';
 import { findingRevisionContext } from '../src/main/findingRevisionContext';
-import type { WorkspaceScopeVersion } from '@shared/types';
+import type { HoneycrispFindingSummary, HoneycrispMemorySummary, WorkspaceScopeVersion } from '@shared/types';
 
 describe('campaign graph projection', () => {
   it('lays out assets, memory, findings, and proof deterministically while dropping dangling edges', () => {
@@ -39,6 +41,38 @@ describe('campaign graph projection', () => {
     expect(sourceChanged.sourceRevision).not.toBe(original.sourceRevision);
     expect(sourceChanged.environmentFingerprint).toBe(original.environmentFingerprint);
     expect(environmentChanged.environmentFingerprint).not.toBe(original.environmentFingerprint);
+  });
+
+  it('shows only the preferred rating on Board cards while retaining class metadata on Trail cards', () => {
+    const claim = {
+      projection: 'finding',
+      maturity: 'reproduced',
+      rating: 'low',
+      classification: 'security.primitive',
+      securityTracking: {
+        cvssAssessments: [{ score: 8.2 }]
+      }
+    } as HoneycrispFindingSummary;
+
+    expect(campaignClaimRatingPresentation(claim).label).toBe('High (CVSS 8.2)');
+    expect(campaignBoardClaimMetadata(claim)).toBe('High (CVSS 8.2)');
+    expect(campaignBoardClaimMetadata(claim)).not.toContain('Primitive');
+    expect(campaignBoardFindings({ findings: [claim] } as HoneycrispMemorySummary, 'reproduced', {
+      classification: 'all',
+      rating: 'high'
+    })).toEqual([claim]);
+    expect(campaignPriorityClaimMetadata(claim)).toBe('Finding Reproduced, Low Primitive');
+  });
+
+  it('falls back to the untrusted rating when a Board claim has no CVSS assessment', () => {
+    const claim = {
+      rating: 'medium',
+      classification: 'security.chain',
+      securityTracking: null
+    } as HoneycrispFindingSummary;
+
+    expect(campaignBoardClaimMetadata(claim)).toBe('Medium');
+    expect(campaignBoardClaimMetadata(claim)).not.toContain('Chain');
   });
 });
 

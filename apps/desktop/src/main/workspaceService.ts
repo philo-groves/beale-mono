@@ -3817,9 +3817,36 @@ export class WorkspaceService {
           ? runtime.honeycrispEngine.steer(action.runId, instruction, action.modelSelection) ?? null
           : null;
         if (runEngine === 'honeycrisp' && !honeycrispDispatch) {
-          continuationTransportReady = isEndedResearchRunStatus(run.status)
-            ? runtime.honeycrispEngine.extendRunWhenInactive(action.runId, instruction)
-            : runtime.honeycrispEngine.extendRun(action.runId, instruction).transportReady;
+          if (isEndedResearchRunStatus(run.status)) {
+            void runtime.honeycrispEngine.extendRunWhenInactive(action.runId, instruction).catch((error: unknown) => {
+              try {
+                const continuationAttemptId = db.getRunDetail(action.runId).attempts.at(-1)?.id ?? null;
+                db.appendTraceEvent({
+                  runId: action.runId,
+                  attemptId: continuationAttemptId,
+                  type: 'approval_event',
+                  source: 'system',
+                  summary: 'Beale could not start the requested Honeycrisp continuation.',
+                  payload: { error: errorMessage(error) },
+                  modelVisible: false
+                });
+                db.createTranscriptMessage({
+                  runId: action.runId,
+                  attemptId: continuationAttemptId,
+                  role: 'assistant',
+                  phase: 'commentary',
+                  contentMarkdown: 'Beale could not start the requested follow-up.',
+                  source: 'beale_status',
+                  metadata: { agentPath: '/root', continuation: true, hostStatus: true, error: true }
+                });
+                this.emitRuntimeChange(runtime.workspacePath, { workspaceRegistryChanged: true });
+              } catch {
+                // The workspace may have closed while the detached continuation was waiting.
+              }
+            });
+          } else {
+            continuationTransportReady = runtime.honeycrispEngine.extendRun(action.runId, instruction).transportReady;
+          }
           break;
         }
         if (!honeycrispDispatch) {

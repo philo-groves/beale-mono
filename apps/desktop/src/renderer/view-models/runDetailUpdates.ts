@@ -117,12 +117,51 @@ function mergeTraceEvents(current: TraceEventRecord[], incoming: TraceEventRecor
 
 function mergeTranscriptMessages(current: TranscriptMessageRecord[], incoming: TranscriptMessageRecord[]): TranscriptMessageRecord[] {
   if (incoming.length === 0) return current;
-  if (canAppendTranscriptMessages(current, incoming)) return [...current, ...incoming];
+  if (canAppendTranscriptMessages(current, incoming) && !replacesSyntheticTerminalResponse(current, incoming)) {
+    return [...current, ...incoming];
+  }
   const byId = new Map(current.map((message) => [message.id, message]));
   for (const message of incoming) {
+    if (isCanonicalTerminalResponse(message)) {
+      for (const [id, existing] of byId) {
+        if (isSyntheticTerminalResponse(existing) && sameTerminalResponse(existing, message)) byId.delete(id);
+      }
+    }
     byId.set(message.id, message);
   }
   return Array.from(byId.values()).sort(compareTranscriptMessages);
+}
+
+function replacesSyntheticTerminalResponse(
+  current: readonly TranscriptMessageRecord[],
+  incoming: readonly TranscriptMessageRecord[]
+): boolean {
+  return incoming.some((message) => isCanonicalTerminalResponse(message) && current.some((existing) => (
+    isSyntheticTerminalResponse(existing) && sameTerminalResponse(existing, message)
+  )));
+}
+
+function isSyntheticTerminalResponse(message: TranscriptMessageRecord): boolean {
+  return message.id.startsWith('transcript_final_')
+    && message.traceEventId === null
+    && message.role === 'assistant'
+    && message.phase === 'final_answer';
+}
+
+function isCanonicalTerminalResponse(message: TranscriptMessageRecord): boolean {
+  return !isSyntheticTerminalResponse(message)
+    && message.role === 'assistant'
+    && message.phase === 'final_answer';
+}
+
+function sameTerminalResponse(left: TranscriptMessageRecord, right: TranscriptMessageRecord): boolean {
+  const leftAgentPath = typeof left.metadata.agentPath === 'string' ? left.metadata.agentPath : '/root';
+  const rightAgentPath = typeof right.metadata.agentPath === 'string' ? right.metadata.agentPath : '/root';
+  return left.runId === right.runId
+    && left.attemptId === right.attemptId
+    && leftAgentPath === rightAgentPath
+    && left.source === right.source
+    && left.contentMarkdown.replace(/\s+/g, ' ').trim() === right.contentMarkdown.replace(/\s+/g, ' ').trim();
 }
 
 function canAppendTraceEvents(current: readonly TraceEventRecord[], incoming: readonly TraceEventRecord[]): boolean {

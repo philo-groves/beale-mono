@@ -26,7 +26,7 @@ import { ProviderIcon } from '../../app/ProviderIcon';
 import { ModelAuthors } from '../../app/ModelAuthors';
 import { useDevRenderProbe } from '../../devInstrumentation';
 import { formatCompactTimeSince, formatSessionDateTime, researchModelDisplayName, stateClass, traceLabel } from '../../lib/formatting';
-import { campaignClaimIsActive } from '../../view-models/campaignClaims';
+import { campaignClaimIsActive, campaignClaimRatingPresentation } from '../../view-models/campaignClaims';
 import { activeMemoryCount, filterMemoryCatalogNodes, groupMemoryRelationships, memoryCatalogGroupPreview, memoryCatalogUpdateKey, memoryTypeGroupsByHeat, memoryTypeSummaryPresentation, sessionMemoryActivitySummary, sessionMemoryCatalogNodes, sessionMemoryCreationCount, sessionMemoryTypeSummaries } from '../../view-models/memoryCatalog';
 import type { SessionMemoryTypeSummary } from '../../view-models/memoryCatalog';
 import { filterSubagentSummaries, subagentCatalogGroups, subagentChannelLabel, subagentDisplayName, subagentOverviewForEvents, subagentOverviewFromSummaries, subagentOverviewStatusCountSummary, subagentStatusIconKind, subagentStatusLabel, subagentSummaries, traceEventsForSubagent } from '../../view-models/subagents';
@@ -2170,7 +2170,7 @@ export function CampaignClaimCatalogSection({
     ? claims.filter((claim) => claim.maturity !== 'refuted').length
     : null;
   const renderClaim = (claim: HoneycrispFindingSummary): JSX.Element => {
-    const rating = campaignClaimCatalogRatingPresentation(claim);
+    const rating = campaignClaimRatingPresentation(claim);
     return (
       <article className={`memory-catalog-item campaign-claim-item is-compact is-${claim.projection} ${selectedClaimId === claim.id ? 'selected' : ''}`} key={claim.id}>
         <button type="button" className="memory-catalog-toggle" aria-pressed={selectedClaimId === claim.id} onClick={() => onOpen(claim.id)}>
@@ -2238,28 +2238,6 @@ export function CampaignClaimCatalogSection({
       ) : null}
     </section>
   );
-}
-
-export function cvssQualitativeSeverityLabel(score: number): 'None' | 'Low' | 'Medium' | 'High' | 'Critical' {
-  if (score <= 0) return 'None';
-  if (score < 4) return 'Low';
-  if (score < 7) return 'Medium';
-  if (score < 9) return 'High';
-  return 'Critical';
-}
-
-function campaignClaimCatalogRatingPresentation(claim: HoneycrispFindingSummary): {
-  label: string;
-  title: string;
-} {
-  const latestCvss = claim.securityTracking?.cvssAssessments.at(-1) ?? null;
-  if (!latestCvss) {
-    const label = traceLabel(claim.rating);
-    return { label, title: `Untrusted rating: ${label}` };
-  }
-  const score = latestCvss.score.toFixed(1);
-  const label = `${cvssQualitativeSeverityLabel(latestCvss.score)} (CVSS ${score})`;
-  return { label, title: `CVSS rating: ${label}` };
 }
 
 export function campaignClaimTypeLabel(classification: string, fallback: string): string {

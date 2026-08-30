@@ -110,6 +110,63 @@ describe('renderer run detail update view model', () => {
     expect(merged.transcriptMessages).toEqual([messageOld, messageNew]);
   });
 
+  it('replaces a provisional terminal response with its canonical transcript record', () => {
+    const provisional = transcriptMessage({
+      id: 'transcript_final_run_test_attempt_one',
+      attemptId: 'attempt_one',
+      phase: 'final_answer',
+      contentMarkdown: 'Objective achieved.\n\nVerification completed.',
+      source: 'honeycrisp',
+      metadata: { agentPath: '/root' },
+      createdAt: '2026-04-30T00:01:00.000Z'
+    });
+    const canonical = transcriptMessage({
+      id: 'transcript_model_output_final',
+      attemptId: 'attempt_one',
+      traceEventId: 'event_model_output_final',
+      phase: 'final_answer',
+      contentMarkdown: 'Objective achieved. Verification completed.',
+      source: 'honeycrisp',
+      metadata: { agentPath: '/root', responseId: 'response_final', itemId: 'text_final' },
+      createdAt: '2026-04-30T00:01:01.000Z'
+    });
+
+    const merged = mergeRunDetailUpdate(
+      runDetail({ transcriptMessages: [provisional] }),
+      runDetailUpdate({ transcriptMessages: [canonical] })
+    );
+
+    expect(merged.transcriptMessages).toEqual([canonical]);
+  });
+
+  it('keeps distinct canonical terminal responses with identical text', () => {
+    const first = transcriptMessage({
+      id: 'transcript_first',
+      attemptId: 'attempt_one',
+      traceEventId: 'event_first',
+      phase: 'final_answer',
+      contentMarkdown: 'Verification completed.',
+      source: 'honeycrisp',
+      metadata: { agentPath: '/root' },
+      createdAt: '2026-04-30T00:01:00.000Z'
+    });
+    const second = transcriptMessage({
+      id: 'transcript_second',
+      attemptId: 'attempt_one',
+      traceEventId: 'event_second',
+      phase: 'final_answer',
+      contentMarkdown: 'Verification completed.',
+      source: 'honeycrisp',
+      metadata: { agentPath: '/root' },
+      createdAt: '2026-04-30T00:02:00.000Z'
+    });
+
+    expect(mergeRunDetailUpdate(
+      runDetail({ transcriptMessages: [first] }),
+      runDetailUpdate({ transcriptMessages: [second] })
+    ).transcriptMessages).toEqual([first, second]);
+  });
+
   it('retains prior aggregate records when a cursor update contains only changed records', () => {
     const current = runDetail();
     current.artifacts = [{ id: 'artifact_old' }] as RunDetail['artifacts'];

@@ -335,23 +335,7 @@ export class HoneycrispRunEngine {
       }
     });
     if (!options.steeringAlreadyRecorded) {
-      const steeringTrace = this.db.appendTraceEvent({
-        runId,
-        attemptId: attempt.id,
-        type: 'user_note',
-        source: 'user',
-        summary: 'User steering extended the current research session.',
-        payload: { instruction: redactForModelText(instruction), continuation: true }
-      });
-      this.db.createTranscriptMessage({
-        runId,
-        attemptId: attempt.id,
-        traceEventId: steeringTrace.id,
-        role: 'user',
-        contentMarkdown: instruction,
-        source: 'user_steering',
-        metadata: { continuation: true }
-      });
+      this.recordContinuationAccepted(runId, attempt.id, instruction);
     }
     this.db.updateRunStatus(runId, 'active', 'Continuing the current Honeycrisp research session.');
 
@@ -372,13 +356,49 @@ export class HoneycrispRunEngine {
     options: HoneycrispContinuationOptions = {}
   ): Promise<boolean> {
     const completion = this.completions.get(runId);
+    let continuationOptions = options;
     if (this.activeRuns.has(runId)) {
       if (!completion) {
         throw new Error(`Honeycrisp run ${runId} is still active without a completion boundary.`);
       }
+      if (!options.steeringAlreadyRecorded) {
+        const attemptId = this.db.getRunDetail(runId).attempts.at(-1)?.id ?? null;
+        this.recordContinuationAccepted(runId, attemptId, instruction);
+        continuationOptions = { ...options, steeringAlreadyRecorded: true };
+      }
       await completion;
     }
-    return await this.extendRun(runId, instruction, options).transportReady;
+    if (this.disposed) return false;
+    return await this.extendRun(runId, instruction, continuationOptions).transportReady;
+  }
+
+  private recordContinuationAccepted(runId: string, attemptId: string | null, instruction: string): void {
+    const steeringTrace = this.db.appendTraceEvent({
+      runId,
+      attemptId,
+      type: 'user_note',
+      source: 'user',
+      summary: 'User steering extended the current research session.',
+      payload: { instruction: redactForModelText(instruction), continuation: true }
+    });
+    this.db.createTranscriptMessage({
+      runId,
+      attemptId,
+      traceEventId: steeringTrace.id,
+      role: 'user',
+      contentMarkdown: instruction,
+      source: 'user_steering',
+      metadata: { continuation: true }
+    });
+    this.db.createTranscriptMessage({
+      runId,
+      attemptId,
+      role: 'assistant',
+      phase: 'commentary',
+      contentMarkdown: 'Follow-up accepted. Beale is preparing the next agent turn.',
+      source: 'beale_status',
+      metadata: { agentPath: '/root', continuation: true, hostStatus: true }
+    });
   }
 
   private launchRun(

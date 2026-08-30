@@ -726,7 +726,7 @@ test("Pi Agent blocks a third identical recall call and traces research-focus re
   assert.match(contexts.at(-1).messageContents.join("\n"), /Repeated read blocked/);
 });
 
-test("Pi Agent permits repeated timed-out collaboration waits while retaining no-progress steering", async () => {
+test("Pi Agent keeps the root active until a delegated result is incorporated into the final response", async () => {
   const contexts = [];
   let rootTurn = 0;
   const models = {
@@ -753,7 +753,9 @@ test("Pi Agent permits repeated timed-out collaboration waits while retaining no
         assistant(toolCall("wait_agent", { timeout_ms: 1_000 }, "wait_1"), "toolUse"),
         assistant(toolCall("wait_agent", { timeout_ms: 1_000 }, "wait_2"), "toolUse"),
         assistant(toolCall("wait_agent", { timeout_ms: 1_000 }, "wait_3"), "toolUse"),
-        assistant("## Result\nCollaboration polling remained available."),
+        assistant("## Result\nThe child is still pending."),
+        assistant(toolCall("wait_agent", { timeout_ms: 1_000 }, "wait_after_terminal_guard"), "toolUse"),
+        assistant("## Result\nThe slow child completed and its result is incorporated."),
       ];
       const response = messages[rootTurn] ?? messages.at(-1);
       rootTurn += 1;
@@ -771,8 +773,10 @@ test("Pi Agent permits repeated timed-out collaboration waits while retaining no
     }),
   });
 
-  assert.equal(result.agentRun.output.raw.toolCallCount, 4);
+  assert.equal(result.agentRun.output.raw.toolCallCount, 5);
   assert.equal(result.agentRun.output.raw.subagents.agents[0].status, "completed");
+  assert.match(result.agentRun.output.text, /slow child completed and its result is incorporated/i);
+  assert.match(contexts.at(-1).messageContents.join("\n"), /Slow child completed/);
   assert.ok(contexts.every((context) => context.systemPrompt.includes("use the Tart VM with SIP enabled")));
   assert.match(
     contexts.find((context) => context.model === "slow-child-model").systemPrompt,

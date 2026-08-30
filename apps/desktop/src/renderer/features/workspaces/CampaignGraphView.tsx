@@ -11,7 +11,8 @@ import type {
 import { formatWorkspaceTimelineDuration } from '../../view-models/workspaceTimeline';
 import type { SessionTimelineProjection } from '../../view-models/workspaceTimeline';
 import type { SessionHeatPreferences } from '../../view-models/sessionHeat';
-import { campaignClaimIsActive } from '../../view-models/campaignClaims';
+import { campaignClaimIsActive, campaignClaimRatingPresentation } from '../../view-models/campaignClaims';
+import type { CampaignClaimRatingValue } from '../../view-models/campaignClaims';
 import { researchModelDisplayName, traceLabel } from '../../lib/formatting';
 import { ProviderIcon } from '../../app/ProviderIcon';
 import { FloatingTextPicker } from '../../app/FloatingTextPicker';
@@ -20,9 +21,10 @@ import { memoryTypeClassName, memoryTypeLabel, memoryTypeStyle } from '../resear
 const CAMPAIGN_PRIORITY_CLAIM_LIMIT = 8;
 const CAMPAIGN_BOARD_MATURITIES = ['refuted', 'observed', 'reproduced', 'verified'] as const;
 type CampaignBoardMaturity = typeof CAMPAIGN_BOARD_MATURITIES[number];
-type CampaignBoardRatingFilter = ResearchClaimRating | 'all';
+type CampaignBoardRatingFilter = CampaignClaimRatingValue | 'all';
 const CAMPAIGN_BOARD_RATING_OPTIONS: Array<{ value: CampaignBoardRatingFilter; label: string }> = [
   { value: 'all', label: 'All Ratings' },
+  { value: 'none', label: 'None' },
   { value: 'informational', label: 'Informational' },
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
@@ -146,11 +148,11 @@ export function CampaignBoardView({
             value={classificationFilter}
           />
           <FloatingTextPicker
-            ariaLabel="Untrusted rating filter"
+            ariaLabel="Finding rating filter"
             className="campaign-board-filter campaign-board-rating-filter"
             onChange={(value) => setRatingFilter(value as CampaignBoardRatingFilter)}
             options={CAMPAIGN_BOARD_RATING_OPTIONS}
-            title="Filter findings by untrusted rating"
+            title="Filter findings by preferred CVSS or fallback rating"
             value={ratingFilter}
           />
         </div>
@@ -286,11 +288,11 @@ export function campaignPriorityClaimHasOverflow(scrollWidth: number, clientWidt
 }
 
 export function campaignPriorityClaimMetadata(claim: HoneycrispFindingSummary): string {
-  return `${traceLabel(claim.projection)} ${traceLabel(claim.maturity)}, ${campaignBoardClaimMetadata(claim)}`;
+  return `${traceLabel(claim.projection)} ${traceLabel(claim.maturity)}, ${traceLabel(claim.rating)} ${campaignBoardClassificationLabel(claim.classification)}`;
 }
 
 export function campaignBoardClaimMetadata(claim: HoneycrispFindingSummary): string {
-  return `${traceLabel(claim.rating)} ${campaignBoardClassificationLabel(claim.classification)}`;
+  return campaignClaimRatingPresentation(claim).label;
 }
 
 export function campaignBoardFindings(
@@ -300,7 +302,7 @@ export function campaignBoardFindings(
 ): HoneycrispFindingSummary[] {
   return (memory?.findings ?? []).filter((claim) => claim.maturity === maturity
     && (filters.classification === 'all' || claim.classification === filters.classification)
-    && (filters.rating === 'all' || claim.rating === filters.rating));
+    && (filters.rating === 'all' || campaignClaimRatingPresentation(claim).value === filters.rating));
 }
 
 export function campaignBoardClassificationOptions(memory: HoneycrispMemorySummary | null): Array<{ value: string; label: string }> {

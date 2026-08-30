@@ -14,6 +14,7 @@ export function createCollaborationSystemGuidance(
     ...runtimeGuidance(config),
     "Startup context contains only a bounded campaign-state projection. Query the specific memory, finding, runbook, report, or investigation catalog needed for the assignment instead of assuming the full campaign was injected.",
     "Channel communication is intentionally lax: post useful work as it becomes available, preserve dissent, and do not wait for a quorum or protocol phase.",
+    ...(lead ? ["Before recording session disposition or sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot."] : []),
     ...subagentModeGuidance(config.subagentMode, lead),
     ...(lead ? modeGuidance(config.mode) : []),
   ].join(" ");

@@ -349,14 +349,21 @@ export class SubagentManager {
 
   public collaborationFollowUp(agentId: string): AgentMessage[] {
     const session = this.ensureSession(agentId);
+    const followUp = this.takeMailbox(agentId);
     if (session.id === "root") {
       const collaborators = [...this.sessions.values()].filter((candidate) => candidate.id !== "root");
       if (this.requireRoomBeforeFinal && collaborators.length === 0) {
-        return [userMessage("This session requires collaboration. Inspect reusable workspace research with channel_list, then join a relevant channel or create one and spawn at least one bounded collaborator before concluding.")];
+        followUp.push(userMessage("This session requires collaboration. Inspect reusable workspace research with channel_list, then join a relevant channel or create one and spawn at least one bounded collaborator before concluding."));
       }
-      return [];
+      const active = collaborators
+        .filter((candidate) => candidate.status === "pending" || candidate.status === "running")
+        .map((candidate) => candidate.path)
+        .sort();
+      if (active.length > 0) {
+        followUp.push(userMessage(`Delegated agents are still active: ${active.join(", ")}. Do not record the session disposition or send the final response from an earlier claim snapshot. Continue useful independent work, wait for their results, or explicitly interrupt agents whose results are no longer needed; then re-read any canonical state they may have changed before concluding.`));
+      }
     }
-    return [];
+    return followUp;
   }
 
   public takeMailbox(agentId: string): AgentMessage[] {
