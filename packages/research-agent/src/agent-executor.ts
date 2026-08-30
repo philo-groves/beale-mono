@@ -392,19 +392,33 @@ export function createPiAgentExecutor(
         }
         return pendingHostSteeringWait;
       };
-      const takeTurnSteering = async (agentId: string, root: boolean): Promise<AgentMessage[]> => {
+      const takeTurnSteering = async (agentId: string, root: boolean): Promise<{
+        messages: AgentMessage[];
+        authoritativeHostMessages: AgentMessage[];
+      }> => {
         const direct = root ? await pollHostSteering() : [];
-        return subagents ? subagents.takeMailbox(agentId) : direct;
+        return {
+          messages: subagents ? subagents.takeMailbox(agentId) : direct,
+          authoritativeHostMessages: direct,
+        };
       };
-      const waitForSessionSafetySteering = async (agentId: string): Promise<AgentMessage[]> => {
+      const waitForSessionSafetySteering = async (agentId: string): Promise<{
+        messages: AgentMessage[];
+        authoritativeHostMessages: AgentMessage[];
+      }> => {
         const existing = subagents?.takeMailbox(agentId) ?? [];
-        if (existing.length > 0) return existing;
+        if (existing.length > 0) return { messages: existing, authoritativeHostMessages: [] };
         const polled = await pollHostSteering();
         const afterPoll = subagents?.takeMailbox(agentId) ?? [];
-        if (afterPoll.length > 0) return afterPoll;
-        if (!subagents && polled.length > 0) return polled;
+        if (afterPoll.length > 0) return { messages: afterPoll, authoritativeHostMessages: polled };
+        if (!subagents && polled.length > 0) {
+          return { messages: polled, authoritativeHostMessages: polled };
+        }
         const waited = await waitForHostSteering();
-        return subagents ? subagents.takeMailbox(agentId) : waited;
+        return {
+          messages: subagents ? subagents.takeMailbox(agentId) : waited,
+          authoritativeHostMessages: waited,
+        };
       };
       const researchToolNames = new Set(
         options.toolRegistry?.listTools().map((tool) => getToolTransportName(tool)) ?? [],
@@ -597,8 +611,13 @@ export function createPiAgentExecutor(
           },
           waitForSafetyRecovery: async () => {
             const steering = await waitForSessionSafetySteering(request.id);
-            if (steering.length > 0) researchFocus.notePotentialExternalChange();
-            return steering as Message[];
+            if (steering.messages.length > 0) researchFocus.notePotentialExternalChange();
+            if (request.root && steering.authoritativeHostMessages.length > 0) {
+              researchFocus.noteAuthoritativeUserSteering(
+                steering.authoritativeHostMessages.map(agentMessageText).filter(Boolean),
+              );
+            }
+            return steering.messages as Message[];
           },
           onRetry: async ({ retry, delayMs, errorMessage, recoveryKind, safetyDisposition, awaitingSteering }) => {
             const retryEvent = {
@@ -643,6 +662,7 @@ export function createPiAgentExecutor(
               compacted,
               researchFocus.compactionCheckpoint("context_window_retry", currentTurn),
               active,
+              researchFocus.currentAuthoritativeUserSteering(),
             );
             contextWindowRetryCheckpointed = true;
             return {
@@ -710,8 +730,13 @@ export function createPiAgentExecutor(
               compactedInheritedMessages,
               researchFocus.compactionCheckpoint(inheritedCheckpointReason, currentTurn),
               initialActiveModel,
+              researchFocus.currentAuthoritativeUserSteering(),
             )
-          : retainLatestResearchCheckpoint(compactedInheritedMessages, initialActiveModel);
+          : retainLatestResearchCheckpoint(
+              compactedInheritedMessages,
+              initialActiveModel,
+              researchFocus.currentAuthoritativeUserSteering(),
+            );
         if (inheritedNativeCompactionFingerprint) {
           lastNativeCompactionFingerprint = inheritedNativeCompactionFingerprint;
         }
@@ -930,7 +955,12 @@ export function createPiAgentExecutor(
               }
               const nextMessages = [
                 ...(checkpoint
-                  ? replaceResearchCheckpoint(compactedMessages, checkpoint, activeTurnModel)
+                  ? replaceResearchCheckpoint(
+                      compactedMessages,
+                      checkpoint,
+                      activeTurnModel,
+                      researchFocus.currentAuthoritativeUserSteering(),
+                    )
                   : compactedMessages),
                 ...(focusTurn.steeringMessage ? [userAgentMessage(focusTurn.steeringMessage)] : []),
               ];
@@ -951,9 +981,14 @@ export function createPiAgentExecutor(
               };
             },
             getSteeringMessages: async () => {
-              const externalMessages = await takeTurnSteering(request.id, request.root === true);
-              if (externalMessages.length > 0) researchFocus.notePotentialExternalChange();
-              return externalMessages;
+              const steering = await takeTurnSteering(request.id, request.root === true);
+              if (steering.messages.length > 0) researchFocus.notePotentialExternalChange();
+              if (request.root && steering.authoritativeHostMessages.length > 0) {
+                researchFocus.noteAuthoritativeUserSteering(
+                  steering.authoritativeHostMessages.map(agentMessageText).filter(Boolean),
+                );
+              }
+              return steering.messages;
             },
             getFollowUpMessages: async () => {
               const mailboxMessages = subagents?.takeMailbox(request.id) ?? [];
@@ -1133,21 +1168,28 @@ export function createPiAgentExecutor(
             ? rootResult.resumableCheckpoints.contextWindowRetry
             : rootResult.resumableCheckpoints.local,
           model,
+          rootResult.researchFocusState.authoritativeUserSteering ?? [],
         );
       } else if (rootResult.contextWindowRetryCheckpointed) {
         resumableMessages.messages = replaceResearchCheckpoint(
           resumableMessages.messages,
           rootResult.resumableCheckpoints.contextWindowRetry,
           model,
+          rootResult.researchFocusState.authoritativeUserSteering ?? [],
         );
       } else if (rootResult.lastNativeCompactionFingerprint) {
         resumableMessages.messages = replaceResearchCheckpoint(
           resumableMessages.messages,
           rootResult.resumableCheckpoints.native,
           model,
+          rootResult.researchFocusState.authoritativeUserSteering ?? [],
         );
       } else {
-        resumableMessages.messages = retainLatestResearchCheckpoint(resumableMessages.messages, model);
+        resumableMessages.messages = retainLatestResearchCheckpoint(
+          resumableMessages.messages,
+          model,
+          rootResult.researchFocusState.authoritativeUserSteering ?? [],
+        );
       }
 
       return {
@@ -1944,6 +1986,8 @@ const RESEARCH_CHECKPOINT_HOST_API = "honeycrisp-host";
 const RESEARCH_CHECKPOINT_HOST_PROVIDER = "honeycrisp-host";
 const RESEARCH_CHECKPOINT_HOST_MODEL = "research-checkpoint-v1";
 const RESEARCH_CHECKPOINT_NOTICE_PREFIX = "[[HONEYCRISP_HOST_RESEARCH_CHECKPOINT_NOTICE_V1:";
+const AUTHORITATIVE_STEERING_REMINDER_PREFIX = "[[HONEYCRISP_HOST_AUTHORITATIVE_STEERING_V1]]\n";
+const AUTHORITATIVE_STEERING_REMINDER_SUFFIX = "\n[[/HONEYCRISP_HOST_AUTHORITATIVE_STEERING_V1]]";
 
 interface ValidResearchCheckpoint {
   checkpoint: string;
@@ -1955,8 +1999,9 @@ function replaceResearchCheckpoint(
   messages: readonly AgentMessage[],
   checkpoint: string,
   _model: { api: string; provider: string; id: string },
+  authoritativeUserSteering: readonly string[] = [],
 ): AgentMessage[] {
-  const cleaned = removeResearchCheckpoints(messages);
+  const cleaned = removeAuthoritativeSteeringReminders(removeResearchCheckpoints(messages));
   const checkpointContent = researchCheckpointContent(checkpoint);
   const checkpointHash = researchCheckpointHash(checkpoint);
   return [
@@ -1984,15 +2029,58 @@ function replaceResearchCheckpoint(
       content: researchCheckpointNotice(checkpointHash),
       timestamp: Date.now(),
     } as AgentMessage,
+    ...(authoritativeUserSteering.length > 0
+      ? [userAgentMessage(authoritativeSteeringReminder(authoritativeUserSteering))]
+      : []),
   ];
 }
 
 function retainLatestResearchCheckpoint(
   messages: readonly AgentMessage[],
   model: { api: string; provider: string; id: string },
+  authoritativeUserSteering: readonly string[] = [],
 ): AgentMessage[] {
   const latest = validResearchCheckpoints(messages).at(-1);
-  return latest ? replaceResearchCheckpoint(messages, latest.checkpoint, model) : [...messages];
+  if (latest) {
+    return replaceResearchCheckpoint(messages, latest.checkpoint, model, authoritativeUserSteering);
+  }
+  const cleaned = removeAuthoritativeSteeringReminders(messages);
+  return authoritativeUserSteering.length > 0
+    ? [...cleaned, userAgentMessage(authoritativeSteeringReminder(authoritativeUserSteering))]
+    : cleaned;
+}
+
+function authoritativeSteeringReminder(messages: readonly string[]): string {
+  return [
+    AUTHORITATIVE_STEERING_REMINDER_PREFIX.trimEnd(),
+    "The host preserved the following current user steering across context compaction. Apply it in chronological order as authoritative user direction; later messages supersede earlier ones where they conflict. Do not fall back to an older, broader goal interpretation. Before claiming completion, distinguish work and durable revisions produced in this session from unchanged historical workspace state.",
+    "",
+    JSON.stringify(messages, null, 2),
+    AUTHORITATIVE_STEERING_REMINDER_SUFFIX.trimStart(),
+  ].join("\n");
+}
+
+function removeAuthoritativeSteeringReminders(messages: readonly AgentMessage[]): AgentMessage[] {
+  return messages.filter((message) => !(
+    isRecord(message)
+    && message.role === "user"
+    && typeof message.content === "string"
+    && message.content.startsWith(AUTHORITATIVE_STEERING_REMINDER_PREFIX)
+    && message.content.endsWith(AUTHORITATIVE_STEERING_REMINDER_SUFFIX)
+  ));
+}
+
+function agentMessageText(message: AgentMessage): string {
+  if (!isRecord(message) || message.role !== "user") return "";
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((item): item is { type: "text"; text: string } =>
+      isRecord(item) && item.type === "text" && typeof item.text === "string"
+    )
+    .map((item) => item.text)
+    .join("\n")
+    .trim();
 }
 
 function removeResearchCheckpoints(messages: readonly AgentMessage[]): AgentMessage[] {

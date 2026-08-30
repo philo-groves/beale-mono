@@ -390,6 +390,21 @@ test("research focus guard emits a bounded target-evidence checkpoint", () => {
   assert.doesNotMatch(checkpoint, /Generated checklist detail\. Generated checklist detail\./);
 });
 
+test("research focus guard preserves authoritative user steering across state restoration", () => {
+  const objective = "Upgrade an existing primitive with new evidence.";
+  const guard = new ResearchFocusGuard({ objective });
+  guard.noteAuthoritativeUserSteering([
+    "User steering for the active research run:\n\nAlready-verified primitives do not count. Produce new work.",
+  ]);
+
+  const state = guard.exportState();
+  const restored = new ResearchFocusGuard({ objective, initialState: state });
+
+  assert.deepEqual(restored.currentAuthoritativeUserSteering(), state.authoritativeUserSteering);
+  assert.match(restored.currentAuthoritativeUserSteering()[0], /Produce new work/);
+  assert.doesNotMatch(restored.compactionCheckpoint("native", 2), /Produce new work/);
+});
+
 test("research focus guard drops old entries instead of truncating the checkpoint envelope", () => {
   const guard = new ResearchFocusGuard();
   for (let turn = 1; turn <= 16; turn += 1) {
