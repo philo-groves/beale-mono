@@ -84,6 +84,54 @@ test("memory summary does not mutate finding staleness", async () => {
   }
 });
 
+test("report catalog reads survive unrelated foreign-key violations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "honeycrisp-report-catalog-boundary-"));
+  const databasePath = join(root, "memory.sqlite");
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({
+    databasePath,
+    artifactDirectoryPath: join(root, "artifacts"),
+  }));
+  const reports = new ReportStore(databasePath, layout, {
+    workspaceId: "workspace_report_catalog",
+    workspaceName: "Report catalog",
+  });
+  let report;
+  try {
+    report = reports.create({
+      title: "Parser result",
+      summary: "A report that remains readable when unrelated memory references are stale.",
+      content: "# Parser result\n\nConfirmed.",
+    }).report;
+  } finally {
+    reports.close();
+  }
+
+  try {
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec("PRAGMA foreign_keys = OFF;");
+      database.exec("ALTER TABLE honeycrisp_reports DROP COLUMN triage_status;");
+      database.prepare(`INSERT INTO memory_node_workspaces(node_id, workspace_id, workspace_name)
+        VALUES ('missing_memory_node', 'workspace_report_catalog', 'Report catalog')`).run();
+      assert.equal(database.prepare("PRAGMA foreign_key_check").all().length, 1);
+    } finally {
+      database.close();
+    }
+
+    const catalog = await invokeHoneycrispProtocol("report.list", {
+      args: [],
+      input: { workspaceId: "workspace_report_catalog" },
+      storage: { databasePath, artifactDirectoryPath: layout.artifactDirectoryPath },
+    });
+    assert.equal(catalog.length, 1);
+    assert.equal(catalog[0].id, report.id);
+    assert.equal(catalog[0].title, "Parser result");
+    assert.equal(catalog[0].triageStatus, "editing");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Honeycrisp owns memory summaries, documents, artifact resolution, and Dreaming state", async () => {
   const root = await mkdtemp(join(tmpdir(), "honeycrisp-knowledge-boundary-"));
   const databasePath = join(root, "memory.sqlite");

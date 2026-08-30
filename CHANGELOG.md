@@ -4,6 +4,11 @@
 
 ### Beale
 
+#### Fixed
+
+- Frameless Desktop windows now apply an explicit rounded native window region on Windows instead of relying only on OS-managed corner composition.
+- Desktop reporting now reads report catalogs through a dedicated read-only Honeycrisp operation, so unrelated stale database references cannot make the reporting view fail; the Honeycrisp contract advances to v13 with report-list capability metadata.
+
 #### Added
 
 - Beale iOS active-session composers now expose the shared app-server Stop action in the Send button position, including while a shell or computer-use approval is pending; typing a steering message changes the same control back to Send.

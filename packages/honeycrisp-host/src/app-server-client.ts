@@ -229,7 +229,7 @@ function operationForArguments(argv: readonly string[]): HoneycrispProtocolOpera
     const mapping: Record<string, HoneycrispProtocolOperation> = {
       summary: 'memory.summary', notification_feed: 'memory.notification_feed', dreaming_prepare: 'dreaming.prepare',
       dreaming_parse_plan: 'dreaming.parse_plan', dreaming_apply: 'dreaming.apply', dreaming_record_failure: 'dreaming.record_failure',
-      dreaming_restore: 'dreaming.restore', runbook_get: 'runbook.get', report_get: 'report.get', artifact_resolve: 'artifact.resolve'
+      dreaming_restore: 'dreaming.restore', runbook_get: 'runbook.get', report_list: 'report.list', report_get: 'report.get', artifact_resolve: 'artifact.resolve'
     };
     return normalized ? mapping[normalized] ?? null : null;
   }

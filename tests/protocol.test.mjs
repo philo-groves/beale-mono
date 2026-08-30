@@ -41,10 +41,10 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v12 repository contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v13 report-catalog contract for app-server and WebSocket clients", () => {
   const descriptor = honeycrispProtocolDescriptor();
   assert.deepEqual(descriptor.operations, HONEYCRISP_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 12);
+  assert.equal(descriptor.contractVersion, 13);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 11);
   assert.equal(descriptor.schemas.finding, 4);
@@ -65,12 +65,14 @@ test("protocol describe exposes a runtime-bound v12 repository contract for app-
   assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("suggestion.generate"));
   assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("suggestion.select"));
   assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("prompt.expand"));
+  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.list"));
   assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.revise_content"));
   assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.update_triage_status"));
   assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.replace_recording"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-content-revise.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-triage-status.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-recording-replace.v1"));
+  assert.ok(descriptor.capabilities.includes("knowledge.report-list.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.channels.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.goal-suggestions.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.startup-recovery.v1"));
@@ -79,6 +81,7 @@ test("protocol describe exposes a runtime-bound v12 repository contract for app-
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("source.clone-modes.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("maintenance.repository-consolidation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("memory.notifications.v3"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.report-list.v1"));
   assert.equal(descriptor.transports.websocket.path, "/v1/session");
   assert.equal(descriptor.transports.appServer.path, "/v1/operations");
   assert.equal(descriptor.transports.appServer.authentication, "operator-bearer");
