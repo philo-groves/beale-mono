@@ -1093,6 +1093,7 @@
 
 #### Fixed
 
+- Goal-mode sessions now audit an achieved disposition against the current request and all live user steering before stopping, preventing a broader persistent objective from ending research while a stricter requested result remains unmet.
 - Native and local research-context compaction now preserve current user steering as authoritative user-role context, preventing resumed goals from reverting to an older broad objective or crediting unchanged historical claims and reports as new session work.
 - Honeycrisp lead agents now remain active while delegated reviewers or other subagents are still running, consume their terminal results, and re-read canonical state before the visible final response; provider-backed collaboration continuations also receive results that complete during terminal settling instead of returning an earlier claim-status snapshot.
 - Host-specific research guidance now excludes PowerShell and WSL from macOS and Linux shell and runbook tool contracts while retaining it on Windows.

@@ -58,6 +58,15 @@ test("goal mode continues one Pi session and keeps session disposition after res
       }, "disposition_2"),
     ], "toolUse"),
     assistant("The complete authorization-boundary exploit chain is verified."),
+    assistant([
+      toolCall("session_disposition", {
+        outcome: "objective_achieved",
+        summary: "The completion audit confirms the detailed request and persistent objective are both satisfied.",
+        blockerDependencies: [],
+        externalStateRequired: false,
+      }, "disposition_3"),
+    ], "toolUse"),
+    assistant("The audited authorization-boundary exploit chain is verified."),
   ];
 
   const result = await runResearchAgent({
@@ -77,6 +86,7 @@ test("goal mode continues one Pi session and keeps session disposition after res
       toolRegistry: createResearchToolRegistry([inspectTool, dispositionTool]),
       goal: {
         objective,
+        currentRequest: researchPrompt,
         getDisposition: () => recorder.get(),
         resetDisposition: () => recorder.resetForGoalContinuation(),
       },
@@ -87,13 +97,14 @@ test("goal mode continues one Pi session and keeps session disposition after res
   assert.deepEqual(inspectCalls, [{ path: "auth.c" }]);
   assert.equal(result.agentRun.output.raw.toolCallCount, 1);
   assert.equal(result.agentRun.output.goal.status, "complete");
-  assert.equal(result.agentRun.output.goal.turnsUsed, 2);
+  assert.equal(result.agentRun.output.goal.turnsUsed, 3);
   assert.deepEqual(
     result.agentRun.output.raw.agentEvents
       .filter((event) => event.type === "goal_lifecycle")
       .map((event) => ({ status: event.status, continued: event.continued, outcome: event.dispositionOutcome })),
     [
       { status: "active", continued: true, outcome: "objective_partially_achieved" },
+      { status: "active", continued: true, outcome: "objective_achieved" },
       { status: "complete", continued: false, outcome: "objective_achieved" },
     ],
   );
@@ -101,6 +112,7 @@ test("goal mode continues one Pi session and keeps session disposition after res
   assert.ok(contexts.every((context) => context.sessionId === "goal_session_fixture"));
   assert.ok(contexts[0].toolNames.includes("fixture_inspect"));
   assert.ok(contexts[1].toolNames.includes("session_disposition"));
+  assert.ok(contexts[2].toolNames.includes("session_disposition"));
   assert.ok(!contexts[1].toolNames.includes("fixture_inspect"));
   assert.ok(contexts.every((context) => !context.toolNames.includes("get_goal")));
   assert.ok(contexts.every((context) => !context.toolNames.includes("update_goal")));
@@ -108,6 +120,14 @@ test("goal mode continues one Pi session and keeps session disposition after res
   assert.match(
     contexts.flatMap((context) => context.messageContents).join("\n"),
     /Continue research toward: Verify the authorization boundary\./,
+  );
+  assert.match(
+    contexts.flatMap((context) => context.messageContents).join("\n"),
+    /Goal completion audit required/,
+  );
+  assert.match(
+    contexts.flatMap((context) => context.messageContents).join("\n"),
+    /Review every relevant entry point and verify the complete authorization-boundary exploit chain/,
   );
   assert.doesNotMatch(
     contexts.flatMap((context) => context.messageContents).join("\n"),
@@ -117,7 +137,7 @@ test("goal mode continues one Pi session and keeps session disposition after res
   const capture = createResearchAgentFlowCapture(result);
   assert.equal(capture.schemaVersion, 5);
   assert.equal(capture.agent.goal.status, "complete");
-  assert.equal(capture.agent.goal.turnsUsed, 2);
+  assert.equal(capture.agent.goal.turnsUsed, 3);
 });
 
 function fixtureInspectTool(calls) {

@@ -85,6 +85,7 @@ export function createResearchSystemPrompt(
     ] : []),
     ...(options.goalEnabled ? [
       "Continue researching the supplied objective until evidence supports a final disposition; goal persistence and terminal state are handled by the host.",
+      "The current user request and later user steering are binding completion requirements even when the persistent goal is broader. Record objective_achieved only when evidence from this session satisfies all of them; a valuable intermediate finding is objective_partially_achieved when any requested outcome remains absent.",
     ] : []),
     ...(options.hasSessionDispositionTool ? ["Before the root final response, call session.disposition exactly once. Record the evidence-grounded outcome, every unresolved dependency, whether progress requires external state rather than more work in this session, and exactly three distinct nextPromptSuggestions. Make each suggestion a concrete continuation grounded in this session, with a short action-oriented title and a self-contained promptMarkdown; do not repeat completed work or include the suggestions in the visible final response."] : []),
     ...(options.hasMemoryTools ? [

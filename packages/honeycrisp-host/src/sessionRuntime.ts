@@ -2737,6 +2737,7 @@ function createRealAgentExecutor(
               ...(piResumableState?.goal ? { resumedGoal: piResumableState.goal } : {}),
               prompt: args.prompt!,
             }),
+            currentRequest: args.prompt!,
             getDisposition: () => dispositionRecorder.get(),
             resetDisposition: () => dispositionRecorder.resetForGoalContinuation(),
           },

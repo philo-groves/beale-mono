@@ -625,9 +625,11 @@ export function createPiAgentExecutor(
             const steering = await waitForSessionSafetySteering(request.id);
             if (steering.messages.length > 0) researchFocus.notePotentialExternalChange();
             if (request.root && steering.authoritativeHostMessages.length > 0) {
-              researchFocus.noteAuthoritativeUserSteering(
-                steering.authoritativeHostMessages.map(agentMessageText).filter(Boolean),
-              );
+              const authoritativeSteering = steering.authoritativeHostMessages
+                .map(agentMessageText)
+                .filter(Boolean);
+              researchFocus.noteAuthoritativeUserSteering(authoritativeSteering);
+              goalRuntime?.noteAuthoritativeUserSteering(authoritativeSteering);
             }
             return steering.messages as Message[];
           },
@@ -996,9 +998,11 @@ export function createPiAgentExecutor(
               const steering = await takeTurnSteering(request.id, request.root === true);
               if (steering.messages.length > 0) researchFocus.notePotentialExternalChange();
               if (request.root && steering.authoritativeHostMessages.length > 0) {
-                researchFocus.noteAuthoritativeUserSteering(
-                  steering.authoritativeHostMessages.map(agentMessageText).filter(Boolean),
-                );
+                const authoritativeSteering = steering.authoritativeHostMessages
+                  .map(agentMessageText)
+                  .filter(Boolean);
+                researchFocus.noteAuthoritativeUserSteering(authoritativeSteering);
+                goalRuntime?.noteAuthoritativeUserSteering(authoritativeSteering);
               }
               return steering.messages;
             },
@@ -1012,6 +1016,9 @@ export function createPiAgentExecutor(
                 ...await goalFollowUpMessages({
                   root: request.root === true,
                   goalRuntime,
+                  finalResponse: finalAssistantMessage
+                    ? assistantText(finalAssistantMessage.content)
+                    : "",
                   emitRuntimeEvent,
                 }),
               ];
@@ -2195,12 +2202,13 @@ function validResearchCheckpoints(
 async function goalFollowUpMessages(input: {
   root: boolean;
   goalRuntime: ResearchGoalRuntime | null;
+  finalResponse: string;
   emitRuntimeEvent(payload: Record<string, unknown>): Promise<void>;
 }): Promise<AgentMessage[]> {
   if (!input.root || !input.goalRuntime) return [];
   const previous = input.goalRuntime.snapshot();
   if (previous.status !== "active") return [];
-  const messages = input.goalRuntime.continueAfterRootResponse();
+  const messages = input.goalRuntime.continueAfterRootResponse(input.finalResponse);
   const current = input.goalRuntime.snapshot();
   await input.emitRuntimeEvent({
     type: "goal_lifecycle",
