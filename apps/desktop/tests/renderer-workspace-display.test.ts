@@ -50,6 +50,25 @@ describe('renderer workspace display view models', () => {
     expect(workspaceExists(registry, 'missing')).toBe(false);
   });
 
+  it('sorts sidebar sessions by minute, then alphabetically by displayed title', () => {
+    const registeredWorkspace = workspace('workspace_test', '/workspace/test');
+    const registry: WorkspaceRegistryState = {
+      registryPath: '/home/user/.beale/workspaces.json',
+      workspaces: [registeredWorkspace],
+      researchSessions: [
+        session({ id: 'session_zebra', title: 'Zebra Review', updatedAt: '2026-04-30T12:04:59.000Z' }),
+        session({ id: 'session_newest', title: 'Newest Minute', updatedAt: '2026-04-30T12:05:00.000Z' }),
+        session({ id: 'session_alpha', title: 'Alpha Review', updatedAt: '2026-04-30T12:04:01.000Z' })
+      ]
+    };
+
+    expect(researchSessionsForWorkspace(registry, registeredWorkspace).map((item) => item.id)).toEqual([
+      'session_newest',
+      'session_alpha',
+      'session_zebra'
+    ]);
+  });
+
   it('formats session titles and compact relative ages for sidebar rows', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-30T12:00:00.000Z'));
