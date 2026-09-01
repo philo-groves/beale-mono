@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "apple-security-devices",
+  "version": "0.1.0",
+  "description": "Realistic Apple security-research environments using Tart macOS guests, physical iPhones, and darwin-vm low-level Darwin guests.",
+  "author": {
+    "name": "Beale"
+  },
+  "keywords": [
+    "apple-security",
+    "darwin-vm",
+    "iphone",
+    "macos",
+    "tart"
+  ]
+}
+

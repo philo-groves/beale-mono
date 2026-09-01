@@ -59,7 +59,7 @@ describe('AgentPluginRegistry', () => {
     const runtime = registry.getHoneycrispRuntime();
     const mcpConfigPath = runtime.mcpConfigPath ?? '';
     const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf8')) as {
-      servers: Record<string, { type: string; command: string; cwd: string }>;
+      servers: Record<string, { type: string; command: string; args: string[]; cwd: string; env: Record<string, string> }>;
     };
 
     expect(runtime.skillDirs).toEqual([join(sourceRoot, 'skills')]);
@@ -78,7 +78,13 @@ describe('AgentPluginRegistry', () => {
     expect(mcpConfig.servers['filesystem-plugin.local']).toMatchObject({
       type: 'stdio',
       command: join(sourceRoot, 'server.js'),
-      cwd: sourceRoot
+      args: [join(sourceRoot, 'fixture'), join(dirname(mcpConfigPath), '..', 'agent-plugin-data', installed.plugins[0].id, 'state')],
+      cwd: sourceRoot,
+      env: {
+        PLUGIN_ROOT: sourceRoot,
+        PLUGIN_DATA: join(dirname(mcpConfigPath), '..', 'agent-plugin-data', installed.plugins[0].id),
+        CONFIG: join(sourceRoot, 'config.json')
+      }
     });
 
     registry.setEnabled(installed.plugins[0].id, false);
@@ -109,6 +115,25 @@ describe('AgentPluginRegistry', () => {
     expect(state.plugins[0].status).toBe('invalid');
     expect(state.plugins[0].enabled).toBe(false);
     expect(state.plugins[0].mcpServers[0].errors).toContain('cwd must be plugin-relative or rooted at ${PLUGIN_ROOT} or ${PLUGIN_DATA}.');
+  });
+
+  it('rejects MCP servers that override Agent Plugins reserved environment variables', () => {
+    const registry = new AgentPluginRegistry(tempDir('beale-plugin-registry-'), { builtinPlugins: [] });
+    const pluginRoot = validPluginRoot('reserved-environment');
+    writeFileSync(join(pluginRoot, 'mcp.json'), JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: {
+        local: {
+          type: 'stdio',
+          command: './server.js',
+          env: { PLUGIN_ROOT: '/not/portable' }
+        }
+      }
+    }), 'utf8');
+
+    const state = registry.addFromFilesystem(pluginRoot);
+    expect(state.plugins[0].status).toBe('invalid');
+    expect(state.plugins[0].mcpServers[0].errors).toContain('env must not override reserved variable PLUGIN_ROOT.');
   });
 
   it('rejects directories without the Agent Plugin manifest schema', () => {
@@ -156,6 +181,8 @@ describe('AgentPluginRegistry', () => {
       servers: Record<string, { env: Record<string, string> }>;
     };
     expect(mcpConfig.servers['beale-introspection.beale'].env).toEqual({
+      PLUGIN_ROOT: plugin?.source.path,
+      PLUGIN_DATA: join(dirname(runtime.mcpConfigPath ?? ''), '..', 'agent-plugin-data', plugin?.id ?? ''),
       BEALE_INTROSPECTION_URL: 'http://127.0.0.1:12345',
       BEALE_INTROSPECTION_TOKEN: 'test-token'
     });
@@ -336,8 +363,8 @@ function validPluginRoot(name: string): string {
       local: {
         type: 'stdio',
         command: './server.js',
-        args: [],
-        env: {},
+        args: ['${PLUGIN_ROOT}/fixture', '${PLUGIN_DATA}/state'],
+        env: { CONFIG: '${PLUGIN_ROOT}/config.json' },
         cwd: './'
       }
     }

@@ -12,6 +12,7 @@
 
 #### Added
 
+- Added a top-level `managed-plugins` collection with the portable Agent Plugins 1.0.0 `apple-security-devices` package, including realistic Tart macOS, physical-iPhone CoreDevice, and low-level `darwin-vm` research workflows with explicit mutation confirmation and an enforced iOS Simulator prohibition.
 - Desktop Lead-model settings now offer OpenAI Fast mode for new research and Quick Chat sessions. The choice persists across continuations, forks, recovery, and repeated automation launches; the typed launch preference, `session.openai-fast-mode.v1` capability, and advanced app-server contract timestamp keep Desktop and its host synchronized.
 - Beale iOS active-session composers now expose the shared app-server Stop action in the Send button position, including while a shell or computer-use approval is pending; typing a steering message changes the same control back to Send.
 - Beale iOS session headers now use an icon-only status circle that opens Desktop-style Active and Completed subagent rows with status, latest message, channel, model, and activity age; selecting a row opens that subagent's filtered commentary stream.
@@ -55,6 +56,7 @@
 
 #### Changed
 
+- Agent Plugin stdio runtime materialization now expands standard plugin variables in arguments, provides reserved `PLUGIN_ROOT` and `PLUGIN_DATA` environment variables, and rejects plugin attempts to override them.
 - Desktop automation details now label the right summary sidenav Automation and show the configured Interval above a divider-separated run history.
 - Beale iOS New Research model controls now use dropdowns populated from a path-free app-server catalog of connected providers, label the host's default provider and Lead/subagent models, and restrict collaborator reasoning choices to the selected model's supported levels.
 - Beale iOS research-attention notifications now trigger only for Medium or High findings whose lifecycle status is Observed, Reproduced, or Verified; leads, knowledge nodes, other ratings, and other statuses remain silent.

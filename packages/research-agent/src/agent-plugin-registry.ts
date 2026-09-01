@@ -515,7 +515,7 @@ function scanMcpServer(name: string, config: unknown, pluginRoot: string, plugin
     else if (looksLikePath(command) && !command.startsWith('./')) errors.push('Plugin-relative stdio commands must begin with ./');
     else if (command.startsWith('./')) validateContainedExpression(command, pluginRoot, pluginRoot, 'command', errors);
     validateStringArray(object.args, 'args', errors);
-    validateStringRecord(object.env, 'env', errors);
+    validateStringRecord(object.env, 'env', errors, ['PLUGIN_ROOT', 'PLUGIN_DATA']);
     if (object.cwd !== undefined) validateCwd(object.cwd, pluginRoot, pluginDataRoot, errors);
     return { name, transport, command: command ?? null, url: null, valid: errors.length === 0, errors };
   }
@@ -600,15 +600,25 @@ function honeycrispMcpServerConfig(
       type: 'stdio',
       command: command.startsWith('./') ? resolve(pluginRoot, command) : command
     };
-    if (Array.isArray(object.args)) runtimeConfig.args = object.args.filter((arg): arg is string => typeof arg === 'string');
+    if (Array.isArray(object.args)) {
+      runtimeConfig.args = object.args
+        .filter((arg): arg is string => typeof arg === 'string')
+        .map((arg) => expandPluginVariables(arg, pluginRoot, pluginDataRoot, extraEnvironment));
+    }
+    const environment: Record<string, string> = {
+      PLUGIN_ROOT: pluginRoot,
+      PLUGIN_DATA: pluginDataRoot
+    };
     if (isStringRecord(object.env)) {
-      runtimeConfig.env = Object.fromEntries(
-        Object.entries(object.env).map(([key, value]) => [
+      Object.assign(
+        environment,
+        Object.fromEntries(Object.entries(object.env).map(([key, value]) => [
           key,
           expandPluginVariables(value, pluginRoot, pluginDataRoot, extraEnvironment)
-        ])
+        ]))
       );
     }
+    runtimeConfig.env = environment;
     const cwd = stringValue(object.cwd);
     if (cwd) runtimeConfig.cwd = resolvePluginPathExpression(cwd, pluginRoot, pluginDataRoot);
     return runtimeConfig;
@@ -675,10 +685,14 @@ function validateStringArray(value: unknown, label: string, errors: string[]): v
   }
 }
 
-function validateStringRecord(value: unknown, label: string, errors: string[]): void {
+function validateStringRecord(value: unknown, label: string, errors: string[], forbiddenKeys: string[] = []): void {
   if (value === undefined) return;
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value as Record<string, unknown>).some((entry) => typeof entry !== 'string')) {
     errors.push(`${label} must be an object with string values when provided.`);
+    return;
+  }
+  for (const key of forbiddenKeys) {
+    if (Object.hasOwn(value, key)) errors.push(`${label} must not override reserved variable ${key}.`);
   }
 }
 
