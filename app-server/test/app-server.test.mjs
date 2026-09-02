@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, test } from "node:test";
+import { deserialize } from "node:v8";
 import {
   AppServerHostRegistry,
   AppServerHostService,
@@ -25,6 +26,7 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
 } from "@beale/app-server-runtime/protocol";
 import { AppServerSessionStore } from "../../packages/research-agent/dist/index.js";
+import { AppServerWorkerDatabaseBroker } from "../dist/workerDatabaseBroker.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const WebSocket = requireFromHere("ws");
@@ -482,6 +484,90 @@ test("runs app-server workers in Node mode when hosted by Electron", () => {
 
   assert.equal(environment.BEALE_TEST_CHILD_ENVIRONMENT, "preserved");
   assert.equal(environment.ELECTRON_RUN_AS_NODE, "1");
+});
+
+test("mediates runtime-worker SQLite operations through host-owned connections", () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-worker-database-"));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, "memory.sqlite");
+  const broker = new AppServerWorkerDatabaseBroker(databasePath);
+  try {
+    const opened = brokerRequest(broker, {
+      operation: "open",
+      databasePath,
+    });
+    assert.equal(opened.ok, true);
+    assert.equal(typeof opened.value, "number");
+    const connectionId = opened.value;
+
+    assert.equal(brokerRequest(broker, {
+      operation: "exec",
+      connectionId,
+      sql: "CREATE TABLE mediated_records (id TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    }).ok, true);
+    assert.equal(brokerRequest(broker, {
+      operation: "run",
+      connectionId,
+      sql: "INSERT INTO mediated_records (id, value) VALUES (?, ?)",
+      parameters: ["record-1", "host-owned"],
+    }).ok, true);
+    assert.deepEqual(brokerRequest(broker, {
+      operation: "get",
+      connectionId,
+      sql: "SELECT id, value FROM mediated_records WHERE id = ?",
+      parameters: ["record-1"],
+    }), {
+      ok: true,
+      value: { id: "record-1", value: "host-owned" },
+    });
+
+    const denied = brokerRequest(broker, {
+      operation: "open",
+      databasePath: join(directory, "other.sqlite"),
+    });
+    assert.equal(denied.ok, false);
+    assert.match(denied.error.message, /outside its app-server-owned database/);
+  } finally {
+    broker.close();
+  }
+
+  const inspection = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    assert.equal(
+      inspection.prepare("SELECT value FROM mediated_records WHERE id = ?").get("record-1").value,
+      "host-owned",
+    );
+  } finally {
+    inspection.close();
+  }
+});
+
+test("keeps SQLite construction out of the app-server runtime worker", () => {
+  const workerSource = readFileSync(new URL("../dist/runtimeWorker.js", import.meta.url), "utf8");
+  const clientSource = readFileSync(new URL("../dist/workerDatabaseClient.js", import.meta.url), "utf8");
+  assert.match(workerSource, /installResearchDatabaseFactory/);
+  assert.match(workerSource, /createWorkerResearchDatabaseFactory/);
+  assert.doesNotMatch(workerSource, /node:sqlite|new DatabaseSync/);
+  assert.doesNotMatch(clientSource, /node:sqlite|new DatabaseSync/);
+
+  const researchSourceRoot = new URL("../../packages/research-agent/src/", import.meta.url);
+  for (const file of [
+    "campaign-tracks.ts",
+    "channels.ts",
+    "findings.ts",
+    "goal-suggestions.ts",
+    "knowledge-artifacts.ts",
+    "memory-dreaming.ts",
+    "memory-graph.ts",
+    "memory-summary.ts",
+    "reports.ts",
+    "research-resources.ts",
+    "runbooks.ts",
+    "session-store.ts",
+    "workspace-binding.ts",
+  ]) {
+    assert.doesNotMatch(readFileSync(new URL(file, researchSourceRoot), "utf8"), /new DatabaseSync/);
+  }
 });
 
 test("serves host workspaces and canonical app-server reads from one authenticated control plane", async () => {
@@ -1772,6 +1858,67 @@ test("proxies a real mock run over the versioned session transport and retains i
   assert.equal(reused.status, 201);
 });
 
+test("runs database-backed research tools through the app-server worker mediator", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-mediated-worker-"));
+  temporaryDirectories.push(directory);
+  const capturePath = join(directory, "capture.json");
+  writeFileSync(join(directory, "workspace-context.json"), JSON.stringify({
+    schemaVersion: 1,
+    workspaceRoot: directory,
+    authorization: {
+      recorded: true,
+      source: "beale",
+      scopeId: "scope_mediated_worker_test",
+      scopeName: "Mediated worker test scope",
+    },
+  }));
+  const server = await startAppServer({
+    hostService: testHostService(directory, { capturePath, memoryBackend: "app-server" }),
+  });
+  servers.push(server);
+  const authorization = `Bearer ${server.operatorToken}`;
+  const startResponse = await fetch(`${server.url}/v1/sessions`, {
+    method: "POST",
+    headers: { authorization, "content-type": "application/json" },
+    body: JSON.stringify(sessionLaunchRequest(directory, {
+      sessionId: "session-mediated-database",
+      promptMarkdown: "Exercise host-mediated research storage.",
+    })),
+  });
+  assert.equal(startResponse.status, 201);
+
+  await waitForCondition(async () => {
+    const catalog = await (await fetch(`${server.url}/v1/sessions`, {
+      headers: { authorization },
+    })).json();
+    const session = catalog.sessions.find((candidate) => candidate.sessionId === "session-mediated-database");
+    return Boolean(session && ["completed", "failed", "stopped"].includes(session.state));
+  });
+  const catalog = await (await fetch(`${server.url}/v1/sessions`, {
+    headers: { authorization },
+  })).json();
+  const session = catalog.sessions.find((candidate) => candidate.sessionId === "session-mediated-database");
+  assert.equal(session.state, "completed", session.diagnostic ?? undefined);
+
+  const capture = JSON.parse(readFileSync(capturePath, "utf8"));
+  assert.equal(capture.runtimeConfig.memoryBackend, "app-server");
+  assert.equal(capture.runtimeConfig.tools.some((tool) => tool.name.startsWith("memory.")), true);
+  assert.equal(capture.runtimeConfig.tools.some((tool) => tool.name.startsWith("finding.")), true);
+  const database = new DatabaseSync(join(directory, "memory.sqlite"), { readOnly: true });
+  try {
+    assert.equal(
+      database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_nodes'").get()?.name,
+      "memory_nodes",
+    );
+    assert.equal(
+      database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_server_research_claims'").get()?.name,
+      "app_server_research_claims",
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("replays hosted events after a mobile client disconnects and reconnects", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-replay-"));
   temporaryDirectories.push(directory);
@@ -2526,6 +2673,15 @@ function canonicalFixture(kind) {
     },
     result: { kind },
   };
+}
+
+function brokerRequest(broker, request) {
+  const responseBuffer = new SharedArrayBuffer(1024 * 1024);
+  broker.handle({ type: "database.request", request, responseBuffer });
+  const header = new Int32Array(responseBuffer, 0, 2);
+  assert.equal(Atomics.load(header, 0), 1);
+  const length = Atomics.load(header, 1);
+  return deserialize(Buffer.from(new Uint8Array(responseBuffer, 8, length)));
 }
 
 function waitFor(predicate, timeoutMs = 30_000) {

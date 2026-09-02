@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
 import { basename, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { openResearchDatabase } from "./database.js";
 import {
   normalizeResearchProfile,
   researchProfileHash,
@@ -18,7 +18,6 @@ import type {
   ResearchWorkspaceResourceContext,
 } from "./types.js";
 
-const require = createRequire(import.meta.url);
 export interface ResolveStoredResearchWorkspaceBindingOptions {
   workspaceRoot?: string;
   databasePath?: string;
@@ -67,15 +66,9 @@ export function resolveStoredResearchWorkspaceBinding(
     return fallback;
   }
 
-  const { DatabaseSync } = require("node:sqlite") as {
-    DatabaseSync: new (
-      path: string,
-      options?: { readOnly?: boolean },
-    ) => DatabaseSync;
-  };
   let database: DatabaseSync | undefined;
   try {
-    database = new DatabaseSync(databasePath, { readOnly: true });
+    database = openResearchDatabase(databasePath, { readOnly: true });
     const workspace = readStoredWorkspace(database, workspaceRoot);
     if (!workspace) return fallback;
     const scope = readActiveScope(database, workspace.id);
@@ -141,15 +134,9 @@ export async function resolveStoredResearchProfile(
   let snapshot: Record<string, unknown> | undefined;
 
   if (databasePath !== ":memory:" && existsSync(databasePath)) {
-    const { DatabaseSync } = require("node:sqlite") as {
-      DatabaseSync: new (
-        path: string,
-        options?: { readOnly?: boolean },
-      ) => DatabaseSync;
-    };
     let database: DatabaseSync | undefined;
     try {
-      database = new DatabaseSync(databasePath, { readOnly: true });
+      database = openResearchDatabase(databasePath, { readOnly: true });
       const workspace = readStoredWorkspace(database, workspaceRoot);
       snapshot = workspace
         ? readResearchProfileSnapshot(database, workspace.id, options)

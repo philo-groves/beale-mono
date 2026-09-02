@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
 import { relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { openResearchDatabase } from "./database.js";
 import type { ReportDocument, RunbookDocument } from "./knowledge-types.js";
 import { readAppServerReport } from "./report-document.js";
 import { readAppServerRunbook } from "./runbook-document.js";
@@ -10,8 +10,6 @@ import {
   resolveResearchStorageArtifact,
   type ResearchStorageArtifactManifestEntry,
 } from "./storage.js";
-
-const require = createRequire(import.meta.url);
 
 export interface ResolvedKnowledgeArtifact {
   id: string;
@@ -66,8 +64,7 @@ function readArtifactRow(
   workspaceId: string,
   id: string,
 ): { artifactId: string; relativePath: string } {
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => DatabaseSync };
-  const database = new DatabaseSync(databasePath, { readOnly: true });
+  const database = openResearchDatabase(databasePath, { readOnly: true });
   try {
     const row = database.prepare(`SELECT artifact_id, relative_path FROM ${table} WHERE id = ? AND workspace_id = ?`)
       .get(requiredText(id, "id"), requiredText(workspaceId, "workspaceId")) as Record<string, unknown> | undefined;

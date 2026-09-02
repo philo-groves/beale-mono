@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
+import { openResearchDatabase } from "./database.js";
 import type {
   FindingEvidenceKind,
   FindingEvidenceSummary,
@@ -151,7 +152,7 @@ export class ResearchClaimStore {
   private readonly database: DatabaseSync;
 
   public constructor(private readonly memoryGraph: MemoryGraphStore) {
-    this.database = new DatabaseSync(memoryGraph.databasePath);
+    this.database = openResearchDatabase(memoryGraph.databasePath);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     initializeFindingSchema(this.database);
     migrateLegacyMemoryClaims(this.database, memoryGraph.getContext().workspaceId);
@@ -897,7 +898,7 @@ export function refreshFindingStaleness(input: {
   environmentFingerprint?: string | null;
   actorId?: string;
 }): FindingSummary[] {
-  const database = new DatabaseSync(input.databasePath);
+  const database = openResearchDatabase(input.databasePath);
   database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
   try {
     initializeFindingSchema(database);
@@ -950,7 +951,7 @@ export function refreshFindingStaleness(input: {
 }
 
 export function migrateWorkspaceResearchClaims(databasePath: string, workspaceId: string): void {
-  const database = new DatabaseSync(databasePath);
+  const database = openResearchDatabase(databasePath);
   database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
   try {
     initializeFindingSchema(database);

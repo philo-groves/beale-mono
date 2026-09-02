@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
+import { openResearchDatabase } from './database.js';
 import { modelAuthorshipTableExists, moveModelAuthorship, recordModelAuthorship } from './model-authorship.js';
 import type {
   MemoryEdgeSummary,
@@ -1466,7 +1467,7 @@ export function restoreMemoryDreamingChange(databasePath: string, workspaceId: s
 }
 
 function openDreamingDatabase(databasePath: string): DatabaseSync {
-  const database = new DatabaseSync(databasePath);
+  const database = openResearchDatabase(databasePath);
   database.exec('PRAGMA foreign_keys = ON;');
   database.exec('PRAGMA busy_timeout = 5000;');
   MemoryGraphStore.initializeSchema(database);

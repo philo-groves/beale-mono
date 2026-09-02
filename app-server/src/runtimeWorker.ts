@@ -1,8 +1,12 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { PassThrough } from 'node:stream';
 import { installUndiciTypeOfServiceCompatibility } from '@beale/app-server-runtime/node-network-compatibility';
-import type { ResearchLiveEventSink } from '@beale/app-server-runtime/runtime-services';
+import {
+  installResearchDatabaseFactory,
+  type ResearchLiveEventSink
+} from '@beale/app-server-runtime/runtime-services';
 import type { AppServerRuntimeTransport } from '@beale/app-server-runtime/runtime';
+import { createWorkerResearchDatabaseFactory } from './workerDatabaseClient.js';
 
 installUndiciTypeOfServiceCompatibility();
 
@@ -17,6 +21,8 @@ type HostMessage =
 
 const port = parentPort;
 if (!port) throw new Error('The app-server runtime worker requires a parent port.');
+
+installResearchDatabaseFactory(createWorkerResearchDatabaseFactory((message) => port.postMessage(message)));
 
 const data = workerData as RuntimeWorkerData;
 for (const [name, value] of Object.entries(data.env)) process.env[name] = value;

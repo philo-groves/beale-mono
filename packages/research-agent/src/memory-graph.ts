@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
-import { createRequire } from "node:module";
 import { basename, dirname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
+import { openResearchDatabase } from "./database.js";
 import { preBealeHashDomain } from "./legacy-compatibility.js";
 import {
   modelAuthorsByResource,
@@ -24,7 +24,6 @@ import type {
 import { getDefaultMemoryDatabasePath } from "./storage.js";
 import { resolveStoredResearchWorkspaceBinding } from "./workspace-binding.js";
 
-const require = createRequire(import.meta.url);
 const NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE = normalizeResearchProfile(
   DEFAULT_SECURITY_RESEARCH_PROFILE,
 );
@@ -298,7 +297,6 @@ export class MemoryGraphStore {
     const workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.databasePath = options.databasePath ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     mkdirSync(dirname(this.databasePath), { recursive: true });
-    const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
     const storedBinding = options.context
       ? undefined
       : resolveStoredResearchWorkspaceBinding({
@@ -309,7 +307,7 @@ export class MemoryGraphStore {
       options.context ?? storedBinding?.memoryContext,
       workspaceRoot,
     );
-    this.local = this.openBinding(DatabaseSync, this.databasePath, context);
+    this.local = this.openBinding(this.databasePath, context);
   }
 
   public close(): void {
@@ -1091,13 +1089,9 @@ export class MemoryGraphStore {
     return new Set(types);
   }
 
-  private openBinding(
-    Database: new (path: string) => DatabaseSync,
-    databasePath: string,
-    context: MemoryContext,
-  ): MemoryDatabaseBinding {
+  private openBinding(databasePath: string, context: MemoryContext): MemoryDatabaseBinding {
     mkdirSync(dirname(databasePath), { recursive: true });
-    const database = new Database(databasePath);
+    const database = openResearchDatabase(databasePath);
     if (databasePath !== ":memory:") chmodSync(databasePath, 0o600);
     try {
       database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");

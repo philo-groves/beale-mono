@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
+import { openResearchDatabase } from './database.js';
 import { modelAuthorsByResource } from './model-authorship.js';
 import { buildCampaignGraph, emptyCampaignGraph } from './campaign-graph.js';
 import { readCampaignTrackSummaries, readLatestCampaignTrackReplayMetrics } from './campaign-tracks.js';
@@ -63,7 +64,7 @@ export function listAppServerReportSummaries(
   workspaceId: string
 ): AppServerReportSummary[] {
   if (!existsSync(databasePath)) return [];
-  const database = new DatabaseSync(databasePath, { readOnly: true });
+  const database = openResearchDatabase(databasePath, { readOnly: true });
   try {
     database.exec('PRAGMA busy_timeout = 5000;');
     if (!tableExists(database, 'app_server_reports')) return [];
@@ -99,7 +100,7 @@ export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions
 
   let database: DatabaseSync | null = null;
   try {
-    database = new DatabaseSync(databasePath, { readOnly: true });
+    database = openResearchDatabase(databasePath, { readOnly: true });
     database.exec('PRAGMA busy_timeout = 5000;');
     const hasNodes = tableExists(database, 'memory_nodes');
     const allNodes = hasNodes

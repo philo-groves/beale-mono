@@ -1051,6 +1051,7 @@
 
 #### Changed
 
+- Hosted research workers no longer open the app-server SQLite database. Research stores delegate synchronous SQL through a private worker-to-host mediator whose host-owned connections are restricted to the session's registered database, leaving the resident app-server process as the only database-writing entity.
 - The app-server now owns the existing workspace-state and user-global registry stores, including migrations, settings, session indexing, artifacts, and project-structure persistence, behind versioned allowlisted operations.
 - Removed the former app-server codename from Beale source, packages, protocol adapters, UI, tests, and documentation. Runtime packages now use the `@beale` namespace and app-server terminology throughout.
 - Existing projects retain their profile and memory hashes, and pre-Beale storage directories, environment overrides, runbook metadata, migration histories, and SQLite tables are adopted without deleting stored data.

@@ -48,8 +48,8 @@ Component documentation:
 ## How the Pieces Fit Together
 
 - **Beale is the trusted host harness.** It owns workspace setup, authorization recording, provider credentials, tool-family and side-effect grants, shell policy, and presentation.
-- **The Beale research runtime is the research engine.** It owns context compilation, tool execution, durable knowledge, storage, orchestration, live events, flow captures, and the user-global SQLite database at `~/.beale/memory.sqlite`. Records retain workspace, subject, and research-profile ownership.
-- **Integration is server-mediated.** Desktop and iOS request sessions and canonical operations from the Beale app-server. The server hosts app-server workers directly and owns canonical storage access; no app-server CLI process or private loopback WebSocket sits between the server and engine.
+- **The Beale research runtime is the research engine.** It owns context compilation, tool execution, durable-knowledge semantics, orchestration, live events, and flow captures. Records retain workspace, subject, and research-profile ownership.
+- **Integration and storage are server-mediated.** Desktop, iOS, and hosted research workers request canonical storage through the Beale app-server. Only the resident app-server process opens or writes the user-global SQLite database at `~/.beale/memory.sqlite`; no app-server CLI process or private loopback WebSocket sits between the server and engine.
 - **The App Server is the client-neutral host.** It fans worker events out over per-session authenticated WebSockets and accepts correlated controls from multiple attached clients.
 - **No managed sandbox.** All of these programs run with the current user's host privileges. Launch them inside your own VM or container when OS isolation is required.
 

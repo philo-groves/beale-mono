@@ -1,6 +1,6 @@
 # @beale/app-server
 
-A standalone app-server execution host and client-neutral control plane. It runs each app-server session in an app-server worker and carries events and controls directly over worker messages. There is no child app-server CLI process or private loopback WebSocket. Beale Desktop and iOS use the same authenticated HTTP and WebSocket surface.
+A standalone app-server execution host and client-neutral control plane. It runs each app-server session in an app-server worker and carries events, controls, and private synchronous storage requests directly over worker messages. Workers never open SQLite themselves: the resident app-server owns every database connection and restricts each worker to its session's registered database. There is no child app-server CLI process or private loopback WebSocket. Beale Desktop and iOS use the same authenticated HTTP and WebSocket surface.
 
 The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Its bundled agent-plugin resources live under `app-server/resources/agent-plugins`.
 

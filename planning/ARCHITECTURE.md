@@ -64,7 +64,7 @@ Collaboration calls use the same requested/observed research-event envelope as e
 
 ## Durable Knowledge
 
-app-server uses the host-compatible SQLite database as the source of truth. Durable research state has three complementary projections:
+app-server uses the host-compatible SQLite database as the source of truth. The resident app-server process is the sole database-writing entity: hosted research workers synchronously delegate their store operations through a private worker-to-host mediator and cannot open alternate database paths. Durable research state has three complementary projections:
 
 - **Knowledge memory** stores reusable facts, entities, boundaries, constraints, references, methods, and trajectories in a concise typed graph.
 - **Research claims** use one stable identity. A proposed or refuted claim appears as a Lead; direct evidence promotes that same row and ID into the Findings view.

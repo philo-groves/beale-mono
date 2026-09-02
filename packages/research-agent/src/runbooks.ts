@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { MemoryGraphStore, type MemoryContext } from "./memory-graph.js";
+import { openResearchDatabase } from "./database.js";
 import { modelAuthorsForResource, recordModelAuthorship, type ModelAuthor } from "./model-authorship.js";
 import {
   registerResearchStorageArtifact,
@@ -12,8 +12,6 @@ import {
 } from "./storage.js";
 import type { ResearchArtifactRef, ResearchStorageLayout } from "./types.js";
 import { readPreBealeRecord } from "./legacy-compatibility.js";
-
-const require = createRequire(import.meta.url);
 
 export type RunbookCellKind = "markdown" | "code";
 export type RunbookExecutionStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "skipped";
@@ -155,8 +153,7 @@ export class RunbookStore {
     private readonly context: MemoryContext,
   ) {
     mkdirSync(dirname(databasePath), { recursive: true });
-    const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
-    this.database = new DatabaseSync(databasePath);
+    this.database = openResearchDatabase(databasePath);
     if (databasePath !== ":memory:") chmodSync(databasePath, 0o600);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     MemoryGraphStore.initializeSchema(this.database);

@@ -12,16 +12,14 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { MemoryGraphStore, type MemoryContext } from "./memory-graph.js";
+import { openResearchDatabase } from "./database.js";
 import { modelAuthorsForResource, recordModelAuthorship, type ModelAuthor } from "./model-authorship.js";
 import { registerResearchStorageArtifact, type ResearchStorageArtifactManifestEntry } from "./storage.js";
 import type { ResearchArtifactRef, ResearchStorageLayout } from "./types.js";
-
-const require = createRequire(import.meta.url);
 
 export const REPORT_STATUSES = ["complete", "stale"] as const;
 export type ReportStatus = (typeof REPORT_STATUSES)[number];
@@ -113,8 +111,7 @@ export class ReportStore {
     options: { packetCandidateRoots?: readonly string[] } = {},
   ) {
     mkdirSync(dirname(databasePath), { recursive: true });
-    const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSync };
-    this.database = new DatabaseSync(databasePath);
+    this.database = openResearchDatabase(databasePath);
     this.packetCandidateRoots = uniqueResolvedPaths(options.packetCandidateRoots ?? []);
     if (databasePath !== ":memory:") chmodSync(databasePath, 0o600);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");

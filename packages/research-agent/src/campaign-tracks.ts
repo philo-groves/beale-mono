@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
+import { openResearchDatabase } from "./database.js";
 import { initializeFindingSchema, LEGACY_CLAIM_MEMORY_TYPES, type ResearchClaimStore } from "./findings.js";
 import type {
   CampaignExperimentProjectionSummary,
@@ -288,7 +289,7 @@ export class CampaignTrackStore {
     this.memoryGraph = options.memoryGraph;
     this.claimStore = options.claimStore;
     mkdirSync(dirname(options.databasePath), { recursive: true });
-    this.database = new DatabaseSync(options.databasePath);
+    this.database = openResearchDatabase(options.databasePath);
     if (options.databasePath !== ":memory:") chmodSync(options.databasePath, 0o600);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     MemoryGraphStore.initializeSchema(this.database);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
+import { openResearchDatabase } from "./database.js";
 import { nowIso } from "./ids.js";
 import type {
   ResearchExecutableTool,
@@ -11,8 +11,6 @@ import type {
   ResearchToolAction,
   ResearchWorkspaceResourceContext,
 } from "./types.js";
-
-const require = createRequire(import.meta.url);
 
 export type ResearchResourceSource = "explicit_scope" | "runtime_discovery";
 export type ResearchResourceReviewStatus = "unreviewed" | "relevant" | "not_relevant" | "explicit_out_of_scope";
@@ -69,10 +67,7 @@ export class ResearchResourceCatalog {
   readonly #workspaceId: string;
 
   public constructor(options: ResearchResourceCatalogOptions) {
-    const { DatabaseSync } = require("node:sqlite") as {
-      DatabaseSync: new (path: string) => DatabaseSync;
-    };
-    this.#database = new DatabaseSync(options.databasePath);
+    this.#database = openResearchDatabase(options.databasePath);
     this.#workspaceId = requiredText(options.workspaceId, "workspaceId");
     this.#migrate();
     this.#replaceExplicitResources(options.explicitResources ?? []);

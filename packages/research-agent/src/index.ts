@@ -1,4 +1,5 @@
 export * from "./memory-graph.js";
+export * from "./database.js";
 export * from "./memory-backend.js";
 export * from "./attention-policy.js";
 export * from "./model-authorship.js";

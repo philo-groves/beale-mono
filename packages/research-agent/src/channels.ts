@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
+import { openResearchDatabase } from "./database.js";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
 
 export type ResearchChannelMessageKind = "message" | "evidence" | "decision" | "system";
@@ -258,7 +259,7 @@ export class ResearchChannelStore {
       ?? process.env.APP_SERVER_DATABASE_PATH?.trim()
       ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     if (this.databasePath !== ":memory:") mkdirSync(dirname(this.databasePath), { recursive: true });
-    this.database = new DatabaseSync(this.databasePath);
+    this.database = openResearchDatabase(this.databasePath);
     if (this.databasePath !== ":memory:" && existsSync(this.databasePath)) chmodSync(this.databasePath, 0o600);
     this.database.exec("PRAGMA busy_timeout = 5000;");
     this.database.exec("PRAGMA foreign_keys = ON;");

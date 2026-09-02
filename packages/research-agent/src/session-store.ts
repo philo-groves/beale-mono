@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
+import { openResearchDatabase } from "./database.js";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
 import { normalizeResearchProfile, researchProfileHash } from "./research-profile.js";
 import { readCompatibleRecordValue } from "./legacy-compatibility.js";
@@ -647,7 +648,7 @@ export class AppServerSessionStore {
       && this.databasePath !== ":memory:"
       && existsSync(this.databasePath);
     if (readOnly) {
-      const readDatabase = new DatabaseSync(this.databasePath, { readOnly: true });
+      const readDatabase = openResearchDatabase(this.databasePath, { readOnly: true });
       readDatabase.exec("PRAGMA busy_timeout = 5000;");
       readDatabase.exec("PRAGMA foreign_keys = ON;");
       const schema = readDatabase.prepare(
@@ -667,7 +668,7 @@ export class AppServerSessionStore {
       readDatabase.close();
     }
     mkdirSync(dirname(this.databasePath), { recursive: true });
-    this.database = new DatabaseSync(this.databasePath);
+    this.database = openResearchDatabase(this.databasePath);
     if (this.databasePath !== ":memory:") chmodSync(this.databasePath, 0o600);
     this.database.exec("PRAGMA busy_timeout = 5000;");
     this.database.exec("PRAGMA foreign_keys = ON;");

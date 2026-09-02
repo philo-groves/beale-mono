@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import { AppServerWorkerDatabaseBroker } from './workerDatabaseBroker.js';
+import type { WorkerDatabaseRequestMessage } from './workerDatabaseClient.js';
 
 const MAX_STDERR_CHARS = 8_000;
 
@@ -35,6 +37,9 @@ export function appServerWorkerEnvironment(
 
 export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Promise<AppServerSession> {
   const workerEnvironment = appServerWorkerEnvironment(options.env ?? {});
+  const databasePath = workerEnvironment.APP_SERVER_DATABASE_PATH?.trim();
+  if (!databasePath) throw new Error('App-server runtime workers require app-server-owned database storage.');
+  const databaseBroker = new AppServerWorkerDatabaseBroker(databasePath);
   const worker = new Worker(new URL('./runtimeWorker.js', import.meta.url), {
     workerData: {
       args: ['--hosted-session', '--session-id', options.sessionId, ...(options.args ?? [])],
@@ -59,7 +64,9 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
     worker.on('message', (message: unknown) => {
       if (!message || typeof message !== 'object' || Array.isArray(message)) return;
       const record = message as Record<string, unknown>;
-      if (record.type === 'event' && record.event && typeof record.event === 'object' && !Array.isArray(record.event)) {
+      if (record.type === 'database.request') {
+        databaseBroker.handle(message as WorkerDatabaseRequestMessage);
+      } else if (record.type === 'event' && record.event && typeof record.event === 'object' && !Array.isArray(record.event)) {
         const event = record.event as Record<string, unknown>;
         if (listeners.size === 0) pendingEvents.push(event);
         else for (const listener of listeners) listener(event);
@@ -70,7 +77,10 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
         resolvedCode = 1;
       }
     });
-    worker.once('exit', (code) => resolve({ code: resolvedCode ?? code, stderr: failureMessage || stderr }));
+    worker.once('exit', (code) => {
+      databaseBroker.close();
+      resolve({ code: resolvedCode ?? code, stderr: failureMessage || stderr });
+    });
   });
   const session: AppServerSession = {
     sessionId: options.sessionId,

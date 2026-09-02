@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openResearchDatabase } from "./database.js";
 import { completeAuxiliaryText, type CompleteAuxiliaryTextOptions } from "./auxiliary-completion.js";
 import { resolveAuxiliaryModelRoute, type AuxiliaryModelEffort } from "./auxiliary-model-job.js";
 import { discoverResearchAgentInstructions } from "./agent-instructions.js";
@@ -359,7 +360,7 @@ export function selectStoredResearchGoalSuggestion(input: HostedResearchGoalSugg
 }
 
 function openSuggestionDatabase(path: string): DatabaseSync {
-  const database = new DatabaseSync(path);
+  const database = openResearchDatabase(path);
   database.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
   for (const table of ["workspaces", "scope_versions", "research_goal_suggestion_cache", "research_goal_suggestion_history"]) {
     const row = database.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { present?: unknown } | undefined;
