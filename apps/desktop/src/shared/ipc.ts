@@ -108,6 +108,8 @@ export const IPC_CHANNELS = {
   runMemoryDreaming: 'beale:run-memory-dreaming',
   memoryDreamingUpdated: 'beale:memory-dreaming-updated',
   restoreMemoryDreamingChange: 'beale:restore-memory-dreaming-change',
+  markClaimDuplicate: 'beale:mark-claim-duplicate',
+  undoClaimDuplicate: 'beale:undo-claim-duplicate',
   getAppServerToolingSummary: 'beale:get-app-server-tooling-summary',
   updateAppServerToolingConfig: 'beale:update-app-server-tooling-config',
   generateResearchGoalSuggestions: 'beale:generate-research-goal-suggestions',

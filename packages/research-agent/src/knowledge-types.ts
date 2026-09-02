@@ -195,6 +195,18 @@ export interface FindingSecurityTracking {
   externalReferences: FindingExternalReference[];
 }
 
+export interface ResearchClaimDuplicateSummary {
+  id: string;
+  projection: ResearchClaimProjection;
+  maturity: ResearchClaimMaturity;
+  rating: ResearchClaimRating;
+  classification: string;
+  title: string;
+  status: FindingStatus;
+  revision: number;
+  markedAt: string;
+}
+
 export interface FindingSummary {
   id: string;
   workspaceId: string;
@@ -210,6 +222,9 @@ export interface FindingSummary {
   rating: ResearchClaimRating;
   classification: string;
   componentClaimIds: string[];
+  duplicateOfClaimId: string | null;
+  duplicateMarkedAt: string | null;
+  duplicateClaims: ResearchClaimDuplicateSummary[];
   title: string;
   summary: string;
   impact: string;

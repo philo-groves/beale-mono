@@ -711,6 +711,18 @@ export interface AppServerFindingSecurityTracking {
   externalReferences: Array<{ kind: string; identifier: string; url: string | null }>;
 }
 
+export interface AppServerResearchClaimDuplicateSummary {
+  id: string;
+  projection: 'lead' | 'finding';
+  maturity: 'proposed' | 'observed' | 'reproduced' | 'verified' | 'refuted';
+  rating: ResearchClaimRating;
+  classification: string;
+  title: string;
+  status: AppServerFindingStatus;
+  revision: number;
+  markedAt: string;
+}
+
 export interface AppServerFindingSummary {
   id: string;
   workspaceId: string;
@@ -737,12 +749,28 @@ export interface AppServerFindingSummary {
   reportId: string | null;
   disclosureReference: string | null;
   staleReason: string | null;
+  duplicateOfClaimId: string | null;
+  duplicateMarkedAt: string | null;
+  duplicateClaims: AppServerResearchClaimDuplicateSummary[];
   evidence: AppServerFindingEvidenceSummary[];
   transitions: AppServerFindingTransitionSummary[];
   authors: AppServerModelAuthor[];
   createdAt: string;
   updatedAt: string;
   revision: number;
+}
+
+export interface MarkClaimDuplicateInput {
+  workspaceId: string;
+  claimId: string;
+  parentClaimId: string;
+  expectedRevision: number;
+}
+
+export interface UndoClaimDuplicateInput {
+  workspaceId: string;
+  claimId: string;
+  expectedRevision: number;
 }
 
 export type AppServerCampaignNodeKind = 'memory' | 'lead' | 'finding' | 'runbook' | 'report' | 'asset';
@@ -2464,6 +2492,8 @@ export interface BealeApi {
   runMemoryDreaming(): Promise<WorkspaceSnapshot>;
   onMemoryDreamingProgress(listener: (update: MemoryDreamingProgressUpdate) => void): () => void;
   restoreMemoryDreamingChange(changeId: string): Promise<WorkspaceSnapshot>;
+  markClaimDuplicate(input: MarkClaimDuplicateInput): Promise<WorkspaceSnapshot>;
+  undoClaimDuplicate(input: UndoClaimDuplicateInput): Promise<WorkspaceSnapshot>;
   getAppServerToolingSummary(): Promise<AppServerToolingSummary>;
   updateAppServerToolingConfig(update: AppServerToolingConfigUpdate): Promise<AppServerToolingSummary>;
   generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions>;

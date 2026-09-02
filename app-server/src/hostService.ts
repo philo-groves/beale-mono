@@ -174,7 +174,9 @@ export class AppServerHostService {
       throw new Error(`Workspace ${workspace.workspaceId} uses research profile ${workspace.researchProfileId}, not ${request.profileId}.`);
     }
     if (workspace?.memoryBackend === 'disabled'
-      && (request.operation.startsWith('dreaming.') || request.operation.startsWith('investigation.'))) {
+      && (request.operation.startsWith('dreaming.')
+        || request.operation.startsWith('investigation.')
+        || request.operation.startsWith('claim.'))) {
       throw new Error(`Workspace ${workspace.workspaceId} has memory disabled.`);
     }
     const storageProfileId = workspace?.researchProfileId ?? request.profileId;
@@ -1100,7 +1102,7 @@ function pathFreeWorkspaceMemoryCatalog(
   const leads = Array.isArray(summary.leads) ? summary.leads.flatMap(pathFreeWorkspaceClaim) : [];
   const findings = Array.isArray(summary.findings) ? summary.findings.flatMap(pathFreeWorkspaceClaim) : [];
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     workspaceId,
     status: nonEmpty(summary.status) ?? (nodes.length > 0 ? 'ready' : 'empty'),
     nodeCount: typeof summary.nodeCount === 'number' && Number.isFinite(summary.nodeCount)
@@ -1134,6 +1136,9 @@ function pathFreeWorkspaceClaim(value: unknown): BealeWorkspaceMemoryCatalog['fi
     rating: researchClaimRating(claim.rating),
     classification,
     componentClaimIds: stringArray(claim.componentClaimIds),
+    duplicateClaims: Array.isArray(claim.duplicateClaims)
+      ? claim.duplicateClaims.flatMap(pathFreeWorkspaceClaimDuplicate)
+      : [],
     title,
     summary: typeof claim.summary === 'string' ? claim.summary : '',
     impact: typeof claim.impact === 'string' ? claim.impact : '',
@@ -1145,6 +1150,32 @@ function pathFreeWorkspaceClaim(value: unknown): BealeWorkspaceMemoryCatalog['fi
     updatedAt: nonEmpty(claim.updatedAt) ?? new Date(0).toISOString(),
     revision: typeof claim.revision === 'number' && Number.isInteger(claim.revision) && claim.revision > 0
       ? claim.revision : 1
+  }];
+}
+
+function pathFreeWorkspaceClaimDuplicate(
+  value: unknown
+): BealeWorkspaceMemoryCatalog['findings'][number]['duplicateClaims'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const claim = value as Record<string, unknown>;
+  const id = nonEmpty(claim.id);
+  const projection = claim.projection === 'lead' || claim.projection === 'finding' ? claim.projection : null;
+  const classification = nonEmpty(claim.classification);
+  const title = nonEmpty(claim.title);
+  const status = nonEmpty(claim.status);
+  const markedAt = nonEmpty(claim.markedAt);
+  if (!id || !projection || !classification || !title || !status || !markedAt) return [];
+  return [{
+    id,
+    projection,
+    maturity: nonEmpty(claim.maturity) ?? 'proposed',
+    rating: researchClaimRating(claim.rating),
+    classification,
+    title,
+    status,
+    revision: typeof claim.revision === 'number' && Number.isInteger(claim.revision) && claim.revision > 0
+      ? claim.revision : 1,
+    markedAt
   }];
 }
 

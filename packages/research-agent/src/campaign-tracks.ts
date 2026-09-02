@@ -966,7 +966,7 @@ export class CampaignTrackStore {
     if (this.claimStore) {
       for (const claimId of this.resourceIds(investigationId, "finding")) {
         const claim = this.claimStore.get(claimId);
-        if (!claim) continue;
+        if (!claim || claim.duplicateOfClaimId) continue;
         if (claim.projection === "lead" && claim.maturity !== "refuted") {
           const question = this.upsertQuestion({
             investigationId,
@@ -1023,6 +1023,9 @@ export class CampaignTrackStore {
     const claimStore = this.requireClaimStore();
     const source = claimStore.get(input.claimId);
     if (!source) throw new Error(`Research claim not found: ${input.claimId}`);
+    if (source.duplicateOfClaimId) {
+      throw new Error(`Research claim ${source.id} is a duplicate; review canonical parent ${source.duplicateOfClaimId}.`);
+    }
     if (source.revision !== input.expectedRevision) throw new Error(`Research claim revision conflict for ${source.id}.`);
     const evidenceIds = unique(input.evidenceIds);
     if (input.verdict !== "revise" && evidenceIds.length === 0) throw new Error("Claim acceptance or rejection requires evidence.");

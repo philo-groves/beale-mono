@@ -117,7 +117,7 @@ export function parseAppServerTransportBootstrap(
 
 function validSchemaDescriptor(value: unknown): boolean {
   return isRecord(value) && value.protocol === 1 && value.session === 1
-    && value.memorySummary === 11 && value.finding === 4 && value.campaignGraph === 4;
+    && value.memorySummary === 12 && value.finding === 5 && value.campaignGraph === 4;
 }
 
 function nonEmptyString(value: unknown): value is string {

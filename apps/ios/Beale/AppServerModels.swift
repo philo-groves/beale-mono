@@ -59,7 +59,7 @@ enum BealeAppServerContract {
     static let sessionLaunchVersion = 2
     static let appServerProtocolVersion = 1
     static let memoryNotificationSchemaVersion = 3
-    static let workspaceMemorySchemaVersion = 3
+    static let workspaceMemorySchemaVersion = 4
 
     static let requiredCapabilities: Set<String> = [
         "session.typed-launch.v2",
@@ -74,6 +74,7 @@ enum BealeAppServerContract {
         "session.commentary.v1",
         "memory.notifications.v3",
         "knowledge.claims.v2",
+        "knowledge.claim-deduplication.v1",
         "workspace.goal-suggestions.v1",
         "workspace.prompt-expansion.v1"
     ]
@@ -232,6 +233,7 @@ struct AppServerWorkspaceResearchClaim: Decodable, Identifiable, Sendable {
     let rating: String
     let classification: String
     let componentClaimIds: [String]
+    let duplicateClaims: [AppServerWorkspaceResearchClaimDuplicate]
     let title: String
     let summary: String
     let impact: String
@@ -240,6 +242,18 @@ struct AppServerWorkspaceResearchClaim: Decodable, Identifiable, Sendable {
     let createdAt: String
     let updatedAt: String
     let revision: Int
+}
+
+struct AppServerWorkspaceResearchClaimDuplicate: Decodable, Identifiable, Sendable {
+    let id: String
+    let projection: String
+    let maturity: String
+    let rating: String
+    let classification: String
+    let title: String
+    let status: String
+    let revision: Int
+    let markedAt: String
 }
 
 struct AppServerWorkspaceMemoryNode: Decodable, Identifiable, Sendable {
@@ -529,6 +543,18 @@ struct AppServerOperationResponse<Result: Decodable & Sendable>: Decodable, Send
 struct AppServerResearchSuggestionOperationInput: Encodable, Sendable {
     let workspaceId: String
     let refresh: Bool
+}
+
+struct AppServerClaimDuplicateOperationInput: Encodable, Sendable {
+    let workspaceId: String
+    let claimId: String
+    let parentClaimId: String?
+    let expectedRevision: Int
+}
+
+struct AppServerClaimMutationResult: Decodable, Sendable {
+    let id: String
+    let revision: Int
 }
 
 struct AppServerResearchPromptExpansionOperationInput: Encodable, Sendable {

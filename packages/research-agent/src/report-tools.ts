@@ -1,5 +1,5 @@
 import { nowIso } from "./ids.js";
-import type { ResearchClaimStore } from "./findings.js";
+import { requireCanonicalClaim, type ResearchClaimStore } from "./findings.js";
 import type { FindingSummary } from "./knowledge-types.js";
 import { REPORT_STATUSES, ReportStore, type ReportStatus } from "./reports.js";
 import type { ResearchExecutableTool, ResearchToolExecutionContext, ResearchToolExecutionResult } from "./tool-registry.js";
@@ -90,6 +90,7 @@ function requireReportableSecurityFinding(
   const sourceFindingId = requiredText(value, "sourceFindingId");
   const finding = claimStore.get(sourceFindingId);
   if (!finding) throw new Error(`Report source finding is not recorded in this workspace: ${sourceFindingId}.`);
+  requireCanonicalClaim(finding);
   if (finding.projection !== "finding" || finding.classification !== "security.chain") {
     throw new Error("Security reports require a security.chain composite finding; leads and isolated findings are not report-ready.");
   }
@@ -101,7 +102,7 @@ function requireReportableSecurityFinding(
   }
   for (const componentId of finding.componentClaimIds) {
     const component = claimStore.get(componentId);
-    if (!component || component.projection !== "finding" || component.maturity === "refuted") {
+    if (!component || component.duplicateOfClaimId || component.projection !== "finding" || component.maturity === "refuted") {
       throw new Error(`Security report component is not an active evidence-backed finding: ${componentId}.`);
     }
   }

@@ -16,6 +16,7 @@ import type {
   FindingSummary,
   FindingTransitionSummary,
   ModelAuthorSummary,
+  ResearchClaimDuplicateSummary,
   ResearchClaimRating,
 } from "./knowledge-types.js";
 import type { MemoryGraphStore, MemoryNode } from "./memory-graph.js";
@@ -92,6 +93,17 @@ export interface ReviseResearchClaimInput {
   classification?: string;
   componentClaimIds?: string[];
   securityTracking?: FindingSecurityTrackingUpdate;
+}
+
+export interface MarkResearchClaimDuplicateInput {
+  expectedRevision: number;
+  parentClaimId: string;
+  reason: string;
+}
+
+export interface UndoResearchClaimDuplicateInput {
+  expectedRevision: number;
+  reason: string;
 }
 
 export interface FindingSecurityTrackingUpdate {
@@ -205,6 +217,7 @@ export class ResearchClaimStore {
   public transition(id: string, input: TransitionFindingInput, author?: ModelAuthor, actorId?: string): FindingSummary {
     const current = this.get(id);
     if (!current) throw new Error(`Research claim not found: ${id}.`);
+    requireCanonicalClaim(current);
     if (current.revision !== input.expectedRevision) {
       throw new Error(`Research claim revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
     }
@@ -279,9 +292,100 @@ export class ResearchClaimStore {
     return rows[0] ?? null;
   }
 
+  public markDuplicate(
+    id: string,
+    input: MarkResearchClaimDuplicateInput,
+    author?: ModelAuthor,
+    actorId?: string,
+  ): FindingSummary {
+    const current = this.get(id);
+    if (!current) throw new Error(`Research claim not found: ${id}.`);
+    if (current.revision !== input.expectedRevision) {
+      throw new Error(`Research claim revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
+    }
+    if (current.duplicateOfClaimId) {
+      throw new Error(`Research claim ${id} is already marked as a duplicate of ${current.duplicateOfClaimId}.`);
+    }
+    const parentClaimId = requiredText(input.parentClaimId, "Canonical parent claim id");
+    if (parentClaimId === id) throw new Error("A research claim cannot be marked as a duplicate of itself.");
+    const parent = this.get(parentClaimId);
+    if (!parent) throw new Error(`Canonical parent research claim not found: ${parentClaimId}.`);
+    if (parent.workspaceId !== current.workspaceId) throw new Error("Duplicate claims must belong to the same workspace.");
+    if (parent.subjectId !== current.subjectId) throw new Error("Duplicate claims must belong to the same research subject.");
+    if (parent.duplicateOfClaimId) {
+      throw new Error(`Canonical parent ${parentClaimId} is itself a duplicate; choose its canonical parent instead.`);
+    }
+    if (current.duplicateClaims.length > 0) {
+      throw new Error(`Research claim ${id} owns duplicate claims; undo or reassign them before coalescing it.`);
+    }
+
+    const now = new Date().toISOString();
+    const nextRevision = current.revision + 1;
+    const reason = requiredText(input.reason, "Duplicate reason");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`UPDATE app_server_research_claims SET
+        duplicate_of_claim_id = ?, duplicate_marked_at = ?, updated_at = ?, revision = ?
+        WHERE id = ? AND revision = ? AND duplicate_of_claim_id IS NULL`).run(
+        parentClaimId,
+        now,
+        now,
+        nextRevision,
+        id,
+        current.revision,
+      );
+      if (Number(result.changes) !== 1) throw new Error(`Research claim revision conflict for ${id}.`);
+      this.insertTransition(id, nextRevision, current.status, current.status, reason, actorId ?? null, [], now);
+      this.insertAuthor(id, nextRevision, author, now);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.get(parentClaimId)!;
+  }
+
+  public undoDuplicate(
+    id: string,
+    input: UndoResearchClaimDuplicateInput,
+    author?: ModelAuthor,
+    actorId?: string,
+  ): FindingSummary {
+    const current = this.get(id);
+    if (!current) throw new Error(`Research claim not found: ${id}.`);
+    if (current.revision !== input.expectedRevision) {
+      throw new Error(`Research claim revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
+    }
+    if (!current.duplicateOfClaimId) throw new Error(`Research claim ${id} is not marked as a duplicate.`);
+
+    const now = new Date().toISOString();
+    const nextRevision = current.revision + 1;
+    const reason = requiredText(input.reason, "Duplicate undo reason");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`UPDATE app_server_research_claims SET
+        duplicate_of_claim_id = NULL, duplicate_marked_at = NULL, updated_at = ?, revision = ?
+        WHERE id = ? AND revision = ? AND duplicate_of_claim_id IS NOT NULL`).run(
+        now,
+        nextRevision,
+        id,
+        current.revision,
+      );
+      if (Number(result.changes) !== 1) throw new Error(`Research claim revision conflict for ${id}.`);
+      this.insertTransition(id, nextRevision, current.status, current.status, reason, actorId ?? null, [], now);
+      this.insertAuthor(id, nextRevision, author, now);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.get(id)!;
+  }
+
   public revise(id: string, input: ReviseResearchClaimInput, author?: ModelAuthor, actorId?: string): FindingSummary {
     const current = this.get(id);
     if (!current) throw new Error(`Research claim not found: ${id}.`);
+    requireCanonicalClaim(current);
     if (current.revision !== input.expectedRevision) {
       throw new Error(`Research claim revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
     }
@@ -329,7 +433,8 @@ export class ResearchClaimStore {
   }
 
   public list(): FindingSummary[] {
-    return readFindings(this.database, this.memoryGraph.getContext().workspaceId);
+    return readFindings(this.database, this.memoryGraph.getContext().workspaceId)
+      .filter((claim) => claim.duplicateOfClaimId === null);
   }
 
   public listLeads(): FindingSummary[] {
@@ -346,6 +451,7 @@ export class ResearchClaimStore {
   ): CandidateCompletionChecklist {
     const claim = this.get(id);
     if (!claim) throw new Error(`Research claim not found: ${id}.`);
+    requireCanonicalClaim(claim);
     return candidateCompletionChecklist(claim, targetStatus);
   }
 
@@ -418,10 +524,13 @@ export class ResearchClaimStore {
     const context = this.memoryGraph.getContext();
     for (const componentId of componentIds) {
       const row = this.database.prepare(
-        "SELECT workspace_id FROM app_server_research_claims WHERE id = ?",
-      ).get(componentId) as { workspace_id?: unknown } | undefined;
+        "SELECT workspace_id, duplicate_of_claim_id FROM app_server_research_claims WHERE id = ?",
+      ).get(componentId) as { workspace_id?: unknown; duplicate_of_claim_id?: unknown } | undefined;
       if (!row || row.workspace_id !== context.workspaceId) {
         throw new Error(`Component research claim is unavailable in this workspace: ${componentId}.`);
+      }
+      if (typeof row.duplicate_of_claim_id === "string" && row.duplicate_of_claim_id.length > 0) {
+        throw new Error(`Component research claim ${componentId} is a duplicate; use canonical parent ${row.duplicate_of_claim_id}.`);
       }
     }
   }
@@ -439,6 +548,12 @@ export class ResearchClaimStore {
 export const FindingStore = ResearchClaimStore;
 /** @deprecated Use ResearchClaimStore. */
 export type FindingStore = ResearchClaimStore;
+
+export function requireCanonicalClaim(claim: FindingSummary): void {
+  if (claim.duplicateOfClaimId) {
+    throw new Error(`Research claim ${claim.id} is a duplicate; use canonical parent ${claim.duplicateOfClaimId}.`);
+  }
+}
 
 interface NormalizedFindingEvidence {
   kind: FindingEvidenceKind;
@@ -708,6 +823,20 @@ export function initializeFindingSchema(database: DatabaseSync): void {
         WHERE claim.id = transition_row.claim_id
       ) WHERE transition_row.claim_revision = 1 AND transition_row.session_id IS NULL;`);
     },
+  }, {
+    version: 6,
+    name: "claim_duplicate_relationship",
+    up(db) {
+      if (!tableHasColumn(db, "app_server_research_claims", "duplicate_of_claim_id")) {
+        db.exec(`ALTER TABLE app_server_research_claims
+          ADD COLUMN duplicate_of_claim_id TEXT REFERENCES app_server_research_claims(id) ON DELETE RESTRICT;`);
+      }
+      if (!tableHasColumn(db, "app_server_research_claims", "duplicate_marked_at")) {
+        db.exec("ALTER TABLE app_server_research_claims ADD COLUMN duplicate_marked_at TEXT;");
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS app_server_research_claims_duplicate_parent_idx
+        ON app_server_research_claims(workspace_id, duplicate_of_claim_id, duplicate_marked_at);`);
+    },
   }]);
 }
 
@@ -720,6 +849,7 @@ export function readFindings(database: DatabaseSync, workspaceId: string, findin
   const transitions = groupedTransitions(database, new Set(rows.map((row) => requiredSqlText(row.id))));
   const authors = groupedAuthors(database, new Set(rows.map((row) => requiredSqlText(row.id))));
   const components = groupedComponents(database, new Set(rows.map((row) => requiredSqlText(row.id))));
+  const duplicates = groupedDuplicateClaims(database, workspaceId, new Set(rows.map((row) => requiredSqlText(row.id))));
   return rows.map((row) => {
     const id = requiredSqlText(row.id);
     const status = findingStatus(row.status);
@@ -735,6 +865,9 @@ export function readFindings(database: DatabaseSync, workspaceId: string, findin
     rating: researchClaimRating(row.rating),
     classification,
     componentClaimIds: components.get(id) ?? [],
+    duplicateOfClaimId: optionalSqlText(row.duplicate_of_claim_id),
+    duplicateMarkedAt: optionalSqlText(row.duplicate_marked_at),
+    duplicateClaims: duplicates.get(id) ?? [],
     title: requiredSqlText(row.title),
     summary: requiredSqlText(row.summary),
     impact: requiredSqlText(row.impact),
@@ -769,7 +902,7 @@ export function refreshFindingStaleness(input: {
   try {
     initializeFindingSchema(database);
     const changed: FindingSummary[] = [];
-    for (const finding of readFindings(database, input.workspaceId)) {
+    for (const finding of readFindings(database, input.workspaceId).filter((claim) => claim.duplicateOfClaimId === null)) {
       if (finding.status === "hypothesis" || finding.status === "rejected" || finding.status === "stale") continue;
       const reasons = stalenessReasons(
         finding,
@@ -1225,6 +1358,41 @@ function groupedComponents(database: DatabaseSync, claimIds: ReadonlySet<string>
     const claimId = requiredSqlText(row.claim_id);
     if (!claimIds.has(claimId)) continue;
     grouped.set(claimId, [...(grouped.get(claimId) ?? []), requiredSqlText(row.component_claim_id)]);
+  }
+  return grouped;
+}
+
+function groupedDuplicateClaims(
+  database: DatabaseSync,
+  workspaceId: string,
+  parentClaimIds: ReadonlySet<string>,
+): Map<string, ResearchClaimDuplicateSummary[]> {
+  const grouped = new Map<string, ResearchClaimDuplicateSummary[]>();
+  if (parentClaimIds.size === 0 || !tableHasColumn(database, "app_server_research_claims", "duplicate_of_claim_id")) {
+    return grouped;
+  }
+  const rows = database.prepare(`SELECT claim.*,
+      (SELECT COUNT(*) FROM app_server_claim_evidence evidence WHERE evidence.claim_id = claim.id) AS evidence_count
+    FROM app_server_research_claims claim
+    WHERE claim.workspace_id = ? AND claim.duplicate_of_claim_id IS NOT NULL
+    ORDER BY claim.duplicate_marked_at DESC, claim.id`).all(workspaceId) as SqlRow[];
+  for (const row of rows) {
+    const parentClaimId = requiredSqlText(row.duplicate_of_claim_id);
+    if (!parentClaimIds.has(parentClaimId)) continue;
+    const status = findingStatus(row.status);
+    const staleFromStatus = row.stale_from_status === null ? null : findingStatus(row.stale_from_status);
+    const projection = claimProjection(status, staleFromStatus, requiredSqlNumber(row.evidence_count));
+    grouped.set(parentClaimId, [...(grouped.get(parentClaimId) ?? []), {
+      id: requiredSqlText(row.id),
+      projection: projection.projection,
+      maturity: projection.maturity,
+      rating: researchClaimRating(row.rating),
+      classification: claimClassification(row.classification),
+      title: requiredSqlText(row.title),
+      status,
+      revision: requiredSqlNumber(row.revision),
+      markedAt: requiredSqlText(row.duplicate_marked_at),
+    }]);
   }
   return grouped;
 }

@@ -268,6 +268,9 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   onRunbookExecute,
   onOpenReport = () => undefined,
   onOpenClaim,
+  claimMutationBusy = false,
+  onMarkClaimDuplicate,
+  onUndoClaimDuplicate,
   onSelectSubagent,
   onBackToRunbooks,
   onBackToReports = () => undefined,
@@ -305,6 +308,9 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   onRunbookExecute?: (runbookId: string, selection: RunbookExecutionSelection, target: RunbookProofTargetSelection) => Promise<void>;
   onOpenReport?: (reportId: string) => void;
   onOpenClaim?: (claimId: string) => void;
+  claimMutationBusy?: boolean;
+  onMarkClaimDuplicate?: (claimId: string, parentClaimId: string, expectedRevision: number) => void;
+  onUndoClaimDuplicate?: (claimId: string, expectedRevision: number) => void;
   onSelectSubagent: (path: string) => void;
   onBackToRunbooks: () => void;
   onBackToReports?: () => void;
@@ -1007,7 +1013,14 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
             listClassName="memory-catalog-list memory-detail-scroll"
             updateKey={`${selectedClaim.id}:${selectedClaim.updatedAt}:${selectedClaim.revision}`}
           >
-            <CampaignClaimDetailView claim={selectedClaim} providerModelCatalog={providerModelCatalog} />
+            <CampaignClaimDetailView
+              claim={selectedClaim}
+              claimCandidates={[...findings, ...leads]}
+              mutationBusy={claimMutationBusy}
+              providerModelCatalog={providerModelCatalog}
+              onMarkDuplicate={onMarkClaimDuplicate}
+              onUndoDuplicate={onUndoClaimDuplicate}
+            />
           </MainSideScrollRegion>
         ) : activeView === 'memory' ? (
           <>
@@ -2421,17 +2434,32 @@ export function MemoryDetailView({
 export function CampaignClaimDetailView({
   claim,
   nowMs = Date.now(),
-  providerModelCatalog = []
+  providerModelCatalog = [],
+  claimCandidates = [],
+  mutationBusy = false,
+  onMarkDuplicate,
+  onUndoDuplicate
 }: {
   claim: AppServerFindingSummary;
   nowMs?: number;
   providerModelCatalog?: readonly ResearchProviderModelCatalog[];
+  claimCandidates?: readonly AppServerFindingSummary[];
+  mutationBusy?: boolean;
+  onMarkDuplicate?: (claimId: string, parentClaimId: string, expectedRevision: number) => void;
+  onUndoDuplicate?: (claimId: string, expectedRevision: number) => void;
 }): JSX.Element {
   const projectionLabel = claim.projection === 'finding' ? 'Finding' : 'Lead';
   const confidence = `${Math.round(Math.max(0, Math.min(1, claim.confidence)) * 100)}% confidence`;
   const securityTracking = claim.securityTracking;
   const latestCvss = securityTracking?.cvssAssessments.at(-1) ?? null;
   const latestRiskDecision = securityTracking?.riskDecisions.at(-1) ?? null;
+  const [duplicateParentId, setDuplicateParentId] = useState('');
+  const duplicateParentCandidates = claimCandidates.filter((candidate) => (
+    candidate.id !== claim.id
+      && candidate.workspaceId === claim.workspaceId
+      && candidate.subjectId === claim.subjectId
+  ));
+  useEffect(() => setDuplicateParentId(''), [claim.id]);
   return (
     <article className={`memory-detail campaign-claim-detail is-${claim.projection}`}>
       <header className="memory-detail-heading">
@@ -2522,6 +2550,59 @@ export function CampaignClaimDetailView({
           </p>
         ) : null}
         {claim.staleReason ? <p className="memory-catalog-body"><strong>Stale reason:</strong> {claim.staleReason}</p> : null}
+        {claim.duplicateClaims.length > 0 || (onMarkDuplicate && duplicateParentCandidates.length > 0) ? (
+          <section className="memory-catalog-subsection campaign-claim-duplicates" aria-label="Duplicate claim management">
+            <h4>Duplicates</h4>
+            {claim.duplicateClaims.length > 0 ? (
+              <div className="campaign-claim-duplicate-list">
+                {claim.duplicateClaims.map((duplicate) => (
+                  <article key={duplicate.id} className="campaign-claim-duplicate-row">
+                    <div>
+                      <span>{traceLabel(duplicate.projection)} · {traceLabel(duplicate.maturity)}</span>
+                      <strong>{duplicate.title}</strong>
+                    </div>
+                    {onUndoDuplicate ? (
+                      <button
+                        type="button"
+                        disabled={mutationBusy}
+                        onClick={() => onUndoDuplicate(duplicate.id, duplicate.revision)}
+                      >
+                        Undo
+                      </button>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : <p>No claims are marked as duplicates of this claim.</p>}
+            {onMarkDuplicate && duplicateParentCandidates.length > 0 ? (
+              <div className="campaign-claim-duplicate-controls">
+                <label htmlFor={`duplicate-parent-${claim.id}`}>Mark this claim as a duplicate of</label>
+                <div>
+                  <select
+                    id={`duplicate-parent-${claim.id}`}
+                    value={duplicateParentId}
+                    disabled={mutationBusy}
+                    onChange={(event) => setDuplicateParentId(event.target.value)}
+                  >
+                    <option value="">Choose a canonical claim</option>
+                    {duplicateParentCandidates.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.projection === 'finding' ? 'Finding' : 'Lead'} · {candidate.title}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={mutationBusy || !duplicateParentId}
+                    onClick={() => onMarkDuplicate(claim.id, duplicateParentId, claim.revision)}
+                  >
+                    Mark duplicate
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
         {securityTracking && securityTracking.cvssAssessments.length > 0 ? (
           <section className="memory-catalog-subsection" aria-label="CVSS assessments">
             <h4>CVSS Assessments</h4>

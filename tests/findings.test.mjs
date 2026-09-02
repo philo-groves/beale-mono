@@ -80,6 +80,110 @@ test("same-status finding transitions append evidence without creating duplicate
   }
 });
 
+test("duplicate claims are hidden from catalogs, nested under their canonical parent, and restorable", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-claim-deduplication-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const graph = new MemoryGraphStore({ workspaceRoot, context: { ...workspace, sessionId: "session_deduplicate" } });
+  const claims = new FindingStore(graph);
+  try {
+    const parent = claims.create({
+      title: "Frame length is trusted before validation",
+      summary: "The parser allocates from an unvalidated frame length.",
+      classification: "security.primitive",
+      rating: "high",
+    });
+    const duplicate = claims.create({
+      title: "Unchecked frame length reaches allocation",
+      summary: "An unvalidated frame length controls parser allocation.",
+      classification: "security.primitive",
+      rating: "high",
+    });
+    const registry = createResearchToolRegistry(createFindingTools(claims));
+    const marked = await registry.execute({
+      id: "mark_duplicate_claim",
+      toolName: "claim.mark_duplicate",
+      actionClass: "synthesize",
+      input: {
+        id: duplicate.id,
+        expectedRevision: duplicate.revision,
+        parentClaimId: parent.id,
+        reason: "Both claims describe the same unchecked frame length reaching the same allocation.",
+      },
+    }, { modelAuthor: { provider: "openai", model: "gpt-5.6" }, agentId: "agent_deduplicator" });
+    assert.equal(marked.result.status, "complete");
+    assert.equal(marked.result.output.id, parent.id);
+    assert.equal(marked.result.output.duplicateClaims.length, 1);
+    assert.deepEqual(marked.result.output.duplicateClaims[0], {
+      id: duplicate.id,
+      projection: "lead",
+      maturity: "proposed",
+      rating: "high",
+      classification: "security.primitive",
+      title: "Unchecked frame length reaches allocation",
+      status: "hypothesis",
+      revision: 2,
+      markedAt: marked.result.output.duplicateClaims[0].markedAt,
+    });
+    assert.equal(claims.get(duplicate.id).duplicateOfClaimId, parent.id);
+    assert.equal(claims.get(duplicate.id).authors.some((author) => author.model === "gpt-5.6"), true);
+    assert.deepEqual(claims.list().map((claim) => claim.id), [parent.id]);
+
+    const leadCatalog = await registry.execute({
+      id: "list_after_deduplication",
+      toolName: "lead.list",
+      actionClass: "recall",
+      input: { query: "frame length" },
+    });
+    assert.deepEqual(leadCatalog.result.output.leads.map((claim) => claim.id), [parent.id]);
+    assert.equal(leadCatalog.result.output.leads[0].duplicateCount, 1);
+    const summary = getAppServerMemorySummary({
+      databasePath: layout.databasePath,
+      artifactDirectoryPath: layout.artifactDirectoryPath,
+      workspaceId: workspace.workspaceId,
+      subjectId: workspace.subjectId,
+    });
+    assert.deepEqual(summary.leads.map((claim) => claim.id), [parent.id]);
+    assert.deepEqual(summary.findings, []);
+    assert.equal(summary.leads[0].duplicateClaims[0].id, duplicate.id);
+
+    assert.throws(() => claims.transition(duplicate.id, {
+      expectedRevision: 2,
+      toStatus: "observed",
+      reason: "A retained stale action should not mutate the hidden duplicate.",
+      evidence: [{ kind: "note", summary: "Synthetic observation." }],
+    }), new RegExp(`canonical parent ${parent.id}`));
+    assert.throws(() => claims.revise(duplicate.id, {
+      expectedRevision: 2,
+      title: "Stale duplicate edit",
+      reason: "A retained stale action should not revise the hidden duplicate.",
+    }), new RegExp(`canonical parent ${parent.id}`));
+    assert.throws(
+      () => claims.completionChecklist(duplicate.id),
+      new RegExp(`canonical parent ${parent.id}`),
+    );
+
+    const restored = await registry.execute({
+      id: "undo_duplicate_claim",
+      toolName: "claim.undo_duplicate",
+      actionClass: "synthesize",
+      input: {
+        id: duplicate.id,
+        expectedRevision: 2,
+        reason: "Further review showed that the allocation paths differ.",
+      },
+    });
+    assert.equal(restored.result.status, "complete");
+    assert.equal(restored.result.output.duplicateOfClaimId, null);
+    assert.equal(restored.result.output.revision, 3);
+    assert.equal(claims.get(parent.id).duplicateClaims.length, 0);
+    assert.equal(claims.list().length, 2);
+  } finally {
+    claims.close();
+    graph.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("finding lifecycle is canonical, evidence-gated, and supports same-session independent verification and reporting", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-findings-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
@@ -453,7 +557,7 @@ test("claim schema initializes before a workspace has any knowledge-memory table
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_server_research_claims").get().count, 0);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'security_tracking_json'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'rating'").get().count, 1);
-      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 5);
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 6);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'session_id'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'app_server_findings'").get().count, 0);
     } finally {

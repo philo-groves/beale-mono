@@ -11,6 +11,7 @@ import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   AppServerSessionStore,
   MemoryGraphStore,
+  ResearchClaimStore,
   ReportStore,
   RunbookStore,
   buildMemoryDreamingInstructions,
@@ -27,6 +28,64 @@ import {
   restoreMemoryDreamingChange,
   runMemoryDreaming,
 } from "../packages/research-agent/dist/index.js";
+
+test("app-server exposes reversible canonical claim deduplication", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-claim-deduplication-boundary-"));
+  const databasePath = join(root, "memory.sqlite");
+  const artifactDirectoryPath = join(root, "artifacts");
+  const context = {
+    workspaceId: "workspace_claim_deduplication",
+    workspaceName: "Claim deduplication",
+    subjectId: "subject_claim_deduplication",
+    subjectName: "Claim deduplication",
+  };
+  const graph = new MemoryGraphStore({ databasePath, context });
+  const claims = new ResearchClaimStore(graph);
+  try {
+    const parent = claims.create({
+      title: "Canonical parser boundary",
+      classification: "security.primitive",
+      rating: "medium",
+    });
+    const duplicate = claims.create({
+      title: "Redundant parser boundary",
+      classification: "security.primitive",
+      rating: "medium",
+    });
+
+    const markedParent = await invokeAppServerProtocol("claim.mark_duplicate", {
+      args: [],
+      input: {
+        ...context,
+        claimId: duplicate.id,
+        parentClaimId: parent.id,
+        expectedRevision: duplicate.revision,
+      },
+      storage: { databasePath, artifactDirectoryPath },
+    });
+    assert.equal(markedParent.id, parent.id);
+    assert.equal(markedParent.duplicateClaims[0].id, duplicate.id);
+
+    const summary = await invokeAppServerProtocol("memory.summary", {
+      args: [],
+      input: context,
+      storage: { databasePath, artifactDirectoryPath },
+    });
+    assert.deepEqual(summary.leads.map((claim) => claim.id), [parent.id]);
+
+    const restored = await invokeAppServerProtocol("claim.undo_duplicate", {
+      args: [],
+      input: { ...context, claimId: duplicate.id, expectedRevision: duplicate.revision + 1 },
+      storage: { databasePath, artifactDirectoryPath },
+    });
+    assert.equal(restored.duplicateOfClaimId, null);
+    assert.equal(claims.list().length, 2);
+  } finally {
+    claims.close();
+    graph.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("memory summary does not mutate finding staleness", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-summary-staleness-"));

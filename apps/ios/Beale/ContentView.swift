@@ -935,14 +935,18 @@ private struct WorkspaceClaimsView: View {
                 if !findings.isEmpty {
                     Section("\(findings.count) \(findings.count == 1 ? "Finding" : "Findings")") {
                         ForEach(findings) { claim in
-                            NavigationLink { WorkspaceClaimDetailView(claim: claim) } label: { WorkspaceClaimRow(claim: claim) }
+                            NavigationLink {
+                                WorkspaceClaimDetailView(workspace: workspace, initialClaim: claim, model: model)
+                            } label: { WorkspaceClaimRow(claim: claim) }
                         }
                     }
                 }
                 if !leads.isEmpty {
                     Section("\(leads.count) \(leads.count == 1 ? "Lead" : "Leads")") {
                         ForEach(leads) { claim in
-                            NavigationLink { WorkspaceClaimDetailView(claim: claim) } label: { WorkspaceClaimRow(claim: claim) }
+                            NavigationLink {
+                                WorkspaceClaimDetailView(workspace: workspace, initialClaim: claim, model: model)
+                            } label: { WorkspaceClaimRow(claim: claim) }
                         }
                     }
                 }
@@ -993,7 +997,25 @@ private struct WorkspaceClaimRow: View {
 }
 
 private struct WorkspaceClaimDetailView: View {
-    let claim: AppServerWorkspaceResearchClaim
+    let workspace: AppServerWorkspace
+    let initialClaim: AppServerWorkspaceResearchClaim
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedParentId = ""
+    @State private var mutationBusy = false
+    @State private var mutationError: String?
+
+    private var claim: AppServerWorkspaceResearchClaim {
+        let catalog = model.memoryCatalog(for: workspace)
+        return ((catalog?.findings ?? []) + (catalog?.leads ?? []))
+            .first { $0.id == initialClaim.id } ?? initialClaim
+    }
+
+    private var parentCandidates: [AppServerWorkspaceResearchClaim] {
+        let catalog = model.memoryCatalog(for: workspace)
+        return ((catalog?.findings ?? []) + (catalog?.leads ?? []))
+            .filter { $0.id != claim.id }
+    }
 
     var body: some View {
         List {
@@ -1015,6 +1037,39 @@ private struct WorkspaceClaimDetailView: View {
                     LabeledContent("Components", value: String(claim.componentClaimIds.count))
                 }
             }
+            if !claim.duplicateClaims.isEmpty || !parentCandidates.isEmpty {
+                Section("Duplicates") {
+                    ForEach(claim.duplicateClaims) { duplicate in
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(duplicate.title)
+                                    .foregroundStyle(BealeTheme.text)
+                                Text("\(duplicate.projection.capitalized) · \(duplicate.maturity.capitalized)")
+                                    .font(.caption)
+                                    .foregroundStyle(BealeTheme.muted)
+                            }
+                            Spacer(minLength: 8)
+                            Button("Undo") { undo(duplicate) }
+                                .disabled(mutationBusy)
+                        }
+                    }
+                    if !parentCandidates.isEmpty {
+                        Picker("Mark this claim as a duplicate of", selection: $selectedParentId) {
+                            Text("Choose a canonical claim").tag("")
+                            ForEach(parentCandidates) { candidate in
+                                Text(candidate.title).tag(candidate.id)
+                            }
+                        }
+                        Button("Mark Duplicate") { markDuplicate() }
+                            .disabled(mutationBusy || selectedParentId.isEmpty)
+                    }
+                    if let mutationError {
+                        Text(mutationError)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
         }
         .navigationTitle(claim.projection.capitalized)
         .navigationBarTitleDisplayMode(.inline)
@@ -1022,6 +1077,43 @@ private struct WorkspaceClaimDetailView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .scrollContentBackground(.hidden)
         .background(BealeTheme.panel)
+    }
+
+    private func markDuplicate() {
+        guard !selectedParentId.isEmpty else { return }
+        mutationBusy = true
+        mutationError = nil
+        Task {
+            do {
+                try await model.markClaimDuplicate(
+                    in: workspace,
+                    claimId: claim.id,
+                    parentClaimId: selectedParentId,
+                    expectedRevision: claim.revision
+                )
+                dismiss()
+            } catch {
+                mutationError = error.localizedDescription
+            }
+            mutationBusy = false
+        }
+    }
+
+    private func undo(_ duplicate: AppServerWorkspaceResearchClaimDuplicate) {
+        mutationBusy = true
+        mutationError = nil
+        Task {
+            do {
+                try await model.undoClaimDuplicate(
+                    in: workspace,
+                    claimId: duplicate.id,
+                    expectedRevision: duplicate.revision
+                )
+            } catch {
+                mutationError = error.localizedDescription
+            }
+            mutationBusy = false
+        }
     }
 }
 

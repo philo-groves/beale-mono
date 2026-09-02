@@ -73,6 +73,8 @@ import {
   resolveAppServerAuxiliaryModelRoute,
   resolveAppServerStoragePaths,
   restoreAppServerMemoryDreamingChange,
+  markAppServerClaimDuplicate,
+  undoAppServerClaimDuplicate,
   type AppServerSessionSummary,
   type MemoryDreamingProfileInput,
   type MemoryDreamingPlan,
@@ -142,6 +144,8 @@ import type {
   AppServerMemoryNodeSummary,
   AppServerMemorySummary,
   MemoryDreamingProgressUpdate,
+  MarkClaimDuplicateInput,
+  UndoClaimDuplicateInput,
   MemorySettings,
   MemoryTypeDescriptions,
   NotificationRecord,
@@ -1889,6 +1893,50 @@ export class WorkspaceService {
     restoreAppServerMemoryDreamingChange(runtime.db.getWorkspaceId(), changeId, this.appServerStorage(runtime));
     this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
     return this.requireSnapshot();
+  }
+
+  public async markClaimDuplicate(input: MarkClaimDuplicateInput): Promise<WorkspaceSnapshot> {
+    const runtime = this.requireClaimWorkspace(input.workspaceId);
+    const scope = runtime.db.getActiveScope();
+    const subject = runtime.db.getResearchSubject();
+    await markAppServerClaimDuplicate({
+      workspaceId: runtime.db.getWorkspaceId(),
+      workspaceName: scope.workspaceName,
+      subjectId: subject.id,
+      subjectName: subject.name,
+      claimId: input.claimId,
+      parentClaimId: input.parentClaimId,
+      expectedRevision: input.expectedRevision
+    }, this.appServerStorage(runtime));
+    this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
+    return this.requireSnapshot();
+  }
+
+  public async undoClaimDuplicate(input: UndoClaimDuplicateInput): Promise<WorkspaceSnapshot> {
+    const runtime = this.requireClaimWorkspace(input.workspaceId);
+    const scope = runtime.db.getActiveScope();
+    const subject = runtime.db.getResearchSubject();
+    await undoAppServerClaimDuplicate({
+      workspaceId: runtime.db.getWorkspaceId(),
+      workspaceName: scope.workspaceName,
+      subjectId: subject.id,
+      subjectName: subject.name,
+      claimId: input.claimId,
+      expectedRevision: input.expectedRevision
+    }, this.appServerStorage(runtime));
+    this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
+    return this.requireSnapshot();
+  }
+
+  private requireClaimWorkspace(workspaceId: string): WorkspaceRuntime {
+    const runtime = this.getForegroundRuntime();
+    if (!runtime || runtime.db.getWorkspaceId() !== workspaceId.trim()) {
+      throw new Error(`Workspace is no longer open: ${workspaceId}`);
+    }
+    if (runtime.memoryBackend === 'disabled') {
+      throw new Error('Claim management is disabled for this workspace.');
+    }
+    return runtime;
   }
 
   public getAppServerToolingSummary(): AppServerToolingSummary {

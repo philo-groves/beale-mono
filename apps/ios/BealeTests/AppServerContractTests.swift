@@ -268,6 +268,7 @@ final class AppServerContractTests: XCTestCase {
                 "session.commentary.v1",
                 "memory.notifications.v3",
                 "knowledge.claims.v2",
+                "knowledge.claim-deduplication.v1",
                 "workspace.goal-suggestions.v1",
                 "workspace.prompt-expansion.v1"
               ]
@@ -1059,7 +1060,7 @@ final class AppServerContractTests: XCTestCase {
                 "updatedAt": "2026-08-22T00:00:00.000Z"
               },
               "result": {
-                "schemaVersion": 3,
+                "schemaVersion": 4,
                 "workspaceId": "workspace-1",
                 "status": "ready",
                 "nodeCount": 1,
@@ -1086,6 +1087,7 @@ final class AppServerContractTests: XCTestCase {
                   "workflow": "open",
                   "classification": "security.vulnerability",
                   "componentClaimIds": [],
+                  "duplicateClaims": [],
                   "title": "Authorization lead",
                   "summary": "A boundary may be bypassable.",
                   "impact": "Unknown",
@@ -1105,6 +1107,17 @@ final class AppServerContractTests: XCTestCase {
                   "workflow": "open",
                   "classification": "security.primitive",
                   "componentClaimIds": [],
+                  "duplicateClaims": [{
+                    "id": "claim-duplicate",
+                    "projection": "lead",
+                    "maturity": "observed",
+                    "rating": "high",
+                    "classification": "security.primitive",
+                    "title": "Duplicate authorization bypass",
+                    "status": "observed",
+                    "revision": 3,
+                    "markedAt": "2026-08-22T00:02:00.000Z"
+                  }],
                   "title": "Observed authorization bypass",
                   "summary": "A test reached the privileged operation.",
                   "impact": "Privileged operation is reachable.",
@@ -1128,6 +1141,7 @@ final class AppServerContractTests: XCTestCase {
         XCTAssertEqual(result.result.leads.first?.rating, "low")
         XCTAssertEqual(result.result.findings.first?.classification, "security.primitive")
         XCTAssertEqual(result.result.findings.first?.rating, "high")
+        XCTAssertEqual(result.result.findings.first?.duplicateClaims.first?.title, "Duplicate authorization bypass")
         let raw = try XCTUnwrap(String(data: data, encoding: .utf8))
         XCTAssertFalse(raw.contains("databasePath"))
         XCTAssertFalse(raw.contains("workspacePath"))

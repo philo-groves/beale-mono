@@ -25,7 +25,7 @@ const compatibleDescriptor = {
   protocolVersion: 1,
   contractVersion: APP_SERVER_CONTRACT_VERSION,
   runtime: { name: 'app-server', version: '0.1.0', buildId: 'fixture-build', nodeVersion: process.version },
-  schemas: { protocol: 1, session: 1, memorySummary: 11, finding: 4, campaignGraph: 4, goalSuggestions: 1 },
+  schemas: { protocol: 1, session: 1, memorySummary: 12, finding: 5, campaignGraph: 4, goalSuggestions: 1 },
   capabilities: [...APP_SERVER_PROTOCOL_CAPABILITIES],
   operations: ['protocol.describe'],
   transports: {
@@ -144,7 +144,7 @@ describe('app-server protocol client', () => {
     expect(envelope.result.text).toHaveLength(3 * 1024 * 1024);
   });
 
-  it('rejects incompatible runtime descriptors and malformed memory summary v9 payloads', () => {
+  it('rejects incompatible runtime descriptors and malformed memory summary v12 payloads', () => {
     const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-incompatible-'));
     createdDirectories.push(directory);
     const fixture = join(directory, 'protocol-fixture.mjs');
@@ -158,7 +158,7 @@ describe('app-server protocol client', () => {
     process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = process.execPath;
     process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
     expect(() => getAppServerProtocolDescriptor()).toThrow(new RegExp(`incompatible with Beale contract v${APP_SERVER_CONTRACT_VERSION}`));
-    expect(() => decodeAppServerMemorySummary({ nodes: [], edges: [], runbooks: [], leads: [], findings: [], campaign: {} })).toThrow(/memory summary v9/);
+    expect(() => decodeAppServerMemorySummary({ nodes: [], edges: [], runbooks: [], leads: [], findings: [], campaign: {} })).toThrow(/memory summary v12/);
     expect(() => decodeAppServerMemorySummary({
       nodeCount: 0,
       edgeCount: 0,
@@ -173,7 +173,7 @@ describe('app-server protocol client', () => {
         counts: { findings: 0, coverageGaps: 0 },
         tracks: [{ id: 'unbounded-cast' }]
       }
-    })).toThrow(/memory summary v9/);
+    })).toThrow(/memory summary v12/);
   });
 
   it('validates bounded question, experiment, and observation summaries in campaign tracks', () => {
@@ -249,21 +249,21 @@ describe('app-server protocol client', () => {
     expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [questionlessTrack] }
-    })).toThrow(/memory summary v9/);
+    })).toThrow(/memory summary v12/);
     const { experiments: _experiments, ...countOnlyTrack } = track;
     expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [countOnlyTrack] }
-    })).toThrow(/memory summary v9/);
+    })).toThrow(/memory summary v12/);
     const { observations: _observations, ...observationlessTrack } = track;
     expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [observationlessTrack] }
-    })).toThrow(/memory summary v9/);
+    })).toThrow(/memory summary v12/);
     expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [{ ...track, experiments: [{ ...experiment, status: 'unknown' }] }] }
-    })).toThrow(/memory summary v9/);
+    })).toThrow(/memory summary v12/);
   });
 
   it('batches multiple workspace summary catalogs into one app-server operation', async () => {

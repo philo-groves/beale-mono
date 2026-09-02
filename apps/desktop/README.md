@@ -64,7 +64,7 @@ The guiding philosophy is **human-steered, verifiable research** rather than ful
 - Electron + Vite + TypeScript foundation
 - User-global registry of local Beale workspaces
 - app-server-owned global SQLite persistence under `~/.beale/memory.sqlite`, with workspace and research-profile ownership retained on records
-- A canonical research-claim ledger with one stable identity from Lead to Finding, append-only evidence-gated transitions, independent verification, source/environment staleness, profile classifications, composite claims, and durable runbook/report/disclosure references
+- A canonical research-claim ledger with one stable identity from Lead to Finding, append-only evidence-gated transitions, independent verification, source/environment staleness, profile classifications, composite claims, reversible duplicate coalescing, and durable runbook/report/disclosure references
 - A workspace Campaign graph that maps authorized assets through research memory and findings to proof/report artifacts, ranks uncovered territory and contradictions, and seeds focused follow-up runs
 - app-server-backed research session execution
 - Workspace-local Cybersecurity and Mathematics research profiles with profile-specific sessions, memory, workflows, prompts, collaboration recipes, and catalogs
@@ -91,7 +91,7 @@ Beale uses app-server's user-global `~/.beale/memory.sqlite` database. Operation
 
 For active runs, Beale sends only logical session intent to the Beale app-server. The server resolves workspace identity, host paths, storage, provider policy, plugins, capture/continuation files, and canonical profile snapshots before hosting app-server in an isolated worker. Worker events and controls use direct messages; only the client-facing app-server WebSocket remains. Desktop authenticates with a per-session bearer token, consumes the shared event stream, and reads bounded canonical state through the same control plane. Canonical operations use the authenticated app-server operation endpoint rather than spawning app-server commands.
 
-app-server protocol v1 is the transport boundary, while contract v6 identifies the executing runtime build, claim-ledger and security-tracking schema versions, and required capabilities. Beale validates the app-server descriptor and WebSocket hello. Session persistence and queries, claims, campaign projection, knowledge and artifact operations, auxiliary model jobs and provider semantics, Agent Plugins, source materialization, and Dejunk maintenance are app-server-owned operations hosted by app-server.
+app-server protocol v1 is the transport boundary, while contract v14 identifies the executing runtime build, current claim-ledger and memory-summary schemas, and required capabilities. Beale validates the app-server descriptor and WebSocket hello. Session persistence and queries, claims, campaign projection, knowledge and artifact operations, auxiliary model jobs and provider semantics, Agent Plugins, source materialization, and Dejunk maintenance are app-server-owned operations hosted by app-server.
 
 Beale is pre-alpha and uses append-only component-scoped migrations.
 

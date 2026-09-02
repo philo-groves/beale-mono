@@ -4,6 +4,8 @@ import {
   AgentPluginRegistry,
   BUNDLED_RESEARCH_PROFILE_IDS,
   CampaignTrackStore,
+  MemoryGraphStore,
+  ResearchClaimStore,
   attentionHeatForClaim,
   attentionHeatForMemoryNode,
   RESEARCH_PROFILE_SCHEMA_VERSION,
@@ -114,6 +116,7 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
     return { selected: true };
   }
   if (operation.startsWith('memory.') || operation.startsWith('dreaming.')
+    || operation.startsWith('claim.')
     || operation.startsWith('investigation.')
     || operation === 'runbook.get' || operation.startsWith('report.')
     || operation === 'artifact.resolve') {
@@ -335,6 +338,42 @@ async function knowledgeOperation(operation: AppServerProtocolOperation, options
       });
     }
     case 'memory.notification_feed': return memoryNotificationFeed(layout, input);
+    case 'claim.mark_duplicate':
+    case 'claim.undo_duplicate': {
+      const workspaceId = requiredText(input.workspaceId, 'workspaceId');
+      const workspaceName = optionalText(input.workspaceName) ?? workspaceId;
+      const graph = new MemoryGraphStore({
+        databasePath: layout.databasePath,
+        context: {
+          workspaceId,
+          workspaceName,
+          subjectId: optionalText(input.subjectId) ?? `subject_workspace:${workspaceId}`,
+          subjectName: optionalText(input.subjectName) ?? workspaceName,
+          ...(optionalText(input.sessionId) ? { sessionId: optionalText(input.sessionId)! } : {})
+        }
+      });
+      const claims = new ResearchClaimStore(graph);
+      try {
+        const claimId = requiredText(input.claimId, 'claimId');
+        const expectedRevision = input.expectedRevision;
+        if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 1) {
+          throw new Error('expectedRevision must be a positive integer.');
+        }
+        return operation === 'claim.mark_duplicate'
+          ? claims.markDuplicate(claimId, {
+              expectedRevision: expectedRevision as number,
+              parentClaimId: requiredText(input.parentClaimId, 'parentClaimId'),
+              reason: optionalText(input.reason) ?? 'Marked as a duplicate by the Beale user.'
+            }, undefined, optionalText(input.actorId) ?? 'human')
+          : claims.undoDuplicate(claimId, {
+              expectedRevision: expectedRevision as number,
+              reason: optionalText(input.reason) ?? 'Duplicate marking undone by the Beale user.'
+            }, undefined, optionalText(input.actorId) ?? 'human');
+      } finally {
+        claims.close();
+        graph.close();
+      }
+    }
     case 'investigation.list':
     case 'investigation.get':
     case 'investigation.replay': {

@@ -13,6 +13,7 @@
 
 #### Added
 
+- Desktop and Beale iOS claim details can now mark a Lead or Finding as a duplicate of a canonical claim. Duplicates leave normal claim catalogs and searches, remain listed under the parent, and can be restored with Undo.
 - Added a top-level `managed-plugins` collection with the portable Agent Plugins 1.0.0 `apple-security-devices` package, including realistic Tart macOS, physical-iPhone CoreDevice, and low-level `darwin-vm` research workflows with explicit mutation confirmation and an enforced iOS Simulator prohibition.
 - Desktop Lead-model settings now offer OpenAI Fast mode for new research and Quick Chat sessions. The choice persists across continuations, forks, recovery, and repeated automation launches; the typed launch preference, `session.openai-fast-mode.v1` capability, and advanced app-server contract timestamp keep Desktop and its host synchronized.
 - Beale iOS active-session composers now expose the shared app-server Stop action in the Send button position, including while a shell or computer-use approval is pending; typing a steering message changes the same control back to Send.
@@ -1069,6 +1070,7 @@
 
 #### Added
 
+- Added reversible research-claim deduplication with optimistic revisions, audit transitions, canonical-only catalogs, and model tools that coalesce redundant claims during research. Protocol contract v14 advances memory-summary schema to v12, finding schema to v5, and the path-free mobile workspace-memory catalog to v4.
 - Added a durable research-resource catalog that distinguishes operator-listed scope resources from ambient campaign dependencies such as sandbox runtimes and platform-default binaries or services. Discovery and categorization are non-authoring inventory operations; Auto-Review must verify campaign relevance before first touch, and relevance never expands live-target authorization.
 - Added research-claim migration 3 and model-tool support for an explicitly untrusted qualitative rating. Existing claims default to Informational; CVSS, reachability, evidence maturity, and operator risk treatment remain separate trusted records.
 - Added workspace-scoped research channel storage and `channel.list`, `channel.get`, `channel.create`, `channel.join`, `channel.post`, and `channel.delete` operations in protocol contract v7. Channel-member migration 2 adds durable lifecycle status, with legacy members retained as unknown.

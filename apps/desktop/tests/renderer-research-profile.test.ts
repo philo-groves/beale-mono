@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type {
+  AppServerFindingSummary,
   AppServerMemoryNodeSummary,
   ResearchProfile,
   ResearchProfileWorkflow,
@@ -9,6 +10,7 @@ import type {
 } from '@shared/types';
 import { MemoryTypeLabel } from '../src/renderer/features/research/MemoryTypeLabel';
 import {
+  CampaignClaimDetailView,
   orderedCatalogMemoryTypes,
   ResearchSidePanel
 } from '../src/renderer/features/research/MemorySidePanel';
@@ -218,6 +220,35 @@ describe('renderer research profile presentation', () => {
     expect(html).not.toContain('0 Guides');
   });
 
+  it('renders reversible duplicate management in canonical claim details', () => {
+    const parent = claim('claim_parent', 'Canonical parser boundary');
+    parent.duplicateClaims = [{
+      id: 'claim_duplicate',
+      projection: 'lead',
+      maturity: 'observed',
+      rating: 'high',
+      classification: 'security.primitive',
+      title: 'Redundant parser boundary',
+      status: 'observed',
+      revision: 4,
+      markedAt: '2026-09-02T12:00:00.000Z'
+    }];
+    const other = claim('claim_other', 'Canonical allocator boundary');
+    const html = renderToStaticMarkup(createElement(CampaignClaimDetailView, {
+      claim: parent,
+      claimCandidates: [parent, other],
+      mutationBusy: false,
+      onMarkDuplicate: () => undefined,
+      onUndoDuplicate: () => undefined
+    }));
+
+    expect(html).toContain('aria-label="Duplicate claim management"');
+    expect(html).toContain('Redundant parser boundary');
+    expect(html).toContain('>Undo</button>');
+    expect(html).toContain('Canonical allocator boundary');
+    expect(html).toContain('>Mark duplicate</button>');
+  });
+
   it('renders product-wide attention colors in Appearance with a light and dark toggle', () => {
     const html = renderToStaticMarkup(createElement(AppearanceSettingsView, {
       background: 'solid',
@@ -256,6 +287,45 @@ describe('renderer research profile presentation', () => {
     expect(html).toContain('aria-label="Research attention colors"');
   });
 });
+
+function claim(id: string, title: string): AppServerFindingSummary {
+  return {
+    id,
+    workspaceId: 'workspace_one',
+    subjectId: 'subject_one',
+    memoryNodeId: null,
+    originSessionId: null,
+    projection: 'lead',
+    maturity: 'observed',
+    freshness: 'current',
+    workflow: 'active',
+    rating: 'high',
+    classification: 'security.primitive',
+    componentClaimIds: [],
+    duplicateOfClaimId: null,
+    duplicateMarkedAt: null,
+    duplicateClaims: [],
+    title,
+    summary: 'A directly observed parser boundary.',
+    impact: '',
+    securityTracking: null,
+    status: 'observed',
+    staleFromStatus: null,
+    confidence: 0.8,
+    sourceRevision: null,
+    environmentFingerprint: null,
+    reproductionRunbookId: null,
+    reportId: null,
+    disclosureReference: null,
+    staleReason: null,
+    evidence: [],
+    transitions: [],
+    authors: [],
+    createdAt: '2026-09-02T12:00:00.000Z',
+    updatedAt: '2026-09-02T12:00:00.000Z',
+    revision: 2
+  };
+}
 
 function customProfile(): ResearchProfile {
   const base = testResearchProfile();

@@ -55,7 +55,7 @@ Component documentation:
 
 Workspace memory is independently selectable in Desktop's Workspace Overview:
 
-- **Enabled** uses one canonical research system: concise knowledge memory, a stable claim ledger projected as Leads and Findings, and durable campaign tracks.
+- **Enabled** uses one canonical research system: concise knowledge memory, a stable claim ledger projected as Leads and Findings, reversible duplicate coalescing, and durable campaign tracks.
 - **Disabled** removes memory behavior from new sessions while retaining stored data.
 
 Profiles define domain classifications such as `security.primitive`, `security.chain`, `mathematics.theorem`, and `mathematics.counterexample`; they do not create competing memory backends. Legacy v1/v2/shadow selections migrate to Enabled, and legacy claim-shaped memory rows migrate non-destructively into the claim ledger.

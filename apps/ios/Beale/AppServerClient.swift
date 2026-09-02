@@ -165,6 +165,47 @@ struct AppServerClient: Sendable {
         return try response.validatedResult(workspaceId: workspaceId)
     }
 
+    func markClaimDuplicate(
+        workspaceId: String,
+        claimId: String,
+        parentClaimId: String,
+        expectedRevision: Int
+    ) async throws {
+        let response: AppServerOperationResponse<AppServerClaimMutationResult> = try await operation(
+            "claim.mark_duplicate",
+            input: AppServerClaimDuplicateOperationInput(
+                workspaceId: workspaceId,
+                claimId: claimId,
+                parentClaimId: parentClaimId,
+                expectedRevision: expectedRevision
+            ),
+            timeoutInterval: 15
+        )
+        guard response.controlVersion == BealeAppServerContract.controlVersion else {
+            throw AppServerClientError.incompatible("The claim mutation used an unsupported control version.")
+        }
+    }
+
+    func undoClaimDuplicate(
+        workspaceId: String,
+        claimId: String,
+        expectedRevision: Int
+    ) async throws {
+        let response: AppServerOperationResponse<AppServerClaimMutationResult> = try await operation(
+            "claim.undo_duplicate",
+            input: AppServerClaimDuplicateOperationInput(
+                workspaceId: workspaceId,
+                claimId: claimId,
+                parentClaimId: nil,
+                expectedRevision: expectedRevision
+            ),
+            timeoutInterval: 15
+        )
+        guard response.controlVersion == BealeAppServerContract.controlVersion else {
+            throw AppServerClientError.incompatible("The claim mutation used an unsupported control version.")
+        }
+    }
+
     func fetchSessionTranscript(
         workspaceId: String,
         sessionId: String,

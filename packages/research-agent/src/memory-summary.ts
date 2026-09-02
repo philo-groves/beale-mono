@@ -110,8 +110,9 @@ export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions
           options.includeForeignCatalogs === true
         )
       : [];
-    const claims = readFindings(database, workspaceId);
-    const migratedClaimMemoryIds = new Set(claims.flatMap((claim) => claim.memoryNodeId ? [claim.memoryNodeId] : []));
+    const allClaims = readFindings(database, workspaceId);
+    const claims = allClaims.filter((claim) => claim.duplicateOfClaimId === null);
+    const migratedClaimMemoryIds = new Set(allClaims.flatMap((claim) => claim.memoryNodeId ? [claim.memoryNodeId] : []));
     // Claim-shaped v1 nodes remain in SQLite as migration/audit aliases, but are no longer
     // projected as knowledge memory. Their stable claim IDs are exposed below instead.
     const nodes = allNodes.filter((node) => !migratedClaimMemoryIds.has(node.id));
@@ -149,7 +150,7 @@ export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions
       storageArtifactCount: storageArtifactCount(artifactDirectoryPath),
       runbookCount: runbooks.length,
       reportCount: reports.length,
-      latestNodeUpdatedAt: [...nodes, ...claims]
+      latestNodeUpdatedAt: [...nodes, ...allClaims]
         .map((item) => item.updatedAt)
         .sort((left, right) => right.localeCompare(left))[0] ?? null,
       nodeTypeCounts: groupedNodeCounts(nodes, (node) => node.type),

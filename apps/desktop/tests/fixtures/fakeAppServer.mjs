@@ -365,7 +365,7 @@ function proxySessionTransport(entry, client) {
         sessionId: entry.sessionId,
         server: { name: 'app-server', version: '0.1.0', buildId: 'fixture' },
         contractVersion: APP_SERVER_CONTRACT_VERSION,
-        schemas: { protocol: 1, session: 1, memorySummary: 11, finding: 4, campaignGraph: 4, goalSuggestions: 1 },
+        schemas: { protocol: 1, session: 1, memorySummary: 12, finding: 5, campaignGraph: 4, goalSuggestions: 1 },
         capabilities: ['session.events', 'session.controls']
       }));
     }

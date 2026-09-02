@@ -705,6 +705,11 @@ test("projects workspace memory into a path-free mobile catalog", async () => {
           freshness: "current", workflow: "active", classification: "security.primitive",
           componentClaimIds: [], title: "Parser race", summary: "A shared parser crosses requests.",
           impact: "Integrity loss.", rating: "high", confidence: 0.9, evidence: [],
+          duplicateClaims: [{
+            id: "claim-duplicate", projection: "lead", maturity: "observed", rating: "high",
+            classification: "security.primitive", title: "Duplicate parser race", status: "observed",
+            revision: 2, markedAt: "2026-08-22T00:03:00.000Z",
+          }],
           securityTracking: {
             reachability: { state: "reachable", conditions: "Public listener.", assessedAt: "2026-08-22T00:03:00.000Z" },
             riskTreatment: "remediate",
@@ -723,7 +728,7 @@ test("projects workspace memory into a path-free mobile catalog", async () => {
   const response = await service.workspaceMemory("workspace-test");
 
   assert.deepEqual(response.result, {
-    schemaVersion: 3,
+    schemaVersion: 4,
     workspaceId: "workspace-test",
     status: "ready",
     nodeCount: 1,
@@ -751,6 +756,17 @@ test("projects workspace memory into a path-free mobile catalog", async () => {
       workflow: "active",
       classification: "security.primitive",
       componentClaimIds: [],
+      duplicateClaims: [{
+        id: "claim-duplicate",
+        projection: "lead",
+        maturity: "observed",
+        rating: "high",
+        classification: "security.primitive",
+        title: "Duplicate parser race",
+        status: "observed",
+        revision: 2,
+        markedAt: "2026-08-22T00:03:00.000Z",
+      }],
       title: "Parser race",
       summary: "A shared parser crosses requests.",
       impact: "Integrity loss.",

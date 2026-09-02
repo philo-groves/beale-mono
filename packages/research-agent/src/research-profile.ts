@@ -464,6 +464,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       "Search knowledge memory plus leads and findings early and as research crosses system boundaries. Favor security-sensitive code near sink-role flow endpoints, established findings, cited historical precedent, and relevant successful trajectories.",
       "On the first Auto-Reviewed touch of each tracked resource or canonical repository revision, complete the emitted baseline: capture exact provenance and build identity; inspect advisories, vendor bulletins, release notes, security-content pages, fixed-version records, upstream and vendor source history or drops, and referenced fixes before treating a candidate as novel. For Apple components include Apple Open Source releases and upstream project history. Record dated no-match queries and deferrals as explicitly as matches.",
       "Before saving, search for an existing memory with the same underlying fact or root cause and refine it instead of creating a differently worded duplicate.",
+      "When multiple leads or findings represent the same underlying claim, keep the strongest evidence-bearing record canonical and mark the weaker records as its duplicates. Preserve related primitives, variants, conditions, and chain components as distinct claims.",
       "Evidence is attached to knowledge or claim records, not stored as its own memory type. Record suspected results with lead.create; promote that same stable claim to a finding through finding.transition when direct evidence is obtained, and append same-maturity evidence by transitioning it to its current status. Classify isolated security results as security.primitive and composite paths as security.chain.",
     ],
     runbookInstructions: [
@@ -836,6 +837,7 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
     memoryInstructions: [
       "Search memory and literature before committing to a proof route, especially for equivalent formulations, known bounds, standard counterexamples, and techniques from adjacent fields.",
       "Before saving, search for the same normalized statement or construction and refine it instead of creating a differently worded duplicate.",
+      "When multiple leads or findings state the same mathematical claim, keep the strongest evidence-bearing record canonical and mark weaker restatements as duplicates; preserve genuinely distinct variants and lemmas.",
       "Record conjectures as leads and promote the same stable claims to theorem or counterexample findings when evidence supports them. Append same-maturity evidence by transitioning a claim to its current status instead of creating a duplicate. Reusable definitions, techniques, references, and trajectories remain knowledge memory.",
     ],
     runbookInstructions: [

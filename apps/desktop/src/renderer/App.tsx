@@ -1105,6 +1105,18 @@ export function App(): JSX.Element {
       .finally(() => setMemoryDreamingInProgress(false));
   }, [runAction, snapshot?.researchProfile.profile.capabilities.memoryEnabled]);
 
+  const markClaimDuplicate = useCallback((claimId: string, parentClaimId: string, expectedRevision: number): void => {
+    const workspaceId = snapshot?.workspace.workspaceId;
+    if (!workspaceId) return;
+    void runAction(() => window.beale.markClaimDuplicate({ workspaceId, claimId, parentClaimId, expectedRevision }));
+  }, [runAction, snapshot?.workspace.workspaceId]);
+
+  const undoClaimDuplicate = useCallback((claimId: string, expectedRevision: number): void => {
+    const workspaceId = snapshot?.workspace.workspaceId;
+    if (!workspaceId) return;
+    void runAction(() => window.beale.undoClaimDuplicate({ workspaceId, claimId, expectedRevision }));
+  }, [runAction, snapshot?.workspace.workspaceId]);
+
   const runWorkspaceDejunk = useCallback((): void => {
     setWorkspaceDejunkInProgress(true);
     void runAction(() => window.beale.runWorkspaceDejunk())
@@ -2574,6 +2586,8 @@ export function App(): JSX.Element {
               memoryDreamingProgress={memoryDreamingProgress}
               onRunWorkspaceDejunk={runWorkspaceDejunk}
               onRunMemoryDreaming={runMemoryDreaming}
+              onMarkClaimDuplicate={markClaimDuplicate}
+              onUndoClaimDuplicate={undoClaimDuplicate}
               onAddWorkspaceResource={addWorkspaceResource}
               onChangeWorkspaceResource={changeWorkspaceResource}
               onCloneWorkspaceRepository={cloneWorkspaceRepository}

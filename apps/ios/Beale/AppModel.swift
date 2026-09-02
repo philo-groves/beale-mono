@@ -537,6 +537,52 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func markClaimDuplicate(
+        in workspace: AppServerWorkspace,
+        claimId: String,
+        parentClaimId: String,
+        expectedRevision: Int
+    ) async throws {
+        guard isConnected else {
+            throw AppServerClientError.rejected(status: 503, message: "Connect to the app-server before changing claims.")
+        }
+        let requestedServerURL = serverURL
+        let requestedToken = operatorToken
+        let client = try appServerClient(serverURL: requestedServerURL, token: requestedToken)
+        try await client.markClaimDuplicate(
+            workspaceId: workspace.workspaceId,
+            claimId: claimId,
+            parentClaimId: parentClaimId,
+            expectedRevision: expectedRevision
+        )
+        guard connectionMatches(serverURL: requestedServerURL, token: requestedToken) else {
+            throw CancellationError()
+        }
+        await loadMemory(for: workspace, force: true)
+    }
+
+    func undoClaimDuplicate(
+        in workspace: AppServerWorkspace,
+        claimId: String,
+        expectedRevision: Int
+    ) async throws {
+        guard isConnected else {
+            throw AppServerClientError.rejected(status: 503, message: "Connect to the app-server before changing claims.")
+        }
+        let requestedServerURL = serverURL
+        let requestedToken = operatorToken
+        let client = try appServerClient(serverURL: requestedServerURL, token: requestedToken)
+        try await client.undoClaimDuplicate(
+            workspaceId: workspace.workspaceId,
+            claimId: claimId,
+            expectedRevision: expectedRevision
+        )
+        guard connectionMatches(serverURL: requestedServerURL, token: requestedToken) else {
+            throw CancellationError()
+        }
+        await loadMemory(for: workspace, force: true)
+    }
+
     func loadTranscript(
         for session: AppServerWorkspaceSession,
         in workspace: AppServerWorkspace,

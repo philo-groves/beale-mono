@@ -9247,6 +9247,73 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
   margin-top: 10px;
 }
 
+.campaign-claim-duplicate-list {
+  display: grid;
+  gap: 5px;
+}
+
+.campaign-claim-duplicate-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 7px 8px;
+}
+
+.campaign-claim-duplicate-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.campaign-claim-duplicate-row span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.campaign-claim-duplicate-row strong {
+  overflow-wrap: anywhere;
+  color: var(--muted-strong);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.campaign-claim-duplicate-row button,
+.campaign-claim-duplicate-controls button {
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 0.78rem;
+}
+
+.campaign-claim-duplicate-controls {
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.campaign-claim-duplicate-controls > label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.campaign-claim-duplicate-controls > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.campaign-claim-duplicate-controls select {
+  min-height: 32px;
+  padding-block: 5px;
+  font-size: 0.8rem;
+}
+
 .memory-reference-list,
 .memory-relationship-list {
   min-width: 0;

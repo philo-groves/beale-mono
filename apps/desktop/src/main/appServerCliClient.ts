@@ -767,6 +767,43 @@ export function restoreAppServerMemoryDreamingChange(
   );
 }
 
+export async function markAppServerClaimDuplicate(
+  input: {
+    workspaceId: string;
+    workspaceName: string;
+    subjectId: string;
+    subjectName: string;
+    claimId: string;
+    parentClaimId: string;
+    expectedRevision: number;
+  },
+  storage: AppServerSessionStorage
+): Promise<void> {
+  await invokeAppServerOperation({
+    operation: 'claim.mark_duplicate',
+    input,
+    ...(storage.profileId ? { profileId: storage.profileId } : {})
+  });
+}
+
+export async function undoAppServerClaimDuplicate(
+  input: {
+    workspaceId: string;
+    workspaceName: string;
+    subjectId: string;
+    subjectName: string;
+    claimId: string;
+    expectedRevision: number;
+  },
+  storage: AppServerSessionStorage
+): Promise<void> {
+  await invokeAppServerOperation({
+    operation: 'claim.undo_duplicate',
+    input,
+    ...(storage.profileId ? { profileId: storage.profileId } : {})
+  });
+}
+
 export async function getAppServerRunbookDocument(
   workspaceId: string,
   runbookId: string,
@@ -1260,7 +1297,7 @@ export function decodeAppServerMemorySummary(value: unknown): AppServerMemorySum
     || !Array.isArray(value.findings)
     || !value.findings.every(validFindingSummary)
     || !validCampaignGraph(value.campaign)) {
-    throw new Error('app-server returned an invalid memory summary v9 payload.');
+    throw new Error('app-server returned an invalid memory summary v12 payload.');
   }
   return value as unknown as AppServerMemorySummary;
 }
@@ -1337,12 +1374,29 @@ function validFindingSummary(value: unknown): boolean {
     && (value.securityTracking === null || validFindingSecurityTracking(value.securityTracking))
     && nonEmptyText(value.status)
     && nonNegativeNumber(value.revision)
+    && (value.duplicateOfClaimId === null || nonEmptyText(value.duplicateOfClaimId))
+    && (value.duplicateMarkedAt === null || nonEmptyText(value.duplicateMarkedAt))
+    && Array.isArray(value.duplicateClaims)
+    && value.duplicateClaims.every(validResearchClaimDuplicateSummary)
     && Array.isArray(value.evidence)
     && Array.isArray(value.transitions)
     && Array.isArray(value.authors)
     && value.authors.every((author) => isPlainRecord(author)
       && nonEmptyText(author.provider)
       && nonEmptyText(author.model));
+}
+
+function validResearchClaimDuplicateSummary(value: unknown): boolean {
+  return isPlainRecord(value)
+    && nonEmptyText(value.id)
+    && (value.projection === 'lead' || value.projection === 'finding')
+    && ['proposed', 'observed', 'reproduced', 'verified', 'refuted'].includes(String(value.maturity))
+    && ['informational', 'low', 'medium', 'high', 'critical'].includes(String(value.rating))
+    && nonEmptyText(value.classification)
+    && nonEmptyText(value.title)
+    && nonEmptyText(value.status)
+    && nonNegativeNumber(value.revision)
+    && nonEmptyText(value.markedAt);
 }
 
 function validFindingSecurityTracking(value: unknown): boolean {
