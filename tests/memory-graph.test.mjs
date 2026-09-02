@@ -18,7 +18,7 @@ import {
 } from "../packages/research-agent/dist/index.js";
 
 test("memory graph saves concise knowledge additively and corrects it by revision", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-graph-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-graph-"));
   const store = new MemoryGraphStore({ workspaceRoot });
   try {
     const first = store.save({
@@ -129,7 +129,7 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
 });
 
 test("memory graph tools expose search, save, get, correct, and link", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-tools-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-tools-"));
   const store = new MemoryGraphStore({ workspaceRoot });
   const registry = createResearchToolRegistry(createMemoryGraphTools(store));
   try {
@@ -241,9 +241,9 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
 });
 
 test("memory graph shares a database without disturbing host operational tables", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-shared-database-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-shared-database-"));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
-  await mkdir(join(workspaceRoot, ".honeycrisp", "memory"), { recursive: true });
+  await mkdir(join(workspaceRoot, ".beale", "memory"), { recursive: true });
   const host = new DatabaseSync(databasePath);
   host.exec(`
     CREATE TABLE host_runs (id TEXT PRIMARY KEY, title TEXT NOT NULL);
@@ -270,13 +270,13 @@ test("memory graph shares a database without disturbing host operational tables"
     assert.equal(hostRun.title, "Host run");
     assert.equal(reopened.prepare("SELECT COUNT(*) AS count FROM memory_nodes").get().count, 1);
     assert.deepEqual(
-      { ...reopened.prepare("SELECT component, version, name FROM schema_migrations WHERE component = 'honeycrisp_core'").get() },
-      { component: "honeycrisp_core", version: 1, name: "tiered_memory_graph_baseline" },
+      { ...reopened.prepare("SELECT component, version, name FROM schema_migrations WHERE component = 'app_server_core'").get() },
+      { component: "app_server_core", version: 1, name: "tiered_memory_graph_baseline" },
     );
-    assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
-    assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 6").get().name, "memory_context_memberships");
+    assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
+    assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 6").get().name, "memory_context_memberships");
     assert.equal(reopened.prepare("SELECT name FROM schema_migrations WHERE component = 'beale_workbench'").get().name, "workspace_schema_baseline");
-    assert.equal(reopened.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
+    assert.equal(reopened.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_server_meta'").get(), undefined);
   } finally {
     reopened.close();
     await rm(workspaceRoot, { recursive: true, force: true });
@@ -284,7 +284,7 @@ test("memory graph shares a database without disturbing host operational tables"
 });
 
 test("memory graph migrates legacy finding knowledge to a trajectory", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-migration-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-migration-"));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
   const initial = new MemoryGraphStore({ workspaceRoot });
   initial.close();
@@ -300,7 +300,7 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
     ALTER TABLE memory_nodes ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'workspace_default';
     ALTER TABLE memory_nodes ADD COLUMN workspace_name TEXT NOT NULL DEFAULT 'Default Workspace';
   `);
-  legacy.prepare("DELETE FROM schema_migrations WHERE component = 'honeycrisp_core' AND version >= 2").run();
+  legacy.prepare("DELETE FROM schema_migrations WHERE component = 'app_server_core' AND version >= 2").run();
   legacy.prepare(`INSERT INTO memory_nodes (
     id, tier, scope_key, session_id, workspace_id, workspace_name, subject_id, subject_name,
     type, title, title_norm, summary, body, status, confidence, attributes_json, created_at, updated_at, revision
@@ -340,15 +340,15 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
       assert.equal(database.prepare("SELECT node_id FROM memory_node_tags WHERE tag = 'parser'").get().node_id, migratedNode.id);
       assert.equal(database.prepare("SELECT node_id FROM memory_evidence_refs WHERE id = 'evidence_legacy'").get().node_id, migratedNode.id);
       assert.deepEqual(
-        { ...database.prepare("SELECT version, name FROM schema_migrations WHERE component = 'honeycrisp_core'").get() },
+        { ...database.prepare("SELECT version, name FROM schema_migrations WHERE component = 'app_server_core'").get() },
         { version: 1, name: "tiered_memory_graph_baseline" },
       );
-      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
-      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 3").get().name, "rename_legacy_finding_memory_ids");
-      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 4").get().name, "remove_peer_database_federation");
-      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 5").get().name, "workspace_runbook_artifacts");
-      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 6").get().name, "memory_context_memberships");
-      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'honeycrisp_core' AND version = 7").get().name, "memory_catalog_provenance");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 2").get().name, "replace_finding_memory_with_trajectory");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 3").get().name, "rename_legacy_finding_memory_ids");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 4").get().name, "remove_peer_database_federation");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 5").get().name, "workspace_runbook_artifacts");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 6").get().name, "memory_context_memberships");
+      assert.equal(database.prepare("SELECT name FROM schema_migrations WHERE component = 'app_server_core' AND version = 7").get().name, "memory_catalog_provenance");
       assert.equal(database.prepare("SELECT session_id FROM memory_node_sessions WHERE node_id = ?").get(migratedNode.id), undefined);
       assert.deepEqual({ ...database.prepare("SELECT workspace_id, workspace_name FROM memory_node_workspaces WHERE node_id = ?").get(migratedNode.id) }, {
         workspace_id: "workspace_default",
@@ -367,9 +367,9 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
         validation: null,
       });
       assert.equal(database.prepare("SELECT name FROM pragma_table_info('memory_nodes') WHERE name = 'tier'").get(), undefined);
-      assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_runbooks'").get().name, "honeycrisp_runbooks");
+      assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_server_runbooks'").get().name, "app_server_runbooks");
       assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_federated_edges'").get(), undefined);
-      assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_meta'").get(), undefined);
+      assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_server_meta'").get(), undefined);
     } finally {
       database.close();
     }
@@ -380,7 +380,7 @@ test("memory graph migrates legacy finding knowledge to a trajectory", async () 
 });
 
 test("memory graph uses a runtime profile for aliases, validation, and tool schemas", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-dynamic-memory-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-dynamic-memory-"));
   const profileMemory = customMemoryProfile();
   const store = new MemoryGraphStore({ workspaceRoot, profileMemory });
   try {
@@ -464,7 +464,7 @@ test("memory graph uses a runtime profile for aliases, validation, and tool sche
 });
 
 test("memory save exposes and creates required neighbor links atomically", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-atomic-links-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-atomic-links-"));
   const memory = customMemoryProfile();
   memory.types[0].requirements[0].requiredNeighborTypes = ["claim"];
   const store = new MemoryGraphStore({ workspaceRoot, profileMemory: memory });
@@ -514,7 +514,7 @@ test("memory save exposes and creates required neighbor links atomically", async
 });
 
 test("memory tool attributes remain wholly type-conditional", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-conditional-attributes-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-conditional-attributes-"));
   const memory = customMemoryProfile({ legacyLifecycle: "active", legacyCreatable: true });
   memory.types[1].attributes = {
     citationKey: {
@@ -543,7 +543,7 @@ test("memory tool attributes remain wholly type-conditional", async () => {
 });
 
 test("memory-disabled empty catalogs initialize without inheriting security requirements", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-disabled-catalog-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-disabled-catalog-"));
   const store = new MemoryGraphStore({
     workspaceRoot,
     profileMemory: {
@@ -566,7 +566,7 @@ test("memory-disabled empty catalogs initialize without inheriting security requ
 });
 
 test("memory graph isolates catalog identities while workflow-only profile changes share memory", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-catalog-isolation-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-catalog-isolation-"));
   const memoryA = customMemoryProfile();
   const memoryB = structuredClone(memoryA);
   memoryB.statuses[0].polarity = "negative";
@@ -650,7 +650,7 @@ test("memory graph isolates catalog identities while workflow-only profile chang
 });
 
 test("memory graph preserves compatible nodes across presentation and additive catalog changes", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-compatible-catalog-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-compatible-catalog-"));
   const originalMemory = customMemoryProfile();
   const originalProfile = resolvedProfileForMemory(originalMemory, "compatible-1", "Original workflow.");
   const originalStore = new MemoryGraphStore({ workspaceRoot, resolvedProfile: originalProfile });
@@ -743,7 +743,7 @@ test("memory graph preserves compatible nodes across presentation and additive c
 });
 
 test("general catalogs do not implicitly recall unprofiled security memory", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-legacy-boundary-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-legacy-boundary-"));
   const securityStore = new MemoryGraphStore({ workspaceRoot });
   let legacy;
   try {
@@ -778,7 +778,7 @@ test("general catalogs do not implicitly recall unprofiled security memory", asy
 });
 
 test("memory catalog snapshots are canonical, hash-bound, and immutable", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-memory-catalog-snapshot-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-catalog-snapshot-"));
   const memory = customMemoryProfile();
   const reorderedMemory = {
     defaultCharacterBudget: memory.defaultCharacterBudget,
@@ -837,7 +837,7 @@ test("memory catalog snapshots are canonical, hash-bound, and immutable", async 
 });
 
 test("memory graph reads retired and unknown legacy rows and permits unrelated corrections", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-grandfathered-memory-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-grandfathered-memory-"));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
   const initialMemory = customMemoryProfile({ legacyLifecycle: "active", legacyCreatable: true, requireVerifiedClaimEvidence: false });
   const initial = new MemoryGraphStore({ workspaceRoot, profileMemory: initialMemory });
@@ -909,7 +909,7 @@ test("memory graph reads retired and unknown legacy rows and permits unrelated c
 });
 
 test("searching a replacement type includes compatible retired memory", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-replaced-memory-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-replaced-memory-"));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
   const initialMemory = customMemoryProfile({ legacyLifecycle: "active", legacyCreatable: true });
   const initial = new MemoryGraphStore({ workspaceRoot, databasePath, profileMemory: initialMemory });

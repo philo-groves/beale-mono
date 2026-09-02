@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HoneycrispRunEngine, steeringContinuationConsumed } from '../src/main/honeycrispRunEngine';
+import { AppServerRunEngine, steeringContinuationConsumed } from '../src/main/appServerRunEngine';
 
 interface PendingSteeringHarness {
   requestId: string;
@@ -38,7 +38,7 @@ interface EngineHarness {
   ) => void;
 }
 
-describe('Honeycrisp steering continuation fallback', () => {
+describe('app-server steering continuation fallback', () => {
   it('requires a later completed root turn before treating accepted steering as consumed', () => {
     expect(steeringContinuationConsumed(3, 3)).toBe(false);
     expect(steeringContinuationConsumed(3, 4)).toBe(true);
@@ -75,7 +75,7 @@ describe('Honeycrisp steering continuation fallback', () => {
       pendingControls: new Map([[requestId, pending]]),
       queuedContinuations: new Map()
     };
-    const engine = Object.create(HoneycrispRunEngine.prototype) as EngineHarness;
+    const engine = Object.create(AppServerRunEngine.prototype) as EngineHarness;
     engine.activeRuns = new Map([[active.context.run.id, active]]);
     engine.db = { appendTraceEvent: () => undefined };
     engine.onChange = () => undefined;

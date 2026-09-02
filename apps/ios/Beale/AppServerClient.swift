@@ -331,7 +331,7 @@ struct AppServerClient: Sendable {
         guard attachment.controlVersion == BealeAppServerContract.controlVersion,
               attachment.session.sessionId == sessionId,
               attachment.session.isActive,
-              attachment.transport.protocolVersion == BealeAppServerContract.honeycrispProtocolVersion,
+              attachment.transport.protocolVersion == BealeAppServerContract.appServerProtocolVersion,
               attachment.transport.authentication == "bearer",
               attachment.transport.reconnect == "replay",
               !attachment.transport.token.isEmpty else {
@@ -472,7 +472,7 @@ final class AppServerSessionControlChannel {
         self.socket = socket
         socket.resume()
         try await socket.send(.string(try jsonString([
-            "protocolVersion": BealeAppServerContract.honeycrispProtocolVersion,
+            "protocolVersion": BealeAppServerContract.appServerProtocolVersion,
             "type": "client.hello",
             "sessionId": sessionId,
             "client": ["name": "beale-ios", "version": "0.1.0"]
@@ -480,7 +480,7 @@ final class AppServerSessionControlChannel {
 
         let hello = try await socket.receive()
         let envelope = try decodeEnvelope(hello)
-        guard envelope.protocolVersion == BealeAppServerContract.honeycrispProtocolVersion,
+        guard envelope.protocolVersion == BealeAppServerContract.appServerProtocolVersion,
               envelope.sessionId == sessionId,
               envelope.type == "server.hello" else {
             close()
@@ -525,7 +525,7 @@ final class AppServerSessionControlChannel {
             control[key] = value
         }
         try await socket.send(.string(try jsonString([
-            "protocolVersion": BealeAppServerContract.honeycrispProtocolVersion,
+            "protocolVersion": BealeAppServerContract.appServerProtocolVersion,
             "type": "session.control",
             "sessionId": sessionId,
             "requestId": requestId,
@@ -545,7 +545,7 @@ final class AppServerSessionControlChannel {
             acknowledgement.continuation.resume(
                 throwing: AppServerClientError.rejected(
                     status: 503,
-                    message: "The live session connection closed before Honeycrisp acknowledged the message."
+                    message: "The live session connection closed before app-server acknowledged the message."
                 )
             )
         }
@@ -561,7 +561,7 @@ final class AppServerSessionControlChannel {
             do {
                 let message = try await socket.receive()
                 let envelope = try decodeEnvelope(message)
-                guard envelope.protocolVersion == BealeAppServerContract.honeycrispProtocolVersion,
+                guard envelope.protocolVersion == BealeAppServerContract.appServerProtocolVersion,
                       envelope.sessionId == sessionId,
                       envelope.type != "protocol.error" else {
                     if let requestId = envelope.requestId {
@@ -569,7 +569,7 @@ final class AppServerSessionControlChannel {
                             requestId: requestId,
                             result: .failure(AppServerClientError.rejected(
                                 status: 400,
-                                message: envelope.error?.message ?? "Honeycrisp rejected the session message."
+                                message: envelope.error?.message ?? "app-server rejected the session message."
                             ))
                         )
                     }
@@ -588,7 +588,7 @@ final class AppServerSessionControlChannel {
                             ? .success(())
                             : .failure(AppServerClientError.rejected(
                                 status: 409,
-                                message: envelope.event?.payload?.error ?? "Honeycrisp rejected the message."
+                                message: envelope.event?.payload?.error ?? "app-server rejected the message."
                             ))
                     )
                 }
@@ -611,7 +611,7 @@ final class AppServerSessionControlChannel {
                     requestId: requestId,
                     result: .failure(AppServerClientError.rejected(
                         status: 504,
-                        message: "Honeycrisp did not acknowledge the message in time."
+                        message: "app-server did not acknowledge the message in time."
                     ))
                 )
             }

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { HoneycrispReportSummary, ProviderSettings, ResearchProviderModelCatalog, WorkspaceRegistryEntry } from '@shared/types';
+import type { AppServerReportSummary, ProviderSettings, ResearchProviderModelCatalog, WorkspaceRegistryEntry } from '@shared/types';
 import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollbarActivation';
 import { EditableReport, ReportSummarySidebar, ReportsIndex } from '../src/renderer/features/reports/ReportsWorkspace';
 import {
@@ -15,7 +15,7 @@ import {
   reportsForReportingScope
 } from '../src/renderer/view-models/reports';
 
-const report: HoneycrispReportSummary = {
+const report: AppServerReportSummary = {
   id: 'report_parser',
   workspaceId: 'workspace_one',
   workspaceName: 'Parser',
@@ -211,7 +211,7 @@ describe('reports resource views', () => {
     expect(serviceSource).toContain('shellSafetyMode: normalizeShellSafetyMode(input.shellSafetyMode)');
   });
 
-  it('persists the report identity so Honeycrisp can resolve its canonical model context', () => {
+  it('persists the report identity so app-server can resolve its canonical model context', () => {
     const serviceSource = readFileSync(new URL('../src/main/workspaceService.ts', import.meta.url), 'utf8');
     expect(serviceSource).toContain("kind: 'report'");
     expect(serviceSource).toContain('resourceId: report.id');
@@ -332,17 +332,17 @@ describe('reports resource views', () => {
     const serviceSource = readFileSync(new URL('../src/main/workspaceService.ts', import.meta.url), 'utf8');
     const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
 
-    expect(apiSource).toContain('listReportingReports(): Promise<HoneycrispReportSummary[]>;');
-    expect(apiSource).toContain('getHoneycrispReport(locator: HoneycrispReportLocator)');
+    expect(apiSource).toContain('listReportingReports(): Promise<AppServerReportSummary[]>;');
+    expect(apiSource).toContain('getAppServerReport(locator: AppServerReportLocator)');
     expect(apiSource).toContain('updateReportContent(input: ReportContentUpdateInput)');
     expect(apiSource).toContain('updateReportTriageStatus(input: ReportTriageStatusUpdateInput)');
-    expect(apiSource).toContain('openReportSubmissionPacket(locator: HoneycrispReportLocator)');
-    expect(apiSource).toContain('chooseReportSubmissionPacket(locator: HoneycrispReportLocator)');
-    expect(apiSource).toContain('chooseReportRecording(locator: HoneycrispReportLocator)');
-    expect(serviceSource).toContain('public async listReportingReports(): Promise<HoneycrispReportSummary[]>');
+    expect(apiSource).toContain('openReportSubmissionPacket(locator: AppServerReportLocator)');
+    expect(apiSource).toContain('chooseReportSubmissionPacket(locator: AppServerReportLocator)');
+    expect(apiSource).toContain('chooseReportRecording(locator: AppServerReportLocator)');
+    expect(serviceSource).toContain('public async listReportingReports(): Promise<AppServerReportSummary[]>');
     expect(serviceSource).toContain('workspaceId: workspace.workspaceId');
     expect(serviceSource).toContain('Report workspace is not registered');
-    expect(serviceSource).toContain("resolveHoneycrispArtifact(report.submissionPacket.artifactId");
+    expect(serviceSource).toContain("resolveAppServerArtifact(report.submissionPacket.artifactId");
     expect(serviceSource).toContain("'submission-packet'");
     expect(mainSource).toContain('IPC_CHANNELS.openReportSubmissionPacket');
     expect(mainSource).toContain('IPC_CHANNELS.updateReportContent');
@@ -353,12 +353,12 @@ describe('reports resource views', () => {
     expect(mainSource).toContain("name: 'Media files'");
     expect(serviceSource).toContain('public async replaceReportSubmissionPacket(');
     expect(serviceSource).toContain('public async updateReportContent(');
-    expect(serviceSource).toContain('reviseHoneycrispReportContent({');
+    expect(serviceSource).toContain('reviseAppServerReportContent({');
     expect(serviceSource).toContain('public async updateReportTriageStatus(');
-    expect(serviceSource).toContain('updateHoneycrispReportTriageStatus({');
-    expect(serviceSource).toContain('replaceHoneycrispReportSubmissionPacket({');
+    expect(serviceSource).toContain('updateAppServerReportTriageStatus({');
+    expect(serviceSource).toContain('replaceAppServerReportSubmissionPacket({');
     expect(serviceSource).toContain('public async replaceReportRecording(');
-    expect(serviceSource).toContain('replaceHoneycrispReportRecording({');
+    expect(serviceSource).toContain('replaceAppServerReportRecording({');
     expect(mainSource).toContain('workspaceService.resolveReportSubmissionPacketPath(locator)');
   });
 
@@ -382,7 +382,7 @@ describe('reports resource views', () => {
   });
 
   it('shows an existing packet filename as the replacement file-picker action', () => {
-    const packetReport: HoneycrispReportSummary = {
+    const packetReport: AppServerReportSummary = {
       ...report,
       submissionPacket: {
         artifactId: 'report_parser_submission_packet',

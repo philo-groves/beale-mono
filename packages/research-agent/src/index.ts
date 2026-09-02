@@ -4,6 +4,7 @@ export * from "./attention-policy.js";
 export * from "./model-authorship.js";
 export * from "./memory-taxonomy.js";
 export * from "./database-migrations.js";
+export * from "./legacy-compatibility.js";
 export * from "./memory-graph-tools.js";
 export * from "./findings.js";
 export * from "./finding-tools.js";

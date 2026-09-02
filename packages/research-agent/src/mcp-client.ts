@@ -277,7 +277,7 @@ class StdioMcpServerConnection {
       protocolVersion: DEFAULT_MCP_PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: {
-        name: "honeycrisp",
+        name: "app-server",
         version: "0.1.0",
       },
     });
@@ -421,7 +421,7 @@ class StdioMcpServerConnection {
         id,
         error: {
           code: -32601,
-          message: `Honeycrisp MCP client does not implement server request: ${method}`,
+          message: `app-server MCP client does not implement server request: ${method}`,
         },
       })}\n`,
       "utf8",

@@ -325,13 +325,13 @@ function subagentAssistantPreview(
   const transcriptRole = subagentPayloadValue(event, 'transcriptRole');
   const transcriptSource = subagentPayloadValue(event, 'transcriptSource');
   const messagePhase = subagentPayloadValue(event, 'messagePhase') ?? subagentMetadataValue(event, 'messagePhase');
-  const nativeCommentary = transcriptSource === 'honeycrisp_commentary' || (
+  const nativeCommentary = transcriptSource === 'app_server_commentary' || (
     transcriptRole === 'assistant' &&
     messagePhase === 'commentary' &&
     transcriptSource !== 'openai_reasoning_summary'
   );
   const legacyCommentary = transcriptSource === 'openai_reasoning_summary';
-  const finalAnswer = transcriptRole === 'assistant' && (messagePhase === 'final_answer' || transcriptSource === 'honeycrisp');
+  const finalAnswer = transcriptRole === 'assistant' && (messagePhase === 'final_answer' || transcriptSource === 'app-server');
   const correlationKey = commentaryMessageCorrelationKey(event);
   const suppressedLegacyCommentary = legacyCommentary && correlationKey !== null && nativeCommentaryKeys.has(correlationKey);
   if (!nativeCommentary && !finalAnswer && !(legacyCommentary && !suppressedLegacyCommentary)) {
@@ -345,8 +345,8 @@ function subagentAssistantPreview(
 }
 
 function subagentEventTimestamp(event: TraceEventRecord): string {
-  const honeycrispTimestamp = stringValue(event.payload.honeycrispTimestamp);
-  return honeycrispTimestamp && Number.isFinite(Date.parse(honeycrispTimestamp)) ? honeycrispTimestamp : event.createdAt;
+  const appServerTimestamp = stringValue(event.payload.appServerTimestamp);
+  return appServerTimestamp && Number.isFinite(Date.parse(appServerTimestamp)) ? appServerTimestamp : event.createdAt;
 }
 
 function subagentPayloadValue(event: TraceEventRecord, key: string): string | null {

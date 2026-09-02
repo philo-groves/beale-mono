@@ -8,7 +8,7 @@ import type {
   ResearchClaimRating,
   ResearchGoalSuggestionInput,
   ResearchGoalSuggestionSelectionInput,
-} from "@honeycrisp/research-agent";
+} from "@beale/research-agent";
 
 export type {
   ResearchChannelDetail,
@@ -24,7 +24,7 @@ export type {
   GeneratedResearchGoalSuggestions,
   ResearchGoalSuggestionInput,
   ResearchGoalSuggestionSelectionInput,
-} from "@honeycrisp/research-agent";
+} from "@beale/research-agent";
 
 export interface CreateResearchChannelInput {
   name: string;
@@ -45,12 +45,12 @@ export interface ShareResearchChannelResourceInput {
   note?: string;
 }
 
-export const HONEYCRISP_PROTOCOL_NAME = "honeycrisp" as const;
-export const HONEYCRISP_PROTOCOL_VERSION = 1 as const;
-export const HONEYCRISP_CONTRACT_VERSION = 13 as const;
-export const HONEYCRISP_RUNTIME_VERSION = "0.1.0" as const;
-export const HONEYCRISP_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
-export const HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX = "HONEYCRISP_TRANSPORT " as const;
+export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
+export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
+export const APP_SERVER_CONTRACT_VERSION = 13 as const;
+export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
+export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
+export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
 /**
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
@@ -107,8 +107,8 @@ export interface BealeAppServerHealth {
 }
 
 export interface BealeAppServerDescriptor extends BealeAppServerHealth {
-  sessionLaunchVersion: typeof HONEYCRISP_SESSION_LAUNCH_VERSION;
-  honeycrispProtocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+  sessionLaunchVersion: typeof APP_SERVER_SESSION_LAUNCH_VERSION;
+  appServerProtocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   endpoints: {
     sessions: typeof BEALE_APP_SERVER_SESSIONS_PATH;
     workspaces: typeof BEALE_APP_SERVER_WORKSPACES_PATH;
@@ -175,7 +175,7 @@ export interface BealeAppServerSessionResult {
 
 export interface BealeAppServerSessionTransport {
   path: string;
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   authentication: "bearer";
   token: string;
   reconnect: "replay";
@@ -207,7 +207,7 @@ export interface BealeAppServerShutdownResult {
 
 export interface BealeAppServerErrorResponse {
   controlVersion: typeof BEALE_APP_SERVER_CONTROL_VERSION;
-  error: HoneycrispProtocolErrorDetail;
+  error: AppServerProtocolErrorDetail;
 }
 
 export interface BealeAppServerWorkspaceSummary {
@@ -326,9 +326,9 @@ export interface BealeWorkspaceClaimSecurityTracking {
   externalReferences: Array<{ kind: string; identifier: string; url: string | null }>;
 }
 
-export const HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES = ["session.events", "session.controls"] as const;
-export const HONEYCRISP_PROTOCOL_MAX_REQUEST_ID_LENGTH = 200 as const;
-export const HONEYCRISP_PROTOCOL_CAPABILITIES = [
+export const APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES = ["session.events", "session.controls"] as const;
+export const APP_SERVER_PROTOCOL_MAX_REQUEST_ID_LENGTH = 200 as const;
+export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "knowledge.findings",
   "knowledge.claims.v2",
   "knowledge.claim_security_tracking",
@@ -351,14 +351,14 @@ export const HONEYCRISP_PROTOCOL_CAPABILITIES = [
   "knowledge.report-list.v1",
 ] as const;
 
-/** @deprecated Import the protocol-named constants from `honeycrisp/protocol`. */
-export const HONEYCRISP_TRANSPORT_PROTOCOL_VERSION = HONEYCRISP_PROTOCOL_VERSION;
-/** @deprecated Import the protocol-named constants from `honeycrisp/protocol`. */
-export const HONEYCRISP_TRANSPORT_PREFIX = HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX;
-/** @deprecated Import the protocol-named constants from `honeycrisp/protocol`. */
-export const HONEYCRISP_TRANSPORT_PATH = HONEYCRISP_PROTOCOL_WEBSOCKET_PATH;
+/** @deprecated Import the protocol-named constants from `@beale/app-server-runtime/protocol`. */
+export const APP_SERVER_TRANSPORT_PROTOCOL_VERSION = APP_SERVER_PROTOCOL_VERSION;
+/** @deprecated Import the protocol-named constants from `@beale/app-server-runtime/protocol`. */
+export const APP_SERVER_TRANSPORT_PREFIX = APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX;
+/** @deprecated Import the protocol-named constants from `@beale/app-server-runtime/protocol`. */
+export const APP_SERVER_TRANSPORT_PATH = APP_SERVER_PROTOCOL_WEBSOCKET_PATH;
 
-export const HONEYCRISP_PROTOCOL_OPERATIONS = [
+export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
@@ -375,41 +375,41 @@ export const HONEYCRISP_PROTOCOL_OPERATIONS = [
   "maintenance.summary", "maintenance.run",
 ] as const;
 
-export type HoneycrispProtocolOperation = (typeof HONEYCRISP_PROTOCOL_OPERATIONS)[number];
+export type AppServerProtocolOperation = (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number];
 
-export interface HoneycrispProtocolErrorDetail {
+export interface AppServerProtocolErrorDetail {
   code: string;
   message: string;
   retryable: boolean;
 }
 
-interface HoneycrispProtocolEnvelopeBase {
-  protocol: typeof HONEYCRISP_PROTOCOL_NAME;
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
-  operation: HoneycrispProtocolOperation;
+interface AppServerProtocolEnvelopeBase {
+  protocol: typeof APP_SERVER_PROTOCOL_NAME;
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
+  operation: AppServerProtocolOperation;
   requestId?: string;
 }
 
-export interface HoneycrispProtocolSuccess<T = unknown> extends HoneycrispProtocolEnvelopeBase {
+export interface AppServerProtocolSuccess<T = unknown> extends AppServerProtocolEnvelopeBase {
   ok: true;
   result: T;
 }
 
-export interface HoneycrispProtocolFailure extends HoneycrispProtocolEnvelopeBase {
+export interface AppServerProtocolFailure extends AppServerProtocolEnvelopeBase {
   ok: false;
-  error: HoneycrispProtocolErrorDetail;
+  error: AppServerProtocolErrorDetail;
 }
 
-export type HoneycrispProtocolEnvelope<T = unknown> = HoneycrispProtocolSuccess<T> | HoneycrispProtocolFailure;
+export type AppServerProtocolEnvelope<T = unknown> = AppServerProtocolSuccess<T> | AppServerProtocolFailure;
 
-export interface HoneycrispProtocolDescriptor {
-  protocol: typeof HONEYCRISP_PROTOCOL_NAME;
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
-  operations: readonly HoneycrispProtocolOperation[];
-  contractVersion: typeof HONEYCRISP_CONTRACT_VERSION;
+export interface AppServerProtocolDescriptor {
+  protocol: typeof APP_SERVER_PROTOCOL_NAME;
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
+  operations: readonly AppServerProtocolOperation[];
+  contractVersion: typeof APP_SERVER_CONTRACT_VERSION;
   runtime: {
-    name: typeof HONEYCRISP_PROTOCOL_NAME;
-    version: typeof HONEYCRISP_RUNTIME_VERSION;
+    name: typeof APP_SERVER_PROTOCOL_NAME;
+    version: typeof APP_SERVER_RUNTIME_VERSION;
     buildId: string;
     nodeVersion: string;
   };
@@ -421,7 +421,7 @@ export interface HoneycrispProtocolDescriptor {
     campaignGraph: 4;
     goalSuggestions: 1;
   };
-  capabilities: typeof HONEYCRISP_PROTOCOL_CAPABILITIES;
+  capabilities: typeof APP_SERVER_PROTOCOL_CAPABILITIES;
   transports: {
     appServer: {
       path: typeof BEALE_APP_SERVER_OPERATIONS_PATH;
@@ -430,84 +430,84 @@ export interface HoneycrispProtocolDescriptor {
       errors: "http-problem";
     };
     websocket: {
-      path: typeof HONEYCRISP_PROTOCOL_WEBSOCKET_PATH;
+      path: typeof APP_SERVER_PROTOCOL_WEBSOCKET_PATH;
       authentication: "bearer";
       framing: "json-message";
       errors: "protocol-error-message";
       correlation: "request-id";
-      capabilities: typeof HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES;
+      capabilities: typeof APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES;
     };
   };
 }
 
-export interface HoneycrispTransportBootstrap {
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+export interface AppServerTransportBootstrap {
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   transport: "websocket";
   url: string;
   sessionId: string;
 }
 
-export interface HoneycrispClientHello {
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+export interface AppServerClientHello {
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   type: "client.hello";
   sessionId: string;
   client: { name: string; version: string };
 }
 
-export interface HoneycrispServerHello {
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+export interface AppServerServerHello {
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   type: "server.hello";
   sessionId: string;
-  server: { name: typeof HONEYCRISP_PROTOCOL_NAME; version: string; buildId: string };
-  contractVersion: typeof HONEYCRISP_CONTRACT_VERSION;
-  schemas: HoneycrispProtocolDescriptor["schemas"];
-  capabilities: typeof HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES;
+  server: { name: typeof APP_SERVER_PROTOCOL_NAME; version: string; buildId: string };
+  contractVersion: typeof APP_SERVER_CONTRACT_VERSION;
+  schemas: AppServerProtocolDescriptor["schemas"];
+  capabilities: typeof APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES;
 }
 
-export interface HoneycrispSessionControl<TControl extends Record<string, unknown> = Record<string, unknown>> {
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+export interface AppServerSessionControl<TControl extends Record<string, unknown> = Record<string, unknown>> {
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   type: "session.control";
   sessionId: string;
   requestId: string;
   control: TControl & { requestId: string };
 }
 
-export interface HoneycrispSessionEvent<TEvent extends Record<string, unknown> = Record<string, unknown>> {
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+export interface AppServerSessionEvent<TEvent extends Record<string, unknown> = Record<string, unknown>> {
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   type: "session.event";
   sessionId: string;
   event: TEvent;
 }
 
-export interface HoneycrispWebSocketProtocolError {
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+export interface AppServerWebSocketProtocolError {
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   type: "protocol.error";
   sessionId: string;
   requestId?: string;
-  error: HoneycrispProtocolErrorDetail;
+  error: AppServerProtocolErrorDetail;
   /** Retained in protocol v1 for clients that consumed the original WebSocket error shape. */
   message: string;
 }
 
-/** @deprecated Use HoneycrispWebSocketProtocolError for the complete current DTO. */
-export interface HoneycrispProtocolError {
-  protocolVersion: typeof HONEYCRISP_PROTOCOL_VERSION;
+/** @deprecated Use AppServerWebSocketProtocolError for the complete current DTO. */
+export interface AppServerProtocolError {
+  protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION;
   type: "protocol.error";
   sessionId: string;
   message: string;
 }
 
-export type HoneycrispClientMessage = HoneycrispClientHello | HoneycrispSessionControl;
-export type HoneycrispServerMessage = HoneycrispServerHello | HoneycrispSessionEvent | HoneycrispWebSocketProtocolError;
+export type AppServerClientMessage = AppServerClientHello | AppServerSessionControl;
+export type AppServerServerMessage = AppServerServerHello | AppServerSessionEvent | AppServerWebSocketProtocolError;
 
 /**
  * Versioned, client-independent launch contract consumed by the Beale
  * app-server. Clients describe session intent; the app-server owns the
- * Honeycrisp hosted-runtime argument and worker-environment mapping.
+ * app-server hosted-runtime argument and worker-environment mapping.
  */
-export const HONEYCRISP_SESSION_LAUNCH_VERSION = 2 as const;
+export const APP_SERVER_SESSION_LAUNCH_VERSION = 2 as const;
 
-export const HONEYCRISP_PROVIDER_RISK_ACKNOWLEDGEMENTS = [
+export const APP_SERVER_PROVIDER_RISK_ACKNOWLEDGEMENTS = [
   "openai-codex",
   "anthropic",
   "xai",
@@ -515,37 +515,37 @@ export const HONEYCRISP_PROVIDER_RISK_ACKNOWLEDGEMENTS = [
   "openrouter",
 ] as const;
 
-export type HoneycrispProviderRiskAcknowledgement =
-  (typeof HONEYCRISP_PROVIDER_RISK_ACKNOWLEDGEMENTS)[number];
+export type AppServerProviderRiskAcknowledgement =
+  (typeof APP_SERVER_PROVIDER_RISK_ACKNOWLEDGEMENTS)[number];
 
-export type HoneycrispProviderAuthenticationMethod = "subscription" | "api_key";
+export type AppServerProviderAuthenticationMethod = "subscription" | "api_key";
 
-export interface HoneycrispSessionLaunchProvider {
+export interface AppServerSessionLaunchProvider {
   id?: string;
   model?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
 }
 
-export interface HoneycrispSessionLaunchContinuation {
+export interface AppServerSessionLaunchContinuation {
   resumeAttemptId?: string;
   resumeFromInitialAttempt?: boolean;
   fallbackPrompt: string;
 }
 
-export interface HoneycrispSessionLaunchIntent {
+export interface AppServerSessionLaunchIntent {
   /** Beale's durable workspace id, never a host filesystem path. */
   workspaceId: string;
   attemptId?: string;
   promptMarkdown: string;
   goal?: { objective?: string };
-  provider?: HoneycrispSessionLaunchProvider;
+  provider?: AppServerSessionLaunchProvider;
   shellSafetyMode?: string;
   workflowId?: string;
   researchProfileId?: string;
   researchProfileHash?: string;
   collaboration?: Record<string, unknown>;
-  continuation?: HoneycrispSessionLaunchContinuation;
+  continuation?: AppServerSessionLaunchContinuation;
   generateTitle?: boolean;
   /** Host-only endpoint used by Beale sessions to load workspace introspection tools. */
   introspection?: {
@@ -555,16 +555,16 @@ export interface HoneycrispSessionLaunchIntent {
   };
 }
 
-export interface HoneycrispSessionLaunchRequest {
-  launchVersion: typeof HONEYCRISP_SESSION_LAUNCH_VERSION;
+export interface AppServerSessionLaunchRequest {
+  launchVersion: typeof APP_SERVER_SESSION_LAUNCH_VERSION;
   sessionId?: string;
-  launch: HoneycrispSessionLaunchIntent;
+  launch: AppServerSessionLaunchIntent;
 }
 
-export function decodeHoneycrispSessionLaunchRequest(value: unknown): HoneycrispSessionLaunchRequest {
+export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSessionLaunchRequest {
   if (!isRecord(value)) throw new Error("Session request body must be a JSON object.");
-  if (value.launchVersion !== HONEYCRISP_SESSION_LAUNCH_VERSION) {
-    throw new Error(`launchVersion must be ${HONEYCRISP_SESSION_LAUNCH_VERSION}.`);
+  if (value.launchVersion !== APP_SERVER_SESSION_LAUNCH_VERSION) {
+    throw new Error(`launchVersion must be ${APP_SERVER_SESSION_LAUNCH_VERSION}.`);
   }
   optionalBoundedString(value, "sessionId", 128);
   const launch = requiredRecord(value, "launch");
@@ -619,15 +619,15 @@ export function decodeHoneycrispSessionLaunchRequest(value: unknown): Honeycrisp
     }
   }
 
-  return value as unknown as HoneycrispSessionLaunchRequest;
+  return value as unknown as AppServerSessionLaunchRequest;
 }
 
-export interface HoneycrispProtocolArguments {
+export interface AppServerProtocolArguments {
   args: readonly string[];
   requestId?: string;
 }
 
-export function parseHoneycrispProtocolArguments(argv: readonly string[]): HoneycrispProtocolArguments {
+export function parseAppServerProtocolArguments(argv: readonly string[]): AppServerProtocolArguments {
   const args: string[] = [];
   let requestId: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
@@ -639,8 +639,8 @@ export function parseHoneycrispProtocolArguments(argv: readonly string[]): Honey
     if (requestId !== undefined) throw new Error("--request-id may only be provided once.");
     const value = argv[index + 1];
     if (!value?.trim()) throw new Error("--request-id requires a non-empty value.");
-    if (value.length > HONEYCRISP_PROTOCOL_MAX_REQUEST_ID_LENGTH) {
-      throw new Error(`--request-id must not exceed ${HONEYCRISP_PROTOCOL_MAX_REQUEST_ID_LENGTH} characters.`);
+    if (value.length > APP_SERVER_PROTOCOL_MAX_REQUEST_ID_LENGTH) {
+      throw new Error(`--request-id must not exceed ${APP_SERVER_PROTOCOL_MAX_REQUEST_ID_LENGTH} characters.`);
     }
     requestId = value;
     index += 1;
@@ -648,51 +648,51 @@ export function parseHoneycrispProtocolArguments(argv: readonly string[]): Honey
   return { args, ...(requestId ? { requestId } : {}) };
 }
 
-export function honeycrispProtocolSuccess<T>(operation: HoneycrispProtocolOperation, result: T, requestId?: string): HoneycrispProtocolSuccess<T> {
+export function appServerProtocolSuccess<T>(operation: AppServerProtocolOperation, result: T, requestId?: string): AppServerProtocolSuccess<T> {
   return {
-    protocol: HONEYCRISP_PROTOCOL_NAME, protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+    protocol: APP_SERVER_PROTOCOL_NAME, protocolVersion: APP_SERVER_PROTOCOL_VERSION,
     operation, ok: true, result, ...(requestId ? { requestId } : {}),
   };
 }
 
-export function honeycrispProtocolFailure(
-  operation: HoneycrispProtocolOperation,
+export function appServerProtocolFailure(
+  operation: AppServerProtocolOperation,
   code: string,
   message: string,
   retryable = false,
   requestId?: string,
-): HoneycrispProtocolFailure {
+): AppServerProtocolFailure {
   return {
-    protocol: HONEYCRISP_PROTOCOL_NAME, protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+    protocol: APP_SERVER_PROTOCOL_NAME, protocolVersion: APP_SERVER_PROTOCOL_VERSION,
     operation,
     ok: false,
-    error: honeycrispProtocolErrorDetail(code, message, retryable),
+    error: appServerProtocolErrorDetail(code, message, retryable),
     ...(requestId ? { requestId } : {}),
   };
 }
 
-export function honeycrispProtocolErrorDetail(
+export function appServerProtocolErrorDetail(
   code: string,
   message: string,
   retryable = false,
-): HoneycrispProtocolErrorDetail {
+): AppServerProtocolErrorDetail {
   return { code, message, retryable };
 }
 
-export function honeycrispProtocolDescriptor(): HoneycrispProtocolDescriptor {
+export function appServerProtocolDescriptor(): AppServerProtocolDescriptor {
   return {
-    protocol: HONEYCRISP_PROTOCOL_NAME,
-    protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
-    operations: HONEYCRISP_PROTOCOL_OPERATIONS,
-    contractVersion: HONEYCRISP_CONTRACT_VERSION,
+    protocol: APP_SERVER_PROTOCOL_NAME,
+    protocolVersion: APP_SERVER_PROTOCOL_VERSION,
+    operations: APP_SERVER_PROTOCOL_OPERATIONS,
+    contractVersion: APP_SERVER_CONTRACT_VERSION,
     runtime: {
-      name: HONEYCRISP_PROTOCOL_NAME,
-      version: HONEYCRISP_RUNTIME_VERSION,
-      buildId: honeycrispRuntimeBuildId(),
+      name: APP_SERVER_PROTOCOL_NAME,
+      version: APP_SERVER_RUNTIME_VERSION,
+      buildId: appServerRuntimeBuildId(),
       nodeVersion: process.version,
     },
     schemas: { protocol: 1, session: 1, memorySummary: 11, finding: 4, campaignGraph: 4, goalSuggestions: 1 },
-    capabilities: HONEYCRISP_PROTOCOL_CAPABILITIES,
+    capabilities: APP_SERVER_PROTOCOL_CAPABILITIES,
     transports: {
       appServer: {
         path: BEALE_APP_SERVER_OPERATIONS_PATH,
@@ -701,79 +701,79 @@ export function honeycrispProtocolDescriptor(): HoneycrispProtocolDescriptor {
         errors: "http-problem",
       },
       websocket: {
-        path: HONEYCRISP_PROTOCOL_WEBSOCKET_PATH,
+        path: APP_SERVER_PROTOCOL_WEBSOCKET_PATH,
         authentication: "bearer",
         framing: "json-message",
         errors: "protocol-error-message",
         correlation: "request-id",
-        capabilities: HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES,
+        capabilities: APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES,
       },
     },
   };
 }
 
-function honeycrispRuntimeBuildId(): string {
-  const configured = process.env.HONEYCRISP_BUILD_ID?.trim();
+function appServerRuntimeBuildId(): string {
+  const configured = process.env.APP_SERVER_BUILD_ID?.trim();
   if (configured) return configured;
   try {
     return createHash("sha256").update(readFileSync(fileURLToPath(import.meta.url))).digest("hex").slice(0, 24);
   } catch {
-    return `${HONEYCRISP_RUNTIME_VERSION}-unknown`;
+    return `${APP_SERVER_RUNTIME_VERSION}-unknown`;
   }
 }
 
-export function honeycrispTransportBootstrap(url: string, sessionId: string): HoneycrispTransportBootstrap {
-  return { protocolVersion: HONEYCRISP_PROTOCOL_VERSION, transport: "websocket", url, sessionId };
+export function appServerTransportBootstrap(url: string, sessionId: string): AppServerTransportBootstrap {
+  return { protocolVersion: APP_SERVER_PROTOCOL_VERSION, transport: "websocket", url, sessionId };
 }
 
-export function honeycrispServerHello(sessionId: string, serverVersion: string): HoneycrispServerHello {
+export function appServerServerHello(sessionId: string, serverVersion: string): AppServerServerHello {
   return {
-    protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+    protocolVersion: APP_SERVER_PROTOCOL_VERSION,
     type: "server.hello",
     sessionId,
-    server: { name: HONEYCRISP_PROTOCOL_NAME, version: serverVersion, buildId: honeycrispRuntimeBuildId() },
-    contractVersion: HONEYCRISP_CONTRACT_VERSION,
+    server: { name: APP_SERVER_PROTOCOL_NAME, version: serverVersion, buildId: appServerRuntimeBuildId() },
+    contractVersion: APP_SERVER_CONTRACT_VERSION,
     schemas: { protocol: 1, session: 1, memorySummary: 11, finding: 4, campaignGraph: 4, goalSuggestions: 1 },
-    capabilities: HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES,
+    capabilities: APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES,
   };
 }
 
-export function honeycrispSessionEvent<TEvent extends Record<string, unknown>>(
+export function appServerSessionEvent<TEvent extends Record<string, unknown>>(
   sessionId: string,
   event: TEvent,
-): HoneycrispSessionEvent<TEvent> {
-  return { protocolVersion: HONEYCRISP_PROTOCOL_VERSION, type: "session.event", sessionId, event };
+): AppServerSessionEvent<TEvent> {
+  return { protocolVersion: APP_SERVER_PROTOCOL_VERSION, type: "session.event", sessionId, event };
 }
 
-export function honeycrispWebSocketProtocolError(
+export function appServerWebSocketProtocolError(
   sessionId: string,
   code: string,
   message: string,
   requestId?: string,
-): HoneycrispWebSocketProtocolError {
+): AppServerWebSocketProtocolError {
   return {
-    protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+    protocolVersion: APP_SERVER_PROTOCOL_VERSION,
     type: "protocol.error",
     sessionId,
     ...(requestId ? { requestId } : {}),
-    error: honeycrispProtocolErrorDetail(code, message),
+    error: appServerProtocolErrorDetail(code, message),
     message,
   };
 }
 
-export function decodeHoneycrispProtocolEnvelope(value: unknown): HoneycrispProtocolEnvelope {
-  if (!isRecord(value) || value.protocol !== HONEYCRISP_PROTOCOL_NAME
-    || value.protocolVersion !== HONEYCRISP_PROTOCOL_VERSION
+export function decodeAppServerProtocolEnvelope(value: unknown): AppServerProtocolEnvelope {
+  if (!isRecord(value) || value.protocol !== APP_SERVER_PROTOCOL_NAME
+    || value.protocolVersion !== APP_SERVER_PROTOCOL_VERSION
     || !isProtocolOperation(value.operation) || typeof value.ok !== "boolean") {
-    throw new Error("Invalid or unsupported Honeycrisp protocol envelope.");
+    throw new Error("Invalid or unsupported app-server protocol envelope.");
   }
   validateOptionalRequestId(value.requestId);
   if (value.ok === true) {
-    if (!("result" in value)) throw new Error("Honeycrisp protocol success is missing result.");
-    return value as unknown as HoneycrispProtocolSuccess;
+    if (!("result" in value)) throw new Error("app-server protocol success is missing result.");
+    return value as unknown as AppServerProtocolSuccess;
   }
   validateError(value.error);
-  return value as unknown as HoneycrispProtocolFailure;
+  return value as unknown as AppServerProtocolFailure;
 }
 
 export function decodeBealeAppServerHealth(value: unknown): BealeAppServerHealth {
@@ -788,8 +788,8 @@ export function decodeBealeAppServerHealth(value: unknown): BealeAppServerHealth
 
 export function decodeBealeAppServerDescriptor(value: unknown): BealeAppServerDescriptor {
   decodeBealeAppServerHealth(value);
-  if (!isRecord(value) || value.sessionLaunchVersion !== HONEYCRISP_SESSION_LAUNCH_VERSION
-    || value.honeycrispProtocolVersion !== HONEYCRISP_PROTOCOL_VERSION
+  if (!isRecord(value) || value.sessionLaunchVersion !== APP_SERVER_SESSION_LAUNCH_VERSION
+    || value.appServerProtocolVersion !== APP_SERVER_PROTOCOL_VERSION
     || !isRecord(value.endpoints)
     || value.endpoints.sessions !== BEALE_APP_SERVER_SESSIONS_PATH
     || value.endpoints.workspaces !== BEALE_APP_SERVER_WORKSPACES_PATH
@@ -878,7 +878,7 @@ export function decodeBealeAppServerSessionResult(value: unknown): BealeAppServe
 export function decodeBealeAppServerSessionStartResult(value: unknown): BealeAppServerSessionStartResult {
   if (!isRecord(value) || value.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION
     || !nonEmptyString(value.attemptId) || !isRecord(value.transport)
-    || value.transport.protocolVersion !== HONEYCRISP_PROTOCOL_VERSION
+    || value.transport.protocolVersion !== APP_SERVER_PROTOCOL_VERSION
     || value.transport.authentication !== "bearer"
     || !nonEmptyString(value.transport.token)
     || value.transport.reconnect !== "replay") {
@@ -900,7 +900,7 @@ export function decodeBealeAppServerSessionStartResult(value: unknown): BealeApp
 export function decodeBealeAppServerSessionAttachResult(value: unknown): BealeAppServerSessionAttachResult {
   if (!isRecord(value) || value.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION
     || !isRecord(value.transport)
-    || value.transport.protocolVersion !== HONEYCRISP_PROTOCOL_VERSION
+    || value.transport.protocolVersion !== APP_SERVER_PROTOCOL_VERSION
     || value.transport.authentication !== "bearer"
     || !nonEmptyString(value.transport.token)
     || value.transport.reconnect !== "replay") {
@@ -942,46 +942,46 @@ export function decodeBealeAppServerErrorResponse(value: unknown): BealeAppServe
   return value as unknown as BealeAppServerErrorResponse;
 }
 
-export function decodeHoneycrispTransportBootstrap(value: unknown): HoneycrispTransportBootstrap {
-  if (!isRecord(value) || value.protocolVersion !== HONEYCRISP_PROTOCOL_VERSION
+export function decodeAppServerTransportBootstrap(value: unknown): AppServerTransportBootstrap {
+  if (!isRecord(value) || value.protocolVersion !== APP_SERVER_PROTOCOL_VERSION
     || value.transport !== "websocket" || !nonEmptyString(value.url) || !nonEmptyString(value.sessionId)) {
-    throw new Error("Invalid or unsupported Honeycrisp transport bootstrap.");
+    throw new Error("Invalid or unsupported app-server transport bootstrap.");
   }
-  return value as unknown as HoneycrispTransportBootstrap;
+  return value as unknown as AppServerTransportBootstrap;
 }
 
-export function decodeHoneycrispClientMessage(value: unknown): HoneycrispClientMessage {
+export function decodeAppServerClientMessage(value: unknown): AppServerClientMessage {
   validateMessageBase(value);
   if (value.type === "client.hello") {
     if (!isRecord(value.client) || !nonEmptyString(value.client.name) || !nonEmptyString(value.client.version)) {
       throw new Error("The client.hello message requires client name and version.");
     }
-    return value as unknown as HoneycrispClientHello;
+    return value as unknown as AppServerClientHello;
   }
   if (value.type === "session.control") {
     if (!validRequestId(value.requestId) || !isRecord(value.control)) {
       throw new Error("The session.control message requires requestId and control.");
     }
     if (value.control.requestId !== value.requestId) throw new Error("Control request IDs must match.");
-    return value as unknown as HoneycrispSessionControl;
+    return value as unknown as AppServerSessionControl;
   }
-  throw new Error("Unsupported Honeycrisp client message type.");
+  throw new Error("Unsupported app-server client message type.");
 }
 
-export function decodeHoneycrispServerMessage(value: unknown): HoneycrispServerMessage {
+export function decodeAppServerServerMessage(value: unknown): AppServerServerMessage {
   validateMessageBase(value);
   if (value.type === "server.hello") {
-    if (!isRecord(value.server) || value.server.name !== HONEYCRISP_PROTOCOL_NAME
+    if (!isRecord(value.server) || value.server.name !== APP_SERVER_PROTOCOL_NAME
       || !nonEmptyString(value.server.version) || !nonEmptyString(value.server.buildId)
-      || value.contractVersion !== HONEYCRISP_CONTRACT_VERSION
+      || value.contractVersion !== APP_SERVER_CONTRACT_VERSION
       || !validSchemaDescriptor(value.schemas) || !sameCapabilities(value.capabilities)) {
       throw new Error("The server.hello message has invalid server metadata or capabilities.");
     }
-    return value as unknown as HoneycrispServerHello;
+    return value as unknown as AppServerServerHello;
   }
   if (value.type === "session.event") {
     if (!isRecord(value.event)) throw new Error("The session.event message requires an event.");
-    return value as unknown as HoneycrispSessionEvent;
+    return value as unknown as AppServerSessionEvent;
   }
   if (value.type === "protocol.error") {
     validateOptionalRequestId(value.requestId);
@@ -991,7 +991,7 @@ export function decodeHoneycrispServerMessage(value: unknown): HoneycrispServerM
       : legacyMessage ? { code: "protocol_error", message: legacyMessage, retryable: false } : undefined;
     if (!error) throw new Error("The protocol.error message requires a valid error.");
     return {
-      protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+      protocolVersion: APP_SERVER_PROTOCOL_VERSION,
       type: "protocol.error",
       sessionId: value.sessionId,
       ...(nonEmptyString(value.requestId) ? { requestId: value.requestId } : {}),
@@ -999,43 +999,43 @@ export function decodeHoneycrispServerMessage(value: unknown): HoneycrispServerM
       message: legacyMessage ?? error.message,
     };
   }
-  throw new Error("Unsupported Honeycrisp server message type.");
+  throw new Error("Unsupported app-server server message type.");
 }
 
-function validSchemaDescriptor(value: unknown): value is HoneycrispProtocolDescriptor["schemas"] {
+function validSchemaDescriptor(value: unknown): value is AppServerProtocolDescriptor["schemas"] {
   return isRecord(value) && value.protocol === 1 && value.session === 1
     && value.memorySummary === 11 && value.finding === 4 && value.campaignGraph === 4;
 }
 
 function validateMessageBase(value: unknown): asserts value is Record<string, unknown> & { sessionId: string; type: string } {
-  if (!isRecord(value) || value.protocolVersion !== HONEYCRISP_PROTOCOL_VERSION
+  if (!isRecord(value) || value.protocolVersion !== APP_SERVER_PROTOCOL_VERSION
     || !nonEmptyString(value.type) || !nonEmptyString(value.sessionId)) {
-    throw new Error("Invalid Honeycrisp WebSocket message.");
+    throw new Error("Invalid app-server WebSocket message.");
   }
 }
 
 function validateOptionalRequestId(value: unknown): void {
   if (value !== undefined && !validRequestId(value)) {
-    throw new Error(`Honeycrisp protocol requestId must be non-empty and at most ${HONEYCRISP_PROTOCOL_MAX_REQUEST_ID_LENGTH} characters.`);
+    throw new Error(`app-server protocol requestId must be non-empty and at most ${APP_SERVER_PROTOCOL_MAX_REQUEST_ID_LENGTH} characters.`);
   }
 }
 
-function validateError(value: unknown): asserts value is HoneycrispProtocolErrorDetail {
-  if (!isValidError(value)) throw new Error("Honeycrisp protocol failure is missing a valid error.");
+function validateError(value: unknown): asserts value is AppServerProtocolErrorDetail {
+  if (!isValidError(value)) throw new Error("app-server protocol failure is missing a valid error.");
 }
 
-function isValidError(value: unknown): value is HoneycrispProtocolErrorDetail {
+function isValidError(value: unknown): value is AppServerProtocolErrorDetail {
   return isRecord(value) && nonEmptyString(value.code)
     && typeof value.message === "string" && typeof value.retryable === "boolean";
 }
 
-function sameCapabilities(value: unknown): value is typeof HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES {
-  return Array.isArray(value) && value.length === HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES.length
-    && HONEYCRISP_PROTOCOL_WEBSOCKET_CAPABILITIES.every((capability, index) => value[index] === capability);
+function sameCapabilities(value: unknown): value is typeof APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES {
+  return Array.isArray(value) && value.length === APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES.length
+    && APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES.every((capability, index) => value[index] === capability);
 }
 
-function isProtocolOperation(value: unknown): value is HoneycrispProtocolOperation {
-  return typeof value === "string" && (HONEYCRISP_PROTOCOL_OPERATIONS as readonly string[]).includes(value);
+function isProtocolOperation(value: unknown): value is AppServerProtocolOperation {
+  return typeof value === "string" && (APP_SERVER_PROTOCOL_OPERATIONS as readonly string[]).includes(value);
 }
 
 function sameAppServerCapabilities(value: unknown): value is typeof BEALE_APP_SERVER_CAPABILITIES {
@@ -1117,7 +1117,7 @@ function nonEmptyString(value: unknown): value is string {
 }
 
 function validRequestId(value: unknown): value is string {
-  return nonEmptyString(value) && value.length <= HONEYCRISP_PROTOCOL_MAX_REQUEST_ID_LENGTH;
+  return nonEmptyString(value) && value.length <= APP_SERVER_PROTOCOL_MAX_REQUEST_ID_LENGTH;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

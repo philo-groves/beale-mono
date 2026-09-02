@@ -138,7 +138,7 @@ describe('memory settings', () => {
     reopened.close();
   });
 
-  it('rejects descriptions whose JSON-escaped transport exceeds the Honeycrisp protocol limit', () => {
+  it('rejects descriptions whose JSON-escaped transport exceeds the app-server protocol limit', () => {
     const directory = temporaryDirectory();
     const registry = new WorkspaceRegistry(directory);
     const accepted = repeatedEscapedDescriptions(2_700);

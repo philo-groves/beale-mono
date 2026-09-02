@@ -1,10 +1,10 @@
 import type { RunDetail, TraceEventRecord } from '@shared/types';
 import { traceLabel, truncateText } from '../lib/formatting';
 import {
-  honeycrispToolEventKind,
-  honeycrispToolName,
-  honeycrispToolPairingKey,
-  honeycrispToolPayload as honeycrispEventToolPayload,
+  appServerToolEventKind,
+  appServerToolName,
+  appServerToolPairingKey,
+  appServerToolPayload as appServerEventToolPayload,
   stringRecordValue,
   toolNameFromSummary,
   tracePayloadArray,
@@ -132,18 +132,18 @@ export function traceEventDetailText(event: TraceEventRecord, category: TraceCat
   return tracePayloadDetailText(event, category, detail);
 }
 
-export function isHoneycrispToolObservationError(event: TraceEventRecord): boolean {
-  if (honeycrispToolEventKind(event) !== 'tool.observed') return false;
+export function isAppServerToolObservationError(event: TraceEventRecord): boolean {
+  if (appServerToolEventKind(event) !== 'tool.observed') return false;
   const payload = tracePayloadRecord(event.payload, 'payload');
   if (!payload) return false;
   const status = stringRecordValue(payload, 'status');
   return Boolean(tracePayloadRecord(payload, 'error') || stringRecordValue(payload, 'error') || status === 'error' || status === 'blocked');
 }
 
-export function honeycrispToolTraceSubtext(event: TraceEventRecord, detail: RunDetail | null = null): string {
-  const payload = honeycrispEventToolPayload(event);
+export function appServerToolTraceSubtext(event: TraceEventRecord, detail: RunDetail | null = null): string {
+  const payload = appServerEventToolPayload(event);
   if (!payload) return '';
-  const toolName = honeycrispToolName(event);
+  const toolName = appServerToolName(event);
   const inputs = tracePayloadRecord(payload, 'normalizedInputs');
   if (toolName === 'shell.run') {
     const result = tracePayloadRecord(payload, 'result');
@@ -186,7 +186,7 @@ export function honeycrispToolTraceSubtext(event: TraceEventRecord, detail: RunD
     const revision = result ? numberRecordValue(result, 'revision') : numberRecordValue(inputs, 'expectedRevision');
     return [title ?? id, revision ? `Update ${revision}` : null].filter((value): value is string => Boolean(value)).join(' · ');
   }
-  if (toolName === 'file.read') return honeycrispToolEventKind(event) === 'tool.requested' ? stringRecordValue(inputs, 'path') ?? '' : '';
+  if (toolName === 'file.read') return appServerToolEventKind(event) === 'tool.requested' ? stringRecordValue(inputs, 'path') ?? '' : '';
   if (toolName === 'spawn_agent') {
     const result = tracePayloadRecord(payload, 'result');
     const taskName = (result ? stringRecordValue(result, 'task_name') : null) ?? stringRecordValue(inputs, 'task_name');
@@ -226,29 +226,29 @@ export function honeycrispToolTraceSubtext(event: TraceEventRecord, detail: RunD
   return memoryType ? `${traceLabel(memoryType)} · ${memoryId}` : memoryId;
 }
 
-export function honeycrispCollaborationTraceSummary(event: TraceEventRecord): string {
-  const payload = honeycrispEventToolPayload(event);
+export function appServerCollaborationTraceSummary(event: TraceEventRecord): string {
+  const payload = appServerEventToolPayload(event);
   if (!payload) return '';
-  const toolName = honeycrispToolName(event);
+  const toolName = appServerToolName(event);
   const inputs = tracePayloadRecord(payload, 'normalizedInputs');
   if (!inputs) return '';
   if (toolName === 'spawn_agent' || toolName === 'send_message' || toolName === 'followup_task') {
     return stringRecordValue(inputs, 'message') ?? '';
   }
-  if (toolName !== 'wait_agent' || honeycrispToolEventKind(event) !== 'tool.observed') return '';
+  if (toolName !== 'wait_agent' || appServerToolEventKind(event) !== 'tool.observed') return '';
   const result = tracePayloadRecord(payload, 'result');
   return result ? stringRecordValue(result, 'message') ?? '' : '';
 }
 
-export interface HoneycrispAgentListPreview {
+export interface AppServerAgentListPreview {
   rows: string[];
   allRows: string[];
   count: number;
 }
 
-export function honeycrispAgentListResults(event: TraceEventRecord, maxRows = DEFAULT_TRACE_PREVIEW_LINE_LIMIT): HoneycrispAgentListPreview | null {
-  if (honeycrispToolEventKind(event) !== 'tool.observed' || honeycrispToolName(event) !== 'list_agents') return null;
-  const payload = honeycrispEventToolPayload(event);
+export function appServerAgentListResults(event: TraceEventRecord, maxRows = DEFAULT_TRACE_PREVIEW_LINE_LIMIT): AppServerAgentListPreview | null {
+  if (appServerToolEventKind(event) !== 'tool.observed' || appServerToolName(event) !== 'list_agents') return null;
+  const payload = appServerEventToolPayload(event);
   const result = payload ? tracePayloadRecord(payload, 'result') : null;
   const agents = result ? tracePayloadArray(result, 'agents') : null;
   if (!agents) return null;
@@ -264,47 +264,47 @@ export function honeycrispAgentListResults(event: TraceEventRecord, maxRows = DE
   return { rows: allRows.slice(0, maxRows), allRows, count: allRows.length };
 }
 
-export function honeycrispMemoryCorrectionSummary(event: TraceEventRecord): string {
-  const payload = honeycrispEventToolPayload(event);
-  if (!payload || honeycrispToolName(event) !== 'memory.correct') return '';
+export function appServerMemoryCorrectionSummary(event: TraceEventRecord): string {
+  const payload = appServerEventToolPayload(event);
+  if (!payload || appServerToolName(event) !== 'memory.correct') return '';
   const inputs = tracePayloadRecord(payload, 'normalizedInputs');
   return inputs ? stringRecordValue(inputs, 'summary') ?? '' : '';
 }
 
-export function honeycrispMemorySaveSummary(event: TraceEventRecord): string {
-  const payload = honeycrispEventToolPayload(event);
-  if (!payload || honeycrispToolName(event) !== 'memory.save') return '';
+export function appServerMemorySaveSummary(event: TraceEventRecord): string {
+  const payload = appServerEventToolPayload(event);
+  if (!payload || appServerToolName(event) !== 'memory.save') return '';
   const result = tracePayloadRecord(payload, 'result');
   const inputs = tracePayloadRecord(payload, 'normalizedInputs');
   return (result ? stringRecordValue(result, 'summary') : null) ?? (inputs ? stringRecordValue(inputs, 'summary') : null) ?? '';
 }
 
-export function honeycrispMemoryLinkNote(event: TraceEventRecord): string {
-  const payload = honeycrispEventToolPayload(event);
-  if (!payload || honeycrispToolName(event) !== 'memory.link') return '';
+export function appServerMemoryLinkNote(event: TraceEventRecord): string {
+  const payload = appServerEventToolPayload(event);
+  if (!payload || appServerToolName(event) !== 'memory.link') return '';
   const inputs = tracePayloadRecord(payload, 'normalizedInputs');
   return inputs ? stringRecordValue(inputs, 'note') ?? '' : '';
 }
 
-export function honeycrispMemoryGetSummary(event: TraceEventRecord, detail: RunDetail | null = null): string {
-  if (honeycrispToolName(event) !== 'memory.get') return '';
-  const currentPayload = honeycrispEventToolPayload(event);
+export function appServerMemoryGetSummary(event: TraceEventRecord, detail: RunDetail | null = null): string {
+  if (appServerToolName(event) !== 'memory.get') return '';
+  const currentPayload = appServerEventToolPayload(event);
   const currentResult = currentPayload ? tracePayloadRecord(currentPayload, 'result') : null;
   const currentSummary = currentResult ? stringRecordValue(currentResult, 'summary') : null;
   if (currentSummary) return currentSummary;
 
-  const pairingKey = honeycrispToolPairingKey(event);
+  const pairingKey = appServerToolPairingKey(event);
   const observation = pairingKey
-    ? detail?.traceEvents.find((candidate) => honeycrispToolEventKind(candidate) === 'tool.observed' && honeycrispToolPairingKey(candidate) === pairingKey)
+    ? detail?.traceEvents.find((candidate) => appServerToolEventKind(candidate) === 'tool.observed' && appServerToolPairingKey(candidate) === pairingKey)
     : null;
-  const observationPayload = observation ? honeycrispEventToolPayload(observation) : null;
+  const observationPayload = observation ? appServerEventToolPayload(observation) : null;
   const result = observationPayload ? tracePayloadRecord(observationPayload, 'result') : null;
   return result ? stringRecordValue(result, 'summary') ?? '' : '';
 }
 
-export function honeycrispToolTraceSubtextPill(event: TraceEventRecord): string | null {
-  const payload = honeycrispEventToolPayload(event);
-  if (!payload || honeycrispToolName(event) !== 'shell.run') return null;
+export function appServerToolTraceSubtextPill(event: TraceEventRecord): string | null {
+  const payload = appServerEventToolPayload(event);
+  if (!payload || appServerToolName(event) !== 'shell.run') return null;
   const inputs = tracePayloadRecord(payload, 'normalizedInputs');
   if (!inputs) return null;
   const utility = stringRecordValue(inputs, 'utility');
@@ -313,7 +313,7 @@ export function honeycrispToolTraceSubtextPill(event: TraceEventRecord): string 
   return sshInvocationArguments(utility, args) ? 'SSH' : null;
 }
 
-export interface HoneycrispShellTraceStreamPreview {
+export interface AppServerShellTraceStreamPreview {
   lines: string[];
   allLines: string[];
   lineCount: number;
@@ -321,15 +321,15 @@ export interface HoneycrispShellTraceStreamPreview {
   truncated: boolean;
 }
 
-export interface HoneycrispShellTraceOutput {
-  stdout: HoneycrispShellTraceStreamPreview | null;
+export interface AppServerShellTraceOutput {
+  stdout: AppServerShellTraceStreamPreview | null;
   stderr: string;
   stderrTruncated: boolean;
 }
 
-export function honeycrispShellTraceOutput(event: TraceEventRecord, maxLines = DEFAULT_TRACE_PREVIEW_LINE_LIMIT): HoneycrispShellTraceOutput | null {
-  if (honeycrispToolEventKind(event) !== 'tool.observed' || honeycrispToolName(event) !== 'shell.run') return null;
-  const payload = honeycrispEventToolPayload(event);
+export function appServerShellTraceOutput(event: TraceEventRecord, maxLines = DEFAULT_TRACE_PREVIEW_LINE_LIMIT): AppServerShellTraceOutput | null {
+  if (appServerToolEventKind(event) !== 'tool.observed' || appServerToolName(event) !== 'shell.run') return null;
+  const payload = appServerEventToolPayload(event);
   const result = payload ? tracePayloadRecord(payload, 'result') : null;
   if (!result) return null;
 
@@ -343,7 +343,7 @@ function shellOutputText(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\r\n?/g, '\n') : '';
 }
 
-function shellOutputPreview(value: unknown, sourceTruncated: boolean, maxLines: number): HoneycrispShellTraceStreamPreview | null {
+function shellOutputPreview(value: unknown, sourceTruncated: boolean, maxLines: number): AppServerShellTraceStreamPreview | null {
   const normalized = shellOutputText(value);
   if (!normalized) return null;
   const lines = normalized.split('\n');
@@ -431,25 +431,25 @@ function oneLineShellCommand(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
 }
 
-export function isEmptyHoneycrispMemorySearchObservation(event: TraceEventRecord): boolean {
-  if (honeycrispToolEventKind(event) !== 'tool.observed' || honeycrispToolName(event) !== 'memory.search' || isHoneycrispToolObservationError(event)) return false;
-  const payload = honeycrispEventToolPayload(event);
+export function isEmptyAppServerMemorySearchObservation(event: TraceEventRecord): boolean {
+  if (appServerToolEventKind(event) !== 'tool.observed' || appServerToolName(event) !== 'memory.search' || isAppServerToolObservationError(event)) return false;
+  const payload = appServerEventToolPayload(event);
   return Boolean(payload && Array.isArray(payload.result) && payload.result.length === 0);
 }
 
-export interface HoneycrispMemorySearchResultsPreview {
+export interface AppServerMemorySearchResultsPreview {
   titles: string[];
   allTitles: string[];
   resultCount: number;
   truncated: boolean;
 }
 
-export function honeycrispMemorySearchResults(
+export function appServerMemorySearchResults(
   event: TraceEventRecord,
   maxResults = DEFAULT_TRACE_PREVIEW_LINE_LIMIT
-): HoneycrispMemorySearchResultsPreview | null {
-  if (honeycrispToolEventKind(event) !== 'tool.observed' || honeycrispToolName(event) !== 'memory.search' || isHoneycrispToolObservationError(event)) return null;
-  const payload = honeycrispEventToolPayload(event);
+): AppServerMemorySearchResultsPreview | null {
+  if (appServerToolEventKind(event) !== 'tool.observed' || appServerToolName(event) !== 'memory.search' || isAppServerToolObservationError(event)) return null;
+  const payload = appServerEventToolPayload(event);
   const result = payload?.result;
   if (!Array.isArray(result) || result.length === 0) return null;
 
@@ -638,8 +638,8 @@ export function codeBrowserTracePreview(event: TraceEventRecord, maxLines = DEFA
     };
   }
 
-  const honeycrispFileRead = honeycrispFileReadPreview(event, maxLines);
-  if (honeycrispFileRead) return honeycrispFileRead;
+  const appServerFileRead = appServerFileReadPreview(event, maxLines);
+  if (appServerFileRead) return appServerFileRead;
 
   if (event.type !== 'tool_result' && event.type !== 'artifact_created') return null;
   const isCodeBrowserEvent = toolName === 'code_browser' || /^Code browser\b/i.test(event.summary);
@@ -686,8 +686,8 @@ export function searchTracePreview(event: TraceEventRecord): SearchTracePreview 
     };
   }
 
-  const honeycrispSearch = honeycrispRepositorySearchPreview(event);
-  if (honeycrispSearch) return honeycrispSearch;
+  const appServerSearch = appServerRepositorySearchPreview(event);
+  if (appServerSearch) return appServerSearch;
 
   if (event.type !== 'tool_result') return null;
   const query = tracePayloadPrimitive(event.payload, 'query');
@@ -713,15 +713,15 @@ export function searchTracePreview(event: TraceEventRecord): SearchTracePreview 
   };
 }
 
-function honeycrispFileReadPreview(event: TraceEventRecord, maxLines: number): CodeBrowserTracePreview | null {
+function appServerFileReadPreview(event: TraceEventRecord, maxLines: number): CodeBrowserTracePreview | null {
   if (event.type !== 'tool_result' && event.type !== 'artifact_created') return null;
-  const toolPayload = honeycrispToolPayload(event, 'file.read');
+  const toolPayload = appServerToolPayload(event, 'file.read');
   if (!toolPayload) return null;
   const result = tracePayloadRecord(toolPayload, 'result');
   const inputs = tracePayloadRecord(toolPayload, 'normalizedInputs');
   const sourcePath = stringRecordValue(result ?? {}, 'resolvedPath') ?? stringRecordValue(result ?? {}, 'requestedPath') ?? stringRecordValue(inputs ?? {}, 'path');
   const text = typeof result?.text === 'string' ? result.text : '';
-  const allExcerptLines = splitHoneycrispExcerptLines(text);
+  const allExcerptLines = splitAppServerExcerptLines(text);
   const visibleExcerptLines = allExcerptLines.slice(0, maxLines);
   const bytesRead = numberPayloadValue(result ?? {}, 'bytesRead');
   const offset = numberPayloadValue(result ?? {}, 'offset');
@@ -747,9 +747,9 @@ function honeycrispFileReadPreview(event: TraceEventRecord, maxLines: number): C
   };
 }
 
-function honeycrispRepositorySearchPreview(event: TraceEventRecord): SearchTracePreview | null {
+function appServerRepositorySearchPreview(event: TraceEventRecord): SearchTracePreview | null {
   if (event.type !== 'tool_result') return null;
-  const toolPayload = honeycrispToolPayload(event, 'repository.search');
+  const toolPayload = appServerToolPayload(event, 'repository.search');
   if (!toolPayload) return null;
   const result = tracePayloadRecord(toolPayload, 'result');
   const inputs = tracePayloadRecord(toolPayload, 'normalizedInputs');
@@ -789,15 +789,15 @@ function verifierStatusFromSummary(summary: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
-function honeycrispToolPayload(event: TraceEventRecord, expectedToolName: string): Record<string, unknown> | null {
-  const kind = tracePayloadPrimitive(event.payload, 'honeycrispKind');
+function appServerToolPayload(event: TraceEventRecord, expectedToolName: string): Record<string, unknown> | null {
+  const kind = tracePayloadPrimitive(event.payload, 'appServerKind');
   if (kind !== 'tool.observed' && kind !== 'tool.requested') return null;
   const payload = tracePayloadRecord(event.payload, 'payload');
   if (!payload) return null;
   return stringRecordValue(payload, 'toolName') === expectedToolName ? payload : null;
 }
 
-function splitHoneycrispExcerptLines(text: string): string[] {
+function splitAppServerExcerptLines(text: string): string[] {
   const normalized = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
   return normalized ? normalized.split('\n') : [];
 }
@@ -975,13 +975,13 @@ function rawTraceEventSummary(event: TraceEventRecord, category: TraceCategoryId
   if (summary === 'OpenAI previous response state was unavailable; retrying with compacted Beale replay context.') return 'Retry with compacted replay';
   if (summary === 'OpenAI backend rejected previous_response_id; retrying with compacted Beale replay context.') return 'Retry with compacted replay';
   if (
-    summary === 'Provider context window pressure triggered a Honeycrisp compacted retry.'
+    summary === 'Provider context window pressure triggered an app-server compacted retry.'
     || summary === 'OpenAI context window pressure triggered compacted retry.'
   ) return 'Compact context for retry';
   if (summary === 'OpenAI Responses run failed.') return 'Fail Responses run';
-  if (/^Honeycrisp tool\.requested(?::|$)/.test(summary)) return honeycrispToolTraceTitle(event, summary, 'Requested');
-  if (/^Honeycrisp tool\.observed(?::|$)/.test(summary)) return honeycrispToolTraceTitle(event, summary, 'Observed');
-  if (/^Honeycrisp context\.compiled(?::|$)/i.test(summary)) return 'Honeycrisp Context Compiled';
+  if (/^app-server tool\.requested(?::|$)/.test(summary)) return appServerToolTraceTitle(event, summary, 'Requested');
+  if (/^app-server tool\.observed(?::|$)/.test(summary)) return appServerToolTraceTitle(event, summary, 'Observed');
+  if (/^app-server context\.compiled(?::|$)/i.test(summary)) return 'app-server Context Compiled';
   if (summary === 'Context compacted for long-running session.') return 'Compact context for long-running session';
   if (summary === 'Workspace recovery paused interrupted run after app restart.') return 'Pause interrupted run after restart';
   if (summary === 'Run started from markdown prompt.') return 'Start run from prompt';
@@ -1046,12 +1046,12 @@ function rawTraceEventSummary(event: TraceEventRecord, category: TraceCategoryId
   return `${traceCategoryFallbackPrefix(category)}: ${summary}`;
 }
 
-function honeycrispToolTraceTitle(event: TraceEventRecord, summary: string, action: 'Requested' | 'Observed'): string {
+function appServerToolTraceTitle(event: TraceEventRecord, summary: string, action: 'Requested' | 'Observed'): string {
   const nestedPayload = tracePayloadRecord(event.payload, 'payload');
   const toolName =
     tracePayloadPrimitive(event.payload, 'toolName') ??
     (nestedPayload ? stringRecordValue(nestedPayload, 'toolName') : null) ??
-    honeycrispToolNameFromSummary(summary);
+    appServerToolNameFromSummary(summary);
   const collaborationLabel = toolName ? COLLABORATION_TOOL_LABELS[toolName] : undefined;
   const runbookLabel = toolName ? RUNBOOK_TOOL_LABELS[toolName] : undefined;
   const label = toolName === 'shell.run'
@@ -1062,8 +1062,8 @@ function honeycrispToolTraceTitle(event: TraceEventRecord, summary: string, acti
   return action === 'Requested' ? `${label} Requested` : label;
 }
 
-function honeycrispToolNameFromSummary(summary: string): string | null {
-  const match = summary.match(/^Honeycrisp tool\.(?:requested|observed):\s*([a-zA-Z][a-zA-Z0-9_.-]*?)\s*\.?$/);
+function appServerToolNameFromSummary(summary: string): string | null {
+  const match = summary.match(/^app-server tool\.(?:requested|observed):\s*([a-zA-Z][a-zA-Z0-9_.-]*?)\s*\.?$/);
   return match?.[1] ?? null;
 }
 
@@ -1093,8 +1093,8 @@ function startsWithTraceVerb(summary: string): boolean {
 }
 
 function tracePayloadDetailText(event: TraceEventRecord, category: TraceCategoryId, detail: RunDetail | null): string {
-  const honeycrispToolDetail = honeycrispToolTraceDetailText(event, detail);
-  if (honeycrispToolDetail !== null) return honeycrispToolDetail;
+  const appServerToolDetail = appServerToolTraceDetailText(event, detail);
+  if (appServerToolDetail !== null) return appServerToolDetail;
 
   const payload = event.payload;
   const parts =
@@ -1112,35 +1112,35 @@ function tracePayloadDetailText(event: TraceEventRecord, category: TraceCategory
   return truncateText(formatTraceDetailParts(parts), 300);
 }
 
-function honeycrispToolTraceDetailText(event: TraceEventRecord, detail: RunDetail | null): string | null {
-  const kind = honeycrispToolEventKind(event);
+function appServerToolTraceDetailText(event: TraceEventRecord, detail: RunDetail | null): string | null {
+  const kind = appServerToolEventKind(event);
   if (kind !== 'tool.requested' && kind !== 'tool.observed') return null;
 
-  const payload = honeycrispEventToolPayload(event);
+  const payload = appServerEventToolPayload(event);
   if (!payload) return '';
-  if (kind === 'tool.requested') return honeycrispToolTraceSubtext(event, detail);
+  if (kind === 'tool.requested') return appServerToolTraceSubtext(event, detail);
   const status = stringRecordValue(payload, 'status');
   const error = tracePayloadRecord(payload, 'error');
   const errorMessage = error ? stringRecordValue(error, 'message') : stringRecordValue(payload, 'error');
   if (errorMessage) return errorMessage;
-  const subtext = honeycrispToolTraceSubtext(event, detail);
+  const subtext = appServerToolTraceSubtext(event, detail);
   return subtext || (status && status !== 'complete' ? traceLabel(status) : '');
 }
 
 function memoryTypeForGetTrace(event: TraceEventRecord, memoryId: string, detail: RunDetail | null): string | null {
-  const catalogType = detail?.honeycrispMemory?.nodes.find((node) => node.id === memoryId)?.type;
+  const catalogType = detail?.appServerMemory?.nodes.find((node) => node.id === memoryId)?.type;
   if (catalogType) return catalogType;
 
-  const currentPayload = honeycrispEventToolPayload(event);
+  const currentPayload = appServerEventToolPayload(event);
   const currentResult = currentPayload ? tracePayloadRecord(currentPayload, 'result') : null;
   const currentType = currentResult ? stringRecordValue(currentResult, 'type') : null;
   if (currentType) return currentType;
 
-  const pairingKey = honeycrispToolPairingKey(event);
+  const pairingKey = appServerToolPairingKey(event);
   const observation = pairingKey
-    ? detail?.traceEvents.find((candidate) => honeycrispToolEventKind(candidate) === 'tool.observed' && honeycrispToolPairingKey(candidate) === pairingKey)
+    ? detail?.traceEvents.find((candidate) => appServerToolEventKind(candidate) === 'tool.observed' && appServerToolPairingKey(candidate) === pairingKey)
     : null;
-  const observationPayload = observation ? honeycrispEventToolPayload(observation) : null;
+  const observationPayload = observation ? appServerEventToolPayload(observation) : null;
   const result = observationPayload ? tracePayloadRecord(observationPayload, 'result') : null;
   const observedType = result ? stringRecordValue(result, 'type') : null;
   if (observedType) return observedType;

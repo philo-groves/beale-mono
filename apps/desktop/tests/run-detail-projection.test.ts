@@ -35,7 +35,7 @@ describe('run detail commentary projection', () => {
     const hiddenExecutor = traceEvent('hidden', {
       source: 'executor',
       type: 'research_event',
-      payload: { text: hugeValue, honeycrispSessionEventId: 'session_event_hidden', agentPath: '/root' }
+      payload: { text: hugeValue, appServerSessionEventId: 'session_event_hidden', agentPath: '/root' }
     });
     const detail = runDetail({
       traceEvents: [requested, observed, hiddenExecutor],
@@ -49,7 +49,7 @@ describe('run detail commentary projection', () => {
     expect(projected.traceEvents[0]).toMatchObject({
       id: 'request',
       payload: {
-        honeycrispKind: 'tool.requested',
+        appServerKind: 'tool.requested',
         toolName: 'file.read',
         commentaryDetailDeferred: true,
         payload: {
@@ -62,7 +62,7 @@ describe('run detail commentary projection', () => {
     expect(JSON.stringify(projected.traceEvents)).not.toContain(hugeValue);
     expect(projected.traceEvents[2]?.payload).toEqual({
       agentPath: '/root',
-      honeycrispSessionEventId: 'session_event_hidden'
+      appServerSessionEventId: 'session_event_hidden'
     });
     expect(projected.transcriptMessages[0]?.contentMarkdown).toBe('Visible commentary.');
     expect(projected.transcriptMessages[1]?.contentMarkdown).toBe('');
@@ -231,7 +231,7 @@ describe('run detail commentary projection', () => {
       source: 'executor',
       type: 'research_event',
       payload: {
-        honeycrispKind: 'agent.event',
+        appServerKind: 'agent.event',
         agentPath: '/root/reviewer',
         payload: {
           type: 'subagent.activity',
@@ -249,7 +249,7 @@ describe('run detail commentary projection', () => {
     }));
 
     expect(projected.payload).toEqual({
-      honeycrispKind: 'agent.event',
+      appServerKind: 'agent.event',
       agentPath: '/root/reviewer',
       payload: {
         type: 'subagent.activity',
@@ -471,7 +471,7 @@ describe('run detail commentary projection', () => {
       type: 'model_message',
       payload: {
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         text: 'Rendered reasoning.',
         internalState: { large: 'not rendered' },
         metadata: { responseId: 'response_one', privateValue: 'not rendered' }
@@ -480,7 +480,7 @@ describe('run detail commentary projection', () => {
 
     expect(projected.payload).toEqual({
       transcriptRole: 'assistant',
-      transcriptSource: 'honeycrisp_commentary',
+      transcriptSource: 'app_server_commentary',
       text: 'Rendered reasoning.',
       metadata: { responseId: 'response_one' }
     });
@@ -500,7 +500,7 @@ describe('run detail commentary projection', () => {
               cacheRead: 30_000,
               totalTokens: 41_000,
               cacheHitRate: 0.75,
-              source: 'Honeycrisp reported model usage',
+              source: 'app-server reported model usage',
               privateProviderDetail: 'not rendered'
             }
           }
@@ -522,7 +522,7 @@ describe('run detail commentary projection', () => {
       cacheRead: 30_000,
       totalTokens: 41_000,
       cacheHitRate: 0.75,
-      source: 'Honeycrisp reported model usage'
+      source: 'app-server reported model usage'
     });
     expect(projected.traceEvents[1]?.payload.payload).toEqual({
       agentPath: '/auxiliary-model',
@@ -609,12 +609,12 @@ function toolEvent(id: string, kind: 'tool.requested' | 'tool.observed', payload
   return traceEvent(id, {
     source: 'executor',
     type: 'research_event',
-    summary: `Honeycrisp ${kind}: ${toolName}.`,
+    summary: `app-server ${kind}: ${toolName}.`,
     payload: {
-      honeycrispKind: kind,
+      appServerKind: kind,
       toolName,
       agentPath: '/root',
-      honeycrispSessionEventId: id,
+      appServerSessionEventId: id,
       payload
     }
   });
@@ -648,7 +648,7 @@ function transcript(contentMarkdown: string, role: TranscriptMessageRecord['role
     traceEventId: null,
     role,
     contentMarkdown,
-    source: role === 'assistant' ? 'honeycrisp_commentary' : 'system',
+    source: role === 'assistant' ? 'app_server_commentary' : 'system',
     metadata: { agentPath: '/root', privateValue: 'not rendered' },
     createdAt: '2026-08-16T12:00:01.000Z'
   };

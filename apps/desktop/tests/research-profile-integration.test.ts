@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { preBealeHashDomain } from '@beale/research-agent/legacy-compatibility';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,11 +9,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   decodeResearchProfileCatalogEnvelope,
   ResearchProfileService,
-  resolveHoneycrispProfileInvocation
+  resolveAppServerProfileInvocation
 } from '../src/main/researchProfileService';
 import { WorkspaceDatabase } from '../src/main/database';
 import { ensureBealeAppServerRunning } from '../src/main/bealeAppServerClient';
-import { HoneycrispRunEngine } from '../src/main/honeycrispRunEngine';
+import { AppServerRunEngine } from '../src/main/appServerRunEngine';
 import { isResearchProfileMemoryStatusActive, WorkspaceService } from '../src/main/workspaceService';
 import { migrateResearchProfile, serializeResearchProfile } from '../src/shared/researchProfile';
 import type { ResearchProfile, ResearchProfileModelJob, ResolvedResearchProfile, StartRunInput } from '@shared/types';
@@ -38,37 +39,37 @@ afterEach(() => {
   delete process.env.FAKE_APP_SERVER_DATABASE_PATH;
   delete process.env.FAKE_APP_SERVER_ARTIFACT_DIRECTORY;
   delete process.env.FAKE_RESEARCH_AGENT_MODULE;
-  delete process.env.BEALE_HONEYCRISP_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_ARGS_JSON;
-  delete process.env.BEALE_HONEYCRISP_CWD;
-  delete process.env.BEALE_HONEYCRISP_ROOT;
-  delete process.env.BEALE_HONEYCRISP_NODE_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_PNPM_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_PROTOCOL_ARGS_JSON;
-  delete process.env.BEALE_HONEYCRISP_PROTOCOL_CWD;
-  delete process.env.BEALE_HONEYCRISP_SESSION_OWNERSHIP;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_ARGS_JSON;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_CWD;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_ROOT;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_NODE_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_PNPM_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_TOOL_FAMILY_CEILING_JSON;
-  delete process.env.BEALE_HONEYCRISP_PROFILE_SIDE_EFFECT_CEILING_JSON;
+  delete process.env.BEALE_APP_SERVER_COMMAND;
+  delete process.env.BEALE_APP_SERVER_ARGS_JSON;
+  delete process.env.BEALE_APP_SERVER_CWD;
+  delete process.env.BEALE_APP_SERVER_ROOT;
+  delete process.env.BEALE_APP_SERVER_NODE_COMMAND;
+  delete process.env.BEALE_APP_SERVER_PNPM_COMMAND;
+  delete process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND;
+  delete process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON;
+  delete process.env.BEALE_APP_SERVER_PROTOCOL_CWD;
+  delete process.env.BEALE_APP_SERVER_SESSION_OWNERSHIP;
+  delete process.env.BEALE_APP_SERVER_PROFILE_COMMAND;
+  delete process.env.BEALE_APP_SERVER_PROFILE_ARGS_JSON;
+  delete process.env.BEALE_APP_SERVER_PROFILE_CWD;
+  delete process.env.BEALE_APP_SERVER_PROFILE_ROOT;
+  delete process.env.BEALE_APP_SERVER_PROFILE_NODE_COMMAND;
+  delete process.env.BEALE_APP_SERVER_PROFILE_PNPM_COMMAND;
+  delete process.env.BEALE_APP_SERVER_PROFILE_TOOL_FAMILY_CEILING_JSON;
+  delete process.env.BEALE_APP_SERVER_PROFILE_SIDE_EFFECT_CEILING_JSON;
   delete process.env.BEALE_OPENAI_ACCESS_TOKEN;
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe('research profile host integration', () => {
-  it('decodes an additive Honeycrisp catalog envelope and validates protocol, schema, and hash', () => {
+  it('decodes an additive app-server catalog envelope and validates protocol, schema, and hash', () => {
     const envelope = { ...testResearchProfileCatalogEnvelope(), additiveField: { accepted: true } };
     const captured: { command?: string; args?: readonly string[] } = {};
     const service = new ResearchProfileService({
       resolveInvocation: () => ({
-        command: 'honeycrisp-test',
+        command: 'app-server-test',
         prefixArgs: ['cli.js'],
-        cwd: 'C:\\honeycrisp',
+        cwd: 'C:\\appServer',
         configuredBy: 'env_command',
         usesNodeRuntime: true
       }),
@@ -82,7 +83,7 @@ describe('research profile host integration', () => {
     const resolved = service.resolve('C:\\workspace', 'security-research');
     expect(resolved.profile.name).toBe('Security');
     expect(captured).toEqual({
-      command: 'honeycrisp-test',
+      command: 'app-server-test',
       args: ['cli.js', 'profile', 'resolve', '--workspace-root', 'C:\\workspace', '--profile-id', 'security-research', '--json']
     });
 
@@ -104,7 +105,7 @@ describe('research profile host integration', () => {
     delete capabilities.allowedMcpServerIds;
     const migratedProfile = migrateResearchProfile(legacyProfile).profile;
     const hash = createHash('sha256')
-      .update('honeycrisp:research-profile:v1\0')
+      .update(preBealeHashDomain('research-profile:v1\0'))
       .update(serializeResearchProfile(migratedProfile))
       .digest('hex');
 
@@ -150,9 +151,9 @@ describe('research profile host integration', () => {
     let maxActive = 0;
     const service = new ResearchProfileService({
       resolveInvocation: () => ({
-        command: 'honeycrisp-test',
+        command: 'app-server-test',
         prefixArgs: ['cli.js'],
-        cwd: 'C:\\honeycrisp',
+        cwd: 'C:\\appServer',
         configuredBy: 'env_command',
         usesNodeRuntime: true
       }),
@@ -214,18 +215,18 @@ describe('research profile host integration', () => {
 
   it('keeps run-engine invocation overrides out of canonical profile resolution', () => {
     const unrelatedRoot = temporaryDirectory();
-    process.env.BEALE_HONEYCRISP_COMMAND = 'run-only-wrapper';
-    process.env.BEALE_HONEYCRISP_ARGS_JSON = JSON.stringify(['run-only.mjs']);
-    process.env.BEALE_HONEYCRISP_CWD = unrelatedRoot;
-    process.env.BEALE_HONEYCRISP_ROOT = unrelatedRoot;
-    process.env.BEALE_HONEYCRISP_NODE_COMMAND = 'run-only-node';
-    process.env.BEALE_HONEYCRISP_PNPM_COMMAND = 'run-only-pnpm';
+    process.env.BEALE_APP_SERVER_COMMAND = 'run-only-wrapper';
+    process.env.BEALE_APP_SERVER_ARGS_JSON = JSON.stringify(['run-only.mjs']);
+    process.env.BEALE_APP_SERVER_CWD = unrelatedRoot;
+    process.env.BEALE_APP_SERVER_ROOT = unrelatedRoot;
+    process.env.BEALE_APP_SERVER_NODE_COMMAND = 'run-only-node';
+    process.env.BEALE_APP_SERVER_PNPM_COMMAND = 'run-only-pnpm';
 
     const workspaceRoot = resolve(process.cwd(), '..', '..');
-    const workspaceCli = join(workspaceRoot, 'packages', 'honeycrisp-host', 'dist', 'cli.js');
+    const workspaceCli = join(workspaceRoot, 'packages', 'app-server-runtime', 'dist', 'cli.js');
     expect(existsSync(workspaceCli)).toBe(true);
 
-    const invocation = resolveHoneycrispProfileInvocation();
+    const invocation = resolveAppServerProfileInvocation();
     expect(invocation).toMatchObject({
       prefixArgs: [workspaceCli],
       cwd: workspaceRoot,
@@ -237,26 +238,26 @@ describe('research profile host integration', () => {
   });
 
   it('fails closed instead of using run-only invocation overrides when no canonical profile resolver is present', () => {
-    const missingRoot = join(temporaryDirectory(), 'missing-honeycrisp');
-    process.env.BEALE_HONEYCRISP_COMMAND = 'run-only-wrapper';
-    process.env.BEALE_HONEYCRISP_ARGS_JSON = JSON.stringify(['run-only.mjs']);
-    process.env.BEALE_HONEYCRISP_CWD = temporaryDirectory();
+    const missingRoot = join(temporaryDirectory(), 'missing-appServer');
+    process.env.BEALE_APP_SERVER_COMMAND = 'run-only-wrapper';
+    process.env.BEALE_APP_SERVER_ARGS_JSON = JSON.stringify(['run-only.mjs']);
+    process.env.BEALE_APP_SERVER_CWD = temporaryDirectory();
 
-    expect(() => resolveHoneycrispProfileInvocation({ defaultRoot: missingRoot }))
-      .toThrow(/Canonical Honeycrisp profile resolution is unavailable/);
+    expect(() => resolveAppServerProfileInvocation({ defaultRoot: missingRoot }))
+      .toThrow(/Canonical app-server profile resolution is unavailable/);
   });
 
   it('uses an explicitly configured versioned profile resolver without run-only arguments', () => {
-    const missingRoot = join(temporaryDirectory(), 'missing-honeycrisp');
+    const missingRoot = join(temporaryDirectory(), 'missing-appServer');
     const profileCwd = temporaryDirectory();
-    process.env.BEALE_HONEYCRISP_COMMAND = 'run-only-wrapper';
-    process.env.BEALE_HONEYCRISP_ARGS_JSON = JSON.stringify(['run-only.mjs']);
-    process.env.BEALE_HONEYCRISP_PROFILE_COMMAND = 'packaged-honeycrisp';
-    process.env.BEALE_HONEYCRISP_PROFILE_ARGS_JSON = JSON.stringify(['--catalog-protocol', '1']);
-    process.env.BEALE_HONEYCRISP_PROFILE_CWD = profileCwd;
+    process.env.BEALE_APP_SERVER_COMMAND = 'run-only-wrapper';
+    process.env.BEALE_APP_SERVER_ARGS_JSON = JSON.stringify(['run-only.mjs']);
+    process.env.BEALE_APP_SERVER_PROFILE_COMMAND = 'packaged-appServer';
+    process.env.BEALE_APP_SERVER_PROFILE_ARGS_JSON = JSON.stringify(['--catalog-protocol', '1']);
+    process.env.BEALE_APP_SERVER_PROFILE_CWD = profileCwd;
 
-    expect(resolveHoneycrispProfileInvocation({ defaultRoot: missingRoot })).toMatchObject({
-      command: 'packaged-honeycrisp',
+    expect(resolveAppServerProfileInvocation({ defaultRoot: missingRoot })).toMatchObject({
+      command: 'packaged-appServer',
       prefixArgs: ['--catalog-protocol', '1'],
       cwd: profileCwd,
       configuredBy: 'env_command'
@@ -267,10 +268,10 @@ describe('research profile host integration', () => {
     const root = temporaryDirectory();
     const workspace = join(root, 'workspace');
     const invocationLog = join(root, 'invocations.jsonl');
-    const fakeHoneycrisp = join(root, 'fake-honeycrisp.mjs');
+    const fakeAppServer = join(root, 'fake-appServer.mjs');
     mkdirSync(workspace, { recursive: true });
-    writeFileSync(fakeHoneycrisp, fakeHoneycrispSource());
-    configureFakeAppServer(root, fakeHoneycrisp, [invocationLog]);
+    writeFileSync(fakeAppServer, fakeAppServerSource());
+    configureFakeAppServer(root, fakeAppServer, [invocationLog]);
     await ensureBealeAppServerRunning();
 
     const firstProfile = profileWithWorkflow('1.0.0', 'discovery');
@@ -288,8 +289,8 @@ describe('research profile host integration', () => {
     let currentProfile: ResolvedResearchProfile = resolvedTestResearchProfile(firstProfile);
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => currentProfile
     });
 
@@ -302,12 +303,12 @@ describe('research profile host integration', () => {
       await waitForRun(service, firstRunId);
       const firstDetail = service.getRunDetail(firstRunId);
       const firstRun = firstDetail.run;
-      const firstCatalogHash = firstDetail.honeycrispMemory?.activeCatalogHash;
+      const firstCatalogHash = firstDetail.appServerMemory?.activeCatalogHash;
       expect(firstRun.researchProfileSnapshotId).toBe(opened.researchProfile.id);
       expect(firstDetail.researchProfile?.profileVersion).toBe('1.0.0');
       expect(firstCatalogHash).toMatch(/^[a-f0-9]{64}$/u);
 
-      currentProfile = resolvedTestResearchProfile(secondProfile, 'workspace-default', join(workspace, '.honeycrisp', 'profile.json'));
+      currentProfile = resolvedTestResearchProfile(secondProfile, 'workspace-default', join(workspace, '.beale', 'profile.json'));
       const secondStarted = service.startRun(runInput('analysis-pass'));
       const secondRunId = secondStarted.runs.find((row) => row.run.id !== firstRunId)?.run.id ?? '';
       await waitForRun(service, secondRunId);
@@ -315,10 +316,10 @@ describe('research profile host integration', () => {
       const secondRun = secondDetail.run;
       expect(secondRun.researchProfileSnapshotId).not.toBe(firstRun.researchProfileSnapshotId);
       expect(secondDetail.researchProfile?.profileVersion).toBe('2.0.0');
-      expect(secondDetail.honeycrispMemory?.activeCatalogHash).not.toBe(firstCatalogHash);
+      expect(secondDetail.appServerMemory?.activeCatalogHash).not.toBe(firstCatalogHash);
       const retainedFirstDetail = service.getRunDetail(firstRunId);
       expect(retainedFirstDetail.researchProfile?.profileVersion).toBe('1.0.0');
-      expect(retainedFirstDetail.honeycrispMemory?.activeCatalogHash).toBe(firstCatalogHash);
+      expect(retainedFirstDetail.appServerMemory?.activeCatalogHash).toBe(firstCatalogHash);
       expect(service.getSnapshot()?.researchProfile).toMatchObject({
         profileVersion: '2.0.0',
         profileHash: currentProfile.hash
@@ -359,7 +360,7 @@ describe('research profile host integration', () => {
       expect(invocations[0]?.args).not.toContain('--skill');
       expect(invocations[0]?.args).not.toContain('--memory-type-descriptions');
       const detail = await service.getRunDetailForClient(firstRunId);
-      const launchEvents = detail.traceEvents.filter((event) => event.summary.startsWith('Honeycrisp session requested from the Beale app-server'));
+      const launchEvents = detail.traceEvents.filter((event) => event.summary.startsWith('app-server session requested from the Beale app-server'));
       expect(launchEvents).toHaveLength(1);
       const serializedLaunches = JSON.stringify(launchEvents);
       expect(serializedLaunches).not.toContain(resolvedTestResearchProfile(firstProfile).hash);
@@ -375,18 +376,18 @@ describe('research profile host integration', () => {
     const root = temporaryDirectory();
     const workspace = join(root, 'workspace');
     const invocationLog = join(root, 'invocations.jsonl');
-    const fakeHoneycrisp = join(root, 'fake-honeycrisp.mjs');
+    const fakeAppServer = join(root, 'fake-appServer.mjs');
     mkdirSync(workspace, { recursive: true });
-    writeFileSync(fakeHoneycrisp, fakeHoneycrispSource());
-    configureFakeAppServer(root, fakeHoneycrisp, [invocationLog]);
+    writeFileSync(fakeAppServer, fakeAppServerSource());
+    configureFakeAppServer(root, fakeAppServer, [invocationLog]);
     await ensureBealeAppServerRunning();
 
     let currentProfile = resolvedTestResearchProfile(generalResearchProfile());
     const modelRequests: Record<string, unknown>[] = [];
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => currentProfile,
       researchSubjectResolver: () => ({ id: 'climate-model', name: 'Regional Climate Model' }),
       openAiFetch: async (_url, init) => {
@@ -518,7 +519,7 @@ describe('research profile host integration', () => {
         role: 'assistant',
         phase: 'final_answer',
         contentMarkdown: 'Completed regional analysis.',
-        source: 'honeycrisp',
+        source: 'app-server',
         metadata: { nextPromptSuggestions: capturedNextPrompts }
       });
       const modelRequestCount = modelRequests.length;
@@ -612,7 +613,7 @@ describe('research profile host integration', () => {
     }
   }, 240_000);
 
-  it('keeps memory-disabled recommendation jobs isolated from Honeycrisp memory storage and context', async () => {
+  it('keeps memory-disabled recommendation jobs isolated from app-server memory storage and context', async () => {
     process.env.BEALE_OPENAI_ACCESS_TOKEN = 'memory-disabled-recommendation-test-token';
     const root = temporaryDirectory();
     const workspace = join(root, 'workspace');
@@ -629,8 +630,8 @@ describe('research profile host integration', () => {
     const databasePath = join(root, 'memory.sqlite');
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: databasePath,
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: databasePath,
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(profile),
       openAiFetch: async (_url, init) => {
         const request = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>;
@@ -673,7 +674,7 @@ describe('research profile host integration', () => {
 
       expect(modelRequests).toHaveLength(2);
       for (const request of modelRequests) {
-        expect(String(request.instructions)).not.toMatch(/Honeycrisp memory|recorded memories|active memory/i);
+        expect(String(request.instructions)).not.toMatch(/app-server memory|recorded memories|active memory/i);
         const payload = modelRequestPayload(request);
         const coverageHints = payload.coverageHints as Record<string, unknown>;
         expect(coverageHints).not.toHaveProperty('activeMemoryNodes');
@@ -695,7 +696,7 @@ describe('research profile host integration', () => {
   });
 
   it('rejects a mismatched profile at the Desktop/app-server capture boundary', async () => {
-    const captureOptions: FakeHoneycrispCaptureOptions = {
+    const captureOptions: FakeAppServerCaptureOptions = {
       researchProfileOverride: {
         ...resolvedTestResearchProfile(profileWithWorkflow('9.0.0', 'discovery')),
         workflowId: 'discovery'
@@ -704,16 +705,16 @@ describe('research profile host integration', () => {
     const root = temporaryDirectory();
     const workspace = join(root, 'workspace');
     const invocationLog = join(root, 'invocations.jsonl');
-    const fakeHoneycrisp = join(root, 'fake-honeycrisp.mjs');
+    const fakeAppServer = join(root, 'fake-appServer.mjs');
     mkdirSync(workspace, { recursive: true });
-    writeFileSync(fakeHoneycrisp, fakeHoneycrispSource(captureOptions));
-    configureFakeAppServer(root, fakeHoneycrisp, [invocationLog]);
+    writeFileSync(fakeAppServer, fakeAppServerSource(captureOptions));
+    configureFakeAppServer(root, fakeAppServer, [invocationLog]);
     await ensureBealeAppServerRunning();
 
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(testResearchProfile())
     });
     try {
@@ -724,11 +725,11 @@ describe('research profile host integration', () => {
 
       const detail = service.getRunDetail(runId);
       expect(detail.run.summary).toMatch(/does not match the profile and workflow pinned to session/);
-      expect(detail.artifacts.some((artifact) => artifact.kind === 'honeycrisp_flow_capture')).toBe(false);
+      expect(detail.artifacts.some((artifact) => artifact.kind === 'app_server_flow_capture')).toBe(false);
       expect(detail.traceEvents.some((event) =>
-        event.summary === 'Honeycrisp flow capture preserved as a Beale artifact.'
+        event.summary === 'app-server flow capture preserved as a Beale artifact.'
       )).toBe(false);
-      expect(detail.transcriptMessages.some((message) => message.source === 'honeycrisp')).toBe(false);
+      expect(detail.transcriptMessages.some((message) => message.source === 'app-server')).toBe(false);
     } finally {
       service.close();
     }
@@ -750,9 +751,9 @@ describe('research profile host integration', () => {
       reasoningEffort: 'minimal',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { maxMinutes: 5, maxAttempts: 1, maxCostUsd: 0, runEngine: 'honeycrisp' }
+      budget: { maxMinutes: 5, maxAttempts: 1, maxCostUsd: 0, runEngine: 'app-server' }
     });
-    const engine = new HoneycrispRunEngine(database);
+    const engine = new AppServerRunEngine(database);
     try {
       expect(() => engine.extendRun(legacy.run.id, 'Continue.')).toThrow(/no pinned research profile snapshot/);
     } finally {
@@ -862,7 +863,7 @@ function generalResearchProfile(
 
 function runInput(workflowId: string): StartRunInput {
   return {
-    runEngine: 'honeycrisp',
+    runEngine: 'app-server',
     provider: 'openai-codex',
     shellSafetyMode: 'auto_review',
     goalEnabled: false,
@@ -878,11 +879,11 @@ function runInput(workflowId: string): StartRunInput {
   };
 }
 
-interface FakeHoneycrispCaptureOptions {
+interface FakeAppServerCaptureOptions {
   researchProfileOverride?: ResolvedResearchProfile & { workflowId: string };
 }
 
-function fakeHoneycrispSource(options: FakeHoneycrispCaptureOptions = {}): string {
+function fakeAppServerSource(options: FakeAppServerCaptureOptions = {}): string {
   const profileOverride = options.researchProfileOverride
     ? {
         schemaVersion: options.researchProfileOverride.profile.schemaVersion,
@@ -919,7 +920,7 @@ function fakeHoneycrispSource(options: FakeHoneycrispCaptureOptions = {}): strin
     "const captureResearchProfile = profileOverride ?? { schemaVersion: profile.schemaVersion, id: profile.id, version: profile.version, hash: profileHash, source: resolvedProfile.source, workflowId: workflow, snapshot: profile };",
     "const capture = { schemaVersion: 5, capturedAt: now, request: { prompt: value('-p') }, researchProfile: captureResearchProfile, agent: { id: 'agent_profile_fixture', status: 'complete', executorName: 'profile-fixture', startedAt: now, completedAt: now, outputText: 'Profile fixture complete.' }, eventTimeline: [] };",
     "writeFileSync(capturePath, JSON.stringify(capture) + '\\n');",
-    "const sessionStore = new researchAgent.HoneycrispSessionStore();",
+    "const sessionStore = new researchAgent.AppServerSessionStore();",
     "try { sessionStore.importCapture(value('--session-id'), { attemptId: value('--attempt-id'), capture }); } finally { sessionStore.close(); }"
   ].join('\n');
 }
@@ -933,9 +934,9 @@ const RESEARCH_AGENT_MODULE = fileURLToPath(new URL('../../../packages/research-
  * The scripted worker supplies deterministic capture data for Desktop tests.
  */
 function configureFakeAppServer(root: string, childScript: string, childArgs: readonly string[]): void {
-  delete process.env.BEALE_HONEYCRISP_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_ARGS_JSON;
-  delete process.env.BEALE_HONEYCRISP_CWD;
+  delete process.env.BEALE_APP_SERVER_COMMAND;
+  delete process.env.BEALE_APP_SERVER_ARGS_JSON;
+  delete process.env.BEALE_APP_SERVER_CWD;
   const stateFile = join(root, 'app-server-state.json');
   process.env.BEALE_APP_SERVER_COMMAND = process.execPath;
   process.env.BEALE_APP_SERVER_ARGS_JSON = JSON.stringify([FAKE_APP_SERVER_FIXTURE]);
@@ -949,7 +950,7 @@ function configureFakeAppServer(root: string, childScript: string, childArgs: re
   process.env.FAKE_APP_SERVER_DATABASE_PATH = join(root, 'memory.sqlite');
   process.env.FAKE_APP_SERVER_ARTIFACT_DIRECTORY = join(root, 'artifacts');
   process.env.FAKE_RESEARCH_AGENT_MODULE = RESEARCH_AGENT_MODULE;
-  process.env.BEALE_HONEYCRISP_SESSION_OWNERSHIP = 'honeycrisp';
+  process.env.BEALE_APP_SERVER_SESSION_OWNERSHIP = 'app-server';
 }
 
 function stopFakeAppServer(): void {

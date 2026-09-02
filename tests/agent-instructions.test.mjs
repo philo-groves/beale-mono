@@ -244,5 +244,5 @@ test("research bootstrap appends selected initial context without restoring camp
 });
 
 function instructionFixture() {
-  return mkdtempSync(join(tmpdir(), "honeycrisp-agents-md-"));
+  return mkdtempSync(join(tmpdir(), "app-server-agents-md-"));
 }

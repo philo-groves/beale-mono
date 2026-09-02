@@ -33,7 +33,7 @@ describe('renderer run-detail polling', () => {
     expect(detail.traceEvents).toEqual([]);
     expect(detail.transcriptMessages).toEqual([]);
     expect(sessionSetupComplete(detail, 'database:1')).toBe(false);
-    expect(sessionSetupComplete(detail, 'honeycrisp:1')).toBe(true);
+    expect(sessionSetupComplete(detail, 'beale:1')).toBe(true);
 
     detail.attempts = [{}] as RunDetail['attempts'];
     expect(sessionSetupComplete(detail, 'database:2')).toBe(true);

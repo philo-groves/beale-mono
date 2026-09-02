@@ -205,10 +205,10 @@ test("memory type IDs stay stable across names, aliases, and retirement", () => 
 });
 
 test("workspace profiles override the bundled security default", async () => {
-  const workspaceRoot = join(tmpdir(), `honeycrisp-profile-${process.pid}-${Date.now()}`);
-  const profilePath = join(workspaceRoot, ".honeycrisp", "profile.json");
+  const workspaceRoot = join(tmpdir(), `app-server-profile-${process.pid}-${Date.now()}`);
+  const profilePath = join(workspaceRoot, ".beale", "profile.json");
   try {
-    await mkdir(join(workspaceRoot, ".honeycrisp"), { recursive: true });
+    await mkdir(join(workspaceRoot, ".beale"), { recursive: true });
     await writeFile(profilePath, JSON.stringify(generalResearchProfile()), "utf8");
     const resolved = await resolveResearchProfile({ workspaceRoot });
     assert.equal(resolved.source, "workspace-default");
@@ -292,7 +292,7 @@ test("the general-research example is a valid non-security profile", async () =>
 });
 
 test("profile-selected skills remain inert until the host explicitly selects them", async () => {
-  const workspaceRoot = join(tmpdir(), `honeycrisp-profile-skill-${process.pid}-${Date.now()}`);
+  const workspaceRoot = join(tmpdir(), `app-server-profile-skill-${process.pid}-${Date.now()}`);
   try {
     await mkdir(workspaceRoot, { recursive: true });
     const input = generalResearchProfile();

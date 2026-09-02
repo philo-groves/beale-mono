@@ -181,7 +181,7 @@ describe('Beale introspection tools', () => {
       });
       await expect(introspection.invokeBealeIntrospectionTool('run_dreaming', {})).resolves.toMatchObject({
         workspace: snapshot.workspace,
-        dreaming: snapshot.honeycrispMemory.dreaming
+        dreaming: snapshot.appServerMemory.dreaming
       });
       expect(dejunk).toHaveBeenCalledOnce();
       expect(dreaming).toHaveBeenCalledOnce();
@@ -197,8 +197,8 @@ function createService(): { service: WorkspaceService; workspace: string } {
   const workspace = join(root, 'workspace');
   const service = new WorkspaceService(() => undefined, {
     workspaceRegistryDirectory: join(root, 'registry'),
-    honeycrispDatabasePath: join(root, 'honeycrisp', 'memory.sqlite'),
-    honeycrispArtifactDirectory: join(root, 'honeycrisp', 'artifacts'),
+    appServerDatabasePath: join(root, 'app-server', 'memory.sqlite'),
+    appServerArtifactDirectory: join(root, 'app-server', 'artifacts'),
     researchProfileResolver: () => resolvedTestResearchProfile()
   });
   service.createWorkspace(workspace);

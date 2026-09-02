@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computerUseTargetBinary,
   reusableComputerUseTargetBinary
-} from '../src/main/honeycrispRunEngine';
+} from '../src/main/appServerRunEngine';
 import { WorkspaceRegistry } from '../src/main/workspaceRegistry';
 
 describe('computer-use permissions', () => {

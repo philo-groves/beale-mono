@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { usage } from "./cli-usage.js";
-import { parseHoneycrispProtocolArguments } from "./protocol.js";
+import { parseAppServerProtocolArguments } from "./protocol.js";
+import { installPreBealeEnvironmentAliases } from "@beale/research-agent/legacy-compatibility";
 
 const VERSION = "0.1.0";
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  installPreBealeEnvironmentAliases();
   try {
     const protocolArguments = isProtocolCommand(argv[0])
-      ? parseHoneycrispProtocolArguments(argv)
+      ? parseAppServerProtocolArguments(argv)
       : { args: argv };
     argv = protocolArguments.args;
     if (isProtocolCommand(argv[0])) {
@@ -30,7 +32,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       await runAppServerUtilityClient(argv);
       return;
     }
-    throw new Error('Honeycrisp execution is hosted by the Beale app-server. Start sessions through its control API.');
+    throw new Error('app-server execution is hosted by the Beale app-server. Start sessions through its control API.');
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

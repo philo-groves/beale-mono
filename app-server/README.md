@@ -1,6 +1,6 @@
 # @beale/app-server
 
-A standalone Honeycrisp execution host and client-neutral control plane. It runs each Honeycrisp session in an app-server worker and carries events and controls directly over worker messages. There is no child Honeycrisp CLI process or private loopback WebSocket. Beale Desktop and iOS use the same authenticated HTTP and WebSocket surface.
+A standalone app-server execution host and client-neutral control plane. It runs each app-server session in an app-server worker and carries events and controls directly over worker messages. There is no child app-server CLI process or private loopback WebSocket. Beale Desktop and iOS use the same authenticated HTTP and WebSocket surface.
 
 The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Its bundled agent-plugin resources live under `app-server/resources/agent-plugins`.
 
@@ -68,7 +68,7 @@ For iOS, the recommended deployment is a loopback listener behind Tailscale Serv
 - `GET /health` — liveness and compatibility probe; returns `ok`, the UTC control-contract timestamp, and the capability list. An older Desktop prompts for restart; a newer Desktop replaces an older app-server automatically.
 - `GET /v1/server` — authenticated, typed server descriptor with control/protocol versions, endpoints, capabilities, and payload/replay limits.
 - `GET /v1/providers` — authenticated, path-free model catalogs for providers connected in Desktop, including host Lead/subagent/reasoning defaults but no credentials or authentication metadata.
-- `POST /v1/operations` — execute an allowlisted canonical Honeycrisp operation inside the app-server host. Research clients can use `suggestion.generate` for profile-default workspace suggestions and `prompt.expand` for bounded model-assisted context expansion; the host supplies workspace storage, provider policy, and credentials. Campaign-track clients can use `investigation.list`, `investigation.get`, and `investigation.replay`; disabled-memory workspaces reject investigation and Dreaming operations.
+- `POST /v1/operations` — execute an allowlisted canonical app-server operation inside the app-server host. Research clients can use `suggestion.generate` for profile-default workspace suggestions and `prompt.expand` for bounded model-assisted context expansion; the host supplies workspace storage, provider policy, and credentials. Campaign-track clients can use `investigation.list`, `investigation.get`, and `investigation.replay`; disabled-memory workspaces reject investigation and Dreaming operations.
 - `POST /v1/sessions` — launch a session. Body:
 
   ```json
@@ -93,8 +93,8 @@ For iOS, the recommended deployment is a loopback listener behind Tailscale Serv
   }
   ```
 
-  The shared request and response DTOs and decoders live in `honeycrisp/protocol`. Optional typed sections cover goals, logical continuation intent and collaboration. Filesystem paths, storage locations, CLI arguments, plugins, provider policy, arbitrary environment variables, and credentials are not accepted from clients. `sessionId` is optional and must match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A completed session id may be reused; an active one rejects duplicates with `409`. The `201` response contains `controlVersion`, the session catalog entry, `attemptId`, and a transport descriptor with a relative `path`, protocol/authentication metadata, replay semantics, and the per-session token.
-- `GET /v1/sessions` — typed catalog of known sessions with state (`starting`, `running`, `completed`, `failed`, `stopped`), timestamps, exit codes, client attachment, replay-buffer counts, and a bounded diagnostic for failed Honeycrisp exits. Terminal sessions are retained up to 50 entries; `DELETE` removes them.
+  The shared request and response DTOs and decoders live in `@beale/app-server-runtime/protocol`. Optional typed sections cover goals, logical continuation intent and collaboration. Filesystem paths, storage locations, CLI arguments, plugins, provider policy, arbitrary environment variables, and credentials are not accepted from clients. `sessionId` is optional and must match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A completed session id may be reused; an active one rejects duplicates with `409`. The `201` response contains `controlVersion`, the session catalog entry, `attemptId`, and a transport descriptor with a relative `path`, protocol/authentication metadata, replay semantics, and the per-session token.
+- `GET /v1/sessions` — typed catalog of known sessions with state (`starting`, `running`, `completed`, `failed`, `stopped`), timestamps, exit codes, client attachment, replay-buffer counts, and a bounded diagnostic for failed app-server exits. Terminal sessions are retained up to 50 entries; `DELETE` removes them.
 - `GET /v1/sessions/<id>` — one typed live-process catalog entry, avoiding a full catalog poll.
 - `POST /v1/sessions/<id>/attachments` — mint an independent transport token for another Desktop or mobile client to join an active session. Terminal sessions return `410`.
 - `DELETE /v1/sessions/<id>` — stop a running session (`202`) or remove a retained terminal record (`200`). Unknown ids return `404`.
@@ -119,13 +119,13 @@ Canonical, path-free host reads use control contract v1:
 - `GET /v1/workspaces/<workspace>/sessions/<session>/collaboration`
 - `GET /v1/workspaces/<workspace>/sessions/<session>/captures`
 
-The app-server resolves `<workspace>` through the shared Beale registry. Session reads verify that the canonical session belongs to that workspace. Responses identify the workspace without exposing its path and wrap the Honeycrisp result with `controlVersion: 1`.
+The app-server resolves `<workspace>` through the shared Beale registry. Session reads verify that the canonical session belongs to that workspace. Responses identify the workspace without exposing its path and wrap the app-server result with `controlVersion: 1`.
 
 ## Session transport
 
-Clients resolve the returned `/v1/sessions/<sessionId>/transport` path against their app-server origin, replace `http` with `ws` or `https` with `wss`, authenticate with `Authorization: Bearer <per-attachment-token>`, and speak the standard Honeycrisp protocol v1 envelope stream. Every connection sends `client.hello` first; the app-server then routes controls directly to the hosted worker and broadcasts its events.
+Clients resolve the returned `/v1/sessions/<sessionId>/transport` path against their app-server origin, replace `http` with `ws` or `https` with `wss`, authenticate with `Authorization: Bearer <per-attachment-token>`, and speak the standard app-server protocol v1 envelope stream. Every connection sends `client.hello` first; the app-server then routes controls directly to the hosted worker and broadcasts its events.
 
-Desktop and mobile clients may remain attached concurrently, send independently correlated controls, and receive the same live event stream. Disconnecting one client does not stop Honeycrisp or interrupt the others. The app-server owns `server.hello` and buffers up to 256 hosted event frames or 4 MiB only while no handshaken client is attached, dropping the oldest frames on overflow and reporting counts in the session catalog. Reconnecting clients complete the handshake, receive buffered events, then use canonical cursor reads to reconcile if `droppedFrames` is nonzero.
+Desktop and mobile clients may remain attached concurrently, send independently correlated controls, and receive the same live event stream. Disconnecting one client does not stop app-server or interrupt the others. The app-server owns `server.hello` and buffers up to 256 hosted event frames or 4 MiB only while no handshaken client is attached, dropping the oldest frames on overflow and reporting counts in the session catalog. Reconnecting clients complete the handshake, receive buffered events, then use canonical cursor reads to reconcile if `droppedFrames` is nonzero.
 
 At startup, the app-server marks only canonically active attempts from its prior process as interrupted and relaunches eligible sessions as child attempts before publishing its discovery record. The restart launch descriptor contains typed, host-resolved session intent but no credentials, host paths, attachment tokens, or introspection secrets. Accepted pause and stop controls transition canonical state immediately, so those sessions are excluded from startup recovery. Older sessions without a restart descriptor and secret-bearing introspection sessions remain safely paused for manual handling.
 

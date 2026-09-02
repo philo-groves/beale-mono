@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { researchProfileHash } from "../packages/research-agent/dist/index.js";
 
-const clientPath = fileURLToPath(new URL("../packages/honeycrisp-host/dist/cli.js", import.meta.url));
+const clientPath = fileURLToPath(new URL("../packages/app-server-runtime/dist/cli.js", import.meta.url));
 
 test("the optional client resolves profiles through the app-server", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "beale-profile-client-"));

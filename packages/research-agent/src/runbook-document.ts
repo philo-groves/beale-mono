@@ -5,25 +5,26 @@ import type {
   RunbookExecutionSummary,
   RunbookOutput
 } from './knowledge-types.js';
+import { readPreBealeRecord } from './legacy-compatibility.js';
 
 const MAX_RUNBOOK_BYTES = 8 * 1024 * 1024;
 const MAX_RUNBOOK_CELLS = 1_000;
 
-export function readHoneycrispRunbook(path: string, runbookId: string): RunbookDocument {
+export function readAppServerRunbook(path: string, runbookId: string): RunbookDocument {
   if (statSync(path).size > MAX_RUNBOOK_BYTES) {
     throw new Error(`Runbook artifact is too large to display: ${runbookId}`);
   }
-  return parseHoneycrispRunbook(readFileSync(path, 'utf8'), runbookId);
+  return parseAppServerRunbook(readFileSync(path, 'utf8'), runbookId);
 }
 
-export function parseHoneycrispRunbook(source: string, runbookId: string): RunbookDocument {
+export function parseAppServerRunbook(source: string, runbookId: string): RunbookDocument {
   const notebook = requiredRecord(JSON.parse(source), 'runbook');
   if (notebook.nbformat !== 4) throw new Error('Runbook must use Jupyter nbformat 4');
   if (!Array.isArray(notebook.cells)) throw new Error('Runbook cells must be an array');
   if (notebook.cells.length > MAX_RUNBOOK_CELLS) throw new Error('Runbook contains too many cells to display');
 
   const metadata = optionalRecord(notebook.metadata);
-  const honeycrispMetadata = optionalRecord(metadata?.honeycrisp);
+  const appServerMetadata = optionalRecord(metadata?.beale) ?? readPreBealeRecord(metadata);
   const notebookLanguage =
     optionalString(optionalRecord(metadata?.language_info)?.name) ??
     optionalString(optionalRecord(metadata?.kernelspec)?.language);
@@ -33,8 +34,8 @@ export function parseHoneycrispRunbook(source: string, runbookId: string): Runbo
     nbformat: 4,
     nbformatMinor: optionalInteger(notebook.nbformat_minor) ?? 0,
     language: notebookLanguage,
-    revision: optionalInteger(honeycrispMetadata?.revision),
-    latestRun: parseExecutionSummary(honeycrispMetadata?.latestRun),
+    revision: optionalInteger(appServerMetadata?.revision),
+    latestRun: parseExecutionSummary(appServerMetadata?.latestRun),
     cells: notebook.cells.map((cell, index) => parseCell(cell, index, notebookLanguage))
   };
 }
@@ -46,11 +47,11 @@ function parseCell(value: unknown, index: number, notebookLanguage: string | nul
     throw new Error(`Unsupported runbook cell type at cell ${index + 1}`);
   }
   const metadata = optionalRecord(cell.metadata);
-  const honeycrispMetadata = optionalRecord(metadata?.honeycrisp);
+  const appServerMetadata = optionalRecord(metadata?.beale) ?? readPreBealeRecord(metadata);
   const vscodeMetadata = optionalRecord(metadata?.vscode);
   const language =
     optionalString(metadata?.language) ??
-    optionalString(honeycrispMetadata?.language) ??
+    optionalString(appServerMetadata?.language) ??
     optionalString(vscodeMetadata?.languageId) ??
     (cellType === 'code' ? notebookLanguage : null);
 
@@ -60,7 +61,7 @@ function parseCell(value: unknown, index: number, notebookLanguage: string | nul
     source: sourceText(cell.source),
     language,
     executionCount: optionalInteger(cell.execution_count),
-    latestRun: parseExecutionSummary(honeycrispMetadata?.latestRun),
+    latestRun: parseExecutionSummary(appServerMetadata?.latestRun),
     outputs: cellType === 'code' && Array.isArray(cell.outputs)
       ? cell.outputs.map((output) => parseOutput(output)).filter((output): output is RunbookOutput => output !== null)
       : []

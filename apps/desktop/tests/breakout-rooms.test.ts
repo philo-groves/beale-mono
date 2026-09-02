@@ -63,7 +63,7 @@ describe('breakout room persistence', () => {
         reasoningEffort: 'high',
         attemptStrategy: 'single_path',
         sandboxProfile: 'host',
-        budget: { runEngine: 'honeycrisp' }
+        budget: { runEngine: 'app-server' }
       });
       database.upsertBreakoutRoom({
         id: 'room_older',
@@ -146,7 +146,7 @@ describe('breakout room persistence', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'single_path',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
     const roomId = 'room_parser_review';
     const memberId = 'member_claude';

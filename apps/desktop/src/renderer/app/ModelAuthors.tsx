@@ -1,9 +1,9 @@
 import type { JSX } from 'react';
-import type { HoneycrispModelAuthor } from '@shared/types';
+import type { AppServerModelAuthor } from '@shared/types';
 import { ProviderIcon } from './ProviderIcon';
 
 export function ModelAuthors({ authors }: {
-  authors?: readonly HoneycrispModelAuthor[];
+  authors?: readonly AppServerModelAuthor[];
 }): JSX.Element {
   return (
     <div className="model-authors" aria-label="Model authors">

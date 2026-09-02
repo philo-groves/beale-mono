@@ -34,8 +34,8 @@ describe('model-reasoned memory Dreaming', () => {
     const phases: string[] = [];
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(memoryDreamingResearchProfile()),
       providerTextCompletion: async (request) => {
         calls.push(request);
@@ -79,8 +79,8 @@ describe('model-reasoned memory Dreaming', () => {
     const phases: string[] = [];
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: databasePath,
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: databasePath,
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(memoryDreamingResearchProfile()),
       openAiFetch: async (_url, init) => {
         requestBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
@@ -277,24 +277,24 @@ describe('model-reasoned memory Dreaming', () => {
       expect(projectedInput.memoryStore.relationships.every((edge) => edge.fromType && edge.toType)).toBe(true);
       expect(JSON.stringify(requestBodies[1]).length).toBeLessThan(JSON.stringify(requestBodies[0]).length);
       expect(requestBodies.every((body) => body.model === 'gpt-5.6-sol')).toBe(true);
-      expect(dreamed.honeycrispMemory.dreaming.lastRun).toMatchObject({
+      expect(dreamed.appServerMemory.dreaming.lastRun).toMatchObject({
         prunedNodeCount: 1,
         duplicateHiddenCount: 1,
         duplicateGroupCount: 1,
         reclassifiedNodeCount: 1,
         editedNodeCount: 3
       });
-      expect(dreamed.honeycrispMemory.dreaming.changes.map((change) => change.action).sort()).toEqual([
+      expect(dreamed.appServerMemory.dreaming.changes.map((change) => change.action).sort()).toEqual([
         'merge_duplicates',
         'prune',
         'reclassify',
         'revise'
       ]);
-      expect(dreamed.honeycrispMemory.nodes.map((node) => node.id).sort()).toEqual(['boundary_note', reclassifiedNodeId, 'parser_mechanism'].sort());
-      expect(dreamed.honeycrispMemory.nodes.find((node) => node.id === 'boundary_note')?.summary).toBe(
+      expect(dreamed.appServerMemory.nodes.map((node) => node.id).sort()).toEqual(['boundary_note', reclassifiedNodeId, 'parser_mechanism'].sort());
+      expect(dreamed.appServerMemory.nodes.find((node) => node.id === 'boundary_note')?.summary).toBe(
         'The boundary is reachable only through the local fixture.'
       );
-      expect(dreamed.honeycrispMemory.nodes.find((node) => node.id === reclassifiedNodeId)?.type).toBe('invariant');
+      expect(dreamed.appServerMemory.nodes.find((node) => node.id === reclassifiedNodeId)?.type).toBe('invariant');
     } finally {
       service.close();
     }
@@ -328,8 +328,8 @@ describe('model-reasoned memory Dreaming', () => {
     };
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(memoryDreamingResearchProfile()),
       openAiFetch: async (_url, init) => {
         requestBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
@@ -359,7 +359,7 @@ describe('model-reasoned memory Dreaming', () => {
       expect(correctedInput[1]!.content[0]!.text).toContain('complete replacement Dreaming plan');
       expect(correctedInput[1]!.content[0]!.text).toContain('misclassified_invariant');
       expect(correctedInput[1]!.content[0]!.text).toContain('requires non-empty attributes: rootCause');
-      expect(dreamed.honeycrispMemory.dreaming.lastRun).toMatchObject({
+      expect(dreamed.appServerMemory.dreaming.lastRun).toMatchObject({
         status: 'completed',
         reclassifiedNodeCount: 1,
         errorMessage: null
@@ -398,8 +398,8 @@ describe('model-reasoned memory Dreaming', () => {
     };
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedProfile,
       openAiFetch: async (_url, init) => {
         requestBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
@@ -412,7 +412,7 @@ describe('model-reasoned memory Dreaming', () => {
       await expect(service.runMemoryDreaming()).rejects.toThrow('requires non-empty attributes: rootCause');
 
       expect(requestBodies).toHaveLength(2);
-      expect(service.getSnapshot()?.honeycrispMemory.dreaming.lastRun).toMatchObject({
+      expect(service.getSnapshot()?.appServerMemory.dreaming.lastRun).toMatchObject({
         status: 'failed',
         reclassifiedNodeCount: 0,
         editedNodeCount: 0,
@@ -452,8 +452,8 @@ describe('model-reasoned memory Dreaming', () => {
     const root = temporaryDirectory();
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(memoryDreamingResearchProfile()),
       openAiFetch: async () => new Response(
         sse(event('error', {
@@ -482,7 +482,7 @@ describe('model-reasoned memory Dreaming', () => {
       `);
       database.close();
       await expect(service.runMemoryDreaming()).rejects.toThrow('Provider rejected');
-      const failed = service.getSnapshot()?.honeycrispMemory.dreaming.lastRun;
+      const failed = service.getSnapshot()?.appServerMemory.dreaming.lastRun;
       expect(failed).toMatchObject({
         status: 'failed',
         model: 'gpt-5.6-sol',
@@ -503,8 +503,8 @@ describe('model-reasoned memory Dreaming', () => {
     let requestCount = 0;
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(activeProfile),
       openAiFetch: async () => {
         requestCount += 1;
@@ -611,8 +611,8 @@ function temporaryDirectory(): string {
   setEnvironment('BEALE_APP_SERVER_PARENT_PID', String(process.pid));
   setEnvironment('BEALE_APP_SERVER_PORT', '0');
   setEnvironment('BEALE_WORKSPACE_REGISTRY_DIR', join(directory, 'registry'));
-  setEnvironment('HONEYCRISP_DATABASE_PATH', join(directory, 'memory.sqlite'));
-  setEnvironment('HONEYCRISP_ARTIFACT_DIRECTORY', join(directory, 'artifacts'));
+  setEnvironment('APP_SERVER_DATABASE_PATH', join(directory, 'memory.sqlite'));
+  setEnvironment('APP_SERVER_ARTIFACT_DIRECTORY', join(directory, 'artifacts'));
   return directory;
 }
 

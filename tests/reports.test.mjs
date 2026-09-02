@@ -19,7 +19,7 @@ import {
 } from "../packages/research-agent/dist/index.js";
 
 test("reports persist revisioned Markdown artifacts within one workspace", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-report-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-report-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
   const store = new ReportStore(databasePath, layout, {
@@ -57,7 +57,7 @@ test("reports persist revisioned Markdown artifacts within one workspace", async
     try {
       assert.deepEqual(
         database.prepare(`SELECT artifact_kind, artifact_id, session_id, revision
-          FROM honeycrisp_artifact_revisions
+          FROM app_server_artifact_revisions
           WHERE artifact_id = ? ORDER BY revision`).all(created.report.id).map((row) => ({ ...row })),
         [
           { artifact_kind: "report", artifact_id: created.report.id, session_id: "run_one", revision: 1 },
@@ -75,7 +75,7 @@ test("reports persist revisioned Markdown artifacts within one workspace", async
 });
 
 test("report tools expose list, read, create, and revise operations", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-report-tools-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-report-tools-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const store = new ReportStore(getDefaultMemoryDatabasePath(workspaceRoot), layout, { workspaceId: "workspace_tools", workspaceName: "Tools" });
   const registry = createResearchToolRegistry(createReportTools(store));
@@ -95,8 +95,8 @@ test("report tools expose list, read, create, and revise operations", async () =
 });
 
 test("reports import and retain bounded workspace packet and recording attachments", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-report-packet-"));
-  const outsideRoot = await mkdtemp(join(tmpdir(), "honeycrisp-report-packet-outside-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-report-packet-"));
+  const outsideRoot = await mkdtemp(join(tmpdir(), "app-server-report-packet-outside-"));
   const packetPath = join(workspaceRoot, "candidate.zip");
   const outsidePacketPath = join(outsideRoot, "outside.zip");
   const recordingPath = join(workspaceRoot, "parser-demo.mov");
@@ -177,7 +177,7 @@ test("reports import and retain bounded workspace packet and recording attachmen
 });
 
 test("security report creation accepts a composite finding reviewed in the same session", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-security-report-tools-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-security-report-tools-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const memoryGraph = new MemoryGraphStore({ workspaceRoot, context: {
     sessionId: "run_security", workspaceId: "workspace_security", workspaceName: "Security",

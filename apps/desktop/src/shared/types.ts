@@ -13,7 +13,7 @@ import type {
   ResearchChannelSharedResourceRecord,
   ResearchChannelSummary,
   ResearchClaimRating
-} from 'honeycrisp/protocol';
+} from '@beale/app-server-runtime/protocol';
 
 export * from './researchProfile';
 export * from './researchKits';
@@ -30,7 +30,7 @@ export type {
   ResearchChannelSharedResourceRecord,
   ResearchChannelSummary,
   ResearchClaimRating
-} from 'honeycrisp/protocol';
+} from '@beale/app-server-runtime/protocol';
 
 export type ScopeAssetDirection = 'in_scope' | 'out_of_scope';
 
@@ -124,7 +124,7 @@ export type TraceEventType =
   | 'network_event';
 
 /** Read compatibility for sessions created by the removed fixture engine. */
-export type RunEngineKind = 'honeycrisp' | 'fixture';
+export type RunEngineKind = 'app-server' | 'fixture';
 
 export type ShellSafetyMode = 'manual_approval' | 'auto_review' | 'danger';
 
@@ -501,9 +501,9 @@ export interface ProjectStructureSummary {
   indexedAt: string | null;
 }
 
-export type HoneycrispMemoryStatus = 'missing' | 'empty' | 'ready' | 'error';
+export type AppServerMemoryStatus = 'missing' | 'empty' | 'ready' | 'error';
 
-export interface HoneycrispMemoryDirectorySummary {
+export interface AppServerMemoryDirectorySummary {
   name: 'artifacts';
   path: string;
   purpose: string;
@@ -511,9 +511,9 @@ export interface HoneycrispMemoryDirectorySummary {
   entryCount: number;
 }
 
-export type HoneycrispMemorySource = 'none' | 'honeycrisp_sqlite';
+export type AppServerMemorySource = 'none' | 'app_server_sqlite';
 
-export interface HoneycrispMemoryEvidenceRefSummary {
+export interface AppServerMemoryEvidenceRefSummary {
   id: string;
   kind: 'code' | 'artifact' | 'command' | 'url' | 'human_note' | string;
   pathBase: string | null;
@@ -523,13 +523,13 @@ export interface HoneycrispMemoryEvidenceRefSummary {
   createdAt: string;
 }
 
-export type HoneycrispMemoryNodeValidationKind = 'full' | 'scoped' | 'inherited';
+export type AppServerMemoryNodeValidationKind = 'full' | 'scoped' | 'inherited';
 
-export interface HoneycrispMemoryNodeCatalogValidationSummary {
+export interface AppServerMemoryNodeCatalogValidationSummary {
   nodeRevision: number;
   catalogHash: string;
   contentHash: string;
-  kind: HoneycrispMemoryNodeValidationKind;
+  kind: AppServerMemoryNodeValidationKind;
   validatedAt: string;
   researchProfile?: {
     hash: string;
@@ -538,7 +538,7 @@ export interface HoneycrispMemoryNodeCatalogValidationSummary {
   };
 }
 
-export type HoneycrispMemoryNodeProvenanceSummary =
+export type AppServerMemoryNodeProvenanceSummary =
   | {
       state: 'legacy_unrecorded';
       catalogHash: null;
@@ -555,16 +555,16 @@ export type HoneycrispMemoryNodeProvenanceSummary =
       state: 'active_validated';
       catalogHash: string;
       activeCatalog: true;
-      validation: HoneycrispMemoryNodeCatalogValidationSummary;
+      validation: AppServerMemoryNodeCatalogValidationSummary;
     }
   | {
       state: 'foreign_validated';
       catalogHash: string;
       activeCatalog: false;
-      validation: HoneycrispMemoryNodeCatalogValidationSummary;
+      validation: AppServerMemoryNodeCatalogValidationSummary;
     };
 
-export interface HoneycrispMemoryNodeSummary {
+export interface AppServerMemoryNodeSummary {
   id: string;
   sessionIds: string[];
   workspaces: Array<{ id: string; name: string }>;
@@ -579,17 +579,17 @@ export interface HoneycrispMemoryNodeSummary {
   assetIds: string[];
   tags: string[];
   attributes: Record<string, unknown>;
-  evidenceRefs: HoneycrispMemoryEvidenceRefSummary[];
+  evidenceRefs: AppServerMemoryEvidenceRefSummary[];
   createdAt: string;
   updatedAt: string;
   revision: number;
   /** Missing only on legacy summaries produced before model authorship tracking. */
-  authors?: HoneycrispModelAuthor[];
+  authors?: AppServerModelAuthor[];
   /** Optional only for compatibility with summaries produced before catalog provenance existed. */
-  provenance?: HoneycrispMemoryNodeProvenanceSummary;
+  provenance?: AppServerMemoryNodeProvenanceSummary;
 }
 
-export interface HoneycrispMemoryEdgeSummary {
+export interface AppServerMemoryEdgeSummary {
   fromId: string;
   toId: string;
   relation: string;
@@ -598,7 +598,7 @@ export interface HoneycrispMemoryEdgeSummary {
   updatedAt: string;
 }
 
-export interface HoneycrispRunbookSummary {
+export interface AppServerRunbookSummary {
   id: string;
   workspaceId: string;
   workspaceName: string;
@@ -621,13 +621,13 @@ export interface HoneycrispRunbookSummary {
     } | null;
     latestSuccessfulRunId: string | null;
   };
-  revisions: HoneycrispArtifactRevisionSummary[];
+  revisions: AppServerArtifactRevisionSummary[];
   createdAt: string;
   updatedAt: string;
-  authors?: HoneycrispModelAuthor[];
+  authors?: AppServerModelAuthor[];
 }
 
-export type HoneycrispFindingStatus =
+export type AppServerFindingStatus =
   | 'hypothesis'
   | 'observed'
   | 'reproduced'
@@ -637,7 +637,7 @@ export type HoneycrispFindingStatus =
   | 'stale'
   | 'rejected';
 
-export type HoneycrispFindingEvidenceKind =
+export type AppServerFindingEvidenceKind =
   | 'code'
   | 'artifact'
   | 'command'
@@ -651,9 +651,9 @@ export type HoneycrispFindingEvidenceKind =
   | 'report'
   | 'disclosure';
 
-export interface HoneycrispFindingEvidenceSummary {
+export interface AppServerFindingEvidenceSummary {
   id: string;
-  kind: HoneycrispFindingEvidenceKind;
+  kind: AppServerFindingEvidenceKind;
   referenceId: string | null;
   contentHash: string | null;
   summary: string;
@@ -664,11 +664,11 @@ export interface HoneycrispFindingEvidenceSummary {
   createdAt: string;
 }
 
-export interface HoneycrispFindingTransitionSummary {
+export interface AppServerFindingTransitionSummary {
   id: string;
   revision: number;
-  fromStatus: HoneycrispFindingStatus | null;
-  toStatus: HoneycrispFindingStatus;
+  fromStatus: AppServerFindingStatus | null;
+  toStatus: AppServerFindingStatus;
   reason: string;
   sessionId: string | null;
   actorId: string | null;
@@ -676,12 +676,12 @@ export interface HoneycrispFindingTransitionSummary {
   createdAt: string;
 }
 
-export type HoneycrispFindingReachabilityState = 'not_assessed' | 'unreachable' | 'conditional' | 'reachable';
-export type HoneycrispFindingRiskTreatment = 'unreviewed' | 'remediate' | 'mitigated' | 'accepted' | 'transferred';
+export type AppServerFindingReachabilityState = 'not_assessed' | 'unreachable' | 'conditional' | 'reachable';
+export type AppServerFindingRiskTreatment = 'unreviewed' | 'remediate' | 'mitigated' | 'accepted' | 'transferred';
 
-export interface HoneycrispFindingSecurityTracking {
+export interface AppServerFindingSecurityTracking {
   reachability: {
-    state: HoneycrispFindingReachabilityState;
+    state: AppServerFindingReachabilityState;
     conditions: string;
     evidenceIds: string[];
     assessorId: string | null;
@@ -689,9 +689,9 @@ export interface HoneycrispFindingSecurityTracking {
     sourceRevision: string | null;
     environmentFingerprint: string | null;
   };
-  riskTreatment: HoneycrispFindingRiskTreatment;
+  riskTreatment: AppServerFindingRiskTreatment;
   riskDecisions: Array<{
-    treatment: HoneycrispFindingRiskTreatment;
+    treatment: AppServerFindingRiskTreatment;
     actorId: string;
     rationale: string;
     decidedAt: string;
@@ -711,7 +711,7 @@ export interface HoneycrispFindingSecurityTracking {
   externalReferences: Array<{ kind: string; identifier: string; url: string | null }>;
 }
 
-export interface HoneycrispFindingSummary {
+export interface AppServerFindingSummary {
   id: string;
   workspaceId: string;
   subjectId: string;
@@ -727,9 +727,9 @@ export interface HoneycrispFindingSummary {
   title: string;
   summary: string;
   impact: string;
-  securityTracking: HoneycrispFindingSecurityTracking | null;
-  status: HoneycrispFindingStatus;
-  staleFromStatus: HoneycrispFindingStatus | null;
+  securityTracking: AppServerFindingSecurityTracking | null;
+  status: AppServerFindingStatus;
+  staleFromStatus: AppServerFindingStatus | null;
   confidence: number;
   sourceRevision: string | null;
   environmentFingerprint: string | null;
@@ -737,16 +737,16 @@ export interface HoneycrispFindingSummary {
   reportId: string | null;
   disclosureReference: string | null;
   staleReason: string | null;
-  evidence: HoneycrispFindingEvidenceSummary[];
-  transitions: HoneycrispFindingTransitionSummary[];
-  authors: HoneycrispModelAuthor[];
+  evidence: AppServerFindingEvidenceSummary[];
+  transitions: AppServerFindingTransitionSummary[];
+  authors: AppServerModelAuthor[];
   createdAt: string;
   updatedAt: string;
   revision: number;
 }
 
-export type HoneycrispCampaignNodeKind = 'memory' | 'lead' | 'finding' | 'runbook' | 'report' | 'asset';
-export type HoneycrispCampaignGapKind =
+export type AppServerCampaignNodeKind = 'memory' | 'lead' | 'finding' | 'runbook' | 'report' | 'asset';
+export type AppServerCampaignGapKind =
   | 'unexplored_asset'
   | 'unsupported_memory'
   | 'unobserved_hypothesis'
@@ -755,11 +755,11 @@ export type HoneycrispCampaignGapKind =
   | 'missing_report'
   | 'stale_finding'
   | 'contradiction';
-export type HoneycrispCampaignMomentumState = 'empty' | 'exploring' | 'building' | 'observed' | 'reproducing' | 'verifying' | 'reporting' | 'complete' | 'blocked';
+export type AppServerCampaignMomentumState = 'empty' | 'exploring' | 'building' | 'observed' | 'reproducing' | 'verifying' | 'reporting' | 'complete' | 'blocked';
 
-export interface HoneycrispCampaignGraphNodeSummary {
+export interface AppServerCampaignGraphNodeSummary {
   id: string;
-  kind: HoneycrispCampaignNodeKind;
+  kind: AppServerCampaignNodeKind;
   label: string;
   status: string;
   memoryNodeId: string | null;
@@ -770,16 +770,16 @@ export interface HoneycrispCampaignGraphNodeSummary {
   updatedAt: string;
 }
 
-export interface HoneycrispCampaignGraphEdgeSummary {
+export interface AppServerCampaignGraphEdgeSummary {
   fromId: string;
   toId: string;
   relation: string;
   contradictory: boolean;
 }
 
-export interface HoneycrispCampaignCoverageGapSummary {
+export interface AppServerCampaignCoverageGapSummary {
   id: string;
-  kind: HoneycrispCampaignGapKind;
+  kind: AppServerCampaignGapKind;
   priority: 'critical' | 'high' | 'medium' | 'low';
   title: string;
   rationale: string;
@@ -787,7 +787,7 @@ export interface HoneycrispCampaignCoverageGapSummary {
   suggestedPrompt: string;
 }
 
-export interface HoneycrispCampaignContradictionSummary {
+export interface AppServerCampaignContradictionSummary {
   id: string;
   fromNodeId: string;
   toNodeId: string;
@@ -795,17 +795,17 @@ export interface HoneycrispCampaignContradictionSummary {
   summary: string;
 }
 
-export interface HoneycrispCampaignGraphSummary {
-  nodes: HoneycrispCampaignGraphNodeSummary[];
-  edges: HoneycrispCampaignGraphEdgeSummary[];
-  coverageGaps: HoneycrispCampaignCoverageGapSummary[];
-  contradictions: HoneycrispCampaignContradictionSummary[];
+export interface AppServerCampaignGraphSummary {
+  nodes: AppServerCampaignGraphNodeSummary[];
+  edges: AppServerCampaignGraphEdgeSummary[];
+  coverageGaps: AppServerCampaignCoverageGapSummary[];
+  contradictions: AppServerCampaignContradictionSummary[];
   momentum: {
-    state: HoneycrispCampaignMomentumState;
+    state: AppServerCampaignMomentumState;
     reason: string;
     supportingNodeIds: string[];
   };
-  nextActions: HoneycrispCampaignCoverageGapSummary[];
+  nextActions: AppServerCampaignCoverageGapSummary[];
   counts: {
     leads?: number;
     findings: number;
@@ -814,12 +814,12 @@ export interface HoneycrispCampaignGraphSummary {
     coverageGaps: number;
     contradictions: number;
   };
-  tracks?: HoneycrispCampaignTrackSummary[];
+  tracks?: AppServerCampaignTrackSummary[];
   activeTrackId?: string | null;
-  replayMetrics?: HoneycrispCampaignReplayMetrics;
+  replayMetrics?: AppServerCampaignReplayMetrics;
 }
 
-export interface HoneycrispCampaignTrackSummary {
+export interface AppServerCampaignTrackSummary {
   id: string;
   title: string;
   objective: string;
@@ -829,9 +829,9 @@ export interface HoneycrispCampaignTrackSummary {
   sessionIds: string[];
   updatedAt: string;
   revision: number;
-  questions: HoneycrispCampaignQuestionSummary[];
-  experiments: HoneycrispCampaignExperimentSummary[];
-  observations: HoneycrispCampaignObservationSummary[];
+  questions: AppServerCampaignQuestionSummary[];
+  experiments: AppServerCampaignExperimentSummary[];
+  observations: AppServerCampaignObservationSummary[];
   counts: {
     questions: number;
     openQuestions: number;
@@ -846,7 +846,7 @@ export interface HoneycrispCampaignTrackSummary {
   };
 }
 
-export interface HoneycrispCampaignQuestionSummary {
+export interface AppServerCampaignQuestionSummary {
   id: string;
   investigationId: string;
   text: string;
@@ -857,7 +857,7 @@ export interface HoneycrispCampaignQuestionSummary {
   revision: number;
 }
 
-export interface HoneycrispCampaignExperimentSummary {
+export interface AppServerCampaignExperimentSummary {
   id: string;
   investigationId: string;
   questionId: string | null;
@@ -871,7 +871,7 @@ export interface HoneycrispCampaignExperimentSummary {
   revision: number;
 }
 
-export interface HoneycrispCampaignObservationSummary {
+export interface AppServerCampaignObservationSummary {
   id: string;
   investigationId: string;
   experimentId: string | null;
@@ -881,7 +881,7 @@ export interface HoneycrispCampaignObservationSummary {
   createdAt: string;
 }
 
-export interface HoneycrispCampaignReplayMetrics {
+export interface AppServerCampaignReplayMetrics {
   schemaVersion: 1;
   mode: 'historical' | 'shadow' | 'active';
   workspaceId: string;
@@ -895,19 +895,19 @@ export interface HoneycrispCampaignReplayMetrics {
   medianMinutesToFirstEvidence: number | null;
 }
 
-export interface HoneycrispModelAuthor {
+export interface AppServerModelAuthor {
   provider: string;
   model: string;
 }
 
-export interface HoneycrispRunbookOutput {
+export interface AppServerRunbookOutput {
   kind: 'stream' | 'display' | 'error';
   text: string;
   streamName: 'stdout' | 'stderr' | null;
   mimeType: string | null;
 }
 
-export interface HoneycrispRunbookExecutionSummary {
+export interface AppServerRunbookExecutionSummary {
   runId: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'blocked' | 'skipped';
   startedAt: string;
@@ -926,27 +926,27 @@ export interface RunbookProofTargetSelection {
   deviceOs?: string;
 }
 
-export interface HoneycrispRunbookCell {
+export interface AppServerRunbookCell {
   id: string;
   type: 'markdown' | 'code' | 'raw';
   source: string;
   language: string | null;
   executionCount: number | null;
-  outputs: HoneycrispRunbookOutput[];
-  latestRun: HoneycrispRunbookExecutionSummary | null;
+  outputs: AppServerRunbookOutput[];
+  latestRun: AppServerRunbookExecutionSummary | null;
 }
 
-export interface HoneycrispRunbookDocument {
+export interface AppServerRunbookDocument {
   runbookId: string;
   nbformat: 4;
   nbformatMinor: number;
   language: string | null;
   revision: number | null;
-  latestRun: HoneycrispRunbookExecutionSummary | null;
-  cells: HoneycrispRunbookCell[];
+  latestRun: AppServerRunbookExecutionSummary | null;
+  cells: AppServerRunbookCell[];
 }
 
-export interface HoneycrispReportSummary {
+export interface AppServerReportSummary {
   id: string;
   workspaceId: string;
   workspaceName: string;
@@ -956,15 +956,15 @@ export interface HoneycrispReportSummary {
   title: string;
   summary: string;
   status: 'complete' | 'stale';
-  triageStatus: HoneycrispReportTriageStatus;
+  triageStatus: AppServerReportTriageStatus;
   artifactId: string;
-  submissionPacket: HoneycrispReportSubmissionPacket | null;
-  recording: HoneycrispReportRecording | null;
+  submissionPacket: AppServerReportSubmissionPacket | null;
+  recording: AppServerReportRecording | null;
   revision: number;
-  revisions: HoneycrispArtifactRevisionSummary[];
+  revisions: AppServerArtifactRevisionSummary[];
   createdAt: string;
   updatedAt: string;
-  authors?: HoneycrispModelAuthor[];
+  authors?: AppServerModelAuthor[];
 }
 
 export interface RunbookExecutionSelection {
@@ -973,40 +973,40 @@ export interface RunbookExecutionSelection {
   endCellId?: string;
 }
 
-export interface HoneycrispReportDocument {
+export interface AppServerReportDocument {
   reportId: string;
   content: string;
 }
 
-export interface HoneycrispReportSubmissionPacket {
+export interface AppServerReportSubmissionPacket {
   artifactId: string;
   filename: string;
   sizeBytes: number;
   contentHash: string;
 }
 
-export interface HoneycrispReportRecording {
+export interface AppServerReportRecording {
   artifactId: string;
   filename: string;
   sizeBytes: number;
   contentHash: string;
 }
 
-export interface HoneycrispReportLocator {
+export interface AppServerReportLocator {
   workspaceId: string;
   reportId: string;
 }
 
-export interface ReportContentUpdateInput extends HoneycrispReportLocator {
+export interface ReportContentUpdateInput extends AppServerReportLocator {
   expectedRevision: number;
   content: string;
 }
 
-export type HoneycrispReportTriageStatus = 'editing' | 'submitted' | 'reviewing' | 'rejected' | 'accepted';
+export type AppServerReportTriageStatus = 'editing' | 'submitted' | 'reviewing' | 'rejected' | 'accepted';
 
-export interface ReportTriageStatusUpdateInput extends HoneycrispReportLocator {
+export interface ReportTriageStatusUpdateInput extends AppServerReportLocator {
   expectedRevision: number;
-  triageStatus: HoneycrispReportTriageStatus;
+  triageStatus: AppServerReportTriageStatus;
 }
 
 export type TicketingProviderId = 'github' | 'linear';
@@ -1052,7 +1052,7 @@ export interface ReportResourceContext {
   revision?: number;
 }
 
-export interface ReportSessionStartInput extends HoneycrispReportLocator {
+export interface ReportSessionStartInput extends AppServerReportLocator {
   instruction: string;
   modelSelection?: ResearchModelSelection;
   shellSafetyMode?: ShellSafetyMode;
@@ -1064,7 +1064,7 @@ export interface ReportSessionStartResult {
   snapshot: WorkspaceSnapshot;
 }
 
-export interface HoneycrispArtifactRevisionSummary {
+export interface AppServerArtifactRevisionSummary {
   revision: number;
   sessionId: string | null;
   createdAt: string;
@@ -1134,11 +1134,11 @@ export interface MemoryDreamingSummary {
   changes: MemoryDreamingChangeSummary[];
 }
 
-export interface HoneycrispMemorySummary {
-  /** True while the dashboard loads the Honeycrisp memory summary off the workspace-open path. */
+export interface AppServerMemorySummary {
+  /** True while the dashboard loads the app-server memory summary off the workspace-open path. */
   loading?: boolean;
-  status: HoneycrispMemoryStatus;
-  source: HoneycrispMemorySource;
+  status: AppServerMemoryStatus;
+  source: AppServerMemorySource;
   contextWorkspaceId: string;
   contextSubjectId: string;
   activeCatalogHash?: string | null;
@@ -1155,20 +1155,20 @@ export interface HoneycrispMemorySummary {
   latestNodeUpdatedAt: string | null;
   nodeTypeCounts: Record<string, number>;
   nodeStatusCounts: Record<string, number>;
-  nodeProvenanceCounts?: Partial<Record<HoneycrispMemoryNodeProvenanceSummary['state'], number>>;
-  nodes: HoneycrispMemoryNodeSummary[];
-  edges: HoneycrispMemoryEdgeSummary[];
-  runbooks: HoneycrispRunbookSummary[];
-  reports: HoneycrispReportSummary[];
-  leads: HoneycrispFindingSummary[];
-  findings: HoneycrispFindingSummary[];
-  campaign: HoneycrispCampaignGraphSummary;
+  nodeProvenanceCounts?: Partial<Record<AppServerMemoryNodeProvenanceSummary['state'], number>>;
+  nodes: AppServerMemoryNodeSummary[];
+  edges: AppServerMemoryEdgeSummary[];
+  runbooks: AppServerRunbookSummary[];
+  reports: AppServerReportSummary[];
+  leads: AppServerFindingSummary[];
+  findings: AppServerFindingSummary[];
+  campaign: AppServerCampaignGraphSummary;
   dreaming: MemoryDreamingSummary;
-  directories: HoneycrispMemoryDirectorySummary[];
+  directories: AppServerMemoryDirectorySummary[];
   lastError: string | null;
 }
 
-export interface HoneycrispToolingToolSummary {
+export interface AppServerToolingToolSummary {
   name: string;
   transportName: string | null;
   actionClasses: string[];
@@ -1178,7 +1178,7 @@ export interface HoneycrispToolingToolSummary {
   raw: Record<string, unknown>;
 }
 
-export interface HoneycrispToolingSkillSummary {
+export interface AppServerToolingSkillSummary {
   id: string;
   version: string | null;
   description: string;
@@ -1188,7 +1188,7 @@ export interface HoneycrispToolingSkillSummary {
   raw: Record<string, unknown>;
 }
 
-export interface HoneycrispToolingMcpCapabilitySummary {
+export interface AppServerToolingMcpCapabilitySummary {
   name: string;
   transportName: string | null;
   actionClasses: string[];
@@ -1198,19 +1198,19 @@ export interface HoneycrispToolingMcpCapabilitySummary {
   raw: Record<string, unknown>;
 }
 
-export interface HoneycrispToolingMcpSummary {
+export interface AppServerToolingMcpSummary {
   status: string;
   configPath: string | null;
   configuredServers: string[];
   allowedServers: string[];
   timeoutMs: number | null;
-  discoveredCapabilities: HoneycrispToolingMcpCapabilitySummary[];
+  discoveredCapabilities: AppServerToolingMcpCapabilitySummary[];
   deniedCapabilities: Record<string, unknown>[];
   resourceTemplates: Record<string, unknown>[];
   raw: Record<string, unknown>;
 }
 
-export interface HoneycrispToolingConfigSummary {
+export interface AppServerToolingConfigSummary {
   configPath: string;
   exists: boolean;
   loaded: boolean;
@@ -1226,25 +1226,25 @@ export interface HoneycrispToolingConfigSummary {
   raw: Record<string, unknown>;
 }
 
-export interface HoneycrispToolingSummary {
-  source: 'honeycrisp_cli';
+export interface AppServerToolingSummary {
+  source: 'app_server_cli';
   workspaceRoot: string;
-  config: HoneycrispToolingConfigSummary;
-  tools: HoneycrispToolingToolSummary[];
+  config: AppServerToolingConfigSummary;
+  tools: AppServerToolingToolSummary[];
   toolFamilies: {
     enabled: string[];
     requested: string[];
     disabled: string[];
   };
   skills: {
-    loaded: HoneycrispToolingSkillSummary[];
+    loaded: AppServerToolingSkillSummary[];
     selectedIds: string[];
   };
-  mcp: HoneycrispToolingMcpSummary;
+  mcp: AppServerToolingMcpSummary;
   raw: Record<string, unknown>;
 }
 
-export type HoneycrispToolingConfigUpdate =
+export type AppServerToolingConfigUpdate =
   | { type: 'add_skill_dir'; path: string }
   | { type: 'remove_skill_dir'; path: string }
   | { type: 'select_skill'; id: string }
@@ -1423,7 +1423,7 @@ export interface MemorySettings {
   typeDescriptions: MemoryTypeDescriptions;
 }
 
-export const WORKSPACE_MEMORY_BACKEND_IDS = ['honeycrisp', 'disabled'] as const;
+export const WORKSPACE_MEMORY_BACKEND_IDS = ['app-server', 'disabled'] as const;
 export type WorkspaceMemoryBackendId = (typeof WORKSPACE_MEMORY_BACKEND_IDS)[number];
 
 export function isWorkspaceMemoryBackendId(value: unknown): value is WorkspaceMemoryBackendId {
@@ -2190,7 +2190,7 @@ export interface RunDetail {
   contextCompactions: ContextCompactionRecord[];
   policyEvents: ApprovalRecord[];
   exports: ExportRecord[];
-  honeycrispMemory?: HoneycrispMemorySummary;
+  appServerMemory?: AppServerMemorySummary;
   /** Bounded latest child-agent messages retained by commentary projections. */
   subagentPreviews?: SubagentPreviewRecord[];
   /** Source cursor retained when renderer projections omit agent-owned rows. */
@@ -2257,7 +2257,7 @@ export interface RunDetailUpdate {
   contextCompactions: ContextCompactionRecord[];
   policyEvents: ApprovalRecord[];
   exports: ExportRecord[];
-  honeycrispMemory?: HoneycrispMemorySummary;
+  appServerMemory?: AppServerMemorySummary;
   /** Bounded latest child-agent messages retained by commentary projections. */
   subagentPreviews?: SubagentPreviewRecord[];
   /** Source cursor retained when renderer projections omit agent-owned rows. */
@@ -2274,7 +2274,7 @@ export interface WorkspaceSnapshot {
   workspaceRules: WorkspaceRule[];
   researchSubject: ResearchSubject;
   researchProfile: ResearchProfileSnapshot;
-  honeycrispMemory: HoneycrispMemorySummary;
+  appServerMemory: AppServerMemorySummary;
   recovery: WorkspaceRecoveryReport;
   policyReview: WorkspacePolicyReview;
   runs: RunRow[];
@@ -2445,18 +2445,18 @@ export interface BealeApi {
   getProfilingState(): Promise<ProfilingState>;
   setProfilingEnabled(enabled: boolean): Promise<ProfilingState>;
   recordProfilingReport(report: ProfilingReport): Promise<ProfilingState>;
-  openHoneycrispMemoryDirectory(name: HoneycrispMemoryDirectorySummary['name']): Promise<void>;
-  getHoneycrispRunbook(runbookId: string): Promise<HoneycrispRunbookDocument>;
+  openAppServerMemoryDirectory(name: AppServerMemoryDirectorySummary['name']): Promise<void>;
+  getAppServerRunbook(runbookId: string): Promise<AppServerRunbookDocument>;
   listAutomations(): Promise<AutomationSummary[]>;
   updateAutomation(input: AutomationUpdateInput): Promise<AutomationSummary>;
-  listReportingReports(): Promise<HoneycrispReportSummary[]>;
-  getHoneycrispReport(locator: HoneycrispReportLocator): Promise<HoneycrispReportDocument>;
-  updateReportContent(input: ReportContentUpdateInput): Promise<HoneycrispReportSummary>;
-  updateReportTriageStatus(input: ReportTriageStatusUpdateInput): Promise<HoneycrispReportSummary>;
-  openReportSubmissionPacket(locator: HoneycrispReportLocator): Promise<void>;
-  chooseReportSubmissionPacket(locator: HoneycrispReportLocator): Promise<HoneycrispReportSummary | null>;
-  chooseReportRecording(locator: HoneycrispReportLocator): Promise<HoneycrispReportSummary | null>;
-  submitReportTicket(locator: HoneycrispReportLocator): Promise<TicketSubmissionResult>;
+  listReportingReports(): Promise<AppServerReportSummary[]>;
+  getAppServerReport(locator: AppServerReportLocator): Promise<AppServerReportDocument>;
+  updateReportContent(input: ReportContentUpdateInput): Promise<AppServerReportSummary>;
+  updateReportTriageStatus(input: ReportTriageStatusUpdateInput): Promise<AppServerReportSummary>;
+  openReportSubmissionPacket(locator: AppServerReportLocator): Promise<void>;
+  chooseReportSubmissionPacket(locator: AppServerReportLocator): Promise<AppServerReportSummary | null>;
+  chooseReportRecording(locator: AppServerReportLocator): Promise<AppServerReportSummary | null>;
+  submitReportTicket(locator: AppServerReportLocator): Promise<TicketSubmissionResult>;
   openExternalUrl(url: string): Promise<void>;
   startReportSession(input: ReportSessionStartInput): Promise<ReportSessionStartResult>;
   getWorkspaceDejunkSummary(workspaceId: string): Promise<WorkspaceDejunkSummary>;
@@ -2464,8 +2464,8 @@ export interface BealeApi {
   runMemoryDreaming(): Promise<WorkspaceSnapshot>;
   onMemoryDreamingProgress(listener: (update: MemoryDreamingProgressUpdate) => void): () => void;
   restoreMemoryDreamingChange(changeId: string): Promise<WorkspaceSnapshot>;
-  getHoneycrispToolingSummary(): Promise<HoneycrispToolingSummary>;
-  updateHoneycrispToolingConfig(update: HoneycrispToolingConfigUpdate): Promise<HoneycrispToolingSummary>;
+  getAppServerToolingSummary(): Promise<AppServerToolingSummary>;
+  updateAppServerToolingConfig(update: AppServerToolingConfigUpdate): Promise<AppServerToolingSummary>;
   generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions>;
   selectResearchGoalSuggestion(input: ResearchGoalSuggestionSelectionInput): Promise<void>;
   generateResearchPrompt(input?: ResearchPromptGenerationInput): Promise<GeneratedResearchPrompt>;

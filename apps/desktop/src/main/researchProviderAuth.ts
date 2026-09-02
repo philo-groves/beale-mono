@@ -12,8 +12,8 @@ import type {
   ResearchProviderOAuthStartResult,
   ResearchProviderStatus
 } from '@shared/types';
-import { honeycrispProcessEnvironment, resolveHoneycrispInvocation } from './honeycrispRunEngine';
-import { resolveHoneycrispWorkspaceRoot } from './honeycrispInvocation';
+import { appServerProcessEnvironment, resolveAppServerInvocation } from './appServerRunEngine';
+import { resolveAppServerWorkspaceRoot } from './appServerInvocation';
 
 const SUPPORTED_PROVIDERS: readonly ResearchProviderId[] = ['anthropic', 'xai', 'zai', 'openrouter'];
 const MODEL_PROVIDERS: readonly ResearchModelProviderId[] = ['openai-codex', 'anthropic', 'xai', 'zai', 'openrouter'];
@@ -58,13 +58,13 @@ export class ResearchProviderAuthService {
     if (this.modelCatalog) return this.modelCatalog;
     const catalogs = await Promise.all(
       MODEL_PROVIDERS.map(async (providerId) => {
-        const result = await runHoneycrispCommand(
+        const result = await runAppServerCommand(
           ['models', 'list', providerId, '--json'],
           MAX_MODEL_CATALOG_OUTPUT_CHARS
         );
-        const [catalog] = parseHoneycrispModelCatalog(result.stdout);
+        const [catalog] = parseAppServerModelCatalog(result.stdout);
         if (!catalog || catalog.providerId !== providerId) {
-          throw new Error(`Honeycrisp returned an unrecognized ${providerId} model catalog.`);
+          throw new Error(`app-server returned an unrecognized ${providerId} model catalog.`);
         }
         return catalog;
       })
@@ -95,7 +95,7 @@ export class ResearchProviderAuthService {
       return this.latestStarts.get(providerId) ?? {
         providerId,
         started: false,
-        command: `honeycrisp auth login ${providerId}`,
+        command: `appServer auth login ${providerId}`,
         detail: `${providerDisplayName(providerId)} authentication is already running.`,
         verificationUri: null,
         userCode: null,
@@ -121,7 +121,7 @@ export class ResearchProviderAuthService {
       return result;
     }
 
-    const honeycrispInvocation = resolveHoneycrispInvocation();
+    const appServerInvocation = resolveAppServerInvocation();
     const claudeInvocation = providerId === 'anthropic' ? claudeSubscriptionLoginInvocation() : null;
     if (providerId === 'anthropic' && process.platform === 'win32' && !claudeInvocation) {
       throw new Error(
@@ -137,10 +137,10 @@ export class ResearchProviderAuthService {
       : zcodeInvocation
         ? { ...zcodeInvocation, displayCommand: 'zcode login' }
       : {
-          command: honeycrispInvocation.command,
-          args: [...honeycrispInvocation.prefixArgs, 'auth', 'login', providerId],
-          cwd: honeycrispInvocation.cwd,
-          displayCommand: `honeycrisp auth login ${providerId}`
+          command: appServerInvocation.command,
+          args: [...appServerInvocation.prefixArgs, 'auth', 'login', providerId],
+          cwd: appServerInvocation.cwd,
+          displayCommand: `appServer auth login ${providerId}`
         };
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
@@ -157,7 +157,7 @@ export class ResearchProviderAuthService {
 
     const output = await collectInitialAuthOutput(
       child,
-      providerId === 'anthropic' && claudeInvocation ? 'Claude CLI authentication' : 'Honeycrisp auth'
+      providerId === 'anthropic' && claudeInvocation ? 'Claude CLI authentication' : 'app-server auth'
     );
     const instructions = safeAuthOutput(output);
     const parsed = parseProviderOAuthInstructions(instructions);
@@ -203,7 +203,7 @@ export class ResearchProviderAuthService {
       }), STATUS_TIMEOUT_MS);
       return;
     }
-    await runHoneycrispCommand(['auth', 'logout', providerId]);
+    await runAppServerCommand(['auth', 'logout', providerId]);
   }
 
   public dispose(): void {
@@ -216,13 +216,13 @@ export class ResearchProviderAuthService {
     const environmentApiKeyConfigured = Boolean(process.env[apiKeyEnvironmentVariable]?.trim());
     try {
       const [statusResult, verifyResult] = await Promise.all([
-        runHoneycrispCommand(['auth', 'status', providerId]),
-        runHoneycrispCommand(['auth', 'verify', providerId])
+        runAppServerCommand(['auth', 'status', providerId]),
+        runAppServerCommand(['auth', 'verify', providerId])
       ]);
-      const status = parseHoneycrispAuthStatus(statusResult.stdout);
-      const verification = parseHoneycrispAuthVerification(verifyResult.stdout);
+      const status = parseAppServerAuthStatus(statusResult.stdout);
+      const verification = parseAppServerAuthVerification(verifyResult.stdout);
       if (!status || !verification || status.providerId !== providerId || verification.providerId !== providerId) {
-        throw new Error(`Honeycrisp returned an unrecognized ${providerId} auth status.`);
+        throw new Error(`app-server returned an unrecognized ${providerId} auth status.`);
       }
       const loginInProgress = this.loginProcesses.has(providerId);
       const source = verification.source ?? status.storedCredentialType ?? null;
@@ -256,7 +256,7 @@ export class ResearchProviderAuthService {
         defaultModel: null,
         credentialsHostOnly: true,
         loginInProgress: this.loginProcesses.has(providerId),
-        statusDetail: `Honeycrisp could not inspect ${providerDisplayName(providerId)}: ${errorMessage(error)}`,
+        statusDetail: `app-server could not inspect ${providerDisplayName(providerId)}: ${errorMessage(error)}`,
         apiKeyEnvironmentVariable
       };
     }
@@ -272,19 +272,19 @@ export class ResearchProviderAuthService {
     const cliAvailable = zcodeCliInvocation(['version']) !== null;
     const loginInProgress = this.loginProcesses.has('zai') || this.externalLoginDeadlines.has('zai');
     let defaultModel = 'glm-5.3';
-    let honeycrispApiKeyConfigured = false;
+    let appServerApiKeyConfigured = false;
     try {
-      const verification = parseHoneycrispAuthVerification(
-        (await runHoneycrispCommand(['auth', 'verify', 'zai', 'glm-5.3'])).stdout
+      const verification = parseAppServerAuthVerification(
+        (await runAppServerCommand(['auth', 'verify', 'zai', 'glm-5.3'])).stdout
       );
       if (verification?.providerId === 'zai') {
         defaultModel = verification.modelId;
-        honeycrispApiKeyConfigured = verification.configured && verification.source === apiKeyEnvironmentVariable;
+        appServerApiKeyConfigured = verification.configured && verification.source === apiKeyEnvironmentVariable;
       }
     } catch {
-      // Subscription readiness is owned by official ZCode state, not Honeycrisp's Pi route.
+      // Subscription readiness is owned by official ZCode state, not app-server's Pi route.
     }
-    const configuredApiKey = apiKeyConfigured || honeycrispApiKeyConfigured;
+    const configuredApiKey = apiKeyConfigured || appServerApiKeyConfigured;
     const configured = subscriptionConfigured || configuredApiKey;
     const source = subscriptionConfigured ? 'official ZCode subscription' : configuredApiKey ? apiKeyEnvironmentVariable : null;
     return {
@@ -308,7 +308,7 @@ export class ResearchProviderAuthService {
   }
 }
 
-export function parseHoneycrispAuthStatus(output: string): ParsedAuthStatus | null {
+export function parseAppServerAuthStatus(output: string): ParsedAuthStatus | null {
   const line = cleanOutput(output)
     .split('\n')
     .find((candidate) => candidate.includes('\t'));
@@ -323,7 +323,7 @@ export function parseHoneycrispAuthStatus(output: string): ParsedAuthStatus | nu
   return { providerId, providerName, authMethods, storedCredentialType };
 }
 
-export function parseHoneycrispAuthVerification(output: string): ParsedAuthVerification | null {
+export function parseAppServerAuthVerification(output: string): ParsedAuthVerification | null {
   const line = cleanOutput(output).split('\n').find((candidate) => candidate.includes(' model '));
   const match = line?.match(/^(.+) \(([^)]+)\) model (.+): (configured|not configured)(?: via (.+))?$/u);
   if (!match) return null;
@@ -343,7 +343,7 @@ export function parseProviderOAuthInstructions(output: string): Pick<ResearchPro
   return { verificationUri, userCode: (explicitCode ?? dashedCode)?.toUpperCase() ?? null };
 }
 
-export function parseHoneycrispModelCatalog(output: string): ResearchProviderModelCatalog[] {
+export function parseAppServerModelCatalog(output: string): ResearchProviderModelCatalog[] {
   const parsed = recordValue(JSON.parse(cleanOutput(output)) as unknown);
   if (!parsed || !Array.isArray(parsed.providers)) return [];
   return parsed.providers.flatMap((value) => {
@@ -356,14 +356,14 @@ export function parseHoneycrispModelCatalog(output: string): ResearchProviderMod
   });
 }
 
-async function runHoneycrispCommand(
+async function runAppServerCommand(
   args: readonly string[],
   maxOutputChars = MAX_AUTH_OUTPUT_CHARS
 ): Promise<AuthCommandResult> {
-  const invocation = resolveHoneycrispInvocation();
+  const invocation = resolveAppServerInvocation();
   const child = spawn(invocation.command, [...invocation.prefixArgs, ...args], {
     cwd: invocation.cwd,
-    env: honeycrispProcessEnvironment(),
+    env: appServerProcessEnvironment(),
     windowsHide: true
   });
   return collectCommandOutput(child, STATUS_TIMEOUT_MS, maxOutputChars);
@@ -405,7 +405,7 @@ function collectCommandOutput(
     };
     const timer = setTimeout(() => {
       child.kill();
-      finish(() => reject(new Error('Honeycrisp auth status timed out.')));
+      finish(() => reject(new Error('app-server auth status timed out.')));
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
       stdout = append(stdout, chunk);
@@ -417,7 +417,7 @@ function collectCommandOutput(
     child.once('close', (code) => {
       finish(() => {
         if (code === 0) resolve({ stdout, stderr });
-        else reject(new Error(safeAuthOutput(stderr || stdout || `Honeycrisp auth exited with status ${String(code)}.`)));
+        else reject(new Error(safeAuthOutput(stderr || stdout || `app-server auth exited with status ${String(code)}.`)));
       });
     });
   });
@@ -473,7 +473,7 @@ function safeAuthOutput(value: string): string {
 function providerStatusDetail(providerId: ResearchProviderId, configured: boolean, source: string | null, loginInProgress: boolean): string {
   const name = providerDisplayName(providerId);
   if (loginInProgress) return `${name} authentication is waiting for the provider sign-in to complete.`;
-  if (configured) return `${name} is available to Honeycrisp${source ? ` via ${source}` : ''}.`;
+  if (configured) return `${name} is available to app-server${source ? ` via ${source}` : ''}.`;
   if (providerId === 'anthropic') {
     return `${name} is not configured. Sign in through the official Claude CLI with a Cyber Verification Program account, or provide ANTHROPIC_API_KEY in Beale's host environment.`;
   }
@@ -559,7 +559,7 @@ export function resolveBundledClaudeCliExecutable(
   platform = process.platform,
   architecture = process.arch,
   fileExists: (path: string) => boolean = existsSync,
-  workspaceRoot = resolveHoneycrispWorkspaceRoot()
+  workspaceRoot = resolveAppServerWorkspaceRoot()
 ): string | null {
   if (platform !== 'win32' || (architecture !== 'x64' && architecture !== 'arm64') || !workspaceRoot) return null;
   const sdkEntry = join(
@@ -668,7 +668,7 @@ function providerApiKeyEnvironmentVariable(
 }
 
 function providerAuthProcessEnvironment(providerId: ResearchProviderId): NodeJS.ProcessEnv {
-  const env = honeycrispProcessEnvironment();
+  const env = appServerProcessEnvironment();
   if (providerId === 'zai' && process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
   return env;
 }

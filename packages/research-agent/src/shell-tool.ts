@@ -5,6 +5,7 @@ import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, posix, relative, resolve, win32 } from "node:path";
 import { nowIso } from "./ids.js";
+import { PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 import type {
   ResearchExecutableTool,
   ResearchToolExecutionResult,
@@ -42,7 +43,7 @@ export interface WindowsPowerShellOptions {
   pathExists?: (path: string) => boolean;
 }
 
-export interface HoneycrispShellOptions {
+export interface AppServerShellOptions {
   schemaVersion: 1;
   defaultConcurrency: number;
   utilities: Record<string, number>;
@@ -145,7 +146,7 @@ function shellDescription(platform: NodeJS.Platform): string {
     ? " On Windows, command form uses detected PowerShell by default, and bare pwsh or powershell utilities resolve to PowerShell 7 or inbox Windows PowerShell. Select runtime wsl explicitly for Linux tools; Windows workspace paths are translated for WSL."
     : " Command form uses the host POSIX shell.";
   const searchUtilities = platform === "win32" ? "rg, grep, findstr, or git grep" : "rg, grep, or git grep";
-  return `Run a shell command or execute a utility directly with explicit argv.${platformGuidance} Use repository.search first for literal discovery; raw search commands should use a narrow cwd or path and a bounded timeout. Exit status 1 from direct ${searchUtilities} execution is reported as a successful no-match result. Shell safety authorization, recognized network-intent policy, utility policy for direct execution, and core-directory deletion guards are enforced by the Honeycrisp harness before spawn.`;
+  return `Run a shell command or execute a utility directly with explicit argv.${platformGuidance} Use repository.search first for literal discovery; raw search commands should use a narrow cwd or path and a bounded timeout. Exit status 1 from direct ${searchUtilities} execution is reported as a successful no-match result. Shell safety authorization, recognized network-intent policy, utility policy for direct execution, and core-directory deletion guards are enforced by the app-server harness before spawn.`;
 }
 
 export function createShellTool(options: ShellToolOptions): ResearchExecutableTool {
@@ -174,7 +175,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       requiredPermissions: ["process:spawn"],
       inputSchema: parameters,
       metadata: {
-        provider: "honeycrisp.built_in",
+        provider: "appServer.built_in",
         safetyProfile: "host-utility-policy",
         networkPolicy: "host-recorded-command-intent",
         shellRuntimes: platform === "win32" ? ["host", "wsl"] : ["host"],
@@ -501,8 +502,8 @@ function defaultProtectedDirectories(
     ...systemDirectoryTrees
       .filter((path): path is string => Boolean(path))
       .map((path) => ({ path, includeDescendants: true })),
-    { path: resolve(workspaceRoot, ".honeycrisp"), includeDescendants: true },
     { path: resolve(workspaceRoot, ".beale"), includeDescendants: true },
+    { path: resolve(workspaceRoot, PRE_BEALE_DATA_DIRECTORY_NAME), includeDescendants: true },
     ...(additional ?? []).map((path) => ({ path: resolve(path), includeDescendants: true })),
   ];
   const unique = new Map<string, ProtectedDirectory>();
@@ -524,7 +525,7 @@ function normalizeComparisonPath(path: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-async function loadShellOptions(path: string | undefined): Promise<HoneycrispShellOptions> {
+async function loadShellOptions(path: string | undefined): Promise<AppServerShellOptions> {
   if (!path) {
     return {
       schemaVersion: 1,
@@ -532,7 +533,7 @@ async function loadShellOptions(path: string | undefined): Promise<HoneycrispShe
       utilities: { sudo: 0 },
       leaseDirectory: resolve(
         tmpdir(),
-        `honeycrisp-shell-leases-${typeof process.getuid === "function" ? process.getuid() : "user"}`,
+        `app-server-shell-leases-${typeof process.getuid === "function" ? process.getuid() : "user"}`,
       ),
     };
   }
@@ -850,7 +851,7 @@ function shellEnvironment(): NodeJS.ProcessEnv {
     if (value === undefined || isSensitiveEnvironmentName(name)) continue;
     environment[name] = value;
   }
-  environment.HONEYCRISP_SHELL = "1";
+  environment.APP_SERVER_SHELL = "1";
   return environment;
 }
 

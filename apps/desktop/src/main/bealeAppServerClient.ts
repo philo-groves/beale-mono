@@ -16,10 +16,10 @@ import {
   decodeBealeAppServerSessionStopResult,
   type BealeAppServerCanonicalResult,
   type BealeAppServerSessionCatalogEntry,
-  type HoneycrispSessionLaunchRequest
-  ,type HoneycrispProtocolOperation
-} from 'honeycrisp/protocol';
-import { resolveHoneycrispNodeCommand, resolveHoneycrispWorkspaceRoot } from './honeycrispInvocation';
+  type AppServerSessionLaunchRequest
+  ,type AppServerProtocolOperation
+} from '@beale/app-server-runtime/protocol';
+import { resolveAppServerNodeCommand, resolveAppServerWorkspaceRoot } from './appServerInvocation';
 import { appServerRemoteAccessLaunchEnvironment } from './appServerRemoteAccess';
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 2_000;
@@ -196,7 +196,7 @@ export async function probeAppServerHealth(record: BealeAppServerDiscovery, time
 
 export async function startAppServerSession(
   record: BealeAppServerDiscovery,
-  request: HoneycrispSessionLaunchRequest
+  request: AppServerSessionLaunchRequest
 ): Promise<AppServerSessionStartResult> {
   const response = await fetch(`${appServerControlUrl(record)}${BEALE_APP_SERVER_SESSIONS_PATH}`, {
     method: 'POST',
@@ -352,7 +352,7 @@ export async function fetchExistingAppServerCanonicalResult<T>(
 }
 
 export async function invokeAppServerOperation<T>(request: {
-  operation: HoneycrispProtocolOperation;
+  operation: AppServerProtocolOperation;
   args?: readonly string[];
   input?: unknown;
   profileId?: string;
@@ -370,7 +370,7 @@ export async function invokeAppServerOperation<T>(request: {
     }),
     signal: request.signal ?? AbortSignal.timeout(5 * 60_000)
   });
-  if (!response.ok) throw new Error(`Honeycrisp ${request.operation} failed: ${await describeResponse(response)}`);
+  if (!response.ok) throw new Error(`app-server ${request.operation} failed: ${await describeResponse(response)}`);
   const payload = await response.json() as { controlVersion?: unknown; result?: unknown };
   if (payload.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION) throw new Error('The app-server returned an incompatible operation response.');
   return payload.result as T;
@@ -472,7 +472,7 @@ function launchAppServerTrayController(): void {
 }
 
 function defaultAppServerLaunch(): AppServerLaunch {
-  const workspaceRoot = resolveHoneycrispWorkspaceRoot();
+  const workspaceRoot = resolveAppServerWorkspaceRoot();
   if (!workspaceRoot) {
     throw new Error('The Beale app-server is not running and no workspace root was found to launch one. Start it with `pnpm --filter @beale/app-server start` or set BEALE_APP_SERVER_COMMAND.');
   }
@@ -511,7 +511,7 @@ function defaultAppServerLaunch(): AppServerLaunch {
   if (!existsSync(headlessEntry)) {
     throw new Error(`The Beale app-server entry was not found at ${headlessEntry}. Build the workspace packages first.`);
   }
-  return { command: resolveHoneycrispNodeCommand(), args: [headlessEntry], trayHost: false };
+  return { command: resolveAppServerNodeCommand(), args: [headlessEntry], trayHost: false };
 }
 
 export function writePrivateAppServerLaunchEnvironment(environment: NodeJS.ProcessEnv): {

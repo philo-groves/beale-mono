@@ -16,19 +16,20 @@
     "prepreview": "pnpm run brand:electron",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --exclude \"tests/{agent-plugin-registry,beale-introspection-server,beale-introspection-tools,honeycrisp-session-boundary,memory-dreaming-model,research-profile-integration,research-profile-persistence,source-materializer}.test.ts\"",
+    "test": "vitest run --exclude \"tests/{agent-plugin-registry,beale-introspection-server,beale-introspection-tools,app-server-session-boundary,memory-dreaming-model,research-profile-integration,research-profile-persistence,source-materializer}.test.ts\"",
     "test:fast": "pnpm run test",
-    "test:integration": "vitest run --maxWorkers=4 --testTimeout=30000 tests/agent-plugin-registry.test.ts tests/beale-introspection-server.test.ts tests/beale-introspection-tools.test.ts tests/honeycrisp-session-boundary.test.ts tests/memory-dreaming-model.test.ts tests/research-profile-integration.test.ts tests/research-profile-persistence.test.ts tests/source-materializer.test.ts",
+    "test:integration": "vitest run --maxWorkers=4 --testTimeout=30000 tests/agent-plugin-registry.test.ts tests/beale-introspection-server.test.ts tests/beale-introspection-tools.test.ts tests/app-server-session-boundary.test.ts tests/memory-dreaming-model.test.ts tests/research-profile-integration.test.ts tests/research-profile-persistence.test.ts tests/source-materializer.test.ts",
     "test:all": "pnpm run test && pnpm run test:integration",
     "test:architecture": "vitest run tests/architecture-conformance.test.ts",
     "test:openai:live": "BEALE_LIVE_OPENAI_TEST=1 vitest run tests/openai-live.test.ts",
     "build": "pnpm run typecheck && electron-vite build"
   },
   "dependencies": {
+    "@beale/research-agent": "workspace:*",
     "@mediar-ai/terminator": "0.24.32",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "honeycrisp": "workspace:*",
+    "@beale/app-server-runtime": "workspace:*",
     "katex": "^0.18.4",
     "lucide-react": "^0.554.0",
     "node-pty": "^1.1.0",
@@ -44,7 +45,6 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@honeycrisp/research-agent": "workspace:*",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.6",
     "@types/react-dom": "^19.2.3",

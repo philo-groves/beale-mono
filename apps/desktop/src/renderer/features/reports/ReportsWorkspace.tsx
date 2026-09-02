@@ -2,9 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { JSX } from 'react';
 import { ArrowUp, CircleAlert, CircleDot, FileArchive, FileText, LoaderCircle, Pencil, Video } from 'lucide-react';
 import type {
-  HoneycrispReportDocument,
-  HoneycrispReportSummary,
-  HoneycrispReportTriageStatus,
+  AppServerReportDocument,
+  AppServerReportSummary,
+  AppServerReportTriageStatus,
   WorkspaceRegistryEntry
 } from '@shared/types';
 import { CenteredLoadingState } from '../../app/CenteredLoadingState';
@@ -18,7 +18,7 @@ import {
 } from '../../view-models/reports';
 import { renderTraceProseText } from '../traces/traceMarkup';
 
-const REPORT_TRIAGE_STATUS_OPTIONS: ReadonlyArray<{ value: HoneycrispReportTriageStatus; label: string }> = [
+const REPORT_TRIAGE_STATUS_OPTIONS: ReadonlyArray<{ value: AppServerReportTriageStatus; label: string }> = [
   { value: 'editing', label: 'Editing' },
   { value: 'submitted', label: 'Submitted' },
   { value: 'reviewing', label: 'Reviewing' },
@@ -35,13 +35,13 @@ export function ReportsIndex({
   onScopeChange,
   onOpenReport
 }: {
-  reports: readonly HoneycrispReportSummary[];
+  reports: readonly AppServerReportSummary[];
   workspaces: readonly WorkspaceRegistryEntry[];
   selectedWorkspaceId: string | null;
   loading: boolean;
   error: string | null;
   onScopeChange: (workspaceId: string | null) => void;
-  onOpenReport: (report: HoneycrispReportSummary) => void;
+  onOpenReport: (report: AppServerReportSummary) => void;
 }): JSX.Element {
   const scopeTabs = [
     { id: null, key: 'all', label: 'All Reports' },
@@ -128,13 +128,13 @@ export function ReportSessionWorkspace({
   onChooseSubmissionPacket,
   onChooseRecording
 }: {
-  report: HoneycrispReportSummary;
-  document: HoneycrispReportDocument | null;
+  report: AppServerReportSummary;
+  document: AppServerReportDocument | null;
   loading: boolean;
   error: string | null;
   onReportChange: (instruction: string) => Promise<void>;
   onReportMarkdownChange: (content: string) => Promise<void>;
-  onStatusChange: (status: HoneycrispReportTriageStatus) => Promise<void>;
+  onStatusChange: (status: AppServerReportTriageStatus) => Promise<void>;
   onChooseSubmissionPacket: () => Promise<void>;
   onChooseRecording: () => Promise<void>;
 }): JSX.Element {
@@ -167,8 +167,8 @@ export function EditableReport({
   onChange,
   onMarkdownChange
 }: {
-  report: HoneycrispReportSummary;
-  document: HoneycrispReportDocument | null;
+  report: AppServerReportSummary;
+  document: AppServerReportDocument | null;
   loading: boolean;
   error: string | null;
   onChange: (instruction: string) => Promise<void>;
@@ -377,8 +377,8 @@ export function ReportSummarySidebar({
   onChooseSubmissionPacket,
   onChooseRecording
 }: {
-  report: HoneycrispReportSummary;
-  onStatusChange: (status: HoneycrispReportTriageStatus) => Promise<void>;
+  report: AppServerReportSummary;
+  onStatusChange: (status: AppServerReportTriageStatus) => Promise<void>;
   onChooseSubmissionPacket: () => Promise<void>;
   onChooseRecording: () => Promise<void>;
 }): JSX.Element {
@@ -398,7 +398,7 @@ export function ReportSummarySidebar({
     }
   };
 
-  const changeStatus = async (triageStatus: HoneycrispReportTriageStatus): Promise<void> => {
+  const changeStatus = async (triageStatus: AppServerReportTriageStatus): Promise<void> => {
     if (triageStatus === report.triageStatus) return;
     setStatusPending(true);
     setAttachmentError(null);
@@ -425,7 +425,7 @@ export function ReportSummarySidebar({
               value={report.triageStatus}
               aria-label="Report status"
               disabled={statusPending || choosing !== null}
-              onChange={(event) => void changeStatus(event.target.value as HoneycrispReportTriageStatus)}
+              onChange={(event) => void changeStatus(event.target.value as AppServerReportTriageStatus)}
             >
               {REPORT_TRIAGE_STATUS_OPTIONS.map((option) => (
                 <option value={option.value} key={option.value}>{option.label}</option>

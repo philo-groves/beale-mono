@@ -149,7 +149,7 @@ const CHANNEL_MIGRATIONS = [
     name: "create_workspace_channels",
     up(database: DatabaseSync): void {
       database.exec(`
-      CREATE TABLE IF NOT EXISTS honeycrisp_channels (
+      CREATE TABLE IF NOT EXISTS app_server_channels (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
         name TEXT NOT NULL,
@@ -161,12 +161,12 @@ const CHANNEL_MIGRATIONS = [
         updated_at TEXT NOT NULL,
         UNIQUE(workspace_id, name)
       );
-      CREATE INDEX IF NOT EXISTS honeycrisp_channels_workspace_updated
-      ON honeycrisp_channels(workspace_id, updated_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS app_server_channels_workspace_updated
+      ON app_server_channels(workspace_id, updated_at DESC, id DESC);
 
-      CREATE TABLE IF NOT EXISTS honeycrisp_channel_members (
+      CREATE TABLE IF NOT EXISTS app_server_channel_members (
         id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL REFERENCES honeycrisp_channels(id) ON DELETE CASCADE,
+        channel_id TEXT NOT NULL REFERENCES app_server_channels(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL,
         agent_id TEXT,
         agent_path TEXT NOT NULL,
@@ -177,15 +177,15 @@ const CHANNEL_MIGRATIONS = [
         last_seen_at TEXT NOT NULL,
         UNIQUE(channel_id, session_id, agent_path)
       );
-      CREATE INDEX IF NOT EXISTS honeycrisp_channel_members_channel
-      ON honeycrisp_channel_members(channel_id, joined_at ASC, id ASC);
+      CREATE INDEX IF NOT EXISTS app_server_channel_members_channel
+      ON app_server_channel_members(channel_id, joined_at ASC, id ASC);
 
-      CREATE TABLE IF NOT EXISTS honeycrisp_channel_messages (
+      CREATE TABLE IF NOT EXISTS app_server_channel_messages (
         id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL REFERENCES honeycrisp_channels(id) ON DELETE CASCADE,
+        channel_id TEXT NOT NULL REFERENCES app_server_channels(id) ON DELETE CASCADE,
         session_id TEXT,
         attempt_id TEXT,
-        member_id TEXT REFERENCES honeycrisp_channel_members(id) ON DELETE SET NULL,
+        member_id TEXT REFERENCES app_server_channel_members(id) ON DELETE SET NULL,
         sender_agent_path TEXT NOT NULL,
         kind TEXT NOT NULL CHECK(kind IN ('message', 'evidence', 'decision', 'system')),
         content_markdown TEXT NOT NULL,
@@ -193,8 +193,8 @@ const CHANNEL_MIGRATIONS = [
         metadata_json TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS honeycrisp_channel_messages_channel_created
-      ON honeycrisp_channel_messages(channel_id, created_at ASC, id ASC);
+      CREATE INDEX IF NOT EXISTS app_server_channel_messages_channel_created
+      ON app_server_channel_messages(channel_id, created_at ASC, id ASC);
       `);
     },
   },
@@ -203,7 +203,7 @@ const CHANNEL_MIGRATIONS = [
     name: "add_channel_member_status",
     up(database: DatabaseSync): void {
       database.exec(`
-        ALTER TABLE honeycrisp_channel_members
+        ALTER TABLE app_server_channel_members
         ADD COLUMN status TEXT NOT NULL DEFAULT 'unknown'
         CHECK(status IN ('pending', 'running', 'completed', 'interrupted', 'errored', 'unknown'));
       `);
@@ -214,12 +214,12 @@ const CHANNEL_MIGRATIONS = [
     name: "add_channel_shared_resources",
     up(database: DatabaseSync): void {
       database.exec(`
-        CREATE TABLE IF NOT EXISTS honeycrisp_channel_shared_resources (
+        CREATE TABLE IF NOT EXISTS app_server_channel_shared_resources (
           id TEXT PRIMARY KEY,
-          channel_id TEXT NOT NULL REFERENCES honeycrisp_channels(id) ON DELETE CASCADE,
+          channel_id TEXT NOT NULL REFERENCES app_server_channels(id) ON DELETE CASCADE,
           session_id TEXT,
-          member_id TEXT REFERENCES honeycrisp_channel_members(id) ON DELETE SET NULL,
-          message_id TEXT NOT NULL REFERENCES honeycrisp_channel_messages(id) ON DELETE CASCADE,
+          member_id TEXT REFERENCES app_server_channel_members(id) ON DELETE SET NULL,
+          message_id TEXT NOT NULL REFERENCES app_server_channel_messages(id) ON DELETE CASCADE,
           sender_agent_path TEXT NOT NULL,
           resource_kind TEXT NOT NULL CHECK(resource_kind IN ('file', 'runbook', 'memory')),
           resource_id TEXT NOT NULL,
@@ -228,8 +228,8 @@ const CHANNEL_MIGRATIONS = [
           updated_at TEXT NOT NULL,
           UNIQUE(channel_id, resource_kind, resource_id)
         );
-        CREATE INDEX IF NOT EXISTS honeycrisp_channel_shared_resources_channel_updated
-        ON honeycrisp_channel_shared_resources(channel_id, updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS app_server_channel_shared_resources_channel_updated
+        ON app_server_channel_shared_resources(channel_id, updated_at DESC, id DESC);
       `);
     },
   },
@@ -237,13 +237,13 @@ const CHANNEL_MIGRATIONS = [
     version: 4,
     name: "add_channel_archiving",
     up(database: DatabaseSync): void {
-      const columns = database.prepare("PRAGMA table_info(honeycrisp_channels)").all() as Array<{ name?: unknown }>;
+      const columns = database.prepare("PRAGMA table_info(app_server_channels)").all() as Array<{ name?: unknown }>;
       if (!columns.some((column) => column.name === "archived_at")) {
-        database.exec("ALTER TABLE honeycrisp_channels ADD COLUMN archived_at TEXT;");
+        database.exec("ALTER TABLE app_server_channels ADD COLUMN archived_at TEXT;");
       }
       database.exec(`
-        CREATE INDEX IF NOT EXISTS honeycrisp_channels_workspace_archived_updated
-        ON honeycrisp_channels(workspace_id, archived_at, updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS app_server_channels_workspace_archived_updated
+        ON app_server_channels(workspace_id, archived_at, updated_at DESC, id DESC);
       `);
     },
   },
@@ -255,7 +255,7 @@ export class ResearchChannelStore {
 
   public constructor(options: ResearchChannelStoreOptions = {}) {
     this.databasePath = options.databasePath
-      ?? process.env.HONEYCRISP_DATABASE_PATH?.trim()
+      ?? process.env.APP_SERVER_DATABASE_PATH?.trim()
       ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     if (this.databasePath !== ":memory:") mkdirSync(dirname(this.databasePath), { recursive: true });
     this.database = new DatabaseSync(this.databasePath);
@@ -263,7 +263,7 @@ export class ResearchChannelStore {
     this.database.exec("PRAGMA busy_timeout = 5000;");
     this.database.exec("PRAGMA foreign_keys = ON;");
     this.database.exec("PRAGMA journal_mode = WAL;");
-    applyDatabaseMigrations(this.database, "honeycrisp_channels", CHANNEL_MIGRATIONS);
+    applyDatabaseMigrations(this.database, "app_server_channels", CHANNEL_MIGRATIONS);
   }
 
   public close(): void {
@@ -288,7 +288,7 @@ export class ResearchChannelStore {
     };
     try {
       this.database.prepare(`
-        INSERT INTO honeycrisp_channels (
+        INSERT INTO app_server_channels (
           id, workspace_id, name, title, topic, created_by_session_id,
           created_by_agent_path, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -308,11 +308,11 @@ export class ResearchChannelStore {
   public list(workspaceId: string, limit = 200, archived = false): ResearchChannelSummary[] {
     const rows = this.database.prepare(`
       SELECT channel.*,
-        (SELECT COUNT(*) FROM honeycrisp_channel_members AS member WHERE member.channel_id = channel.id) AS member_count,
-        (SELECT COUNT(*) FROM honeycrisp_channel_messages AS message WHERE message.channel_id = channel.id) AS message_count,
-        (SELECT message.content_markdown FROM honeycrisp_channel_messages AS message
+        (SELECT COUNT(*) FROM app_server_channel_members AS member WHERE member.channel_id = channel.id) AS member_count,
+        (SELECT COUNT(*) FROM app_server_channel_messages AS message WHERE message.channel_id = channel.id) AS message_count,
+        (SELECT message.content_markdown FROM app_server_channel_messages AS message
           WHERE message.channel_id = channel.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1) AS latest_message
-      FROM honeycrisp_channels AS channel
+      FROM app_server_channels AS channel
       WHERE channel.workspace_id = ? AND channel.archived_at IS ${archived ? "NOT " : ""}NULL
       ORDER BY channel.updated_at DESC, channel.id DESC
       LIMIT ?
@@ -333,17 +333,17 @@ export class ResearchChannelStore {
     const record = this.resolve(workspaceId, channel);
     if (!record) return null;
     const members = this.database.prepare(`
-      SELECT * FROM honeycrisp_channel_members
+      SELECT * FROM app_server_channel_members
       WHERE channel_id = ? ORDER BY joined_at ASC, id ASC
     `).all(record.id).map((row) => decodeMember(row as Record<string, unknown>));
     const messages = this.database.prepare(`
       SELECT * FROM (
-        SELECT *, rowid AS channel_sequence FROM honeycrisp_channel_messages
+        SELECT *, rowid AS channel_sequence FROM app_server_channel_messages
         WHERE channel_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
       ) ORDER BY created_at ASC, channel_sequence ASC
     `).all(record.id, boundedMessageLimit(messageLimit)).map((row) => decodeMessage(row as Record<string, unknown>));
     const sharedResources = this.database.prepare(`
-      SELECT * FROM honeycrisp_channel_shared_resources
+      SELECT * FROM app_server_channel_shared_resources
       WHERE channel_id = ? ORDER BY updated_at DESC, id DESC
     `).all(record.id).map((row) => decodeSharedResource(row as Record<string, unknown>));
     return { channel: record, members, messages, sharedResources };
@@ -356,7 +356,7 @@ export class ResearchChannelStore {
     const agentPath = requiredText(input.agentPath, "Agent path");
     const id = `channel_member_${randomUUID().replaceAll("-", "")}`;
     this.database.prepare(`
-      INSERT INTO honeycrisp_channel_members (
+      INSERT INTO app_server_channel_members (
         id, channel_id, session_id, agent_id, agent_path, provider, model, role, status, joined_at, last_seen_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(channel_id, session_id, agent_path) DO UPDATE SET
@@ -365,7 +365,7 @@ export class ResearchChannelStore {
         model = excluded.model,
         role = excluded.role,
         status = CASE
-          WHEN excluded.status = 'unknown' THEN honeycrisp_channel_members.status
+          WHEN excluded.status = 'unknown' THEN app_server_channel_members.status
           ELSE excluded.status
         END,
         last_seen_at = excluded.last_seen_at
@@ -375,7 +375,7 @@ export class ResearchChannelStore {
       normalizeChannelMemberStatus(input.status), joinedAt, joinedAt,
     );
     const row = this.database.prepare(`
-      SELECT * FROM honeycrisp_channel_members
+      SELECT * FROM app_server_channel_members
       WHERE channel_id = ? AND session_id IS ? AND agent_path = ?
     `).get(channel.id, sessionId, agentPath) as Record<string, unknown> | undefined;
     if (!row) throw new Error(`Channel member registration failed for ${agentPath}.`);
@@ -402,7 +402,7 @@ export class ResearchChannelStore {
     this.database.exec("BEGIN IMMEDIATE;");
     try {
       this.database.prepare(`
-        INSERT INTO honeycrisp_channel_messages (
+        INSERT INTO app_server_channel_messages (
           id, channel_id, session_id, attempt_id, member_id, sender_agent_path,
           kind, content_markdown, evidence_refs_json, metadata_json, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -411,7 +411,7 @@ export class ResearchChannelStore {
         message.senderAgentPath, message.kind, message.contentMarkdown,
         JSON.stringify(message.evidenceRefs), JSON.stringify(message.metadata), message.createdAt,
       );
-      this.database.prepare("UPDATE honeycrisp_channels SET updated_at = ? WHERE id = ?")
+      this.database.prepare("UPDATE app_server_channels SET updated_at = ? WHERE id = ?")
         .run(createdAt, channel.id);
       this.database.exec("COMMIT;");
     } catch (error) {
@@ -457,7 +457,7 @@ export class ResearchChannelStore {
     this.database.exec("BEGIN IMMEDIATE;");
     try {
       this.database.prepare(`
-        INSERT INTO honeycrisp_channel_messages (
+        INSERT INTO app_server_channel_messages (
           id, channel_id, session_id, attempt_id, member_id, sender_agent_path,
           kind, content_markdown, evidence_refs_json, metadata_json, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -467,7 +467,7 @@ export class ResearchChannelStore {
         JSON.stringify(message.evidenceRefs), JSON.stringify(message.metadata), message.createdAt,
       );
       this.database.prepare(`
-        INSERT INTO honeycrisp_channel_shared_resources (
+        INSERT INTO app_server_channel_shared_resources (
           id, channel_id, session_id, member_id, message_id, sender_agent_path,
           resource_kind, resource_id, title, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -483,7 +483,7 @@ export class ResearchChannelStore {
         resource.senderAgentPath, resource.kind, resource.resourceId, resource.title,
         resource.createdAt, resource.updatedAt,
       );
-      this.database.prepare("UPDATE honeycrisp_channels SET updated_at = ? WHERE id = ?")
+      this.database.prepare("UPDATE app_server_channels SET updated_at = ? WHERE id = ?")
         .run(createdAt, channel.id);
       this.database.exec("COMMIT;");
     } catch (error) {
@@ -491,7 +491,7 @@ export class ResearchChannelStore {
       throw error;
     }
     const stored = this.database.prepare(`
-      SELECT * FROM honeycrisp_channel_shared_resources
+      SELECT * FROM app_server_channel_shared_resources
       WHERE channel_id = ? AND resource_kind = ? AND resource_id = ?
     `).get(channel.id, kind, resourceId) as Record<string, unknown> | undefined;
     if (!stored) throw new Error(`Channel resource sharing failed for ${resourceId}.`);
@@ -500,7 +500,7 @@ export class ResearchChannelStore {
 
   public delete(workspaceId: string, channel: string): { channelId: string; deleted: true } {
     const record = this.require(workspaceId, channel);
-    const result = this.database.prepare("DELETE FROM honeycrisp_channels WHERE id = ? AND workspace_id = ?")
+    const result = this.database.prepare("DELETE FROM app_server_channels WHERE id = ? AND workspace_id = ?")
       .run(record.id, record.workspaceId);
     if (Number(result.changes) !== 1) throw new Error(`Channel could not be deleted: ${channel}`);
     return { channelId: record.id, deleted: true };
@@ -508,14 +508,14 @@ export class ResearchChannelStore {
 
   public archive(workspaceId: string, channel: string, archivedAt = new Date().toISOString()): ResearchChannelRecord {
     const record = this.require(workspaceId, channel);
-    this.database.prepare("UPDATE honeycrisp_channels SET archived_at = ? WHERE id = ? AND workspace_id = ?")
+    this.database.prepare("UPDATE app_server_channels SET archived_at = ? WHERE id = ? AND workspace_id = ?")
       .run(archivedAt, record.id, record.workspaceId);
     return { ...record, archivedAt };
   }
 
   public restore(workspaceId: string, channel: string): ResearchChannelRecord {
     const record = this.require(workspaceId, channel);
-    this.database.prepare("UPDATE honeycrisp_channels SET archived_at = NULL WHERE id = ? AND workspace_id = ?")
+    this.database.prepare("UPDATE app_server_channels SET archived_at = NULL WHERE id = ? AND workspace_id = ?")
       .run(record.id, record.workspaceId);
     return { ...record, archivedAt: null };
   }
@@ -525,7 +525,7 @@ export class ResearchChannelStore {
     const identifier = requiredText(channel, "Channel");
     const normalizedName = researchChannelNameSlug(identifier);
     const row = this.database.prepare(`
-      SELECT * FROM honeycrisp_channels
+      SELECT * FROM app_server_channels
       WHERE workspace_id = ? AND (id = ? OR name = ?)
       LIMIT 1
     `).get(normalizedWorkspaceId, identifier, normalizedName) as ChannelRow | undefined;

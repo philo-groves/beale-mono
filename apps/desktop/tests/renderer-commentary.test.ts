@@ -283,7 +283,7 @@ describe('renderer commentary projection', () => {
           id: 'runtime-checkout',
           direction: 'in_scope',
           kind: 'repo',
-          value: 'C:\\Users\\alice\\.honeycrisp\\repositories\\github.com_example_runtime\\default',
+          value: 'C:\\Users\\alice\\.beale\\repositories\\github.com_example_runtime\\default',
           attributes: {
             repositoryUrl: 'https://github.com/example/runtime.git'
           }
@@ -312,7 +312,7 @@ describe('renderer commentary projection', () => {
       toolEvent('repo-url-result', 'tool.observed', 'repository.search', 'repo-url', {
         query: 'loadConfig'
       }, {
-        roots: ['C:\\Users\\alice\\.honeycrisp\\repositories\\github.com_example_runtime\\default\\app'],
+        roots: ['C:\\Users\\alice\\.beale\\repositories\\github.com_example_runtime\\default\\app'],
         query: 'loadConfig',
         matches: []
       })
@@ -682,7 +682,7 @@ describe('renderer commentary projection', () => {
     const events = Array.from({ length: 100 }, (_, index) => displayEvent(`commentary-${index}`, {
       agentPath: '/root',
       transcriptRole: 'assistant',
-      transcriptSource: 'honeycrisp_commentary',
+      transcriptSource: 'app_server_commentary',
       messagePhase: 'commentary',
       text: `Commentary message ${index}`
     }, { sequence: index }));
@@ -727,7 +727,7 @@ describe('renderer commentary projection', () => {
         responseId: 'response_one',
         messagePhase: 'commentary',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         text: 'I found two parser entrypoints and am checking their shared guard.'
       }),
       displayEvent('tool', { agentPath: '/root', text: 'Raw shell output.' }, { source: 'tool', type: 'tool_result' }),
@@ -736,7 +736,7 @@ describe('renderer commentary projection', () => {
         responseId: 'response_two',
         messagePhase: 'final_answer',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp',
+        transcriptSource: 'app-server',
         text: 'The shared guard rejects the boundary safely.'
       })
     ]);
@@ -748,12 +748,12 @@ describe('renderer commentary projection', () => {
     ]);
   });
 
-  it('projects failed final Honeycrisp results as error messages', () => {
+  it('projects failed final app-server results as error messages', () => {
     const messages = commentaryMessagesForSession(runDetail('Inspect the parser.'), [
       displayEvent('final-error', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp',
+        transcriptSource: 'app-server',
         messagePhase: 'final_answer',
         finalResultKind: 'error',
         outputText: 'Unexpected error'
@@ -765,12 +765,12 @@ describe('renderer commentary projection', () => {
     ]);
   });
 
-  it('normalizes legacy terminated Honeycrisp final text as an unexpected error', () => {
+  it('normalizes legacy terminated app-server final text as an unexpected error', () => {
     const messages = commentaryMessagesForSession(runDetail('Inspect the parser.'), [
       displayEvent('legacy-final-error', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp',
+        transcriptSource: 'app-server',
         messagePhase: 'final_answer',
         text: 'terminated'
       })
@@ -789,7 +789,7 @@ describe('renderer commentary projection', () => {
       displayEvent('commentary', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         messagePhase: 'commentary',
         text: 'I am inspecting the parser.'
       }),
@@ -807,12 +807,12 @@ describe('renderer commentary projection', () => {
     ]);
   });
 
-  it('preserves legacy wrapped Honeycrisp error details when present', () => {
+  it('preserves legacy wrapped app-server error details when present', () => {
     const messages = commentaryMessagesForSession(runDetail('Inspect the parser.'), [
       displayEvent('legacy-wrapped-error', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp',
+        transcriptSource: 'app-server',
         messagePhase: 'final_answer',
         text: 'Research agent failed: Provider request failed with status 500.'
       })
@@ -837,7 +837,7 @@ describe('renderer commentary projection', () => {
         agentPath: '/root',
         responseId: 'response_native',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         messagePhase: 'commentary',
         text: 'Native commentary for the first response.'
       }),
@@ -871,14 +871,14 @@ describe('renderer commentary projection', () => {
       displayEvent('commentary', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         messagePhase: 'commentary',
         text: 'Checking parser entrypoints.'
       }),
       displayEvent('final', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp',
+        transcriptSource: 'app-server',
         messagePhase: 'final_answer',
         text: 'The parser boundary is safe.'
       })
@@ -927,7 +927,7 @@ describe('renderer commentary projection', () => {
     const commentary = displayEvent('commentary', {
       agentPath: '/root',
       transcriptRole: 'assistant',
-      transcriptSource: 'honeycrisp_commentary',
+      transcriptSource: 'app_server_commentary',
       messagePhase: 'commentary',
       text: 'Checking parser entrypoints.'
     }, { createdAt: '2026-08-03T11:00:00.000Z' });
@@ -968,14 +968,14 @@ describe('renderer commentary projection', () => {
       displayEvent('commentary', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         messagePhase: 'commentary',
         text: 'Checking parser entrypoints.'
       }),
       displayEvent('final', {
         agentPath: '/root',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp',
+        transcriptSource: 'app-server',
         messagePhase: 'final_answer',
         text: 'The parser boundary is safe.'
       })
@@ -1108,7 +1108,7 @@ describe('renderer commentary projection', () => {
         model: 'gpt-5.6-sol',
         messagePhase: 'commentary',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         text: 'I found the parser boundary and am testing its guard.'
       })
     ]);
@@ -1181,7 +1181,7 @@ describe('renderer commentary projection', () => {
       displayEvent('commentary', {
         agentPath: '/root/parser_review',
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         messagePhase: 'commentary',
         text: 'I am checking the parser boundary.'
       }),
@@ -1233,7 +1233,7 @@ function toolEvent(
   result?: unknown
 ): TraceDisplayEvent {
   return displayEvent(id, {
-    honeycrispKind: kind,
+    appServerKind: kind,
     agentPath: '/root',
     toolName,
     payload: {
@@ -1246,7 +1246,7 @@ function toolEvent(
   }, {
     source: 'system',
     type: 'research_event',
-    summary: `Honeycrisp ${kind}: ${toolName}.`
+    summary: `app-server ${kind}: ${toolName}.`
   });
 }
 

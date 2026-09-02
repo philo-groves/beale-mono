@@ -139,7 +139,7 @@ const TOOLS = [
         startRunInput: { type: 'object', description: 'Complete Beale StartRunInput. Overrides simplified fields.' },
         promptMarkdown: { type: 'string' },
         provider: { type: 'string' },
-        runEngine: { type: 'string', enum: ['honeycrisp', 'fixture'] },
+        runEngine: { type: 'string', enum: ['app-server', 'fixture'] },
         shellSafetyMode: { type: 'string', enum: ['manual_approval', 'auto_review', 'danger'] },
         goalEnabled: { type: 'boolean' },
         goalObjective: { type: 'string' },
@@ -187,7 +187,7 @@ const TOOLS = [
   },
   {
     name: 'run_dreaming',
-    description: 'Run Honeycrisp memory Dreaming in the current or selected workspace with the configured profile and provider.',
+    description: 'Run app-server memory Dreaming in the current or selected workspace with the configured profile and provider.',
     inputSchema: {
       type: 'object',
       properties: {

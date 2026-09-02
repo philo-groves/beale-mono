@@ -153,7 +153,7 @@ export class ResearchClaimStore {
     const context = this.memoryGraph.getContext();
     const memory = input.memoryNodeId ? this.requireWorkspaceMemory(input.memoryNodeId) : null;
     const existing = memory ? this.database.prepare(
-      "SELECT id FROM honeycrisp_research_claims WHERE workspace_id = ? AND legacy_memory_node_id = ?",
+      "SELECT id FROM app_server_research_claims WHERE workspace_id = ? AND legacy_memory_node_id = ?",
     ).get(context.workspaceId, memory.id) as { id?: unknown } | undefined : undefined;
     if (typeof existing?.id === "string") return this.get(existing.id)!;
 
@@ -166,7 +166,7 @@ export class ResearchClaimStore {
     this.validateComponents(id, componentClaimIds);
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      this.database.prepare(`INSERT INTO honeycrisp_research_claims (
+      this.database.prepare(`INSERT INTO app_server_research_claims (
         id, workspace_id, subject_id, legacy_memory_node_id, origin_session_id, classification,
         title, summary, impact, rating, status, stale_from_status, confidence,
         source_revision, environment_fingerprint, reproduction_runbook_id,
@@ -235,7 +235,7 @@ export class ResearchClaimStore {
       const staleFromStatus = input.toStatus === "stale"
         ? (current.status === "stale" ? current.staleFromStatus : current.status)
         : null;
-      const result = this.database.prepare(`UPDATE honeycrisp_research_claims SET
+      const result = this.database.prepare(`UPDATE app_server_research_claims SET
         status = ?, stale_from_status = ?, classification = ?, source_revision = ?, environment_fingerprint = ?,
         reproduction_runbook_id = ?, report_id = ?, disclosure_reference = ?, stale_reason = ?,
         updated_at = ?, revision = ? WHERE id = ? AND revision = ?`).run(
@@ -297,7 +297,7 @@ export class ResearchClaimStore {
     );
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const result = this.database.prepare(`UPDATE honeycrisp_research_claims SET
+      const result = this.database.prepare(`UPDATE app_server_research_claims SET
         title = ?, summary = ?, impact = ?, rating = ?, confidence = ?, classification = ?, security_tracking_json = ?, updated_at = ?, revision = ?
         WHERE id = ? AND revision = ?`).run(
         input.title === undefined ? current.title : requiredText(input.title, "Claim title"),
@@ -371,7 +371,7 @@ export class ResearchClaimStore {
   }
 
   private insertEvidence(findingId: string, evidence: readonly NormalizedFindingEvidence[], now: string): string[] {
-    const insert = this.database.prepare(`INSERT INTO honeycrisp_claim_evidence (
+    const insert = this.database.prepare(`INSERT INTO app_server_claim_evidence (
       id, claim_id, kind, reference_id, content_hash, summary, session_id,
       actor_id, independent, metadata_json, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -394,7 +394,7 @@ export class ResearchClaimStore {
     now: string,
   ): void {
     const sessionId = this.memoryGraph.getContext().sessionId ?? null;
-    this.database.prepare(`INSERT INTO honeycrisp_claim_transitions (
+    this.database.prepare(`INSERT INTO app_server_claim_transitions (
       id, claim_id, claim_revision, from_status, to_status, reason, session_id, actor_id, evidence_ids_json, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       `claim_transition_${randomUUID()}`, findingId, revision, fromStatus, toStatus, reason,
@@ -404,7 +404,7 @@ export class ResearchClaimStore {
 
   private insertAuthor(findingId: string, revision: number, author: ModelAuthor | undefined, now: string): void {
     if (!author?.provider.trim() || !author.model.trim()) return;
-    this.database.prepare(`INSERT OR IGNORE INTO honeycrisp_claim_authorship
+    this.database.prepare(`INSERT OR IGNORE INTO app_server_claim_authorship
       (claim_id, revision, provider, model, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(findingId, revision, author.provider.trim(), author.model.trim(), now);
   }
@@ -414,7 +414,7 @@ export class ResearchClaimStore {
     const context = this.memoryGraph.getContext();
     for (const componentId of componentIds) {
       const row = this.database.prepare(
-        "SELECT workspace_id FROM honeycrisp_research_claims WHERE id = ?",
+        "SELECT workspace_id FROM app_server_research_claims WHERE id = ?",
       ).get(componentId) as { workspace_id?: unknown } | undefined;
       if (!row || row.workspace_id !== context.workspaceId) {
         throw new Error(`Component research claim is unavailable in this workspace: ${componentId}.`);
@@ -423,9 +423,9 @@ export class ResearchClaimStore {
   }
 
   private replaceComponents(id: string, componentIds: readonly string[], now: string): void {
-    this.database.prepare("DELETE FROM honeycrisp_claim_components WHERE claim_id = ?").run(id);
+    this.database.prepare("DELETE FROM app_server_claim_components WHERE claim_id = ?").run(id);
     const insert = this.database.prepare(
-      "INSERT INTO honeycrisp_claim_components(claim_id, component_claim_id, position, created_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO app_server_claim_components(claim_id, component_claim_id, position, created_at) VALUES (?, ?, ?, ?)",
     );
     componentIds.forEach((componentId, index) => insert.run(id, componentId, index, now));
   }
@@ -452,12 +452,12 @@ export function initializeFindingSchema(database: DatabaseSync): void {
   // database would preserve their foreign key to the retired memory_nodes
   // schema and can make an otherwise knowledge-free workspace impossible to
   // initialize. Only advance that schema when an installation actually has it.
-  if (tableExists(database, "honeycrisp_findings")) applyDatabaseMigrations(database, "honeycrisp_findings", [{
+  if (tableExists(database, "app_server_findings")) applyDatabaseMigrations(database, "app_server_findings", [{
     version: 1,
     name: "evidence_gated_finding_lifecycle",
     up(db) {
       db.exec(`
-        CREATE TABLE IF NOT EXISTS honeycrisp_findings (
+        CREATE TABLE IF NOT EXISTS app_server_findings (
           id TEXT PRIMARY KEY,
           workspace_id TEXT NOT NULL,
           subject_id TEXT NOT NULL,
@@ -480,11 +480,11 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           revision INTEGER NOT NULL CHECK (revision > 0),
           UNIQUE(workspace_id, memory_node_id)
         );
-        CREATE INDEX IF NOT EXISTS honeycrisp_findings_workspace_status_idx
-          ON honeycrisp_findings(workspace_id, status, updated_at);
-        CREATE TABLE IF NOT EXISTS honeycrisp_finding_evidence (
+        CREATE INDEX IF NOT EXISTS app_server_findings_workspace_status_idx
+          ON app_server_findings(workspace_id, status, updated_at);
+        CREATE TABLE IF NOT EXISTS app_server_finding_evidence (
           id TEXT PRIMARY KEY,
-          finding_id TEXT NOT NULL REFERENCES honeycrisp_findings(id) ON DELETE CASCADE,
+          finding_id TEXT NOT NULL REFERENCES app_server_findings(id) ON DELETE CASCADE,
           kind TEXT NOT NULL CHECK (kind IN ('code','artifact','command','url','runbook_execution','independent_verification','report','disclosure')),
           reference_id TEXT,
           content_hash TEXT,
@@ -495,11 +495,11 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           metadata_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS honeycrisp_finding_evidence_finding_idx
-          ON honeycrisp_finding_evidence(finding_id, created_at);
-        CREATE TABLE IF NOT EXISTS honeycrisp_finding_transitions (
+        CREATE INDEX IF NOT EXISTS app_server_finding_evidence_finding_idx
+          ON app_server_finding_evidence(finding_id, created_at);
+        CREATE TABLE IF NOT EXISTS app_server_finding_transitions (
           id TEXT PRIMARY KEY,
-          finding_id TEXT NOT NULL REFERENCES honeycrisp_findings(id) ON DELETE CASCADE,
+          finding_id TEXT NOT NULL REFERENCES app_server_findings(id) ON DELETE CASCADE,
           finding_revision INTEGER NOT NULL,
           from_status TEXT,
           to_status TEXT NOT NULL,
@@ -508,10 +508,10 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           evidence_ids_json TEXT NOT NULL DEFAULT '[]',
           created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS honeycrisp_finding_transitions_finding_idx
-          ON honeycrisp_finding_transitions(finding_id, created_at);
-        CREATE TABLE IF NOT EXISTS honeycrisp_finding_authorship (
-          finding_id TEXT NOT NULL REFERENCES honeycrisp_findings(id) ON DELETE CASCADE,
+        CREATE INDEX IF NOT EXISTS app_server_finding_transitions_finding_idx
+          ON app_server_finding_transitions(finding_id, created_at);
+        CREATE TABLE IF NOT EXISTS app_server_finding_authorship (
+          finding_id TEXT NOT NULL REFERENCES app_server_findings(id) ON DELETE CASCADE,
           revision INTEGER NOT NULL,
           provider TEXT NOT NULL,
           model TEXT NOT NULL,
@@ -524,25 +524,25 @@ export function initializeFindingSchema(database: DatabaseSync): void {
     version: 2,
     name: "ordered_finding_transitions",
     up(db) {
-      if (!tableHasColumn(db, "honeycrisp_finding_transitions", "finding_revision")) {
-        db.exec("ALTER TABLE honeycrisp_finding_transitions ADD COLUMN finding_revision INTEGER;");
-        db.exec(`UPDATE honeycrisp_finding_transitions AS transition_row SET finding_revision = (
-          SELECT COUNT(*) FROM honeycrisp_finding_transitions AS earlier
+      if (!tableHasColumn(db, "app_server_finding_transitions", "finding_revision")) {
+        db.exec("ALTER TABLE app_server_finding_transitions ADD COLUMN finding_revision INTEGER;");
+        db.exec(`UPDATE app_server_finding_transitions AS transition_row SET finding_revision = (
+          SELECT COUNT(*) FROM app_server_finding_transitions AS earlier
           WHERE earlier.finding_id = transition_row.finding_id
             AND (earlier.created_at < transition_row.created_at
               OR (earlier.created_at = transition_row.created_at AND earlier.rowid <= transition_row.rowid))
         );`);
       }
-      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS honeycrisp_finding_transitions_revision_idx
-        ON honeycrisp_finding_transitions(finding_id, finding_revision);`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS app_server_finding_transitions_revision_idx
+        ON app_server_finding_transitions(finding_id, finding_revision);`);
     },
   }]);
-  applyDatabaseMigrations(database, "honeycrisp_research_claims", [{
+  applyDatabaseMigrations(database, "app_server_research_claims", [{
     version: 1,
     name: "canonical_research_claim_ledger",
     up(db) {
       db.exec(`
-        CREATE TABLE IF NOT EXISTS honeycrisp_research_claims (
+        CREATE TABLE IF NOT EXISTS app_server_research_claims (
           id TEXT PRIMARY KEY,
           workspace_id TEXT NOT NULL,
           subject_id TEXT NOT NULL,
@@ -565,14 +565,14 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           updated_at TEXT NOT NULL,
           revision INTEGER NOT NULL CHECK (revision > 0)
         );
-        CREATE INDEX IF NOT EXISTS honeycrisp_research_claims_workspace_status_idx
-          ON honeycrisp_research_claims(workspace_id, status, updated_at);
-        CREATE UNIQUE INDEX IF NOT EXISTS honeycrisp_research_claims_legacy_memory_idx
-          ON honeycrisp_research_claims(workspace_id, legacy_memory_node_id)
+        CREATE INDEX IF NOT EXISTS app_server_research_claims_workspace_status_idx
+          ON app_server_research_claims(workspace_id, status, updated_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS app_server_research_claims_legacy_memory_idx
+          ON app_server_research_claims(workspace_id, legacy_memory_node_id)
           WHERE legacy_memory_node_id IS NOT NULL;
-        CREATE TABLE IF NOT EXISTS honeycrisp_claim_evidence (
+        CREATE TABLE IF NOT EXISTS app_server_claim_evidence (
           id TEXT PRIMARY KEY,
-          claim_id TEXT NOT NULL REFERENCES honeycrisp_research_claims(id) ON DELETE CASCADE,
+          claim_id TEXT NOT NULL REFERENCES app_server_research_claims(id) ON DELETE CASCADE,
           kind TEXT NOT NULL,
           reference_id TEXT,
           content_hash TEXT,
@@ -583,11 +583,11 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           metadata_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS honeycrisp_claim_evidence_claim_idx
-          ON honeycrisp_claim_evidence(claim_id, created_at);
-        CREATE TABLE IF NOT EXISTS honeycrisp_claim_transitions (
+        CREATE INDEX IF NOT EXISTS app_server_claim_evidence_claim_idx
+          ON app_server_claim_evidence(claim_id, created_at);
+        CREATE TABLE IF NOT EXISTS app_server_claim_transitions (
           id TEXT PRIMARY KEY,
-          claim_id TEXT NOT NULL REFERENCES honeycrisp_research_claims(id) ON DELETE CASCADE,
+          claim_id TEXT NOT NULL REFERENCES app_server_research_claims(id) ON DELETE CASCADE,
           claim_revision INTEGER NOT NULL,
           from_status TEXT,
           to_status TEXT NOT NULL,
@@ -597,17 +597,17 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           created_at TEXT NOT NULL,
           UNIQUE(claim_id, claim_revision)
         );
-        CREATE TABLE IF NOT EXISTS honeycrisp_claim_authorship (
-          claim_id TEXT NOT NULL REFERENCES honeycrisp_research_claims(id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS app_server_claim_authorship (
+          claim_id TEXT NOT NULL REFERENCES app_server_research_claims(id) ON DELETE CASCADE,
           revision INTEGER NOT NULL,
           provider TEXT NOT NULL,
           model TEXT NOT NULL,
           created_at TEXT NOT NULL,
           PRIMARY KEY(claim_id, revision, provider, model)
         );
-        CREATE TABLE IF NOT EXISTS honeycrisp_claim_components (
-          claim_id TEXT NOT NULL REFERENCES honeycrisp_research_claims(id) ON DELETE CASCADE,
-          component_claim_id TEXT NOT NULL REFERENCES honeycrisp_research_claims(id) ON DELETE RESTRICT,
+        CREATE TABLE IF NOT EXISTS app_server_claim_components (
+          claim_id TEXT NOT NULL REFERENCES app_server_research_claims(id) ON DELETE CASCADE,
+          component_claim_id TEXT NOT NULL REFERENCES app_server_research_claims(id) ON DELETE RESTRICT,
           position INTEGER NOT NULL CHECK (position >= 0),
           created_at TEXT NOT NULL,
           PRIMARY KEY(claim_id, component_claim_id),
@@ -615,9 +615,9 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           CHECK(claim_id <> component_claim_id)
         );
       `);
-      if (tableExists(db, "honeycrisp_findings") && tableExists(db, "memory_nodes")) {
+      if (tableExists(db, "app_server_findings") && tableExists(db, "memory_nodes")) {
         db.exec(`
-        INSERT OR IGNORE INTO honeycrisp_research_claims(
+        INSERT OR IGNORE INTO app_server_research_claims(
           id, workspace_id, subject_id, legacy_memory_node_id, origin_session_id, classification,
           title, summary, impact, status, stale_from_status, confidence, source_revision,
           environment_fingerprint, reproduction_runbook_id, report_id, disclosure_reference,
@@ -636,11 +636,11 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           f.title, f.summary, f.impact, f.status, f.stale_from_status, f.confidence,
           f.source_revision, f.environment_fingerprint, f.reproduction_runbook_id,
           f.report_id, f.disclosure_reference, f.stale_reason, f.created_at, f.updated_at, f.revision
-        FROM honeycrisp_findings f LEFT JOIN memory_nodes n ON n.id = f.memory_node_id;
+        FROM app_server_findings f LEFT JOIN memory_nodes n ON n.id = f.memory_node_id;
         `);
-      } else if (tableExists(db, "honeycrisp_findings")) {
+      } else if (tableExists(db, "app_server_findings")) {
         db.exec(`
-        INSERT OR IGNORE INTO honeycrisp_research_claims(
+        INSERT OR IGNORE INTO app_server_research_claims(
           id, workspace_id, subject_id, legacy_memory_node_id, origin_session_id, classification,
           title, summary, impact, status, stale_from_status, confidence, source_revision,
           environment_fingerprint, reproduction_runbook_id, report_id, disclosure_reference,
@@ -650,38 +650,38 @@ export function initializeFindingSchema(database: DatabaseSync): void {
           f.title, f.summary, f.impact, f.status, f.stale_from_status, f.confidence,
           f.source_revision, f.environment_fingerprint, f.reproduction_runbook_id,
           f.report_id, f.disclosure_reference, f.stale_reason, f.created_at, f.updated_at, f.revision
-        FROM honeycrisp_findings f;
+        FROM app_server_findings f;
         `);
       }
-      if (tableExists(db, "honeycrisp_finding_evidence")) db.exec(`
-        INSERT OR IGNORE INTO honeycrisp_claim_evidence
+      if (tableExists(db, "app_server_finding_evidence")) db.exec(`
+        INSERT OR IGNORE INTO app_server_claim_evidence
           SELECT id, finding_id, kind, reference_id, content_hash, summary, session_id,
-            actor_id, independent, metadata_json, created_at FROM honeycrisp_finding_evidence;
+            actor_id, independent, metadata_json, created_at FROM app_server_finding_evidence;
       `);
-      if (tableExists(db, "honeycrisp_finding_transitions")) db.exec(`
-        INSERT OR IGNORE INTO honeycrisp_claim_transitions
+      if (tableExists(db, "app_server_finding_transitions")) db.exec(`
+        INSERT OR IGNORE INTO app_server_claim_transitions
           SELECT id, finding_id, finding_revision, from_status, to_status, reason, actor_id,
-            evidence_ids_json, created_at FROM honeycrisp_finding_transitions;
+            evidence_ids_json, created_at FROM app_server_finding_transitions;
       `);
-      if (tableExists(db, "honeycrisp_finding_authorship")) db.exec(`
-        INSERT OR IGNORE INTO honeycrisp_claim_authorship
-          SELECT finding_id, revision, provider, model, created_at FROM honeycrisp_finding_authorship;
+      if (tableExists(db, "app_server_finding_authorship")) db.exec(`
+        INSERT OR IGNORE INTO app_server_claim_authorship
+          SELECT finding_id, revision, provider, model, created_at FROM app_server_finding_authorship;
       `);
     },
   }, {
     version: 2,
     name: "security_finding_tracking",
     up(db) {
-      if (!tableHasColumn(db, "honeycrisp_research_claims", "security_tracking_json")) {
-        db.exec("ALTER TABLE honeycrisp_research_claims ADD COLUMN security_tracking_json TEXT NOT NULL DEFAULT 'null';");
+      if (!tableHasColumn(db, "app_server_research_claims", "security_tracking_json")) {
+        db.exec("ALTER TABLE app_server_research_claims ADD COLUMN security_tracking_json TEXT NOT NULL DEFAULT 'null';");
       }
     },
   }, {
     version: 3,
     name: "untrusted_qualitative_claim_rating",
     up(db) {
-      if (!tableHasColumn(db, "honeycrisp_research_claims", "rating")) {
-        db.exec(`ALTER TABLE honeycrisp_research_claims
+      if (!tableHasColumn(db, "app_server_research_claims", "rating")) {
+        db.exec(`ALTER TABLE app_server_research_claims
           ADD COLUMN rating TEXT NOT NULL DEFAULT 'informational'
           CHECK (rating IN ('informational','low','medium','high','critical'));`);
       }
@@ -696,11 +696,11 @@ export function initializeFindingSchema(database: DatabaseSync): void {
     version: 5,
     name: "claim_transition_session_attribution",
     up(db) {
-      if (!tableHasColumn(db, "honeycrisp_claim_transitions", "session_id")) {
-        db.exec("ALTER TABLE honeycrisp_claim_transitions ADD COLUMN session_id TEXT;");
+      if (!tableHasColumn(db, "app_server_claim_transitions", "session_id")) {
+        db.exec("ALTER TABLE app_server_claim_transitions ADD COLUMN session_id TEXT;");
       }
-      db.exec(`UPDATE honeycrisp_claim_transitions AS transition_row SET session_id = (
-        SELECT claim.origin_session_id FROM honeycrisp_research_claims claim
+      db.exec(`UPDATE app_server_claim_transitions AS transition_row SET session_id = (
+        SELECT claim.origin_session_id FROM app_server_research_claims claim
         WHERE claim.id = transition_row.claim_id
       ) WHERE transition_row.claim_revision = 1 AND transition_row.session_id IS NULL;`);
     },
@@ -708,8 +708,8 @@ export function initializeFindingSchema(database: DatabaseSync): void {
 }
 
 export function readFindings(database: DatabaseSync, workspaceId: string, findingId?: string): FindingSummary[] {
-  if (!tableExists(database, "honeycrisp_research_claims")) return [];
-  const rows = database.prepare(`SELECT * FROM honeycrisp_research_claims
+  if (!tableExists(database, "app_server_research_claims")) return [];
+  const rows = database.prepare(`SELECT * FROM app_server_research_claims
     WHERE workspace_id = ?${findingId ? " AND id = ?" : ""}
     ORDER BY updated_at DESC, id`).all(...(findingId ? [workspaceId, findingId] : [workspaceId])) as SqlRow[];
   const evidence = groupedEvidence(database, new Set(rows.map((row) => requiredSqlText(row.id))));
@@ -777,7 +777,7 @@ export function refreshFindingStaleness(input: {
       const nextRevision = finding.revision + 1;
       database.exec("BEGIN IMMEDIATE");
       try {
-        const result = database.prepare(`UPDATE honeycrisp_research_claims SET
+        const result = database.prepare(`UPDATE app_server_research_claims SET
           status = 'stale', stale_from_status = ?, stale_reason = ?, updated_at = ?, revision = ?
           WHERE id = ? AND revision = ?`).run(
           finding.status,
@@ -788,7 +788,7 @@ export function refreshFindingStaleness(input: {
           finding.revision,
         );
         if (Number(result.changes) !== 1) throw new Error(`Finding revision conflict for ${finding.id}.`);
-        database.prepare(`INSERT INTO honeycrisp_claim_transitions (
+        database.prepare(`INSERT INTO app_server_claim_transitions (
           id, claim_id, claim_revision, from_status, to_status, reason, actor_id, evidence_ids_json, created_at
         ) VALUES (?, ?, ?, ?, 'stale', ?, ?, '[]', ?)`).run(
           `claim_transition_${randomUUID()}`,
@@ -827,14 +827,14 @@ function repairIncomparableWorkspaceStaleness(database: DatabaseSync): void {
   const rows = database.prepare(`SELECT claim.*, transition.to_status AS latest_to_status,
       transition.reason AS latest_reason, transition.actor_id AS latest_actor_id,
       transition.claim_revision AS latest_transition_revision
-    FROM honeycrisp_research_claims claim
-    LEFT JOIN honeycrisp_claim_transitions transition
+    FROM app_server_research_claims claim
+    LEFT JOIN app_server_claim_transitions transition
       ON transition.claim_id = claim.id AND transition.claim_revision = claim.revision
     WHERE claim.status = 'stale' AND claim.stale_from_status IS NOT NULL`).all() as SqlRow[];
-  const update = database.prepare(`UPDATE honeycrisp_research_claims SET
+  const update = database.prepare(`UPDATE app_server_research_claims SET
     status = ?, stale_from_status = NULL, source_revision = ?, environment_fingerprint = ?,
     stale_reason = NULL, updated_at = ?, revision = ? WHERE id = ? AND revision = ?`);
-  const insertTransition = database.prepare(`INSERT INTO honeycrisp_claim_transitions (
+  const insertTransition = database.prepare(`INSERT INTO app_server_claim_transitions (
     id, claim_id, claim_revision, from_status, to_status, reason, actor_id, evidence_ids_json, created_at
   ) VALUES (?, ?, ?, 'stale', ?, ?, 'host:migration', '[]', ?)`);
 
@@ -877,13 +877,13 @@ function repairIncomparableWorkspaceStaleness(database: DatabaseSync): void {
     );
   }
 
-  const activeRows = database.prepare(`SELECT * FROM honeycrisp_research_claims
+  const activeRows = database.prepare(`SELECT * FROM app_server_research_claims
     WHERE status NOT IN ('hypothesis', 'stale', 'rejected')
       AND (source_revision GLOB 'source:[0-9a-f]*' OR environment_fingerprint GLOB 'environment:[0-9a-f]*')`).all() as SqlRow[];
-  const priorHostTransition = database.prepare(`SELECT reason FROM honeycrisp_claim_transitions
+  const priorHostTransition = database.prepare(`SELECT reason FROM app_server_claim_transitions
     WHERE claim_id = ? AND to_status = 'stale' AND actor_id = 'host'
     ORDER BY claim_revision DESC LIMIT 1`);
-  const revise = database.prepare(`UPDATE honeycrisp_research_claims SET
+  const revise = database.prepare(`UPDATE app_server_research_claims SET
     source_revision = ?, environment_fingerprint = ?, updated_at = ?, revision = ?
     WHERE id = ? AND revision = ?`);
   for (const row of activeRows) {
@@ -913,7 +913,7 @@ function repairIncomparableWorkspaceStaleness(database: DatabaseSync): void {
     if (Number(result.changes) !== 1) {
       throw new Error(`Research claim revision conflict while repairing active claim ${id}.`);
     }
-    database.prepare(`INSERT INTO honeycrisp_claim_transitions (
+    database.prepare(`INSERT INTO app_server_claim_transitions (
       id, claim_id, claim_revision, from_status, to_status, reason, actor_id, evidence_ids_json, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, 'host:migration', '[]', ?)`).run(
       `claim_transition_${randomUUID()}`,
@@ -1003,7 +1003,7 @@ function validateTransitionEvidence(
   }
   if (input.toStatus === "report_ready") {
     const reportId = nullableText(input.reportId) ?? current.reportId;
-    if (!reportId || !workspaceResourceExists(database, "honeycrisp_reports", reportId, current.workspaceId)
+    if (!reportId || !workspaceResourceExists(database, "app_server_reports", reportId, current.workspaceId)
       || !evidence.some((item) => item.kind === "report" && item.referenceId === reportId)) {
       throw new Error("Report-ready findings require a report reference and report evidence.");
     }
@@ -1155,8 +1155,8 @@ function normalizeEvidenceInputs(items: readonly FindingEvidenceInput[], default
 
 function groupedEvidence(database: DatabaseSync, findingIds: ReadonlySet<string>): Map<string, FindingEvidenceSummary[]> {
   const grouped = new Map<string, FindingEvidenceSummary[]>();
-  if (findingIds.size === 0 || !tableExists(database, "honeycrisp_claim_evidence")) return grouped;
-  for (const row of database.prepare("SELECT * FROM honeycrisp_claim_evidence ORDER BY created_at, id").all() as SqlRow[]) {
+  if (findingIds.size === 0 || !tableExists(database, "app_server_claim_evidence")) return grouped;
+  for (const row of database.prepare("SELECT * FROM app_server_claim_evidence ORDER BY created_at, id").all() as SqlRow[]) {
     const findingId = requiredSqlText(row.claim_id);
     if (!findingIds.has(findingId)) continue;
     grouped.set(findingId, [...(grouped.get(findingId) ?? []), {
@@ -1177,8 +1177,8 @@ function groupedEvidence(database: DatabaseSync, findingIds: ReadonlySet<string>
 
 function groupedTransitions(database: DatabaseSync, findingIds: ReadonlySet<string>): Map<string, FindingTransitionSummary[]> {
   const grouped = new Map<string, FindingTransitionSummary[]>();
-  if (findingIds.size === 0 || !tableExists(database, "honeycrisp_claim_transitions")) return grouped;
-  for (const row of database.prepare("SELECT * FROM honeycrisp_claim_transitions ORDER BY claim_id, claim_revision").all() as SqlRow[]) {
+  if (findingIds.size === 0 || !tableExists(database, "app_server_claim_transitions")) return grouped;
+  for (const row of database.prepare("SELECT * FROM app_server_claim_transitions ORDER BY claim_id, claim_revision").all() as SqlRow[]) {
     const findingId = requiredSqlText(row.claim_id);
     if (!findingIds.has(findingId)) continue;
     grouped.set(findingId, [...(grouped.get(findingId) ?? []), {
@@ -1198,9 +1198,9 @@ function groupedTransitions(database: DatabaseSync, findingIds: ReadonlySet<stri
 
 function groupedAuthors(database: DatabaseSync, findingIds: ReadonlySet<string>): Map<string, ModelAuthorSummary[]> {
   const grouped = new Map<string, ModelAuthorSummary[]>();
-  if (findingIds.size === 0 || !tableExists(database, "honeycrisp_claim_authorship")) return grouped;
+  if (findingIds.size === 0 || !tableExists(database, "app_server_claim_authorship")) return grouped;
   for (const row of database.prepare(`SELECT claim_id, provider, model
-    FROM honeycrisp_claim_authorship ORDER BY claim_id, revision, provider, model`).all() as SqlRow[]) {
+    FROM app_server_claim_authorship ORDER BY claim_id, revision, provider, model`).all() as SqlRow[]) {
     const findingId = requiredSqlText(row.claim_id);
     if (!findingIds.has(findingId)) continue;
     const author = { provider: requiredSqlText(row.provider), model: requiredSqlText(row.model) };
@@ -1214,9 +1214,9 @@ function groupedAuthors(database: DatabaseSync, findingIds: ReadonlySet<string>)
 
 function groupedComponents(database: DatabaseSync, claimIds: ReadonlySet<string>): Map<string, string[]> {
   const grouped = new Map<string, string[]>();
-  if (claimIds.size === 0 || !tableExists(database, "honeycrisp_claim_components")) return grouped;
+  if (claimIds.size === 0 || !tableExists(database, "app_server_claim_components")) return grouped;
   for (const row of database.prepare(
-    "SELECT claim_id, component_claim_id FROM honeycrisp_claim_components ORDER BY claim_id, position",
+    "SELECT claim_id, component_claim_id FROM app_server_claim_components ORDER BY claim_id, position",
   ).all() as SqlRow[]) {
     const claimId = requiredSqlText(row.claim_id);
     if (!claimIds.has(claimId)) continue;
@@ -1234,16 +1234,16 @@ export function migrateLegacyMemoryClaims(database: DatabaseSync, workspaceId: s
     ORDER BY n.created_at, n.id
   `).all(workspaceId) as SqlRow[];
   if (rows.length === 0) return;
-  const insertClaim = database.prepare(`INSERT OR IGNORE INTO honeycrisp_research_claims(
+  const insertClaim = database.prepare(`INSERT OR IGNORE INTO app_server_research_claims(
     id, workspace_id, subject_id, legacy_memory_node_id, origin_session_id, classification,
     title, summary, impact, status, stale_from_status, confidence, source_revision,
     environment_fingerprint, reproduction_runbook_id, report_id, disclosure_reference,
     stale_reason, created_at, updated_at, revision
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, 1)`);
-  const insertTransition = database.prepare(`INSERT OR IGNORE INTO honeycrisp_claim_transitions(
+  const insertTransition = database.prepare(`INSERT OR IGNORE INTO app_server_claim_transitions(
     id, claim_id, claim_revision, from_status, to_status, reason, actor_id, evidence_ids_json, created_at
   ) VALUES (?, ?, 1, NULL, ?, ?, 'migration', ?, ?)`);
-  const insertEvidence = database.prepare(`INSERT OR IGNORE INTO honeycrisp_claim_evidence(
+  const insertEvidence = database.prepare(`INSERT OR IGNORE INTO app_server_claim_evidence(
     id, claim_id, kind, reference_id, content_hash, summary, session_id, actor_id,
     independent, metadata_json, created_at
   ) VALUES (?, ?, ?, ?, NULL, ?, ?, 'migration', 0, ?, ?)`);
@@ -1320,19 +1320,19 @@ export function migrateLegacyMemoryClaims(database: DatabaseSync, workspaceId: s
   if (!tableExists(database, "memory_edges")) return;
   const componentRows = database.prepare(`
     SELECT parent.id AS claim_id, component.id AS component_claim_id
-    FROM honeycrisp_research_claims parent
+    FROM app_server_research_claims parent
     JOIN memory_nodes parent_memory ON parent_memory.id = parent.legacy_memory_node_id
     JOIN memory_edges edge ON edge.from_id = parent_memory.id OR edge.to_id = parent_memory.id
     JOIN memory_nodes component_memory ON component_memory.id = CASE
       WHEN edge.from_id = parent_memory.id THEN edge.to_id ELSE edge.from_id END
-    JOIN honeycrisp_research_claims component ON component.legacy_memory_node_id = component_memory.id
+    JOIN app_server_research_claims component ON component.legacy_memory_node_id = component_memory.id
     WHERE parent.workspace_id = ? AND parent_memory.type = 'chain'
       AND component.workspace_id = parent.workspace_id AND component_memory.type = 'primitive'
     ORDER BY parent.id, component.id
   `).all(workspaceId) as SqlRow[];
   const positions = new Map<string, number>();
   const insertComponent = database.prepare(
-    "INSERT OR IGNORE INTO honeycrisp_claim_components(claim_id, component_claim_id, position, created_at) VALUES (?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO app_server_claim_components(claim_id, component_claim_id, position, created_at) VALUES (?, ?, ?, ?)",
   );
   for (const row of componentRows) {
     const claimId = requiredSqlText(row.claim_id);
@@ -1706,7 +1706,7 @@ function stableFindingId(workspaceId: string, memoryNodeId: string): string {
   return `finding_${createHash("sha256").update(`${workspaceId}\0${memoryNodeId}`).digest("hex").slice(0, 20)}`;
 }
 
-function workspaceResourceExists(database: DatabaseSync, table: "honeycrisp_runbooks" | "honeycrisp_reports", id: string, workspaceId: string): boolean {
+function workspaceResourceExists(database: DatabaseSync, table: "app_server_runbooks" | "app_server_reports", id: string, workspaceId: string): boolean {
   return tableExists(database, table)
     && Boolean(database.prepare(`SELECT 1 FROM ${table} WHERE id = ? AND workspace_id = ?`).get(id, workspaceId));
 }
@@ -1718,8 +1718,8 @@ function successfulRunbookExecutionExists(
   runId: string,
 ): boolean {
   return Boolean(runbookId)
-    && tableExists(database, "honeycrisp_runbook_executions")
-    && Boolean(database.prepare(`SELECT 1 FROM honeycrisp_runbook_executions
+    && tableExists(database, "app_server_runbook_executions")
+    && Boolean(database.prepare(`SELECT 1 FROM app_server_runbook_executions
       WHERE workspace_id = ? AND runbook_id = ? AND run_id = ? AND status = 'succeeded'`)
       .get(workspaceId, runbookId, runId));
 }

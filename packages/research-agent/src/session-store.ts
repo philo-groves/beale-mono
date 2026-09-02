@@ -5,10 +5,11 @@ import { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
 import { normalizeResearchProfile, researchProfileHash } from "./research-profile.js";
+import { readCompatibleRecordValue } from "./legacy-compatibility.js";
 
-export const HONEYCRISP_SESSION_SCHEMA_VERSION = 1 as const;
+export const APP_SERVER_SESSION_SCHEMA_VERSION = 1 as const;
 
-export type HoneycrispSessionStatus =
+export type AppServerSessionStatus =
   | "active"
   | "paused"
   | "blocked"
@@ -16,7 +17,7 @@ export type HoneycrispSessionStatus =
   | "failed"
   | "stopped";
 
-export interface HoneycrispSessionDisposition {
+export interface AppServerSessionDisposition {
   outcome: string;
   summary: string;
   externalStateRequired: boolean;
@@ -25,7 +26,7 @@ export interface HoneycrispSessionDisposition {
   [key: string]: unknown;
 }
 
-export interface HoneycrispSessionEvent {
+export interface AppServerSessionEvent {
   id: string;
   kind: string;
   timestamp: string;
@@ -36,49 +37,49 @@ export interface HoneycrispSessionEvent {
   parentAgentId?: string;
 }
 
-export interface HoneycrispSessionCapture {
+export interface AppServerSessionCapture {
   attemptId: string;
   capturedAt: string;
   schemaVersion: number;
   eventStreams: {
-    timeline: HoneycrispSessionCaptureEventReference;
-    agentDiagnostics: HoneycrispSessionCaptureEventReference;
+    timeline: AppServerSessionCaptureEventReference;
+    agentDiagnostics: AppServerSessionCaptureEventReference;
   };
   raw: Record<string, unknown>;
 }
 
-export interface HoneycrispSessionCaptureEventReference {
-  source: "honeycrisp_session_events";
+export interface AppServerSessionCaptureEventReference {
+  source: "app_server_session_events";
   sessionId: string;
   attemptId: string;
   count: number;
 }
 
-export interface HoneycrispSessionCaptureSummary {
+export interface AppServerSessionCaptureSummary {
   attemptId: string;
   capturedAt: string;
   schemaVersion: number;
   sizeBytes: number;
   contentHash: string;
-  eventStreams: HoneycrispSessionCapture["eventStreams"];
+  eventStreams: AppServerSessionCapture["eventStreams"];
 }
 
-export interface HoneycrispSessionAttempt {
+export interface AppServerSessionAttempt {
   id: string;
   parentAttemptId: string | null;
-  status: HoneycrispSessionStatus;
+  status: AppServerSessionStatus;
   summary: string;
   startedAt: string;
   endedAt: string | null;
-  capture: HoneycrispSessionCapture | null;
+  capture: AppServerSessionCapture | null;
   metadata: Record<string, unknown>;
 }
 
-export interface HoneycrispSessionRecord {
-  schemaVersion: typeof HONEYCRISP_SESSION_SCHEMA_VERSION;
+export interface AppServerSessionRecord {
+  schemaVersion: typeof APP_SERVER_SESSION_SCHEMA_VERSION;
   id: string;
   workspaceId: string;
-  status: HoneycrispSessionStatus;
+  status: AppServerSessionStatus;
   title: string;
   prompt: string;
   summary: string;
@@ -88,10 +89,10 @@ export interface HoneycrispSessionRecord {
   workflowId: string | null;
   profile: Record<string, unknown> | null;
   metadata: Record<string, unknown>;
-  finalDisposition: HoneycrispSessionDisposition | null;
+  finalDisposition: AppServerSessionDisposition | null;
   finalResponse: string | null;
-  attempts: HoneycrispSessionAttempt[];
-  events: HoneycrispSessionEvent[];
+  attempts: AppServerSessionAttempt[];
+  events: AppServerSessionEvent[];
   createdAt: string;
   startedAt: string;
   endedAt: string | null;
@@ -99,9 +100,9 @@ export interface HoneycrispSessionRecord {
   revision: number;
 }
 
-export type HoneycrispSessionAttemptSummary = Omit<HoneycrispSessionAttempt, "capture">;
+export type AppServerSessionAttemptSummary = Omit<AppServerSessionAttempt, "capture">;
 
-export interface HoneycrispSessionTokenUsage {
+export interface AppServerSessionTokenUsage {
   totalTokens: number;
   totalCostUsd?: number;
   inputTokens?: number;
@@ -110,68 +111,68 @@ export interface HoneycrispSessionTokenUsage {
   cachePromptTokens?: number;
 }
 
-export interface HoneycrispSessionActivityCounts {
+export interface AppServerSessionActivityCounts {
   memorySearches: number;
   memoryUpdates: number;
 }
 
-export type HoneycrispSessionSummary = Omit<
-  HoneycrispSessionRecord,
+export type AppServerSessionSummary = Omit<
+  AppServerSessionRecord,
   "attempts" | "events" | "finalResponse"
 > & {
-  attempts: HoneycrispSessionAttemptSummary[];
+  attempts: AppServerSessionAttemptSummary[];
   lastMessageAt: string | null;
-  tokenUsage: HoneycrispSessionTokenUsage;
-  activityCounts: HoneycrispSessionActivityCounts;
+  tokenUsage: AppServerSessionTokenUsage;
+  activityCounts: AppServerSessionActivityCounts;
 };
 
-export interface HoneycrispSessionUpdate {
-  session: HoneycrispSessionSummary;
+export interface AppServerSessionUpdate {
+  session: AppServerSessionSummary;
   finalResponse: string | null;
-  events: HoneycrispSessionEvent[];
+  events: AppServerSessionEvent[];
   eventOffset: number;
   nextAfterEventId: string | null;
   hasEarlier: boolean;
   hasMore: boolean;
 }
 
-export type HoneycrispSessionEventStream = "all" | "transcript" | "trace" | "commentary";
+export type AppServerSessionEventStream = "all" | "transcript" | "trace" | "commentary";
 
-export interface HoneycrispSessionEventPageInput {
+export interface AppServerSessionEventPageInput {
   afterEventId?: string | null;
   limit?: number;
   maxBytes?: number;
   tail?: boolean;
-  stream?: HoneycrispSessionEventStream;
+  stream?: AppServerSessionEventStream;
 }
 
-export interface HoneycrispSessionEventPage {
+export interface AppServerSessionEventPage {
   sessionId: string;
-  stream: HoneycrispSessionEventStream;
-  events: HoneycrispSessionEvent[];
+  stream: AppServerSessionEventStream;
+  events: AppServerSessionEvent[];
   eventOffset: number;
   nextAfterEventId: string | null;
   hasEarlier: boolean;
   hasMore: boolean;
 }
 
-export interface HoneycrispSessionCollaborationState {
+export interface AppServerSessionCollaborationState {
   sessionId: string;
   revision: number;
-  rooms: HoneycrispSessionEvent[];
-  members: HoneycrispSessionEvent[];
-  messages: HoneycrispSessionEvent[];
-  subagents: HoneycrispSessionEvent[];
+  rooms: AppServerSessionEvent[];
+  members: AppServerSessionEvent[];
+  messages: AppServerSessionEvent[];
+  subagents: AppServerSessionEvent[];
 }
 
-export interface HoneycrispSessionMutationReceipt {
+export interface AppServerSessionMutationReceipt {
   sessionId: string;
-  status: HoneycrispSessionStatus;
+  status: AppServerSessionStatus;
   revision: number;
   updatedAt: string;
 }
 
-export interface CreateHoneycrispSessionInput {
+export interface CreateAppServerSessionInput {
   id: string;
   workspaceId: string;
   attemptId: string;
@@ -187,12 +188,12 @@ export interface CreateHoneycrispSessionInput {
   createdAt?: string;
 }
 
-export interface HoneycrispSessionTransitionInput {
-  status: HoneycrispSessionStatus;
+export interface AppServerSessionTransitionInput {
+  status: AppServerSessionStatus;
   summary: string;
   attemptId?: string;
   expectedRevision?: number;
-  disposition?: HoneycrispSessionDisposition | null;
+  disposition?: AppServerSessionDisposition | null;
   metadata?: Record<string, unknown>;
   configuration?: {
     prompt?: string;
@@ -204,12 +205,12 @@ export interface HoneycrispSessionTransitionInput {
   at?: string;
 }
 
-export interface RecoverInterruptedHoneycrispSessionsInput {
+export interface RecoverInterruptedAppServerSessionsInput {
   reason?: string;
   at?: string;
 }
 
-export interface HoneycrispSessionRecoveryReport {
+export interface AppServerSessionRecoveryReport {
   workspaceId: string;
   recoveredAt: string;
   reason: string;
@@ -218,13 +219,13 @@ export interface HoneycrispSessionRecoveryReport {
   sessionIds: string[];
 }
 
-export interface ImportHoneycrispSessionCaptureInput {
+export interface ImportAppServerSessionCaptureInput {
   attemptId: string;
   capture: unknown;
   expectedRevision?: number;
 }
 
-export interface BeginHoneycrispSessionAttemptInput {
+export interface BeginAppServerSessionAttemptInput {
   attemptId: string;
   parentAttemptId?: string | null;
   summary: string;
@@ -233,7 +234,7 @@ export interface BeginHoneycrispSessionAttemptInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface HoneycrispSessionStoreOptions {
+export interface AppServerSessionStoreOptions {
   databasePath?: string;
   workspaceRoot?: string;
   readOnly?: boolean;
@@ -255,13 +256,13 @@ interface StoredSessionCaptureRow {
   content_hash?: unknown;
 }
 
-const HONEYCRISP_SESSION_MIGRATIONS = [
+const APP_SERVER_SESSION_MIGRATIONS = [
   {
     version: 1,
     name: "create_session_aggregates",
     up(database: DatabaseSync): void {
       database.exec(`
-        CREATE TABLE IF NOT EXISTS honeycrisp_sessions (
+        CREATE TABLE IF NOT EXISTS app_server_sessions (
           id TEXT PRIMARY KEY,
           workspace_id TEXT NOT NULL,
           status TEXT NOT NULL,
@@ -272,8 +273,8 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS honeycrisp_sessions_workspace_updated
-        ON honeycrisp_sessions(workspace_id, updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS app_server_sessions_workspace_updated
+        ON app_server_sessions(workspace_id, updated_at DESC, id DESC);
       `);
     },
   },
@@ -281,12 +282,12 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
     version: 2,
     name: "normalize_session_event_streams",
     up(database: DatabaseSync): void {
-      if (!columnExists(database, "honeycrisp_sessions", "document_hash")) {
-        database.exec("ALTER TABLE honeycrisp_sessions ADD COLUMN document_hash TEXT;");
+      if (!columnExists(database, "app_server_sessions", "document_hash")) {
+        database.exec("ALTER TABLE app_server_sessions ADD COLUMN document_hash TEXT;");
       }
       database.exec(`
-        CREATE TABLE IF NOT EXISTS honeycrisp_session_events (
-          session_id TEXT NOT NULL REFERENCES honeycrisp_sessions(id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS app_server_session_events (
+          session_id TEXT NOT NULL REFERENCES app_server_sessions(id) ON DELETE CASCADE,
           event_offset INTEGER NOT NULL CHECK (event_offset >= 0),
           event_id TEXT NOT NULL,
           event_json TEXT NOT NULL,
@@ -296,19 +297,19 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
         );
       `);
       const rows = database.prepare(
-        "SELECT id, document_json FROM honeycrisp_sessions ORDER BY created_at ASC, id ASC",
+        "SELECT id, document_json FROM app_server_sessions ORDER BY created_at ASC, id ASC",
       ).all() as Array<{ id?: unknown; document_json?: unknown }>;
-      const deleteEvents = database.prepare("DELETE FROM honeycrisp_session_events WHERE session_id = ?");
+      const deleteEvents = database.prepare("DELETE FROM app_server_session_events WHERE session_id = ?");
       const insertEvent = database.prepare(`
-        INSERT INTO honeycrisp_session_events (
+        INSERT INTO app_server_session_events (
           session_id, event_offset, event_id, event_json, content_hash
         ) VALUES (?, ?, ?, ?, ?)
       `);
       const updateDocument = database.prepare(`
-        UPDATE honeycrisp_sessions SET document_json = ?, document_hash = ? WHERE id = ?
+        UPDATE app_server_sessions SET document_json = ?, document_hash = ? WHERE id = ?
       `);
       for (const row of rows) {
-        const sessionId = requiredStoredString(row.id, "Honeycrisp session id");
+        const sessionId = requiredStoredString(row.id, "app-server session id");
         const session = decodeStoredSession(row.document_json);
         if (session.events.length > 0) {
           deleteEvents.run(sessionId);
@@ -328,8 +329,8 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
     name: "normalize_session_captures",
     up(database: DatabaseSync): void {
       database.exec(`
-        CREATE TABLE IF NOT EXISTS honeycrisp_session_captures (
-          session_id TEXT NOT NULL REFERENCES honeycrisp_sessions(id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS app_server_session_captures (
+          session_id TEXT NOT NULL REFERENCES app_server_sessions(id) ON DELETE CASCADE,
           attempt_id TEXT NOT NULL,
           capture_json TEXT NOT NULL,
           content_hash TEXT NOT NULL,
@@ -337,10 +338,10 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
         );
       `);
       const rows = database.prepare(
-        "SELECT id, document_json FROM honeycrisp_sessions ORDER BY created_at ASC, id ASC",
+        "SELECT id, document_json FROM app_server_sessions ORDER BY created_at ASC, id ASC",
       ).all() as Array<{ id?: unknown; document_json?: unknown }>;
       const upsertCapture = database.prepare(`
-        INSERT INTO honeycrisp_session_captures (
+        INSERT INTO app_server_session_captures (
           session_id, attempt_id, capture_json, content_hash
         ) VALUES (?, ?, ?, ?)
         ON CONFLICT(session_id, attempt_id) DO UPDATE SET
@@ -348,10 +349,10 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
           content_hash = excluded.content_hash
       `);
       const updateDocument = database.prepare(`
-        UPDATE honeycrisp_sessions SET document_json = ?, document_hash = ? WHERE id = ?
+        UPDATE app_server_sessions SET document_json = ?, document_hash = ? WHERE id = ?
       `);
       for (const row of rows) {
-        const sessionId = requiredStoredString(row.id, "Honeycrisp session id");
+        const sessionId = requiredStoredString(row.id, "app-server session id");
         const session = decodeStoredSession(row.document_json);
         for (const attempt of session.attempts) {
           if (!attempt.capture) continue;
@@ -369,7 +370,7 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
     up(database: DatabaseSync): void {
       const rows = database.prepare(`
         SELECT session_id, attempt_id, capture_json, content_hash
-        FROM honeycrisp_session_captures
+        FROM app_server_session_captures
         ORDER BY session_id ASC, attempt_id ASC
       `).all() as Array<{
         session_id?: unknown;
@@ -378,15 +379,15 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
         content_hash?: unknown;
       }>;
       const update = database.prepare(`
-        UPDATE honeycrisp_session_captures
+        UPDATE app_server_session_captures
         SET capture_json = ?, content_hash = ?
         WHERE session_id = ? AND attempt_id = ?
       `);
       for (const row of rows) {
-        const sessionId = requiredStoredString(row.session_id, "Honeycrisp session capture session id");
-        const attemptId = requiredStoredString(row.attempt_id, "Honeycrisp session capture attempt id");
-        const document = requiredStoredString(row.capture_json, "Honeycrisp session capture");
-        verifyJsonHash(document, row.content_hash, "Honeycrisp session capture");
+        const sessionId = requiredStoredString(row.session_id, "app-server session capture session id");
+        const attemptId = requiredStoredString(row.attempt_id, "app-server session capture attempt id");
+        const document = requiredStoredString(row.capture_json, "app-server session capture");
+        verifyJsonHash(document, row.content_hash, "app-server session capture");
         const compacted = compactStoredCapture(JSON.parse(document) as unknown, sessionId, attemptId);
         const compactedDocument = JSON.stringify(compacted);
         update.run(compactedDocument, hashJson(compactedDocument), sessionId, attemptId);
@@ -398,16 +399,16 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
     name: "materialize_session_summary_metrics",
     up(database: DatabaseSync): void {
       database.exec(`
-        CREATE TABLE IF NOT EXISTS honeycrisp_session_summary_metrics (
-          session_id TEXT PRIMARY KEY REFERENCES honeycrisp_sessions(id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS app_server_session_summary_metrics (
+          session_id TEXT PRIMARY KEY REFERENCES app_server_sessions(id) ON DELETE CASCADE,
           completed_turn_tokens INTEGER NOT NULL DEFAULT 0,
           completed_turn_cost_usd REAL NOT NULL DEFAULT 0,
           latest_reported_total_tokens INTEGER,
           last_message_at TEXT
         );
 
-        INSERT OR IGNORE INTO honeycrisp_session_summary_metrics (session_id)
-        SELECT id FROM honeycrisp_sessions;
+        INSERT OR IGNORE INTO app_server_session_summary_metrics (session_id)
+        SELECT id FROM app_server_sessions;
 
         WITH completed_turns AS (
           SELECT
@@ -422,25 +423,25 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
               json_extract(event_json, '$.payload.usage.totalCostUsd'),
               0
             )), 0) AS total_cost
-          FROM honeycrisp_session_events
+          FROM app_server_session_events
           WHERE json_extract(event_json, '$.kind') = 'agent.event'
             AND json_extract(event_json, '$.payload.type') = 'turn_completed'
           GROUP BY session_id
         )
-        UPDATE honeycrisp_session_summary_metrics
+        UPDATE app_server_session_summary_metrics
         SET
           completed_turn_tokens = COALESCE((
             SELECT total_tokens FROM completed_turns
-            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+            WHERE completed_turns.session_id = app_server_session_summary_metrics.session_id
           ), 0),
           completed_turn_cost_usd = COALESCE((
             SELECT total_cost FROM completed_turns
-            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+            WHERE completed_turns.session_id = app_server_session_summary_metrics.session_id
           ), 0);
 
         WITH latest_usage_offsets AS (
           SELECT session_id, MAX(event_offset) AS event_offset
-          FROM honeycrisp_session_events
+          FROM app_server_session_events
           WHERE json_extract(event_json, '$.kind') = 'beale.model_session_update'
           GROUP BY session_id
         ), latest_usage AS (
@@ -448,19 +449,19 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
             json_extract(event.event_json, '$.payload.record.patch.metadata.latestReportedTotalTokens'),
             json_extract(event.event_json, '$.payload.record.patch.metadata.latest_reported_total_tokens')
           ) AS total_tokens
-          FROM honeycrisp_session_events AS event
+          FROM app_server_session_events AS event
           JOIN latest_usage_offsets AS latest
             ON latest.session_id = event.session_id AND latest.event_offset = event.event_offset
         )
-        UPDATE honeycrisp_session_summary_metrics
+        UPDATE app_server_session_summary_metrics
         SET latest_reported_total_tokens = (
           SELECT total_tokens FROM latest_usage
-          WHERE latest_usage.session_id = honeycrisp_session_summary_metrics.session_id
+          WHERE latest_usage.session_id = app_server_session_summary_metrics.session_id
         );
 
         WITH latest_message_offsets AS (
           SELECT session_id, MAX(event_offset) AS event_offset
-          FROM honeycrisp_session_events
+          FROM app_server_session_events
           WHERE json_extract(event_json, '$.kind') = 'beale.transcript'
           GROUP BY session_id
         ), latest_messages AS (
@@ -468,14 +469,14 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
             json_extract(event.event_json, '$.payload.record.createdAt'),
             json_extract(event.event_json, '$.timestamp')
           ) AS created_at
-          FROM honeycrisp_session_events AS event
+          FROM app_server_session_events AS event
           JOIN latest_message_offsets AS latest
             ON latest.session_id = event.session_id AND latest.event_offset = event.event_offset
         )
-        UPDATE honeycrisp_session_summary_metrics
+        UPDATE app_server_session_summary_metrics
         SET last_message_at = (
           SELECT created_at FROM latest_messages
-          WHERE latest_messages.session_id = honeycrisp_session_summary_metrics.session_id
+          WHERE latest_messages.session_id = app_server_session_summary_metrics.session_id
         );
       `);
     },
@@ -485,13 +486,13 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
     name: "materialize_session_usage_breakdown",
     up(database: DatabaseSync): void {
       database.exec(`
-        ALTER TABLE honeycrisp_session_summary_metrics
+        ALTER TABLE app_server_session_summary_metrics
           ADD COLUMN completed_turn_input_tokens INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE honeycrisp_session_summary_metrics
+        ALTER TABLE app_server_session_summary_metrics
           ADD COLUMN completed_turn_output_tokens INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE honeycrisp_session_summary_metrics
+        ALTER TABLE app_server_session_summary_metrics
           ADD COLUMN completed_turn_cache_read_tokens INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE honeycrisp_session_summary_metrics
+        ALTER TABLE app_server_session_summary_metrics
           ADD COLUMN completed_turn_cache_prompt_tokens INTEGER NOT NULL DEFAULT 0;
 
         WITH completed_turns AS (
@@ -549,28 +550,28 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
                 0
               )
             )), 0) AS cache_prompt_tokens
-          FROM honeycrisp_session_events
+          FROM app_server_session_events
           WHERE json_extract(event_json, '$.kind') = 'agent.event'
             AND json_extract(event_json, '$.payload.type') = 'turn_completed'
           GROUP BY session_id
         )
-        UPDATE honeycrisp_session_summary_metrics
+        UPDATE app_server_session_summary_metrics
         SET
           completed_turn_input_tokens = COALESCE((
             SELECT input_tokens FROM completed_turns
-            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+            WHERE completed_turns.session_id = app_server_session_summary_metrics.session_id
           ), 0),
           completed_turn_output_tokens = COALESCE((
             SELECT output_tokens FROM completed_turns
-            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+            WHERE completed_turns.session_id = app_server_session_summary_metrics.session_id
           ), 0),
           completed_turn_cache_read_tokens = COALESCE((
             SELECT cache_read_tokens FROM completed_turns
-            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+            WHERE completed_turns.session_id = app_server_session_summary_metrics.session_id
           ), 0),
           completed_turn_cache_prompt_tokens = COALESCE((
             SELECT cache_prompt_tokens FROM completed_turns
-            WHERE completed_turns.session_id = honeycrisp_session_summary_metrics.session_id
+            WHERE completed_turns.session_id = app_server_session_summary_metrics.session_id
           ), 0);
       `);
     },
@@ -580,25 +581,25 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
     name: "materialize_session_tool_activity",
     up(database: DatabaseSync): void {
       database.exec(`
-        CREATE TABLE honeycrisp_session_tool_activity (
-          session_id TEXT NOT NULL REFERENCES honeycrisp_sessions(id) ON DELETE CASCADE,
+        CREATE TABLE app_server_session_tool_activity (
+          session_id TEXT NOT NULL REFERENCES app_server_sessions(id) ON DELETE CASCADE,
           activity_key TEXT NOT NULL,
           tool_name TEXT NOT NULL,
           created_at TEXT NOT NULL,
           PRIMARY KEY(session_id, activity_key, tool_name)
         );
-        CREATE INDEX honeycrisp_session_tool_activity_tool_idx
-          ON honeycrisp_session_tool_activity(session_id, tool_name);
+        CREATE INDEX app_server_session_tool_activity_tool_idx
+          ON app_server_session_tool_activity(session_id, tool_name);
       `);
       const eventPage = database.prepare(`
         SELECT rowid AS row_id, session_id, event_json
-        FROM honeycrisp_session_events
+        FROM app_server_session_events
         WHERE rowid > ?
         ORDER BY rowid ASC
         LIMIT 1000
       `);
       const insert = database.prepare(`
-        INSERT OR IGNORE INTO honeycrisp_session_tool_activity (
+        INSERT OR IGNORE INTO app_server_session_tool_activity (
           session_id, activity_key, tool_name, created_at
         ) VALUES (?, ?, ?, ?)
       `);
@@ -611,16 +612,16 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
         }>;
         if (events.length === 0) break;
         for (const row of events) {
-          const sessionId = requiredStoredString(row.session_id, "Honeycrisp session tool activity session id");
-          const document = requiredStoredString(row.event_json, "Honeycrisp session tool activity event");
-          const event = normalizeEvent(JSON.parse(document) as HoneycrispSessionEvent);
+          const sessionId = requiredStoredString(row.session_id, "app-server session tool activity session id");
+          const document = requiredStoredString(row.event_json, "app-server session tool activity event");
+          const event = normalizeEvent(JSON.parse(document) as AppServerSessionEvent);
           for (const activity of sessionToolActivityEntries(event)) {
             insert.run(sessionId, activity.key, activity.toolName, event.timestamp);
           }
         }
         const lastRowId = events.at(-1)?.row_id;
         if (typeof lastRowId !== "number" || !Number.isFinite(lastRowId) || lastRowId <= afterRowId) {
-          throw new Error("Honeycrisp session tool activity migration cursor did not advance.");
+          throw new Error("app-server session tool activity migration cursor did not advance.");
         }
         afterRowId = lastRowId;
       }
@@ -628,7 +629,7 @@ const HONEYCRISP_SESSION_MIGRATIONS = [
   },
 ] as const;
 
-export class HoneycrispSessionStore {
+export class AppServerSessionStore {
   public readonly databasePath: string;
   private readonly database: DatabaseSync;
   private readonly normalizedEventStorage: boolean;
@@ -638,9 +639,9 @@ export class HoneycrispSessionStore {
   private readonly summaryUsageBreakdownStorage: boolean;
   private readonly sessionToolActivityStorage: boolean;
 
-  public constructor(options: HoneycrispSessionStoreOptions = {}) {
+  public constructor(options: AppServerSessionStoreOptions = {}) {
     this.databasePath = options.databasePath
-      ?? process.env.HONEYCRISP_DATABASE_PATH?.trim()
+      ?? process.env.APP_SERVER_DATABASE_PATH?.trim()
       ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     const readOnly = options.readOnly === true
       && this.databasePath !== ":memory:"
@@ -650,17 +651,17 @@ export class HoneycrispSessionStore {
       readDatabase.exec("PRAGMA busy_timeout = 5000;");
       readDatabase.exec("PRAGMA foreign_keys = ON;");
       const schema = readDatabase.prepare(
-        "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_sessions'",
+        "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'app_server_sessions'",
       ).get() as { present?: unknown } | undefined;
       if (schema?.present === 1) {
         this.database = readDatabase;
-        this.normalizedEventStorage = tableExists(readDatabase, "honeycrisp_session_events");
-        this.normalizedCaptureStorage = tableExists(readDatabase, "honeycrisp_session_captures");
-        this.sessionDocumentHashes = columnExists(readDatabase, "honeycrisp_sessions", "document_hash");
-        this.summaryMetricsStorage = tableExists(readDatabase, "honeycrisp_session_summary_metrics");
+        this.normalizedEventStorage = tableExists(readDatabase, "app_server_session_events");
+        this.normalizedCaptureStorage = tableExists(readDatabase, "app_server_session_captures");
+        this.sessionDocumentHashes = columnExists(readDatabase, "app_server_sessions", "document_hash");
+        this.summaryMetricsStorage = tableExists(readDatabase, "app_server_session_summary_metrics");
         this.summaryUsageBreakdownStorage = this.summaryMetricsStorage
-          && columnExists(readDatabase, "honeycrisp_session_summary_metrics", "completed_turn_input_tokens");
-        this.sessionToolActivityStorage = tableExists(readDatabase, "honeycrisp_session_tool_activity");
+          && columnExists(readDatabase, "app_server_session_summary_metrics", "completed_turn_input_tokens");
+        this.sessionToolActivityStorage = tableExists(readDatabase, "app_server_session_tool_activity");
         return;
       }
       readDatabase.close();
@@ -671,7 +672,7 @@ export class HoneycrispSessionStore {
     this.database.exec("PRAGMA busy_timeout = 5000;");
     this.database.exec("PRAGMA foreign_keys = ON;");
     this.database.exec("PRAGMA journal_mode = WAL;");
-    applyDatabaseMigrations(this.database, "honeycrisp_sessions", HONEYCRISP_SESSION_MIGRATIONS);
+    applyDatabaseMigrations(this.database, "app_server_sessions", APP_SERVER_SESSION_MIGRATIONS);
     this.normalizedEventStorage = true;
     this.normalizedCaptureStorage = true;
     this.sessionDocumentHashes = true;
@@ -684,16 +685,16 @@ export class HoneycrispSessionStore {
     this.database.close();
   }
 
-  public create(input: CreateHoneycrispSessionInput): HoneycrispSessionRecord {
+  public create(input: CreateAppServerSessionInput): AppServerSessionRecord {
     const now = input.createdAt ?? new Date().toISOString();
-    const record: HoneycrispSessionRecord = {
-      schemaVersion: HONEYCRISP_SESSION_SCHEMA_VERSION,
+    const record: AppServerSessionRecord = {
+      schemaVersion: APP_SERVER_SESSION_SCHEMA_VERSION,
       id: requiredString(input.id, "Session id"),
       workspaceId: requiredString(input.workspaceId, "Workspace id"),
       status: "active",
       title: requiredString(input.title, "Session title"),
       prompt: requiredString(input.prompt, "Session prompt"),
-      summary: "Honeycrisp research session started.",
+      summary: "app-server research session started.",
       provider: optionalString(input.provider),
       model: requiredString(input.model, "Session model"),
       reasoningEffort: requiredString(input.reasoningEffort, "Session reasoning effort"),
@@ -706,7 +707,7 @@ export class HoneycrispSessionStore {
         id: requiredString(input.attemptId, "Attempt id"),
         parentAttemptId: null,
         status: "active",
-        summary: "Honeycrisp research attempt started.",
+        summary: "app-server research attempt started.",
         startedAt: now,
         endedAt: null,
         capture: null,
@@ -720,7 +721,7 @@ export class HoneycrispSessionStore {
       revision: 1,
     };
     this.database.prepare(`
-      INSERT INTO honeycrisp_sessions (
+      INSERT INTO app_server_sessions (
         id, workspace_id, status, title, summary, document_json, document_hash,
         revision, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -739,7 +740,7 @@ export class HoneycrispSessionStore {
     return record;
   }
 
-  public get(sessionId: string): HoneycrispSessionRecord | null {
+  public get(sessionId: string): AppServerSessionRecord | null {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     const session = this.getSessionCore(normalizedSessionId);
     if (!session) return null;
@@ -748,7 +749,7 @@ export class HoneycrispSessionStore {
     return session;
   }
 
-  public getSummary(sessionId: string): HoneycrispSessionSummary | null {
+  public getSummary(sessionId: string): AppServerSessionSummary | null {
     const session = this.getSessionCore(requiredString(sessionId, "Session id"));
     if (!session) return null;
     return sessionSummary(
@@ -759,40 +760,40 @@ export class HoneycrispSessionStore {
     );
   }
 
-  public getCapture(sessionId: string, attemptId: string): HoneycrispSessionCapture | null {
+  public getCapture(sessionId: string, attemptId: string): AppServerSessionCapture | null {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     const normalizedAttemptId = requiredString(attemptId, "Attempt id");
     const row = this.database.prepare(`
-      SELECT attempt_id, capture_json, content_hash FROM honeycrisp_session_captures
+      SELECT attempt_id, capture_json, content_hash FROM app_server_session_captures
       WHERE session_id = ? AND attempt_id = ?
     `).get(normalizedSessionId, normalizedAttemptId) as StoredSessionCaptureRow | undefined;
     return row ? decodeCaptureRow(row, normalizedSessionId) : null;
   }
 
-  public listCaptureSummaries(sessionId: string): HoneycrispSessionCaptureSummary[] {
+  public listCaptureSummaries(sessionId: string): AppServerSessionCaptureSummary[] {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     const rows = this.database.prepare(`
-      SELECT attempt_id, capture_json, content_hash FROM honeycrisp_session_captures
+      SELECT attempt_id, capture_json, content_hash FROM app_server_session_captures
       WHERE session_id = ? ORDER BY attempt_id ASC
     `).all(normalizedSessionId) as StoredSessionCaptureRow[];
     return rows.map((row) => {
-      const document = requiredStoredString(row.capture_json, "Honeycrisp session capture");
+      const document = requiredStoredString(row.capture_json, "app-server session capture");
       const capture = decodeCaptureRow(row, normalizedSessionId);
       return {
         attemptId: capture.attemptId,
         capturedAt: capture.capturedAt,
         schemaVersion: capture.schemaVersion,
         sizeBytes: Buffer.byteLength(document),
-        contentHash: requiredStoredString(row.content_hash, "Honeycrisp session capture hash"),
+        contentHash: requiredStoredString(row.content_hash, "app-server session capture hash"),
         eventStreams: capture.eventStreams,
       };
     });
   }
 
-  public list(workspaceId: string, limit = 100): HoneycrispSessionRecord[] {
+  public list(workspaceId: string, limit = 100): AppServerSessionRecord[] {
     const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
     const rows = this.database.prepare(`
-      SELECT document_json${this.sessionDocumentHashes ? ", document_hash" : ""} FROM honeycrisp_sessions
+      SELECT document_json${this.sessionDocumentHashes ? ", document_hash" : ""} FROM app_server_sessions
       WHERE workspace_id = ?
       ORDER BY updated_at DESC, id DESC
       LIMIT ?
@@ -804,10 +805,10 @@ export class HoneycrispSessionStore {
     });
   }
 
-  public listSummaries(workspaceId: string, limit = 100): HoneycrispSessionSummary[] {
+  public listSummaries(workspaceId: string, limit = 100): AppServerSessionSummary[] {
     const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
     const rows = this.database.prepare(`
-      SELECT document_json${this.sessionDocumentHashes ? ", document_hash" : ""} FROM honeycrisp_sessions
+      SELECT document_json${this.sessionDocumentHashes ? ", document_hash" : ""} FROM app_server_sessions
       WHERE workspace_id = ?
       ORDER BY updated_at DESC, id DESC
       LIMIT ?
@@ -824,7 +825,7 @@ export class HoneycrispSessionStore {
     ));
   }
 
-  public listForWorkspaces(workspaceIds: readonly string[], limitPerWorkspace = 100): HoneycrispSessionRecord[] {
+  public listForWorkspaces(workspaceIds: readonly string[], limitPerWorkspace = 100): AppServerSessionRecord[] {
     const normalizedWorkspaceIds = [...new Set(workspaceIds.map((workspaceId) => requiredString(workspaceId, "Workspace id")))];
     if (normalizedWorkspaceIds.length === 0) return [];
     const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limitPerWorkspace)));
@@ -836,7 +837,7 @@ export class HoneycrispSessionStore {
             PARTITION BY workspace_id
             ORDER BY updated_at DESC, id DESC
           ) AS workspace_rank
-        FROM honeycrisp_sessions
+        FROM app_server_sessions
         WHERE workspace_id IN (${placeholders})
       )
       WHERE workspace_rank <= ?
@@ -852,7 +853,7 @@ export class HoneycrispSessionStore {
   public listSummariesForWorkspaces(
     workspaceIds: readonly string[],
     limitPerWorkspace = 100,
-  ): HoneycrispSessionSummary[] {
+  ): AppServerSessionSummary[] {
     const normalizedWorkspaceIds = [...new Set(workspaceIds.map((workspaceId) => requiredString(workspaceId, "Workspace id")))];
     if (normalizedWorkspaceIds.length === 0) return [];
     const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limitPerWorkspace)));
@@ -864,7 +865,7 @@ export class HoneycrispSessionStore {
             PARTITION BY workspace_id
             ORDER BY updated_at DESC, id DESC
           ) AS workspace_rank
-        FROM honeycrisp_sessions
+        FROM app_server_sessions
         WHERE workspace_id IN (${placeholders})
       )
       WHERE workspace_rank <= ?
@@ -885,8 +886,8 @@ export class HoneycrispSessionStore {
   public getUpdate(
     sessionId: string,
     afterEventId?: string | null,
-    input: Omit<HoneycrispSessionEventPageInput, "afterEventId" | "stream"> = {},
-  ): HoneycrispSessionUpdate | null {
+    input: Omit<AppServerSessionEventPageInput, "afterEventId" | "stream"> = {},
+  ): AppServerSessionUpdate | null {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     if (this.normalizedEventStorage) {
       const session = this.getSessionCore(normalizedSessionId);
@@ -935,7 +936,7 @@ export class HoneycrispSessionStore {
     };
   }
 
-  public getEventPage(sessionId: string, input: HoneycrispSessionEventPageInput = {}): HoneycrispSessionEventPage {
+  public getEventPage(sessionId: string, input: AppServerSessionEventPageInput = {}): AppServerSessionEventPage {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     if (!this.getSessionCore(normalizedSessionId)) throw new Error(`Session not found: ${normalizedSessionId}`);
     const stream = input.stream ?? "all";
@@ -951,7 +952,7 @@ export class HoneycrispSessionStore {
     const direction = tail ? "DESC" : "ASC";
     const comparison = cursorOffset === null ? "" : "AND event_offset > ?";
     const query = this.database.prepare(`
-      SELECT event_offset, event_json, content_hash FROM honeycrisp_session_events
+      SELECT event_offset, event_json, content_hash FROM app_server_session_events
       WHERE session_id = ? ${comparison} ${filter}
       ORDER BY event_offset ${direction}
       LIMIT ?
@@ -966,7 +967,7 @@ export class HoneycrispSessionStore {
     const candidates = tail ? [...orderedRows].reverse() : orderedRows;
     for (const row of candidates) {
       if (selected.length >= limit) break;
-      const document = requiredStoredString(row.event_json, "Honeycrisp session event");
+      const document = requiredStoredString(row.event_json, "app-server session event");
       const nextBytes = Buffer.byteLength(document);
       if (selected.length > 0 && bytes + nextBytes > maxBytes) break;
       selected.push(row);
@@ -974,7 +975,7 @@ export class HoneycrispSessionStore {
     }
     if (tail) selected.reverse();
     const decodedEvents = selected.map((row) => {
-      const document = requiredStoredString(row.event_json, "Honeycrisp session event");
+      const document = requiredStoredString(row.event_json, "app-server session event");
       return Buffer.byteLength(document) > maxBytes
         ? projectOversizedSessionEvent(decodeEventRow(row), Buffer.byteLength(document))
         : decodeEventRow(row);
@@ -1022,7 +1023,7 @@ export class HoneycrispSessionStore {
     if (candidates.size === 0) return new Set();
     const placeholders = [...candidates].map(() => '?').join(', ');
     const rows = this.database.prepare(`
-      SELECT event_json, content_hash FROM honeycrisp_session_events
+      SELECT event_json, content_hash FROM app_server_session_events
       WHERE session_id = ? AND json_extract(event_json, '$.kind') = 'beale.transcript'
         AND (
           COALESCE(json_extract(event_json, '$.payload.record.source'), '') || char(0) ||
@@ -1040,14 +1041,14 @@ export class HoneycrispSessionStore {
     }));
   }
 
-  public getEventDetails(sessionId: string, eventIds: readonly string[]): HoneycrispSessionEvent[] {
+  public getEventDetails(sessionId: string, eventIds: readonly string[]): AppServerSessionEvent[] {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     const normalizedIds = [...new Set(eventIds.map((eventId) => requiredString(eventId, "Session event id")))];
     if (normalizedIds.length === 0) return [];
     if (normalizedIds.length > 100) throw new Error("At most 100 session event details may be requested at once.");
     const placeholders = normalizedIds.map(() => "?").join(", ");
     const rows = this.database.prepare(`
-      SELECT event_json, content_hash FROM honeycrisp_session_events
+      SELECT event_json, content_hash FROM app_server_session_events
       WHERE session_id = ? AND (
         event_id IN (${placeholders})
         OR EXISTS (
@@ -1060,13 +1061,13 @@ export class HoneycrispSessionStore {
     return rows.map(decodeEventRow);
   }
 
-  public getCollaborationState(sessionId: string, messageLimit = 200): HoneycrispSessionCollaborationState {
+  public getCollaborationState(sessionId: string, messageLimit = 200): AppServerSessionCollaborationState {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     const session = this.getSessionCore(normalizedSessionId);
     if (!session) throw new Error(`Session not found: ${normalizedSessionId}`);
-    const readKind = (kind: string, limit: number): HoneycrispSessionEvent[] => {
+    const readKind = (kind: string, limit: number): AppServerSessionEvent[] => {
       const rows = this.database.prepare(`
-        SELECT event_json, content_hash FROM honeycrisp_session_events
+        SELECT event_json, content_hash FROM app_server_session_events
         WHERE session_id = ? AND json_extract(event_json, '$.kind') = ?
         ORDER BY event_offset DESC
         LIMIT ?
@@ -1080,7 +1081,7 @@ export class HoneycrispSessionStore {
       boundedInteger(messageLimit, 200, 1, 1_000),
     );
     const subagentRows = this.database.prepare(`
-      SELECT event_json, content_hash FROM honeycrisp_session_events
+      SELECT event_json, content_hash FROM app_server_session_events
       WHERE session_id = ?
         AND json_extract(event_json, '$.kind') = 'agent.event'
         AND json_extract(event_json, '$.payload.type') = 'subagent.activity'
@@ -1099,15 +1100,15 @@ export class HoneycrispSessionStore {
 
   public recoverInterrupted(
     workspaceId: string,
-    input: RecoverInterruptedHoneycrispSessionsInput = {},
-  ): HoneycrispSessionRecoveryReport {
+    input: RecoverInterruptedAppServerSessionsInput = {},
+  ): AppServerSessionRecoveryReport {
     const normalizedWorkspaceId = requiredString(workspaceId, "Workspace id");
     const recoveredAt = input.at ?? new Date().toISOString();
     const reason = optionalString(input.reason) ?? "workspace_open";
     this.database.exec("BEGIN IMMEDIATE;");
     try {
       const rows = this.database.prepare(`
-        SELECT document_json, document_hash FROM honeycrisp_sessions
+        SELECT document_json, document_hash FROM app_server_sessions
         WHERE workspace_id = ? AND status = 'active'
         ORDER BY updated_at ASC, id ASC
       `).all(normalizedWorkspaceId) as StoredSessionRow[];
@@ -1118,7 +1119,7 @@ export class HoneycrispSessionStore {
         for (const attempt of session.attempts) {
           if (attempt.status !== "active") continue;
           attempt.status = "paused";
-          attempt.summary = "Paused after the Honeycrisp process was interrupted.";
+          attempt.summary = "Paused after the app-server process was interrupted.";
           attempt.endedAt = null;
           attempt.metadata = {
             ...attempt.metadata,
@@ -1130,7 +1131,7 @@ export class HoneycrispSessionStore {
           interruptedAttempts += 1;
         }
         session.status = "paused";
-        session.summary = "Paused after the Honeycrisp process was interrupted.";
+        session.summary = "Paused after the app-server process was interrupted.";
         session.endedAt = null;
         session.metadata = {
           ...session.metadata,
@@ -1144,7 +1145,7 @@ export class HoneycrispSessionStore {
           id: `session_recovery_${randomUUID()}`,
           kind: "session.recovery",
           timestamp: recoveredAt,
-          summary: "Workspace recovery paused an interrupted Honeycrisp session.",
+          summary: "Workspace recovery paused an interrupted app-server session.",
           payload: {
             interruptedByRecovery: true,
             previousStatus: "active",
@@ -1160,7 +1161,7 @@ export class HoneycrispSessionStore {
         session.updatedAt = recoveredAt;
         const document = storedSessionDocument(session);
         const result = this.database.prepare(`
-          UPDATE honeycrisp_sessions
+          UPDATE app_server_sessions
           SET status = ?, summary = ?, document_json = ?, document_hash = ?, revision = ?, updated_at = ?
           WHERE id = ? AND revision = ? AND status = 'active'
         `).run(
@@ -1192,7 +1193,7 @@ export class HoneycrispSessionStore {
     }
   }
 
-  public beginAttempt(sessionId: string, input: BeginHoneycrispSessionAttemptInput): HoneycrispSessionRecord {
+  public beginAttempt(sessionId: string, input: BeginAppServerSessionAttemptInput): AppServerSessionRecord {
     return this.mutate(sessionId, input.expectedRevision, (session) => {
       if (session.status === "active") {
         throw new Error(`Session ${session.id} already has an active attempt.`);
@@ -1214,18 +1215,18 @@ export class HoneycrispSessionStore {
     });
   }
 
-  public appendEvent(sessionId: string, event: HoneycrispSessionEvent): HoneycrispSessionRecord {
+  public appendEvent(sessionId: string, event: AppServerSessionEvent): AppServerSessionRecord {
     const session = this.appendNormalizedEvent(sessionId, event);
     session.events = this.readEvents(session.id);
     this.hydrateCaptures(session);
     return session;
   }
 
-  public appendEventReceipt(sessionId: string, event: HoneycrispSessionEvent): HoneycrispSessionMutationReceipt {
+  public appendEventReceipt(sessionId: string, event: AppServerSessionEvent): AppServerSessionMutationReceipt {
     return sessionMutationReceipt(this.appendNormalizedEvent(sessionId, event));
   }
 
-  public transition(sessionId: string, input: HoneycrispSessionTransitionInput): HoneycrispSessionRecord {
+  public transition(sessionId: string, input: AppServerSessionTransitionInput): AppServerSessionRecord {
     return this.mutate(sessionId, input.expectedRevision, (session) => {
       const now = input.at ?? new Date().toISOString();
       session.status = input.status;
@@ -1261,7 +1262,7 @@ export class HoneycrispSessionStore {
     });
   }
 
-  public importCapture(sessionId: string, input: ImportHoneycrispSessionCaptureInput): HoneycrispSessionRecord {
+  public importCapture(sessionId: string, input: ImportAppServerSessionCaptureInput): AppServerSessionRecord {
     const capture = decodeCapture(input.capture);
     return this.mutate(sessionId, input.expectedRevision, (session) => {
       const attempt = session.attempts.find((candidate) => candidate.id === input.attemptId);
@@ -1275,7 +1276,7 @@ export class HoneycrispSessionStore {
       const goalStatus = optionalString(goal?.status);
       const agentStatus = optionalString(agent.status);
       const completed = agentStatus === "complete" && goalStatus !== "active";
-      const status: HoneycrispSessionStatus = completed && goalStatus === "blocked"
+      const status: AppServerSessionStatus = completed && goalStatus === "blocked"
         ? "blocked"
         : completed
           ? "completed"
@@ -1304,8 +1305,8 @@ export class HoneycrispSessionStore {
   private mutate(
     sessionId: string,
     expectedRevision: number | undefined,
-    update: (session: HoneycrispSessionRecord) => void,
-  ): HoneycrispSessionRecord {
+    update: (session: AppServerSessionRecord) => void,
+  ): AppServerSessionRecord {
     this.database.exec("BEGIN IMMEDIATE;");
     try {
       const session = this.getSessionCore(requiredString(sessionId, "Session id"));
@@ -1323,7 +1324,7 @@ export class HoneycrispSessionStore {
       this.insertCaptures(session);
       const document = storedSessionDocument(session);
       const result = this.database.prepare(`
-        UPDATE honeycrisp_sessions
+        UPDATE app_server_sessions
         SET status = ?, title = ?, summary = ?, document_json = ?, document_hash = ?, revision = ?, updated_at = ?
         WHERE id = ? AND revision = ?
       `).run(
@@ -1346,7 +1347,7 @@ export class HoneycrispSessionStore {
     }
   }
 
-  private appendNormalizedEvent(sessionId: string, event: HoneycrispSessionEvent): HoneycrispSessionRecord {
+  private appendNormalizedEvent(sessionId: string, event: AppServerSessionEvent): AppServerSessionRecord {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     const normalized = normalizeEvent(event);
     this.database.exec("BEGIN IMMEDIATE;");
@@ -1354,7 +1355,7 @@ export class HoneycrispSessionStore {
       const session = this.getSessionCore(normalizedSessionId);
       if (!session) throw new Error(`Session not found: ${normalizedSessionId}`);
       const duplicate = this.database.prepare(`
-        SELECT 1 AS present FROM honeycrisp_session_events
+        SELECT 1 AS present FROM app_server_session_events
         WHERE session_id = ? AND event_id = ?
       `).get(normalizedSessionId, normalized.id) as { present?: unknown } | undefined;
       if (duplicate?.present !== 1) {
@@ -1369,7 +1370,7 @@ export class HoneycrispSessionStore {
       session.updatedAt = new Date().toISOString();
       const document = storedSessionDocument(session);
       const result = this.database.prepare(`
-        UPDATE honeycrisp_sessions
+        UPDATE app_server_sessions
         SET title = ?, document_json = ?, document_hash = ?, revision = ?, updated_at = ?
         WHERE id = ? AND revision = ?
       `).run(
@@ -1390,24 +1391,24 @@ export class HoneycrispSessionStore {
     }
   }
 
-  private getSessionCore(sessionId: string): HoneycrispSessionRecord | null {
+  private getSessionCore(sessionId: string): AppServerSessionRecord | null {
     const row = this.database.prepare(`
       SELECT document_json${this.sessionDocumentHashes ? ", document_hash" : ""}
-      FROM honeycrisp_sessions WHERE id = ?
+      FROM app_server_sessions WHERE id = ?
     `).get(sessionId) as StoredSessionRow | undefined;
     return row ? this.decodeSessionRow(row) : null;
   }
 
-  private decodeSessionRow(row: StoredSessionRow): HoneycrispSessionRecord {
-    const document = requiredStoredString(row.document_json, "Honeycrisp session document");
-    if (this.sessionDocumentHashes) verifyJsonHash(document, row.document_hash, "Honeycrisp session document");
+  private decodeSessionRow(row: StoredSessionRow): AppServerSessionRecord {
+    const document = requiredStoredString(row.document_json, "app-server session document");
+    if (this.sessionDocumentHashes) verifyJsonHash(document, row.document_hash, "app-server session document");
     return decodeStoredSession(document);
   }
 
-  private readEvents(sessionId: string, fromOffset = 0): HoneycrispSessionEvent[] {
+  private readEvents(sessionId: string, fromOffset = 0): AppServerSessionEvent[] {
     if (!this.normalizedEventStorage) return [];
     const rows = this.database.prepare(`
-      SELECT event_json, content_hash FROM honeycrisp_session_events
+      SELECT event_json, content_hash FROM app_server_session_events
       WHERE session_id = ? AND event_offset >= ?
       ORDER BY event_offset ASC
     `).all(sessionId, fromOffset) as StoredSessionEventRow[];
@@ -1416,11 +1417,11 @@ export class HoneycrispSessionStore {
 
   private eventStreamBounds(
     sessionId: string,
-    stream: HoneycrispSessionEventStream,
+    stream: AppServerSessionEventStream,
   ): { minimum: number | null; maximum: number | null } {
     const row = this.database.prepare(`
       SELECT MIN(event_offset) AS minimum, MAX(event_offset) AS maximum
-      FROM honeycrisp_session_events
+      FROM app_server_session_events
       WHERE session_id = ? ${eventStreamSql(stream)}
     `).get(sessionId) as { minimum?: unknown; maximum?: unknown } | undefined;
     return {
@@ -1431,7 +1432,7 @@ export class HoneycrispSessionStore {
 
   private eventOffsetForCursor(sessionId: string, eventId: string): number | null {
     const row = this.database.prepare(`
-      SELECT event_offset FROM honeycrisp_session_events
+      SELECT event_offset FROM app_server_session_events
       WHERE session_id = ? AND (
         event_id = ?
         OR EXISTS (
@@ -1445,8 +1446,8 @@ export class HoneycrispSessionStore {
     return numericOffset(row?.event_offset);
   }
 
-  private readSummaryTokenUsage(sessionIds: readonly string[]): Map<string, HoneycrispSessionTokenUsage> {
-    const totals = new Map<string, HoneycrispSessionTokenUsage>();
+  private readSummaryTokenUsage(sessionIds: readonly string[]): Map<string, AppServerSessionTokenUsage> {
+    const totals = new Map<string, AppServerSessionTokenUsage>();
     if (!this.normalizedEventStorage || sessionIds.length === 0) return totals;
     if (this.summaryMetricsStorage) {
       for (const sessionId of sessionIds) totals.set(sessionId, { totalTokens: 0 });
@@ -1457,7 +1458,7 @@ export class HoneycrispSessionStore {
             completed_turn_input_tokens, completed_turn_output_tokens,
             completed_turn_cache_read_tokens, completed_turn_cache_prompt_tokens
           ` : ""}
-        FROM honeycrisp_session_summary_metrics
+        FROM app_server_session_summary_metrics
         WHERE session_id IN (${placeholders})
       `).all(...sessionIds) as Array<{
         session_id?: unknown;
@@ -1495,7 +1496,7 @@ export class HoneycrispSessionStore {
       return totals;
     }
     const latestUsageEvent = this.database.prepare(`
-      SELECT event_json FROM honeycrisp_session_events
+      SELECT event_json FROM app_server_session_events
       WHERE session_id = ?
         AND json_extract(event_json, '$.kind') = 'beale.model_session_update'
       ORDER BY event_offset DESC
@@ -1549,7 +1550,7 @@ export class HoneycrispSessionStore {
               + COALESCE(json_extract(event_json, '$.payload.usage.cacheReadTokens'), json_extract(event_json, '$.payload.usage.cacheRead'), json_extract(event_json, '$.payload.usage.cache_read_tokens'), 0)
               + COALESCE(json_extract(event_json, '$.payload.usage.cacheWriteTokens'), json_extract(event_json, '$.payload.usage.cacheWrite'), json_extract(event_json, '$.payload.usage.cache_write_tokens'), 0)
           ) ELSE 0 END), 0) AS cache_prompt_tokens
-      FROM honeycrisp_session_events WHERE session_id = ?
+      FROM app_server_session_events WHERE session_id = ?
     `);
     for (const sessionId of sessionIds) {
       const row = latestUsageEvent.get(sessionId) as { event_json?: unknown } | undefined;
@@ -1597,7 +1598,7 @@ export class HoneycrispSessionStore {
       const placeholders = sessionIds.map(() => "?").join(", ");
       const rows = this.database.prepare(`
         SELECT session_id, last_message_at
-        FROM honeycrisp_session_summary_metrics
+        FROM app_server_session_summary_metrics
         WHERE session_id IN (${placeholders}) AND last_message_at IS NOT NULL
       `).all(...sessionIds) as Array<{ session_id?: unknown; last_message_at?: unknown }>;
       for (const row of rows) {
@@ -1612,7 +1613,7 @@ export class HoneycrispSessionStore {
         json_extract(event_json, '$.payload.record.createdAt'),
         json_extract(event_json, '$.timestamp')
       ) AS last_message_at
-      FROM honeycrisp_session_events
+      FROM app_server_session_events
       WHERE session_id = ?
         AND json_extract(event_json, '$.kind') = 'beale.transcript'
       ORDER BY event_offset DESC
@@ -1626,8 +1627,8 @@ export class HoneycrispSessionStore {
     return timestamps;
   }
 
-  private readSummaryActivityCounts(sessionIds: readonly string[]): Map<string, HoneycrispSessionActivityCounts> {
-    const counts = new Map<string, HoneycrispSessionActivityCounts>();
+  private readSummaryActivityCounts(sessionIds: readonly string[]): Map<string, AppServerSessionActivityCounts> {
+    const counts = new Map<string, AppServerSessionActivityCounts>();
     for (const sessionId of sessionIds) counts.set(sessionId, { memorySearches: 0, memoryUpdates: 0 });
     if (!this.sessionToolActivityStorage || sessionIds.length === 0) return counts;
     const placeholders = sessionIds.map(() => "?").join(", ");
@@ -1636,7 +1637,7 @@ export class HoneycrispSessionStore {
         session_id,
         SUM(CASE WHEN tool_name = 'memory.search' THEN 1 ELSE 0 END) AS memory_searches,
         SUM(CASE WHEN tool_name IN ('memory.save', 'memory.correct', 'memory.link') THEN 1 ELSE 0 END) AS memory_updates
-      FROM honeycrisp_session_tool_activity
+      FROM app_server_session_tool_activity
       WHERE session_id IN (${placeholders})
       GROUP BY session_id
     `).all(...sessionIds) as Array<{
@@ -1655,15 +1656,15 @@ export class HoneycrispSessionStore {
     return counts;
   }
 
-  private insertEvents(sessionId: string, events: readonly HoneycrispSessionEvent[]): void {
+  private insertEvents(sessionId: string, events: readonly AppServerSessionEvent[]): void {
     if (events.length === 0) return;
     const offsetRow = this.database.prepare(`
       SELECT COALESCE(MAX(event_offset), -1) + 1 AS next_offset
-      FROM honeycrisp_session_events WHERE session_id = ?
+      FROM app_server_session_events WHERE session_id = ?
     `).get(sessionId) as { next_offset?: unknown } | undefined;
     let offset = typeof offsetRow?.next_offset === "number" ? offsetRow.next_offset : 0;
     const insert = this.database.prepare(`
-      INSERT OR IGNORE INTO honeycrisp_session_events (
+      INSERT OR IGNORE INTO app_server_session_events (
         session_id, event_offset, event_id, event_json, content_hash
       ) VALUES (?, ?, ?, ?, ?)
     `);
@@ -1679,13 +1680,13 @@ export class HoneycrispSessionStore {
     }
   }
 
-  private updateSessionSummaryMetrics(sessionId: string, event: HoneycrispSessionEvent): void {
+  private updateSessionSummaryMetrics(sessionId: string, event: AppServerSessionEvent): void {
     if (!this.summaryMetricsStorage) return;
     const payload = recordValue(event.payload);
     const completedTurn = event.kind === "agent.event" && payload?.type === "turn_completed";
     if (event.kind !== "beale.model_session_update" && event.kind !== "beale.transcript" && !completedTurn) return;
     this.database.prepare(`
-      INSERT OR IGNORE INTO honeycrisp_session_summary_metrics (session_id) VALUES (?)
+      INSERT OR IGNORE INTO app_server_session_summary_metrics (session_id) VALUES (?)
     `).run(sessionId);
     if (event.kind === "beale.model_session_update") {
       const record = recordValue(payload?.record);
@@ -1696,7 +1697,7 @@ export class HoneycrispSessionStore {
       );
       if (reportedTokens !== null) {
         this.database.prepare(`
-          UPDATE honeycrisp_session_summary_metrics
+          UPDATE app_server_session_summary_metrics
           SET latest_reported_total_tokens = ? WHERE session_id = ?
         `).run(reportedTokens, sessionId);
       }
@@ -1721,7 +1722,7 @@ export class HoneycrispSessionStore {
       const inputTokens = finiteNonNegativeNumber(usage?.promptTokens ?? usage?.prompt_tokens)
         ?? uncachedInputTokens + cacheReadTokens + cacheWriteTokens;
       this.database.prepare(`
-        UPDATE honeycrisp_session_summary_metrics
+        UPDATE app_server_session_summary_metrics
         SET
           completed_turn_tokens = completed_turn_tokens + ?,
           completed_turn_cost_usd = completed_turn_cost_usd + ?,
@@ -1744,16 +1745,16 @@ export class HoneycrispSessionStore {
       const record = recordValue(payload?.record);
       const createdAt = optionalString(record?.createdAt) ?? event.timestamp;
       this.database.prepare(`
-        UPDATE honeycrisp_session_summary_metrics
+        UPDATE app_server_session_summary_metrics
         SET last_message_at = ? WHERE session_id = ?
       `).run(createdAt, sessionId);
     }
   }
 
-  private updateSessionToolActivity(sessionId: string, event: HoneycrispSessionEvent): void {
+  private updateSessionToolActivity(sessionId: string, event: AppServerSessionEvent): void {
     if (!this.sessionToolActivityStorage) return;
     const insert = this.database.prepare(`
-      INSERT OR IGNORE INTO honeycrisp_session_tool_activity (
+      INSERT OR IGNORE INTO app_server_session_tool_activity (
         session_id, activity_key, tool_name, created_at
       ) VALUES (?, ?, ?, ?)
     `);
@@ -1762,28 +1763,28 @@ export class HoneycrispSessionStore {
     }
   }
 
-  private hydrateCaptures(session: HoneycrispSessionRecord): void {
+  private hydrateCaptures(session: AppServerSessionRecord): void {
     if (!this.normalizedCaptureStorage) return;
     const rows = this.database.prepare(`
-      SELECT attempt_id, capture_json, content_hash FROM honeycrisp_session_captures
+      SELECT attempt_id, capture_json, content_hash FROM app_server_session_captures
       WHERE session_id = ?
     `).all(session.id) as StoredSessionCaptureRow[];
     const captures = new Map(rows.map((row) => {
-      const attemptId = requiredStoredString(row.attempt_id, "Honeycrisp session capture attempt id");
+      const attemptId = requiredStoredString(row.attempt_id, "app-server session capture attempt id");
       return [attemptId, decodeCaptureRow(row, session.id)] as const;
     }));
     for (const attempt of session.attempts) attempt.capture = captures.get(attempt.id) ?? attempt.capture;
   }
 
-  private insertCaptures(session: HoneycrispSessionRecord): void {
+  private insertCaptures(session: AppServerSessionRecord): void {
     const existingRows = this.database.prepare(`
-      SELECT attempt_id FROM honeycrisp_session_captures WHERE session_id = ?
+      SELECT attempt_id FROM app_server_session_captures WHERE session_id = ?
     `).all(session.id) as Array<{ attempt_id?: unknown }>;
     const existingAttemptIds = new Set(existingRows.flatMap((row) =>
       typeof row.attempt_id === "string" ? [row.attempt_id] : []
     ));
     const insert = this.database.prepare(`
-      INSERT INTO honeycrisp_session_captures (
+      INSERT INTO app_server_session_captures (
         session_id, attempt_id, capture_json, content_hash
       ) VALUES (?, ?, ?, ?)
     `);
@@ -1795,7 +1796,7 @@ export class HoneycrispSessionStore {
   }
 }
 
-function storedSessionDocument(session: HoneycrispSessionRecord, stripCaptures = true): string {
+function storedSessionDocument(session: AppServerSessionRecord, stripCaptures = true): string {
   return JSON.stringify({
     ...session,
     attempts: stripCaptures
@@ -1805,7 +1806,7 @@ function storedSessionDocument(session: HoneycrispSessionRecord, stripCaptures =
   });
 }
 
-function sessionDocumentHash(session: HoneycrispSessionRecord): string {
+function sessionDocumentHash(session: AppServerSessionRecord): string {
   return hashJson(storedSessionDocument(session));
 }
 
@@ -1837,11 +1838,11 @@ function columnExists(database: DatabaseSync, table: string, column: string): bo
 }
 
 function sessionSummary(
-  session: HoneycrispSessionRecord,
-  tokenUsage: HoneycrispSessionTokenUsage = { totalTokens: 0 },
+  session: AppServerSessionRecord,
+  tokenUsage: AppServerSessionTokenUsage = { totalTokens: 0 },
   lastMessageAt = latestTranscriptTimestamp(session.events),
-  activityCounts: HoneycrispSessionActivityCounts = sessionActivityCounts(session.events),
-): HoneycrispSessionSummary {
+  activityCounts: AppServerSessionActivityCounts = sessionActivityCounts(session.events),
+): AppServerSessionSummary {
   return {
     schemaVersion: session.schemaVersion,
     id: session.id,
@@ -1869,7 +1870,7 @@ function sessionSummary(
   };
 }
 
-function latestTranscriptTimestamp(events: readonly HoneycrispSessionEvent[]): string | null {
+function latestTranscriptTimestamp(events: readonly AppServerSessionEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event?.kind !== "beale.transcript") continue;
@@ -1879,7 +1880,7 @@ function latestTranscriptTimestamp(events: readonly HoneycrispSessionEvent[]): s
   return null;
 }
 
-function sessionActivityCounts(events: readonly HoneycrispSessionEvent[]): HoneycrispSessionActivityCounts {
+function sessionActivityCounts(events: readonly AppServerSessionEvent[]): AppServerSessionActivityCounts {
   const activities = new Set<string>();
   for (const event of events) {
     for (const activity of sessionToolActivityEntries(event)) {
@@ -1899,7 +1900,7 @@ function sessionActivityCounts(events: readonly HoneycrispSessionEvent[]): Honey
 }
 
 function sessionToolActivityEntries(
-  event: HoneycrispSessionEvent,
+  event: AppServerSessionEvent,
 ): Array<{ key: string; toolName: string }> {
   const entries = new Map<string, { key: string; toolName: string }>();
   const add = (
@@ -1945,7 +1946,7 @@ function sessionToolActivityEntries(
     const toolPayload = recordValue(tracePayload?.payload) ?? tracePayload;
     const traceType = optionalString(trace?.type);
     add(
-      optionalString(tracePayload?.honeycrispKind)
+      optionalString(readCompatibleRecordValue(tracePayload, "appServerKind"))
         ?? (traceType === "tool_call" ? "tool.requested" : traceType === "tool_result" ? "tool.observed" : null),
       toolPayload,
       optionalString(trace?.id) ?? event.id,
@@ -1962,7 +1963,7 @@ function finiteNonNegativeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : null;
 }
 
-function sessionMutationReceipt(session: HoneycrispSessionRecord): HoneycrispSessionMutationReceipt {
+function sessionMutationReceipt(session: AppServerSessionRecord): AppServerSessionMutationReceipt {
   return {
     sessionId: session.id,
     status: session.status,
@@ -1976,12 +1977,12 @@ function compactImportedCapture(
   sessionId: string,
   attemptId: string,
   capturedAt: string,
-): HoneycrispSessionCapture {
+): AppServerSessionCapture {
   const timelineCount = Array.isArray(capture.eventTimeline) ? capture.eventTimeline.length : 0;
   const agent = recordValue(capture.agent);
   const agentRaw = recordValue(agent?.raw);
   const agentDiagnosticCount = Array.isArray(agentRaw?.agentEvents) ? agentRaw.agentEvents.length : 0;
-  const eventStreams: HoneycrispSessionCapture["eventStreams"] = {
+  const eventStreams: AppServerSessionCapture["eventStreams"] = {
     timeline: sessionCaptureEventReference(sessionId, attemptId, timelineCount),
     agentDiagnostics: sessionCaptureEventReference(sessionId, attemptId, agentDiagnosticCount),
   };
@@ -2007,8 +2008,8 @@ function compactImportedCapture(
   };
 }
 
-function compactStoredCapture(value: unknown, sessionId: string, attemptId: string): HoneycrispSessionCapture {
-  if (!isRecord(value)) throw new Error("Honeycrisp session capture is invalid.");
+function compactStoredCapture(value: unknown, sessionId: string, attemptId: string): AppServerSessionCapture {
+  if (!isRecord(value)) throw new Error("app-server session capture is invalid.");
   const raw = recordValue(value.raw) ?? value;
   const capturedAt = optionalString(value.capturedAt) ?? optionalString(raw.capturedAt) ?? new Date(0).toISOString();
   const schemaVersion = typeof raw.schemaVersion === "number" ? raw.schemaVersion : value.schemaVersion;
@@ -2016,7 +2017,7 @@ function compactStoredCapture(value: unknown, sessionId: string, attemptId: stri
   const storedStreams = recordValue(value.eventStreams);
   const storedTimeline = recordValue(storedStreams?.timeline);
   const storedDiagnostics = recordValue(storedStreams?.agentDiagnostics);
-  const eventStreams: HoneycrispSessionCapture["eventStreams"] = {
+  const eventStreams: AppServerSessionCapture["eventStreams"] = {
     timeline: sessionCaptureEventReference(
       sessionId,
       attemptId,
@@ -2049,30 +2050,30 @@ function sessionCaptureEventReference(
   sessionId: string,
   attemptId: string,
   count: number,
-): HoneycrispSessionCaptureEventReference {
+): AppServerSessionCaptureEventReference {
   return {
-    source: "honeycrisp_session_events",
+    source: "app_server_session_events",
     sessionId,
     attemptId,
     count: Math.max(0, Math.trunc(count)),
   };
 }
 
-function decodeCaptureRow(row: StoredSessionCaptureRow, sessionId: string): HoneycrispSessionCapture {
-  const attemptId = requiredStoredString(row.attempt_id, "Honeycrisp session capture attempt id");
-  const document = requiredStoredString(row.capture_json, "Honeycrisp session capture");
-  verifyJsonHash(document, row.content_hash, "Honeycrisp session capture");
+function decodeCaptureRow(row: StoredSessionCaptureRow, sessionId: string): AppServerSessionCapture {
+  const attemptId = requiredStoredString(row.attempt_id, "app-server session capture attempt id");
+  const document = requiredStoredString(row.capture_json, "app-server session capture");
+  verifyJsonHash(document, row.content_hash, "app-server session capture");
   const parsed = JSON.parse(document) as unknown;
   return compactStoredCapture(parsed, sessionId, attemptId);
 }
 
-function decodeEventRow(row: StoredSessionEventRow): HoneycrispSessionEvent {
-  const document = requiredStoredString(row.event_json, "Honeycrisp session event");
-  verifyJsonHash(document, row.content_hash, "Honeycrisp session event");
-  return normalizeEvent(JSON.parse(document) as HoneycrispSessionEvent);
+function decodeEventRow(row: StoredSessionEventRow): AppServerSessionEvent {
+  const document = requiredStoredString(row.event_json, "app-server session event");
+  verifyJsonHash(document, row.content_hash, "app-server session event");
+  return normalizeEvent(JSON.parse(document) as AppServerSessionEvent);
 }
 
-function projectOversizedSessionEvent(event: HoneycrispSessionEvent, sizeBytes: number): HoneycrispSessionEvent {
+function projectOversizedSessionEvent(event: AppServerSessionEvent, sizeBytes: number): AppServerSessionEvent {
   const payload = recordValue(event.payload);
   if (event.kind === "beale.trace_batch" && Array.isArray(payload?.records)) {
     return {
@@ -2128,7 +2129,7 @@ function projectOversizedSessionEvent(event: HoneycrispSessionEvent, sizeBytes: 
   };
 }
 
-function eventStreamSql(stream: HoneycrispSessionEventStream): string {
+function eventStreamSql(stream: AppServerSessionEventStream): string {
   if (stream === "transcript") return "AND json_extract(event_json, '$.kind') = 'beale.transcript'";
   if (stream === "commentary") {
     return `AND (
@@ -2152,7 +2153,7 @@ function eventStreamSql(stream: HoneycrispSessionEventStream): string {
   return "";
 }
 
-function projectCommentarySessionEvent(sessionId: string, event: HoneycrispSessionEvent): HoneycrispSessionEvent {
+function projectCommentarySessionEvent(sessionId: string, event: AppServerSessionEvent): AppServerSessionEvent {
   if (event.kind === "beale.transcript") return event;
   if (event.kind === "model.output" || event.kind === "model.thought") {
     const payload = recordValue(event.payload) ?? {};
@@ -2161,7 +2162,7 @@ function projectCommentarySessionEvent(sessionId: string, event: HoneycrispSessi
     const phase = thought ? undefined : messagePhase === "commentary" ? "commentary" : "final_answer";
     const source = thought
       ? "openai_reasoning_summary"
-      : phase === "commentary" ? "honeycrisp_commentary" : "honeycrisp";
+      : phase === "commentary" ? "app_server_commentary" : "app-server";
     const agentPath = optionalString(payload.agentPath) ?? event.agentPath ?? "/root";
     return {
       id: event.id,
@@ -2224,7 +2225,7 @@ function projectCommentarySessionEvent(sessionId: string, event: HoneycrispSessi
         role: "assistant",
         phase: "tool",
         contentMarkdown: copy.label,
-        source: "honeycrisp_tool_summary",
+        source: "app_server_tool_summary",
         metadata: {
           agentPath,
           toolName,
@@ -2244,7 +2245,7 @@ function commentaryTranscriptCorrelationKey(value: unknown): string | null {
   const record = recordValue(value);
   if (!record) return null;
   const source = optionalString(record.source);
-  if (source !== "honeycrisp_commentary" && source !== "honeycrisp" && source !== "openai_reasoning_summary") {
+  if (source !== "app_server_commentary" && source !== "app-server" && source !== "openai_reasoning_summary") {
     return null;
   }
   const metadata = recordValue(record.metadata);
@@ -2310,8 +2311,8 @@ function firstCommandWord(command: string | null | undefined): string | undefine
   return command?.trim().split(/\s+/u).find(Boolean);
 }
 
-function latestRecordEvents(events: readonly HoneycrispSessionEvent[]): HoneycrispSessionEvent[] {
-  const latest = new Map<string, HoneycrispSessionEvent>();
+function latestRecordEvents(events: readonly AppServerSessionEvent[]): AppServerSessionEvent[] {
+  const latest = new Map<string, AppServerSessionEvent>();
   for (const event of events) {
     const payload = recordValue(event.payload);
     const record = recordValue(payload?.record);
@@ -2334,31 +2335,31 @@ function numericOffset(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
-function decodeStoredSession(value: unknown): HoneycrispSessionRecord {
+function decodeStoredSession(value: unknown): AppServerSessionRecord {
   const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
   if (!isRecord(parsed)
-    || parsed.schemaVersion !== HONEYCRISP_SESSION_SCHEMA_VERSION
+    || parsed.schemaVersion !== APP_SERVER_SESSION_SCHEMA_VERSION
     || typeof parsed.id !== "string"
     || typeof parsed.workspaceId !== "string"
     || typeof parsed.revision !== "number") {
-    throw new Error("Stored Honeycrisp session is invalid or unsupported.");
+    throw new Error("Stored app-server session is invalid or unsupported.");
   }
-  return parsed as unknown as HoneycrispSessionRecord;
+  return parsed as unknown as AppServerSessionRecord;
 }
 
 function decodeCapture(value: unknown): Record<string, unknown> {
   if (!isRecord(value) || (value.schemaVersion !== 4 && value.schemaVersion !== 5)) {
-    throw new Error("Honeycrisp capture must use schema version 4 or 5.");
+    throw new Error("app-server capture must use schema version 4 or 5.");
   }
   if (!isRecord(value.agent) || !isRecord(value.request)) {
-    throw new Error("Honeycrisp capture is missing its request or agent record.");
+    throw new Error("app-server capture is missing its request or agent record.");
   }
   return value;
 }
 
 function validateCaptureResearchProfile(
   capture: Record<string, unknown>,
-  session: HoneycrispSessionRecord
+  session: AppServerSessionRecord
 ): void {
   const expected = recordValue(session.profile);
   const expectedId = optionalString(expected?.id);
@@ -2367,7 +2368,7 @@ function validateCaptureResearchProfile(
 
   const captured = recordValue(capture.researchProfile);
   if (!captured) {
-    throw new Error(`Honeycrisp capture is missing the research profile pinned to session ${session.id}.`);
+    throw new Error(`app-server capture is missing the research profile pinned to session ${session.id}.`);
   }
   const capturedId = optionalString(captured.id);
   const capturedHash = optionalString(captured.hash);
@@ -2376,7 +2377,7 @@ function validateCaptureResearchProfile(
   const computedHash = researchProfileHash(snapshot);
   if (!capturedHash || capturedHash !== computedHash) {
     throw new Error(
-      `Honeycrisp capture research profile hash mismatch for ${capturedId ?? snapshot.id}@${snapshot.version}.`
+      `app-server capture research profile hash mismatch for ${capturedId ?? snapshot.id}@${snapshot.version}.`
     );
   }
   if (
@@ -2385,12 +2386,12 @@ function validateCaptureResearchProfile(
     || (session.workflowId && capturedWorkflowId !== session.workflowId)
   ) {
     throw new Error(
-      `Honeycrisp capture research profile does not match the profile and workflow pinned to session ${session.id}.`
+      `app-server capture research profile does not match the profile and workflow pinned to session ${session.id}.`
     );
   }
 }
 
-function decodeDisposition(value: unknown): HoneycrispSessionDisposition | null {
+function decodeDisposition(value: unknown): AppServerSessionDisposition | null {
   const disposition = recordValue(value);
   if (!disposition) return null;
   const outcome = optionalString(disposition.outcome);
@@ -2407,7 +2408,7 @@ function decodeDisposition(value: unknown): HoneycrispSessionDisposition | null 
   };
 }
 
-function captureEvent(value: unknown): HoneycrispSessionEvent | null {
+function captureEvent(value: unknown): AppServerSessionEvent | null {
   const event = recordValue(value);
   if (!event) return null;
   const id = optionalString(event.id) ?? `capture_event_${randomUUID()}`;
@@ -2425,7 +2426,7 @@ function captureEvent(value: unknown): HoneycrispSessionEvent | null {
   });
 }
 
-function normalizeEvent(event: HoneycrispSessionEvent): HoneycrispSessionEvent {
+function normalizeEvent(event: AppServerSessionEvent): AppServerSessionEvent {
   return {
     id: requiredString(event.id, "Session event id"),
     kind: requiredString(event.kind, "Session event kind"),
@@ -2440,16 +2441,16 @@ function normalizeEvent(event: HoneycrispSessionEvent): HoneycrispSessionEvent {
 
 function completionSummary(agentStatus: string | null, goalStatus: string | null, agent: Record<string, unknown>): string {
   if (agentStatus === "complete" && goalStatus === "blocked") {
-    return "Honeycrisp stopped because the research goal is genuinely blocked on external state.";
+    return "app-server stopped because the research goal is genuinely blocked on external state.";
   }
   if (agentStatus === "complete" && goalStatus === "active") {
-    return "Honeycrisp exited while the research goal was still active.";
+    return "app-server exited while the research goal was still active.";
   }
-  if (agentStatus === "complete") return "Honeycrisp completed the research session.";
-  return `Honeycrisp process failed: ${optionalString(agent.outputText) ?? "Unknown Honeycrisp error."}`;
+  if (agentStatus === "complete") return "app-server completed the research session.";
+  return `app-server process failed: ${optionalString(agent.outputText) ?? "Unknown app-server error."}`;
 }
 
-function terminalStatus(status: HoneycrispSessionStatus): boolean {
+function terminalStatus(status: AppServerSessionStatus): boolean {
   return status === "blocked" || status === "completed" || status === "failed" || status === "stopped";
 }
 
@@ -2465,7 +2466,7 @@ function optionalString(value: unknown): string | null {
 
 function numberValue(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new Error("Honeycrisp capture schema version is invalid.");
+    throw new Error("app-server capture schema version is invalid.");
   }
   return value;
 }

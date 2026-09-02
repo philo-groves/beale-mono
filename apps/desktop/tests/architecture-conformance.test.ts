@@ -67,22 +67,22 @@ describe('architecture conformance', () => {
     expect(findPatternHits(files, forbiddenSql)).toEqual([]);
   });
 
-  it('keeps host subprocess use limited to auth, device, editor-launch, and Honeycrisp host-agent boundaries', () => {
+  it('keeps host subprocess use limited to auth, device, editor-launch, and app-server host-agent boundaries', () => {
     const files = filesUnder('src/main').filter(isSourceFile);
     const hits = findPatternHits(files, [/node:child_process|spawnSync\(|\bspawn\(|\bexecFile\(|\bfork\(/]).filter(
       (hit) =>
         ![
           'src/main/openaiAuth.ts',
           'src/main/researchProviderAuth.ts',
-          'src/main/honeycrispRunEngine.ts',
-          'src/main/honeycrispCliClient.ts',
-          'src/main/honeycrispInvocation.ts',
+          'src/main/appServerRunEngine.ts',
+          'src/main/appServerCliClient.ts',
+          'src/main/appServerInvocation.ts',
           'src/main/bealeAppServerClient.ts',
           'src/main/appServerRemoteAccess.ts',
           'src/main/iosDeviceCaptureService.ts',
           'src/main/workspaceEditors.ts',
           'src/main/researchProfileService.ts',
-          'src/main/honeycrispMemorySummary.ts'
+          'src/main/appServerMemorySummary.ts'
         ].includes(normalizePath(hit.path))
     );
 
@@ -91,40 +91,40 @@ describe('architecture conformance', () => {
 
   it('keeps renderer session and runbook detail queries off the Electron main-thread blocking path', () => {
     const main = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8');
-    const honeycrispClient = readFileSync(join(ROOT, 'src/main/honeycrispCliClient.ts'), 'utf8');
-    const sessionBoundary = readFileSync(join(ROOT, 'src/main/honeycrispSessionBoundary.ts'), 'utf8');
+    const appServerClient = readFileSync(join(ROOT, 'src/main/appServerCliClient.ts'), 'utf8');
+    const sessionBoundary = readFileSync(join(ROOT, 'src/main/appServerSessionBoundary.ts'), 'utf8');
     expect(main).toMatch(/timedMainIpcAsync\('getRunDetail'/);
     expect(main).toMatch(/timedMainIpcAsync\('getRunDetailVersion'/);
     expect(main).toMatch(/timedMainIpcAsync\('getRunDetailUpdate'/);
-    expect(main).toMatch(/timedMainIpcAsync\('getHoneycrispRunbook'/);
+    expect(main).toMatch(/timedMainIpcAsync\('getAppServerRunbook'/);
     expect(main).toMatch(/getRunDetailForClient|getRunDetailVersionForClient|getRunDetailUpdateForClient/);
-    expect(honeycrispClient).toMatch(/async function getHoneycrispRunbookDocument[\s\S]*invokeWithJsonInputAsync<HoneycrispRunbookDocument>/);
+    expect(appServerClient).toMatch(/async function getAppServerRunbookDocument[\s\S]*invokeWithJsonInputAsync<AppServerRunbookDocument>/);
     expect(sessionBoundary).toContain('fetchExistingAppServerCanonicalResult');
     expect(sessionBoundary).not.toContain('ensureBealeAppServerRunning');
   });
 
-  it('forbids new Beale access to Honeycrisp memory.sqlite outside the versioned CLI boundary', () => {
+  it('forbids new Beale access to app-server memory.sqlite outside the versioned CLI boundary', () => {
     const cliBoundaryFiles = new Set([
-      'src/main/honeycrispCliClient.ts',
-      'src/main/honeycrispInvocation.ts',
-      'src/main/honeycrispRunEngine.ts',
-      'src/main/honeycrispSessionBoundary.ts',
+      'src/main/appServerCliClient.ts',
+      'src/main/appServerInvocation.ts',
+      'src/main/appServerRunEngine.ts',
+      'src/main/appServerSessionBoundary.ts',
       'src/main/researchProfileService.ts'
     ]);
     // The Beale database still owns workbench-only records during the remaining
-    // migration. All knowledge features use the Honeycrisp protocol boundary.
+    // migration. All knowledge features use the app-server protocol boundary.
     const legacyDirectAccessFiles = new Set([
       'src/main/database.ts'
     ]);
     const patterns = [
       /memory\.sqlite/,
-      /HONEYCRISP_DATABASE_PATH/,
+      /APP_SERVER_DATABASE_PATH/,
       /\bmemory_nodes\b/,
       /\bmemory_edges\b/,
       /\bmemory_node_(?:sessions|workspaces|assets|tags|catalog_validations)\b/,
       /\bmemory_evidence_refs\b/,
       /\bmemory_catalog_snapshots\b/,
-      /\bhoneycrisp_(?:runbooks|reports|artifact_revisions)\b/
+      /\bapp_server_(?:runbooks|reports|artifact_revisions)\b/
     ];
     const hits = findPatternHits(filesUnder('src/main').filter(isSourceFile), patterns);
     const unexpected = hits.filter((hit) => {
@@ -141,14 +141,14 @@ describe('architecture conformance', () => {
       const content = readFileSync(join(ROOT, path), 'utf8');
       expect(content).not.toMatch(/node:sqlite|new\s+DatabaseSync\s*\(/);
     }
-    expect(findPatternHits(filesUnder('src/main').filter(isSourceFile), [/\bhoneycrisp_sessions\b/])).toEqual([]);
+    expect(findPatternHits(filesUnder('src/main').filter(isSourceFile), [/\bapp_server_sessions\b/])).toEqual([]);
     const files = filesUnder('src/main').map(normalizePath);
     expect(files).not.toContain('src/main/memoryDreaming.ts');
-    expect(files).not.toContain('src/main/honeycrispRunbook.ts');
-    expect(files).not.toContain('src/main/honeycrispReport.ts');
+    expect(files).not.toContain('src/main/appServerRunbook.ts');
+    expect(files).not.toContain('src/main/appServerReport.ts');
   });
 
-  it('keeps migrated harness features behind Honeycrisp protocol adapters', () => {
+  it('keeps migrated harness features behind app-server protocol adapters', () => {
     const adapters = [
       'src/main/agentPluginRegistry.ts',
       'src/main/providerTextCompletion.ts',
@@ -164,7 +164,7 @@ describe('architecture conformance', () => {
     ];
     expect(findPatternHits(adapters, forbidden)).toEqual([]);
     for (const path of adapters) {
-      expect(readFileSync(join(ROOT, path), 'utf8')).toMatch(/honeycrispCliClient/);
+      expect(readFileSync(join(ROOT, path), 'utf8')).toMatch(/appServerCliClient/);
     }
     expect(readFileSync(join(ROOT, 'src/shared/modelDefaults.ts'), 'utf8')).not.toMatch(/SMALL_MODEL_BY_PROVIDER|smallModelForProvider/);
   });
@@ -181,6 +181,21 @@ describe('architecture conformance', () => {
     expect(files).not.toContain('src/main/legacyMemoryDreamingSchema.ts');
   });
 
+  it('bundles only the narrow research-agent compatibility surface into the Electron main process', () => {
+    const mainFiles = filesUnder('src/main').filter(isSourceFile);
+    const packageImports = mainFiles.flatMap((path) =>
+      [...readFileSync(join(ROOT, path), 'utf8').matchAll(/from\s+['"](@beale\/research-agent(?:\/[^'"]*)?)['"]/g)]
+        .map((match) => ({ path: normalizePath(path), specifier: match[1] }))
+    );
+    expect(packageImports.length).toBeGreaterThan(0);
+    expect(packageImports.filter(({ specifier }) => specifier !== '@beale/research-agent/legacy-compatibility')).toEqual([]);
+
+    const electronViteConfig = readFileSync(join(ROOT, 'electron.vite.config.ts'), 'utf8');
+    expect(electronViteConfig).toMatch(
+      /externalizeDepsPlugin\(\{\s*exclude:\s*\[['"]@beale\/app-server-runtime['"],\s*['"]@beale\/research-agent['"]\]\s*\}\)/
+    );
+  });
+
   it('keeps retired graph, semantic indexing, VM state, and duplicate protocol code out of Beale surfaces', () => {
     const sourceFiles = filesUnder('src').filter(isSourceFile);
     expect(findPatternHits(sourceFiles, [
@@ -188,20 +203,20 @@ describe('architecture conformance', () => {
       /ProjectSemanticSummary|project_semantic_chunks|semantic-index/,
       /\b(?:restart_from_snapshot|preserve_vm|destroy_vm)\b/,
       /VmPreference|VmContext|vm_context|vm-backend|vm_event|vm_execution/,
-      /BEALE_HONEYCRISP_TRANSPORT|HONEYCRISP_EVENT_PREFIX|parseHoneycrispLiveEvent|--event-stream|--control-stream/
+      /BEALE_APP_SERVER_TRANSPORT|APP_SERVER_EVENT_PREFIX|parseAppServerLiveEvent|--event-stream|--control-stream/
     ])).toEqual([]);
-    const webSocketClient = readFileSync(join(ROOT, 'src/main/honeycrispWebSocketClient.ts'), 'utf8');
-    const cliClient = readFileSync(join(ROOT, 'src/main/honeycrispCliClient.ts'), 'utf8');
-    expect(webSocketClient).toMatch(/from ['"]\.\/honeycrispProtocol['"]/);
-    expect(cliClient).toMatch(/from ['"]\.\/honeycrispProtocol['"]/);
+    const webSocketClient = readFileSync(join(ROOT, 'src/main/appServerWebSocketClient.ts'), 'utf8');
+    const cliClient = readFileSync(join(ROOT, 'src/main/appServerCliClient.ts'), 'utf8');
+    expect(webSocketClient).toMatch(/from ['"]\.\/appServerProtocol['"]/);
+    expect(cliClient).toMatch(/from ['"]\.\/appServerProtocol['"]/);
     expect(webSocketClient).not.toMatch(/PROTOCOL_VERSION\s*=\s*1|['"]\/v1\/session['"]/);
-    expect(cliClient).not.toMatch(/PROTOCOL_VERSION\s*=\s*1|interface HoneycrispProtocolEnvelope/);
+    expect(cliClient).not.toMatch(/PROTOCOL_VERSION\s*=\s*1|interface AppServerProtocolEnvelope/);
   });
 
   it('keeps app-server-owned transport and capture policy out of Desktop', () => {
-    const runEngine = readFileSync(join(ROOT, 'src/main/honeycrispRunEngine.ts'), 'utf8');
+    const runEngine = readFileSync(join(ROOT, 'src/main/appServerRunEngine.ts'), 'utf8');
     const mainFiles = filesUnder('src/main').map(normalizePath);
-    expect(runEngine).not.toMatch(/capturePath|parseHoneycrispCapture|workspaceContextPath|collaborationConfigPath/);
+    expect(runEngine).not.toMatch(/capturePath|parseAppServerCapture|workspaceContextPath|collaborationConfigPath/);
     expect(mainFiles).not.toContain('src/main/bealeRemoteServer.ts');
     expect(existsSync(join(ROOT, 'resources', 'agent-plugins'))).toBe(false);
   });
@@ -294,7 +309,7 @@ describe('architecture conformance', () => {
     const dir = tempDir('beale-architecture-db-');
     const artifactRoot = join(dir, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    const db = new WorkspaceDatabase(join(dir, '.honeycrisp', 'memory', 'memory.sqlite'), artifactRoot);
+    const db = new WorkspaceDatabase(join(dir, '.beale', 'memory', 'memory.sqlite'), artifactRoot);
     db.initialize();
 
     const context = db.createRun({
@@ -310,7 +325,7 @@ describe('architecture conformance', () => {
       budget: { maxMinutes: 30, maxAttempts: 1, maxCostUsd: 0, runEngine: 'fixture' }
     });
 
-    expect(db.getDatabasePath()).toBe(join(dir, '.honeycrisp', 'memory', 'memory.sqlite'));
+    expect(db.getDatabasePath()).toBe(join(dir, '.beale', 'memory', 'memory.sqlite'));
     expect(db.getArtifactRoot()).toBe(artifactRoot);
     expect(context).toMatchObject({ run: { status: 'active' }, attempt: { status: 'active' } });
     expect(JSON.stringify(context)).not.toMatch(/beale\.sqlite|OPENAI|api[_-]?key|access[_-]?token|credential/i);

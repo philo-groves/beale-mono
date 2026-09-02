@@ -1,13 +1,13 @@
 import { FileText, CircleAlert, LoaderCircle } from 'lucide-react';
 import type { JSX } from 'react';
-import type { HoneycrispReportDocument, HoneycrispReportSummary } from '@shared/types';
+import type { AppServerReportDocument, AppServerReportSummary } from '@shared/types';
 import { traceLabel } from '../../lib/formatting';
 import { ModelAuthors } from '../../app/ModelAuthors';
 import { renderTraceProseText } from '../traces/traceMarkup';
 
 export function ReportView({ report, document, loading, error }: {
-  report: HoneycrispReportSummary;
-  document: HoneycrispReportDocument | null;
+  report: AppServerReportSummary;
+  document: AppServerReportDocument | null;
   loading: boolean;
   error: string | null;
 }): JSX.Element {

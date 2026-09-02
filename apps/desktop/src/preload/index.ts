@@ -36,19 +36,19 @@ import type {
   ResearchKitRefreshInput,
   ResearchKitRefreshResult,
   GitHubRepositorySummary,
-  HoneycrispMemoryDirectorySummary,
+  AppServerMemoryDirectorySummary,
   AutomationSummary,
   AutomationUpdateInput,
   MemoryDreamingProgressUpdate,
-  HoneycrispRunbookDocument,
-  HoneycrispReportDocument,
-  HoneycrispReportLocator,
-  HoneycrispReportSummary,
+  AppServerRunbookDocument,
+  AppServerReportDocument,
+  AppServerReportLocator,
+  AppServerReportSummary,
   ReportContentUpdateInput,
   ReportTriageStatusUpdateInput,
   ReportSessionStartInput,
   ReportSessionStartResult,
-  HoneycrispToolingConfigUpdate,
+  AppServerToolingConfigUpdate,
   WorkspaceDejunkSummary,
   NativeMenuAction,
   WorkspaceOnboardingInput,
@@ -397,11 +397,11 @@ const api: BealeApi = {
   recordProfilingReport(report: ProfilingReport): Promise<ProfilingState> {
     return ipcRenderer.invoke(IPC_CHANNELS.recordProfilingReport, report);
   },
-  openHoneycrispMemoryDirectory(name: HoneycrispMemoryDirectorySummary['name']) {
-    return ipcRenderer.invoke(IPC_CHANNELS.openHoneycrispMemoryDirectory, name);
+  openAppServerMemoryDirectory(name: AppServerMemoryDirectorySummary['name']) {
+    return ipcRenderer.invoke(IPC_CHANNELS.openAppServerMemoryDirectory, name);
   },
-  getHoneycrispRunbook(runbookId: string): Promise<HoneycrispRunbookDocument> {
-    return ipcRenderer.invoke(IPC_CHANNELS.getHoneycrispRunbook, runbookId);
+  getAppServerRunbook(runbookId: string): Promise<AppServerRunbookDocument> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getAppServerRunbook, runbookId);
   },
   listAutomations(): Promise<AutomationSummary[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.listAutomations);
@@ -409,28 +409,28 @@ const api: BealeApi = {
   updateAutomation(input: AutomationUpdateInput): Promise<AutomationSummary> {
     return ipcRenderer.invoke(IPC_CHANNELS.updateAutomation, input);
   },
-  listReportingReports(): Promise<HoneycrispReportSummary[]> {
+  listReportingReports(): Promise<AppServerReportSummary[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.listReportingReports);
   },
-  getHoneycrispReport(locator: HoneycrispReportLocator): Promise<HoneycrispReportDocument> {
-    return ipcRenderer.invoke(IPC_CHANNELS.getHoneycrispReport, locator);
+  getAppServerReport(locator: AppServerReportLocator): Promise<AppServerReportDocument> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getAppServerReport, locator);
   },
-  updateReportContent(input: ReportContentUpdateInput): Promise<HoneycrispReportSummary> {
+  updateReportContent(input: ReportContentUpdateInput): Promise<AppServerReportSummary> {
     return ipcRenderer.invoke(IPC_CHANNELS.updateReportContent, input);
   },
-  updateReportTriageStatus(input: ReportTriageStatusUpdateInput): Promise<HoneycrispReportSummary> {
+  updateReportTriageStatus(input: ReportTriageStatusUpdateInput): Promise<AppServerReportSummary> {
     return ipcRenderer.invoke(IPC_CHANNELS.updateReportTriageStatus, input);
   },
-  openReportSubmissionPacket(locator: HoneycrispReportLocator): Promise<void> {
+  openReportSubmissionPacket(locator: AppServerReportLocator): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.openReportSubmissionPacket, locator);
   },
-  chooseReportSubmissionPacket(locator: HoneycrispReportLocator): Promise<HoneycrispReportSummary | null> {
+  chooseReportSubmissionPacket(locator: AppServerReportLocator): Promise<AppServerReportSummary | null> {
     return ipcRenderer.invoke(IPC_CHANNELS.chooseReportSubmissionPacket, locator);
   },
-  chooseReportRecording(locator: HoneycrispReportLocator): Promise<HoneycrispReportSummary | null> {
+  chooseReportRecording(locator: AppServerReportLocator): Promise<AppServerReportSummary | null> {
     return ipcRenderer.invoke(IPC_CHANNELS.chooseReportRecording, locator);
   },
-  submitReportTicket(locator: HoneycrispReportLocator): Promise<TicketSubmissionResult> {
+  submitReportTicket(locator: AppServerReportLocator): Promise<TicketSubmissionResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.submitReportTicket, locator);
   },
   openExternalUrl(url: string): Promise<void> {
@@ -456,11 +456,11 @@ const api: BealeApi = {
   restoreMemoryDreamingChange(changeId: string) {
     return ipcRenderer.invoke(IPC_CHANNELS.restoreMemoryDreamingChange, changeId);
   },
-  getHoneycrispToolingSummary() {
-    return ipcRenderer.invoke(IPC_CHANNELS.getHoneycrispToolingSummary);
+  getAppServerToolingSummary() {
+    return ipcRenderer.invoke(IPC_CHANNELS.getAppServerToolingSummary);
   },
-  updateHoneycrispToolingConfig(update: HoneycrispToolingConfigUpdate) {
-    return ipcRenderer.invoke(IPC_CHANNELS.updateHoneycrispToolingConfig, update);
+  updateAppServerToolingConfig(update: AppServerToolingConfigUpdate) {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateAppServerToolingConfig, update);
   },
   generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions> {
     return ipcRenderer.invoke(IPC_CHANNELS.generateResearchGoalSuggestions, input);

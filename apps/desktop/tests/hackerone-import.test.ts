@@ -22,8 +22,8 @@ describe('HackerOne workspace import', () => {
     const completionCalls: Array<{ provider: string; model: string; prompt: string }> = [];
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile(),
       hackerOneFetch: async () => new Response(JSON.stringify({
         data: {

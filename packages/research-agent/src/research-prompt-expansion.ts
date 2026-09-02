@@ -1,9 +1,9 @@
 import { completeAuxiliaryText, type CompleteAuxiliaryTextOptions } from "./auxiliary-completion.js";
 import { discoverResearchAgentInstructions } from "./agent-instructions.js";
-import { getHoneycrispMemorySummary } from "./memory-summary.js";
+import { getAppServerMemorySummary } from "./memory-summary.js";
 import type { CampaignGraphSummary } from "./knowledge-types.js";
 import { providerSemanticsDescriptor } from "./provider-semantics.js";
-import { HoneycrispSessionStore } from "./session-store.js";
+import { AppServerSessionStore } from "./session-store.js";
 import {
   resolveStoredResearchProfile,
   resolveStoredResearchWorkspaceBinding,
@@ -81,7 +81,7 @@ export async function expandStoredResearchPrompt(
     researchProfileId: input.researchProfileId,
   });
   const memory = input.memoryEnabled && profile.profile.capabilities.memoryEnabled
-    ? getHoneycrispMemorySummary({
+    ? getAppServerMemorySummary({
         databasePath: input.databasePath,
         artifactDirectoryPath: input.artifactDirectoryPath,
         workspaceId,
@@ -90,7 +90,7 @@ export async function expandStoredResearchPrompt(
       })
     : null;
   const instructions = discoverResearchAgentInstructions({ workingDirectory: input.workspaceRoot });
-  const sessions = new HoneycrispSessionStore({ databasePath: input.databasePath });
+  const sessions = new AppServerSessionStore({ databasePath: input.databasePath });
   let previousResearch: unknown[];
   try {
     previousResearch = sessions.listSummaries(workspaceId, 8).map((session) => ({

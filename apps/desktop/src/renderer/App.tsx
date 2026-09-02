@@ -15,9 +15,9 @@ import type {
   ProviderSettings,
   ProviderAuthenticationMethod,
   ProviderModelDefaults,
-  HoneycrispRunbookDocument,
-  HoneycrispReportDocument,
-  HoneycrispReportSummary,
+  AppServerRunbookDocument,
+  AppServerReportDocument,
+  AppServerReportSummary,
   MemoryDreamingProgressUpdate,
   NotificationRecord,
   OpenAiOAuthStartResult,
@@ -323,7 +323,7 @@ export function App(): JSX.Element {
   const [selectedAutomationWorkspaceId, setSelectedAutomationWorkspaceId] = useState<string | null>(null);
   const [reportsOpen, setReportsOpen] = useState(false);
   const [reportingScopeWorkspaceId, setReportingScopeWorkspaceId] = useState<string | null>(null);
-  const [reportingReports, setReportingReports] = useState<HoneycrispReportSummary[]>([]);
+  const [reportingReports, setReportingReports] = useState<AppServerReportSummary[]>([]);
   const [reportingReportsLoading, setReportingReportsLoading] = useState(false);
   const [reportingReportsError, setReportingReportsError] = useState<string | null>(null);
   const [reportSessionRunId, setReportSessionRunId] = useState<string | null>(null);
@@ -360,15 +360,15 @@ export function App(): JSX.Element {
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [selectedReportWorkspaceId, setSelectedReportWorkspaceId] = useState<string | null>(null);
   const [rightSidenavExpanded, setRightSidenavExpanded] = useState(false);
-  const [selectedRunbookDocument, setSelectedRunbookDocument] = useState<HoneycrispRunbookDocument | null>(null);
+  const [selectedRunbookDocument, setSelectedRunbookDocument] = useState<AppServerRunbookDocument | null>(null);
   const [runbookLoading, setRunbookLoading] = useState(false);
   const [runbookError, setRunbookError] = useState<string | null>(null);
   const runbookExecutionRequestRef = useRef(0);
   const runbookDocumentFetchRef = useRef<{
     runbookId: string;
-    request: Promise<HoneycrispRunbookDocument>;
+    request: Promise<AppServerRunbookDocument>;
   } | null>(null);
-  const [selectedReportDocument, setSelectedReportDocument] = useState<HoneycrispReportDocument | null>(null);
+  const [selectedReportDocument, setSelectedReportDocument] = useState<AppServerReportDocument | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1111,7 +1111,7 @@ export function App(): JSX.Element {
       .finally(() => setWorkspaceDejunkInProgress(false));
   }, [runAction]);
 
-  const openHoneycrispRunbook = useCallback((runbookId: string): void => {
+  const openAppServerRunbook = useCallback((runbookId: string): void => {
     setRightSidenavExpanded(true);
     setSelectedSubagentPath(null);
     setSelectedReportId(null);
@@ -1121,7 +1121,7 @@ export function App(): JSX.Element {
     setSelectedRunbookId(runbookId);
   }, []);
 
-  const openHoneycrispReport = useCallback((reportId: string): void => {
+  const openAppServerReport = useCallback((reportId: string): void => {
     setRightSidenavExpanded(true);
     setSelectedSubagentPath(null);
     setSelectedRunbookId(null);
@@ -1152,7 +1152,7 @@ export function App(): JSX.Element {
   const reportingWorkspaceCatalogKey = workspaceRegistry?.workspaces
     .map((workspace) => `${workspace.id}:${workspace.workspaceId}:${workspace.updatedAt}`)
     .join('|') ?? '';
-  const activeWorkspaceReportCatalogKey = snapshot?.honeycrispMemory.reports
+  const activeWorkspaceReportCatalogKey = snapshot?.appServerMemory.reports
     .map((report) => `${report.id}:${report.revision}:${report.updatedAt}`)
     .join('|') ?? '';
   const automaticTicketingEnabled = ticketingSettings?.provider !== undefined
@@ -1223,7 +1223,7 @@ export function App(): JSX.Element {
     setSelectedAutomationWorkspaceId(null);
   }, [automations, clearRunDetail, selectedAutomationRunId, selectedAutomationWorkspaceId, setSelectedRunId]);
 
-  const openReportSession = useCallback((report: HoneycrispReportSummary): void => {
+  const openReportSession = useCallback((report: AppServerReportSummary): void => {
     clearRunDetail();
     setSelectedRunId(null);
     setSelectedReportId(report.id);
@@ -1243,7 +1243,7 @@ export function App(): JSX.Element {
     if (!selectedReportId || !selectedReportWorkspaceId) throw new Error('No report is selected.');
     const report = reportingReports.find((candidate) => (
       candidate.id === selectedReportId && candidate.workspaceId === selectedReportWorkspaceId
-    )) ?? snapshot?.honeycrispMemory.reports.find((candidate) => (
+    )) ?? snapshot?.appServerMemory.reports.find((candidate) => (
       candidate.id === selectedReportId && candidate.workspaceId === selectedReportWorkspaceId
     ));
     if (!report) throw new Error('The selected report is no longer available.');
@@ -1271,7 +1271,7 @@ export function App(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [applySnapshot, reportingReports, selectedReportId, selectedReportWorkspaceId, setSelectedRunId, snapshot?.honeycrispMemory.reports]);
+  }, [applySnapshot, reportingReports, selectedReportId, selectedReportWorkspaceId, setSelectedRunId, snapshot?.appServerMemory.reports]);
 
   const submitReportChange = useCallback(async (instruction: string): Promise<void> => {
     if (!reportSessionRunId) {
@@ -1501,7 +1501,7 @@ export function App(): JSX.Element {
       [providerId]: {
         providerId,
         started: true,
-        command: `honeycrisp auth login ${providerId}`,
+        command: `appServer auth login ${providerId}`,
         detail: `Starting ${providerId === 'anthropic' ? 'Claude.ai subscription' : providerId === 'zai' ? 'Z.ai subscription' : 'provider'} authentication…`,
         verificationUri: null,
         userCode: null,
@@ -1798,8 +1798,8 @@ export function App(): JSX.Element {
     })();
   }, [applySnapshot]);
   const researchPanelMemory = selectedRunId
-    ? activeRunDetail?.honeycrispMemory ?? null
-    : snapshot?.honeycrispMemory ?? null;
+    ? activeRunDetail?.appServerMemory ?? null
+    : snapshot?.appServerMemory ?? null;
   const selectedRunbook = useMemo(
     () => researchPanelMemory?.runbooks.find((runbook) => runbook.id === selectedRunbookId) ?? null,
     [researchPanelMemory?.runbooks, selectedRunbookId]
@@ -1814,11 +1814,11 @@ export function App(): JSX.Element {
       const catalogReport = reportingReports.find((report) => (
         report.id === selectedReportId && report.workspaceId === selectedReportWorkspaceId
       )) ?? null;
-      return catalogReport ?? snapshot?.honeycrispMemory.reports.find((report) => (
+      return catalogReport ?? snapshot?.appServerMemory.reports.find((report) => (
         report.id === selectedReportId && report.workspaceId === selectedReportWorkspaceId
       )) ?? null;
     },
-    [reportingReports, reportsOpen, researchPanelMemory?.reports, selectedReportId, selectedReportWorkspaceId, snapshot?.honeycrispMemory.reports]
+    [reportingReports, reportsOpen, researchPanelMemory?.reports, selectedReportId, selectedReportWorkspaceId, snapshot?.appServerMemory.reports]
   );
   const displayedQuickChats = useMemo<QuickChatDescriptor[]>(() => {
     if (settingsOpen || !reportsOpen || !selectedReport) return quickChats;
@@ -1850,18 +1850,18 @@ export function App(): JSX.Element {
   useEffect(() => () => {
     runbookExecutionRequestRef.current += 1;
   }, [selectedRunbookId]);
-  const fetchHoneycrispRunbook = useCallback((runbookId: string): Promise<HoneycrispRunbookDocument> => {
+  const fetchAppServerRunbook = useCallback((runbookId: string): Promise<AppServerRunbookDocument> => {
     const inFlight = runbookDocumentFetchRef.current;
     if (inFlight?.runbookId === runbookId) return inFlight.request;
-    const request = window.beale.getHoneycrispRunbook(runbookId).finally(() => {
+    const request = window.beale.getAppServerRunbook(runbookId).finally(() => {
       if (runbookDocumentFetchRef.current?.request === request) runbookDocumentFetchRef.current = null;
     });
     runbookDocumentFetchRef.current = { runbookId, request };
     return request;
   }, []);
-  const applyHoneycrispRunbookDocument = useCallback((document: HoneycrispRunbookDocument): void => {
+  const applyAppServerRunbookDocument = useCallback((document: AppServerRunbookDocument): void => {
     startTransition(() => {
-      setSelectedRunbookDocument((current) => current && honeycrispRunbookDocumentUpdateKey(current) === honeycrispRunbookDocumentUpdateKey(document)
+      setSelectedRunbookDocument((current) => current && appServerRunbookDocumentUpdateKey(current) === appServerRunbookDocumentUpdateKey(document)
         ? current
         : document);
     });
@@ -1875,10 +1875,10 @@ export function App(): JSX.Element {
     setRunbookLoading(selectedRunbookDocument?.runbookId !== selectedRunbookId);
     setRunbookError(null);
     setSelectedRunbookDocument((current) => current?.runbookId === selectedRunbookId ? current : null);
-    void fetchHoneycrispRunbook(selectedRunbookId)
+    void fetchAppServerRunbook(selectedRunbookId)
       .then((document) => {
         if (cancelled || document.runbookId !== selectedRunbookId) return;
-        applyHoneycrispRunbookDocument(document);
+        applyAppServerRunbookDocument(document);
       })
       .catch((caught: unknown) => {
         if (!cancelled) setRunbookError(errorMessage(caught));
@@ -1889,15 +1889,15 @@ export function App(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [applyHoneycrispRunbookDocument, fetchHoneycrispRunbook, selectedRunbook?.revision, selectedRunbookDocument?.runbookId, selectedRunbookId]);
+  }, [applyAppServerRunbookDocument, fetchAppServerRunbook, selectedRunbook?.revision, selectedRunbookDocument?.runbookId, selectedRunbookId]);
 
-  const runHoneycrispRunbook = useCallback(async (
+  const runAppServerRunbook = useCallback(async (
     runbookId: string,
     selection: RunbookExecutionSelection,
     target: RunbookProofTargetSelection
   ): Promise<void> => {
     const runbook = researchPanelMemory?.runbooks.find((candidate) => candidate.id === runbookId);
-    if (!runbook?.sessionId) throw new Error('This runbook is not attached to an executable Honeycrisp session.');
+    if (!runbook?.sessionId) throw new Error('This runbook is not attached to an executable app-server session.');
     const previousRunId = selectedRunbookDocument?.runbookId === runbookId
       ? selectedRunbookDocument.latestRun?.runId ?? null
       : null;
@@ -1918,9 +1918,9 @@ export function App(): JSX.Element {
       applySnapshot(next);
       for (let attempt = 0; attempt < 30 && runbookExecutionRequestRef.current === request; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-        const document = await fetchHoneycrispRunbook(runbookId);
+        const document = await fetchAppServerRunbook(runbookId);
         if (runbookExecutionRequestRef.current !== request) return;
-        applyHoneycrispRunbookDocument(document);
+        applyAppServerRunbookDocument(document);
         setRunbookLoading(false);
         const latestRun = document.latestRun;
         if (latestRun && latestRun.runId !== previousRunId) {
@@ -1931,7 +1931,7 @@ export function App(): JSX.Element {
           return;
         }
         if (attempt >= 29) {
-          throw new Error('Honeycrisp acknowledged the request but the runbook did not start. Inspect the session trace for the execution error.');
+          throw new Error('app-server acknowledged the request but the runbook did not start. Inspect the session trace for the execution error.');
         }
       }
     } catch (caught: unknown) {
@@ -1939,7 +1939,7 @@ export function App(): JSX.Element {
       setRunbookError(message);
       throw new Error(message);
     }
-  }, [applyHoneycrispRunbookDocument, applySnapshot, fetchHoneycrispRunbook, researchPanelMemory?.runbooks, selectedRunbookDocument]);
+  }, [applyAppServerRunbookDocument, applySnapshot, fetchAppServerRunbook, researchPanelMemory?.runbooks, selectedRunbookDocument]);
   useEffect(() => {
     if (!selectedReportId || selectedReport || (reportsOpen && reportingReportsLoading)) return;
     setSelectedReportId(null);
@@ -1956,7 +1956,7 @@ export function App(): JSX.Element {
     setReportLoading(true);
     setReportError(null);
     setSelectedReportDocument((current) => current?.reportId === selectedReportId ? current : null);
-    void window.beale.getHoneycrispReport({ workspaceId: selectedReport.workspaceId, reportId: selectedReportId })
+    void window.beale.getAppServerReport({ workspaceId: selectedReport.workspaceId, reportId: selectedReportId })
       .then((document) => {
         if (cancelled || document.reportId !== selectedReportId) return;
         setSelectedReportDocument(document);
@@ -2241,7 +2241,7 @@ export function App(): JSX.Element {
       />
       {sessionOverviewOpen && activeRunDetail && activeSessionOverviewRun ? (
         <SessionOverviewDialog
-          memory={snapshot?.honeycrispMemory ?? activeRunDetail.honeycrispMemory ?? null}
+          memory={snapshot?.appServerMemory ?? activeRunDetail.appServerMemory ?? null}
           memoryTypes={snapshot?.researchProfile.profile.memory.types ?? activeRunDetail.researchProfile?.profile.memory.types ?? []}
           onClose={() => setSessionOverviewOpen(false)}
           profileId={snapshot?.researchProfile.profile.id ?? activeRunDetail.researchProfile?.profile.id}
@@ -2533,7 +2533,7 @@ export function App(): JSX.Element {
               allEvents={activeTraceEvents}
               providerModelCatalog={enabledResearchProviderModelCatalog}
               providerModelDefaults={providerSettings?.modelDefaults}
-              honeycrispMemory={selectedRunId ? null : snapshot?.honeycrispMemory ?? null}
+              appServerMemory={selectedRunId ? null : snapshot?.appServerMemory ?? null}
               activeScope={snapshot?.activeScope ?? null}
               workspaceRules={selectedRunId ? [] : snapshot?.workspaceRules ?? []}
               researchProfile={selectedRunId ? renderedRunDetail?.researchProfile?.profile ?? null : snapshot?.researchProfile.profile ?? null}
@@ -2544,7 +2544,7 @@ export function App(): JSX.Element {
               responseSuggestionsEnabled={suggestionPreferences.responseSuggestionsEnabled}
               workspacePath={selectedRunId ? '' : snapshot?.workspace.workspacePath ?? ''}
               workspaceDirectories={selectedRunId ? [] : snapshot?.workspace.workspaceDirectories}
-              workspaceMemoryBackend={snapshot.workspace.memoryBackend ?? 'honeycrisp'}
+              workspaceMemoryBackend={snapshot.workspace.memoryBackend ?? 'app-server'}
               workspaceName={snapshot?.activeScope.workspaceName ?? 'Workspace'}
               viewState={newResearchOpen ? 'new-research' : selectedRunId ? 'session' : 'workspace'}
               newResearchContent={newResearchContent}
@@ -2586,10 +2586,10 @@ export function App(): JSX.Element {
               onOpenSession={openWorkspaceDashboardSession}
               onWorkspaceViewChange={setWorkspaceDashboardViewName}
               onResearchDetailsOpenChange={changeResearchDetailsOpen}
-              onOpenHoneycrispRunbook={openHoneycrispRunbook}
-              onRunHoneycrispRunbook={runHoneycrispRunbook}
+              onOpenAppServerRunbook={openAppServerRunbook}
+              onRunAppServerRunbook={runAppServerRunbook}
               onBackToRunbooks={backToRunbooks}
-              onOpenHoneycrispReport={openHoneycrispReport}
+              onOpenAppServerReport={openAppServerReport}
               onBackToReports={backToReports}
               onBackToSubagents={backToSubagents}
               onSelectSubagent={selectSubagent}
@@ -2661,7 +2661,7 @@ export function App(): JSX.Element {
   );
 }
 
-export function honeycrispRunbookDocumentUpdateKey(document: HoneycrispRunbookDocument): string {
+export function appServerRunbookDocumentUpdateKey(document: AppServerRunbookDocument): string {
   const latestRun = document.latestRun;
   const cells = document.cells.map((cell) => {
     const latestCellRun = cell.latestRun;

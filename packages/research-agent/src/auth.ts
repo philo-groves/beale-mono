@@ -17,6 +17,11 @@ import type {
   OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import {
+  compatibleExistingPath,
+  PRE_BEALE_DATA_DIRECTORY_NAME,
+  readCompatibleEnvironment,
+} from "./legacy-compatibility.js";
 
 export type AuthLoginCallbacks = AuthInteraction;
 
@@ -411,16 +416,19 @@ export class FileCredentialStore implements CredentialStore {
 }
 
 export function getDefaultAuthFile(): string {
-  const configured = process.env.HONEYCRISP_AUTH_FILE;
+  const configured = readCompatibleEnvironment("APP_SERVER_AUTH_FILE");
   if (configured) {
     return resolve(configured.replace(/^~(?=$|\/)/, homedir()));
   }
 
-  return join(homedir(), ".honeycrisp", "auth.json");
+  return compatibleExistingPath(
+    join(homedir(), ".beale", "auth.json"),
+    join(homedir(), PRE_BEALE_DATA_DIRECTORY_NAME, "auth.json"),
+  );
 }
 
 export function getCodexAuthFile(): string | undefined {
-  const configured = process.env.HONEYCRISP_CODEX_AUTH_FILE?.trim();
+  const configured = readCompatibleEnvironment("APP_SERVER_CODEX_AUTH_FILE")?.trim();
   return configured
     ? resolve(configured.replace(/^~(?=$|\/)/, homedir()))
     : undefined;
@@ -435,7 +443,7 @@ export function createCredentialStore(
 export function createAuthenticatedModels(
   options: FileCredentialStoreOptions & { authContext?: AuthContext } = {},
 ): Models {
-  const models = honeycrispModels({
+  const models = appServerModels({
     credentials: createCredentialStore(options),
     ...(options.authContext ? { authContext: options.authContext } : {}),
   });
@@ -444,7 +452,7 @@ export function createAuthenticatedModels(
 }
 
 export function listAuthProviders(): AuthProviderSummary[] {
-  return honeycrispModels()
+  return appServerModels()
     .getProviders()
     .map((provider) => ({
       id: provider.id,
@@ -456,7 +464,7 @@ export function listAuthProviders(): AuthProviderSummary[] {
 }
 
 export function getProviderModelCatalog(providerId?: string): ProviderModelCatalog[] {
-  const models = honeycrispModels();
+  const models = appServerModels();
   return models
     .getProviders()
     .filter((provider) => !providerId || provider.id === providerId)
@@ -520,7 +528,7 @@ export async function loginAuthProvider(
   options: FileCredentialStoreOptions = {},
 ): Promise<AuthLoginResult> {
   const store = createCredentialStore(options);
-  const models = honeycrispModels();
+  const models = appServerModels();
   const provider = models.getProvider(providerId);
 
   if (!provider) {
@@ -577,7 +585,7 @@ export async function verifyProviderAuth(
   options: FileCredentialStoreOptions = {},
 ): Promise<AuthVerifyResult> {
   const store = createCredentialStore(options);
-  const models = honeycrispModels({
+  const models = appServerModels({
     credentials: store,
   });
   const provider = models.getProvider(providerId);
@@ -721,7 +729,7 @@ function getProviderAuthMethods(
   return methods;
 }
 
-function honeycrispModels(
+function appServerModels(
   options?: Parameters<typeof builtinModels>[0],
 ): MutableModels {
   const models = builtinModels(options);
@@ -770,11 +778,11 @@ export async function getZCodeSubscriptionAuthStatus(userHome = homedir()): Prom
 }
 
 function shouldUseZCodeSubscriptionAuth(options: FileCredentialStoreOptions): boolean {
-  return !options.authFile && !process.env.HONEYCRISP_AUTH_FILE?.trim();
+  return !options.authFile && !readCompatibleEnvironment("APP_SERVER_AUTH_FILE")?.trim();
 }
 
 function shouldUseClaudeCliAuth(options: FileCredentialStoreOptions): boolean {
-  return !options.authFile && !process.env.HONEYCRISP_AUTH_FILE?.trim();
+  return !options.authFile && !readCompatibleEnvironment("APP_SERVER_AUTH_FILE")?.trim();
 }
 
 async function getClaudeCliAuthStatus(): Promise<ClaudeCliAuthStatus> {

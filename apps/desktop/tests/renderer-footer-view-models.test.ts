@@ -26,7 +26,7 @@ describe('renderer session usage view models', () => {
     expect(meter.fraction).toBeCloseTo(136 / 200);
   });
 
-  it('uses the active provider model context window when Honeycrisp reports it', () => {
+  it('uses the active provider model context window when app-server reports it', () => {
     const meter = contextMeterForDetail(
       runDetail({
         traceEvents: [
@@ -146,7 +146,7 @@ describe('renderer session usage view models', () => {
             payload: {
               usage: {
                 inputTokens: 9_269,
-                source: 'Honeycrisp serialized capture estimate',
+                source: 'app-server serialized capture estimate',
                 estimated: true
               }
             }
@@ -158,7 +158,7 @@ describe('renderer session usage view models', () => {
     expect(meter.label).toBe('9.3k/200k');
     expect(visibleContextMeterLabel(meter)).toBe('9.3k/200k');
     expect(visibleSessionTokenUsageLabel(meter)).toBe('0');
-    expect(meter.source).toBe('Honeycrisp serialized capture estimate');
+    expect(meter.source).toBe('app-server serialized capture estimate');
   });
 
   it('accepts Pi live usage field names', () => {
@@ -171,7 +171,7 @@ describe('renderer session usage view models', () => {
                 input: 12_000,
                 output: 800,
                 totalTokens: 12_800,
-                source: 'Honeycrisp reported model usage'
+                source: 'app-server reported model usage'
               }
             }
           })
@@ -184,7 +184,7 @@ describe('renderer session usage view models', () => {
     expect(meter.sessionInputTokens).toBe(12_000);
     expect(meter.sessionOutputTokens).toBe(800);
     expect(visibleSessionTokenBreakdownLabel(meter)).toBe('12k In, 800 Out');
-    expect(meter.source).toBe('Honeycrisp reported model usage');
+    expect(meter.source).toBe('app-server reported model usage');
   });
 
   it('uses Pi cache tokens for full context size and session cache hit rate', () => {
@@ -200,7 +200,7 @@ describe('renderer session usage view models', () => {
                 cacheWrite: 0,
                 totalTokens: 1_050,
                 cacheHitRate: 0.8,
-                source: 'Honeycrisp reported model usage'
+                source: 'app-server reported model usage'
               }
             }
           })

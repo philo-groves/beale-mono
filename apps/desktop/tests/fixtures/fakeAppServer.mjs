@@ -10,9 +10,9 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
   BEALE_APP_SERVER_OPERATIONS_PATH,
   BEALE_APP_SERVER_SESSIONS_PATH,
-  HONEYCRISP_CONTRACT_VERSION,
-  HONEYCRISP_PROTOCOL_VERSION
-} from 'honeycrisp/protocol';
+  APP_SERVER_CONTRACT_VERSION,
+  APP_SERVER_PROTOCOL_VERSION
+} from '@beale/app-server-runtime/protocol';
 
 const OPERATOR_TOKEN = 'fake-operator-token';
 const stateFile = process.env.FAKE_APP_SERVER_STATE_FILE ?? '';
@@ -27,14 +27,14 @@ if (!stateFile || !childScript || !sessionLaunchModule || !researchAgentModule) 
 const {
   AppServerHostRegistry,
   AppServerHostService,
-  invokeHoneycrispProtocol,
-  prepareHoneycrispSessionLaunch
+  invokeAppServerProtocol,
+  prepareAppServerSessionLaunch
 } = await import(pathToFileURL(sessionLaunchModule).href);
-const { HoneycrispSessionStore } = await import(pathToFileURL(researchAgentModule).href);
+const { AppServerSessionStore } = await import(pathToFileURL(researchAgentModule).href);
 const hostRegistry = new AppServerHostRegistry({
   registryDirectory: process.env.FAKE_APP_SERVER_REGISTRY_DIRECTORY,
-  honeycrispDatabasePath: process.env.FAKE_APP_SERVER_DATABASE_PATH,
-  honeycrispArtifactDirectory: process.env.FAKE_APP_SERVER_ARTIFACT_DIRECTORY
+  appServerDatabasePath: process.env.FAKE_APP_SERVER_DATABASE_PATH,
+  appServerArtifactDirectory: process.env.FAKE_APP_SERVER_ARTIFACT_DIRECTORY
 });
 const hostService = new AppServerHostService({
   registry: hostRegistry,
@@ -57,7 +57,7 @@ const hostService = new AppServerHostService({
         })
       };
     }
-    return invokeHoneycrispProtocol(operation, options);
+    return invokeAppServerProtocol(operation, options);
   }
 });
 
@@ -156,7 +156,7 @@ async function handle(request, response) {
       updatedAt: new Date().toISOString()
     };
     const storage = hostRegistry.storageForProfile(workspace.researchProfileId);
-    const store = new HoneycrispSessionStore({
+    const store = new AppServerSessionStore({
       databasePath: storage.databasePath,
       artifactDirectoryPath: storage.artifactDirectoryPath,
       readOnly: true
@@ -229,7 +229,7 @@ async function handle(request, response) {
     };
     sessions.set(sessionId, entry);
     const resolved = await hostService.prepareSession(body, sessionId);
-    const prepared = prepareHoneycrispSessionLaunch(resolved.launch, process.env);
+    const prepared = prepareAppServerSessionLaunch(resolved.launch, process.env);
     const child = spawn(process.execPath, [
       childScript,
       ...childArgs,
@@ -238,7 +238,7 @@ async function handle(request, response) {
       sessionId,
       ...prepared.args
     ], {
-      env: { ...prepared.env, HONEYCRISP_TRANSPORT_TOKEN: token },
+      env: { ...prepared.env, APP_SERVER_TRANSPORT_TOKEN: token },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
     });
@@ -271,7 +271,7 @@ async function handle(request, response) {
       attemptId: resolved.attemptId,
       transport: {
         path: `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/transport`,
-        protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+        protocolVersion: APP_SERVER_PROTOCOL_VERSION,
         authentication: 'bearer',
         token,
         reconnect: 'replay'
@@ -363,8 +363,8 @@ function proxySessionTransport(entry, client) {
         protocolVersion: 1,
         type: 'server.hello',
         sessionId: entry.sessionId,
-        server: { name: 'honeycrisp', version: '0.1.0', buildId: 'fixture' },
-        contractVersion: HONEYCRISP_CONTRACT_VERSION,
+        server: { name: 'app-server', version: '0.1.0', buildId: 'fixture' },
+        contractVersion: APP_SERVER_CONTRACT_VERSION,
         schemas: { protocol: 1, session: 1, memorySummary: 11, finding: 4, campaignGraph: 4, goalSuggestions: 1 },
         capabilities: ['session.events', 'session.controls']
       }));

@@ -4,18 +4,18 @@ import {
   codeBrowserTracePreview,
   compactTracePath,
   formatReasoningTraceText,
-  honeycrispAgentListResults,
-  honeycrispCollaborationTraceSummary,
-  honeycrispMemoryCorrectionSummary,
-  honeycrispMemoryGetSummary,
-  honeycrispMemoryLinkNote,
-  honeycrispMemorySaveSummary,
-  honeycrispMemorySearchResults,
-  honeycrispShellTraceOutput,
-  honeycrispToolTraceSubtext,
-  honeycrispToolTraceSubtextPill,
-  isHoneycrispToolObservationError,
-  isEmptyHoneycrispMemorySearchObservation,
+  appServerAgentListResults,
+  appServerCollaborationTraceSummary,
+  appServerMemoryCorrectionSummary,
+  appServerMemoryGetSummary,
+  appServerMemoryLinkNote,
+  appServerMemorySaveSummary,
+  appServerMemorySearchResults,
+  appServerShellTraceOutput,
+  appServerToolTraceSubtext,
+  appServerToolTraceSubtextPill,
+  isAppServerToolObservationError,
+  isEmptyAppServerMemorySearchObservation,
   isProseTraceEvent,
   lineRangePart,
   pythonTracePreview,
@@ -33,42 +33,42 @@ describe('renderer trace content view models', () => {
     expect(traceEventSummary(traceEvent({ type: 'model_message', summary: 'OpenAI response completed.' }), 'agent_output')).toBe('Response Completed');
     expect(traceEventSummary(traceEvent({ type: 'model_message', summary: 'OpenAI Responses request sent for turn 12.' }), 'agent_output')).toBe('Request for Turn 12');
     expect(traceEventSummary(traceEvent({ type: 'model_message', summary: 'OpenAI streamed model output delta.' }), 'agent_output')).toBe('Model Output');
-    expect(traceEventSummary(traceEvent({ type: 'tool_call', summary: 'Honeycrisp tool.requested: repository.search' }), 'tools')).toBe('Repository Search Requested');
+    expect(traceEventSummary(traceEvent({ type: 'tool_call', summary: 'app-server tool.requested: repository.search' }), 'tools')).toBe('Repository Search Requested');
     expect(
       traceEventSummary(
-        traceEvent({ type: 'tool_result', summary: 'Honeycrisp tool.observed: 12 results', payload: { payload: { toolName: 'file.read' } } }),
+        traceEvent({ type: 'tool_result', summary: 'app-server tool.observed: 12 results', payload: { payload: { toolName: 'file.read' } } }),
         'tools'
       )
     ).toBe('File Read');
-    expect(traceEventSummary(traceEvent({ type: 'tool_result', summary: 'Honeycrisp tool.observed: 12 results' }), 'tools')).toBe('Tool');
+    expect(traceEventSummary(traceEvent({ type: 'tool_result', summary: 'app-server tool.observed: 12 results' }), 'tools')).toBe('Tool');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'Honeycrisp tool.requested: shell.run', payload: { payload: { toolName: 'shell.run' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'app-server tool.requested: shell.run', payload: { payload: { toolName: 'shell.run' } } }), 'tools')
     ).toBe('Shell Requested');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'Honeycrisp tool.observed: shell.run', payload: { payload: { toolName: 'shell.run' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'app-server tool.observed: shell.run', payload: { payload: { toolName: 'shell.run' } } }), 'tools')
     ).toBe('Shell');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'Honeycrisp tool.requested: memory.correct', payload: { payload: { toolName: 'memory.correct' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'app-server tool.requested: memory.correct', payload: { payload: { toolName: 'memory.correct' } } }), 'tools')
     ).toBe('Memory Correction Requested');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'Honeycrisp tool.observed: memory.correct', payload: { payload: { toolName: 'memory.correct' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'app-server tool.observed: memory.correct', payload: { payload: { toolName: 'memory.correct' } } }), 'tools')
     ).toBe('Memory Correction');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'Honeycrisp tool.requested: runbook.create', payload: { payload: { toolName: 'runbook.create' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'app-server tool.requested: runbook.create', payload: { payload: { toolName: 'runbook.create' } } }), 'tools')
     ).toBe('Runbook Creation Requested');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'Honeycrisp tool.observed: runbook.append', payload: { payload: { toolName: 'runbook.append' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'app-server tool.observed: runbook.append', payload: { payload: { toolName: 'runbook.append' } } }), 'tools')
     ).toBe('Runbook Update');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'Honeycrisp tool.requested: spawn_agent', payload: { payload: { toolName: 'spawn_agent' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_call', summary: 'app-server tool.requested: spawn_agent', payload: { payload: { toolName: 'spawn_agent' } } }), 'tools')
     ).toBe('Spawn Agent Requested');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'Honeycrisp tool.observed: followup_task', payload: { payload: { toolName: 'followup_task' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'app-server tool.observed: followup_task', payload: { payload: { toolName: 'followup_task' } } }), 'tools')
     ).toBe('Follow-up Task');
     expect(
-      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'Honeycrisp tool.observed: wait_agent', payload: { payload: { toolName: 'wait_agent' } } }), 'tools')
+      traceEventSummary(traceEvent({ type: 'tool_result', summary: 'app-server tool.observed: wait_agent', payload: { payload: { toolName: 'wait_agent' } } }), 'tools')
     ).toBe('Wait for Agent Activity');
-    expect(traceEventSummary(traceEvent({ type: 'model_message', summary: 'Honeycrisp context.compiled: 53k tokens' }), 'agent_output')).toBe('Honeycrisp Context Compiled');
+    expect(traceEventSummary(traceEvent({ type: 'model_message', summary: 'app-server context.compiled: 53k tokens' }), 'agent_output')).toBe('app-server Context Compiled');
     expect(
       traceEventSummary(
         traceEvent({ type: 'tool_call', summary: 'OpenAI completed function call arguments for python.', payload: { toolName: 'python' } }),
@@ -108,8 +108,8 @@ describe('renderer trace content view models', () => {
   });
 
   it('shows useful runbook tool metadata', () => {
-    expect(honeycrispToolTraceSubtext(honeycrispToolRequest('runbook.create', { title: 'VM crash triage', purpose: 'Repeatable proof' }))).toBe('VM crash triage');
-    expect(honeycrispToolTraceSubtext(honeycrispToolObservation('runbook.append', { id: 'runbook_one', expectedRevision: 2 }, {
+    expect(appServerToolTraceSubtext(appServerToolRequest('runbook.create', { title: 'VM crash triage', purpose: 'Repeatable proof' }))).toBe('VM crash triage');
+    expect(appServerToolTraceSubtext(appServerToolObservation('runbook.append', { id: 'runbook_one', expectedRevision: 2 }, {
       id: 'runbook_one', title: 'VM crash triage', status: 'completed', revision: 3
     }))).toBe('VM crash triage · Update 3');
   });
@@ -168,16 +168,16 @@ describe('renderer trace content view models', () => {
     });
     expect(traceEventDetailText(search, 'code_navigation')).toBe('query "decodeToken" · 2 matches · files 14 · target auth');
 
-    const honeycrispToolRequest = traceEvent({
+    const appServerToolRequest = traceEvent({
       type: 'tool_call',
       source: 'tool',
-      summary: 'Honeycrisp tool.requested: repository.search',
+      summary: 'app-server tool.requested: repository.search',
       payload: {
         agentId: 'agent_root',
         agentPath: '/root',
-        honeycrispEventId: 'evt_tool_request',
-        honeycrispKind: 'tool.requested',
-        honeycrispSequence: 12,
+        appServerEventId: 'evt_tool_request',
+        appServerKind: 'tool.requested',
+        appServerSequence: 12,
         payload: {
           toolActionId: 'action_repository_search',
           toolName: 'repository.search',
@@ -185,16 +185,16 @@ describe('renderer trace content view models', () => {
         }
       }
     });
-    expect(traceEventDetailText(honeycrispToolRequest, 'code_navigation')).toBe('');
+    expect(traceEventDetailText(appServerToolRequest, 'code_navigation')).toBe('');
 
-    const honeycrispToolFailure = traceEvent({
+    const appServerToolFailure = traceEvent({
       type: 'tool_result',
       source: 'tool',
-      summary: 'Honeycrisp tool.observed: Repository search failed.',
+      summary: 'app-server tool.observed: Repository search failed.',
       payload: {
         agentId: 'agent_root',
-        honeycrispKind: 'tool.observed',
-        honeycrispSequence: 13,
+        appServerKind: 'tool.observed',
+        appServerSequence: 13,
         payload: {
           toolActionId: 'action_repository_search',
           toolName: 'repository.search',
@@ -203,9 +203,9 @@ describe('renderer trace content view models', () => {
         }
       }
     });
-    expect(traceEventDetailText(honeycrispToolFailure, 'failure_recovery')).toBe('Repository is unavailable');
-    expect(isHoneycrispToolObservationError(honeycrispToolFailure)).toBe(true);
-    expect(isHoneycrispToolObservationError(honeycrispToolRequest)).toBe(false);
+    expect(traceEventDetailText(appServerToolFailure, 'failure_recovery')).toBe('Repository is unavailable');
+    expect(isAppServerToolObservationError(appServerToolFailure)).toBe(true);
+    expect(isAppServerToolObservationError(appServerToolRequest)).toBe(false);
 
     const researchNote = traceEvent({
       type: 'research_event',
@@ -224,19 +224,19 @@ describe('renderer trace content view models', () => {
   });
 
   it('renders collaboration tool targets, prompts, wait state, and bounded agent lists', () => {
-    const spawn = honeycrispToolObservation(
+    const spawn = appServerToolObservation(
       'spawn_agent',
       { task_name: 'modules', message: 'Audit module entry points.\nPrioritize default loading.', fork_turns: '2', model: 'gpt-5.6-sol', reasoning_effort: 'high' },
       { agent_id: 'agent_1', task_name: '/root/modules', model: 'gpt-5.6-sol', reasoning_effort: 'high', fork_turns: '2' }
     );
-    const followup = honeycrispToolObservation(
+    const followup = appServerToolObservation(
       'followup_task',
       { target: 'modules', message: 'Check the remaining parser path.' },
       { delivered: true, target: '/root/modules', triggered_turn: true }
     );
-    const interrupt = honeycrispToolObservation('interrupt_agent', { target: 'modules' }, { target: '/root/modules', previous_status: 'running' });
-    const wait = honeycrispToolObservation('wait_agent', { timeout_ms: 5000 }, { message: 'Agent activity is ready.', timed_out: false });
-    const list = honeycrispToolObservation(
+    const interrupt = appServerToolObservation('interrupt_agent', { target: 'modules' }, { target: '/root/modules', previous_status: 'running' });
+    const wait = appServerToolObservation('wait_agent', { timeout_ms: 5000 }, { message: 'Agent activity is ready.', timed_out: false });
+    const list = appServerToolObservation(
       'list_agents',
       {},
       {
@@ -250,15 +250,15 @@ describe('renderer trace content view models', () => {
       }
     );
 
-    expect(honeycrispToolTraceSubtext(spawn)).toBe('/root/modules · Last 2 turns · gpt-5.6-sol · High effort');
-    expect(honeycrispCollaborationTraceSummary(spawn)).toBe('Audit module entry points.\nPrioritize default loading.');
-    expect(honeycrispToolTraceSubtext(followup)).toBe('/root/modules · Turn started');
-    expect(honeycrispCollaborationTraceSummary(followup)).toBe('Check the remaining parser path.');
-    expect(honeycrispToolTraceSubtext(interrupt)).toBe('/root/modules · Was Running');
-    expect(honeycrispToolTraceSubtext(wait)).toBe('5s timeout');
-    expect(honeycrispCollaborationTraceSummary(wait)).toBe('Agent activity is ready.');
-    expect(honeycrispToolTraceSubtext(list)).toBe('All agents · 7 agents');
-    expect(honeycrispAgentListResults(list)).toEqual({
+    expect(appServerToolTraceSubtext(spawn)).toBe('/root/modules · Last 2 turns · gpt-5.6-sol · High effort');
+    expect(appServerCollaborationTraceSummary(spawn)).toBe('Audit module entry points.\nPrioritize default loading.');
+    expect(appServerToolTraceSubtext(followup)).toBe('/root/modules · Turn started');
+    expect(appServerCollaborationTraceSummary(followup)).toBe('Check the remaining parser path.');
+    expect(appServerToolTraceSubtext(interrupt)).toBe('/root/modules · Was Running');
+    expect(appServerToolTraceSubtext(wait)).toBe('5s timeout');
+    expect(appServerCollaborationTraceSummary(wait)).toBe('Agent activity is ready.');
+    expect(appServerToolTraceSubtext(list)).toBe('All agents · 7 agents');
+    expect(appServerAgentListResults(list)).toEqual({
       rows: [
         '/root/worker_0 · Running · gpt-5.6-sol · High effort',
         '/root/worker_1 · Completed · gpt-5.6-sol · High effort',
@@ -271,8 +271,8 @@ describe('renderer trace content view models', () => {
     });
   });
 
-  it('extracts separate stdout and stderr streams from Honeycrisp shell observations', () => {
-    const shellRun = honeycrispToolObservation(
+  it('extracts separate stdout and stderr streams from app-server shell observations', () => {
+    const shellRun = appServerToolObservation(
       'shell.run',
       { utility: 'make', args: ['test'] },
       {
@@ -284,14 +284,14 @@ describe('renderer trace content view models', () => {
       }
     );
 
-    expect(honeycrispShellTraceOutput(shellRun)).toEqual({
+    expect(appServerShellTraceOutput(shellRun)).toEqual({
       stdout: { lines: ['building', 'finished'], allLines: ['building', 'finished'], lineCount: 2, sourceTruncated: false, truncated: false },
       stderr: 'test failed\nline two\n',
       stderrTruncated: true
     });
     expect(
-      honeycrispShellTraceOutput(
-        honeycrispToolObservation('shell.run', { utility: 'printf', args: [] }, { stdout: 'one\ntwo\nthree\nfour\nfive\nsix\n', stderr: '' })
+      appServerShellTraceOutput(
+        appServerToolObservation('shell.run', { utility: 'printf', args: [] }, { stdout: 'one\ntwo\nthree\nfour\nfive\nsix\n', stderr: '' })
       )
     ).toEqual({
       stdout: {
@@ -304,8 +304,8 @@ describe('renderer trace content view models', () => {
       stderr: '',
       stderrTruncated: false
     });
-    expect(honeycrispShellTraceOutput(honeycrispToolRequest('shell.run', { utility: 'make', args: ['test'] }))).toBeNull();
-    expect(honeycrispShellTraceOutput(honeycrispToolObservation('memory.search', { query: 'test' }, []))).toBeNull();
+    expect(appServerShellTraceOutput(appServerToolRequest('shell.run', { utility: 'make', args: ['test'] }))).toBeNull();
+    expect(appServerShellTraceOutput(appServerToolObservation('memory.search', { query: 'test' }, []))).toBeNull();
   });
 
   it('builds python previews and prose decisions for trace rows', () => {
@@ -452,15 +452,15 @@ describe('renderer trace content view models', () => {
     ).toEqual(['1: a', '2: b', '3: c', '4: d', '5: e', '6: f']);
   });
 
-  it('builds structured file-read previews from Honeycrisp tool observations', () => {
+  it('builds structured file-read previews from app-server tool observations', () => {
     expect(
       codeBrowserTracePreview(
         traceEvent({
           type: 'tool_result',
           source: 'tool',
-          summary: 'Honeycrisp tool.observed: Read 128 byte(s) from /repo/Src/parse.c with truncation.',
+          summary: 'app-server tool.observed: Read 128 byte(s) from /repo/Src/parse.c with truncation.',
           payload: {
-            honeycrispKind: 'tool.observed',
+            appServerKind: 'tool.observed',
             payload: {
               toolName: 'file.read',
               status: 'complete',
@@ -541,7 +541,7 @@ describe('renderer trace content view models', () => {
 });
 
 function runDetail(
-  input: { traceEvents?: TraceEventRecord[]; honeycrispMemory?: RunDetail['honeycrispMemory'] } = {}
+  input: { traceEvents?: TraceEventRecord[]; appServerMemory?: RunDetail['appServerMemory'] } = {}
 ): RunDetail {
   return {
     run: {
@@ -568,18 +568,18 @@ function runDetail(
     contextCompactions: [],
     policyEvents: [],
     exports: [],
-    ...(input.honeycrispMemory ? { honeycrispMemory: input.honeycrispMemory } : {})
+    ...(input.appServerMemory ? { appServerMemory: input.appServerMemory } : {})
   } as unknown as RunDetail;
 }
 
-function honeycrispToolRequest(toolName: string, normalizedInputs: Record<string, unknown>): TraceEventRecord {
+function appServerToolRequest(toolName: string, normalizedInputs: Record<string, unknown>): TraceEventRecord {
   return traceEvent({
     source: 'model',
     type: 'tool_call',
-    summary: `Honeycrisp tool.requested: ${toolName}`,
+    summary: `app-server tool.requested: ${toolName}`,
     payload: {
       agentPath: '/root',
-      honeycrispKind: 'tool.requested',
+      appServerKind: 'tool.requested',
       payload: {
         toolActionId: `action_${toolName}`,
         toolName,
@@ -589,14 +589,14 @@ function honeycrispToolRequest(toolName: string, normalizedInputs: Record<string
   });
 }
 
-function honeycrispToolObservation(toolName: string, normalizedInputs: Record<string, unknown>, result: unknown): TraceEventRecord {
+function appServerToolObservation(toolName: string, normalizedInputs: Record<string, unknown>, result: unknown): TraceEventRecord {
   return traceEvent({
     source: 'tool',
     type: 'tool_result',
-    summary: `Honeycrisp tool.observed: ${toolName}`,
+    summary: `app-server tool.observed: ${toolName}`,
     payload: {
       agentPath: '/root',
-      honeycrispKind: 'tool.observed',
+      appServerKind: 'tool.observed',
       payload: {
         toolActionId: `action_${toolName}`,
         toolName,

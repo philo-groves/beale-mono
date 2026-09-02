@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, JSX, RefObject } from 'react';
 import { BadgeCheck, CircleHelp, Eye, FlaskConical, GitBranch, Lightbulb, Minus, Plus } from 'lucide-react';
 import type {
-  HoneycrispFindingSummary,
-  HoneycrispMemorySummary,
+  AppServerFindingSummary,
+  AppServerMemorySummary,
   ResearchProfileMemoryType,
   ResearchProviderModelCatalog,
   ResearchClaimRating
@@ -31,7 +31,7 @@ const CAMPAIGN_BOARD_RATING_OPTIONS: Array<{ value: CampaignBoardRatingFilter; l
   { value: 'high', label: 'High' },
   { value: 'critical', label: 'Critical' }
 ];
-const CAMPAIGN_CLAIM_RATING_RANK: Readonly<Record<HoneycrispFindingSummary['rating'], number>> = {
+const CAMPAIGN_CLAIM_RATING_RANK: Readonly<Record<AppServerFindingSummary['rating'], number>> = {
   critical: 0,
   high: 1,
   medium: 2,
@@ -46,7 +46,7 @@ export function CampaignGraphView({
   onOpenClaim,
   onOpenRunbook
 }: {
-  memory: HoneycrispMemorySummary | null;
+  memory: AppServerMemorySummary | null;
   providerModelCatalog: readonly ResearchProviderModelCatalog[];
   workspaceName: string;
   onOpenClaim: (claimId: string) => void;
@@ -116,7 +116,7 @@ export function CampaignBoardView({
   workspaceName,
   onOpenClaim
 }: {
-  memory: HoneycrispMemorySummary | null;
+  memory: AppServerMemorySummary | null;
   providerModelCatalog: readonly ResearchProviderModelCatalog[];
   workspaceName: string;
   onOpenClaim: (claimId: string) => void;
@@ -244,7 +244,7 @@ function CampaignPriorityClaimAuthors({
   authors,
   providerModelCatalog
 }: {
-  authors: HoneycrispFindingSummary['authors'];
+  authors: AppServerFindingSummary['authors'];
   providerModelCatalog: readonly ResearchProviderModelCatalog[];
 }): JSX.Element | null {
   const containerRef = useRef<HTMLSpanElement | null>(null);
@@ -287,25 +287,25 @@ export function campaignPriorityClaimHasOverflow(scrollWidth: number, clientWidt
   return scrollWidth > clientWidth;
 }
 
-export function campaignPriorityClaimMetadata(claim: HoneycrispFindingSummary): string {
+export function campaignPriorityClaimMetadata(claim: AppServerFindingSummary): string {
   return `${traceLabel(claim.projection)} ${traceLabel(claim.maturity)}, ${traceLabel(claim.rating)} ${campaignBoardClassificationLabel(claim.classification)}`;
 }
 
-export function campaignBoardClaimMetadata(claim: HoneycrispFindingSummary): string {
+export function campaignBoardClaimMetadata(claim: AppServerFindingSummary): string {
   return campaignClaimRatingPresentation(claim).label;
 }
 
 export function campaignBoardFindings(
-  memory: HoneycrispMemorySummary | null,
+  memory: AppServerMemorySummary | null,
   maturity: CampaignBoardMaturity,
   filters: { classification: string; rating: CampaignBoardRatingFilter } = { classification: 'all', rating: 'all' }
-): HoneycrispFindingSummary[] {
+): AppServerFindingSummary[] {
   return (memory?.findings ?? []).filter((claim) => claim.maturity === maturity
     && (filters.classification === 'all' || claim.classification === filters.classification)
     && (filters.rating === 'all' || campaignClaimRatingPresentation(claim).value === filters.rating));
 }
 
-export function campaignBoardClassificationOptions(memory: HoneycrispMemorySummary | null): Array<{ value: string; label: string }> {
+export function campaignBoardClassificationOptions(memory: AppServerMemorySummary | null): Array<{ value: string; label: string }> {
   const classifications = [...new Set((memory?.findings ?? []).map((claim) => claim.classification).filter(Boolean))];
   return [
     { value: 'all', label: 'All Classes' },
@@ -320,7 +320,7 @@ function campaignBoardClassificationLabel(classification: string): string {
   return traceLabel(unqualified.replaceAll('-', '_'));
 }
 
-export function campaignPriorityClaims(memory: HoneycrispMemorySummary | null): HoneycrispFindingSummary[] {
+export function campaignPriorityClaims(memory: AppServerMemorySummary | null): AppServerFindingSummary[] {
   if (!memory) return [];
   const actionRanks = new Map<string, number>();
   memory.campaign.nextActions.forEach((action, actionIndex) => {
@@ -349,7 +349,7 @@ function CampaignClaimCard({
   onOpenClaim,
   providerModelCatalog
 }: {
-  claim: HoneycrispFindingSummary;
+  claim: AppServerFindingSummary;
   className?: string;
   metadata: string;
   onOpenClaim: (claimId: string) => void;
@@ -377,7 +377,7 @@ function CampaignTrailHierarchy({
   onOpenRunbook
 }: {
   activeTrackId: string | null;
-  memory: HoneycrispMemorySummary | null;
+  memory: AppServerMemorySummary | null;
   onOpenRunbook: (runbookId: string) => void;
 }): JSX.Element {
   const tracks = memory?.campaign.tracks ?? [];
@@ -408,7 +408,7 @@ function CampaignTrailHierarchy({
   );
 }
 
-type CampaignTrack = NonNullable<HoneycrispMemorySummary['campaign']['tracks']>[number];
+type CampaignTrack = NonNullable<AppServerMemorySummary['campaign']['tracks']>[number];
 type CampaignQuestion = CampaignTrack['questions'][number];
 type CampaignExperiment = CampaignTrack['experiments'][number];
 type CampaignObservation = CampaignTrack['observations'][number];
@@ -584,7 +584,7 @@ function CampaignExperimentRow({
   experiment,
   onOpenRunbook
 }: {
-  experiment: NonNullable<NonNullable<HoneycrispMemorySummary['campaign']['tracks']>[number]['experiments']>[number];
+  experiment: NonNullable<NonNullable<AppServerMemorySummary['campaign']['tracks']>[number]['experiments']>[number];
   onOpenRunbook: (runbookId: string) => void;
 }): JSX.Element {
   const content = <><FlaskConical aria-hidden="true" className="campaign-tree-item-icon" size={13} /><span className="campaign-tree-item-copy"><span className="campaign-tree-item-type">experiment</span><span className="campaign-tree-item-name">{experiment.title}</span></span><span className="campaign-tree-item-status">{experiment.status.replaceAll('_', ' ')}</span></>;

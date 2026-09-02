@@ -4,10 +4,10 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  HONEYCRISP_SESSION_LAUNCH_VERSION,
-  type HoneycrispProviderRiskAcknowledgement,
-  type HoneycrispSessionLaunchRequest
-} from 'honeycrisp/protocol';
+  APP_SERVER_SESSION_LAUNCH_VERSION,
+  type AppServerProviderRiskAcknowledgement,
+  type AppServerSessionLaunchRequest
+} from '@beale/app-server-runtime/protocol';
 import type { CreatedRunContext, WorkspaceDatabase } from './database';
 import type {
   BreakoutRoomKind,
@@ -32,13 +32,13 @@ import type {
 import { normalizeResearchCollaboration } from '../shared/collaboration';
 import { normalizeRepeatSchedule } from '../shared/repeatSchedule';
 import { generateSessionTitle, SESSION_TITLE_FALLBACK } from '../shared/sessionTitle';
-import { getHoneycrispProviderSemantics } from './honeycrispCliClient';
+import { getAppServerProviderSemantics } from './appServerCliClient';
 import { resolveGoalObjective } from '../shared/goalObjective';
 import { redactCommandArgumentsForModel, redactForModelText, redactJsonForModel } from './redaction';
 import {
-  HoneycrispWebSocketClient
-} from './honeycrispWebSocketClient';
-import { resolveHoneycrispInvocation, type HoneycrispInvocation } from './honeycrispInvocation';
+  AppServerWebSocketClient
+} from './appServerWebSocketClient';
+import { resolveAppServerInvocation, type AppServerInvocation } from './appServerInvocation';
 import {
   attachAppServerSession,
   ensureBealeAppServerRunning,
@@ -48,18 +48,18 @@ import {
   type AppServerCatalogEntry,
   type BealeAppServerDiscovery
 } from './bealeAppServerClient';
-import type { HoneycrispTransportBootstrap } from './honeycrispProtocol';
-import { isHoneycrispSessionBoundary } from './honeycrispSessionBoundary';
-export { resolveHoneycrispInvocation } from './honeycrispInvocation';
-export type { HoneycrispInvocation } from './honeycrispInvocation';
+import type { AppServerTransportBootstrap } from './appServerProtocol';
+import { isAppServerSessionBoundary } from './appServerSessionBoundary';
+export { resolveAppServerInvocation } from './appServerInvocation';
+export type { AppServerInvocation } from './appServerInvocation';
 
-export interface HoneycrispRunHandle {
+export interface AppServerRunHandle {
   context: CreatedRunContext;
   completion: Promise<void>;
   transportReady: Promise<boolean>;
 }
 
-interface ActiveHoneycrispRun {
+interface ActiveAppServerRun {
   context: CreatedRunContext;
   rootTurnOffset: number;
   paused: boolean;
@@ -67,14 +67,14 @@ interface ActiveHoneycrispRun {
   stopReason: 'user' | 'time_limit' | 'safety_control' | null;
   budgetTimer: NodeJS.Timeout | null;
   forceStopTimer: NodeJS.Timeout | null;
-  liveHoneycrispEventIds: Set<string>;
-  liveReasoningSummaries: Map<string, HoneycrispLiveReasoningSummaryState>;
-  pendingControls: Map<string, PendingHoneycrispControl>;
-  queuedContinuations: Map<string, PendingHoneycrispControl>;
+  liveAppServerEventIds: Set<string>;
+  liveReasoningSummaries: Map<string, AppServerLiveReasoningSummaryState>;
+  pendingControls: Map<string, PendingAppServerControl>;
+  queuedContinuations: Map<string, PendingAppServerControl>;
   shellApprovalRecords: Map<string, string>;
   shellApprovalDecisionsInFlight: Map<string, {
     decision: 'approved' | 'denied';
-    dispatch: HoneycrispControlDispatch;
+    dispatch: AppServerControlDispatch;
     resolutionTimeout: NodeJS.Timeout | null;
   }>;
   resolvedShellApprovalRequestIds: Set<string>;
@@ -85,7 +85,7 @@ interface ActiveHoneycrispRun {
   appServerSessionId: string | null;
   appServerClientToken: string | null;
   transportMode: 'pending' | 'websocket';
-  webSocketClient: HoneycrispWebSocketClient | null;
+  webSocketClient: AppServerWebSocketClient | null;
   transportReconnectInProgress: boolean;
   transportReadySettled: boolean;
   resolveTransportReady: (connected: boolean) => void;
@@ -94,7 +94,7 @@ interface ActiveHoneycrispRun {
   lastProcessDiagnostic: string | null;
 }
 
-interface PendingHoneycrispControl {
+interface PendingAppServerControl {
   requestId: string;
   type: 'pause' | 'resume' | 'stop' | 'configure' | 'steer' | 'configure_shell_safety' | 'resolve_shell_approval' | 'resolve_tool_approval' | 'runbook_execute';
   sentAt: string;
@@ -112,23 +112,23 @@ interface PendingHoneycrispControl {
   reportRevisionCompleted?: boolean;
 }
 
-export interface HoneycrispControlDispatch {
+export interface AppServerControlDispatch {
   requestId: string;
   deliveryStatus: 'pending';
 }
 
-interface HoneycrispContinuationOptions {
+interface AppServerContinuationOptions {
   steeringAlreadyRecorded?: boolean;
   controlRequestIds?: readonly string[];
 }
 
-interface HoneycrispResearchProfileLaunch {
+interface AppServerResearchProfileLaunch {
   id: string;
   hash: string;
   workflowId: string;
 }
 
-interface HoneycrispCaptureEvent {
+interface AppServerCaptureEvent {
   id?: string;
   sequence?: number;
   kind?: string;
@@ -141,14 +141,14 @@ interface HoneycrispCaptureEvent {
   parentAgentId?: string;
 }
 
-interface HoneycrispLiveEvent {
+interface AppServerLiveEvent {
   schemaVersion?: number;
   kind?: string;
   timestamp?: string;
   payload?: Record<string, unknown>;
 }
 
-interface HoneycrispLiveReasoningSummaryState {
+interface AppServerLiveReasoningSummaryState {
   text: string;
   snapshotCount: number;
 }
@@ -165,13 +165,13 @@ interface NormalizedTokenUsage {
 }
 
 const MAX_SUMMARY_CHARS = 220;
-const HONEYCRISP_REPORTED_USAGE_SOURCE = 'Honeycrisp reported model usage';
+const APP_SERVER_REPORTED_USAGE_SOURCE = 'app-server reported model usage';
 const CONTINUATION_CONTEXT_MAX_CHARS = 32_000;
 const CONTINUATION_SUBAGENT_MAX_COUNT = 12;
 const CONTINUATION_SUBAGENT_OUTPUT_MAX_CHARS = 600;
 const UNBOUNDED_RUN_MINUTES = 999_999;
-const HONEYCRISP_STOP_GRACE_MS = 1_500;
-const DEFAULT_HONEYCRISP_CONTROL_ACK_TIMEOUT_MS = 2_000;
+const APP_SERVER_STOP_GRACE_MS = 1_500;
+const DEFAULT_APP_SERVER_CONTROL_ACK_TIMEOUT_MS = 2_000;
 const APP_SERVER_FINALIZE_POLL_MS = 12_000;
 const APP_SERVER_FINALIZE_INTERVAL_MS = 400;
 const TERMINAL_APP_SERVER_STATES: ReadonlySet<AppServerCatalogEntry['state']> = new Set([
@@ -180,7 +180,7 @@ const TERMINAL_APP_SERVER_STATES: ReadonlySet<AppServerCatalogEntry['state']> = 
   'stopped'
 ]);
 
-export interface HoneycrispRunEngineChange {
+export interface AppServerRunEngineChange {
   workspaceRegistryChanged?: boolean;
   forceSnapshot?: boolean;
   sessionLifecycleChanged?: boolean;
@@ -190,8 +190,8 @@ export interface HoneycrispRunEngineChange {
   };
 }
 
-export class HoneycrispRunEngine {
-  private readonly activeRuns = new Map<string, ActiveHoneycrispRun>();
+export class AppServerRunEngine {
+  private readonly activeRuns = new Map<string, ActiveAppServerRun>();
   private readonly completions = new Map<string, Promise<void>>();
   private readonly computerUseBinaryGrants = new Map<string, Set<string>>();
   private readonly introspectionEndpoints = new Map<string, NonNullable<StartRunInput['introspection']>>();
@@ -199,13 +199,13 @@ export class HoneycrispRunEngine {
 
   public constructor(
     private readonly db: WorkspaceDatabase,
-    private readonly onChange: (change?: HoneycrispRunEngineChange) => void = () => undefined,
+    private readonly onChange: (change?: AppServerRunEngineChange) => void = () => undefined,
     private readonly getComputerUseSettings?: () => ComputerUseSettings
   ) {}
 
-  public startRun(input: StartRunInput, researchProfile: ResearchProfileSnapshot): HoneycrispRunHandle {
+  public startRun(input: StartRunInput, researchProfile: ResearchProfileSnapshot): AppServerRunHandle {
     if (this.disposed) {
-      throw new Error('Honeycrisp run engine has been disposed.');
+      throw new Error('app-server run engine has been disposed.');
     }
     const goalObjective = input.goalEnabled
       ? resolveGoalObjective(input.goalObjective, input.promptMarkdown)
@@ -229,7 +229,7 @@ export class HoneycrispRunEngine {
       targetPath: input.targetPath,
       budget: {
         ...input.budget,
-        runEngine: 'honeycrisp',
+        runEngine: 'app-server',
         modelProvider: input.provider?.trim() || null,
         fastMode: input.fastMode === true,
         goalEnabled: input.goalEnabled,
@@ -242,7 +242,7 @@ export class HoneycrispRunEngine {
     if (input.introspection) this.introspectionEndpoints.set(context.run.id, input.introspection);
     this.db.createModelSession({
       runId: context.run.id,
-      provider: 'honeycrisp',
+      provider: 'app-server',
       transport: 'host_process',
       status: 'active',
       metadata: {
@@ -263,9 +263,9 @@ export class HoneycrispRunEngine {
       attemptId: context.attempt.id,
       type: 'user_note',
       source: 'user',
-      summary: 'Honeycrisp research run started from markdown prompt.',
+      summary: 'app-server research run started from markdown prompt.',
       payload: {
-        runEngine: 'honeycrisp',
+        runEngine: 'app-server',
         provider: input.provider?.trim() || null,
         goalEnabled: input.goalEnabled,
         goalObjectivePresent: Boolean(goalObjective),
@@ -279,28 +279,28 @@ export class HoneycrispRunEngine {
   public extendRun(
     runId: string,
     instruction: string,
-    options: HoneycrispContinuationOptions = {}
-  ): HoneycrispRunHandle {
+    options: AppServerContinuationOptions = {}
+  ): AppServerRunHandle {
     if (this.activeRuns.has(runId)) {
-      throw new Error(`Honeycrisp run ${runId} is already active.`);
+      throw new Error(`app-server run ${runId} is already active.`);
     }
     const detail = this.db.getRunDetail(runId);
     const run = detail.run;
     if (!run.researchProfileSnapshotId) {
       throw new Error(
-        `Cannot continue legacy Honeycrisp run ${runId} because it has no pinned research profile snapshot. Start a new run under the active profile instead.`
+        `Cannot continue legacy app-server run ${runId} because it has no pinned research profile snapshot. Start a new run under the active profile instead.`
       );
     }
     const researchProfile = this.db.getRunResearchProfileSnapshot(runId);
     if (!researchProfile) {
-      throw new Error(`Research profile snapshot not found for Honeycrisp continuation: ${run.researchProfileSnapshotId}`);
+      throw new Error(`Research profile snapshot not found for app-server continuation: ${run.researchProfileSnapshotId}`);
     }
     const parentAttempt = detail.attempts.at(-1) ?? null;
     const attempt = this.db.createAttempt({
       runId,
       parentAttemptId: parentAttempt?.id ?? null,
       status: 'active',
-      shortState: 'Continuing the current Honeycrisp research session.',
+      shortState: 'Continuing the current app-server research session.',
       strategyRole: 'session_continuation'
     });
     this.db.beginSessionRunActivity(runId, attempt.id);
@@ -321,7 +321,7 @@ export class HoneycrispRunEngine {
 
     this.db.createModelSession({
       runId,
-      provider: 'honeycrisp',
+      provider: 'app-server',
       transport: 'host_process',
       status: 'active',
       metadata: {
@@ -339,7 +339,7 @@ export class HoneycrispRunEngine {
     if (!options.steeringAlreadyRecorded) {
       this.recordContinuationAccepted(runId, attempt.id, instruction);
     }
-    this.db.updateRunStatus(runId, 'active', 'Continuing the current Honeycrisp research session.');
+    this.db.updateRunStatus(runId, 'active', 'Continuing the current app-server research session.');
 
     const handle = this.launchRun(context, continuationInput, true, researchProfile, {
       ...(parentAttempt ? {
@@ -355,13 +355,13 @@ export class HoneycrispRunEngine {
   public async extendRunWhenInactive(
     runId: string,
     instruction: string,
-    options: HoneycrispContinuationOptions = {}
+    options: AppServerContinuationOptions = {}
   ): Promise<boolean> {
     const completion = this.completions.get(runId);
     let continuationOptions = options;
     if (this.activeRuns.has(runId)) {
       if (!completion) {
-        throw new Error(`Honeycrisp run ${runId} is still active without a completion boundary.`);
+        throw new Error(`app-server run ${runId} is still active without a completion boundary.`);
       }
       if (!options.steeringAlreadyRecorded) {
         const attemptId = this.db.getRunDetail(runId).attempts.at(-1)?.id ?? null;
@@ -413,7 +413,7 @@ export class HoneycrispRunEngine {
       resumeFromInitialAttempt?: boolean;
       fallbackPrompt: string;
     }
-  ): HoneycrispRunHandle {
+  ): AppServerRunHandle {
     const rootTurnOffset = continuation ? latestRootTurn(this.db.getRunDetail(context.run.id).traceEvents) : 0;
     const workflowId = researchProfile
       ? resolveResearchWorkflowId(
@@ -422,7 +422,7 @@ export class HoneycrispRunEngine {
           input.mode
         )
       : null;
-    const launchRequest = honeycrispSessionLaunchRequest(
+    const launchRequest = appServerSessionLaunchRequest(
       input,
       this.db.getWorkspaceId(),
       context.run.id,
@@ -443,7 +443,7 @@ export class HoneycrispRunEngine {
       attemptId: context.attempt.id,
       type: 'research_event',
       source: 'executor',
-      summary: continuation ? 'Honeycrisp session requested from the Beale app-server to continue the current run.' : 'Honeycrisp session requested from the Beale app-server.',
+      summary: continuation ? 'app-server session requested from the Beale app-server to continue the current run.' : 'app-server session requested from the Beale app-server.',
       payload: {
         transport: 'app-server',
         launchVersion: launchRequest.launchVersion,
@@ -475,7 +475,7 @@ export class HoneycrispRunEngine {
     });
     const approvedComputerUseTargetBinaries = this.computerUseBinaryGrants.get(context.run.id) ?? new Set<string>();
     this.computerUseBinaryGrants.set(context.run.id, approvedComputerUseTargetBinaries);
-    const active: ActiveHoneycrispRun = {
+    const active: ActiveAppServerRun = {
       context,
       rootTurnOffset,
       paused: false,
@@ -483,7 +483,7 @@ export class HoneycrispRunEngine {
       stopReason: null,
       budgetTimer: null,
       forceStopTimer: null,
-      liveHoneycrispEventIds: new Set(),
+      liveAppServerEventIds: new Set(),
       liveReasoningSummaries: new Map(),
       pendingControls: new Map(),
       queuedContinuations: new Map(),
@@ -533,7 +533,7 @@ export class HoneycrispRunEngine {
           active.lastProcessDiagnostic = `Breakout-room cleanup failed: ${errorMessage(cleanupError)}`;
         }
         try {
-          this.failRun(context, `Beale could not start the Honeycrisp research session: ${startDiagnostic}`, {
+          this.failRun(context, `Beale could not start the app-server research session: ${startDiagnostic}`, {
             error: errorMessage(startError)
           });
         } catch (failureError) {
@@ -554,14 +554,14 @@ export class HoneycrispRunEngine {
   }
 
   /**
-   * Requests a Honeycrisp session from the Beale app-server and attaches the
+   * Requests an app-server session from the Beale app-server and attaches the
    * run's WebSocket transport once the facade reports the session ready. Run
    * finalization hangs off the app-server catalog. Individual Desktop or
    * mobile sockets may reconnect without disturbing the shared hosted session.
    */
   private async startAppServerRun(params: {
-    active: ActiveHoneycrispRun;
-    request: HoneycrispSessionLaunchRequest;
+    active: ActiveAppServerRun;
+    request: AppServerSessionLaunchRequest;
   }): Promise<void> {
     const { active, request } = params;
     const record = await ensureBealeAppServerRunning();
@@ -581,7 +581,7 @@ export class HoneycrispRunEngine {
       attemptId: active.context.attempt.id,
       type: 'research_event',
       source: 'executor',
-      summary: 'The Beale app-server accepted the Honeycrisp session.',
+      summary: 'The Beale app-server accepted the app-server session.',
       payload: {
         appServerUrl: record.url,
         sessionId: started.sessionId
@@ -597,7 +597,7 @@ export class HoneycrispRunEngine {
     });
   }
 
-  private isStale(active: ActiveHoneycrispRun): boolean {
+  private isStale(active: ActiveAppServerRun): boolean {
     return this.disposed
       || active.finalized
       || this.activeRuns.get(active.context.run.id) !== active;
@@ -606,9 +606,9 @@ export class HoneycrispRunEngine {
   /**
    * Runs the shared close sequence exactly once for an app-server-hosted run.
    * The exit code comes from the app-server catalog because the host no longer
-   * owns the Honeycrisp process.
+   * owns the app-server process.
    */
-  private handleAppServerClosure(active: ActiveHoneycrispRun): void {
+  private handleAppServerClosure(active: ActiveAppServerRun): void {
     if (active.finalized) return;
     active.finalized = true;
     void (async (): Promise<void> => {
@@ -629,7 +629,7 @@ export class HoneycrispRunEngine {
       }
       if (!this.disposed) {
         if (state === 'failed' && exitCode === null) {
-          active.lastProcessDiagnostic = active.lastProcessDiagnostic ?? 'The Honeycrisp session ended with an error.';
+          active.lastProcessDiagnostic = active.lastProcessDiagnostic ?? 'The app-server session ended with an error.';
         }
         this.clearTimeLimit(active);
         this.clearForceStopTimer(active);
@@ -653,7 +653,7 @@ export class HoneycrispRunEngine {
         } catch (finalizationError) {
           active.lastProcessDiagnostic = `Run finalization failed: ${errorMessage(finalizationError)}`;
           try {
-            this.failRun(active.context, 'Honeycrisp session finalization failed.', {
+            this.failRun(active.context, 'app-server session finalization failed.', {
               error: errorMessage(finalizationError)
             });
           } catch {
@@ -699,7 +699,7 @@ export class HoneycrispRunEngine {
     const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
     const approvedComputerUseTargetBinaries = this.computerUseBinaryGrants.get(runId) ?? new Set<string>();
     this.computerUseBinaryGrants.set(runId, approvedComputerUseTargetBinaries);
-    const active: ActiveHoneycrispRun = {
+    const active: ActiveAppServerRun = {
       context,
       rootTurnOffset: latestRootTurn(this.db.getRunDetail(runId).traceEvents),
       paused: false,
@@ -707,7 +707,7 @@ export class HoneycrispRunEngine {
       stopReason: null,
       budgetTimer: null,
       forceStopTimer: null,
-      liveHoneycrispEventIds: new Set(),
+      liveAppServerEventIds: new Set(),
       liveReasoningSummaries: new Map(),
       pendingControls: new Map(),
       queuedContinuations: new Map(),
@@ -761,7 +761,7 @@ export class HoneycrispRunEngine {
     return [...this.activeRuns.keys()];
   }
 
-  private stopActiveRun(active: ActiveHoneycrispRun, reason: 'user' | 'time_limit' | 'safety_control'): void {
+  private stopActiveRun(active: ActiveAppServerRun, reason: 'user' | 'time_limit' | 'safety_control'): void {
     if (active.stopped) return;
     active.stopped = true;
     active.stopReason = reason;
@@ -776,22 +776,22 @@ export class HoneycrispRunEngine {
       active.forceStopTimer = null;
       if (this.activeRuns.get(active.context.run.id) !== active) return;
       this.stopAppServerSessionForRun(active);
-    }, HONEYCRISP_STOP_GRACE_MS);
+    }, APP_SERVER_STOP_GRACE_MS);
     active.forceStopTimer.unref();
   }
 
   /**
    * Backstop for runs whose control stream is unavailable: the app-server
-   * terminates the Honeycrisp process for the session.
+   * terminates the app-server process for the session.
    */
-  private stopAppServerSessionForRun(active: ActiveHoneycrispRun): void {
+  private stopAppServerSessionForRun(active: ActiveAppServerRun): void {
     const record = active.appServerRecord;
     const sessionId = active.appServerSessionId;
     if (!record || !sessionId) return;
     void stopAppServerSession(record, sessionId).catch(() => undefined);
   }
 
-  private armTimeLimit(active: ActiveHoneycrispRun, maxMinutes: number): void {
+  private armTimeLimit(active: ActiveAppServerRun, maxMinutes: number): void {
     if (!Number.isFinite(maxMinutes) || maxMinutes <= 0 || maxMinutes >= UNBOUNDED_RUN_MINUTES) return;
     const timeoutMs = Math.max(1, Math.round(maxMinutes * 60_000));
     active.budgetTimer = setTimeout(() => {
@@ -811,13 +811,13 @@ export class HoneycrispRunEngine {
     active.budgetTimer.unref();
   }
 
-  private clearTimeLimit(active: ActiveHoneycrispRun): void {
+  private clearTimeLimit(active: ActiveAppServerRun): void {
     if (!active.budgetTimer) return;
     clearTimeout(active.budgetTimer);
     active.budgetTimer = null;
   }
 
-  private clearForceStopTimer(active: ActiveHoneycrispRun): void {
+  private clearForceStopTimer(active: ActiveAppServerRun): void {
     if (!active.forceStopTimer) return;
     clearTimeout(active.forceStopTimer);
     active.forceStopTimer = null;
@@ -828,10 +828,10 @@ export class HoneycrispRunEngine {
     if (!active) return false;
     if (active.paused) return true;
     if (active.shellApprovalRecords.size > 0) {
-      throw new Error('Resolve pending shell approvals before pausing the Honeycrisp process.');
+      throw new Error('Resolve pending shell approvals before pausing the app-server process.');
     }
     if ([...active.pendingControls.values()].some((control) => isSafetyControlType(control.type))) {
-      throw new Error('Wait for the pending shell safety control before pausing the Honeycrisp process.');
+      throw new Error('Wait for the pending shell safety control before pausing the app-server process.');
     }
     this.sendControl(active, { schemaVersion: 1, type: 'pause' });
     active.paused = true;
@@ -847,7 +847,7 @@ export class HoneycrispRunEngine {
     return true;
   }
 
-  public steer(runId: string, instruction: string, modelSelection?: ResearchModelSelection): HoneycrispControlDispatch | null {
+  public steer(runId: string, instruction: string, modelSelection?: ResearchModelSelection): AppServerControlDispatch | null {
     const active = this.activeRuns.get(runId);
     if (!active) return null;
     return this.sendControl(active, {
@@ -865,11 +865,11 @@ export class HoneycrispRunEngine {
     return true;
   }
 
-  public configureShellSafety(runId: string, shellSafetyMode: ShellSafetyMode): HoneycrispControlDispatch | null {
+  public configureShellSafety(runId: string, shellSafetyMode: ShellSafetyMode): AppServerControlDispatch | null {
     const active = this.activeRuns.get(runId);
     if (!active) return null;
     if (active.paused) {
-      throw new Error('Resume the Honeycrisp process before changing its shell safety mode.');
+      throw new Error('Resume the app-server process before changing its shell safety mode.');
     }
     const pending = [...active.pendingControls.values()].find((control) => control.type === 'configure_shell_safety');
     if (pending) {
@@ -887,10 +887,10 @@ export class HoneycrispRunEngine {
     proofTarget: RunbookProofTarget,
     selection: RunbookExecutionSelection,
     deviceOs?: string
-  ): HoneycrispControlDispatch | null {
+  ): AppServerControlDispatch | null {
     const active = this.activeRuns.get(runId);
     if (!active) return null;
-    if (active.paused) throw new Error('Resume the Honeycrisp process before running a runbook.');
+    if (active.paused) throw new Error('Resume the app-server process before running a runbook.');
     return this.sendControl(active, {
       schemaVersion: 1,
       type: 'runbook_execute',
@@ -907,7 +907,7 @@ export class HoneycrispRunEngine {
     runId: string,
     approvalRequestId: string,
     decision: 'approved' | 'denied'
-  ): HoneycrispControlDispatch | null {
+  ): AppServerControlDispatch | null {
     const active = this.activeRuns.get(runId);
     if (!active || !active.shellApprovalRecords.has(approvalRequestId)) return null;
     const inFlight = active.shellApprovalDecisionsInFlight.get(approvalRequestId);
@@ -964,12 +964,12 @@ export class HoneycrispRunEngine {
   }
 
   private sendControl(
-    active: ActiveHoneycrispRun,
-    message: Record<string, unknown> & { type: PendingHoneycrispControl['type'] }
-  ): HoneycrispControlDispatch {
+    active: ActiveAppServerRun,
+    message: Record<string, unknown> & { type: PendingAppServerControl['type'] }
+  ): AppServerControlDispatch {
     const requestId = `control_${randomUUID()}`;
     const wireMessage = { ...message, requestId };
-    const pending: PendingHoneycrispControl = {
+    const pending: PendingAppServerControl = {
       requestId,
       type: message.type,
       sentAt: new Date().toISOString(),
@@ -1001,10 +1001,10 @@ export class HoneycrispRunEngine {
     return { requestId, deliveryStatus: 'pending' };
   }
 
-  private dispatchPendingControl(active: ActiveHoneycrispRun, pending: PendingHoneycrispControl): void {
+  private dispatchPendingControl(active: ActiveAppServerRun, pending: PendingAppServerControl): void {
     if (pending.dispatched || active.transportMode === 'pending') return;
     if (!active.webSocketClient) {
-      throw new Error(`Honeycrisp WebSocket transport is unavailable for run ${active.context.run.id}.`);
+      throw new Error(`app-server WebSocket transport is unavailable for run ${active.context.run.id}.`);
     }
     active.webSocketClient.sendControl(pending.wireMessage);
     pending.dispatched = true;
@@ -1017,7 +1017,7 @@ export class HoneycrispRunEngine {
     }
   }
 
-  private flushPendingControls(active: ActiveHoneycrispRun): void {
+  private flushPendingControls(active: ActiveAppServerRun): void {
     for (const pending of active.pendingControls.values()) {
       try {
         this.dispatchPendingControl(active, pending);
@@ -1028,7 +1028,7 @@ export class HoneycrispRunEngine {
           attemptId: active.context.attempt.id,
           type: 'research_event',
           source: 'executor',
-          summary: 'Honeycrisp control delivery failed.',
+          summary: 'app-server control delivery failed.',
           payload: { requestId: pending.requestId, type: pending.type, error: errorMessage(error) },
           modelVisible: false
         });
@@ -1037,7 +1037,7 @@ export class HoneycrispRunEngine {
     this.onChange();
   }
 
-  private recordControlAcknowledgement(context: CreatedRunContext, event: HoneycrispLiveEvent): void {
+  private recordControlAcknowledgement(context: CreatedRunContext, event: AppServerLiveEvent): void {
     const payload = event.payload ?? {};
     const active = this.activeRuns.get(context.run.id);
     const accepted = typeof payload.accepted === 'boolean' ? payload.accepted : false;
@@ -1057,7 +1057,7 @@ export class HoneycrispRunEngine {
     const controlType = pending?.type ?? reportedType;
     if (active && pending) {
       if (accepted && pending.type === 'steer' && !active.stopped) {
-        // control.received only means Honeycrisp queued the instruction. Retain a
+        // control.received only means app-server queued the instruction. Retain a
         // fallback until a later root model turn proves that it was consumed.
         active.queuedContinuations.set(pending.requestId, pending);
       } else if (accepted) {
@@ -1087,7 +1087,7 @@ export class HoneycrispRunEngine {
         payload: {
           shellSafetyMode: updated.shellSafetyMode,
           controlRequestId: pending.requestId,
-          acknowledgedByHoneycrisp: true,
+          acknowledgedByAppServer: true,
           explicitRiskAcceptance: updated.shellSafetyMode === 'danger'
         },
         modelVisible: false
@@ -1099,11 +1099,11 @@ export class HoneycrispRunEngine {
       type: 'research_event',
       source: 'executor',
       summary: accepted
-        ? `Honeycrisp acknowledged ${controlType} control.`
-        : `Honeycrisp rejected ${controlType} control.`,
+        ? `app-server acknowledged ${controlType} control.`
+        : `app-server rejected ${controlType} control.`,
       payload: {
-        honeycrispLiveKind: event.kind,
-        honeycrispTimestamp: event.timestamp ?? null,
+        appServerLiveKind: event.kind,
+        appServerTimestamp: event.timestamp ?? null,
         eventType: 'control.received',
         controlType,
         accepted,
@@ -1128,7 +1128,7 @@ export class HoneycrispRunEngine {
     }
   }
 
-  private armShellApprovalResolutionTimeout(active: ActiveHoneycrispRun, approvalRequestId: string): void {
+  private armShellApprovalResolutionTimeout(active: ActiveAppServerRun, approvalRequestId: string): void {
     const inFlight = active.shellApprovalDecisionsInFlight.get(approvalRequestId);
     if (!inFlight || inFlight.resolutionTimeout) return;
     inFlight.resolutionTimeout = setTimeout(() => {
@@ -1139,7 +1139,7 @@ export class HoneycrispRunEngine {
         attemptId: active.context.attempt.id,
         type: 'approval_event',
         source: 'policy',
-        summary: 'Honeycrisp accepted a shell decision but did not confirm its resolution; the session was stopped fail closed.',
+        summary: 'app-server accepted a shell decision but did not confirm its resolution; the session was stopped fail closed.',
         payload: { approvalRequestId, timeoutMs: controlAckTimeoutMs() },
         modelVisible: false
       });
@@ -1149,13 +1149,13 @@ export class HoneycrispRunEngine {
     inFlight.resolutionTimeout.unref();
   }
 
-  private clearShellApprovalDecisionInFlight(active: ActiveHoneycrispRun, approvalRequestId: string): void {
+  private clearShellApprovalDecisionInFlight(active: ActiveAppServerRun, approvalRequestId: string): void {
     const inFlight = active.shellApprovalDecisionsInFlight.get(approvalRequestId);
     if (inFlight?.resolutionTimeout) clearTimeout(inFlight.resolutionTimeout);
     active.shellApprovalDecisionsInFlight.delete(approvalRequestId);
   }
 
-  private handleControlAckTimeout(active: ActiveHoneycrispRun, requestId: string): void {
+  private handleControlAckTimeout(active: ActiveAppServerRun, requestId: string): void {
     if (this.disposed || this.activeRuns.get(active.context.run.id) !== active) return;
     const pending = active.pendingControls.get(requestId);
     if (!pending || pending.timedOut) return;
@@ -1174,7 +1174,7 @@ export class HoneycrispRunEngine {
       attemptId: active.context.attempt.id,
       type: 'approval_event',
       source: 'policy',
-      summary: 'Honeycrisp did not acknowledge a shell safety control; the session was stopped fail closed.',
+      summary: 'app-server did not acknowledge a shell safety control; the session was stopped fail closed.',
       payload: {
         controlRequestId: pending.requestId,
         controlType: pending.type,
@@ -1188,16 +1188,16 @@ export class HoneycrispRunEngine {
   }
 
   private markRunContinuationQueued(
-    active: ActiveHoneycrispRun,
-    pending: PendingHoneycrispControl,
+    active: ActiveAppServerRun,
+    pending: PendingAppServerControl,
     reason: 'timeout' | 'rejected' | 'process_closed'
   ): void {
     const timeoutMs = controlAckTimeoutMs();
     const summary = reason === 'rejected'
-      ? 'Honeycrisp rejected steering; continuation is queued until the active process exits.'
+      ? 'app-server rejected steering; continuation is queued until the active process exits.'
       : reason === 'process_closed'
-        ? 'Honeycrisp exited before acknowledging steering; continuation is queued.'
-        : 'Honeycrisp did not acknowledge steering; continuation is queued until the active process exits.';
+        ? 'app-server exited before acknowledging steering; continuation is queued.'
+        : 'app-server did not acknowledge steering; continuation is queued until the active process exits.';
     this.db.appendTraceEvent({
       runId: active.context.run.id,
       attemptId: active.context.attempt.id,
@@ -1219,7 +1219,7 @@ export class HoneycrispRunEngine {
   }
 
   private finalizePendingControls(
-    active: ActiveHoneycrispRun,
+    active: ActiveAppServerRun,
     reason: 'session_closed' | 'process_closed' | 'engine_disposed'
   ): void {
     for (const pending of active.pendingControls.values()) {
@@ -1242,8 +1242,8 @@ export class HoneycrispRunEngine {
         active.context.run.id,
         'denied',
         reason === 'engine_disposed'
-          ? `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the Honeycrisp engine closed.`
-          : `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the Honeycrisp process exited.`
+          ? `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the app-server engine closed.`
+          : `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the app-server process exited.`
       );
       this.db.appendTraceEvent({
         runId: active.context.run.id,
@@ -1251,8 +1251,8 @@ export class HoneycrispRunEngine {
         type: 'approval_event',
         source: 'policy',
         summary: computerUse
-          ? 'Pending computer-use action denied when Honeycrisp closed.'
-          : 'Pending shell command denied when Honeycrisp closed.',
+          ? 'Pending computer-use action denied when app-server closed.'
+          : 'Pending shell command denied when app-server closed.',
         payload: { approvalId, approvalRequestId, decision: 'denied', reason },
         approvalId,
         modelVisible: false
@@ -1266,13 +1266,13 @@ export class HoneycrispRunEngine {
     }
   }
 
-  private removePendingControl(active: ActiveHoneycrispRun, pending: PendingHoneycrispControl): void {
+  private removePendingControl(active: ActiveAppServerRun, pending: PendingAppServerControl): void {
     if (pending.timeout) clearTimeout(pending.timeout);
     pending.timeout = null;
     active.pendingControls.delete(pending.requestId);
   }
 
-  private clearConsumedSteeringContinuations(active: ActiveHoneycrispRun, completedRootTurn: number): void {
+  private clearConsumedSteeringContinuations(active: ActiveAppServerRun, completedRootTurn: number): void {
     const consumedRequestIds: string[] = [];
     for (const [requestId, control] of active.queuedContinuations) {
       if (!steeringContinuationConsumed(
@@ -1290,7 +1290,7 @@ export class HoneycrispRunEngine {
       attemptId: active.context.attempt.id,
       type: 'research_event',
       source: 'executor',
-      summary: 'Honeycrisp consumed user steering in a model turn.',
+      summary: 'app-server consumed user steering in a model turn.',
       payload: {
         completedRootTurn,
         controlRequestIds: consumedRequestIds
@@ -1299,7 +1299,7 @@ export class HoneycrispRunEngine {
     });
   }
 
-  private markReportRevisionCompleted(active: ActiveHoneycrispRun, event: HoneycrispCaptureEvent): void {
+  private markReportRevisionCompleted(active: ActiveAppServerRun, event: AppServerCaptureEvent): void {
     const resourceContext = active.context.run.budget.resourceContext;
     if (!isReportResourceContext(resourceContext)) return;
     if (!isSuccessfulReportRevisionEvent(event, resourceContext.resourceId)) return;
@@ -1308,10 +1308,10 @@ export class HoneycrispRunEngine {
     }
   }
 
-  private launchQueuedContinuation(active: ActiveHoneycrispRun): void {
+  private launchQueuedContinuation(active: ActiveAppServerRun): void {
     if (this.disposed || active.stopped || active.queuedContinuations.size === 0) return;
     const queued = [...active.queuedContinuations.values()]
-      .filter((control): control is PendingHoneycrispControl & { instruction: string } => Boolean(control.instruction?.trim()));
+      .filter((control): control is PendingAppServerControl & { instruction: string } => Boolean(control.instruction?.trim()));
     active.queuedContinuations.clear();
     if (queued.length === 0) return;
     const instruction = queued.map((control) => control.instruction.trim()).join('\n\n');
@@ -1325,7 +1325,7 @@ export class HoneycrispRunEngine {
         attemptId: this.db.getRunDetail(active.context.run.id).attempts.at(-1)?.id ?? null,
         type: 'research_event',
         source: 'executor',
-        summary: 'Honeycrisp launched the queued steering continuation after the prior process exited.',
+        summary: 'app-server launched the queued steering continuation after the prior process exited.',
         payload: {
           controlRequestIds: queued.map((control) => control.requestId),
           queuedInstructionCount: queued.length
@@ -1339,7 +1339,7 @@ export class HoneycrispRunEngine {
         attemptId: active.context.attempt.id,
         type: 'approval_event',
         source: 'system',
-        summary: 'Beale could not launch the queued Honeycrisp continuation.',
+        summary: 'Beale could not launch the queued app-server continuation.',
         payload: {
           controlRequestIds: queued.map((control) => control.requestId),
           error: errorMessage(error)
@@ -1351,22 +1351,22 @@ export class HoneycrispRunEngine {
   }
 
   private connectWebSocketTransport(
-    active: ActiveHoneycrispRun,
-    bootstrap: HoneycrispTransportBootstrap
+    active: ActiveAppServerRun,
+    bootstrap: AppServerTransportBootstrap
   ): void {
     if (active.transportMode !== 'pending' || active.webSocketClient) return;
-    const client = new HoneycrispWebSocketClient({
+    const client = new AppServerWebSocketClient({
       bootstrap,
       token: active.appServerClientToken ?? '',
       clientVersion: '0.1.0',
       onEvent: (rawEvent) => {
         if (this.activeRuns.get(active.context.run.id) !== active) return;
-        const event = decodeHoneycrispLiveEvent(rawEvent);
+        const event = decodeAppServerLiveEvent(rawEvent);
         if (!event) return;
         try {
           this.recordLiveEvent(active.context, event);
         } catch (error) {
-          const message = `Desktop could not project a Honeycrisp live event: ${errorMessage(error)}`;
+          const message = `Desktop could not project an app-server live event: ${errorMessage(error)}`;
           active.lastProcessDiagnostic = message.slice(0, 500);
           try {
             this.db.appendTraceEvent({
@@ -1374,7 +1374,7 @@ export class HoneycrispRunEngine {
               attemptId: active.context.attempt.id,
               type: 'research_event',
               source: 'executor',
-              summary: 'Desktop skipped a failed live-event projection while Honeycrisp continued running.',
+              summary: 'Desktop skipped a failed live-event projection while app-server continued running.',
               payload: { eventKind: event.kind ?? null, error: errorMessage(error) },
               modelVisible: false
             });
@@ -1393,7 +1393,7 @@ export class HoneycrispRunEngine {
           attemptId: active.context.attempt.id,
           type: 'research_event',
           source: 'executor',
-          summary: 'The Honeycrisp session transport reported an error.',
+          summary: 'The app-server session transport reported an error.',
           payload: { error: error.message },
           modelVisible: false
         });
@@ -1413,7 +1413,7 @@ export class HoneycrispRunEngine {
           attemptId: active.context.attempt.id,
           type: 'research_event',
           source: 'executor',
-          summary: 'The Honeycrisp session transport closed.',
+          summary: 'The app-server session transport closed.',
           payload: { code, reason: reason.slice(0, 256) },
           modelVisible: false
         });
@@ -1433,7 +1433,7 @@ export class HoneycrispRunEngine {
         attemptId: active.context.attempt.id,
         type: 'research_event',
         source: 'executor',
-        summary: 'The Honeycrisp session transport was established through the Beale app-server.',
+        summary: 'The app-server session transport was established through the Beale app-server.',
         payload: { protocolVersion: bootstrap.protocolVersion, transport: bootstrap.transport },
         modelVisible: false
       });
@@ -1449,8 +1449,8 @@ export class HoneycrispRunEngine {
   }
 
   private reconnectOrFinalizeAppServerTransport(
-    active: ActiveHoneycrispRun,
-    bootstrap: HoneycrispTransportBootstrap
+    active: ActiveAppServerRun,
+    bootstrap: AppServerTransportBootstrap
   ): void {
     if (active.finalized || active.transportReconnectInProgress) return;
     active.transportReconnectInProgress = true;
@@ -1468,7 +1468,7 @@ export class HoneycrispRunEngine {
             attemptId: active.context.attempt.id,
             type: 'research_event',
             source: 'executor',
-            summary: 'The Desktop session transport is reconnecting without interrupting Honeycrisp.',
+            summary: 'The Desktop session transport is reconnecting without interrupting app-server.',
             payload: { attempt: attempt + 1 },
             modelVisible: false
           });
@@ -1484,13 +1484,13 @@ export class HoneycrispRunEngine {
     })();
   }
 
-  private settleTransportReadiness(active: ActiveHoneycrispRun, connected: boolean): void {
+  private settleTransportReadiness(active: ActiveAppServerRun, connected: boolean): void {
     if (active.transportReadySettled) return;
     active.transportReadySettled = true;
     active.resolveTransportReady(connected);
   }
 
-  private recordLiveEvent(context: CreatedRunContext, event: HoneycrispLiveEvent): void {
+  private recordLiveEvent(context: CreatedRunContext, event: AppServerLiveEvent): void {
     const active = this.activeRuns.get(context.run.id);
     event = offsetRootTurn(event, active?.rootTurnOffset ?? 0);
     if (event.kind === 'session.title') {
@@ -1529,12 +1529,12 @@ export class HoneycrispRunEngine {
     }
 
     if (event.kind === 'research.event') {
-      const honeycrispEvent = honeycrispCaptureEventFromLiveEvent(event);
-      if (!honeycrispEvent) return;
-      if (honeycrispEvent.id && active?.liveHoneycrispEventIds.has(honeycrispEvent.id)) return;
-      if (honeycrispEvent.id) active?.liveHoneycrispEventIds.add(honeycrispEvent.id);
-      if (active) this.markReportRevisionCompleted(active, honeycrispEvent);
-      const messageRecorded = this.recordLiveResearchSummary(context, honeycrispEvent);
+      const appServerEvent = appServerCaptureEventFromLiveEvent(event);
+      if (!appServerEvent) return;
+      if (appServerEvent.id && active?.liveAppServerEventIds.has(appServerEvent.id)) return;
+      if (appServerEvent.id) active?.liveAppServerEventIds.add(appServerEvent.id);
+      if (active) this.markReportRevisionCompleted(active, appServerEvent);
+      const messageRecorded = this.recordLiveResearchSummary(context, appServerEvent);
       if (messageRecorded) this.notifyRegistrySessionActivity(context, event.timestamp);
       else this.onChange();
       return;
@@ -1590,8 +1590,8 @@ export class HoneycrispRunEngine {
       }
       if (isAgentResearchControlEventType(eventType)) {
         const eventId = stringPayload(event.payload ?? {}, 'eventId');
-        if (eventId && active?.liveHoneycrispEventIds.has(eventId)) return;
-        if (eventId) active?.liveHoneycrispEventIds.add(eventId);
+        if (eventId && active?.liveAppServerEventIds.has(eventId)) return;
+        if (eventId) active?.liveAppServerEventIds.add(eventId);
         this.recordAgentResearchControl(context, event);
         return;
       }
@@ -1603,7 +1603,7 @@ export class HoneycrispRunEngine {
         this.clearConsumedSteeringContinuations(active, turn);
       }
       const reportedUsage = normalizeTokenUsage(recordValue(event.payload?.usage) ?? {});
-      const usage = reportedUsage ? reportedHoneycrispTraceUsage(reportedUsage) : null;
+      const usage = reportedUsage ? reportedAppServerTraceUsage(reportedUsage) : null;
       this.db.appendTraceEvent({
         runId: context.run.id,
         attemptId: context.attempt.id,
@@ -1611,14 +1611,14 @@ export class HoneycrispRunEngine {
         source: 'executor',
         summary: subagent
           ? turn
-            ? `Honeycrisp subagent ${agentPath} turn ${turn} completed.`
-            : `Honeycrisp subagent ${agentPath} turn completed.`
+            ? `app-server subagent ${agentPath} turn ${turn} completed.`
+            : `app-server subagent ${agentPath} turn completed.`
           : turn
-            ? `Honeycrisp model turn ${turn} completed.`
-            : 'Honeycrisp model turn completed.',
+            ? `app-server model turn ${turn} completed.`
+            : 'app-server model turn completed.',
         payload: {
-          honeycrispLiveKind: event.kind,
-          honeycrispTimestamp: event.timestamp ?? null,
+          appServerLiveKind: event.kind,
+          appServerTimestamp: event.timestamp ?? null,
           ...(event.payload ?? {}),
           ...(usage ? { usage } : {})
         },
@@ -1630,7 +1630,7 @@ export class HoneycrispRunEngine {
             latestReportedInputTokens: reportedUsage.promptTokens,
             latestReportedTotalTokens: reportedUsage.totalTokens,
             latestCacheHitRate: reportedUsage.cacheHitRate,
-            latestContextUsageSource: HONEYCRISP_REPORTED_USAGE_SOURCE,
+            latestContextUsageSource: APP_SERVER_REPORTED_USAGE_SOURCE,
             latestContextUsageEstimated: false,
             latestContextUsageReportedCallCount: turn ?? 1
           }
@@ -1646,10 +1646,10 @@ export class HoneycrispRunEngine {
         attemptId: context.attempt.id,
         type: 'research_event',
         source: 'executor',
-        summary: honeycrispLiveEventSummary(event),
+        summary: appServerLiveEventSummary(event),
         payload: {
-          honeycrispLiveKind: event.kind,
-          honeycrispTimestamp: event.timestamp ?? null,
+          appServerLiveKind: event.kind,
+          appServerTimestamp: event.timestamp ?? null,
           ...(event.payload ?? {})
         },
         modelVisible: false
@@ -1658,7 +1658,7 @@ export class HoneycrispRunEngine {
     }
   }
 
-  private recordRunbookExecution(context: CreatedRunContext, event: HoneycrispLiveEvent): void {
+  private recordRunbookExecution(context: CreatedRunContext, event: AppServerLiveEvent): void {
     const payload = event.payload ?? {};
     const runbookId = stringPayload(payload, 'runbookId');
     const runbookRunId = stringPayload(payload, 'runId');
@@ -1695,8 +1695,8 @@ export class HoneycrispRunEngine {
 
   private recordShellAuthorizationRequested(
     context: CreatedRunContext,
-    event: HoneycrispLiveEvent,
-    active: ActiveHoneycrispRun | undefined
+    event: AppServerLiveEvent,
+    active: ActiveAppServerRun | undefined
   ): void {
     const payload = event.payload ?? {};
     const approvalRequestId = stringPayload(payload, 'approvalRequestId');
@@ -1765,8 +1765,8 @@ export class HoneycrispRunEngine {
 
   private recordShellAuthorizationResolved(
     context: CreatedRunContext,
-    event: HoneycrispLiveEvent,
-    active: ActiveHoneycrispRun | undefined
+    event: AppServerLiveEvent,
+    active: ActiveAppServerRun | undefined
   ): void {
     const payload = event.payload ?? {};
     const approvalRequestId = stringPayload(payload, 'approvalRequestId');
@@ -1816,8 +1816,8 @@ export class HoneycrispRunEngine {
 
   private recordToolAuthorizationRequested(
     context: CreatedRunContext,
-    event: HoneycrispLiveEvent,
-    active: ActiveHoneycrispRun | undefined
+    event: AppServerLiveEvent,
+    active: ActiveAppServerRun | undefined
   ): void {
     const payload = event.payload ?? {};
     const approvalRequestId = stringPayload(payload, 'approvalRequestId');
@@ -1927,8 +1927,8 @@ export class HoneycrispRunEngine {
 
   private recordToolAuthorizationResolved(
     context: CreatedRunContext,
-    event: HoneycrispLiveEvent,
-    active: ActiveHoneycrispRun | undefined
+    event: AppServerLiveEvent,
+    active: ActiveAppServerRun | undefined
   ): void {
     const payload = event.payload ?? {};
     const approvalRequestId = stringPayload(payload, 'approvalRequestId');
@@ -1968,7 +1968,7 @@ export class HoneycrispRunEngine {
     this.onChange({ forceSnapshot: Boolean(existingApprovalId) });
   }
 
-  private recordAgentContextCompaction(context: CreatedRunContext, event: HoneycrispLiveEvent): void {
+  private recordAgentContextCompaction(context: CreatedRunContext, event: AppServerLiveEvent): void {
     const payload = event.payload ?? {};
     const reactive = payload.reason === 'context_window_error';
     this.db.appendTraceEvent({
@@ -1977,11 +1977,11 @@ export class HoneycrispRunEngine {
       type: 'model_message',
       source: 'system',
       summary: reactive
-        ? 'Provider context window pressure triggered a Honeycrisp compacted retry.'
-        : 'Honeycrisp compacted agent context.',
+        ? 'Provider context window pressure triggered an app-server compacted retry.'
+        : 'app-server compacted agent context.',
       payload: {
-        honeycrispLiveKind: event.kind,
-        honeycrispTimestamp: event.timestamp ?? null,
+        appServerLiveKind: event.kind,
+        appServerTimestamp: event.timestamp ?? null,
         transcriptRole: 'system',
         ...payload
       },
@@ -1990,7 +1990,7 @@ export class HoneycrispRunEngine {
     this.onChange();
   }
 
-  private recordAgentModelRetry(context: CreatedRunContext, event: HoneycrispLiveEvent): void {
+  private recordAgentModelRetry(context: CreatedRunContext, event: AppServerLiveEvent): void {
     const payload = event.payload ?? {};
     const errorMessage = stringPayload(payload, 'errorMessage') ?? 'Transient model error.';
     const silentStream = errorMessage.includes('produced no content');
@@ -2003,17 +2003,17 @@ export class HoneycrispRunEngine {
       type: 'model_message',
       source: 'system',
       summary: safetyGuardrail && awaitingSteering
-        ? 'Honeycrisp is waiting for user steering after a repeated provider safeguard.'
+        ? 'app-server is waiting for user steering after a repeated provider safeguard.'
         : safetyGuardrail
         ? likelyFalsePositive
-          ? 'Honeycrisp continued after an authorized safety guardrail false positive.'
-          : 'Honeycrisp added safer steering after a provider safety guardrail.'
+          ? 'app-server continued after an authorized safety guardrail false positive.'
+          : 'app-server added safer steering after a provider safety guardrail.'
         : silentStream
-          ? 'Honeycrisp retried a silent model stream.'
-          : 'Honeycrisp retried a transient model error.',
+          ? 'app-server retried a silent model stream.'
+          : 'app-server retried a transient model error.',
       payload: {
-        honeycrispLiveKind: event.kind,
-        honeycrispTimestamp: event.timestamp ?? null,
+        appServerLiveKind: event.kind,
+        appServerTimestamp: event.timestamp ?? null,
         transcriptRole: 'system',
         ...payload
       },
@@ -2022,7 +2022,7 @@ export class HoneycrispRunEngine {
     this.onChange();
   }
 
-  private recordAgentResearchControl(context: CreatedRunContext, event: HoneycrispLiveEvent): void {
+  private recordAgentResearchControl(context: CreatedRunContext, event: AppServerLiveEvent): void {
     const payload = event.payload ?? {};
     const eventType = stringPayload(payload, 'type');
     const status = stringPayload(payload, 'status');
@@ -2030,25 +2030,25 @@ export class HoneycrispRunEngine {
     const reason = stringPayload(payload, 'reason');
     const dispositionOutcome = stringPayload(payload, 'dispositionOutcome');
     const eventId = stringPayload(payload, 'eventId');
-    let summary = 'Honeycrisp updated host-managed research state.';
+    let summary = 'app-server updated host-managed research state.';
     if (eventType === 'goal_lifecycle') {
       summary = status === 'complete'
-        ? 'Honeycrisp completed the research goal from the session disposition.'
+        ? 'app-server completed the research goal from the session disposition.'
         : status === 'blocked'
-          ? 'Honeycrisp blocked the research goal on recorded external state.'
+          ? 'app-server blocked the research goal on recorded external state.'
           : dispositionOutcome
-            ? 'Honeycrisp continued the active research goal from the session disposition.'
-            : 'Honeycrisp continued the active research goal because no valid session disposition was recorded.';
+            ? 'app-server continued the active research goal from the session disposition.'
+            : 'app-server continued the active research goal because no valid session disposition was recorded.';
     } else if (eventType === 'research_checkpoint') {
       summary = reason === 'native'
-        ? 'Honeycrisp restored a research checkpoint after provider context compaction.'
+        ? 'app-server restored a research checkpoint after provider context compaction.'
         : reason === 'context_window_retry'
-          ? 'Honeycrisp restored a research checkpoint for a compacted retry.'
-          : 'Honeycrisp restored a research checkpoint after local context compaction.';
+          ? 'app-server restored a research checkpoint for a compacted retry.'
+          : 'app-server restored a research checkpoint after local context compaction.';
     } else if (eventType === 'research_loop_guard') {
       summary = action === 'blocked_duplicate'
-        ? 'Honeycrisp blocked a repeated read that produced no new research evidence.'
-        : 'Honeycrisp steered a tool-only loop back to target research.';
+        ? 'app-server blocked a repeated read that produced no new research evidence.'
+        : 'app-server steered a tool-only loop back to target research.';
     }
     this.db.appendTraceEvent({
       runId: context.run.id,
@@ -2057,11 +2057,11 @@ export class HoneycrispRunEngine {
       source: 'system',
       summary,
       payload: {
-        honeycrispLiveKind: event.kind,
-        honeycrispTimestamp: event.timestamp ?? null,
+        appServerLiveKind: event.kind,
+        appServerTimestamp: event.timestamp ?? null,
         transcriptRole: 'system',
         ...payload,
-        ...(eventId ? { honeycrispEventId: eventId } : {})
+        ...(eventId ? { appServerEventId: eventId } : {})
       },
       modelVisible: false
     });
@@ -2070,7 +2070,7 @@ export class HoneycrispRunEngine {
 
   private recordSubagentActivity(
     context: CreatedRunContext,
-    event: HoneycrispLiveEvent
+    event: AppServerLiveEvent
   ): void {
     const payload = event.payload ?? {};
     const action = stringPayload(payload, 'action') ?? 'updated';
@@ -2129,26 +2129,26 @@ export class HoneycrispRunEngine {
       this.db.refreshBreakoutRoomStatus(roomId);
     }
     const summaries: Record<string, string> = {
-      spawned: `Honeycrisp subagent ${agentPath} started.`,
-      message: `Honeycrisp sent a message to subagent ${agentPath}.`,
-      followup: `Honeycrisp extended subagent ${agentPath}.`,
-      interrupted: `Honeycrisp subagent ${agentPath} was interrupted.`,
-      completed: `Honeycrisp subagent ${agentPath} completed.`,
-      errored: `Honeycrisp subagent ${agentPath} failed.`,
-      room_created: `Honeycrisp collaboration room ${roomTitle ?? roomName ?? ''} started.`,
-      room_phase: `Honeycrisp collaboration room ${roomTitle ?? roomName ?? ''} advanced to ${roomPhase}.`,
-      room_packet: `Honeycrisp recorded a ${stringPayload(payload, 'packetKind') ?? 'room'} packet from ${agentPath}.`,
-      room_completed: `Honeycrisp collaboration room ${roomTitle ?? roomName ?? ''} completed.`
+      spawned: `app-server subagent ${agentPath} started.`,
+      message: `app-server sent a message to subagent ${agentPath}.`,
+      followup: `app-server extended subagent ${agentPath}.`,
+      interrupted: `app-server subagent ${agentPath} was interrupted.`,
+      completed: `app-server subagent ${agentPath} completed.`,
+      errored: `app-server subagent ${agentPath} failed.`,
+      room_created: `app-server collaboration room ${roomTitle ?? roomName ?? ''} started.`,
+      room_phase: `app-server collaboration room ${roomTitle ?? roomName ?? ''} advanced to ${roomPhase}.`,
+      room_packet: `app-server recorded a ${stringPayload(payload, 'packetKind') ?? 'room'} packet from ${agentPath}.`,
+      room_completed: `app-server collaboration room ${roomTitle ?? roomName ?? ''} completed.`
     };
     const activityTrace = this.db.appendTraceEvent({
       runId: context.run.id,
       attemptId: context.attempt.id,
       type: 'model_message',
       source: 'system',
-      summary: summaries[action] ?? `Honeycrisp subagent ${agentPath} ${action}.`,
+      summary: summaries[action] ?? `app-server subagent ${agentPath} ${action}.`,
       payload: {
-        honeycrispLiveKind: event.kind,
-        honeycrispTimestamp: event.timestamp ?? null,
+        appServerLiveKind: event.kind,
+        appServerTimestamp: event.timestamp ?? null,
         transcriptRole: 'system',
         ...(event.payload ?? {})
       },
@@ -2164,10 +2164,10 @@ export class HoneycrispRunEngine {
         attemptId: context.attempt.id,
         type: 'model_message',
         source: 'model',
-        summary: `Honeycrisp subagent ${agentPath} responded.`,
+        summary: `app-server subagent ${agentPath} responded.`,
         payload: {
           transcriptRole: 'assistant',
-          transcriptSource: 'honeycrisp',
+          transcriptSource: 'app-server',
           transcriptKind: 'agent_output',
           messagePhase: 'final_answer',
           agentId,
@@ -2187,7 +2187,7 @@ export class HoneycrispRunEngine {
         role: 'assistant',
         phase: 'final_answer',
         contentMarkdown: finalText,
-        source: 'honeycrisp',
+        source: 'app-server',
         metadata: {
           agentId,
           agentPath,
@@ -2205,7 +2205,7 @@ export class HoneycrispRunEngine {
 
   private recordLiveAgentOutput(
     context: CreatedRunContext,
-    event: HoneycrispLiveEvent
+    event: AppServerLiveEvent
   ): void {
     const payload = event.payload ?? {};
     const agentPath = stringPayload(payload, 'agentPath');
@@ -2226,12 +2226,12 @@ export class HoneycrispRunEngine {
       type: 'model_message',
       source: 'model',
       summary: subagent
-        ? `Honeycrisp subagent ${agentPath} shared commentary.`
-        : 'Honeycrisp shared commentary.',
+        ? `app-server subagent ${agentPath} shared commentary.`
+        : 'app-server shared commentary.',
       payload: {
         ...(event.payload ?? {}),
         transcriptRole: 'assistant',
-        transcriptSource: 'honeycrisp_commentary',
+        transcriptSource: 'app_server_commentary',
         transcriptKind: 'commentary',
         messagePhase: 'commentary',
         ...(responseId ? { responseId } : {}),
@@ -2246,7 +2246,7 @@ export class HoneycrispRunEngine {
       role: 'assistant',
       phase: 'commentary',
       contentMarkdown: text,
-      source: 'honeycrisp_commentary',
+      source: 'app_server_commentary',
       metadata: {
         agentId: stringPayload(payload, 'agentId'),
         agentPath,
@@ -2280,7 +2280,7 @@ export class HoneycrispRunEngine {
     this.notifyRegistrySessionActivity(context, event.timestamp);
   }
 
-  private recordLiveResearchSummary(context: CreatedRunContext, event: HoneycrispCaptureEvent): boolean {
+  private recordLiveResearchSummary(context: CreatedRunContext, event: AppServerCaptureEvent): boolean {
     const summaryText = researchSummaryText(event);
     if (!summaryText) return false;
     const payload = recordValue(event.payload);
@@ -2290,19 +2290,19 @@ export class HoneycrispRunEngine {
       attemptId: context.attempt.id,
       type: 'model_message',
       source: 'model',
-      summary: 'Honeycrisp progress summary.',
+      summary: 'app-server progress summary.',
       payload: {
         text: summaryText,
         transcriptRole: 'assistant',
         transcriptSource: 'openai_reasoning_summary',
         transcriptKind: 'reasoning_summary',
-        responseId: 'honeycrisp-progress',
+        responseId: 'app-server-progress',
         itemId,
         phase: 'progress',
         live: true,
-        honeycrispEventId: event.id ?? null,
-        honeycrispKind: event.kind ?? null,
-        honeycrispTimestamp: event.timestamp ?? null,
+        appServerEventId: event.id ?? null,
+        appServerKind: event.kind ?? null,
+        appServerTimestamp: event.timestamp ?? null,
         toolName: stringPayload(payload ?? {}, 'toolName') ?? null
       },
     });
@@ -2314,13 +2314,13 @@ export class HoneycrispRunEngine {
       contentMarkdown: summaryText,
       source: 'openai_reasoning_summary',
       metadata: {
-        responseId: 'honeycrisp-progress',
+        responseId: 'app-server-progress',
         itemId,
         phase: 'progress',
         live: true,
-        honeycrispEventId: event.id ?? null,
-        honeycrispKind: event.kind ?? null,
-        honeycrispTimestamp: event.timestamp ?? null,
+        appServerEventId: event.id ?? null,
+        appServerKind: event.kind ?? null,
+        appServerTimestamp: event.timestamp ?? null,
         toolName: stringPayload(payload ?? {}, 'toolName') ?? null,
         fallback: true
       }
@@ -2328,7 +2328,7 @@ export class HoneycrispRunEngine {
     return true;
   }
 
-  private recordLiveReasoningSummary(context: CreatedRunContext, event: HoneycrispLiveEvent, active: ActiveHoneycrispRun | undefined): void {
+  private recordLiveReasoningSummary(context: CreatedRunContext, event: AppServerLiveEvent, active: ActiveAppServerRun | undefined): void {
     const payload = event.payload ?? {};
     const text = stringPayload(payload, 'text');
     const delta = stringPayload(payload, 'delta');
@@ -2365,11 +2365,11 @@ export class HoneycrispRunEngine {
       source: 'model',
       summary: subagent
         ? phase === 'completed'
-          ? `Honeycrisp subagent ${agentPath} completed reasoning.`
-          : `Honeycrisp subagent ${agentPath} reasoning.`
+          ? `app-server subagent ${agentPath} completed reasoning.`
+          : `app-server subagent ${agentPath} reasoning.`
         : phase === 'completed'
-          ? 'Honeycrisp completed reasoning.'
-          : 'Honeycrisp reasoning.',
+          ? 'app-server completed reasoning.'
+          : 'app-server reasoning.',
       payload: {
         text: summaryText,
         transcriptRole: 'assistant',
@@ -2426,7 +2426,7 @@ export class HoneycrispRunEngine {
     context: CreatedRunContext,
     code: number | null,
     signal: NodeJS.Signals | null,
-    active: ActiveHoneycrispRun
+    active: ActiveAppServerRun
   ): void {
     const processPayload = {
       code,
@@ -2438,10 +2438,10 @@ export class HoneycrispRunEngine {
       const timeLimitReached = active.stopReason === 'time_limit';
       const safetyControlFailed = active.stopReason === 'safety_control';
       const stoppedSummary = timeLimitReached
-        ? 'Honeycrisp host process stopped at the session time limit.'
+        ? 'app-server host process stopped at the session time limit.'
         : safetyControlFailed
-          ? 'Honeycrisp host process stopped because a shell safety decision could not be confirmed.'
-          : 'Honeycrisp host process was stopped by Beale.';
+          ? 'app-server host process stopped because a shell safety decision could not be confirmed.'
+          : 'app-server host process was stopped by Beale.';
       this.db.appendTraceEvent({
         runId: context.run.id,
         attemptId: context.attempt.id,
@@ -2459,19 +2459,19 @@ export class HoneycrispRunEngine {
 
     if (code !== 0) {
       const summary = active.lastProcessDiagnostic
-        ? `Honeycrisp host process exited with an error: ${active.lastProcessDiagnostic}`
-        : 'Honeycrisp host process exited with an error.';
+        ? `app-server host process exited with an error: ${active.lastProcessDiagnostic}`
+        : 'app-server host process exited with an error.';
       this.failRun(context, summary, processPayload);
       return;
     }
 
-    if (!isHoneycrispSessionBoundary(this.db)) {
-      this.failRun(context, 'Honeycrisp sessions require the canonical Honeycrisp session boundary.', processPayload);
+    if (!isAppServerSessionBoundary(this.db)) {
+      this.failRun(context, 'app-server sessions require the canonical app-server session boundary.', processPayload);
       return;
     }
     const canonical = this.db.getRun(context.run.id);
     if (!canonical || canonical.status === 'active') {
-      this.failRun(context, 'Honeycrisp exited without committing its canonical session capture.', processPayload);
+      this.failRun(context, 'app-server exited without committing its canonical session capture.', processPayload);
       return;
     }
     this.notifySessionLifecycleChanged();
@@ -2497,33 +2497,33 @@ export class HoneycrispRunEngine {
   }
 }
 
-export function honeycrispProcessEnvironment(
+export function appServerProcessEnvironment(
   storage: { databasePath: string; artifactDirectoryPath: string } | null = null,
   preferredAuthenticationMethods: ProviderSettings['preferredAuthenticationMethods'] = undefined
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' };
   if (storage) {
-    env.HONEYCRISP_DATABASE_PATH = storage.databasePath;
-    env.HONEYCRISP_ARTIFACT_DIRECTORY = storage.artifactDirectoryPath;
+    env.APP_SERVER_DATABASE_PATH = storage.databasePath;
+    env.APP_SERVER_ARTIFACT_DIRECTORY = storage.artifactDirectoryPath;
   }
-  env.HONEYCRISP_PROVIDER_AUTH_PREFERENCES = JSON.stringify({
+  env.APP_SERVER_PROVIDER_AUTH_PREFERENCES = JSON.stringify({
     'openai-codex': preferredAuthenticationMethods?.['openai-codex'] ?? 'subscription',
     anthropic: preferredAuthenticationMethods?.anthropic ?? 'subscription',
     xai: preferredAuthenticationMethods?.xai ?? 'subscription',
     zai: preferredAuthenticationMethods?.zai ?? 'subscription',
     openrouter: 'api_key'
   });
-  if (env.HONEYCRISP_CODEX_AUTH_FILE?.trim()) return env;
+  if (env.APP_SERVER_CODEX_AUTH_FILE?.trim()) return env;
 
   const configured = process.env.BEALE_OPENAI_CODEX_AUTH_FILE?.trim();
   const candidate = configured
     ? configured.replace(/^~(?=$|\/)/, homedir())
     : join(homedir(), '.codex', 'auth.json');
-  if (existsSync(candidate)) env.HONEYCRISP_CODEX_AUTH_FILE = candidate;
+  if (existsSync(candidate)) env.APP_SERVER_CODEX_AUTH_FILE = candidate;
   return env;
 }
 
-function decodeHoneycrispLiveEvent(value: unknown): HoneycrispLiveEvent | null {
+function decodeAppServerLiveEvent(value: unknown): AppServerLiveEvent | null {
   if (!isRecord(value)) return null;
   return {
     schemaVersion: typeof value.schemaVersion === 'number' ? value.schemaVersion : undefined,
@@ -2533,7 +2533,7 @@ function decodeHoneycrispLiveEvent(value: unknown): HoneycrispLiveEvent | null {
   };
 }
 
-function honeycrispCaptureEventFromLiveEvent(event: HoneycrispLiveEvent): HoneycrispCaptureEvent | null {
+function appServerCaptureEventFromLiveEvent(event: AppServerLiveEvent): AppServerCaptureEvent | null {
   const payload = event.payload ?? {};
   const rawEvent = recordValue(payload.event);
   if (!rawEvent) return null;
@@ -2551,21 +2551,21 @@ function honeycrispCaptureEventFromLiveEvent(event: HoneycrispLiveEvent): Honeyc
   };
 }
 
-function honeycrispLiveEventSummary(event: HoneycrispLiveEvent): string {
+function appServerLiveEventSummary(event: AppServerLiveEvent): string {
   const payload = event.payload ?? {};
   if (event.kind === 'tool.progress') {
     const eventType = stringPayload(payload, 'eventType') ?? 'tool_execution';
     const toolName = stringPayload(payload, 'toolName') ?? 'tool';
-    return `Honeycrisp ${eventType}: ${toolName}`;
+    return `app-server ${eventType}: ${toolName}`;
   }
   if (event.kind === 'agent.event') {
     const eventType = stringPayload(payload, 'type') ?? 'agent_event';
-    return `Honeycrisp ${eventType}`;
+    return `app-server ${eventType}`;
   }
-  return `Honeycrisp live event: ${event.kind ?? 'unknown'}`;
+  return `app-server live event: ${event.kind ?? 'unknown'}`;
 }
 
-function researchSummaryText(event: HoneycrispCaptureEvent): string {
+function researchSummaryText(event: AppServerCaptureEvent): string {
   const payload = recordValue(event.payload);
   const summary = stringPayload(payload ?? {}, 'summary') ?? (typeof event.summary === 'string' ? event.summary.trim() : '');
   switch (event.kind) {
@@ -2637,26 +2637,26 @@ function breakoutMemberStatus(value: string | null, action: string): BreakoutRoo
   return 'active';
 }
 
-function honeycrispSessionLaunchRequest(
+function appServerSessionLaunchRequest(
   input: StartRunInput,
   workspaceId: string,
   sessionId: string,
   attemptId: string | undefined,
   generateTitle = false,
-  researchProfile?: HoneycrispResearchProfileLaunch,
+  researchProfile?: AppServerResearchProfileLaunch,
   collaboration?: object,
   continuation?: {
     resumeAttemptId?: string;
     resumeFromInitialAttempt?: boolean;
     fallbackPrompt: string;
   }
-): HoneycrispSessionLaunchRequest {
+): AppServerSessionLaunchRequest {
   const objective = input.goalEnabled
     ? resolveGoalObjective(input.goalObjective, input.promptMarkdown)
     : null;
 
   return {
-    launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+    launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
     sessionId,
     launch: {
       workspaceId,
@@ -2722,7 +2722,7 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
       maxCostUsd: finiteRecordNumber(run.budget, 'maxCostUsd', 0),
       repeatSchedule: normalizeRepeatSchedule(run.budget.repeatSchedule)
     },
-    runEngine: 'honeycrisp'
+    runEngine: 'app-server'
   };
 }
 
@@ -2800,7 +2800,7 @@ function buildContinuationSubagentContext(
   for (const message of messages) {
     const agentPath = stringPayload(message.metadata, 'agentPath');
     const output = message.contentMarkdown.trim();
-    if (message.source !== 'honeycrisp' || message.role !== 'assistant' || !agentPath || agentPath === '/root' || !output) {
+    if (message.source !== 'app-server' || message.role !== 'assistant' || !agentPath || agentPath === '/root' || !output) {
       continue;
     }
     const previous = states.get(agentPath);
@@ -2846,8 +2846,8 @@ function subagentStatusFromAction(action: string): string {
 
 function isRootContinuationMessage(message: TranscriptMessageRecord): boolean {
   if (
-    message.source !== 'honeycrisp' &&
-    message.source !== 'honeycrisp_commentary' &&
+    message.source !== 'app-server' &&
+    message.source !== 'app_server_commentary' &&
     message.source !== 'user_steering' &&
     message.source !== 'openai_reasoning_summary'
   ) {
@@ -2858,7 +2858,7 @@ function isRootContinuationMessage(message: TranscriptMessageRecord): boolean {
 }
 
 function continuationMessageLabel(message: TranscriptMessageRecord): string {
-  if (message.source === 'honeycrisp_commentary') return 'Agent commentary';
+  if (message.source === 'app_server_commentary') return 'Agent commentary';
   if (message.source === 'openai_reasoning_summary') return 'Agent progress';
   return message.role === 'assistant' ? 'Agent' : message.role === 'system' ? 'System' : 'User';
 }
@@ -2885,7 +2885,7 @@ export function steeringContinuationConsumed(
     && completedRootTurn > Math.max(0, rootTurnAtDispatch ?? 0);
 }
 
-function isSuccessfulReportRevisionEvent(event: HoneycrispCaptureEvent, reportId: string): boolean {
+function isSuccessfulReportRevisionEvent(event: AppServerCaptureEvent, reportId: string): boolean {
   if (event.kind !== 'tool.observed') return false;
   const payload = recordValue(event.payload);
   if (!payload || stringPayload(payload, 'status') !== 'complete') return false;
@@ -2900,7 +2900,7 @@ function turnFromSummary(summary: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-function offsetRootTurn(event: HoneycrispLiveEvent, rootTurnOffset: number): HoneycrispLiveEvent {
+function offsetRootTurn(event: AppServerLiveEvent, rootTurnOffset: number): AppServerLiveEvent {
   if (rootTurnOffset <= 0 || !event.payload) return event;
   const turn = numberPayload(event.payload, 'turn');
   if (!turn) return event;
@@ -2921,19 +2921,19 @@ function finiteRecordNumber(record: Record<string, unknown>, key: string, fallba
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-export function invokeHoneycrispToolsList(
+export function invokeAppServerToolsList(
   workspacePath: string,
   shellOptionsPath?: string,
   agentPluginRuntimeArgs: readonly string[] = []
 ): Record<string, unknown> {
-  const invocation = resolveHoneycrispInvocation();
+  const invocation = resolveAppServerInvocation();
   const fullArgs = [
     ...invocation.prefixArgs,
     'tools',
     'list',
     '--workspace-root',
     workspacePath,
-    ...bealeHoneycrispToolDiscoveryArgs(shellOptionsPath, agentPluginRuntimeArgs),
+    ...bealeAppServerToolDiscoveryArgs(shellOptionsPath, agentPluginRuntimeArgs),
     '--json'
   ];
   const result = spawnSync(invocation.command, fullArgs, {
@@ -2944,14 +2944,14 @@ export function invokeHoneycrispToolsList(
     windowsHide: true
   });
   if (result.status !== 0) {
-    const detail = String(result.stderr || result.stdout || 'Honeycrisp tools list failed.').trim();
-    throw new Error(`Honeycrisp tooling discovery failed: ${detail}`);
+    const detail = String(result.stderr || result.stdout || 'app-server tools list failed.').trim();
+    throw new Error(`app-server tooling discovery failed: ${detail}`);
   }
-  return parseHoneycrispJsonCommandOutput(result.stdout, 'Honeycrisp tooling discovery');
+  return parseAppServerJsonCommandOutput(result.stdout, 'app-server tooling discovery');
 }
 
-export function invokeHoneycrispToolsConfig(workspacePath: string, args: readonly string[]): Record<string, unknown> {
-  const invocation = resolveHoneycrispInvocation();
+export function invokeAppServerToolsConfig(workspacePath: string, args: readonly string[]): Record<string, unknown> {
+  const invocation = resolveAppServerInvocation();
   const fullArgs = [
     ...invocation.prefixArgs,
     'tools',
@@ -2969,10 +2969,10 @@ export function invokeHoneycrispToolsConfig(workspacePath: string, args: readonl
     windowsHide: true
   });
   if (result.status !== 0) {
-    const detail = String(result.stderr || result.stdout || 'Honeycrisp tools config failed.').trim();
-    throw new Error(`Honeycrisp tooling configuration failed: ${detail}`);
+    const detail = String(result.stderr || result.stdout || 'app-server tools config failed.').trim();
+    throw new Error(`app-server tooling configuration failed: ${detail}`);
   }
-  return parseHoneycrispJsonCommandOutput(result.stdout, 'Honeycrisp tooling configuration');
+  return parseAppServerJsonCommandOutput(result.stdout, 'app-server tooling configuration');
 }
 
 function positiveIntegerEnv(name: string): number | null {
@@ -2983,7 +2983,7 @@ function positiveIntegerEnv(name: string): number | null {
 }
 
 function controlAckTimeoutMs(): number {
-  return positiveIntegerEnv('BEALE_HONEYCRISP_CONTROL_ACK_TIMEOUT_MS') ?? DEFAULT_HONEYCRISP_CONTROL_ACK_TIMEOUT_MS;
+  return positiveIntegerEnv('BEALE_APP_SERVER_CONTROL_ACK_TIMEOUT_MS') ?? DEFAULT_APP_SERVER_CONTROL_ACK_TIMEOUT_MS;
 }
 
 function isResearchModelSelection(value: unknown): value is ResearchModelSelection {
@@ -3188,16 +3188,16 @@ function parseEnvArgs(name: string): string[] {
   return parsed;
 }
 
-function additionalHoneycrispRuntimeArgs(): string[] {
-  return parseEnvArgs('BEALE_HONEYCRISP_RUNTIME_ARGS_JSON');
+function additionalAppServerRuntimeArgs(): string[] {
+  return parseEnvArgs('BEALE_APP_SERVER_RUNTIME_ARGS_JSON');
 }
 
-function bealeHoneycrispToolDiscoveryArgs(
+function bealeAppServerToolDiscoveryArgs(
   shellOptionsPath: string | undefined,
   agentPluginRuntimeArgs: readonly string[] = []
 ): string[] {
   return [
-    ...additionalHoneycrispRuntimeArgs(),
+    ...additionalAppServerRuntimeArgs(),
     '--no-default-tool-config',
     ...agentPluginRuntimeArgs,
     '--tool-family',
@@ -3321,7 +3321,7 @@ function normalizeTokenUsage(record: Record<string, unknown>): NormalizedTokenUs
   };
 }
 
-function reportedHoneycrispTraceUsage(usage: NormalizedTokenUsage): Record<string, unknown> {
+function reportedAppServerTraceUsage(usage: NormalizedTokenUsage): Record<string, unknown> {
   return {
     ...(usage.inputTokens !== null ? { input_tokens: usage.inputTokens } : {}),
     ...(usage.promptTokens !== null ? { prompt_tokens: usage.promptTokens } : {}),
@@ -3334,7 +3334,7 @@ function reportedHoneycrispTraceUsage(usage: NormalizedTokenUsage): Record<strin
           cache_hit_rate: usage.cacheHitRate
         }
       : {}),
-    source: HONEYCRISP_REPORTED_USAGE_SOURCE,
+    source: APP_SERVER_REPORTED_USAGE_SOURCE,
     estimated: false
   };
 }
@@ -3374,7 +3374,7 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseHoneycrispJsonCommandOutput(stdout: string, label: string): Record<string, unknown> {
+function parseAppServerJsonCommandOutput(stdout: string, label: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(stdout) as unknown;
     if (isJsonRecord(parsed)) return parsed;

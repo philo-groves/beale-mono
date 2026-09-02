@@ -440,8 +440,8 @@ class ZCodeProtocolClient {
         result: {
           decision: allowed ? "allow" : "deny",
           reason: allowed
-            ? "Honeycrisp exposes this governed tool through its session-scoped MCP bridge."
-            : "This tool is outside Honeycrisp's governed ZCode allowlist.",
+            ? "app-server exposes this governed tool through its session-scoped MCP bridge."
+            : "This tool is outside app-server's governed ZCode allowlist.",
         },
       })}\n`);
       return;
@@ -468,10 +468,10 @@ async function startZCodeMcpServer(tools: readonly ZCodeTool[], signal: AbortSig
     server.listen(0, "127.0.0.1", () => resolvePromise());
   });
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Honeycrisp could not bind its ZCode MCP bridge.");
+  if (!address || typeof address === "string") throw new Error("app-server could not bind its ZCode MCP bridge.");
   return {
     descriptor: {
-      name: "honeycrisp",
+      name: "app-server",
       type: "http",
       url: `http://127.0.0.1:${address.port}/mcp`,
       headers: [{ name: "Authorization", value: `Bearer ${token}` }],
@@ -513,7 +513,7 @@ async function handleMcpRequest(
       result = {
         protocolVersion: "2025-11-25",
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "honeycrisp", version: "0.1.0" },
+        serverInfo: { name: "app-server", version: "0.1.0" },
       };
     } else if (method === "tools/list") {
       result = { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })) };
@@ -521,7 +521,7 @@ async function handleMcpRequest(
       const params = isRecord(message.params) ? message.params : {};
       const name = stringValue(params.name);
       const tool = tools.find((candidate) => candidate.name === name);
-      if (!tool) throw new Error(`Unknown Honeycrisp MCP tool: ${name ?? "missing"}`);
+      if (!tool) throw new Error(`Unknown app-server MCP tool: ${name ?? "missing"}`);
       const executed = await tool.execute(isRecord(params.arguments) ? params.arguments : {}, signal);
       result = { content: executed.content, ...(executed.isError ? { isError: true } : {}) };
     } else {
@@ -564,11 +564,11 @@ function resolveZCodeCliInvocation(args: readonly string[]): { command: string; 
 
 function workspaceDescriptor(workspaceRoot: string): Record<string, unknown> {
   const workspaceKey = createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 24);
-  return { workspacePath: workspaceRoot, workspaceKey: `honeycrisp-${workspaceKey}` };
+  return { workspacePath: workspaceRoot, workspaceKey: `app-server-${workspaceKey}` };
 }
 
 function zcodeToolAllowlist(tools: readonly ZCodeTool[]): string[] {
-  return tools.flatMap((tool) => [tool.name, `mcp__honeycrisp__${tool.name}`]);
+  return tools.flatMap((tool) => [tool.name, `mcp__app_server__${tool.name}`]);
 }
 
 function zcodeSessionId(value: unknown): string | null {
@@ -617,7 +617,7 @@ function finalZCodeAssistantText(snapshot: unknown): string {
 function formatZCodePrompt(systemPrompt: string, input: ResearchAgentExecutionInput["modelInput"]): string {
   const context = input.contextSections.map((section) => `## ${section.label}\n${serializeContext(section.content)}`).join("\n\n");
   return [
-    "Follow this Honeycrisp host contract for the entire turn:",
+    "Follow this app-server host contract for the entire turn:",
     systemPrompt,
     context ? `Research context:\n\n${context}` : "",
     `User research request:\n\n${input.prompt}`,

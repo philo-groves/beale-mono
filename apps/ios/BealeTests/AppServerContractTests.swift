@@ -627,7 +627,7 @@ final class AppServerContractTests: XCTestCase {
                       "role": "assistant",
                       "phase": "commentary",
                       "contentMarkdown": "Checking the authentication boundary.",
-                      "source": "honeycrisp_commentary",
+                      "source": "app_server_commentary",
                       "metadata": {
                         "live": true,
                         "agentPath": "/root",
@@ -703,7 +703,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "05",
                 content: "Native commentary",
-                source: "honeycrisp_commentary",
+                source: "app_server_commentary",
                 phase: "commentary",
                 responseId: "response-2",
                 itemId: "message:0"
@@ -712,7 +712,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "07",
                 content: "Commentary separator",
-                source: "honeycrisp_commentary",
+                source: "app_server_commentary",
                 phase: "commentary",
                 responseId: "response-4",
                 itemId: "message:0"
@@ -721,13 +721,13 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "09",
                 content: "**Issue** Research agent failed: WebSocket error",
-                responseId: "honeycrisp-progress",
+                responseId: "app-server-progress",
                 itemId: "failure-event"
             ),
             message(
                 "10",
                 content: "Read parser.c",
-                source: "honeycrisp_tool_summary",
+                source: "app_server_tool_summary",
                 phase: "tool",
                 toolName: "file.read",
                 toolPluralTemplate: "Read {count} files"
@@ -735,7 +735,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "11",
                 content: "Read token.c",
-                source: "honeycrisp_tool_summary",
+                source: "app_server_tool_summary",
                 phase: "tool",
                 toolName: "file.read",
                 toolPluralTemplate: "Read {count} files"
@@ -757,7 +757,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "12",
                 content: "Mapped the parser boundary.",
-                source: "honeycrisp_commentary",
+                source: "app_server_commentary",
                 phase: "commentary",
                 agentPath: "/root/parser_reviewer",
                 responseId: "subagent-response",
@@ -766,7 +766,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "13",
                 content: "Root-only commentary",
-                source: "honeycrisp_commentary",
+                source: "app_server_commentary",
                 phase: "commentary",
                 responseId: "root-response",
                 itemId: "message:0"
@@ -811,7 +811,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "synthesized-commentary",
                 content: "Checking the parser boundary.",
-                source: "honeycrisp_commentary",
+                source: "app_server_commentary",
                 phase: "commentary",
                 responseId: "response-1",
                 itemId: "message:0",
@@ -820,7 +820,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "persisted-commentary",
                 content: "Checking the parser boundary.",
-                source: "honeycrisp_commentary",
+                source: "app_server_commentary",
                 phase: "commentary",
                 responseId: "response-1",
                 itemId: "message:0",
@@ -829,7 +829,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "synthesized-final",
                 content: "The boundary is guarded.",
-                source: "honeycrisp",
+                source: "app-server",
                 phase: "final_answer",
                 traceEventId: "model-output-2",
                 createdAt: "2026-08-28T20:00:01.000Z"
@@ -837,7 +837,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "persisted-final",
                 content: "The boundary is guarded.",
-                source: "honeycrisp",
+                source: "app-server",
                 phase: "final_answer",
                 traceEventId: "model-output-2",
                 createdAt: "2026-08-28T20:00:01.100Z"
@@ -845,7 +845,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "tool-alias-1",
                 content: "Read parser.c",
-                source: "honeycrisp_tool_summary",
+                source: "app_server_tool_summary",
                 phase: "tool",
                 toolName: "file.read",
                 createdAt: "2026-08-28T20:00:02.000Z"
@@ -853,7 +853,7 @@ final class AppServerContractTests: XCTestCase {
             message(
                 "tool-alias-2",
                 content: "Read parser.c",
-                source: "honeycrisp_tool_summary",
+                source: "app_server_tool_summary",
                 phase: "tool",
                 toolName: "file.read",
                 createdAt: "2026-08-28T20:00:02.000Z"

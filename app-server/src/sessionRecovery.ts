@@ -17,19 +17,19 @@ const NON_RECOVERABLE_FAILURE_PATTERNS = [
 
 export const DEFAULT_LONG_SESSION_RECOVERY_ATTEMPTS = 2;
 
-export interface HoneycrispSessionCompletion {
+export interface AppServerSessionCompletion {
   readonly succeeded: boolean;
   readonly recoverable: boolean;
   readonly captureAvailable: boolean;
   readonly diagnostic: string | null;
 }
 
-export async function inspectHoneycrispSessionCompletion(input: {
+export async function inspectAppServerSessionCompletion(input: {
   code: number | null;
   stderr: string;
   capturePath: string;
   stopRequested: boolean;
-}): Promise<HoneycrispSessionCompletion> {
+}): Promise<AppServerSessionCompletion> {
   if (input.stopRequested) {
     return {
       succeeded: false,
@@ -53,7 +53,7 @@ export async function inspectHoneycrispSessionCompletion(input: {
 
   const diagnostic = normalizedDiagnostic(
     capture?.status === 'error' ? capture.outputText : input.stderr,
-  ) ?? `Honeycrisp exited with code ${input.code ?? 'unknown'}.`;
+  ) ?? `app-server exited with code ${input.code ?? 'unknown'}.`;
   return {
     succeeded: false,
     recoverable: isRecoverableLongSessionFailure(diagnostic),

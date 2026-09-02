@@ -238,7 +238,7 @@ export function createRunbookExecutionTool(
     descriptor: {
       name: "runbook.run",
       transportName: "runbook_run",
-      description: "Execute one code cell, an inclusive ordered cell range, or a complete runbook through the normal Honeycrisp shell safety boundary. Returns the durable runId required for runbook_execution finding evidence. Use startCellId after repairing a late failure so already-successful cells are not repeated. Auto-Review denies proof commands issued directly through shell.run outside a runbook.",
+      description: "Execute one code cell, an inclusive ordered cell range, or a complete runbook through the normal app-server shell safety boundary. Returns the durable runId required for runbook_execution finding evidence. Use startCellId after repairing a late failure so already-successful cells are not repeated. Auto-Review denies proof commands issued directly through shell.run outside a runbook.",
       actionClasses: ["experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],

@@ -7,7 +7,7 @@ export const UNBOUNDED_MINUTES = 999_999;
 export const UNBOUNDED_ATTEMPTS = 999_999;
 
 export const defaultRunInput: StartRunInput = {
-  runEngine: 'honeycrisp',
+  runEngine: 'app-server',
   shellSafetyMode: DEFAULT_SHELL_SAFETY_MODE,
   goalEnabled: true,
   goalObjective: null,

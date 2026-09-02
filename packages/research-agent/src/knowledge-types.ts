@@ -537,7 +537,7 @@ export interface MemoryDreamingSummary {
 
 export interface MemorySummary {
   status: "missing" | "empty" | "ready" | "error";
-  source: "none" | "honeycrisp_sqlite";
+  source: "none" | "app_server_sqlite";
   contextWorkspaceId: string;
   contextSubjectId: string;
   activeCatalogHash?: string | null;

@@ -10,7 +10,7 @@ import {
 } from '../packages/research-agent/dist/index.js';
 
 test('app-server goal suggestions generate, persist, cache, and record selection', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'honeycrisp-goal-suggestions-'));
+  const root = mkdtempSync(join(tmpdir(), 'app-server-goal-suggestions-'));
   const workspaceRoot = join(root, 'workspace');
   const artifactDirectoryPath = join(root, 'artifacts');
   const databasePath = join(root, 'memory.sqlite');

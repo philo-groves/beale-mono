@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TicketingService } from '../src/main/ticketingService';
-import type { HoneycrispReportDocument, HoneycrispReportSummary } from '../src/shared/types';
+import type { AppServerReportDocument, AppServerReportSummary } from '../src/shared/types';
 
 const directories: string[] = [];
 const encryption = {
@@ -154,7 +154,7 @@ function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-function report(): HoneycrispReportSummary {
+function report(): AppServerReportSummary {
   return {
     id: 'report-1',
     workspaceId: 'workspace-1',
@@ -176,6 +176,6 @@ function report(): HoneycrispReportSummary {
   };
 }
 
-function document(): HoneycrispReportDocument {
+function document(): AppServerReportDocument {
   return { reportId: 'report-1', content: '# Finding\n\nEvidence.' };
 }

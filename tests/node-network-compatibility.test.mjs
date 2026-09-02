@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   installUndiciTypeOfServiceCompatibility,
   isTypeOfServiceInvalidArgument
-} from '../packages/honeycrisp-host/dist/node-network-compatibility.js';
+} from '../packages/app-server-runtime/dist/node-network-compatibility.js';
 
 function typeOfServiceError(code = 'EINVAL', syscall = 'setTypeOfService') {
   return Object.assign(new Error(`${syscall} ${code}`), { code, syscall });

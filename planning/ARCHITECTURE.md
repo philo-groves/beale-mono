@@ -1,25 +1,25 @@
 # Architecture
 
-Honeycrisp is a general-purpose research agent built around Pi's native agent loop. It puts useful workspace context, durable knowledge, and tools in front of the selected model, then lets the model plan and decide when the work is complete.
+app-server is a general-purpose research agent built around Pi's native agent loop. It puts useful workspace context, durable knowledge, and tools in front of the selected model, then lets the model plan and decide when the work is complete.
 
 ## Core Ownership
 
 - The model owns investigation planning, decomposition, tool use, collaboration, and completion.
-- Honeycrisp owns context compilation, tool execution, durable knowledge, storage, orchestration, live events, and flow captures.
+- app-server owns context compilation, tool execution, durable knowledge, storage, orchestration, live events, and flow captures.
 - A host such as Beale owns workspace setup, authorization recording, repository references, researcher interaction, and presentation.
 
-Honeycrisp does not maintain an outer goal tree, generated subgoals, a triager, or completion gates.
+app-server does not maintain an outer goal tree, generated subgoals, a triager, or completion gates.
 
 ## Runtime Flow
 
 1. The app-server host supplies a research request and structured authorized workspace context.
-2. Honeycrisp selects concise relevant knowledge, leads, and findings from the unified SQLite database.
-3. Honeycrisp compiles projected workspace identity, source references, selected knowledge and claims, and skills into model context. Database paths and storage layout remain runtime-only.
+2. app-server selects concise relevant knowledge, leads, and findings from the unified SQLite database.
+3. app-server compiles projected workspace identity, source references, selected knowledge and claims, and skills into model context. Database paths and storage layout remain runtime-only.
 4. Pi runs the selected model with research tools and collaboration tools.
-   Honeycrisp retries a model turn when the provider reports a retryable transient failure before emitting substantive output; partial turns and non-retryable failures remain terminal.
+   app-server retries a model turn when the provider reports a retryable transient failure before emitting substantive output; partial turns and non-retryable failures remain terminal.
 5. Research tool observations are appended to the operational event stream. The model explicitly saves reusable knowledge or advances evidence-backed claims.
 6. The model may spawn bounded child sessions, communicate with them, and incorporate their results.
-7. Honeycrisp returns the root response and writes a schema-v4 flow capture containing the root result, child sessions, tools, compiled context, and operational storage metadata.
+7. app-server returns the root response and writes a schema-v4 flow capture containing the root result, child sessions, tools, compiled context, and operational storage metadata.
 
 ## Context
 
@@ -31,7 +31,7 @@ The compiled workspace context is guidance, not a repository permission fence. I
 - bounded session, workspace, and relevant or linked subject memory with stable ids, evidence references, relationships, and revisions; and
 - selected skills.
 
-Pi presents the tools themselves through their typed definitions. Honeycrisp enforces permissions and budgets in lifecycle hooks instead of restating that policy as prompt prose. The compiled-context event records concise summaries of the tools actually available for inspection by host interfaces.
+Pi presents the tools themselves through their typed definitions. app-server enforces permissions and budgets in lifecycle hooks instead of restating that policy as prompt prose. The compiled-context event records concise summaries of the tools actually available for inspection by host interfaces.
 
 Repository paths help the model discover likely source. A repository may include bounded nested content roots when a host checkout wraps the actual project directory. A repository need not be known before research begins, and the same user-global checkout may be referenced by multiple workspaces.
 
@@ -64,7 +64,7 @@ Collaboration calls use the same requested/observed research-event envelope as e
 
 ## Durable Knowledge
 
-Honeycrisp uses the host-compatible SQLite database as the source of truth. Durable research state has three complementary projections:
+app-server uses the host-compatible SQLite database as the source of truth. Durable research state has three complementary projections:
 
 - **Knowledge memory** stores reusable facts, entities, boundaries, constraints, references, methods, and trajectories in a concise typed graph.
 - **Research claims** use one stable identity. A proposed or refuted claim appears as a Lead; direct evidence promotes that same row and ID into the Findings view.
@@ -80,7 +80,7 @@ Knowledge records share the user-global SQLite database and are tiered by:
 
 Transcripts, narration, and bulk tool output are operational data, not durable knowledge. Large outputs remain artifact files referenced by concise graph nodes.
 
-Runbooks are a separate workspace-scoped artifact family for reusable multi-step procedures. SQLite stores their ownership, lifecycle, artifact identity, and optimistic revision. Valid Jupyter `nbformat 4` files store ordered markdown/code cells and bounded recorded results under `~/.honeycrisp/artifacts/runbooks/<workspace-id>/`. Runbooks are portable documents, not an alternate executor; all commands run through the normal research tools.
+Runbooks are a separate workspace-scoped artifact family for reusable multi-step procedures. SQLite stores their ownership, lifecycle, artifact identity, and optimistic revision. Valid Jupyter `nbformat 4` files store ordered markdown/code cells and bounded recorded results under `~/.beale/artifacts/runbooks/<workspace-id>/`. Runbooks are portable documents, not an alternate executor; all commands run through the normal research tools.
 
 The agent searches knowledge, leads, and findings early and when research crosses system boundaries. In the Security profile, a suspected vulnerability starts as a Lead, an evidence-backed isolated flaw is classified `security.primitive`, and an end-to-end result that composes component claims into demonstrated impact is classified `security.chain`. In the Mathematics profile, conjecture, theorem, and counterexample are claim classifications rather than memory-node types. Reusable flow endpoints, invariants, mitigations, references, techniques, and trajectories remain knowledge. Routine narration is not durable state.
 
@@ -94,7 +94,7 @@ Research attention is product policy, not profile ontology. Lead, maturity, stal
 
 Research tools expose concrete capabilities such as repository search, bounded file reads, structural code intelligence, analysis, experiments, runbook artifacts, storage inspection, memory access, skills, and configured MCP servers.
 
-Each research tool has a typed schema, action class, side-effect profile, required permissions, and structured result. Honeycrisp enforces tool governance in lifecycle hooks. Collaboration tools are orchestration primitives and remain available when a research-call budget is exhausted.
+Each research tool has a typed schema, action class, side-effect profile, required permissions, and structured result. app-server enforces tool governance in lifecycle hooks. Collaboration tools are orchestration primitives and remain available when a research-call budget is exhausted.
 
 Tool-backed observations may promote or advance claims. Model or child prose alone does not become evidence.
 
@@ -102,16 +102,16 @@ Tool-backed observations may promote or advance claims. Model or child prose alo
 
 The default durable surfaces are:
 
-- `~/.honeycrisp/memory.sqlite` for cross-workspace operational state and tiered knowledge; and
-- `~/.honeycrisp/artifacts/` for files, raw outputs, logs, generated material, and reproducible scripts.
+- `~/.beale/memory.sqlite` for cross-workspace operational state and tiered knowledge; and
+- `~/.beale/artifacts/` for files, raw outputs, logs, generated material, and reproducible scripts.
 
-The shared SQLite database uses an append-only, component-scoped migration ledger. Honeycrisp owns the `honeycrisp_core` sequence and adopts the idempotent graph baseline for databases created before the ledger existed.
+The shared SQLite database uses an append-only, component-scoped migration ledger. app-server owns the `app_server_core` sequence and adopts the idempotent graph baseline for databases created before the ledger existed.
 
 Schema-v4 flow captures summarize the request, root result, child session tree, model calls, tool events, compiled context with selected graph knowledge, and storage manifest. Child metadata includes path, parent, lifecycle state, model, effort, inheritance mode, timestamps, result, errors, and usage.
 
 ## Trust Boundary
 
-OpenAI credentials remain in the host credential layer. Host-provided authorization is recorded once and inherited by child sessions. Honeycrisp treats external tool content as untrusted input and does not interpret delegation as authorization expansion.
+OpenAI credentials remain in the host credential layer. Host-provided authorization is recorded once and inherited by child sessions. app-server treats external tool content as untrusted input and does not interpret delegation as authorization expansion.
 
 Isolation is an operator and host choice. Allowlisted local experiments are auditable tools, not a security sandbox.
 

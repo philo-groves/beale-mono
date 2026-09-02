@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { isLiveResearchRunStatus } from '../src/shared/types';
-import type { HoneycrispMemorySummary, RunRow, ScopeAsset, SessionRunActivity } from '../src/shared/types';
+import type { AppServerMemorySummary, RunRow, ScopeAsset, SessionRunActivity } from '../src/shared/types';
 import { MainSessionWorkspace } from '../src/renderer/features/sessions/MainSessionWorkspace';
 import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollbarActivation';
 import { promoteWorkspaceDirectory, WorkspaceDirectoriesField } from '../src/renderer/features/workspaces/WorkspaceDirectoriesWidget';
@@ -402,7 +402,7 @@ describe('workspace dashboard', () => {
   it('shows a disabled loading state while the filesystem summary is deferred', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceHousekeepingPanel, {
       busy: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       memoryDreamingInProgress: false,
       researchProfile: testResearchProfile(),
       runs: [],
@@ -429,7 +429,7 @@ describe('workspace dashboard', () => {
       events: [],
       allEvents: [],
       providerModelCatalog: [],
-      honeycrispMemory: memory,
+      appServerMemory: memory,
       researchProfile: testResearchProfile(),
       researchKitId: 'apple-security-bounty',
       researchSubjectName: 'Parser',
@@ -451,7 +451,7 @@ describe('workspace dashboard', () => {
       memoryDreamingInProgress: false,
       onRunMemoryDreaming: () => undefined,
       onResearchDetailsOpenChange: () => undefined,
-      onOpenHoneycrispRunbook: () => undefined,
+      onOpenAppServerRunbook: () => undefined,
       onBackToRunbooks: () => undefined,
       onBackToSubagents: () => undefined,
       onSelectSubagent: () => undefined,
@@ -513,7 +513,7 @@ describe('workspace dashboard', () => {
     expect(html).toMatch(/aria-label="Research Profile"[^>]*disabled=""[^>]*value="Security"/u);
     expect(html).toMatch(/aria-label="Research Kit"[^>]*disabled=""[^>]*value="Apple Security Bounty"/u);
     expect(html).toContain('<strong>Memory</strong>');
-    expect(html).toContain('aria-label="Memory" class="workspace-overview-input"><option value="honeycrisp" selected="">Enabled</option><option value="disabled">Disabled</option></select>');
+    expect(html).toContain('aria-label="Memory" class="workspace-overview-input"><option value="app-server" selected="">Enabled</option><option value="disabled">Disabled</option></select>');
     expect(html).toContain('Disabling memory retains existing data and removes recall, claim, and campaign tools from new sessions.');
     expect(html).toMatch(/aria-label="Research Subject"[^>]*disabled=""[^>]*value="Parser"/u);
     expect(html).toMatch(/aria-label="Workspace Name"[^>]*required=""[^>]*value="Parser Workspace"/u);
@@ -553,7 +553,7 @@ describe('workspace dashboard', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: testResearchProfile(),
       workspaceName: 'Parser Workspace',
       runs: [],
@@ -586,7 +586,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'board',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: testResearchProfile(),
       workspaceName: 'Parser Workspace',
       runs: [],
@@ -600,7 +600,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'runbooks',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: testResearchProfile(),
       workspaceName: 'Parser Workspace',
       runs: [],
@@ -614,7 +614,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'claims',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: testResearchProfile(),
       workspaceName: 'Parser Workspace',
       runs: [],
@@ -634,7 +634,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'kit',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchKitId: 'apple-security-bounty',
       researchProfile: testResearchProfile(),
       workspaceName: 'Apple Research',
@@ -654,7 +654,7 @@ describe('workspace dashboard', () => {
     const generalHtml = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchKitId: 'general',
       researchProfile: testResearchProfile(),
       workspaceName: 'General Research',
@@ -669,7 +669,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'utilities',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: testResearchProfile(),
       workspaceName: 'Parser Workspace',
       runs: [],
@@ -680,7 +680,7 @@ describe('workspace dashboard', () => {
     expect(html).toContain('<h2>Parser Workspace Utilities</h2>');
     expect(html).toContain('<strong>Remove Workspace</strong>');
     expect(html).toContain('Unregisters this workspace from Beale only.');
-    expect(html).toContain('Directories, .beale metadata, repository clones, scoped resources, and Honeycrisp memory remain on disk.');
+    expect(html).toContain('Directories, .beale metadata, repository clones, scoped resources, and app-server memory remain on disk.');
     expect(html).toContain('aria-label="Type Parser Workspace to confirm workspace removal"');
     expect(html).toContain('placeholder="Type &quot;Parser Workspace&quot; to confirm"');
     expect(html).toMatch(/<button class="workspace-removal-action" disabled="" type="submit">Remove from Beale<\/button>/u);
@@ -732,7 +732,7 @@ describe('workspace dashboard', () => {
       },
       busy: false,
       initialView: 'overview',
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       memoryDreamingInProgress: false,
       onRunMemoryDreaming: () => undefined,
       runs: [],
@@ -807,7 +807,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'rules',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       workspaceName: 'Parser Workspace',
       workspaceRules: [{
         id: 'rule_one',
@@ -925,7 +925,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'memory',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memory,
+      appServerMemory: memory,
       researchProfile: profile,
       sessionHeatPreferences,
       workspaceName: 'Security',
@@ -1051,7 +1051,7 @@ describe('workspace dashboard', () => {
         lastRun: null
       },
       memoryDreamingInProgress: false,
-      honeycrispMemory: memory,
+      appServerMemory: memory,
       researchProfile: profile,
       workspaceName: 'Parser Workspace',
       runs,
@@ -1080,7 +1080,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'resources',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memory,
+      appServerMemory: memory,
       activeScope: {
         id: 'scope_surface',
         version: 1,
@@ -1317,7 +1317,7 @@ describe('workspace dashboard', () => {
       busy: false,
       initialView: 'activity',
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: testResearchProfile(),
       workspaceName: 'Parser Workspace',
       runs: [natural, unexpected, safeguard, recovered, active],
@@ -1368,7 +1368,7 @@ describe('workspace dashboard', () => {
     const inProgressHtml = renderToStaticMarkup(createElement(WorkspaceHousekeepingPanel, {
       busy: true,
       memoryDreamingInProgress: true,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: profile,
       runs: [],
       onRunMemoryDreaming: () => undefined
@@ -1388,7 +1388,7 @@ describe('workspace dashboard', () => {
         decisionCount: 0,
         updatedAt: '2026-08-12T12:00:00.000Z'
       },
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: profile,
       runs: [],
       onRunMemoryDreaming: () => undefined
@@ -1399,7 +1399,7 @@ describe('workspace dashboard', () => {
     const disabledHtml = renderToStaticMarkup(createElement(WorkspaceHousekeepingPanel, {
       busy: false,
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: {
         ...profile,
         capabilities: { ...profile.capabilities, memoryEnabled: false }
@@ -1432,7 +1432,7 @@ describe('workspace dashboard', () => {
       busy: false,
       workspaceDejunk: null,
       memoryDreamingInProgress: false,
-      honeycrispMemory: { ...memorySummary(), loading: true },
+      appServerMemory: { ...memorySummary(), loading: true },
       researchProfile: testResearchProfile(),
       runs: [],
       onRunMemoryDreaming: () => undefined
@@ -1459,7 +1459,7 @@ describe('workspace dashboard', () => {
         lastRun: null
       },
       memoryDreamingInProgress: false,
-      honeycrispMemory: memorySummary(),
+      appServerMemory: memorySummary(),
       researchProfile: testResearchProfile(),
       runs: [runRow(`run_${status}`, [], { status })],
       onRunMemoryDreaming: () => undefined
@@ -1505,7 +1505,7 @@ function runRow(
       startedAt: intervals[0]?.[0] ?? null,
       endedAt: intervals.at(-1)?.[1] ?? null
     },
-    engine: 'honeycrisp',
+    engine: 'app-server',
     sessionRuns: intervals.length > 0
       ? [sessionRun(id, `attempt_${id}`, intervals, outcome)]
       : []
@@ -1538,14 +1538,14 @@ function sessionRun(
 }
 
 function memorySummary(input: {
-  nodes?: Array<Partial<HoneycrispMemorySummary['nodes'][number]>>;
-  runbooks?: Array<Partial<HoneycrispMemorySummary['runbooks'][number]>>;
-  reports?: Array<Partial<HoneycrispMemorySummary['reports'][number]>>;
+  nodes?: Array<Partial<AppServerMemorySummary['nodes'][number]>>;
+  runbooks?: Array<Partial<AppServerMemorySummary['runbooks'][number]>>;
+  reports?: Array<Partial<AppServerMemorySummary['reports'][number]>>;
   lastDreamCompletedAt?: string;
-} = {}): HoneycrispMemorySummary {
+} = {}): AppServerMemorySummary {
   return {
     status: 'ready',
-    source: 'honeycrisp_sqlite',
+    source: 'app_server_sqlite',
     contextWorkspaceId: 'workspace_security',
     contextSubjectId: 'subject_security',
     databasePath: '/memory.sqlite',

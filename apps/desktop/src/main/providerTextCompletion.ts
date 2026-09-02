@@ -3,8 +3,8 @@ import type {
   ResearchModelEffortLevel,
   ResearchModelProviderId
 } from '@shared/types';
-import { honeycrispProcessEnvironment } from './honeycrispRunEngine';
-import { invokeHoneycrispCliProtocolAsync } from './honeycrispCliClient';
+import { appServerProcessEnvironment } from './appServerRunEngine';
+import { invokeAppServerCliProtocolAsync } from './appServerCliClient';
 
 export interface ProviderTextCompletionRequest {
   provider: ResearchModelProviderId;
@@ -22,9 +22,9 @@ export type ProviderTextCompleter = (request: ProviderTextCompletionRequest) => 
 
 export async function completeProviderText(request: ProviderTextCompletionRequest): Promise<string> {
   // Keep credential/environment injection in Beale's trusted host adapter;
-  // completion validation and provider execution belong to Honeycrisp.
-  const envelope = await invokeHoneycrispCliProtocolAsync<{ text: string }>('provider.complete', ['complete', '--json'], {
-    env: honeycrispProcessEnvironment(null, request.preferredAuthenticationMethods),
+  // completion validation and provider execution belong to app-server.
+  const envelope = await invokeAppServerCliProtocolAsync<{ text: string }>('provider.complete', ['complete', '--json'], {
+    env: appServerProcessEnvironment(null, request.preferredAuthenticationMethods),
     ...(request.signal ? { signal: request.signal } : {}),
     stdin: JSON.stringify({
     schemaVersion: 1,
@@ -38,7 +38,7 @@ export async function completeProviderText(request: ProviderTextCompletionReques
     })
   });
   if (typeof envelope.result.text !== 'string' || !envelope.result.text.trim()) {
-    throw new Error('Honeycrisp returned an invalid provider completion result.');
+    throw new Error('app-server returned an invalid provider completion result.');
   }
   return envelope.result.text.trim();
 }

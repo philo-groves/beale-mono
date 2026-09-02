@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import {
   ResearchProviderAuthService,
   claudeSubscriptionLoginInvocation,
-  parseHoneycrispAuthStatus,
-  parseHoneycrispAuthVerification,
-  parseHoneycrispModelCatalog,
+  parseAppServerAuthStatus,
+  parseAppServerAuthVerification,
+  parseAppServerModelCatalog,
   parseProviderOAuthInstructions,
   resolveBundledClaudeCliExecutable,
   resolveClaudeCliExecutable,
@@ -125,10 +125,10 @@ describe('research provider auth parsing', () => {
     }
   });
 
-  it('parses Honeycrisp stored OAuth state', () => {
+  it('parses app-server stored OAuth state', () => {
     expect(
-      parseHoneycrispAuthStatus(
-        'Auth file: /Users/researcher/.honeycrisp/auth.json\nanthropic\tAnthropic\tapi_key, oauth\toauth\n'
+      parseAppServerAuthStatus(
+        'Auth file: /Users/researcher/.beale/auth.json\nanthropic\tAnthropic\tapi_key, oauth\toauth\n'
       )
     ).toEqual({
       providerId: 'anthropic',
@@ -140,7 +140,7 @@ describe('research provider auth parsing', () => {
 
   it('parses ambient API-key verification without reading the key', () => {
     expect(
-      parseHoneycrispAuthVerification(
+      parseAppServerAuthVerification(
         'Anthropic (anthropic) model claude-sonnet-4-6: configured via ANTHROPIC_API_KEY\n'
       )
     ).toEqual({
@@ -165,7 +165,7 @@ describe('research provider auth parsing', () => {
 
   it('parses Pi model catalogs with model-specific effort levels', () => {
     expect(
-      parseHoneycrispModelCatalog(JSON.stringify({
+      parseAppServerModelCatalog(JSON.stringify({
         providers: [{
           providerId: 'xai',
           providerName: 'xAI',

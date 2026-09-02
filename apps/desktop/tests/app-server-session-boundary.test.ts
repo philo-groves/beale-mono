@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import { HoneycrispSessionStore } from '@honeycrisp/research-agent';
+import { AppServerSessionStore } from '@beale/research-agent';
 import { WorkspaceDatabase } from '../src/main/database';
 import {
-  recoverInterruptedHoneycrispSessions
-} from '../src/main/honeycrispCliClient';
+  recoverInterruptedAppServerSessions
+} from '../src/main/appServerCliClient';
 import {
-  createHoneycrispSessionBoundary,
-  flushHoneycrispSessionWrites,
-  getHoneycrispRunDetailForClient,
-  getHoneycrispRunDetailUpdateForClient
-} from '../src/main/honeycrispSessionBoundary';
+  createAppServerSessionBoundary,
+  flushAppServerSessionWrites,
+  getAppServerRunDetailForClient,
+  getAppServerRunDetailUpdateForClient
+} from '../src/main/appServerSessionBoundary';
 import { WorkspaceService } from '../src/main/workspaceService';
 import { resolvedTestResearchProfile } from './researchProfileFixture';
 
@@ -21,13 +21,13 @@ const createdDirectories: string[] = [];
 const createdAppServerStateFiles: string[] = [];
 const previousEnvironment = new Map<string, string | undefined>();
 
-function importHoneycrispSessionCapture(
+function importAppServerSessionCapture(
   sessionId: string,
   attemptId: string,
   capturePath: string,
   storage: { databasePath: string; artifactDirectoryPath: string }
 ): void {
-  const store = new HoneycrispSessionStore(storage);
+  const store = new AppServerSessionStore(storage);
   try {
     store.importCapture(sessionId, {
       attemptId,
@@ -50,14 +50,14 @@ afterEach(() => {
   }
 });
 
-describe('Honeycrisp session persistence boundary', () => {
-  it('captures and persists end-of-session suggestions for Honeycrisp-owned runs', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-next-steps-'));
+describe('app-server session persistence boundary', () => {
+  it('captures and persists end-of-session suggestions for app-server-owned runs', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-next-steps-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -70,7 +70,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_next_steps'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     try {
       const context = database.createRun({
         scopeVersionId: database.getActiveScope().id,
@@ -82,7 +82,7 @@ describe('Honeycrisp session persistence boundary', () => {
         reasoningEffort: 'high',
         attemptStrategy: 'iterative_research',
         sandboxProfile: 'host',
-        budget: { runEngine: 'honeycrisp', researchWorkflowId: 'discovery' }
+        budget: { runEngine: 'app-server', researchWorkflowId: 'discovery' }
       });
       const promptSuggestions = [1, 2, 3].map((index) => ({
         title: `Follow-up direction ${index}`,
@@ -94,7 +94,7 @@ describe('Honeycrisp session persistence boundary', () => {
         role: 'assistant',
         phase: 'final_answer',
         contentMarkdown: 'Session complete.',
-        source: 'honeycrisp',
+        source: 'app-server',
         metadata: { nextPromptSuggestions: promptSuggestions }
       });
       database.updateRunStatus(context.run.id, 'completed', 'Session complete.');
@@ -113,10 +113,10 @@ describe('Honeycrisp session persistence boundary', () => {
       expect(database.getSessionNextStepSuggestions(context.run.id)).toEqual(saved);
       expect(database.getRunDetail(context.run.id).nextStepSuggestions).toEqual(saved);
 
-      await flushHoneycrispSessionWrites(database, context.run.id);
+      await flushAppServerSessionWrites(database, context.run.id);
       expect(database.listRunRows().find((row) => row.run.id === context.run.id)?.lastMessageAt)
         .toBe(finalMessage.createdAt);
-      const sessionStore = new HoneycrispSessionStore({ databasePath });
+      const sessionStore = new AppServerSessionStore({ databasePath });
       try {
         sessionStore.appendEvent(context.run.id, {
           id: 'event_canonical_session_usage',
@@ -150,7 +150,7 @@ describe('Honeycrisp session persistence boundary', () => {
       } finally {
         sessionStore.close();
       }
-      await expect(getHoneycrispRunDetailForClient(database, context.run.id)).resolves.toMatchObject({
+      await expect(getAppServerRunDetailForClient(database, context.run.id)).resolves.toMatchObject({
         nextStepSuggestions: saved,
         tokenUsage: {
           totalTokens: 2_500_000,
@@ -167,12 +167,12 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 30_000);
 
   it('retains optional diagnostic traces only while tracing is enabled', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-trace-retention-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-trace-retention-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: join(directory, 'artifacts'),
@@ -186,7 +186,7 @@ describe('Honeycrisp session persistence boundary', () => {
     });
     rawDatabase.initialize();
     let tracesEnabled = false;
-    const database = createHoneycrispSessionBoundary(rawDatabase, true, () => tracesEnabled);
+    const database = createAppServerSessionBoundary(rawDatabase, true, () => tracesEnabled);
     try {
       const context = database.createRun({
         scopeVersionId: database.getActiveScope().id,
@@ -198,7 +198,7 @@ describe('Honeycrisp session persistence boundary', () => {
         reasoningEffort: 'high',
         attemptStrategy: 'iterative_research',
         sandboxProfile: 'host',
-        budget: { runEngine: 'honeycrisp' }
+        budget: { runEngine: 'app-server' }
       });
 
       database.appendTraceEvent({
@@ -218,7 +218,7 @@ describe('Honeycrisp session persistence boundary', () => {
         summary: 'Retained session-history event.',
         payload: {}
       });
-      await flushHoneycrispSessionWrites(database, context.run.id);
+      await flushAppServerSessionWrites(database, context.run.id);
 
       let summaries = database.getRunDetail(context.run.id).traceEvents.map((event) => event.summary);
       expect(summaries).not.toContain('Discarded transport diagnostic.');
@@ -234,7 +234,7 @@ describe('Honeycrisp session persistence boundary', () => {
         payload: { transport: 'websocket' },
         modelVisible: false
       });
-      await flushHoneycrispSessionWrites(database, context.run.id);
+      await flushAppServerSessionWrites(database, context.run.id);
 
       summaries = database.getRunDetail(context.run.id).traceEvents.map((event) => event.summary);
       expect(summaries).toContain('Queryable transport diagnostic.');
@@ -244,12 +244,12 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 30_000);
 
   it('keeps completed subagents after their lifecycle events age out of the session tail', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-subagent-history-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-subagent-history-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -262,7 +262,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_subagent_history'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     try {
       const context = database.createRun({
         scopeVersionId: database.getActiveScope().id,
@@ -274,9 +274,9 @@ describe('Honeycrisp session persistence boundary', () => {
         reasoningEffort: 'high',
         attemptStrategy: 'iterative_research',
         sandboxProfile: 'host',
-        budget: { runEngine: 'honeycrisp' }
+        budget: { runEngine: 'app-server' }
       });
-      const store = new HoneycrispSessionStore({ databasePath });
+      const store = new AppServerSessionStore({ databasePath });
       try {
         for (const [id, action, timestamp] of [
           ['subagent_spawned', 'spawned', '2026-08-23T12:00:00.000Z'],
@@ -311,7 +311,7 @@ describe('Honeycrisp session persistence boundary', () => {
         store.close();
       }
 
-      const detail = await getHoneycrispRunDetailForClient(database, context.run.id);
+      const detail = await getAppServerRunDetailForClient(database, context.run.id);
       expect(detail?.traceEvents.map((event) => event.id)).toEqual(expect.arrayContaining([
         'subagent_spawned',
         'subagent_completed'
@@ -322,12 +322,12 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 30_000);
 
   it('derives and persists interrupted canonical breakout-room state', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-breakout-interruption-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-breakout-interruption-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -340,7 +340,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_breakout_interruption'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     try {
       const context = database.createRun({
         scopeVersionId: database.getActiveScope().id,
@@ -352,7 +352,7 @@ describe('Honeycrisp session persistence boundary', () => {
         reasoningEffort: 'high',
         attemptStrategy: 'iterative_research',
         sandboxProfile: 'host',
-        budget: { runEngine: 'honeycrisp' }
+        budget: { runEngine: 'app-server' }
       });
       database.upsertBreakoutRoom({
         id: 'room_interrupted',
@@ -391,8 +391,8 @@ describe('Honeycrisp session persistence boundary', () => {
         status: 'interrupted',
         endedAt: '2026-08-16T12:02:00.000Z'
       });
-      const previousProtocolCommand = process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND;
-      process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = '/definitely-not-a-honeycrisp-protocol-client';
+      const previousProtocolCommand = process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND;
+      process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = '/definitely-not-a-app-server-protocol-client';
       try {
         expect(database.findBreakoutRoomMember(context.run.id, context.attempt.id, '/root/worker')).toEqual(
           expect.objectContaining({ id: 'member_worker', status: 'interrupted' })
@@ -401,15 +401,15 @@ describe('Honeycrisp session persistence boundary', () => {
           expect.objectContaining({ id: 'room_interrupted', status: 'interrupted' })
         );
       } finally {
-        if (previousProtocolCommand === undefined) delete process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND;
-        else process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = previousProtocolCommand;
+        if (previousProtocolCommand === undefined) delete process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND;
+        else process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = previousProtocolCommand;
       }
 
       expect(database.getRunDetail(context.run.id).breakoutRooms).toEqual([
         expect.objectContaining({ id: 'room_interrupted', status: 'interrupted' })
       ]);
-      await flushHoneycrispSessionWrites(database, context.run.id);
-      expect((await getHoneycrispRunDetailForClient(database, context.run.id))?.breakoutRooms).toEqual([
+      await flushAppServerSessionWrites(database, context.run.id);
+      expect((await getAppServerRunDetailForClient(database, context.run.id))?.breakoutRooms).toEqual([
         expect.objectContaining({ id: 'room_interrupted', status: 'interrupted' })
       ]);
     } finally {
@@ -417,13 +417,13 @@ describe('Honeycrisp session persistence boundary', () => {
     }
   }, 30_000);
 
-  it('uses Honeycrisp as the only writer and batches live trace mirrors off the caller path', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-session-boundary-'));
+  it('uses app-server as the only writer and batches live trace mirrors off the caller path', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-session-boundary-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: join(directory, 'artifacts'),
@@ -436,10 +436,10 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_boundary'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     const context = database.createRun({
       scopeVersionId: database.getActiveScope().id,
-      title: 'Canonical Honeycrisp session',
+      title: 'Canonical app-server session',
       promptMarkdown: 'Inspect the parser.',
       shellSafetyMode: 'auto_review',
       mode: 'open_discovery',
@@ -447,7 +447,7 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
 
     expect(rawDatabase.getRun(context.run.id)).toBeNull();
@@ -487,7 +487,7 @@ describe('Honeycrisp session persistence boundary', () => {
         payload: {}
       });
     }
-    await flushHoneycrispSessionWrites(database, context.run.id);
+    await flushAppServerSessionWrites(database, context.run.id);
 
     const capturePath = join(directory, 'capture.json');
     writeFileSync(capturePath, JSON.stringify({
@@ -510,22 +510,22 @@ describe('Honeycrisp session persistence boundary', () => {
       },
       eventTimeline: []
     }));
-    importHoneycrispSessionCapture(context.run.id, context.attempt.id, capturePath, {
+    importAppServerSessionCapture(context.run.id, context.attempt.id, capturePath, {
       databasePath,
       artifactDirectoryPath: join(dirname(databasePath), 'artifacts')
     });
 
     expect(database.getRunDetail(context.run.id)).toMatchObject({
-      run: { status: 'completed', summary: 'Honeycrisp completed the research session.' },
+      run: { status: 'completed', summary: 'app-server completed the research session.' },
       transcriptMessages: [{ role: 'assistant', contentMarkdown: 'The parser is safe.' }]
     });
 
     const inspection = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      expect(inspection.prepare('SELECT COUNT(*) AS count FROM honeycrisp_sessions').get()).toMatchObject({ count: 1 });
+      expect(inspection.prepare('SELECT COUNT(*) AS count FROM app_server_sessions').get()).toMatchObject({ count: 1 });
       expect(inspection.prepare('SELECT COUNT(*) AS count FROM runs').get()).toMatchObject({ count: 0 });
       const storedEvents = inspection.prepare(`
-        SELECT event_json FROM honeycrisp_session_events
+        SELECT event_json FROM app_server_session_events
         WHERE session_id = ? ORDER BY event_offset ASC
       `).all(context.run.id) as Array<{ event_json: string }>;
       const traceBatches = storedEvents
@@ -540,12 +540,12 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 15_000);
 
   it('does not replay a prior attempt final response while a continuation is active', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-active-continuation-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-active-continuation-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -558,10 +558,10 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_active_continuation'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     const context = database.createRun({
       scopeVersionId: database.getActiveScope().id,
-      title: 'Interrupted Honeycrisp session',
+      title: 'Interrupted app-server session',
       promptMarkdown: 'Inspect the parser.',
       shellSafetyMode: 'auto_review',
       mode: 'open_discovery',
@@ -569,7 +569,7 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
 
     try {
@@ -588,7 +588,7 @@ describe('Honeycrisp session persistence boundary', () => {
         },
         eventTimeline: []
       }));
-      importHoneycrispSessionCapture(context.run.id, context.attempt.id, capturePath, {
+      importAppServerSessionCapture(context.run.id, context.attempt.id, capturePath, {
         databasePath,
         artifactDirectoryPath: join(dirname(databasePath), 'artifacts')
       });
@@ -612,11 +612,11 @@ describe('Honeycrisp session persistence boundary', () => {
       )).toBe(false);
 
       const latestTrace = activeDetail.traceEvents.at(-1);
-      const update = await getHoneycrispRunDetailUpdateForClient(database, context.run.id, {
+      const update = await getAppServerRunDetailUpdateForClient(database, context.run.id, {
         afterTraceSequence: latestTrace?.sequence ?? -1,
         afterTranscriptCount: activeDetail.transcriptMessages.length,
-        afterTraceEventId: typeof latestTrace?.payload.honeycrispSessionEventId === 'string'
-          ? latestTrace.payload.honeycrispSessionEventId
+        afterTraceEventId: typeof latestTrace?.payload.appServerSessionEventId === 'string'
+          ? latestTrace.payload.appServerSessionEventId
           : latestTrace?.id ?? null
       });
       expect(update?.run.status).toBe('active');
@@ -627,7 +627,7 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 15_000);
 
   it('returns the successful terminal response after an app-recovered session resumes', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-recovered-completion-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-recovered-completion-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
@@ -637,7 +637,7 @@ describe('Honeycrisp session persistence boundary', () => {
     };
     const workspaceId = 'workspace_recovered_completion';
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -650,10 +650,10 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     const context = database.createRun({
       scopeVersionId: database.getActiveScope().id,
-      title: 'Recovered Honeycrisp session',
+      title: 'Recovered app-server session',
       promptMarkdown: 'Verify the calculator.',
       shellSafetyMode: 'auto_review',
       mode: 'open_discovery',
@@ -661,11 +661,11 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
 
     try {
-      recoverInterruptedHoneycrispSessions(workspaceId, {
+      recoverInterruptedAppServerSessions(workspaceId, {
         reason: 'app_shutdown',
         at: '2026-08-18T22:28:42.542Z'
       }, storage);
@@ -702,14 +702,14 @@ describe('Honeycrisp session persistence boundary', () => {
         },
         eventTimeline: []
       }));
-      importHoneycrispSessionCapture(context.run.id, resumedAttempt.id, capturePath, storage);
+      importAppServerSessionCapture(context.run.id, resumedAttempt.id, capturePath, storage);
 
       const latestPausedTrace = pausedDetail.traceEvents.at(-1);
-      const update = await getHoneycrispRunDetailUpdateForClient(database, context.run.id, {
+      const update = await getAppServerRunDetailUpdateForClient(database, context.run.id, {
         afterTraceSequence: latestPausedTrace?.sequence ?? -1,
         afterTranscriptCount: pausedDetail.transcriptMessages.length,
-        afterTraceEventId: typeof latestPausedTrace?.payload.honeycrispSessionEventId === 'string'
-          ? latestPausedTrace.payload.honeycrispSessionEventId
+        afterTraceEventId: typeof latestPausedTrace?.payload.appServerSessionEventId === 'string'
+          ? latestPausedTrace.payload.appServerSessionEventId
           : latestPausedTrace?.id ?? null
       });
       expect(update?.run.status).toBe('completed');
@@ -734,12 +734,12 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 20_000);
 
   it('keeps the completed root response when a subagent already has a final transcript', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-root-final-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-root-final-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: join(directory, 'artifacts'),
@@ -752,7 +752,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_root_final'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     const context = database.createRun({
       scopeVersionId: database.getActiveScope().id,
       title: 'Root and subagent responses',
@@ -763,7 +763,7 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
 
     try {
@@ -773,7 +773,7 @@ describe('Honeycrisp session persistence boundary', () => {
         role: 'assistant',
         phase: 'final_answer',
         contentMarkdown: 'The reviewer found one issue.',
-        source: 'honeycrisp',
+        source: 'app-server',
         metadata: { agentPath: '/root/reviewer' }
       });
 
@@ -792,7 +792,7 @@ describe('Honeycrisp session persistence boundary', () => {
         },
         eventTimeline: []
       }));
-      importHoneycrispSessionCapture(context.run.id, context.attempt.id, capturePath, {
+      importAppServerSessionCapture(context.run.id, context.attempt.id, capturePath, {
         databasePath,
         artifactDirectoryPath: join(dirname(databasePath), 'artifacts')
       });
@@ -816,12 +816,12 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 15_000);
 
   it('persists approval revisions as distinct events and reconciles legacy pending records from resolution traces', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-approval-boundary-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-approval-boundary-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: join(directory, 'artifacts'),
@@ -834,7 +834,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_approval_boundary'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     const context = database.createRun({
       scopeVersionId: database.getActiveScope().id,
       title: 'Canonical approval session',
@@ -845,7 +845,7 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
 
     try {
@@ -895,7 +895,7 @@ describe('Honeycrisp session persistence boundary', () => {
         approvalId: reconciled.id,
         modelVisible: false
       });
-      await flushHoneycrispSessionWrites(database, context.run.id);
+      await flushAppServerSessionWrites(database, context.run.id);
 
       expect(database.getRunDetail(context.run.id).policyEvents).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: revised.id, decision: 'approved', reason: 'Approved once.' }),
@@ -911,7 +911,7 @@ describe('Honeycrisp session persistence boundary', () => {
       const inspection = new DatabaseSync(databasePath, { readOnly: true });
       try {
         const storedEvents = inspection.prepare(`
-          SELECT event_json FROM honeycrisp_session_events
+          SELECT event_json FROM app_server_session_events
           WHERE session_id = ? ORDER BY event_offset ASC
         `).all(context.run.id) as Array<{ event_json: string }>;
         const revisions = storedEvents.map(({ event_json }) => JSON.parse(event_json) as {
@@ -931,11 +931,11 @@ describe('Honeycrisp session persistence boundary', () => {
     }
   }, 15_000);
 
-  it('runs the Honeycrisp host adapter against the canonical store without creating a Beale run row', async () => {
-    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-run-'));
-    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-registry-'));
+  it('runs the app-server host adapter against the canonical store without creating a Beale run row', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-app-server-canonical-run-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-app-server-canonical-registry-'));
     createdDirectories.push(workspace, registry);
-    setEnvironment('BEALE_HONEYCRISP_MOCK', '1');
+    setEnvironment('BEALE_APP_SERVER_MOCK', '1');
     configureIsolatedAppServer(registry);
 
     const broadcastStatuses: string[] = [];
@@ -951,14 +951,14 @@ describe('Honeycrisp session persistence boundary', () => {
     });
     try {
       service.createWorkspace(workspace);
-      const databasePath = join(registry, 'honeycrisp', 'profiles', 'security-research', 'memory.sqlite');
+      const databasePath = join(registry, 'app-server', 'profiles', 'security-research', 'memory.sqlite');
       const runtime = (service as unknown as {
-        getForegroundRuntime(): { honeycrispEngine: { hasActiveRuns(): boolean } } | null;
+        getForegroundRuntime(): { appServerEngine: { hasActiveRuns(): boolean } } | null;
       }).getForegroundRuntime();
       expect(runtime).not.toBeNull();
-      runtime!.honeycrispEngine.hasActiveRuns = () => true;
+      runtime!.appServerEngine.hasActiveRuns = () => true;
       const started = service.startRun({
-        runEngine: 'honeycrisp',
+        runEngine: 'app-server',
         provider: 'openai-codex',
         shellSafetyMode: 'auto_review',
         goalEnabled: false,
@@ -974,7 +974,7 @@ describe('Honeycrisp session persistence boundary', () => {
       const runId = started.runs.find(
         ({ run }) => run.promptMarkdown === 'Inspect the canonical session boundary.'
       )?.run.id;
-      if (!runId) throw new Error('Expected the canonical Honeycrisp session to start.');
+      if (!runId) throw new Error('Expected the canonical app-server session to start.');
       await waitFor(() => service.getRunDetail(runId).run.status !== 'active');
       try {
         await waitFor(() => broadcastStatuses.includes('completed'));
@@ -1027,7 +1027,7 @@ describe('Honeycrisp session persistence boundary', () => {
 
       const inspection = new DatabaseSync(databasePath, { readOnly: true });
       try {
-        expect(inspection.prepare('SELECT COUNT(*) AS count FROM honeycrisp_sessions WHERE id = ?').get(runId)).toMatchObject({ count: 1 });
+        expect(inspection.prepare('SELECT COUNT(*) AS count FROM app_server_sessions WHERE id = ?').get(runId)).toMatchObject({ count: 1 });
         expect(inspection.prepare('SELECT COUNT(*) AS count FROM runs WHERE id = ?').get(runId)).toMatchObject({ count: 0 });
       } finally {
         inspection.close();
@@ -1038,10 +1038,10 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 30_000);
 
   it('stops a newly started canonical session without querying full session aggregates from live events', async () => {
-    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-stop-'));
-    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-canonical-stop-registry-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-app-server-canonical-stop-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-app-server-canonical-stop-registry-'));
     createdDirectories.push(workspace, registry);
-    setEnvironment('BEALE_HONEYCRISP_MOCK', '1');
+    setEnvironment('BEALE_APP_SERVER_MOCK', '1');
     configureIsolatedAppServer(registry);
 
     let watchForContinuedRegistry = false;
@@ -1058,7 +1058,7 @@ describe('Honeycrisp session persistence boundary', () => {
     try {
       service.createWorkspace(workspace);
       const started = service.startRun({
-        runEngine: 'honeycrisp',
+        runEngine: 'app-server',
         provider: 'openai-codex',
         shellSafetyMode: 'auto_review',
         goalEnabled: false,
@@ -1126,13 +1126,13 @@ describe('Honeycrisp session persistence boundary', () => {
     }
   }, 30_000);
 
-  it('loads a Honeycrisp session asynchronously while its runtime database writer is active', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-session-read-lock-'));
+  it('loads an app-server session asynchronously while its runtime database writer is active', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-session-read-lock-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -1145,7 +1145,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_read_lock'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     const context = database.createRun({
       scopeVersionId: database.getActiveScope().id,
       title: 'Concurrent session read',
@@ -1156,14 +1156,14 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
 
     const writer = new DatabaseSync(databasePath);
     writer.exec('PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;');
-    writer.prepare('UPDATE honeycrisp_sessions SET summary = summary WHERE id = ?').run(context.run.id);
+    writer.prepare('UPDATE app_server_sessions SET summary = summary WHERE id = ?').run(context.run.id);
     let mainLoopAdvanced = false;
-    const detailPromise = getHoneycrispRunDetailForClient(database, context.run.id);
+    const detailPromise = getAppServerRunDetailForClient(database, context.run.id);
     setImmediate(() => { mainLoopAdvanced = true; });
     try {
       await new Promise((resolvePromise) => setImmediate(resolvePromise));
@@ -1177,12 +1177,12 @@ describe('Honeycrisp session persistence boundary', () => {
   });
 
   it('normalizes canonical nested research tool events for Desktop commentary', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-tool-commentary-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-tool-commentary-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -1195,7 +1195,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_tool_commentary'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     try {
       const context = database.createRun({
         scopeVersionId: database.getActiveScope().id,
@@ -1207,11 +1207,11 @@ describe('Honeycrisp session persistence boundary', () => {
         reasoningEffort: 'high',
         attemptStrategy: 'iterative_research',
         sandboxProfile: 'host',
-        budget: { runEngine: 'honeycrisp' }
+        budget: { runEngine: 'app-server' }
       });
-      await flushHoneycrispSessionWrites(database, context.run.id);
+      await flushAppServerSessionWrites(database, context.run.id);
 
-      const store = new HoneycrispSessionStore({ databasePath });
+      const store = new AppServerSessionStore({ databasePath });
       try {
         for (const [kind, timestamp] of [
           ['tool.requested', '2026-08-22T20:00:00.000Z'],
@@ -1243,9 +1243,9 @@ describe('Honeycrisp session persistence boundary', () => {
         store.close();
       }
 
-      const detail = await getHoneycrispRunDetailForClient(database, context.run.id);
-      const tools = detail?.traceEvents.filter((event) => event.payload.honeycrispKind === 'tool.requested'
-        || event.payload.honeycrispKind === 'tool.observed') ?? [];
+      const detail = await getAppServerRunDetailForClient(database, context.run.id);
+      const tools = detail?.traceEvents.filter((event) => event.payload.appServerKind === 'tool.requested'
+        || event.payload.appServerKind === 'tool.observed') ?? [];
       expect(tools.map((event) => [event.type, event.payload.toolName])).toEqual([
         ['tool_call', 'file.read'],
         ['tool_result', 'file.read']
@@ -1256,12 +1256,12 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 30_000);
 
   it('restores canonical root and subagent commentary when Desktop was detached', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-detached-commentary-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-detached-commentary-'));
     createdDirectories.push(directory);
     const databasePath = join(directory, 'memory.sqlite');
     const artifactRoot = join(directory, '.beale', 'artifacts');
     mkdirSync(join(artifactRoot, 'sha256'), { recursive: true });
-    configureRealHoneycrisp({
+    configureRealAppServer({
       registryDirectory: join(directory, 'registry'),
       databasePath,
       artifactDirectoryPath: artifactRoot,
@@ -1274,7 +1274,7 @@ describe('Honeycrisp session persistence boundary', () => {
       workspaceId: 'workspace_detached_commentary'
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     try {
       const context = database.createRun({
         scopeVersionId: database.getActiveScope().id,
@@ -1286,11 +1286,11 @@ describe('Honeycrisp session persistence boundary', () => {
         reasoningEffort: 'high',
         attemptStrategy: 'iterative_research',
         sandboxProfile: 'host',
-        budget: { runEngine: 'honeycrisp' }
+        budget: { runEngine: 'app-server' }
       });
-      await flushHoneycrispSessionWrites(database, context.run.id);
+      await flushAppServerSessionWrites(database, context.run.id);
 
-      const store = new HoneycrispSessionStore({ databasePath });
+      const store = new AppServerSessionStore({ databasePath });
       try {
         store.appendEventReceipt(context.run.id, {
           id: 'canonical_root_commentary',
@@ -1327,10 +1327,10 @@ describe('Honeycrisp session persistence boundary', () => {
         store.close();
       }
 
-      const detail = await getHoneycrispRunDetailForClient(database, context.run.id);
+      const detail = await getAppServerRunDetailForClient(database, context.run.id);
       expect(detail?.transcriptMessages).toEqual(expect.arrayContaining([
         expect.objectContaining({
-          source: 'honeycrisp_commentary',
+          source: 'app_server_commentary',
           contentMarkdown: 'Root commentary from the canonical worker.',
           metadata: expect.objectContaining({ agentPath: '/root' })
         }),
@@ -1345,9 +1345,9 @@ describe('Honeycrisp session persistence boundary', () => {
     }
   });
 
-  it('defers Honeycrisp interruption classification to the app-server', async () => {
-    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-restart-workspace-'));
-    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-restart-registry-'));
+  it('defers app-server interruption classification to the app-server', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-app-server-restart-workspace-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-app-server-restart-registry-'));
     createdDirectories.push(workspace, registry);
     configureIsolatedAppServer(registry);
 
@@ -1358,13 +1358,13 @@ describe('Honeycrisp session persistence boundary', () => {
     const created = initial.createWorkspace(workspace);
     initial.close();
 
-    const databasePath = join(registry, 'honeycrisp', 'profiles', 'security-research', 'memory.sqlite');
+    const databasePath = join(registry, 'app-server', 'profiles', 'security-research', 'memory.sqlite');
     const rawDatabase = new WorkspaceDatabase(databasePath, join(workspace, '.beale', 'artifacts'), {
       workspacePath: workspace,
       workspaceId: created.workspace.workspaceId
     });
     rawDatabase.initialize();
-    const database = createHoneycrispSessionBoundary(rawDatabase);
+    const database = createAppServerSessionBoundary(rawDatabase);
     const interrupted = database.createRun({
       scopeVersionId: database.getActiveScope().id,
       title: 'Interrupted canonical session',
@@ -1375,7 +1375,7 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
     database.close();
 
@@ -1399,8 +1399,8 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 20_000);
 
   it('safely pauses a legacy cached session without app-server restart intent', async () => {
-    const workspace = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-registry-recovery-workspace-'));
-    const registry = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-registry-recovery-registry-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'beale-app-server-registry-recovery-workspace-'));
+    const registry = mkdtempSync(join(tmpdir(), 'beale-app-server-registry-recovery-registry-'));
     createdDirectories.push(workspace, registry);
     configureIsolatedAppServer(registry);
 
@@ -1420,7 +1420,7 @@ describe('Honeycrisp session persistence boundary', () => {
       reasoningEffort: 'high',
       attemptStrategy: 'iterative_research',
       sandboxProfile: 'host',
-      budget: { runEngine: 'honeycrisp' }
+      budget: { runEngine: 'app-server' }
     });
     expect(initial.getWorkspaceRegistryState().researchSessions).toContainEqual(
       expect.objectContaining({ runId: interrupted.run.id, status: 'active' })
@@ -1443,7 +1443,7 @@ describe('Honeycrisp session persistence boundary', () => {
   }, 20_000);
 });
 
-function configureRealHoneycrisp(options?: {
+function configureRealAppServer(options?: {
   registryDirectory: string;
   databasePath: string;
   artifactDirectoryPath: string;
@@ -1452,7 +1452,7 @@ function configureRealHoneycrisp(options?: {
 }): void {
   // Runs launch through the Beale app-server, which discovers the workspace
   // CLI itself. Only session-ownership policy is pinned here.
-  setEnvironment('BEALE_HONEYCRISP_SESSION_OWNERSHIP', 'honeycrisp');
+  setEnvironment('BEALE_APP_SERVER_SESSION_OWNERSHIP', 'app-server');
   if (!options) return;
 
   mkdirSync(options.registryDirectory, { recursive: true });
@@ -1489,8 +1489,8 @@ function configureRealHoneycrisp(options?: {
     registry.close();
   }
   configureIsolatedAppServer(options.registryDirectory);
-  setEnvironment('HONEYCRISP_DATABASE_PATH', options.databasePath);
-  setEnvironment('HONEYCRISP_ARTIFACT_DIRECTORY', options.artifactDirectoryPath);
+  setEnvironment('APP_SERVER_DATABASE_PATH', options.databasePath);
+  setEnvironment('APP_SERVER_ARTIFACT_DIRECTORY', options.artifactDirectoryPath);
 }
 
 function configureIsolatedAppServer(registry: string): void {
@@ -1525,5 +1525,5 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<vo
     if (predicate()) return;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
   }
-  throw new Error('Timed out waiting for canonical Honeycrisp session completion.');
+  throw new Error('Timed out waiting for canonical app-server session completion.');
 }

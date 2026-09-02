@@ -6,10 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { MemoryGraphStore, ResearchClaimStore } from "../packages/research-agent/dist/index.js";
-import { invokeHoneycrispProtocol } from "../app-server/dist/honeycrispProtocolClient.js";
+import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolClient.js";
 
 test("memory notification feed includes only path-free heat-bearing nodes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-memory-notifications-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-memory-notifications-"));
   const databasePath = join(directory, "memory.sqlite");
   const artifactDirectoryPath = join(directory, "artifacts");
   const context = {
@@ -70,7 +70,7 @@ test("memory notification feed includes only path-free heat-bearing nodes", asyn
       toStatus: "observed",
       reason: "Directly observed in source.",
     });
-    const feed = await invokeHoneycrispProtocol("memory.notification_feed", {
+    const feed = await invokeAppServerProtocol("memory.notification_feed", {
       args: [],
       input: {
         workspaceId: context.workspaceId,

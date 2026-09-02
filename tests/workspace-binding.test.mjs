@@ -17,7 +17,7 @@ import {
 import * as workspaceTools from "../packages/research-agent/dist/workspace-tools.js";
 
 test("stored workspace binding derives path-stable identity without exposing storage paths", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-binding-fallback-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-binding-fallback-"));
   const databasePath = join(workspaceRoot, "missing", "memory.sqlite");
   try {
     const binding = resolveStoredResearchWorkspaceBinding({
@@ -55,7 +55,7 @@ test("stored workspace binding derives path-stable identity without exposing sto
 });
 
 test("stored workspace binding prefers the Beale research subject and redacts credential references", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-binding-beale-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-binding-beale-"));
   const databasePath = join(workspaceRoot, "state", "memory.sqlite");
   const profileSourcePath = join(workspaceRoot, "private", "profile.json");
   const storedProfile = normalizeResearchProfile({
@@ -184,7 +184,7 @@ test("stored workspace binding prefers the Beale research subject and redacts cr
           resourceId: "report_parser",
           title: "Parser boundary confusion",
           artifactId: "artifact_report",
-          artifactRelativePath: ".honeycrisp/artifacts/report.md",
+          artifactRelativePath: ".beale/artifacts/report.md",
           revision: 3,
         },
       }));
@@ -282,8 +282,8 @@ test("stored workspace binding prefers the Beale research subject and redacts cr
 });
 
 test("stored research profile falls back to a path-free workspace profile", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-profile-fallback-"));
-  const profileDirectory = join(workspaceRoot, ".honeycrisp");
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-profile-fallback-"));
+  const profileDirectory = join(workspaceRoot, ".beale");
   const profilePath = join(profileDirectory, "profile.json");
   const databasePath = join(workspaceRoot, "missing", "memory.sqlite");
   const workspaceProfile = {

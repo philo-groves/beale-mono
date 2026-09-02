@@ -1,5 +1,5 @@
 import type {
-  HoneycrispReportSummary,
+  AppServerReportSummary,
   OpenAiAccountStatus,
   ProviderSettings,
   ResearchModelEffortLevel,
@@ -56,14 +56,14 @@ export function isReportResourceRun(run: Pick<RunRecord, 'budget'>): boolean {
   );
 }
 
-export function reportCatalogGroups(reports: readonly HoneycrispReportSummary[]): {
-  complete: HoneycrispReportSummary[];
-  stale: HoneycrispReportSummary[];
+export function reportCatalogGroups(reports: readonly AppServerReportSummary[]): {
+  complete: AppServerReportSummary[];
+  stale: AppServerReportSummary[];
 } {
-  const complete: HoneycrispReportSummary[] = [];
-  const stale: HoneycrispReportSummary[] = [];
+  const complete: AppServerReportSummary[] = [];
+  const stale: AppServerReportSummary[] = [];
   for (const report of reports) (report.status === 'stale' ? stale : complete).push(report);
-  const newestFirst = (left: HoneycrispReportSummary, right: HoneycrispReportSummary): number =>
+  const newestFirst = (left: AppServerReportSummary, right: AppServerReportSummary): number =>
     right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
   complete.sort(newestFirst);
   stale.sort(newestFirst);
@@ -71,9 +71,9 @@ export function reportCatalogGroups(reports: readonly HoneycrispReportSummary[])
 }
 
 export function reportsForReportingScope(
-  reports: readonly HoneycrispReportSummary[],
+  reports: readonly AppServerReportSummary[],
   workspaceId: string | null
-): HoneycrispReportSummary[] {
+): AppServerReportSummary[] {
   return workspaceId ? reports.filter((report) => report.workspaceId === workspaceId) : [...reports];
 }
 

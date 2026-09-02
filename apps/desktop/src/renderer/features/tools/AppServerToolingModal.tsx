@@ -2,27 +2,27 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent, JSX, ReactNode } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Plus, Save, Server, Trash2, Wrench, XCircle } from 'lucide-react';
 import type {
-  HoneycrispToolingConfigUpdate,
-  HoneycrispToolingMcpCapabilitySummary,
-  HoneycrispToolingSkillSummary,
-  HoneycrispToolingSummary,
-  HoneycrispToolingToolSummary
+  AppServerToolingConfigUpdate,
+  AppServerToolingMcpCapabilitySummary,
+  AppServerToolingSkillSummary,
+  AppServerToolingSummary,
+  AppServerToolingToolSummary
 } from '@shared/types';
 import { Modal } from '../../app/Modal';
 import { errorMessage } from '../../lib/errors';
 
-export type HoneycrispToolingModalKind = 'skills' | 'mcpServers';
+export type AppServerToolingModalKind = 'skills' | 'mcpServers';
 
-type ToolingUpdateHandler = (update: HoneycrispToolingConfigUpdate) => Promise<boolean>;
+type ToolingUpdateHandler = (update: AppServerToolingConfigUpdate) => Promise<boolean>;
 
-export function HoneycrispToolingModal({
+export function AppServerToolingModal({
   kind,
   onClose
 }: {
-  kind: HoneycrispToolingModalKind;
+  kind: AppServerToolingModalKind;
   onClose: () => void;
 }): JSX.Element {
-  const [summary, setSummary] = useState<HoneycrispToolingSummary | null>(null);
+  const [summary, setSummary] = useState<AppServerToolingSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +31,7 @@ export function HoneycrispToolingModal({
     setLoading(true);
     setError(null);
     window.beale
-      .getHoneycrispToolingSummary()
+      .getAppServerToolingSummary()
       .then(setSummary)
       .catch((caught: unknown) => setError(errorMessage(caught)))
       .finally(() => setLoading(false));
@@ -41,7 +41,7 @@ export function HoneycrispToolingModal({
     setBusyAction(update.type);
     setError(null);
     try {
-      const next = await window.beale.updateHoneycrispToolingConfig(update);
+      const next = await window.beale.updateAppServerToolingConfig(update);
       setSummary(next);
       return true;
     } catch (caught) {
@@ -63,7 +63,7 @@ export function HoneycrispToolingModal({
     <Modal
       title={title}
       wide
-      className="honeycrisp-tooling-modal"
+      className="app-server-tooling-modal"
       onClose={onClose}
       footer={
         <>
@@ -74,21 +74,21 @@ export function HoneycrispToolingModal({
         </>
       }
     >
-      <div className="honeycrisp-tooling">
+      <div className="app-server-tooling">
         {loading ? (
-          <div className="honeycrisp-tooling-loading">
+          <div className="app-server-tooling-loading">
             <Loader2 size={16} />
-            <span>Loading Honeycrisp tooling...</span>
+            <span>Loading app-server tooling...</span>
           </div>
         ) : null}
         {busyAction ? (
-          <div className="honeycrisp-tooling-loading">
+          <div className="app-server-tooling-loading">
             <Loader2 size={16} />
-            <span>Updating Honeycrisp tooling...</span>
+            <span>Updating app-server tooling...</span>
           </div>
         ) : null}
         {error ? (
-          <div className="honeycrisp-tooling-error">
+          <div className="app-server-tooling-error">
             <AlertCircle size={16} />
             <span>{error}</span>
           </div>
@@ -110,7 +110,7 @@ function SkillsView({
   disabled,
   onUpdate
 }: {
-  summary: HoneycrispToolingSummary;
+  summary: AppServerToolingSummary;
   disabled: boolean;
   onUpdate: ToolingUpdateHandler;
 }): JSX.Element {
@@ -139,18 +139,18 @@ function SkillsView({
 
   return (
     <>
-      <div className="honeycrisp-tooling-summary-grid">
+      <div className="app-server-tooling-summary-grid">
         <Metric label="Loaded" value={summary.skills.loaded.length} />
         <Metric label="Active" value={summary.skills.selectedIds.length} />
         <Metric label="Configured Dirs" value={summary.config.preference.skillDirs.length} />
         <Metric label="Config" value={summary.config.exists ? 'Saved' : 'Default'} />
       </div>
-      <section className="honeycrisp-tooling-section">
+      <section className="app-server-tooling-section">
         <h3>Configuration</h3>
-        <div className="honeycrisp-tooling-key-values">
+        <div className="app-server-tooling-key-values">
           <KeyValue label="Path" value={summary.config.configPath} />
         </div>
-        <form className="honeycrisp-tooling-control-row" onSubmit={addSkillDir}>
+        <form className="app-server-tooling-control-row" onSubmit={addSkillDir}>
           <label>
             <span>Skill directory</span>
             <input
@@ -160,7 +160,7 @@ function SkillsView({
               onChange={(event) => setSkillDirDraft(event.currentTarget.value)}
             />
           </label>
-          <button type="submit" className="honeycrisp-tooling-icon-button" title="Add skill directory" disabled={disabled || !skillDirDraft.trim()}>
+          <button type="submit" className="app-server-tooling-icon-button" title="Add skill directory" disabled={disabled || !skillDirDraft.trim()}>
             <Plus size={15} />
           </button>
         </form>
@@ -171,7 +171,7 @@ function SkillsView({
           disabled={disabled}
           onRemove={(path) => onUpdate({ type: 'remove_skill_dir', path })}
         />
-        <form className="honeycrisp-tooling-control-row" onSubmit={addSkill}>
+        <form className="app-server-tooling-control-row" onSubmit={addSkill}>
           <label>
             <span>Skill id</span>
             <input
@@ -181,7 +181,7 @@ function SkillsView({
               onChange={(event) => setSkillIdDraft(event.currentTarget.value)}
             />
           </label>
-          <button type="submit" className="honeycrisp-tooling-icon-button" title="Select skill" disabled={disabled || !skillIdDraft.trim()}>
+          <button type="submit" className="app-server-tooling-icon-button" title="Select skill" disabled={disabled || !skillIdDraft.trim()}>
             <Plus size={15} />
           </button>
         </form>
@@ -193,10 +193,10 @@ function SkillsView({
           onRemove={(id) => onUpdate({ type: 'deselect_skill', id })}
         />
       </section>
-      <section className="honeycrisp-tooling-section">
+      <section className="app-server-tooling-section">
         <h3>Loaded Skills</h3>
         {summary.skills.loaded.length > 0 ? (
-          <div className="honeycrisp-tooling-list">
+          <div className="app-server-tooling-list">
             {summary.skills.loaded.map((skill) => (
               <SkillCard
                 key={skill.id}
@@ -210,7 +210,7 @@ function SkillsView({
             ))}
           </div>
         ) : (
-          <p className="honeycrisp-tooling-empty">No Honeycrisp skills loaded.</p>
+          <p className="app-server-tooling-empty">No app-server skills loaded.</p>
         )}
       </section>
       <ToolFamilies summary={summary} />
@@ -223,7 +223,7 @@ function McpServersView({
   disabled,
   onUpdate
 }: {
-  summary: HoneycrispToolingSummary;
+  summary: AppServerToolingSummary;
   disabled: boolean;
   onUpdate: ToolingUpdateHandler;
 }): JSX.Element {
@@ -262,18 +262,18 @@ function McpServersView({
 
   return (
     <>
-      <div className="honeycrisp-tooling-summary-grid">
+      <div className="app-server-tooling-summary-grid">
         <Metric label="Status" value={statusLabel(mcp.status)} />
         <Metric label="Allowed" value={mcp.allowedServers.length} />
         <Metric label="Capabilities" value={mcp.discoveredCapabilities.length} />
         <Metric label="Config" value={summary.config.exists ? 'Saved' : 'Default'} />
       </div>
-      <section className="honeycrisp-tooling-section">
+      <section className="app-server-tooling-section">
         <h3>Configuration</h3>
-        <div className="honeycrisp-tooling-key-values">
+        <div className="app-server-tooling-key-values">
           <KeyValue label="Path" value={summary.config.configPath} />
         </div>
-        <form className="honeycrisp-tooling-control-row" onSubmit={saveMcpConfigPath}>
+        <form className="app-server-tooling-control-row" onSubmit={saveMcpConfigPath}>
           <label>
             <span>MCP config</span>
             <input
@@ -283,12 +283,12 @@ function McpServersView({
               onChange={(event) => setMcpConfigPathDraft(event.currentTarget.value)}
             />
           </label>
-          <button type="submit" className="honeycrisp-tooling-icon-button" title="Save MCP config path" disabled={disabled || !mcpConfigPathDraft.trim()}>
+          <button type="submit" className="app-server-tooling-icon-button" title="Save MCP config path" disabled={disabled || !mcpConfigPathDraft.trim()}>
             <Save size={15} />
           </button>
           <button
             type="button"
-            className="honeycrisp-tooling-icon-button"
+            className="app-server-tooling-icon-button"
             title="Clear MCP config path"
             disabled={disabled || !summary.config.preference.mcpConfigPath}
             onClick={() => void onUpdate({ type: 'clear_mcp_config_path' })}
@@ -296,7 +296,7 @@ function McpServersView({
             <XCircle size={15} />
           </button>
         </form>
-        <form className="honeycrisp-tooling-control-row" onSubmit={addAllowedServer}>
+        <form className="app-server-tooling-control-row" onSubmit={addAllowedServer}>
           <label>
             <span>Allowed server</span>
             <input
@@ -306,7 +306,7 @@ function McpServersView({
               onChange={(event) => setAllowedServerDraft(event.currentTarget.value)}
             />
           </label>
-          <button type="submit" className="honeycrisp-tooling-icon-button" title="Allow MCP server" disabled={disabled || !allowedServerDraft.trim()}>
+          <button type="submit" className="app-server-tooling-icon-button" title="Allow MCP server" disabled={disabled || !allowedServerDraft.trim()}>
             <Plus size={15} />
           </button>
         </form>
@@ -317,7 +317,7 @@ function McpServersView({
           disabled={disabled}
           onRemove={(name) => onUpdate({ type: 'disallow_mcp_server', name })}
         />
-        <form className="honeycrisp-tooling-control-row" onSubmit={saveTimeout}>
+        <form className="app-server-tooling-control-row" onSubmit={saveTimeout}>
           <label>
             <span>MCP timeout ms</span>
             <input
@@ -329,12 +329,12 @@ function McpServersView({
               onChange={(event) => setTimeoutDraft(event.currentTarget.value)}
             />
           </label>
-          <button type="submit" className="honeycrisp-tooling-icon-button" title="Save MCP timeout" disabled={disabled || !timeoutDraft.trim()}>
+          <button type="submit" className="app-server-tooling-icon-button" title="Save MCP timeout" disabled={disabled || !timeoutDraft.trim()}>
             <Save size={15} />
           </button>
           <button
             type="button"
-            className="honeycrisp-tooling-icon-button"
+            className="app-server-tooling-icon-button"
             title="Clear MCP timeout"
             disabled={disabled || summary.config.preference.mcpTimeoutMs === null}
             onClick={() => void onUpdate({ type: 'clear_mcp_timeout_ms' })}
@@ -343,37 +343,37 @@ function McpServersView({
           </button>
         </form>
       </section>
-      <section className="honeycrisp-tooling-section">
+      <section className="app-server-tooling-section">
         <h3>Servers</h3>
-        <div className="honeycrisp-tooling-key-values">
+        <div className="app-server-tooling-key-values">
           <KeyValue label="Active Config" value={mcp.configPath ?? 'None'} />
           <KeyValue label="Configured" value={mcp.configuredServers.length > 0 ? mcp.configuredServers.join(', ') : 'None'} />
           <KeyValue label="Active Allowed" value={mcp.allowedServers.length > 0 ? mcp.allowedServers.join(', ') : 'None'} />
           <KeyValue label="Timeout" value={mcp.timeoutMs === null ? 'Default' : `${mcp.timeoutMs} ms`} />
         </div>
       </section>
-      <section className="honeycrisp-tooling-section">
+      <section className="app-server-tooling-section">
         <h3>Discovered Capabilities</h3>
         {mcp.discoveredCapabilities.length > 0 ? (
-          <div className="honeycrisp-tooling-list">
+          <div className="app-server-tooling-list">
             {mcp.discoveredCapabilities.map((capability) => (
               <ToolCard key={`${capability.transportName ?? capability.name}:${capability.name}`} tool={capability} />
             ))}
           </div>
         ) : (
-          <p className="honeycrisp-tooling-empty">No MCP capabilities discovered.</p>
+          <p className="app-server-tooling-empty">No MCP capabilities discovered.</p>
         )}
       </section>
       {mcp.resourceTemplates.length > 0 ? (
-        <section className="honeycrisp-tooling-section">
+        <section className="app-server-tooling-section">
           <h3>Resource Templates</h3>
-          <pre className="honeycrisp-tooling-json">{JSON.stringify(mcp.resourceTemplates, null, 2)}</pre>
+          <pre className="app-server-tooling-json">{JSON.stringify(mcp.resourceTemplates, null, 2)}</pre>
         </section>
       ) : null}
       {mcp.deniedCapabilities.length > 0 ? (
-        <section className="honeycrisp-tooling-section">
+        <section className="app-server-tooling-section">
           <h3>Denied Capabilities</h3>
-          <pre className="honeycrisp-tooling-json">{JSON.stringify(mcp.deniedCapabilities, null, 2)}</pre>
+          <pre className="app-server-tooling-json">{JSON.stringify(mcp.deniedCapabilities, null, 2)}</pre>
         </section>
       ) : null}
       <ToolFamilies summary={summary} />
@@ -389,7 +389,7 @@ function SkillCard({
   onSelect,
   onDeselect
 }: {
-  skill: HoneycrispToolingSkillSummary;
+  skill: AppServerToolingSkillSummary;
   selected: boolean;
   configured: boolean;
   disabled: boolean;
@@ -398,22 +398,22 @@ function SkillCard({
 }): JSX.Element {
   const source = sourceLabel(skill.source);
   return (
-    <article className="honeycrisp-tooling-card">
-      <div className="honeycrisp-tooling-card-heading">
+    <article className="app-server-tooling-card">
+      <div className="app-server-tooling-card-heading">
         <div>
           <strong>{skill.version ? `${skill.id}@${skill.version}` : skill.id}</strong>
           {skill.description ? <span>{skill.description}</span> : null}
         </div>
-        <div className="honeycrisp-tooling-card-actions">
+        <div className="app-server-tooling-card-actions">
           {selected ? (
-            <span className="honeycrisp-tooling-selected">
+            <span className="app-server-tooling-selected">
               <CheckCircle2 size={13} />
               Active
             </span>
           ) : null}
           <button
             type="button"
-            className="honeycrisp-tooling-icon-button"
+            className="app-server-tooling-icon-button"
             title={configured ? 'Deselect skill' : 'Select skill'}
             disabled={disabled}
             onClick={() => void (configured ? onDeselect(skill.id) : onSelect(skill.id))}
@@ -422,7 +422,7 @@ function SkillCard({
           </button>
         </div>
       </div>
-      <div className="honeycrisp-tooling-card-meta">
+      <div className="app-server-tooling-card-meta">
         {source ? <span>{source}</span> : null}
         {skill.domainTags.length > 0 ? <PillList values={skill.domainTags} /> : null}
       </div>
@@ -430,17 +430,17 @@ function SkillCard({
   );
 }
 
-function ToolCard({ tool }: { tool: HoneycrispToolingToolSummary | HoneycrispToolingMcpCapabilitySummary }): JSX.Element {
+function ToolCard({ tool }: { tool: AppServerToolingToolSummary | AppServerToolingMcpCapabilitySummary }): JSX.Element {
   return (
-    <article className="honeycrisp-tooling-card">
-      <div className="honeycrisp-tooling-card-heading">
+    <article className="app-server-tooling-card">
+      <div className="app-server-tooling-card-heading">
         <div>
           <strong>{tool.name}</strong>
           {tool.transportName ? <span>{tool.transportName}</span> : null}
         </div>
         <Wrench size={15} />
       </div>
-      <div className="honeycrisp-tooling-card-meta">
+      <div className="app-server-tooling-card-meta">
         {tool.actionClasses.length > 0 ? <PillList values={tool.actionClasses} /> : null}
         {tool.sideEffects.length > 0 ? <PillList values={tool.sideEffects} /> : null}
         {tool.requiredPermissions.length > 0 ? <PillList values={tool.requiredPermissions} /> : null}
@@ -449,7 +449,7 @@ function ToolCard({ tool }: { tool: HoneycrispToolingToolSummary | HoneycrispToo
   );
 }
 
-function ToolFamilies({ summary }: { summary: HoneycrispToolingSummary }): JSX.Element {
+function ToolFamilies({ summary }: { summary: AppServerToolingSummary }): JSX.Element {
   const families = useMemo(
     () => [
       ['Enabled', summary.toolFamilies.enabled],
@@ -460,9 +460,9 @@ function ToolFamilies({ summary }: { summary: HoneycrispToolingSummary }): JSX.E
   );
   if (families.every(([, values]) => values.length === 0)) return <></>;
   return (
-    <section className="honeycrisp-tooling-section">
+    <section className="app-server-tooling-section">
       <h3>Tool Families</h3>
-      <div className="honeycrisp-tooling-family-grid">
+      <div className="app-server-tooling-family-grid">
         {families.map(([label, values]) => (
           <div key={label}>
             <span>{label}</span>
@@ -488,14 +488,14 @@ function ConfiguredValueList({
   onRemove: (value: string) => Promise<boolean>;
 }): JSX.Element {
   if (values.length === 0) {
-    return <p className="honeycrisp-tooling-empty">{emptyLabel}</p>;
+    return <p className="app-server-tooling-empty">{emptyLabel}</p>;
   }
   return (
-    <div className="honeycrisp-tooling-config-list">
+    <div className="app-server-tooling-config-list">
       {values.map((value) => (
-        <div key={value} className="honeycrisp-tooling-config-row">
+        <div key={value} className="app-server-tooling-config-row">
           <span>{value}</span>
-          <button type="button" className="honeycrisp-tooling-icon-button" title={removeTitle} disabled={disabled} onClick={() => void onRemove(value)}>
+          <button type="button" className="app-server-tooling-icon-button" title={removeTitle} disabled={disabled} onClick={() => void onRemove(value)}>
             <Trash2 size={14} />
           </button>
         </div>
@@ -506,7 +506,7 @@ function ConfiguredValueList({
 
 function Metric({ label, value }: { label: string; value: ReactNode }): JSX.Element {
   return (
-    <div className="honeycrisp-tooling-metric">
+    <div className="app-server-tooling-metric">
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -524,7 +524,7 @@ function KeyValue({ label, value }: { label: string; value: string }): JSX.Eleme
 
 function PillList({ values }: { values: string[] }): JSX.Element {
   return (
-    <div className="honeycrisp-tooling-pills">
+    <div className="app-server-tooling-pills">
       {values.map((value) => (
         <span key={value}>{value}</span>
       ))}
@@ -543,7 +543,7 @@ function sourceLabel(source: Record<string, unknown> | null): string {
 function statusLabel(status: string): JSX.Element | string {
   if (status === 'configured') {
     return (
-      <span className="honeycrisp-tooling-status-ready">
+      <span className="app-server-tooling-status-ready">
         <Server size={13} />
         Configured
       </span>

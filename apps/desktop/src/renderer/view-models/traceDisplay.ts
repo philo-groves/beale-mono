@@ -1,7 +1,7 @@
 import type { RunDetail, RunStatus, TraceEventRecord, TranscriptMessageRecord } from '@shared/types';
 import {
-  honeycrispToolEventKind,
-  honeycrispToolPairingKey,
+  appServerToolEventKind,
+  appServerToolPairingKey,
   stringRecordValue,
   traceCategoryForEvent,
   traceEventOutcome,
@@ -78,7 +78,7 @@ export function latestTraceGroupKey(events: TraceEventRecord[]): string {
 
 export function buildTraceTimelineEntries<TEvent extends TraceEventRecord>(events: TEvent[], visibleCategories: TraceCategoryId[]): TraceTimelineEntry<TEvent>[] {
   const entries: TraceTimelineEntry<TEvent>[] = [];
-  const pendingToolRequestEventIds = pendingHoneycrispToolRequestEventIds(events);
+  const pendingToolRequestEventIds = pendingAppServerToolRequestEventIds(events);
   let group = createTraceTimelineGroup('setup', 'Setup', events[0]?.createdAt ?? '');
   let identity = 'setup';
 
@@ -123,17 +123,17 @@ export function traceEventVisibleInTimeline(
   visibleCategories: TraceCategoryId[],
   pendingToolRequest = false
 ): boolean {
-  if (pendingToolRequest && honeycrispToolEventKind(event) === 'tool.requested') return true;
+  if (pendingToolRequest && appServerToolEventKind(event) === 'tool.requested') return true;
   if (!visibleCategories.includes(category)) return false;
   return event.modelVisible || visibleCategories.includes('non_standard');
 }
 
-export function pendingHoneycrispToolRequestEventIds(events: readonly TraceEventRecord[]): Set<string> {
+export function pendingAppServerToolRequestEventIds(events: readonly TraceEventRecord[]): Set<string> {
   const pendingByKey = new Map<string, string[]>();
 
   for (const event of events) {
-    const kind = honeycrispToolEventKind(event);
-    const pairingKey = honeycrispToolPairingKey(event);
+    const kind = appServerToolEventKind(event);
+    const pairingKey = appServerToolPairingKey(event);
     if (!kind || !pairingKey) continue;
     if (kind === 'tool.requested') {
       const pending = pendingByKey.get(pairingKey);

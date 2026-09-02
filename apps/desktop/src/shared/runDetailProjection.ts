@@ -29,9 +29,9 @@ const COMMENTARY_EVENT_PAYLOAD_KEYS = [
   'action',
   'interruptedByRecovery',
   'fixtureOnly',
-  'honeycrispKind',
+  'appServerKind',
   'toolName',
-  'honeycrispSessionEventId',
+  'appServerSessionEventId',
   'contextUsageEligible',
   'serializedSizeBytes'
 ] as const;
@@ -148,7 +148,7 @@ function projectedSubagentPreviews(
 }
 
 function subagentPreviewMessage(event: TraceEventRecord): string | null {
-  if (event.payload.transcriptRole !== 'assistant' || isHoneycrispToolTraceEvent(event)) return null;
+  if (event.payload.transcriptRole !== 'assistant' || isAppServerToolTraceEvent(event)) return null;
   return stringValue(event.payload.text)
     ?? stringValue(event.payload.outputText)
     ?? stringValue(event.payload.message);
@@ -173,7 +173,7 @@ export function projectCommentaryTraceEvent(
   const usage = recordValue(event.payload.usage);
   if (usage) payload.usage = boundedRecordValues(usage, COMMENTARY_USAGE_PAYLOAD_KEYS);
 
-  if (isHoneycrispToolTraceEvent(event)) {
+  if (isAppServerToolTraceEvent(event)) {
     const toolPayload = recordValue(event.payload.payload);
     payload.payload = toolPayload ? projectToolPayloadScaffold(event, toolPayload) : {};
     payload.commentaryDetailDeferred = true;
@@ -181,7 +181,7 @@ export function projectCommentaryTraceEvent(
     Object.assign(payload, pickRecordValues(event.payload, COMMENTARY_CONTENT_PAYLOAD_KEYS));
   }
 
-  if (!isHoneycrispToolTraceEvent(event)) {
+  if (!isAppServerToolTraceEvent(event)) {
     const nestedPayload = recordValue(event.payload.payload);
     const contextScaffold = nestedPayload
       ? nestedPayload.type === 'subagent.activity'
@@ -252,8 +252,8 @@ function projectedSourceCursor(
   sourceCursor?: RunDetailUpdateCursor
 ): RunDetailUpdateCursor {
   const latestTrace = detail.traceEvents.at(-1);
-  const afterTraceEventId = typeof latestTrace?.payload.honeycrispSessionEventId === 'string'
-    ? latestTrace.payload.honeycrispSessionEventId
+  const afterTraceEventId = typeof latestTrace?.payload.appServerSessionEventId === 'string'
+    ? latestTrace.payload.appServerSessionEventId
     : latestTrace?.id ?? sourceCursor?.afterTraceEventId ?? null;
   return {
     afterTraceSequence: latestTrace?.sequence ?? sourceCursor?.afterTraceSequence ?? -1,
@@ -370,12 +370,12 @@ function isCommentaryContentEvent(event: TraceEventRecord): boolean {
     (event.source === 'model' && event.type === 'model_message' && event.payload.fixtureOnly === true);
 }
 
-export function isHoneycrispToolTraceEvent(event: TraceEventRecord): boolean {
-  const kind = event.payload.honeycrispKind;
+export function isAppServerToolTraceEvent(event: TraceEventRecord): boolean {
+  const kind = event.payload.appServerKind;
   return kind === 'tool.requested' ||
     kind === 'tool.observed' ||
-    event.summary.startsWith('Honeycrisp tool.requested') ||
-    event.summary.startsWith('Honeycrisp tool.observed');
+    event.summary.startsWith('app-server tool.requested') ||
+    event.summary.startsWith('app-server tool.observed');
 }
 
 function pickRecordValues<const TKey extends readonly string[]>(

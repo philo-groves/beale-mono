@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { preBealeHashDomain } from '@beale/research-agent/legacy-compatibility';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -148,7 +149,7 @@ describe('research profile persistence', () => {
       resolveProfile(researchProfile('1.0.0', 'Security'), 'bundled-default')
     );
     const second = fixture.database.activateResearchProfileSnapshot(
-      resolveProfile(researchProfile('2.0.0', 'General Research'), 'workspace-default', join(fixture.workspacePath, '.honeycrisp', 'profile.json'))
+      resolveProfile(researchProfile('2.0.0', 'General Research'), 'workspace-default', join(fixture.workspacePath, '.beale', 'profile.json'))
     );
 
     expect(second.id).not.toBe(first.id);
@@ -298,8 +299,8 @@ describe('research profile persistence', () => {
     mkdirSync(workspacePath, { recursive: true });
     const options: WorkspaceServiceOptions = {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: databasePath,
-      honeycrispArtifactDirectory: join(root, 'global', 'artifacts'),
+      appServerDatabasePath: databasePath,
+      appServerArtifactDirectory: join(root, 'global', 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile()
     };
     configureIsolatedAppServer(options);
@@ -330,7 +331,7 @@ describe('research profile persistence', () => {
       'Never modify production data.'
     ]);
     expect(service.addWorkspaceRule('Never modify production data.').workspaceRules).toHaveLength(2);
-    expect(onboarded.honeycrispMemory.nodes).toEqual(
+    expect(onboarded.appServerMemory.nodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: 'claude_first_memory',
@@ -350,8 +351,8 @@ describe('research profile persistence', () => {
     mkdirSync(secondary, { recursive: true });
     const options: WorkspaceServiceOptions = {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'global', 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'global', 'artifacts'),
+      appServerDatabasePath: join(root, 'global', 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'global', 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile()
     };
     configureIsolatedAppServer(options);
@@ -397,8 +398,8 @@ describe('research profile persistence', () => {
     const workspacePath = join(root, 'workspace');
     const options: WorkspaceServiceOptions = {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'global', 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'global', 'artifacts'),
+      appServerDatabasePath: join(root, 'global', 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'global', 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile()
     };
     configureIsolatedAppServer(options);
@@ -437,8 +438,8 @@ describe('research profile persistence', () => {
     writeFileSync(markerPath, 'keep');
     const options: WorkspaceServiceOptions = {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: databasePath,
-      honeycrispArtifactDirectory: artifactRoot,
+      appServerDatabasePath: databasePath,
+      appServerArtifactDirectory: artifactRoot,
       researchProfileResolver: () => resolvedTestResearchProfile()
     };
     configureIsolatedAppServer(options);
@@ -514,8 +515,8 @@ describe('research profile persistence', () => {
     process.env.BEALE_GIT_COMMAND = fakeGit;
     const options: WorkspaceServiceOptions = {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'global', 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'global', 'artifacts'),
+      appServerDatabasePath: join(root, 'global', 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'global', 'artifacts'),
       repositoryStoreDirectory,
       researchProfileResolver: () => resolvedTestResearchProfile()
     };
@@ -634,8 +635,8 @@ describe('research profile persistence', () => {
     writeFileSync(join(misplacedRepository, 'README.md'), 'source');
     const options: WorkspaceServiceOptions = {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'global', 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'global', 'artifacts'),
+      appServerDatabasePath: join(root, 'global', 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'global', 'artifacts'),
       repositoryStoreDirectory,
       researchProfileResolver: () => resolvedTestResearchProfile()
     };
@@ -806,10 +807,10 @@ function tempDirectory(): string {
 
 function configureIsolatedAppServer(options: WorkspaceServiceOptions): void {
   const registryDirectory = options.workspaceRegistryDirectory;
-  const databasePath = options.honeycrispDatabasePath;
-  const artifactDirectoryPath = options.honeycrispArtifactDirectory;
+  const databasePath = options.appServerDatabasePath;
+  const artifactDirectoryPath = options.appServerArtifactDirectory;
   if (!registryDirectory || !databasePath || !artifactDirectoryPath) {
-    throw new Error('The app-server fixture requires explicit registry and Honeycrisp storage paths.');
+    throw new Error('The app-server fixture requires explicit registry and app-server storage paths.');
   }
   const stateFile = join(registryDirectory, 'app-server.json');
   appServerStateFiles.push(stateFile);
@@ -817,8 +818,8 @@ function configureIsolatedAppServer(options: WorkspaceServiceOptions): void {
   setEnvironment('BEALE_APP_SERVER_PARENT_PID', String(process.pid));
   setEnvironment('BEALE_APP_SERVER_PORT', '0');
   setEnvironment('BEALE_WORKSPACE_REGISTRY_DIR', registryDirectory);
-  setEnvironment('HONEYCRISP_DATABASE_PATH', databasePath);
-  setEnvironment('HONEYCRISP_ARTIFACT_DIRECTORY', artifactDirectoryPath);
+  setEnvironment('APP_SERVER_DATABASE_PATH', databasePath);
+  setEnvironment('APP_SERVER_ARTIFACT_DIRECTORY', artifactDirectoryPath);
 }
 
 function stopTestAppServer(stateFile: string): void {
@@ -946,7 +947,7 @@ function resolveProfile(
   path?: string
 ): ResolvedResearchProfile {
   const hash = createHash('sha256')
-    .update('honeycrisp:research-profile:v1\0')
+    .update(preBealeHashDomain('research-profile:v1\0'))
     .update(serializeResearchProfile(profile))
     .digest('hex');
   return { profile, hash, source, ...(path ? { path } : {}) };

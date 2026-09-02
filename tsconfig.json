@@ -5,7 +5,7 @@
       "path": "./packages/research-agent"
     },
     {
-      "path": "./packages/honeycrisp-host"
+      "path": "./packages/app-server-runtime"
     },
     {
       "path": "./app-server"

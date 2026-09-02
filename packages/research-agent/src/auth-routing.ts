@@ -19,7 +19,7 @@ const API_KEY_ENVIRONMENT_VARIABLES: Readonly<Record<ResearchModelProviderId, st
 };
 
 export function readProviderAuthenticationPreferences(
-  value = process.env.HONEYCRISP_PROVIDER_AUTH_PREFERENCES,
+  value = process.env.APP_SERVER_PROVIDER_AUTH_PREFERENCES,
 ): ProviderAuthenticationPreferences {
   if (!value?.trim()) return {};
   try {
@@ -104,7 +104,7 @@ export class ProviderAuthenticationRouter {
   }
 
   claudeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...base, CLAUDE_AGENT_SDK_CLIENT_APP: "honeycrisp/0.1.0" };
+    const env: NodeJS.ProcessEnv = { ...base, CLAUDE_AGENT_SDK_CLIENT_APP: "appServer/0.1.0" };
     if (this.method("anthropic") === "subscription") delete env.ANTHROPIC_API_KEY;
     return env;
   }

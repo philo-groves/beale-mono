@@ -2,22 +2,22 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AgentPluginRecord, AgentPluginRegistryState } from '@shared/types';
 import {
-  addHoneycrispPluginFromFilesystem,
-  addHoneycrispPluginFromRepository,
-  getHoneycrispPluginRuntime,
-  listHoneycrispPlugins,
-  removeHoneycrispPlugin,
-  setHoneycrispPluginEnabled,
-  type HoneycrispAgentPluginRuntime,
-  type HoneycrispBuiltinPlugin
-} from './honeycrispCliClient';
+  addAppServerPluginFromFilesystem,
+  addAppServerPluginFromRepository,
+  getAppServerPluginRuntime,
+  listAppServerPlugins,
+  removeAppServerPlugin,
+  setAppServerPluginEnabled,
+  type AppServerAgentPluginRuntime,
+  type AppServerBuiltinPlugin
+} from './appServerCliClient';
 
 export interface AgentPluginRegistryOptions {
-  builtinPlugins?: HoneycrispBuiltinPlugin[];
+  builtinPlugins?: AppServerBuiltinPlugin[];
   runtimeEnvironment?: (plugin: AgentPluginRecord) => Record<string, string>;
 }
 
-export type AgentPluginHoneycrispRuntime = HoneycrispAgentPluginRuntime;
+export type AgentPluginAppServerRuntime = AppServerAgentPluginRuntime;
 
 export class AgentPluginRegistry {
   public constructor(
@@ -26,32 +26,32 @@ export class AgentPluginRegistry {
   ) {}
 
   public getState(): AgentPluginRegistryState {
-    return listHoneycrispPlugins(this.baseInput());
+    return listAppServerPlugins(this.baseInput());
   }
 
-  public getHoneycrispRuntime(): AgentPluginHoneycrispRuntime {
+  public getAppServerRuntime(): AgentPluginAppServerRuntime {
     const state = this.getState();
     const runtimeEnvironment = Object.fromEntries(state.plugins.map((plugin) => [
       plugin.id,
       this.options.runtimeEnvironment?.(plugin) ?? {}
     ]));
-    return getHoneycrispPluginRuntime({ ...this.baseInput(), runtimeEnvironment });
+    return getAppServerPluginRuntime({ ...this.baseInput(), runtimeEnvironment });
   }
 
   public addFromFilesystem(pluginRoot: string): AgentPluginRegistryState {
-    return addHoneycrispPluginFromFilesystem({ ...this.baseInput(), pluginRoot });
+    return addAppServerPluginFromFilesystem({ ...this.baseInput(), pluginRoot });
   }
 
   public addFromRepository(repositoryUrl: string): Promise<AgentPluginRegistryState> {
-    return addHoneycrispPluginFromRepository({ ...this.baseInput(), repositoryUrl });
+    return addAppServerPluginFromRepository({ ...this.baseInput(), repositoryUrl });
   }
 
   public setEnabled(pluginId: string, enabled: boolean): AgentPluginRegistryState {
-    return setHoneycrispPluginEnabled({ ...this.baseInput(), pluginId, enabled });
+    return setAppServerPluginEnabled({ ...this.baseInput(), pluginId, enabled });
   }
 
   public remove(pluginId: string): AgentPluginRegistryState {
-    return removeHoneycrispPlugin({ ...this.baseInput(), pluginId });
+    return removeAppServerPlugin({ ...this.baseInput(), pluginId });
   }
 
   private baseInput(): Record<string, unknown> {
@@ -62,7 +62,7 @@ export class AgentPluginRegistry {
   }
 }
 
-function defaultBuiltinPlugins(): HoneycrispBuiltinPlugin[] {
+function defaultBuiltinPlugins(): AppServerBuiltinPlugin[] {
   return [
     {
       id: 'beale-introspection-builtin',

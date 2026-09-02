@@ -65,7 +65,7 @@ test("flow captures preserve host research-control events in the event timeline"
 });
 
 function captureFixtureResult(timestamp, agentEvents) {
-  const storageRoot = join(tmpdir(), "honeycrisp-flow-capture-control-events");
+  const storageRoot = join(tmpdir(), "app-server-flow-capture-control-events");
   return {
     prompt: "Preserve host control telemetry.",
     agentRun: {

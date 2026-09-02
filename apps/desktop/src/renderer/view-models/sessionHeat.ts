@@ -1,5 +1,5 @@
 import type {
-  HoneycrispMemorySummary,
+  AppServerMemorySummary,
   ResearchProfile,
   ResearchProfileSessionHeat,
   ResearchProfileSessionHeatPalette,
@@ -89,16 +89,16 @@ export function sessionHeatForDetail(
   preferences: SessionHeatPreferences | SessionHeatPreferenceOverrides = EMPTY_SESSION_HEAT_PREFERENCES
 ): SessionHeat {
   if (!detail?.researchProfile?.profile) return 'none';
-  return sessionHeatForHoneycrispMemory(
-    detail.honeycrispMemory ?? null,
+  return sessionHeatForAppServerMemory(
+    detail.appServerMemory ?? null,
     detail.run.id,
     detail.researchProfile.profile,
     sessionHeatPreferenceOverrides(preferences)
   );
 }
 
-export function sessionHeatForHoneycrispMemory(
-  memory: HoneycrispMemorySummary | null | undefined,
+export function sessionHeatForAppServerMemory(
+  memory: AppServerMemorySummary | null | undefined,
   sessionId: string | null,
   profile?: ResearchProfile | null,
   overrides: SessionHeatPreferenceOverrides = {}
@@ -307,7 +307,7 @@ function maxSessionHeat(left: SessionHeat, right: SessionHeat): SessionHeat {
 }
 
 function sessionHeatForFindingRating(
-  rating: HoneycrispMemorySummary['findings'][number]['rating']
+  rating: AppServerMemorySummary['findings'][number]['rating']
 ): SessionHeat {
   return rating === 'informational' ? 'none' : rating;
 }

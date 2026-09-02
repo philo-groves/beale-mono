@@ -4,19 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { invokeHoneycrispProtocol } from "../app-server/dist/honeycrispProtocolClient.js";
+import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolClient.js";
 
 import {
   CampaignTrackStore,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
-  HoneycrispSessionStore,
+  AppServerSessionStore,
   MemoryGraphStore,
   ReportStore,
   RunbookStore,
   buildMemoryDreamingInstructions,
   createResearchStorageLayout,
   ensureResearchStorageLayout,
-  getHoneycrispMemorySummary,
+  getAppServerMemorySummary,
   getKnowledgeReport,
   getKnowledgeRunbook,
   migrateWorkspaceResearchClaims,
@@ -29,7 +29,7 @@ import {
 } from "../packages/research-agent/dist/index.js";
 
 test("memory summary does not mutate finding staleness", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-summary-staleness-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-summary-staleness-"));
   const databasePath = join(root, "memory.sqlite");
   const artifactDirectoryPath = join(root, "artifacts");
   const now = "2026-08-24T12:00:00.000Z";
@@ -38,7 +38,7 @@ test("memory summary does not mutate finding staleness", async () => {
     migrateWorkspaceResearchClaims(databasePath, "workspace_summary");
     const database = new DatabaseSync(databasePath);
     try {
-      database.prepare(`INSERT INTO honeycrisp_research_claims (
+      database.prepare(`INSERT INTO app_server_research_claims (
         id, workspace_id, subject_id, legacy_memory_node_id, origin_session_id, classification,
         title, summary, impact, rating, status, stale_from_status, confidence, source_revision,
         environment_fingerprint, reproduction_runbook_id, report_id, disclosure_reference,
@@ -46,14 +46,14 @@ test("memory summary does not mutate finding staleness", async () => {
       ) VALUES ('claim_summary', 'workspace_summary', 'subject_summary', NULL, NULL,
         'security.vulnerability', 'Summary invariant', '', '', 'high', 'observed', NULL, 0.8,
         'git:parser:one', 'environment:parser:one', NULL, NULL, NULL, NULL, 'null', ?, ?, 1)`).run(now, now);
-      database.prepare(`INSERT INTO honeycrisp_claim_transitions
+      database.prepare(`INSERT INTO app_server_claim_transitions
         (id, claim_id, claim_revision, from_status, to_status, reason, actor_id, evidence_ids_json, created_at)
         VALUES ('transition_summary', 'claim_summary', 1, 'hypothesis', 'observed', 'Observed.', 'agent', '[]', ?)`).run(now);
     } finally {
       database.close();
     }
 
-    await invokeHoneycrispProtocol("memory.summary", {
+    await invokeAppServerProtocol("memory.summary", {
       args: [],
       input: {
         workspaceId: "workspace_summary",
@@ -67,7 +67,7 @@ test("memory summary does not mutate finding staleness", async () => {
     const readDatabase = new DatabaseSync(databasePath, { readOnly: true });
     try {
       assert.deepEqual({ ...readDatabase.prepare(`SELECT status, stale_from_status, source_revision,
-        environment_fingerprint, stale_reason, revision FROM honeycrisp_research_claims
+        environment_fingerprint, stale_reason, revision FROM app_server_research_claims
         WHERE id = 'claim_summary'`).get() }, {
         status: "observed",
         stale_from_status: null,
@@ -85,7 +85,7 @@ test("memory summary does not mutate finding staleness", async () => {
 });
 
 test("report catalog reads survive unrelated foreign-key violations", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-report-catalog-boundary-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-report-catalog-boundary-"));
   const databasePath = join(root, "memory.sqlite");
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({
     databasePath,
@@ -110,7 +110,7 @@ test("report catalog reads survive unrelated foreign-key violations", async () =
     const database = new DatabaseSync(databasePath);
     try {
       database.exec("PRAGMA foreign_keys = OFF;");
-      database.exec("ALTER TABLE honeycrisp_reports DROP COLUMN triage_status;");
+      database.exec("ALTER TABLE app_server_reports DROP COLUMN triage_status;");
       database.prepare(`INSERT INTO memory_node_workspaces(node_id, workspace_id, workspace_name)
         VALUES ('missing_memory_node', 'workspace_report_catalog', 'Report catalog')`).run();
       assert.equal(database.prepare("PRAGMA foreign_key_check").all().length, 1);
@@ -118,7 +118,7 @@ test("report catalog reads survive unrelated foreign-key violations", async () =
       database.close();
     }
 
-    const catalog = await invokeHoneycrispProtocol("report.list", {
+    const catalog = await invokeAppServerProtocol("report.list", {
       args: [],
       input: { workspaceId: "workspace_report_catalog" },
       storage: { databasePath, artifactDirectoryPath: layout.artifactDirectoryPath },
@@ -132,8 +132,8 @@ test("report catalog reads survive unrelated foreign-key violations", async () =
   }
 });
 
-test("Honeycrisp owns memory summaries, documents, artifact resolution, and Dreaming state", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-knowledge-boundary-"));
+test("app-server owns memory summaries, documents, artifact resolution, and Dreaming state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-knowledge-boundary-"));
   const databasePath = join(root, "memory.sqlite");
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({
     workspaceRoot: root,
@@ -179,7 +179,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
       content: "# Parser result\n\nConfirmed.",
     }).report;
 
-    const summary = getHoneycrispMemorySummary({
+    const summary = getAppServerMemorySummary({
       databasePath,
       artifactDirectoryPath: layout.artifactDirectoryPath,
       workspaceId: context.workspaceId,
@@ -197,7 +197,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
       expectedKind: "runbook",
     }).kind, "runbook");
 
-    const hostedRunbook = await invokeHoneycrispProtocol("runbook.get", {
+    const hostedRunbook = await invokeAppServerProtocol("runbook.get", {
       args: [],
       input: { workspaceId: context.workspaceId, runbookId: runbook.id },
       storage: {
@@ -207,7 +207,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
     });
     assert.equal(hostedRunbook.runbookId, runbook.id);
 
-    const revisedReport = await invokeHoneycrispProtocol("report.revise_content", {
+    const revisedReport = await invokeAppServerProtocol("report.revise_content", {
       args: [],
       input: {
         workspaceId: context.workspaceId,
@@ -224,7 +224,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
     assert.equal(revisedReport.revision, 2);
     assert.match(getKnowledgeReport(databasePath, layout.artifactDirectoryPath, context.workspaceId, report.id).content, /direct triage edits/);
 
-    const submittedReport = await invokeHoneycrispProtocol("report.update_triage_status", {
+    const submittedReport = await invokeAppServerProtocol("report.update_triage_status", {
       args: [],
       input: {
         workspaceId: context.workspaceId,
@@ -243,7 +243,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
 
     const replacementPacketPath = join(root, "replacement.zip");
     await writeFile(replacementPacketPath, Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]));
-    const replacedReport = await invokeHoneycrispProtocol("report.replace_packet", {
+    const replacedReport = await invokeAppServerProtocol("report.replace_packet", {
       args: [],
       input: {
         workspaceId: context.workspaceId,
@@ -262,7 +262,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
 
     const recordingPath = join(root, "parser-demo.webm");
     await writeFile(recordingPath, Buffer.from("recording"));
-    const reportWithRecording = await invokeHoneycrispProtocol("report.replace_recording", {
+    const reportWithRecording = await invokeAppServerProtocol("report.replace_recording", {
       args: [],
       input: {
         workspaceId: context.workspaceId,
@@ -278,7 +278,7 @@ test("Honeycrisp owns memory summaries, documents, artifact resolution, and Drea
     });
     assert.equal(reportWithRecording.revision, 5);
     assert.equal(reportWithRecording.recording.filename, "parser-demo.webm");
-    const summaryWithRecording = getHoneycrispMemorySummary({
+    const summaryWithRecording = getAppServerMemorySummary({
       databasePath,
       artifactDirectoryPath: layout.artifactDirectoryPath,
       workspaceId: context.workspaceId,

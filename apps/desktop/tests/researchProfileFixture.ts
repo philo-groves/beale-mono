@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { preBealeHashDomain } from '@beale/research-agent/legacy-compatibility';
 import { serializeResearchProfile } from '../src/shared/researchProfile';
 import type { ResearchProfile, ResolvedResearchProfile } from '@shared/types';
 
@@ -119,7 +120,7 @@ export function resolvedTestResearchProfile(
   path?: string
 ): ResolvedResearchProfile {
   const hash = createHash('sha256')
-    .update('honeycrisp:research-profile:v1\0')
+    .update(preBealeHashDomain('research-profile:v1\0'))
     .update(serializeResearchProfile(profile))
     .digest('hex');
   return { profile, hash, source, ...(path ? { path } : {}) };

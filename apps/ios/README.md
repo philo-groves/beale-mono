@@ -1,6 +1,6 @@
 # Beale iOS
 
-Beale iOS is a small SwiftUI client for the Beale app-server and shared live Honeycrisp sessions:
+Beale iOS is a small SwiftUI client for the Beale app-server and shared live app-server sessions:
 
 - launch presents saved app-server connections as a selectable list plus an Add Connection path for QR or manual provisioning;
 - each saved connection keeps its own operator token in the iOS Keychain; tokens are never compiled into the application;
@@ -14,7 +14,7 @@ Beale iOS is a small SwiftUI client for the Beale app-server and shared live Hon
 - active session views check the path-free memory notification feed every six seconds, while an iOS app-refresh task provides opportunistic background checks;
 - the leading menu's Workspaces action returns to that catalog from nested workspace or session views;
 - the home-screen icon uses the same Beale artwork as Desktop;
-- the canonical commentary stream reduces tool activity to safe labels such as `Read parser.ts` and `Ran rg`; no tool results, command arguments, host paths, Honeycrisp storage, provider credentials, or CLI arguments cross the mobile boundary.
+- the canonical commentary stream reduces tool activity to safe labels such as `Read parser.ts` and `Ran rg`; no tool results, command arguments, host paths, app-server storage, provider credentials, or CLI arguments cross the mobile boundary.
 
 The app targets iOS 17 or newer and can be built with Xcode 27 beta:
 

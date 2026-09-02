@@ -7,7 +7,7 @@ import {
   BEALE_APP_SERVER_SESSIONS_PATH,
   BEALE_APP_SERVER_SHUTDOWN_PATH,
   decodeBealeAppServerSessionCatalog
-} from 'honeycrisp/protocol';
+} from '@beale/app-server-runtime/protocol';
 import {
   acquireDiscoveryLock,
   defaultDiscoveryPath,

@@ -26,7 +26,7 @@ test('managed apple-security-devices is importable through the Beale Agent Plugi
       valid: server.valid
     })), [{ name: 'devices', transport: 'stdio', valid: true }]);
 
-    const runtime = registry.getHoneycrispRuntime();
+    const runtime = registry.getAppServerRuntime();
     assert.deepEqual(runtime.selectedSkillIds, ['apple-security-devices']);
     assert.deepEqual(runtime.allowedMcpServers, ['apple-security-devices.devices']);
     const runtimeConfig = JSON.parse(readFileSync(runtime.mcpConfigPath, 'utf8'));

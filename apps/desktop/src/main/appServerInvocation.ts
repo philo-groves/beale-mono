@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-export interface HoneycrispInvocation {
+export interface AppServerInvocation {
   command: string;
   prefixArgs: string[];
   cwd: string;
@@ -12,13 +12,13 @@ export interface HoneycrispInvocation {
 
 /**
  * Walk up from the current directory to locate the enclosing monorepo root
- * that carries the optional app-server client at packages/honeycrisp-host/dist/cli.js. Returns null
+ * that carries the optional app-server client at packages/app-server-runtime/dist/cli.js. Returns null
  * when no workspace root is found.
  */
-export function resolveHoneycrispWorkspaceRoot(): string | null {
+export function resolveAppServerWorkspaceRoot(): string | null {
   let directory = process.cwd();
   for (;;) {
-    if (existsSync(join(directory, 'packages', 'honeycrisp-host', 'dist', 'cli.js'))) return directory;
+    if (existsSync(join(directory, 'packages', 'app-server-runtime', 'dist', 'cli.js'))) return directory;
     if (existsSync(join(directory, 'pnpm-workspace.yaml'))) return directory;
     const parent = resolve(directory, '..');
     if (parent === directory) return null;
@@ -26,28 +26,28 @@ export function resolveHoneycrispWorkspaceRoot(): string | null {
   }
 }
 
-function defaultHoneycrispRoot(): string {
-  return resolveHoneycrispWorkspaceRoot() || resolve(process.cwd(), '..', 'honeycrisp');
+function defaultAppServerRoot(): string {
+  return resolveAppServerWorkspaceRoot() || resolve(process.cwd(), '..', 'app-server');
 }
 
-export function resolveHoneycrispInvocation(): HoneycrispInvocation {
-  const command = process.env.BEALE_HONEYCRISP_COMMAND?.trim();
+export function resolveAppServerInvocation(): AppServerInvocation {
+  const command = process.env.BEALE_APP_SERVER_COMMAND?.trim();
   if (command) {
     return {
       command,
-      prefixArgs: parseEnvArgs('BEALE_HONEYCRISP_ARGS_JSON'),
-      cwd: process.env.BEALE_HONEYCRISP_CWD?.trim() || process.cwd(),
+      prefixArgs: parseEnvArgs('BEALE_APP_SERVER_ARGS_JSON'),
+      cwd: process.env.BEALE_APP_SERVER_CWD?.trim() || process.cwd(),
       configuredBy: 'env_command',
       usesNodeRuntime: isPlainNodeExecutable(command)
     };
   }
 
-  const configuredRoot = process.env.BEALE_HONEYCRISP_ROOT?.trim();
-  const root = configuredRoot || defaultHoneycrispRoot();
-  const cliPath = join(root, 'packages', 'honeycrisp-host', 'dist', 'cli.js');
+  const configuredRoot = process.env.BEALE_APP_SERVER_ROOT?.trim();
+  const root = configuredRoot || defaultAppServerRoot();
+  const cliPath = join(root, 'packages', 'app-server-runtime', 'dist', 'cli.js');
   if (existsSync(cliPath)) {
     return {
-      command: resolveHoneycrispNodeCommand(),
+      command: resolveAppServerNodeCommand(),
       prefixArgs: [cliPath],
       cwd: root,
       configuredBy: configuredRoot ? 'env_root' : 'workspace_root',
@@ -55,7 +55,7 @@ export function resolveHoneycrispInvocation(): HoneycrispInvocation {
     };
   }
   return {
-    command: process.env.BEALE_HONEYCRISP_PNPM_COMMAND?.trim() || 'pnpm',
+    command: process.env.BEALE_APP_SERVER_PNPM_COMMAND?.trim() || 'pnpm',
     prefixArgs: ['--dir', root, 'start'],
     cwd: root,
     configuredBy: configuredRoot ? 'env_root' : 'workspace_root',
@@ -68,44 +68,44 @@ export function resolveHoneycrispInvocation(): HoneycrispInvocation {
  * feature operations call app-server directly. A custom compatibility client
  * must opt in through the dedicated variables and implement protocol v1.
  */
-export function resolveHoneycrispProtocolInvocation(): HoneycrispInvocation {
-  const command = process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND?.trim();
+export function resolveAppServerProtocolInvocation(): AppServerInvocation {
+  const command = process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND?.trim();
   if (command) {
     return {
       command,
-      prefixArgs: parseEnvArgs('BEALE_HONEYCRISP_PROTOCOL_ARGS_JSON'),
-      cwd: process.env.BEALE_HONEYCRISP_PROTOCOL_CWD?.trim() || process.cwd(),
+      prefixArgs: parseEnvArgs('BEALE_APP_SERVER_PROTOCOL_ARGS_JSON'),
+      cwd: process.env.BEALE_APP_SERVER_PROTOCOL_CWD?.trim() || process.cwd(),
       configuredBy: 'env_command',
       usesNodeRuntime: isPlainNodeExecutable(command)
     };
   }
-  const root = process.env.BEALE_HONEYCRISP_PROTOCOL_ROOT?.trim()
-    || process.env.BEALE_HONEYCRISP_ROOT?.trim()
-    || defaultHoneycrispRoot();
-  const cliPath = join(root, 'packages', 'honeycrisp-host', 'dist', 'cli.js');
+  const root = process.env.BEALE_APP_SERVER_PROTOCOL_ROOT?.trim()
+    || process.env.BEALE_APP_SERVER_ROOT?.trim()
+    || defaultAppServerRoot();
+  const cliPath = join(root, 'packages', 'app-server-runtime', 'dist', 'cli.js');
   if (existsSync(cliPath)) {
     return {
-      command: process.env.BEALE_HONEYCRISP_PROTOCOL_NODE_COMMAND?.trim() || resolveHoneycrispNodeCommand(),
+      command: process.env.BEALE_APP_SERVER_PROTOCOL_NODE_COMMAND?.trim() || resolveAppServerNodeCommand(),
       prefixArgs: [cliPath],
       cwd: root,
-      configuredBy: process.env.BEALE_HONEYCRISP_PROTOCOL_ROOT || process.env.BEALE_HONEYCRISP_ROOT ? 'env_root' : 'workspace_root',
+      configuredBy: process.env.BEALE_APP_SERVER_PROTOCOL_ROOT || process.env.BEALE_APP_SERVER_ROOT ? 'env_root' : 'workspace_root',
       usesNodeRuntime: true
     };
   }
   return {
-    command: process.env.BEALE_HONEYCRISP_PROTOCOL_PNPM_COMMAND?.trim()
-      || process.env.BEALE_HONEYCRISP_PNPM_COMMAND?.trim()
+    command: process.env.BEALE_APP_SERVER_PROTOCOL_PNPM_COMMAND?.trim()
+      || process.env.BEALE_APP_SERVER_PNPM_COMMAND?.trim()
       || 'pnpm',
     prefixArgs: ['--dir', root, 'start'],
     cwd: root,
-    configuredBy: process.env.BEALE_HONEYCRISP_PROTOCOL_ROOT || process.env.BEALE_HONEYCRISP_ROOT ? 'env_root' : 'workspace_root',
+    configuredBy: process.env.BEALE_APP_SERVER_PROTOCOL_ROOT || process.env.BEALE_APP_SERVER_ROOT ? 'env_root' : 'workspace_root',
     usesNodeRuntime: false
   };
 }
 
-export function resolveHoneycrispNodeCommand(): string {
+export function resolveAppServerNodeCommand(): string {
   const candidates = [
-    process.env.BEALE_HONEYCRISP_NODE_COMMAND?.trim(),
+    process.env.BEALE_APP_SERVER_NODE_COMMAND?.trim(),
     process.env.BEALE_NODE_COMMAND?.trim(),
     process.env.npm_node_execpath?.trim(),
     process.env.NODE?.trim(),

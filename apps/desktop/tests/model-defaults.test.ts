@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getHoneycrispProviderSemantics } from '../src/main/honeycrispCliClient';
+import { getAppServerProviderSemantics } from '../src/main/appServerCliClient';
 
 describe('research session title models', () => {
   it('uses the designated small model for each supported provider', () => {
-    const semantics = getHoneycrispProviderSemantics();
+    const semantics = getAppServerProviderSemantics();
     expect(semantics.defaultSmallModels).toEqual({
       'openai-codex': 'gpt-5.6-luna',
       anthropic: 'claude-haiku-4-5',
@@ -16,6 +16,6 @@ describe('research session title models', () => {
   });
 
   it('does not invent a title model for unknown providers', () => {
-    expect(getHoneycrispProviderSemantics().defaultSmallModels).not.toHaveProperty('other');
+    expect(getAppServerProviderSemantics().defaultSmallModels).not.toHaveProperty('other');
   });
 });

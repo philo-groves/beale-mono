@@ -58,10 +58,10 @@ const SSH_SOURCE_REPOSITORY_RE = /\bgit@(?:github\.com|gitlab\.com):[A-Za-z0-9_.
 const SOURCE_REPOSITORY_HOSTS = new Set(['github.com', 'gitlab.com']);
 
 export function defaultSourceRepositoryStoreDirectory(registryDirectory?: string): string {
-  const explicit = process.env.HONEYCRISP_REPOSITORY_STORE_DIR?.trim();
+  const explicit = process.env.APP_SERVER_REPOSITORY_STORE_DIR?.trim();
   if (explicit) return resolve(explicit);
-  const honeycrispHome = registryDirectory ?? process.env.HONEYCRISP_REGISTRY_DIRECTORY?.trim() ?? join(homedir(), '.honeycrisp');
-  return resolve(honeycrispHome, 'repositories');
+  const appServerHome = registryDirectory ?? process.env.APP_SERVER_REGISTRY_DIRECTORY?.trim() ?? join(homedir(), '.beale');
+  return resolve(appServerHome, 'repositories');
 }
 
 export function sourceRepositoryCheckoutPath(
@@ -584,7 +584,7 @@ function waitSynchronously(milliseconds: number): void {
 }
 
 function gitInvocation(args: string[]): { command: string; args: string[] } {
-  const command = process.env.HONEYCRISP_GIT_COMMAND?.trim() || process.env.BEALE_GIT_COMMAND?.trim() || 'git';
+  const command = process.env.APP_SERVER_GIT_COMMAND?.trim() || process.env.BEALE_GIT_COMMAND?.trim() || 'git';
   if (process.platform === 'win32' && /\.(?:[cm]?js)$/i.test(command)) {
     return { command: process.execPath, args: [command, ...args] };
   }

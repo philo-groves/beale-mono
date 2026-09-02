@@ -161,7 +161,7 @@ export function createRepositoryHistoryTool(
       requiredPermissions: ["filesystem:read"],
       inputSchema: REPOSITORY_HISTORY_PARAMETERS,
       artifactLocations: roots,
-      metadata: { provider: "honeycrisp.built_in", safetyProfile: "host-filesystem-read" },
+      metadata: { provider: "appServer.built_in", safetyProfile: "host-filesystem-read" },
     },
     parameters: REPOSITORY_HISTORY_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action) {
@@ -234,7 +234,7 @@ export function createPriorArtSearchTool(
       sideEffects: "network",
       requiredPermissions: ["network:public-advisory:read"],
       inputSchema: PRIOR_ART_SEARCH_PARAMETERS,
-      metadata: { provider: "honeycrisp.built_in", safetyProfile: "public-advisory-read" },
+      metadata: { provider: "appServer.built_in", safetyProfile: "public-advisory-read" },
     },
     parameters: PRIOR_ART_SEARCH_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action, context) {
@@ -457,7 +457,7 @@ async function searchNvd(
       const url = new URL("https://services.nvd.nist.gov/rest/json/cves/2.0");
       url.searchParams.set("keywordSearch", term);
       url.searchParams.set("resultsPerPage", String(Math.min(maxResults, 50)));
-      const response = await request(url, { headers: { Accept: "application/json", "User-Agent": "Honeycrisp prior-art research" }, signal });
+      const response = await request(url, { headers: { Accept: "application/json", "User-Agent": "app-server prior-art research" }, signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json() as unknown;
     }));
@@ -487,7 +487,7 @@ async function searchOsv(
         };
     const response = await request("https://api.osv.dev/v1/query", {
       method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "Honeycrisp prior-art research" },
+      headers: { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "app-server prior-art research" },
       body: JSON.stringify(body),
       signal,
     });

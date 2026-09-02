@@ -9,15 +9,15 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
-  HoneycrispSessionStore,
+  AppServerSessionStore,
   ResearchChannelStore,
   normalizeResearchProfile,
   researchProfileHash,
 } from "../packages/research-agent/dist/index.js";
-import { invokeHoneycrispProtocol } from "../app-server/dist/honeycrispProtocolClient.js";
+import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolClient.js";
 
 test("workspace channels retain cross-session transcripts until explicitly deleted", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-channels-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-channels-"));
   const databasePath = join(directory, "memory.sqlite");
   const first = new ResearchChannelStore({ databasePath });
   const channel = first.create({
@@ -105,12 +105,12 @@ test("workspace channel names use at most three lowercase dash-separated words",
 });
 
 test("hosted channel operations publish typed shared resources", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-channel-share-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-channel-share-"));
   const storage = {
     databasePath: join(directory, "memory.sqlite"),
     artifactDirectoryPath: join(directory, "artifacts"),
   };
-  const created = await invokeHoneycrispProtocol("channel.create", {
+  const created = await invokeAppServerProtocol("channel.create", {
     args: [],
     storage,
     input: {
@@ -119,7 +119,7 @@ test("hosted channel operations publish typed shared resources", async () => {
       topic: "Share durable research artifacts.",
     },
   });
-  const shared = await invokeHoneycrispProtocol("channel.share", {
+  const shared = await invokeAppServerProtocol("channel.share", {
     args: [],
     storage,
     input: {
@@ -132,7 +132,7 @@ test("hosted channel operations publish typed shared resources", async () => {
       title: "Parser boundary",
     },
   });
-  const detail = await invokeHoneycrispProtocol("channel.get", {
+  const detail = await invokeAppServerProtocol("channel.get", {
     args: [],
     storage,
     input: { workspaceId: "workspace_channels", channel: created.id },
@@ -143,7 +143,7 @@ test("hosted channel operations publish typed shared resources", async () => {
 });
 
 test("workspace channel migration retains legacy members with unknown status", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-channel-status-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-channel-status-"));
   const databasePath = join(directory, "memory.sqlite");
   const original = new ResearchChannelStore({ databasePath });
   const channel = original.create({
@@ -160,9 +160,9 @@ test("workspace channel migration retains legacy members with unknown status", a
   original.close();
 
   const legacyDatabase = new DatabaseSync(databasePath);
-  legacyDatabase.exec("ALTER TABLE honeycrisp_channel_members DROP COLUMN status;");
+  legacyDatabase.exec("ALTER TABLE app_server_channel_members DROP COLUMN status;");
   legacyDatabase.prepare("DELETE FROM schema_migrations WHERE component = ? AND version >= 2")
-    .run("honeycrisp_channels");
+    .run("app_server_channels");
   legacyDatabase.close();
 
   const migrated = new ResearchChannelStore({ databasePath });
@@ -174,7 +174,7 @@ test("workspace channel migration retains legacy members with unknown status", a
 });
 
 test("session store owns creation, lifecycle, capture import, and queries as one revisioned aggregate", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     const created = store.create({
       id: "session_one",
@@ -222,7 +222,7 @@ test("session store owns creation, lifecycle, capture import, and queries as one
 });
 
 test("capture import enforces the canonical session profile and workflow", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const profileHash = researchProfileHash(profile);
   try {
@@ -266,7 +266,7 @@ test("capture import enforces the canonical session profile and workflow", () =>
 });
 
 test("session transitions update editable configuration with the lifecycle aggregate", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     const created = store.create({
       id: "session_configuration",
@@ -302,7 +302,7 @@ test("session transitions update editable configuration with the lifecycle aggre
 });
 
 test("session recovery atomically pauses interrupted workspace sessions and their active attempts", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
       id: "session_interrupted",
@@ -352,9 +352,9 @@ test("session recovery atomically pauses interrupted workspace sessions and thei
 });
 
 test("session summary lists stay bounded when canonical sessions contain large event histories", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-summary-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-session-summary-"));
   const databasePath = join(directory, "memory.sqlite");
-  const store = new HoneycrispSessionStore({ databasePath });
+  const store = new AppServerSessionStore({ databasePath });
   try {
     store.create({
       id: "session_large_history",
@@ -399,7 +399,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
   const inspection = new DatabaseSync(databasePath, { readOnly: true });
   try {
     const stored = inspection.prepare(`
-      SELECT document_json, document_hash FROM honeycrisp_sessions WHERE id = ?
+      SELECT document_json, document_hash FROM app_server_sessions WHERE id = ?
     `).get("session_large_history");
     const document = JSON.parse(stored.document_json);
     assert.deepEqual(document.events, []);
@@ -409,7 +409,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
       createHash("sha256").update(stored.document_json).digest("hex"),
     );
     const event = inspection.prepare(`
-      SELECT event_json, content_hash FROM honeycrisp_session_events WHERE session_id = ?
+      SELECT event_json, content_hash FROM app_server_session_events WHERE session_id = ?
     `).get("session_large_history");
     assert.equal(
       event.content_hash,
@@ -420,7 +420,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
       { ...inspection.prepare(`
         SELECT completed_turn_tokens, completed_turn_cost_usd,
           latest_reported_total_tokens, last_message_at
-        FROM honeycrisp_session_summary_metrics WHERE session_id = ?
+        FROM app_server_session_summary_metrics WHERE session_id = ?
       `).get("session_large_history") },
       {
         completed_turn_tokens: 0,
@@ -435,7 +435,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
 
   const listed = await runHostedOperation(
     ["session", "list-summaries", "--workspace-id", "workspace_summary", "--json"],
-    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+    { ...process.env, APP_SERVER_DATABASE_PATH: databasePath },
   );
   assert.equal(listed.operation, "session.list_summaries");
   assert.equal(listed.result[0].id, "session_large_history");
@@ -446,7 +446,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
 
   const projected = await runHostedOperation(
     ["session", "get-update", "--session-id", "session_large_history", "--max-bytes", "1024", "--json"],
-    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+    { ...process.env, APP_SERVER_DATABASE_PATH: databasePath },
   );
   assert.equal(projected.result.events.length, 1);
   assert.equal(projected.result.events[0].payload.detailAvailableOnRequest, true);
@@ -460,7 +460,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
       "--workspace-id", "workspace_other_summary",
       "--json",
     ],
-    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+    { ...process.env, APP_SERVER_DATABASE_PATH: databasePath },
   );
   assert.deepEqual(
     new Set(batched.result.map((session) => session.id)),
@@ -469,7 +469,7 @@ test("session summary lists stay bounded when canonical sessions contain large e
 });
 
 test("session summaries read token usage from the latest model-session update", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
       id: "session_latest_usage",
@@ -502,7 +502,7 @@ test("session summaries read token usage from the latest model-session update", 
 });
 
 test("session summaries expose the latest transcript message time", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
       id: "session_last_message",
@@ -542,7 +542,7 @@ test("session summaries expose the latest transcript message time", () => {
 });
 
 test("session summaries and live updates prefer aggregate completed-turn usage over the latest root turn", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
       id: "session_turn_usage",
@@ -598,7 +598,7 @@ test("session summaries and live updates prefer aggregate completed-turn usage o
 });
 
 test("session summaries durably deduplicate canonical memory activity", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
       id: "session_memory_activity",
@@ -639,7 +639,7 @@ test("session summaries durably deduplicate canonical memory activity", () => {
           id: "duplicate_search_trace",
           type: "tool_result",
           payload: {
-            honeycrispKind: "tool.observed",
+            appServerKind: "tool.observed",
             toolName: "memory.search",
             payload: { toolActionId: "search_one", toolName: "memory.search" },
           },
@@ -657,11 +657,11 @@ test("session summaries durably deduplicate canonical memory activity", () => {
 });
 
 test("session migration transactionally normalizes legacy embedded event histories", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-migration-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-session-migration-"));
   const databasePath = join(directory, "memory.sqlite");
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(`
-    CREATE TABLE honeycrisp_sessions (
+    CREATE TABLE app_server_sessions (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
       status TEXT NOT NULL,
@@ -736,7 +736,7 @@ test("session migration transactionally normalizes legacy embedded event histori
     revision: 2,
   };
   legacy.prepare(`
-    INSERT INTO honeycrisp_sessions (
+    INSERT INTO app_server_sessions (
       id, workspace_id, status, title, summary, document_json, revision, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
@@ -752,14 +752,14 @@ test("session migration transactionally normalizes legacy embedded event histori
   );
   legacy.close();
 
-  const migrated = new HoneycrispSessionStore({ databasePath });
+  const migrated = new AppServerSessionStore({ databasePath });
   try {
     assert.deepEqual(migrated.get("session_legacy")?.events, legacyDocument.events);
     const capture = migrated.get("session_legacy")?.attempts[0].capture;
     assert.equal(capture?.attemptId, "attempt_legacy");
     assert.equal(capture?.schemaVersion, 5);
     assert.equal(capture?.raw.retained, true);
-    assert.equal(capture?.eventStreams.timeline.source, "honeycrisp_session_events");
+    assert.equal(capture?.eventStreams.timeline.source, "app_server_session_events");
     assert.deepEqual(migrated.getSummary("session_legacy")?.activityCounts, {
       memorySearches: 1,
       memoryUpdates: 0,
@@ -771,14 +771,14 @@ test("session migration transactionally normalizes legacy embedded event histori
   const inspection = new DatabaseSync(databasePath, { readOnly: true });
   try {
     const row = inspection.prepare(`
-      SELECT document_json, document_hash FROM honeycrisp_sessions WHERE id = ?
+      SELECT document_json, document_hash FROM app_server_sessions WHERE id = ?
     `).get("session_legacy");
     assert.deepEqual(JSON.parse(row.document_json).events, []);
     assert.equal(JSON.parse(row.document_json).attempts[0].capture, null);
     assert.equal(typeof row.document_hash, "string");
     assert.deepEqual(
       inspection.prepare(`
-        SELECT event_id, event_offset FROM honeycrisp_session_events WHERE session_id = ?
+        SELECT event_id, event_offset FROM app_server_session_events WHERE session_id = ?
       `).all("session_legacy").map((event) => ({ ...event })),
       [
         { event_id: "event_legacy", event_offset: 0 },
@@ -787,7 +787,7 @@ test("session migration transactionally normalizes legacy embedded event histori
     );
     assert.deepEqual(
       inspection.prepare(`
-        SELECT attempt_id FROM honeycrisp_session_captures WHERE session_id = ?
+        SELECT attempt_id FROM app_server_session_captures WHERE session_id = ?
       `).all("session_legacy").map((capture) => ({ ...capture })),
       [{ attempt_id: "attempt_legacy" }],
     );
@@ -795,7 +795,7 @@ test("session migration transactionally normalizes legacy embedded event histori
       { ...inspection.prepare(`
         SELECT completed_turn_tokens, completed_turn_cost_usd,
           latest_reported_total_tokens, last_message_at
-        FROM honeycrisp_session_summary_metrics WHERE session_id = ?
+        FROM app_server_session_summary_metrics WHERE session_id = ?
       `).get("session_legacy") },
       {
         completed_turn_tokens: 0,
@@ -810,9 +810,9 @@ test("session migration transactionally normalizes legacy embedded event histori
 });
 
 test("hosted session operations report actionable integrity and database corruption failures", async () => {
-  const integrityDirectory = await mkdtemp(join(tmpdir(), "honeycrisp-session-integrity-"));
+  const integrityDirectory = await mkdtemp(join(tmpdir(), "app-server-session-integrity-"));
   const integrityDatabasePath = join(integrityDirectory, "memory.sqlite");
-  const store = new HoneycrispSessionStore({ databasePath: integrityDatabasePath });
+  const store = new AppServerSessionStore({ databasePath: integrityDatabasePath });
   store.create({
     id: "session_integrity",
     workspaceId: "workspace_integrity",
@@ -832,7 +832,7 @@ test("hosted session operations report actionable integrity and database corrupt
   store.close();
   const tamper = new DatabaseSync(integrityDatabasePath);
   tamper.prepare(`
-    UPDATE honeycrisp_session_events SET event_json = ? WHERE session_id = ?
+    UPDATE app_server_session_events SET event_json = ? WHERE session_id = ?
   `).run(JSON.stringify({
     id: "event_integrity",
     kind: "agent.event",
@@ -844,26 +844,26 @@ test("hosted session operations report actionable integrity and database corrupt
 
   const integrityFailure = await runHostedOperationFailure(
     ["session", "event-details", "--session-id", "session_integrity", "--event-id", "event_integrity", "--json"],
-    { ...process.env, HONEYCRISP_DATABASE_PATH: integrityDatabasePath },
+    { ...process.env, APP_SERVER_DATABASE_PATH: integrityDatabasePath },
   );
   assert.equal(integrityFailure.error.code, "session_integrity_failed");
   assert.match(integrityFailure.error.message, /preserve the database/iu);
 
-  const corruptDirectory = await mkdtemp(join(tmpdir(), "honeycrisp-database-corrupt-"));
+  const corruptDirectory = await mkdtemp(join(tmpdir(), "app-server-database-corrupt-"));
   const corruptDatabasePath = join(corruptDirectory, "memory.sqlite");
   await writeFile(corruptDatabasePath, "not a sqlite database");
   const corruptionFailure = await runHostedOperationFailure(
     ["session", "get", "--session-id", "session_corrupt", "--json"],
-    { ...process.env, HONEYCRISP_DATABASE_PATH: corruptDatabasePath },
+    { ...process.env, APP_SERVER_DATABASE_PATH: corruptDatabasePath },
   );
   assert.equal(corruptionFailure.error.code, "database_corrupt");
   assert.match(corruptionFailure.error.message, /restore a verified backup or run SQLite recovery/iu);
 });
 
 test("session cursor updates omit prior events and capture bodies", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-update-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-session-update-"));
   const databasePath = join(directory, "memory.sqlite");
-  const store = new HoneycrispSessionStore({ databasePath });
+  const store = new AppServerSessionStore({ databasePath });
   try {
     store.create({
       id: "session_update",
@@ -894,7 +894,7 @@ test("session cursor updates omit prior events and capture bodies", async () => 
 
   const updated = await runHostedOperation(
     ["session", "get-update", "--session-id", "session_update", "--after-event-id", "event_before_cursor", "--json"],
-    { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+    { ...process.env, APP_SERVER_DATABASE_PATH: databasePath },
   );
   assert.equal(updated.operation, "session.get_update");
   assert.deepEqual(updated.result.events.map((event) => event.id), ["event_after_cursor"]);
@@ -913,7 +913,7 @@ test("session cursor updates omit prior events and capture bodies", async () => 
   }));
   const appended = await runHostedOperation([
     "session", "append-event-receipt", "--session-id", "session_update", "--input", appendPath, "--json",
-  ], { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath });
+  ], { ...process.env, APP_SERVER_DATABASE_PATH: databasePath });
   assert.equal(appended.operation, "session.append_event_receipt");
   assert.equal(appended.result.sessionId, "session_update");
   assert.equal(appended.result.revision, 4);
@@ -921,7 +921,7 @@ test("session cursor updates omit prior events and capture bodies", async () => 
 });
 
 test("session event, collaboration, capture, and nested trace reads are targeted and bounded", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
       id: "session_targeted",
@@ -989,7 +989,7 @@ test("session event, collaboration, capture, and nested trace reads are targeted
 });
 
 test("commentary event pages project transcripts and path-safe tool summaries", () => {
-  const store = new HoneycrispSessionStore({ databasePath: ":memory:" });
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {
     store.create({
       id: "session_commentary",
@@ -1050,7 +1050,7 @@ test("commentary event pages project transcripts and path-safe tool summaries", 
           role: "assistant",
           phase: "commentary",
           contentMarkdown: "The parser has one guarded entrypoint.",
-          source: "honeycrisp_commentary",
+          source: "app_server_commentary",
           metadata: { agentPath: "/root" },
           createdAt: "2026-08-22T20:00:02.000Z",
         },
@@ -1097,7 +1097,7 @@ test("commentary event pages project transcripts and path-safe tool summaries", 
     assert.equal(page.events[0].payload.record.metadata.toolPluralTemplate, "Read {count} files");
     assert.equal(page.events[1].payload.record.contentMarkdown, "Ran rg");
     assert.equal(page.events[2].payload.record.contentMarkdown, "The parser has one guarded entrypoint.");
-    assert.equal(page.events[3].payload.record.source, "honeycrisp_commentary");
+    assert.equal(page.events[3].payload.record.source, "app_server_commentary");
     assert.equal(page.events[3].payload.record.contentMarkdown, "Canonical commentary remains available without a Desktop attachment.");
     assert.equal(page.events[4].payload.record.source, "openai_reasoning_summary");
     assert.equal(page.events[4].payload.record.metadata.agentPath, "/root/reviewer");
@@ -1110,7 +1110,7 @@ test("commentary event pages project transcripts and path-safe tool summaries", 
 });
 
 test("versioned hosted session operations import captures and serve the canonical query", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-protocol-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-session-protocol-"));
   const databasePath = join(directory, "memory.sqlite");
   const createPath = join(directory, "create.json");
   const capturePath = join(directory, "capture.json");
@@ -1124,7 +1124,7 @@ test("versioned hosted session operations import captures and serve the canonica
     reasoningEffort: "high",
   }));
   await writeFile(capturePath, JSON.stringify(captureFixture()));
-  const env = { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath };
+  const env = { ...process.env, APP_SERVER_DATABASE_PATH: databasePath };
 
   const created = await runHostedOperation(["session", "create", "--input", createPath, "--json"], env);
   assert.equal(created.operation, "session.create");
@@ -1154,9 +1154,9 @@ test("versioned hosted session operations import captures and serve the canonica
 });
 
 test("hosted session reads remain available while the runtime holds a write transaction", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-read-lock-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-session-read-lock-"));
   const databasePath = join(directory, "memory.sqlite");
-  const store = new HoneycrispSessionStore({ databasePath });
+  const store = new AppServerSessionStore({ databasePath });
   store.create({
     id: "session_read_lock",
     workspaceId: "workspace_lock",
@@ -1170,11 +1170,11 @@ test("hosted session reads remain available while the runtime holds a write tran
 
   const writer = new DatabaseSync(databasePath);
   writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
-  writer.prepare("UPDATE honeycrisp_sessions SET summary = summary WHERE id = ?").run("session_read_lock");
+  writer.prepare("UPDATE app_server_sessions SET summary = summary WHERE id = ?").run("session_read_lock");
   try {
     const queried = await runHostedOperation(
       ["session", "get", "--session-id", "session_read_lock", "--json"],
-      { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath },
+      { ...process.env, APP_SERVER_DATABASE_PATH: databasePath },
     );
     assert.equal(queried.ok, true);
     assert.equal(queried.result.id, "session_read_lock");
@@ -1185,10 +1185,10 @@ test("hosted session reads remain available while the runtime holds a write tran
 });
 
 test("hosted session writers wait for a short competing writer instead of returning database locked", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-session-write-lock-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-session-write-lock-"));
   const databasePath = join(directory, "memory.sqlite");
   const inputPath = join(directory, "event.json");
-  const store = new HoneycrispSessionStore({ databasePath });
+  const store = new AppServerSessionStore({ databasePath });
   store.create({
     id: "session_write_lock",
     workspaceId: "workspace_lock",
@@ -1219,7 +1219,7 @@ test("hosted session writers wait for a short competing writer instead of return
     "--session-id", "session_write_lock",
     "--input", inputPath,
     "--json",
-  ], { ...process.env, HONEYCRISP_DATABASE_PATH: databasePath });
+  ], { ...process.env, APP_SERVER_DATABASE_PATH: databasePath });
   assert.equal(appended.ok, true);
   assert.equal(appended.result.sessionId, "session_write_lock");
   assert.equal(appended.result.status, "active");
@@ -1231,15 +1231,15 @@ test("hosted session writers wait for a short competing writer instead of return
 async function runHostedOperation(args, env) {
   const operation = sessionOperation(args);
   const input = await sessionInput(args);
-  const result = await invokeHoneycrispProtocol(operation, {
+  const result = await invokeAppServerProtocol(operation, {
     args,
     ...(input !== undefined ? { input } : {}),
     storage: {
-      databasePath: env.HONEYCRISP_DATABASE_PATH,
-      artifactDirectoryPath: env.HONEYCRISP_ARTIFACT_DIRECTORY ?? join(env.HONEYCRISP_DATABASE_PATH, "..", "artifacts"),
+      databasePath: env.APP_SERVER_DATABASE_PATH,
+      artifactDirectoryPath: env.APP_SERVER_ARTIFACT_DIRECTORY ?? join(env.APP_SERVER_DATABASE_PATH, "..", "artifacts"),
     },
   });
-  return { protocol: "honeycrisp", protocolVersion: 1, operation, ok: true, result };
+  return { protocol: "app-server", protocolVersion: 1, operation, ok: true, result };
 }
 
 async function runHostedOperationFailure(args, env) {
@@ -1251,13 +1251,13 @@ async function runHostedOperationFailure(args, env) {
     if (/database disk image is malformed|file is not a database|database corruption|SQLITE_CORRUPT|SQLITE_NOTADB/iu.test(detail)) {
       return { ok: false, error: {
         code: "database_corrupt",
-        message: "Honeycrisp database integrity failed. Stop active writers and restore a verified backup or run SQLite recovery against the configured database before retrying.",
+        message: "app-server database integrity failed. Stop active writers and restore a verified backup or run SQLite recovery against the configured database before retrying.",
       } };
     }
     if (/failed (?:its|the) integrity check/iu.test(detail)) {
       return { ok: false, error: {
         code: "session_integrity_failed",
-        message: "Honeycrisp session integrity validation failed. Stop active writers, preserve the database, and restore or repair the affected session data before retrying.",
+        message: "app-server session integrity validation failed. Stop active writers, preserve the database, and restore or repair the affected session data before retrying.",
       } };
     }
     throw error;

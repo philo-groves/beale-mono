@@ -1,7 +1,7 @@
 import type {
-  HoneycrispMemoryNodeSummary,
-  HoneycrispReportSummary,
-  HoneycrispRunbookSummary,
+  AppServerMemoryNodeSummary,
+  AppServerReportSummary,
+  AppServerRunbookSummary,
   ResearchProfileMemoryType,
   RunRow,
   SessionActivityInterval,
@@ -87,15 +87,15 @@ interface SessionRunTimelineInput {
 }
 
 interface WorkspaceArtifactRevisionInput {
-  artifact: HoneycrispRunbookSummary | HoneycrispReportSummary;
-  revision: HoneycrispRunbookSummary['revisions'][number];
+  artifact: AppServerRunbookSummary | AppServerReportSummary;
+  revision: AppServerRunbookSummary['revisions'][number];
 }
 
 export function buildWorkspaceTimeline(
   runs: readonly RunRow[],
-  memories: readonly HoneycrispMemoryNodeSummary[],
-  runbooks: readonly HoneycrispRunbookSummary[],
-  reports: readonly HoneycrispReportSummary[],
+  memories: readonly AppServerMemoryNodeSummary[],
+  runbooks: readonly AppServerRunbookSummary[],
+  reports: readonly AppServerReportSummary[],
   memoryTypes: readonly ResearchProfileMemoryType[],
   nowMs: number
 ): WorkspaceTimelineModel {
@@ -121,7 +121,7 @@ export function buildWorkspaceTimeline(
   for (const candidates of sessionRunsByRun.values()) {
     candidates.sort((left, right) => left.startedAtMs - right.startedAtMs || left.sessionRun.id.localeCompare(right.sessionRun.id));
   }
-  const memoriesByRun = new Map<string, HoneycrispMemoryNodeSummary[]>();
+  const memoriesByRun = new Map<string, AppServerMemoryNodeSummary[]>();
   for (const memory of memories) {
     for (const runId of memory.sessionIds) {
       const candidates = memoriesByRun.get(runId) ?? [];
@@ -235,9 +235,9 @@ export function buildWorkspaceTimeline(
 
 export function buildSessionTimelineProjection(
   row: RunRow,
-  memories: readonly HoneycrispMemoryNodeSummary[],
-  runbooks: readonly HoneycrispRunbookSummary[],
-  reports: readonly HoneycrispReportSummary[],
+  memories: readonly AppServerMemoryNodeSummary[],
+  runbooks: readonly AppServerRunbookSummary[],
+  reports: readonly AppServerReportSummary[],
   memoryTypes: readonly ResearchProfileMemoryType[],
   nowMs: number
 ): SessionTimelineProjection {
@@ -255,7 +255,7 @@ export function buildSessionTimelineProjection(
     return percentOfActivityWindow(activityOffsetAt(activityClock, createdAtMs), activityClock);
   };
   const artifactMarkers = (
-    artifacts: readonly (HoneycrispRunbookSummary | HoneycrispReportSummary)[]
+    artifacts: readonly (AppServerRunbookSummary | AppServerReportSummary)[]
   ): WorkspaceTimelineArtifactRevisionMarker[] => artifacts.flatMap((artifact) => (artifact.revisions ?? []).flatMap((revision) => {
     if (revision.sessionId !== row.run.id) return [];
     const leftPercent = position(revision.createdAt);
@@ -337,7 +337,7 @@ function artifactRevisionMarkers(
 }
 
 function artifactRevisionsByRun(
-  artifacts: readonly (HoneycrispRunbookSummary | HoneycrispReportSummary)[]
+  artifacts: readonly (AppServerRunbookSummary | AppServerReportSummary)[]
 ): Map<string, WorkspaceArtifactRevisionInput[]> {
   const grouped = new Map<string, WorkspaceArtifactRevisionInput[]>();
   for (const artifact of artifacts) {

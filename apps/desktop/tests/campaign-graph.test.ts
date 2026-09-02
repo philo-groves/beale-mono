@@ -3,7 +3,7 @@ import { layoutCampaignGraph } from '../src/renderer/view-models/campaignGraph';
 import { campaignClaimRatingPresentation } from '../src/renderer/view-models/campaignClaims';
 import { campaignBoardClaimMetadata, campaignBoardFindings, campaignPriorityClaimMetadata } from '../src/renderer/features/workspaces/CampaignGraphView';
 import { findingRevisionContext } from '../src/main/findingRevisionContext';
-import type { HoneycrispFindingSummary, HoneycrispMemorySummary, WorkspaceScopeVersion } from '@shared/types';
+import type { AppServerFindingSummary, AppServerMemorySummary, WorkspaceScopeVersion } from '@shared/types';
 
 describe('campaign graph projection', () => {
   it('lays out assets, memory, findings, and proof deterministically while dropping dangling edges', () => {
@@ -52,12 +52,12 @@ describe('campaign graph projection', () => {
       securityTracking: {
         cvssAssessments: [{ score: 8.2 }]
       }
-    } as HoneycrispFindingSummary;
+    } as AppServerFindingSummary;
 
     expect(campaignClaimRatingPresentation(claim).label).toBe('High (CVSS 8.2)');
     expect(campaignBoardClaimMetadata(claim)).toBe('High (CVSS 8.2)');
     expect(campaignBoardClaimMetadata(claim)).not.toContain('Primitive');
-    expect(campaignBoardFindings({ findings: [claim] } as HoneycrispMemorySummary, 'reproduced', {
+    expect(campaignBoardFindings({ findings: [claim] } as AppServerMemorySummary, 'reproduced', {
       classification: 'all',
       rating: 'high'
     })).toEqual([claim]);
@@ -69,7 +69,7 @@ describe('campaign graph projection', () => {
       rating: 'medium',
       classification: 'security.chain',
       securityTracking: null
-    } as HoneycrispFindingSummary;
+    } as AppServerFindingSummary;
 
     expect(campaignBoardClaimMetadata(claim)).toBe('Medium');
     expect(campaignBoardClaimMetadata(claim)).not.toContain('Chain');

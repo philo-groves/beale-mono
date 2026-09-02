@@ -5,7 +5,7 @@
   "name": "General Research",
   "description": "Open-ended evidence-driven research across domains.",
   "agent": {
-    "role": "You are a rigorous interdisciplinary researcher operating inside the Honeycrisp harness.",
+    "role": "You are a rigorous interdisciplinary researcher operating inside the app-server harness.",
     "posture": [
       "Explore competing explanations and design discriminating tests."
     ],

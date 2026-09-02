@@ -7,26 +7,26 @@ import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
   BEALE_APP_SERVER_CONTROL_VERSION,
-  HONEYCRISP_CONTRACT_VERSION,
-  HONEYCRISP_PROTOCOL_CAPABILITIES
-} from 'honeycrisp/protocol';
+  APP_SERVER_CONTRACT_VERSION,
+  APP_SERVER_PROTOCOL_CAPABILITIES
+} from '@beale/app-server-runtime/protocol';
 import {
-  decodeHoneycrispProtocolEnvelope,
-  decodeHoneycrispMemorySummary,
-  getHoneycrispProtocolDescriptor,
-  invokeHoneycrispCliProtocol,
-  invokeHoneycrispCliProtocolAsync,
-  listHoneycrispSessionSummariesForWorkspacesAsync
-} from '../src/main/honeycrispCliClient';
+  decodeAppServerProtocolEnvelope,
+  decodeAppServerMemorySummary,
+  getAppServerProtocolDescriptor,
+  invokeAppServerCliProtocol,
+  invokeAppServerCliProtocolAsync,
+  listAppServerSessionSummariesForWorkspacesAsync
+} from '../src/main/appServerCliClient';
 
 const createdDirectories: string[] = [];
 const compatibleDescriptor = {
-  protocol: 'honeycrisp',
+  protocol: 'app-server',
   protocolVersion: 1,
-  contractVersion: HONEYCRISP_CONTRACT_VERSION,
-  runtime: { name: 'honeycrisp', version: '0.1.0', buildId: 'fixture-build', nodeVersion: process.version },
+  contractVersion: APP_SERVER_CONTRACT_VERSION,
+  runtime: { name: 'app-server', version: '0.1.0', buildId: 'fixture-build', nodeVersion: process.version },
   schemas: { protocol: 1, session: 1, memorySummary: 11, finding: 4, campaignGraph: 4, goalSuggestions: 1 },
-  capabilities: [...HONEYCRISP_PROTOCOL_CAPABILITIES],
+  capabilities: [...APP_SERVER_PROTOCOL_CAPABILITIES],
   operations: ['protocol.describe'],
   transports: {
     appServer: { path: '/v1/operations', authentication: 'operator-bearer', framing: 'json', errors: 'http-problem' },
@@ -35,21 +35,21 @@ const compatibleDescriptor = {
 };
 
 afterEach(() => {
-  delete process.env.BEALE_HONEYCRISP_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_ARGS_JSON;
-  delete process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND;
-  delete process.env.BEALE_HONEYCRISP_PROTOCOL_ARGS_JSON;
+  delete process.env.BEALE_APP_SERVER_COMMAND;
+  delete process.env.BEALE_APP_SERVER_ARGS_JSON;
+  delete process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND;
+  delete process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON;
   delete process.env.BEALE_APP_SERVER_STATE_FILE;
   for (const directory of createdDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
 });
 
-describe('Honeycrisp app-server protocol client', () => {
+describe('app-server protocol client', () => {
   it('rejects unversioned and unsupported envelopes', () => {
-    expect(() => decodeHoneycrispProtocolEnvelope('{}')).toThrow(/Invalid or unsupported/);
-    expect(() => decodeHoneycrispProtocolEnvelope(JSON.stringify({
-      protocol: 'honeycrisp',
+    expect(() => decodeAppServerProtocolEnvelope('{}')).toThrow(/Invalid or unsupported/);
+    expect(() => decodeAppServerProtocolEnvelope(JSON.stringify({
+      protocol: 'app-server',
       protocolVersion: 2,
       operation: 'protocol.describe',
       ok: true,
@@ -57,8 +57,8 @@ describe('Honeycrisp app-server protocol client', () => {
     }))).toThrow(/Invalid or unsupported/);
   });
 
-  it('discovers the Honeycrisp protocol through the CLI boundary', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-protocol-'));
+  it('discovers the app-server protocol through the CLI boundary', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-protocol-'));
     createdDirectories.push(directory);
     const fixture = join(directory, 'protocol-fixture.mjs');
     writeFileSync(fixture, [
@@ -67,7 +67,7 @@ describe('Honeycrisp app-server protocol client', () => {
       "const requestId = args[args.indexOf('--request-id') + 1];",
       "if (args.slice(0, 3).join(' ') !== 'protocol describe --json' || !requestId) process.exit(2);",
       `console.log(JSON.stringify({ ...${JSON.stringify({
-        protocol: 'honeycrisp',
+        protocol: 'app-server',
         protocolVersion: 1,
         operation: 'protocol.describe',
         ok: true,
@@ -75,64 +75,64 @@ describe('Honeycrisp app-server protocol client', () => {
       })}, requestId }));`
     ].join('\n'));
     chmodSync(fixture, 0o700);
-    process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = process.execPath;
-    process.env.BEALE_HONEYCRISP_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
+    process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = process.execPath;
+    process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
 
-    expect(getHoneycrispProtocolDescriptor()).toMatchObject({
-      protocol: 'honeycrisp',
+    expect(getAppServerProtocolDescriptor()).toMatchObject({
+      protocol: 'app-server',
       protocolVersion: 1,
       operations: ['protocol.describe'],
-      contractVersion: HONEYCRISP_CONTRACT_VERSION,
+      contractVersion: APP_SERVER_CONTRACT_VERSION,
       transports: { websocket: { path: '/v1/session' } }
     });
   });
 
   it('rejects a CLI response correlated to a different request', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-protocol-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-protocol-'));
     createdDirectories.push(directory);
     const fixture = join(directory, 'protocol-fixture.mjs');
     writeFileSync(fixture, [
       '#!/usr/bin/env node',
-      "console.log(JSON.stringify({ protocol: 'honeycrisp', protocolVersion: 1, operation: 'protocol.describe', requestId: 'wrong-request', ok: true, result: {} }));"
+      "console.log(JSON.stringify({ protocol: 'app-server', protocolVersion: 1, operation: 'protocol.describe', requestId: 'wrong-request', ok: true, result: {} }));"
     ].join('\n'));
     chmodSync(fixture, 0o700);
-    process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = process.execPath;
-    process.env.BEALE_HONEYCRISP_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
+    process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = process.execPath;
+    process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
 
-    expect(() => invokeHoneycrispCliProtocol('protocol.describe', ['protocol', 'describe', '--json']))
+    expect(() => invokeAppServerCliProtocol('protocol.describe', ['protocol', 'describe', '--json']))
       .toThrow(/request mismatch/);
   });
 
   it('reports protocol process failures without mistaking runtime warnings for the cause', () => {
-    process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = join(tmpdir(), 'missing-honeycrisp-protocol-command');
+    process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = join(tmpdir(), 'missing-app-server-protocol-command');
 
-    expect(() => invokeHoneycrispCliProtocol('session.list', ['session', 'list', '--workspace-id', 'workspace_one', '--json']))
+    expect(() => invokeAppServerCliProtocol('session.list', ['session', 'list', '--workspace-id', 'workspace_one', '--json']))
       .toThrow(/process error:.*ENOENT/);
   });
 
   it('suppresses Node runtime warnings on machine-readable protocol subprocesses', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-protocol-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-protocol-'));
     createdDirectories.push(directory);
     const fixture = join(directory, 'protocol-warning-fixture.mjs');
     writeFileSync(fixture, [
       '#!/usr/bin/env node',
       "const args = process.argv.slice(2);",
       "const requestId = args[args.indexOf('--request-id') + 1];",
-      `if (args[0] === 'protocol' && args[1] === 'describe') { console.log(JSON.stringify({ protocol: 'honeycrisp', protocolVersion: 1, operation: 'protocol.describe', requestId, ok: true, result: ${JSON.stringify(compatibleDescriptor)} })); process.exit(0); }`,
+      `if (args[0] === 'protocol' && args[1] === 'describe') { console.log(JSON.stringify({ protocol: 'app-server', protocolVersion: 1, operation: 'protocol.describe', requestId, ok: true, result: ${JSON.stringify(compatibleDescriptor)} })); process.exit(0); }`,
       "if (process.env.NODE_NO_WARNINGS !== '1') process.stderr.write('ExperimentalWarning: protocol noise\\n');",
-      "console.log(JSON.stringify({ protocol: 'honeycrisp', protocolVersion: 1, operation: 'session.list', requestId, ok: true, result: [] }));"
+      "console.log(JSON.stringify({ protocol: 'app-server', protocolVersion: 1, operation: 'session.list', requestId, ok: true, result: [] }));"
     ].join('\n'));
     chmodSync(fixture, 0o700);
-    process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = process.execPath;
-    process.env.BEALE_HONEYCRISP_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
+    process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = process.execPath;
+    process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
 
-    expect(invokeHoneycrispCliProtocol('session.list', ['session', 'list', '--workspace-id', 'workspace_one', '--json']).result)
+    expect(invokeAppServerCliProtocol('session.list', ['session', 'list', '--workspace-id', 'workspace_one', '--json']).result)
       .toEqual([]);
   });
 
   it('retains complete JSON envelopes larger than the former two-million-character process cap', () => {
-    const envelope = decodeHoneycrispProtocolEnvelope<{ text: string }>(JSON.stringify({
-      protocol: 'honeycrisp',
+    const envelope = decodeAppServerProtocolEnvelope<{ text: string }>(JSON.stringify({
+      protocol: 'app-server',
       protocolVersion: 1,
       operation: 'session.get',
       requestId: 'large-response',
@@ -145,21 +145,21 @@ describe('Honeycrisp app-server protocol client', () => {
   });
 
   it('rejects incompatible runtime descriptors and malformed memory summary v9 payloads', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-incompatible-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-incompatible-'));
     createdDirectories.push(directory);
     const fixture = join(directory, 'protocol-fixture.mjs');
     writeFileSync(fixture, [
       '#!/usr/bin/env node',
       "const args = process.argv.slice(2);",
       "const requestId = args[args.indexOf('--request-id') + 1];",
-      `console.log(JSON.stringify({ protocol: 'honeycrisp', protocolVersion: 1, operation: 'protocol.describe', requestId, ok: true, result: ${JSON.stringify({ ...compatibleDescriptor, contractVersion: 1 })} }));`
+      `console.log(JSON.stringify({ protocol: 'app-server', protocolVersion: 1, operation: 'protocol.describe', requestId, ok: true, result: ${JSON.stringify({ ...compatibleDescriptor, contractVersion: 1 })} }));`
     ].join('\n'));
     chmodSync(fixture, 0o700);
-    process.env.BEALE_HONEYCRISP_PROTOCOL_COMMAND = process.execPath;
-    process.env.BEALE_HONEYCRISP_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
-    expect(() => getHoneycrispProtocolDescriptor()).toThrow(new RegExp(`incompatible with Beale contract v${HONEYCRISP_CONTRACT_VERSION}`));
-    expect(() => decodeHoneycrispMemorySummary({ nodes: [], edges: [], runbooks: [], leads: [], findings: [], campaign: {} })).toThrow(/memory summary v9/);
-    expect(() => decodeHoneycrispMemorySummary({
+    process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = process.execPath;
+    process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
+    expect(() => getAppServerProtocolDescriptor()).toThrow(new RegExp(`incompatible with Beale contract v${APP_SERVER_CONTRACT_VERSION}`));
+    expect(() => decodeAppServerMemorySummary({ nodes: [], edges: [], runbooks: [], leads: [], findings: [], campaign: {} })).toThrow(/memory summary v9/);
+    expect(() => decodeAppServerMemorySummary({
       nodeCount: 0,
       edgeCount: 0,
       nodes: [],
@@ -240,34 +240,34 @@ describe('Honeycrisp app-server protocol client', () => {
       }
     };
 
-    expect(decodeHoneycrispMemorySummary(summary).campaign.tracks?.[0]).toMatchObject({
+    expect(decodeAppServerMemorySummary(summary).campaign.tracks?.[0]).toMatchObject({
       questions: [question],
       experiments: [experiment],
       observations: [observation]
     });
     const { questions: _questions, ...questionlessTrack } = track;
-    expect(() => decodeHoneycrispMemorySummary({
+    expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [questionlessTrack] }
     })).toThrow(/memory summary v9/);
     const { experiments: _experiments, ...countOnlyTrack } = track;
-    expect(() => decodeHoneycrispMemorySummary({
+    expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [countOnlyTrack] }
     })).toThrow(/memory summary v9/);
     const { observations: _observations, ...observationlessTrack } = track;
-    expect(() => decodeHoneycrispMemorySummary({
+    expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [observationlessTrack] }
     })).toThrow(/memory summary v9/);
-    expect(() => decodeHoneycrispMemorySummary({
+    expect(() => decodeAppServerMemorySummary({
       ...summary,
       campaign: { ...summary.campaign, tracks: [{ ...track, experiments: [{ ...experiment, status: 'unknown' }] }] }
     })).toThrow(/memory summary v9/);
   });
 
   it('batches multiple workspace summary catalogs into one app-server operation', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-protocol-'));
+    const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-protocol-'));
     createdDirectories.push(directory);
     let receivedBody: Record<string, unknown> | null = null;
     const server = createServer((request, response) => {
@@ -308,7 +308,7 @@ describe('Honeycrisp app-server protocol client', () => {
         startedAt: new Date().toISOString()
       }), 'utf8');
 
-      await expect(listHoneycrispSessionSummariesForWorkspacesAsync(
+      await expect(listAppServerSessionSummariesForWorkspacesAsync(
         ['workspace_one', 'workspace_two', 'workspace_one'],
         { databasePath: join(directory, 'memory.sqlite'), artifactDirectoryPath: join(directory, 'artifacts') }
       )).resolves.toEqual([]);

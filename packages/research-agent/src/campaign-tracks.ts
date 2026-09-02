@@ -301,7 +301,7 @@ export class CampaignTrackStore {
   }
 
   public static initializeSchema(database: DatabaseSync): void {
-    applyDatabaseMigrations(database, "honeycrisp_campaign_tracks", [{
+    applyDatabaseMigrations(database, "app_server_campaign_tracks", [{
       version: 1,
       name: "evidence_governed_campaign_tracks",
       up(db) {
@@ -480,7 +480,7 @@ export class CampaignTrackStore {
           END;
 
           CREATE TRIGGER IF NOT EXISTS campaign_track_link_runbook_on_create
-          AFTER INSERT ON honeycrisp_runbooks WHEN NEW.session_id IS NOT NULL
+          AFTER INSERT ON app_server_runbooks WHEN NEW.session_id IS NOT NULL
           BEGIN
             INSERT OR IGNORE INTO campaign_track_resources(investigation_id, resource_kind, resource_id, role, linked_at)
             SELECT investigation_id, 'runbook', NEW.id, 'produced', NEW.created_at
@@ -488,7 +488,7 @@ export class CampaignTrackStore {
           END;
 
           CREATE TRIGGER IF NOT EXISTS campaign_track_link_report_on_create
-          AFTER INSERT ON honeycrisp_reports WHEN NEW.session_id IS NOT NULL
+          AFTER INSERT ON app_server_reports WHEN NEW.session_id IS NOT NULL
           BEGIN
             INSERT OR IGNORE INTO campaign_track_resources(investigation_id, resource_kind, resource_id, role, linked_at)
             SELECT investigation_id, 'report', NEW.id, 'produced', NEW.created_at
@@ -505,7 +505,7 @@ export class CampaignTrackStore {
           CREATE TABLE IF NOT EXISTS campaign_track_research_claim_reviews (
             id TEXT PRIMARY KEY,
             investigation_id TEXT NOT NULL REFERENCES campaign_tracks(id) ON DELETE CASCADE,
-            claim_id TEXT NOT NULL REFERENCES honeycrisp_research_claims(id) ON DELETE CASCADE,
+            claim_id TEXT NOT NULL REFERENCES app_server_research_claims(id) ON DELETE CASCADE,
             claim_revision INTEGER NOT NULL CHECK (claim_revision > 0),
             resulting_revision INTEGER NOT NULL CHECK (resulting_revision > 0),
             verdict TEXT NOT NULL CHECK (verdict IN ('accept', 'revise', 'reject')),
@@ -519,7 +519,7 @@ export class CampaignTrackStore {
           CREATE INDEX IF NOT EXISTS campaign_track_research_claim_reviews_claim_idx
             ON campaign_track_research_claim_reviews(claim_id, created_at DESC);
           CREATE TRIGGER IF NOT EXISTS campaign_track_link_claim_on_create
-          AFTER INSERT ON honeycrisp_research_claims WHEN NEW.origin_session_id IS NOT NULL
+          AFTER INSERT ON app_server_research_claims WHEN NEW.origin_session_id IS NOT NULL
           BEGIN
             INSERT OR IGNORE INTO campaign_track_resources(investigation_id, resource_kind, resource_id, role, linked_at)
             SELECT investigation_id, 'finding', NEW.id, 'produced', NEW.created_at
@@ -1348,9 +1348,9 @@ export class CampaignTrackStore {
     const inserts: Array<{ kind: CampaignTrackResourceKind; sql: string }> = [
       { kind: "memory", sql: "SELECT node_id AS id FROM memory_node_sessions WHERE session_id = ?" },
       { kind: "evidence", sql: "SELECT e.id FROM memory_evidence_refs e JOIN memory_node_sessions s ON s.node_id = e.node_id WHERE s.session_id = ?" },
-      { kind: "finding", sql: "SELECT id FROM honeycrisp_research_claims WHERE origin_session_id = ?" },
-      { kind: "runbook", sql: "SELECT id FROM honeycrisp_runbooks WHERE session_id = ?" },
-      { kind: "report", sql: "SELECT id FROM honeycrisp_reports WHERE session_id = ?" },
+      { kind: "finding", sql: "SELECT id FROM app_server_research_claims WHERE origin_session_id = ?" },
+      { kind: "runbook", sql: "SELECT id FROM app_server_runbooks WHERE session_id = ?" },
+      { kind: "report", sql: "SELECT id FROM app_server_reports WHERE session_id = ?" },
     ];
     const insert = this.database.prepare(
       "INSERT OR IGNORE INTO campaign_track_resources(investigation_id, resource_kind, resource_id, role, linked_at) VALUES (?, ?, ?, 'produced', ?)",
@@ -1420,10 +1420,10 @@ export class CampaignTrackStore {
   }
 
   private replaySessions(): ReplaySession[] {
-    if (!tableExists(this.database, "honeycrisp_sessions")) return [];
+    if (!tableExists(this.database, "app_server_sessions")) return [];
     const rows = this.database.prepare(`
       SELECT id, title, summary, document_json, status, created_at, updated_at
-      FROM honeycrisp_sessions WHERE workspace_id = ? ORDER BY created_at, id
+      FROM app_server_sessions WHERE workspace_id = ? ORDER BY created_at, id
     `).all(this.context.workspaceId) as SqlRow[];
     return rows.map((row) => {
       const id = textValue(row.id);
@@ -1433,7 +1433,7 @@ export class CampaignTrackStore {
             FROM memory_nodes n JOIN memory_node_sessions s ON s.node_id = n.id WHERE s.session_id = ? ORDER BY n.created_at
           `).all(id) as SqlRow[]).map(replayNodeFromRow)
         : [];
-      const runbooks = tableExists(this.database, "honeycrisp_runbooks")
+      const runbooks = tableExists(this.database, "app_server_runbooks")
         ? replayRunbooks(this.database, id)
         : [];
       return {
@@ -1478,18 +1478,18 @@ export class CampaignTrackStore {
   }
 
   private sessionTitle(sessionId: string): string | null {
-    if (!tableExists(this.database, "honeycrisp_sessions")) return null;
+    if (!tableExists(this.database, "app_server_sessions")) return null;
     const row = this.database.prepare(
-      "SELECT title, document_json FROM honeycrisp_sessions WHERE id = ?",
+      "SELECT title, document_json FROM app_server_sessions WHERE id = ?",
     ).get(sessionId) as SqlRow | undefined;
     return row ? researchSessionTitle(row) : null;
   }
 
   private hasActiveSession(investigationId: string): boolean {
-    if (!tableExists(this.database, "honeycrisp_sessions")) return false;
+    if (!tableExists(this.database, "app_server_sessions")) return false;
     return Boolean(this.database.prepare(`
       SELECT 1 FROM campaign_track_sessions t
-      JOIN honeycrisp_sessions s ON s.id = t.session_id
+      JOIN app_server_sessions s ON s.id = t.session_id
       WHERE t.investigation_id = ? AND s.status = 'active'
       LIMIT 1
     `).get(investigationId));
@@ -1799,9 +1799,9 @@ function replayMetrics(
 function replayRunbooks(database: DatabaseSync, sessionId: string): ReplayRunbook[] {
   const rows = database.prepare(`
     SELECT r.id, r.title,
-      COALESCE((SELECT e.status FROM honeycrisp_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), 'planned') AS execution_status,
-      COALESCE((SELECT e.error FROM honeycrisp_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), '') AS result_summary
-    FROM honeycrisp_runbooks r WHERE r.session_id = ?
+      COALESCE((SELECT e.status FROM app_server_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), 'planned') AS execution_status,
+      COALESCE((SELECT e.error FROM app_server_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), '') AS result_summary
+    FROM app_server_runbooks r WHERE r.session_id = ?
   `).all(sessionId) as SqlRow[];
   return rows.map((row) => ({
     id: textValue(row.id), title: textValue(row.title), status: runbookExperimentStatus(textValue(row.execution_status)), resultSummary: textValue(row.result_summary),
@@ -1809,12 +1809,12 @@ function replayRunbooks(database: DatabaseSync, sessionId: string): ReplayRunboo
 }
 
 function replayRunbook(database: DatabaseSync, runbookId: string): ReplayRunbook | null {
-  if (!tableExists(database, "honeycrisp_runbooks")) return null;
+  if (!tableExists(database, "app_server_runbooks")) return null;
   const row = database.prepare(`
     SELECT r.id, r.title,
-      COALESCE((SELECT e.status FROM honeycrisp_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), 'planned') AS execution_status,
-      COALESCE((SELECT e.error FROM honeycrisp_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), '') AS result_summary
-    FROM honeycrisp_runbooks r WHERE r.id = ?
+      COALESCE((SELECT e.status FROM app_server_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), 'planned') AS execution_status,
+      COALESCE((SELECT e.error FROM app_server_runbook_executions e WHERE e.runbook_id = r.id ORDER BY e.started_at DESC LIMIT 1), '') AS result_summary
+    FROM app_server_runbooks r WHERE r.id = ?
   `).get(runbookId) as SqlRow | undefined;
   return row ? {
     id: textValue(row.id),

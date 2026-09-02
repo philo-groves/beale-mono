@@ -1,12 +1,12 @@
 {
-  "name": "honeycrisp",
+  "name": "@beale/app-server-runtime",
   "version": "0.1.0",
-  "description": "Shared Honeycrisp protocol and app-server-hosted runtime, with an optional app-server client.",
+  "description": "Shared app-server protocol and hosted runtime, with an optional app-server client.",
   "type": "module",
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
   "bin": {
-    "honeycrisp": "./dist/cli.js"
+    "beale-app-server-client": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -42,7 +42,7 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@honeycrisp/research-agent": "workspace:*",
+    "@beale/research-agent": "workspace:*",
     "ws": "8.21.0"
   },
   "license": "UNLICENSED",

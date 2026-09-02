@@ -13,7 +13,7 @@ describe('renderer run settings view model', () => {
   it('keeps new research sessions unlimited by minutes but one branch by default', () => {
     expect(defaultRunInput.budget.maxMinutes).toBe(UNBOUNDED_MINUTES);
     expect(defaultRunInput.budget.maxAttempts).toBe(1);
-    expect(defaultRunInput.runEngine).toBe('honeycrisp');
+    expect(defaultRunInput.runEngine).toBe('app-server');
     expect(defaultRunInput.goalEnabled).toBe(true);
     expect(defaultRunInput.goalObjective).toBeNull();
     expect(defaultRunInput.provider).toBeUndefined();

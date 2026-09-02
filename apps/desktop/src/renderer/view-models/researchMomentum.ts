@@ -2,7 +2,7 @@ import type { RunDetail, TraceEventRecord } from '@shared/types';
 import type { ResearchMomentum, ResearchMomentumState } from '../features/momentum/types';
 import { traceLabel } from '../lib/formatting';
 import {
-  honeycrispToolName,
+  appServerToolName,
   traceCategoryForEvent,
   traceEventOutcome,
   tracePayloadPrimitive
@@ -19,7 +19,7 @@ export function researchMomentumForDetail(detail: RunDetail | null, heat: Sessio
   if (detail.run.status === 'queued') return momentumState('waiting', 'The research session is queued.');
   if (detail.run.status !== 'active') return momentumState('idle', `The research session is ${traceLabel(detail.run.status)}.`);
 
-  const campaignMomentum = detail.honeycrispMemory?.campaign?.momentum;
+  const campaignMomentum = detail.appServerMemory?.campaign?.momentum;
   if (campaignMomentum && campaignMomentum.state !== 'empty') {
     return momentumState(campaignMomentumState(campaignMomentum.state), campaignMomentum.reason);
   }
@@ -61,7 +61,7 @@ export function researchMomentumForDetail(detail: RunDetail | null, heat: Sessio
   return momentumState('exploring', momentumReasonFromEvent('Active session is producing trace events', latest), recent.slice(-3));
 }
 
-function campaignMomentumState(state: NonNullable<RunDetail['honeycrispMemory']>['campaign']['momentum']['state']): ResearchMomentumState {
+function campaignMomentumState(state: NonNullable<RunDetail['appServerMemory']>['campaign']['momentum']['state']): ResearchMomentumState {
   switch (state) {
     case 'blocked': return 'stuck';
     case 'building': return 'building';
@@ -129,7 +129,7 @@ function hasMomentumHotLead(detail: RunDetail, heat: SessionHeat, recent: TraceE
   const recentProgress = recent.some((event) => isMomentumVerifyingEvent(event) || isMemoryGraphMutationEvent(event));
   if (recentProgress) return true;
 
-  return detail.honeycrispMemory?.nodes.some((node) =>
+  return detail.appServerMemory?.nodes.some((node) =>
     node.sessionIds.includes(detail.run.id) &&
     node.type === 'chain' &&
     (node.status === 'suspected' || node.status === 'confirmed') &&
@@ -153,7 +153,7 @@ function isMomentumBuildingEvent(event: TraceEventRecord): boolean {
 }
 
 function isMemoryGraphMutationEvent(event: TraceEventRecord): boolean {
-  const toolName = honeycrispToolName(event);
+  const toolName = appServerToolName(event);
   return toolName !== null && MEMORY_GRAPH_MUTATION_TOOLS.has(toolName);
 }
 

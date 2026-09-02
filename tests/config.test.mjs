@@ -39,7 +39,7 @@ test("authenticated model catalog includes current supplemental models", () => {
 });
 
 test("credential store treats legacy Anthropic credentials as cleanup-only", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-anthropic-legacy-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-anthropic-legacy-"));
   const authFile = join(directory, "auth.json");
   await writeFile(authFile, JSON.stringify({
     anthropic: { type: "api_key", key: "legacy-secret" },
@@ -108,8 +108,8 @@ test("research model config accepts Pi max effort", async () => {
 });
 
 test("credential store prefers a fresher host Codex OAuth credential", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-codex-bridge-"));
-  const authFile = join(directory, "honeycrisp-auth.json");
+  const directory = await mkdtemp(join(tmpdir(), "app-server-codex-bridge-"));
+  const authFile = join(directory, "app-server-auth.json");
   const codexAuthFile = join(directory, "codex-auth.json");
   const nowSeconds = Math.floor(Date.now() / 1000);
   const jwt = (expires) =>
@@ -313,7 +313,7 @@ test("research model config resolver applies config model preference to the firs
 });
 
 test("research model config resolver loads the default project config path", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-default-config-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-default-config-"));
   const configPath = getDefaultResearchModelConfigPath(workspaceRoot);
   await mkdir(resolve(configPath, ".."), { recursive: true });
   await writeFile(
@@ -346,7 +346,7 @@ test("research model config resolver loads the default project config path", asy
 });
 
 test("research model config writer creates preference-only project config files", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-write-config-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-write-config-"));
   const written = await writeResearchModelConfig({
     workspaceRoot,
     preference: {
@@ -397,7 +397,7 @@ test("research model config resolver reports missing authorization clearly", asy
 });
 
 test("research model default config rejects auth-like secret fields", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-secret-config-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-secret-config-"));
   const configPath = getDefaultResearchModelConfigPath(workspaceRoot);
   await mkdir(resolve(configPath, ".."), { recursive: true });
   await writeFile(
@@ -448,7 +448,7 @@ test("research model config CLI-style overrides win over config files", async ()
 });
 
 async function writeConfig(config) {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-config-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-config-"));
   const configPath = join(root, "research-config.json");
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   return configPath;

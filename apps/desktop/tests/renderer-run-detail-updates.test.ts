@@ -33,7 +33,7 @@ describe('renderer run detail update view model', () => {
       afterTranscriptCount: 1,
       afterTraceEventId: 'trace_old'
     });
-    detail.traceEvents[0].payload.honeycrispSessionEventId = 'trace_batch_1';
+    detail.traceEvents[0].payload.appServerSessionEventId = 'trace_batch_1';
     expect(runDetailUpdateCursor(detail).afterTraceEventId).toBe('trace_batch_1');
     detail.projectionCursor = { afterTraceSequence: 50, afterTranscriptCount: 75, afterTraceEventId: 'source_50' };
     expect(runDetailUpdateCursor(detail)).toEqual(detail.projectionCursor);
@@ -116,7 +116,7 @@ describe('renderer run detail update view model', () => {
       attemptId: 'attempt_one',
       phase: 'final_answer',
       contentMarkdown: 'Objective achieved.\n\nVerification completed.',
-      source: 'honeycrisp',
+      source: 'app-server',
       metadata: { agentPath: '/root' },
       createdAt: '2026-04-30T00:01:00.000Z'
     });
@@ -126,7 +126,7 @@ describe('renderer run detail update view model', () => {
       traceEventId: 'event_model_output_final',
       phase: 'final_answer',
       contentMarkdown: 'Objective achieved. Verification completed.',
-      source: 'honeycrisp',
+      source: 'app-server',
       metadata: { agentPath: '/root', responseId: 'response_final', itemId: 'text_final' },
       createdAt: '2026-04-30T00:01:01.000Z'
     });
@@ -146,7 +146,7 @@ describe('renderer run detail update view model', () => {
       traceEventId: 'event_first',
       phase: 'final_answer',
       contentMarkdown: 'Verification completed.',
-      source: 'honeycrisp',
+      source: 'app-server',
       metadata: { agentPath: '/root' },
       createdAt: '2026-04-30T00:01:00.000Z'
     });
@@ -156,7 +156,7 @@ describe('renderer run detail update view model', () => {
       traceEventId: 'event_second',
       phase: 'final_answer',
       contentMarkdown: 'Verification completed.',
-      source: 'honeycrisp',
+      source: 'app-server',
       metadata: { agentPath: '/root' },
       createdAt: '2026-04-30T00:02:00.000Z'
     });

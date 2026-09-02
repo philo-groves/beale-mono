@@ -13,7 +13,7 @@ import {
 } from "../packages/research-agent/dist/index.js";
 
 test("resource discovery is non-authoring and first touch requires relevance Auto-Review", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-resources-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-resources-"));
   const databasePath = join(root, "memory.sqlite");
   const reviews = [];
   const catalog = new ResearchResourceCatalog({
@@ -113,7 +113,7 @@ test("resource discovery is non-authoring and first touch requires relevance Aut
         SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%authorship%'
       `).all();
       assert.deepEqual(authorshipTables, []);
-      const touches = database.prepare("SELECT COUNT(*) AS count FROM honeycrisp_research_resource_touches").get();
+      const touches = database.prepare("SELECT COUNT(*) AS count FROM app_server_research_resource_touches").get();
       assert.equal(touches.count, 1);
     } finally {
       database.close();
@@ -169,7 +169,7 @@ test("resource scope authorizer recognizes ambient platform dependencies without
 });
 
 test("resource catalog replaces stale explicit scope classification on a new active scope", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-resource-scope-sync-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-resource-scope-sync-"));
   const databasePath = join(root, "memory.sqlite");
   const original = new ResearchResourceCatalog({
     databasePath,

@@ -15,8 +15,8 @@ import {
 } from "../packages/research-agent/dist/index.js";
 
 test("storage manifest registers, lists, resolves, and reloads artifacts", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-storage-"));
-  const outsideRoot = await mkdtemp(join(tmpdir(), "honeycrisp-storage-outside-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-storage-"));
+  const outsideRoot = await mkdtemp(join(tmpdir(), "app-server-storage-outside-"));
   const layout = ensureResearchStorageLayout(
     createResearchStorageLayout({ workspaceRoot }),
   );

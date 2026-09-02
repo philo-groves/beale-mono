@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   BEALE_APP_SERVER_CONTROL_VERSION,
-  HONEYCRISP_SESSION_LAUNCH_VERSION,
+  APP_SERVER_SESSION_LAUNCH_VERSION,
   type BealeAppServerCanonicalResult,
   type BealeAppServerProviderCatalog,
   type BealeMemoryNotificationFeed,
@@ -13,11 +13,11 @@ import {
   type BealeWorkspaceClaimSecurityTracking,
   type BealeWorkspaceMemoryNode,
   type BealeAppServerWorkspaceList,
-  decodeHoneycrispSessionLaunchRequest,
-  type HoneycrispProtocolOperation,
-  type HoneycrispSessionLaunchRequest
-} from 'honeycrisp/protocol';
-import { getProviderModelCatalog } from 'honeycrisp/runtime-services';
+  decodeAppServerSessionLaunchRequest,
+  type AppServerProtocolOperation,
+  type AppServerSessionLaunchRequest
+} from '@beale/app-server-runtime/protocol';
+import { getProviderModelCatalog } from '@beale/app-server-runtime/runtime-services';
 import {
   AppServerHostRegistry,
   type AppServerHostRegistryOptions,
@@ -25,27 +25,27 @@ import {
   type AppServerHostWorkspace
 } from './hostRegistry.js';
 import {
-  invokeHoneycrispProtocol,
-  type InvokeHoneycrispProtocolOptions
-} from './honeycrispProtocolClient.js';
+  invokeAppServerProtocol,
+  type InvokeAppServerProtocolOptions
+} from './appServerProtocolClient.js';
 import {
-  resolveHoneycrispCodexAuthFile,
-  type ResolvedHoneycrispSessionLaunch
+  resolveAppServerCodexAuthFile,
+  type ResolvedAppServerSessionLaunch
 } from './sessionLaunch.js';
 import { longSessionRecoveryFallbackPrompt } from './sessionRecovery.js';
 
 type ProtocolInvoker = <T>(
-  operation: HoneycrispProtocolOperation,
-  options: InvokeHoneycrispProtocolOptions
+  operation: AppServerProtocolOperation,
+  options: InvokeAppServerProtocolOptions
 ) => Promise<T>;
 
 interface StoredRestartLaunchDescriptor {
   schemaVersion: 1;
   eligible: boolean;
-  launch: HoneycrispSessionLaunchRequest['launch'];
+  launch: AppServerSessionLaunchRequest['launch'];
 }
 
-interface HoneycrispSessionSummaryProjection {
+interface AppServerSessionSummaryProjection {
   id?: unknown;
   workspaceId?: unknown;
   status?: unknown;
@@ -61,18 +61,18 @@ interface HoneycrispSessionSummaryProjection {
   updatedAt?: unknown;
 }
 
-interface HoneycrispSessionUpdateProjection {
-  session?: HoneycrispSessionSummaryProjection;
+interface AppServerSessionUpdateProjection {
+  session?: AppServerSessionSummaryProjection;
 }
 
-interface HoneycrispPluginRuntimeProjection {
+interface AppServerPluginRuntimeProjection {
   skillDirs?: unknown;
   selectedSkillIds?: unknown;
   mcpConfigPath?: unknown;
   allowedMcpServers?: unknown;
 }
 
-interface HoneycrispProviderSemanticsProjection {
+interface AppServerProviderSemanticsProjection {
   defaultSmallModels?: unknown;
   sessionTitleEffort?: unknown;
   shellReviewEffort?: unknown;
@@ -81,11 +81,11 @@ interface HoneycrispProviderSemanticsProjection {
 export interface PreparedAppServerSession {
   sessionId: string;
   attemptId: string;
-  launch: ResolvedHoneycrispSessionLaunch;
+  launch: ResolvedAppServerSessionLaunch;
 }
 
 export interface RecoveredAppServerSession {
-  request: HoneycrispSessionLaunchRequest;
+  request: AppServerSessionLaunchRequest;
   prepared: PreparedAppServerSession;
 }
 
@@ -97,7 +97,7 @@ export interface AppServerStartupRecoveryResult {
 }
 
 export interface DueAppServerAutomation {
-  request: HoneycrispSessionLaunchRequest;
+  request: AppServerSessionLaunchRequest;
   dueAt: string;
 }
 
@@ -109,7 +109,7 @@ export interface AppServerHostServiceOptions extends AppServerHostRegistryOption
 export class AppServerHostService {
   private readonly registry: AppServerHostRegistry;
   private readonly invokeProtocol: ProtocolInvoker;
-  private pluginRuntimePromise: Promise<ResolvedHoneycrispSessionLaunch['pluginRuntime'] | null> | null = null;
+  private pluginRuntimePromise: Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> | null = null;
   private providerSemanticsPromise: Promise<{
     defaultSmallModels: Record<string, string>;
     sessionTitleEffort: string;
@@ -118,7 +118,7 @@ export class AppServerHostService {
 
   public constructor(options: AppServerHostServiceOptions = {}) {
     this.registry = options.registry ?? new AppServerHostRegistry(options);
-    this.invokeProtocol = options.invokeProtocol ?? invokeHoneycrispProtocol;
+    this.invokeProtocol = options.invokeProtocol ?? invokeAppServerProtocol;
   }
 
   public listWorkspaces(): BealeAppServerWorkspaceList {
@@ -160,7 +160,7 @@ export class AppServerHostService {
   }
 
   public async executeOperation(request: {
-    operation: HoneycrispProtocolOperation;
+    operation: AppServerProtocolOperation;
     args?: readonly string[];
     input?: unknown;
     profileId?: string;
@@ -202,7 +202,7 @@ export class AppServerHostService {
   }
 
   private hostedSuggestionInput(
-    operation: HoneycrispProtocolOperation,
+    operation: AppServerProtocolOperation,
     input: unknown,
     workspace: AppServerHostWorkspace,
     storage: AppServerHostStorage
@@ -221,7 +221,7 @@ export class AppServerHostService {
     if (!providerId) throw new Error('No Lead provider is configured for this Beale host.');
     const defaults = settings.modelDefaults[providerId];
     const codexAuthFile = providerId === 'openai-codex'
-      ? resolveHoneycrispCodexAuthFile()
+      ? resolveAppServerCodexAuthFile()
       : undefined;
     return {
       ...input,
@@ -270,7 +270,7 @@ export class AppServerHostService {
     const model = requestedModel ?? defaults?.leadModel;
     if (!model) throw new Error(`No Lead model is configured for provider ${providerId}.`);
     const codexAuthFile = providerId === 'openai-codex'
-      ? resolveHoneycrispCodexAuthFile()
+      ? resolveAppServerCodexAuthFile()
       : undefined;
     return {
       ...input,
@@ -291,7 +291,7 @@ export class AppServerHostService {
   }
 
   public async prepareSession(
-    request: HoneycrispSessionLaunchRequest,
+    request: AppServerSessionLaunchRequest,
     generatedSessionId: string
   ): Promise<PreparedAppServerSession> {
     const sessionId = request.sessionId ?? generatedSessionId;
@@ -327,7 +327,7 @@ export class AppServerHostService {
         defaults.smallModel ? [[id, defaults.smallModel] as const] : []
       )))
     };
-    const runDirectory = join(workspace.workspacePath, '.beale', 'honeycrisp-runs');
+    const runDirectory = join(workspace.workspacePath, '.beale', 'app-server-runs');
     const continuation = request.launch.continuation;
     const fileStem = continuation ? `${sessionId}.${attemptId}` : sessionId;
     const capturePath = join(runDirectory, `${fileStem}.capture.json`);
@@ -450,7 +450,7 @@ export class AppServerHostService {
   }
 
   public async prepareSessionRecovery(input: {
-    request: HoneycrispSessionLaunchRequest;
+    request: AppServerSessionLaunchRequest;
     sessionId: string;
     previousAttemptId: string;
     previousAttemptWasInitial: boolean;
@@ -458,7 +458,7 @@ export class AppServerHostService {
   }): Promise<PreparedAppServerSession> {
     const workspace = this.requireWorkspace(input.request.launch.workspaceId);
     const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
-    const existing = await this.invokeProtocol<HoneycrispSessionSummaryProjection>('session.get', {
+    const existing = await this.invokeProtocol<AppServerSessionSummaryProjection>('session.get', {
       args: ['session', 'get', '--session-id', input.sessionId],
       storage
     });
@@ -468,7 +468,7 @@ export class AppServerHostService {
         storage,
         input: {
           status: 'paused',
-          summary: 'Paused after an unexpected Honeycrisp worker failure.',
+          summary: 'Paused after an unexpected app-server worker failure.',
           attemptId: input.previousAttemptId,
           metadata: {
             longSessionRecovery: true,
@@ -517,7 +517,7 @@ export class AppServerHostService {
       const sessionIds = stringArray(report.sessionIds);
       for (const sessionId of sessionIds) {
         try {
-          const session = await this.invokeProtocol<HoneycrispSessionSummaryProjection>('session.get', {
+          const session = await this.invokeProtocol<AppServerSessionSummaryProjection>('session.get', {
             args: ['session', 'get', '--session-id', sessionId],
             storage
           });
@@ -527,8 +527,8 @@ export class AppServerHostService {
             skippedSessions += 1;
             continue;
           }
-          const request: HoneycrispSessionLaunchRequest = {
-            launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+          const request: AppServerSessionLaunchRequest = {
+            launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
             sessionId,
             launch: restart.launch
           };
@@ -556,9 +556,9 @@ export class AppServerHostService {
       const workspace = this.registry.resolveWorkspace(summary.workspaceId);
       if (!workspace) continue;
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
-      let sessions: HoneycrispSessionSummaryProjection[];
+      let sessions: AppServerSessionSummaryProjection[];
       try {
-        sessions = await this.invokeProtocol<HoneycrispSessionSummaryProjection[]>('session.list_summaries', {
+        sessions = await this.invokeProtocol<AppServerSessionSummaryProjection[]>('session.list_summaries', {
           args: ['session', 'list-summaries', '--workspace-id', workspace.workspaceId, '--limit', '500'],
           storage
         });
@@ -574,7 +574,7 @@ export class AppServerHostService {
   }
 
   public async recordSessionControlState(input: {
-    request: HoneycrispSessionLaunchRequest;
+    request: AppServerSessionLaunchRequest;
     sessionId: string;
     attemptId: string;
     state: 'active' | 'paused' | 'stopped';
@@ -726,7 +726,7 @@ export class AppServerHostService {
   ): Promise<BealeAppServerCanonicalResult> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
     const storage = this.registry.storageForProfile(workspace.researchProfileId);
-    const result = await this.invokeProtocol<HoneycrispSessionUpdateProjection>('session.get_update', {
+    const result = await this.invokeProtocol<AppServerSessionUpdateProjection>('session.get_update', {
       args: [
         'session', 'get-update', '--session-id', sessionId,
         ...(options.afterEventId ? ['--after-event-id', options.afterEventId] : []),
@@ -795,7 +795,7 @@ export class AppServerHostService {
   private async sessionQuery(
     workspaceIdentifier: string,
     sessionId: string,
-    operation: HoneycrispProtocolOperation,
+    operation: AppServerProtocolOperation,
     args: readonly string[]
   ): Promise<BealeAppServerCanonicalResult> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
@@ -810,7 +810,7 @@ export class AppServerHostService {
 
   private async channelOperation(
     workspaceIdentifier: string,
-    operation: HoneycrispProtocolOperation,
+    operation: AppServerProtocolOperation,
     channel: string | null,
     input: Record<string, unknown>,
     extraArgs: readonly string[] = []
@@ -832,8 +832,8 @@ export class AppServerHostService {
     sessionId: string,
     workspace: AppServerHostWorkspace,
     storage: AppServerHostStorage
-  ): Promise<HoneycrispSessionSummaryProjection> {
-    const update = await this.invokeProtocol<HoneycrispSessionUpdateProjection>('session.get_update', {
+  ): Promise<AppServerSessionSummaryProjection> {
+    const update = await this.invokeProtocol<AppServerSessionUpdateProjection>('session.get_update', {
       args: [
         'session', 'get-update', '--session-id', sessionId,
         '--tail', '--limit', '1', '--max-bytes', '1024'
@@ -846,15 +846,15 @@ export class AppServerHostService {
   private requireSessionWorkspaceProjection(
     sessionId: string,
     workspace: AppServerHostWorkspace,
-    session: HoneycrispSessionSummaryProjection | undefined
-  ): HoneycrispSessionSummaryProjection {
+    session: AppServerSessionSummaryProjection | undefined
+  ): AppServerSessionSummaryProjection {
     const projectedSessionId = nonEmpty(session?.id);
     const sessionWorkspaceId = nonEmpty(session?.workspaceId);
     if (!session || !projectedSessionId || projectedSessionId !== sessionId) {
-      throw new Error(`Honeycrisp session projection did not match requested session ${sessionId}.`);
+      throw new Error(`app-server session projection did not match requested session ${sessionId}.`);
     }
     if (!sessionWorkspaceId || sessionWorkspaceId !== workspace.workspaceId) {
-      throw new Error(`Honeycrisp session ${sessionId} does not belong to workspace ${workspace.workspaceId}.`);
+      throw new Error(`app-server session ${sessionId} does not belong to workspace ${workspace.workspaceId}.`);
     }
     return session;
   }
@@ -865,14 +865,14 @@ export class AppServerHostService {
     return workspace;
   }
 
-  private async resolvePluginRuntime(): Promise<ResolvedHoneycrispSessionLaunch['pluginRuntime'] | null> {
+  private async resolvePluginRuntime(): Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> {
     this.pluginRuntimePromise ??= this.loadPluginRuntime();
     return this.pluginRuntimePromise;
   }
 
-  private async loadPluginRuntime(): Promise<ResolvedHoneycrispSessionLaunch['pluginRuntime'] | null> {
+  private async loadPluginRuntime(): Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> {
     try {
-      const runtime = await this.invokeProtocol<HoneycrispPluginRuntimeProjection>('plugin.runtime', {
+      const runtime = await this.invokeProtocol<AppServerPluginRuntimeProjection>('plugin.runtime', {
         args: ['harness', 'plugin-runtime'],
         input: {
           registryDirectory: this.registry.registryDirectory,
@@ -890,12 +890,12 @@ export class AppServerHostService {
     }
   }
 
-  private async loadIntrospectionPluginRuntime(): Promise<ResolvedHoneycrispSessionLaunch['pluginRuntime'] | null> {
+  private async loadIntrospectionPluginRuntime(): Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> {
     const plugin = builtinPlugin('beale-introspection-builtin', 'beale-introspection', false);
     if (!existsSync(plugin.path)) {
       throw new Error('Beale introspection plugin is unavailable for Quick Chat.');
     }
-    const runtime = await this.invokeProtocol<HoneycrispPluginRuntimeProjection>('plugin.runtime', {
+    const runtime = await this.invokeProtocol<AppServerPluginRuntimeProjection>('plugin.runtime', {
       args: ['harness', 'plugin-runtime'],
       input: {
         registryDirectory: join(this.registry.registryDirectory, 'quick-chat-plugin-runtime'),
@@ -928,7 +928,7 @@ export class AppServerHostService {
     sessionTitleEffort: string;
     shellReviewEffort: string;
   }> {
-    const descriptor = await this.invokeProtocol<HoneycrispProviderSemanticsProjection>('provider.describe', {
+    const descriptor = await this.invokeProtocol<AppServerProviderSemanticsProjection>('provider.describe', {
       args: ['harness', 'provider-describe'],
       input: {}
     });
@@ -955,9 +955,9 @@ export class AppServerHostService {
     restartLaunch: StoredRestartLaunchDescriptor;
     parentAttemptId?: string;
   }): Promise<void> {
-    let existing: HoneycrispSessionSummaryProjection | null = null;
+    let existing: AppServerSessionSummaryProjection | null = null;
     try {
-      existing = await this.invokeProtocol<HoneycrispSessionSummaryProjection>('session.get', {
+      existing = await this.invokeProtocol<AppServerSessionSummaryProjection>('session.get', {
         args: ['session', 'get', '--session-id', input.sessionId],
         storage: input.storage
       });
@@ -993,7 +993,7 @@ export class AppServerHostService {
     const existingWorkspaceId = nonEmpty(existing.workspaceId);
     if (!existingWorkspaceId || existingWorkspaceId !== input.workspace.workspaceId) {
       throw new Error(
-        `Honeycrisp session ${input.sessionId} does not belong to workspace ${input.workspace.workspaceId}.`
+        `app-server session ${input.sessionId} does not belong to workspace ${input.workspace.workspaceId}.`
       );
     }
     if (!attemptIds(existing.attempts).has(input.attemptId)) {
@@ -1004,8 +1004,8 @@ export class AppServerHostService {
           attemptId: input.attemptId,
           ...(input.parentAttemptId ? { parentAttemptId: input.parentAttemptId } : {}),
           summary: input.continuation
-            ? 'Continuing the current Honeycrisp research session.'
-            : 'Starting the Honeycrisp research session.'
+            ? 'Continuing the current app-server research session.'
+            : 'Starting the app-server research session.'
         }
       });
     }
@@ -1015,8 +1015,8 @@ export class AppServerHostService {
       input: {
         status: 'active',
         summary: input.continuation
-          ? 'Continuing the current Honeycrisp research session.'
-          : 'Starting the Honeycrisp research session.',
+          ? 'Continuing the current app-server research session.'
+          : 'Starting the app-server research session.',
         attemptId: input.attemptId,
         metadata: { appServerRestartLaunch: input.restartLaunch },
         configuration: {
@@ -1287,7 +1287,7 @@ function generatedTitle(prompt: string): string {
 }
 
 function validatedIntrospectionEndpoint(
-  endpoint: HoneycrispSessionLaunchRequest['launch']['introspection']
+  endpoint: AppServerSessionLaunchRequest['launch']['introspection']
 ): { url: string; token: string; runtimeMode: 'isolated' | 'standard' } | undefined {
   if (!endpoint) return undefined;
   const endpointUrl = new URL(endpoint.url);
@@ -1310,7 +1310,7 @@ function validatedIntrospectionEndpoint(
 }
 
 function restartLaunchDescriptor(
-  request: HoneycrispSessionLaunchRequest,
+  request: AppServerSessionLaunchRequest,
   resolved: {
     providerId: string;
     model?: string;
@@ -1352,7 +1352,7 @@ interface AutomationInterval {
 }
 
 function dueAutomation(
-  session: HoneycrispSessionSummaryProjection,
+  session: AppServerSessionSummaryProjection,
   workspace: AppServerHostWorkspace,
   at: Date
 ): DueAppServerAutomation | null {
@@ -1390,7 +1390,7 @@ function dueAutomation(
   return {
     dueAt: dueAt.toISOString(),
     request: {
-      launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+      launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
       sessionId,
       launch: {
         workspaceId,
@@ -1458,8 +1458,8 @@ function decodeRestartLaunchDescriptor(value: unknown): StoredRestartLaunchDescr
   const stored = value.appServerRestartLaunch;
   if (!isRecord(stored) || stored.schemaVersion !== 1 || typeof stored.eligible !== 'boolean') return null;
   try {
-    const decoded = decodeHoneycrispSessionLaunchRequest({
-      launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+    const decoded = decodeAppServerSessionLaunchRequest({
+      launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
       sessionId: 'startup-recovery-validation',
       launch: stored.launch
     });

@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 import { relative, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { ReportDocument, RunbookDocument } from "./knowledge-types.js";
-import { readHoneycrispReport } from "./report-document.js";
-import { readHoneycrispRunbook } from "./runbook-document.js";
+import { readAppServerReport } from "./report-document.js";
+import { readAppServerRunbook } from "./runbook-document.js";
 import {
   createResearchStorageLayout,
   resolveResearchStorageArtifact,
@@ -44,9 +44,9 @@ export function getKnowledgeRunbook(
   workspaceId: string,
   runbookId: string,
 ): RunbookDocument {
-  const row = readArtifactRow(databasePath, "honeycrisp_runbooks", workspaceId, runbookId);
+  const row = readArtifactRow(databasePath, "app_server_runbooks", workspaceId, runbookId);
   const path = resolveStoredArtifactPath(artifactDirectoryPath, row, "runbook");
-  return readHoneycrispRunbook(path, runbookId);
+  return readAppServerRunbook(path, runbookId);
 }
 
 export function getKnowledgeReport(
@@ -55,14 +55,14 @@ export function getKnowledgeReport(
   workspaceId: string,
   reportId: string,
 ): ReportDocument {
-  const row = readArtifactRow(databasePath, "honeycrisp_reports", workspaceId, reportId);
+  const row = readArtifactRow(databasePath, "app_server_reports", workspaceId, reportId);
   const path = resolveStoredArtifactPath(artifactDirectoryPath, row, "report");
-  return readHoneycrispReport(path, reportId);
+  return readAppServerReport(path, reportId);
 }
 
 function readArtifactRow(
   databasePath: string,
-  table: "honeycrisp_runbooks" | "honeycrisp_reports",
+  table: "app_server_runbooks" | "app_server_reports",
   workspaceId: string,
   id: string,
 ): { artifactId: string; relativePath: string } {
@@ -72,7 +72,7 @@ function readArtifactRow(
     const row = database.prepare(`SELECT artifact_id, relative_path FROM ${table} WHERE id = ? AND workspace_id = ?`)
       .get(requiredText(id, "id"), requiredText(workspaceId, "workspaceId")) as Record<string, unknown> | undefined;
     if (!row || typeof row.artifact_id !== "string" || typeof row.relative_path !== "string") {
-      throw new Error(`${table === "honeycrisp_runbooks" ? "Runbook" : "Report"} not found in this workspace: ${id}`);
+      throw new Error(`${table === "app_server_runbooks" ? "Runbook" : "Report"} not found in this workspace: ${id}`);
     }
     return { artifactId: row.artifact_id, relativePath: row.relative_path };
   } finally {
@@ -110,7 +110,7 @@ function resolveInside(rootPath: string, relativePath: string): string {
   const path = resolve(root, relativePath);
   const child = relative(root, path);
   if (!child || child === ".." || child.startsWith("../") || child.startsWith("..\\")) {
-    throw new Error("Artifact path escaped Honeycrisp storage.");
+    throw new Error("Artifact path escaped app-server storage.");
   }
   return path;
 }

@@ -153,7 +153,7 @@ describe('subagent trace view models', () => {
         createdAt: '2026-07-20T12:00:00.000Z',
         payload: {
           agentPath: '/root/created_second',
-          honeycrispTimestamp: '2026-07-20T09:00:00.000Z',
+          appServerTimestamp: '2026-07-20T09:00:00.000Z',
           payload: { status: 'running', message: 'Imported activity.' }
         }
       }),
@@ -162,7 +162,7 @@ describe('subagent trace view models', () => {
         createdAt: '2026-07-20T12:00:01.000Z',
         payload: {
           agentPath: '/root/created_first',
-          honeycrispTimestamp: '2026-07-20T10:00:00.000Z',
+          appServerTimestamp: '2026-07-20T10:00:00.000Z',
           payload: { type: 'subagent.activity', action: 'spawned', status: 'running', message: 'First task.' }
         }
       }),
@@ -171,7 +171,7 @@ describe('subagent trace view models', () => {
         createdAt: '2026-07-20T12:00:02.000Z',
         payload: {
           agentPath: '/root/created_second',
-          honeycrispTimestamp: '2026-07-20T10:01:00.000Z',
+          appServerTimestamp: '2026-07-20T10:01:00.000Z',
           payload: { type: 'subagent.activity', action: 'spawned', status: 'running', message: 'Second task.' }
         }
       })
@@ -301,7 +301,7 @@ describe('subagent trace view models', () => {
         payload: {
           agentId: 'agent_worker',
           agentPath: '/root/worker',
-          honeycrispKind: 'tool.observed',
+          appServerKind: 'tool.observed',
           status: 'complete',
           summary: 'Shell completed successfully.'
         }
@@ -340,7 +340,7 @@ describe('subagent trace view models', () => {
         sequence: 3,
         payload: {
           agentPath: '/root/worker',
-          honeycrispKind: 'tool.observed',
+          appServerKind: 'tool.observed',
           status: 'complete'
         }
       })
@@ -583,7 +583,7 @@ describe('subagent trace view models', () => {
         payload: {
           agentPath: '/root/worker',
           transcriptRole: 'assistant',
-          transcriptSource: 'honeycrisp_commentary',
+          transcriptSource: 'app_server_commentary',
           messagePhase: 'commentary',
           text: 'The parser boundary is promising.'
         }
@@ -593,7 +593,7 @@ describe('subagent trace view models', () => {
         sequence: 3,
         payload: {
           agentPath: '/root/worker',
-          honeycrispKind: 'tool.observed',
+          appServerKind: 'tool.observed',
           message: 'Shell completed successfully.'
         }
       })
@@ -612,7 +612,7 @@ describe('subagent trace view models', () => {
         payload: {
           agentPath: '/root/worker',
           transcriptRole: 'assistant',
-          transcriptSource: 'honeycrisp_commentary',
+          transcriptSource: 'app_server_commentary',
           messagePhase: 'commentary',
           text: 'The first parser pass is complete.'
         }
@@ -658,7 +658,7 @@ describe('subagent trace view models', () => {
         payload: {
           agentPath: '/root/worker',
           transcriptRole: 'assistant',
-          transcriptSource: 'honeycrisp_commentary',
+          transcriptSource: 'app_server_commentary',
           messagePhase: 'commentary',
           text: 'Checking the final guard.'
         }
@@ -669,7 +669,7 @@ describe('subagent trace view models', () => {
         payload: {
           agentPath: '/root/worker',
           transcriptRole: 'assistant',
-          transcriptSource: 'honeycrisp',
+          transcriptSource: 'app-server',
           messagePhase: 'final_answer',
           text: 'The guard is complete.'
         }
@@ -710,7 +710,7 @@ describe('subagent trace view models', () => {
           agentPath: '/root/one',
           responseId: 'response_one',
           transcriptRole: 'assistant',
-          transcriptSource: 'honeycrisp_commentary',
+          transcriptSource: 'app_server_commentary',
           messagePhase: 'commentary',
           text: 'Native preview for one.'
         }
@@ -732,7 +732,7 @@ describe('subagent trace view models', () => {
           agentPath: '/root/worker',
           responseId: 'response_native',
           transcriptRole: 'assistant',
-          transcriptSource: 'honeycrisp_commentary',
+          transcriptSource: 'app_server_commentary',
           messagePhase: 'commentary',
           text: 'Native commentary from the first response.'
         }

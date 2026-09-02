@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { preBealeHashDomain } from '@beale/research-agent/legacy-compatibility';
 import { existsSync } from 'node:fs';
 import { join, resolve, win32 } from 'node:path';
 import {
@@ -10,8 +11,8 @@ import {
 } from '../shared/researchProfile';
 import type { ResearchProfileId, ResolvedResearchProfile } from '@shared/types';
 import { redactForModelText } from './redaction';
-import { resolveHoneycrispWorkspaceRoot } from './honeycrispInvocation';
-import type { HoneycrispInvocation } from './honeycrispRunEngine';
+import { resolveAppServerWorkspaceRoot } from './appServerInvocation';
+import type { AppServerInvocation } from './appServerRunEngine';
 
 export const RESEARCH_PROFILE_CATALOG_PROTOCOL_VERSION = 1 as const;
 const RESEARCH_PROFILE_RESOLUTION_TIMEOUT_MS = 30_000;
@@ -25,9 +26,9 @@ interface ResearchProfileCommandResult {
 }
 
 export interface ResearchProfileServiceOptions {
-  resolveInvocation?: () => HoneycrispInvocation;
-  runCommand?: (command: string, args: readonly string[], invocation: HoneycrispInvocation) => ResearchProfileCommandResult;
-  runCommandAsync?: (command: string, args: readonly string[], invocation: HoneycrispInvocation) => Promise<ResearchProfileCommandResult>;
+  resolveInvocation?: () => AppServerInvocation;
+  runCommand?: (command: string, args: readonly string[], invocation: AppServerInvocation) => ResearchProfileCommandResult;
+  runCommandAsync?: (command: string, args: readonly string[], invocation: AppServerInvocation) => Promise<ResearchProfileCommandResult>;
 }
 
 export interface ResearchProfileCatalogEnvelope {
@@ -71,11 +72,11 @@ export class ResearchProfileService {
 
   private createRequest(workspaceRoot: string, profileId: ResearchProfileId): {
     key: string;
-    invocation: HoneycrispInvocation;
+    invocation: AppServerInvocation;
     args: string[];
   } {
     const resolvedWorkspaceRoot = win32.isAbsolute(workspaceRoot) ? win32.normalize(workspaceRoot) : resolve(workspaceRoot);
-    const invocation = (this.options.resolveInvocation ?? resolveHoneycrispProfileInvocation)();
+    const invocation = (this.options.resolveInvocation ?? resolveAppServerProfileInvocation)();
     return {
       key: `${resolvedWorkspaceRoot}\0${profileId}`,
       invocation,
@@ -94,9 +95,9 @@ export class ResearchProfileService {
 }
 
 export function decodeResearchProfileCatalogEnvelope(value: unknown): ResearchProfileCatalogEnvelope {
-  const envelope = recordValue(value, 'Honeycrisp research profile catalog');
+  const envelope = recordValue(value, 'app-server research profile catalog');
   if (envelope.catalogProtocolVersion !== RESEARCH_PROFILE_CATALOG_PROTOCOL_VERSION) {
-    throw new Error(`Unsupported Honeycrisp profile catalog protocol: ${String(envelope.catalogProtocolVersion)}`);
+    throw new Error(`Unsupported app-server profile catalog protocol: ${String(envelope.catalogProtocolVersion)}`);
   }
   const supportedVersions = envelope.supportedResearchProfileSchemaVersions;
   if (
@@ -104,11 +105,11 @@ export function decodeResearchProfileCatalogEnvelope(value: unknown): ResearchPr
     || supportedVersions.length === 0
     || !supportedVersions.every((version) => typeof version === 'number' && Number.isSafeInteger(version) && version >= RESEARCH_PROFILE_MIN_SCHEMA_VERSION)
   ) {
-    throw new Error('Honeycrisp profile catalog returned invalid supported schema versions.');
+    throw new Error('app-server profile catalog returned invalid supported schema versions.');
   }
   const migratedProfile = migrateResearchProfile(envelope.profile);
   if (!supportedVersions.includes(migratedProfile.schemaVersion) && !supportedVersions.includes(migratedProfile.originalSchemaVersion)) {
-    throw new Error('Honeycrisp does not advertise research profile schema version 1 support or a migratable legacy schema.');
+    throw new Error('app-server does not advertise research profile schema version 1 support or a migratable legacy schema.');
   }
 
   const resolvedProfile = decodeResolvedResearchProfile({
@@ -118,14 +119,14 @@ export function decodeResearchProfileCatalogEnvelope(value: unknown): ResearchPr
     ...(envelope.path === undefined ? {} : { path: envelope.path })
   });
   if (!supportedVersions.includes(resolvedProfile.profile.schemaVersion) && !supportedVersions.includes(migratedProfile.originalSchemaVersion)) {
-    throw new Error(`Honeycrisp profile schema version ${resolvedProfile.profile.schemaVersion} is not advertised by the catalog.`);
+    throw new Error(`app-server profile schema version ${resolvedProfile.profile.schemaVersion} is not advertised by the catalog.`);
   }
   const calculatedHash = createHash('sha256')
-    .update('honeycrisp:research-profile:v1\0')
+    .update(preBealeHashDomain('research-profile:v1\0'))
     .update(serializeResearchProfile(resolvedProfile.profile))
     .digest('hex');
   if (calculatedHash !== resolvedProfile.hash) {
-    throw new Error(`Honeycrisp research profile hash mismatch for ${resolvedProfile.profile.id}@${resolvedProfile.profile.version}.`);
+    throw new Error(`app-server research profile hash mismatch for ${resolvedProfile.profile.id}@${resolvedProfile.profile.version}.`);
   }
   return {
     catalogProtocolVersion: RESEARCH_PROFILE_CATALOG_PROTOCOL_VERSION,
@@ -134,13 +135,13 @@ export function decodeResearchProfileCatalogEnvelope(value: unknown): ResearchPr
   };
 }
 
-export function resolveHoneycrispProfileInvocation(options: { defaultRoot?: string } = {}): HoneycrispInvocation {
-  const command = process.env.BEALE_HONEYCRISP_PROFILE_COMMAND?.trim();
+export function resolveAppServerProfileInvocation(options: { defaultRoot?: string } = {}): AppServerInvocation {
+  const command = process.env.BEALE_APP_SERVER_PROFILE_COMMAND?.trim();
   if (command) {
     return {
       command,
-      prefixArgs: parseEnvironmentArgs('BEALE_HONEYCRISP_PROFILE_ARGS_JSON'),
-      cwd: process.env.BEALE_HONEYCRISP_PROFILE_CWD?.trim() || process.cwd(),
+      prefixArgs: parseEnvironmentArgs('BEALE_APP_SERVER_PROFILE_ARGS_JSON'),
+      cwd: process.env.BEALE_APP_SERVER_PROFILE_CWD?.trim() || process.cwd(),
       configuredBy: 'env_command',
       usesNodeRuntime: isNodeExecutable(command)
     };
@@ -149,16 +150,16 @@ export function resolveHoneycrispProfileInvocation(options: { defaultRoot?: stri
   // Profile resolution deliberately ignores the run-engine command, args,
   // cwd, root, and runtime overrides. Those may be launch-only wrappers or
   // fixtures and are not the trusted CLI that normalizes the profile catalog.
-  const configuredProfileRoot = process.env.BEALE_HONEYCRISP_PROFILE_ROOT?.trim();
+  const configuredProfileRoot = process.env.BEALE_APP_SERVER_PROFILE_ROOT?.trim();
   const root = configuredProfileRoot
     ? resolve(configuredProfileRoot)
     : options.defaultRoot
       ? resolve(options.defaultRoot)
-      : resolveHoneycrispWorkspaceRoot() ?? resolve(process.cwd(), '..', 'honeycrisp');
-  const cliPath = join(root, 'packages', 'honeycrisp-host', 'dist', 'cli.js');
+      : resolveAppServerWorkspaceRoot() ?? resolve(process.cwd(), '..', 'app-server');
+  const cliPath = join(root, 'packages', 'app-server-runtime', 'dist', 'cli.js');
   if (existsSync(cliPath)) {
     return {
-      command: process.env.BEALE_HONEYCRISP_PROFILE_NODE_COMMAND?.trim()
+      command: process.env.BEALE_APP_SERVER_PROFILE_NODE_COMMAND?.trim()
         || process.env.npm_node_execpath?.trim()
         || 'node',
       prefixArgs: [cliPath],
@@ -169,11 +170,11 @@ export function resolveHoneycrispProfileInvocation(options: { defaultRoot?: stri
   }
   if (!existsSync(join(root, 'package.json'))) {
     throw new Error(
-      'Canonical Honeycrisp profile resolution is unavailable. Configure BEALE_HONEYCRISP_PROFILE_COMMAND or BEALE_HONEYCRISP_PROFILE_ROOT.'
+      'Canonical app-server profile resolution is unavailable. Configure BEALE_APP_SERVER_PROFILE_COMMAND or BEALE_APP_SERVER_PROFILE_ROOT.'
     );
   }
   return {
-    command: process.env.BEALE_HONEYCRISP_PROFILE_PNPM_COMMAND?.trim() || 'pnpm',
+    command: process.env.BEALE_APP_SERVER_PROFILE_PNPM_COMMAND?.trim() || 'pnpm',
     prefixArgs: ['--dir', root, 'start'],
     cwd: root,
     configuredBy: configuredProfileRoot ? 'env_root' : 'workspace_root',
@@ -183,8 +184,8 @@ export function resolveHoneycrispProfileInvocation(options: { defaultRoot?: stri
 
 function resolvedProfileFromCommandResult(result: ResearchProfileCommandResult): ResolvedResearchProfile {
   if (result.error || result.status !== 0) {
-    const detail = redactForModelText(result.stderr || result.stdout || result.error?.message || 'Honeycrisp profile resolution failed.');
-    throw new Error(`Honeycrisp research profile resolution failed: ${detail.slice(0, 1_000)}`);
+    const detail = redactForModelText(result.stderr || result.stdout || result.error?.message || 'app-server profile resolution failed.');
+    throw new Error(`app-server research profile resolution failed: ${detail.slice(0, 1_000)}`);
   }
   return decodeResearchProfileCatalogEnvelope(parseJsonCommandOutput(result.stdout)).resolvedProfile;
 }
@@ -192,7 +193,7 @@ function resolvedProfileFromCommandResult(result: ResearchProfileCommandResult):
 function runResearchProfileCommand(
   command: string,
   args: readonly string[],
-  invocation: HoneycrispInvocation
+  invocation: AppServerInvocation
 ): ResearchProfileCommandResult {
   const result = spawnSync(command, args, {
     cwd: invocation.cwd,
@@ -213,7 +214,7 @@ function runResearchProfileCommand(
 function runResearchProfileCommandAsync(
   command: string,
   args: readonly string[],
-  invocation: HoneycrispInvocation
+  invocation: AppServerInvocation
 ): Promise<ResearchProfileCommandResult> {
   return new Promise((resolveResult) => {
     let stdout = '';
@@ -236,7 +237,7 @@ function runResearchProfileCommandAsync(
       outputBytes += chunk.byteLength;
       if (outputBytes > RESEARCH_PROFILE_RESOLUTION_MAX_BYTES) {
         child.kill();
-        finish(null, new Error('Honeycrisp research profile catalog output exceeded the host limit.'));
+        finish(null, new Error('app-server research profile catalog output exceeded the host limit.'));
         return;
       }
       if (stream === 'stdout') stdout += chunk.toString('utf8');
@@ -248,7 +249,7 @@ function runResearchProfileCommandAsync(
     child.once('close', (status) => finish(status));
     timeout = setTimeout(() => {
       child.kill();
-      finish(null, new Error(`Honeycrisp research profile resolution timed out after ${RESEARCH_PROFILE_RESOLUTION_TIMEOUT_MS}ms.`));
+      finish(null, new Error(`app-server research profile resolution timed out after ${RESEARCH_PROFILE_RESOLUTION_TIMEOUT_MS}ms.`));
     }, RESEARCH_PROFILE_RESOLUTION_TIMEOUT_MS);
     timeout.unref?.();
   });
@@ -256,7 +257,7 @@ function runResearchProfileCommandAsync(
 
 function parseJsonCommandOutput(stdout: string): unknown {
   if (Buffer.byteLength(stdout, 'utf8') > RESEARCH_PROFILE_RESOLUTION_MAX_BYTES) {
-    throw new Error('Honeycrisp research profile catalog output exceeded the host limit.');
+    throw new Error('app-server research profile catalog output exceeded the host limit.');
   }
   try {
     return JSON.parse(stdout) as unknown;
@@ -272,7 +273,7 @@ function parseJsonCommandOutput(stdout: string): unknown {
       // Fall through to the bounded error below.
     }
   }
-  throw new Error(`Honeycrisp research profile resolution returned non-JSON output: ${redactForModelText(stdout.slice(0, 500))}`);
+  throw new Error(`app-server research profile resolution returned non-JSON output: ${redactForModelText(stdout.slice(0, 500))}`);
 }
 
 function recordValue(value: unknown, label: string): Record<string, unknown> {

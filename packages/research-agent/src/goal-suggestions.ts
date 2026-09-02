@@ -8,10 +8,10 @@ import {
   researchGoalSuggestionCandidateCount,
   type ResearchGoalSuggestionGrounding,
 } from "./goal-suggestion-selection.js";
-import { getHoneycrispMemorySummary } from "./memory-summary.js";
-import type { MemorySummary as HoneycrispMemorySummary } from "./knowledge-types.js";
+import { getAppServerMemorySummary } from "./memory-summary.js";
+import type { MemorySummary as AppServerMemorySummary } from "./knowledge-types.js";
 import { providerSemanticsDescriptor } from "./provider-semantics.js";
-import { HoneycrispSessionStore } from "./session-store.js";
+import { AppServerSessionStore } from "./session-store.js";
 import {
   resolveStoredResearchProfile,
   resolveStoredResearchWorkspaceBinding,
@@ -109,7 +109,7 @@ export async function generateStoredResearchGoalSuggestions(
     throw new Error(`Research suggestion lane ${phase} exceeds the host maximum of ${MAX_SUGGESTIONS}.`);
   }
 
-  const sessions = new HoneycrispSessionStore({ databasePath: input.databasePath });
+  const sessions = new AppServerSessionStore({ databasePath: input.databasePath });
   try {
     if (sourceRunId) {
       const source = sessions.getSummary(sourceRunId);
@@ -179,7 +179,7 @@ export async function generateStoredResearchGoalSuggestions(
       const priorSuggestionHistory = readSuggestionHistory(database, workspaceId, phase);
       const priorSuggestions = priorSuggestionHistory.map((entry) => entry.suggestion);
       const memory = input.memoryEnabled && profile.profile.capabilities.memoryEnabled
-        ? getHoneycrispMemorySummary({
+        ? getAppServerMemorySummary({
             databasePath: input.databasePath,
             artifactDirectoryPath: input.artifactDirectoryPath,
             workspaceId,
@@ -247,7 +247,7 @@ export async function generateStoredResearchGoalSuggestions(
         "Make every noveltyAxis concise and materially different from every other candidate; candidates that share the same primary mechanism or proof question are duplicates even when they name different impact ceilings.",
         "Do not propose completed work. A useful goal should make clear what discriminating evidence would change the current research state without prescribing commands or an ordered procedure.",
         "These suggestions are shown before the researcher chooses launch-time controls. Auto-Review is only a default, not an active setting at this stage.",
-        "Describe research objectives without mentioning or depending on Auto-Review, Manual Approval, Danger Mode, shell-safety mode, provider selection, or other launch-time controls. Honeycrisp applies relevant execution policy after launch.",
+        "Describe research objectives without mentioning or depending on Auto-Review, Manual Approval, Danger Mode, shell-safety mode, provider selection, or other launch-time controls. app-server applies relevant execution policy after launch.",
         "Return JSON only as {\"candidates\":[{\"goal\":\"one self-contained action sentence\",\"groundingRefs\":[\"exact-id\"],\"rationale\":\"why this follows from current evidence\",\"noveltyAxis\":\"specific new mechanism or proof question\"}] }.",
       ].join("\n");
       let suggestions: string[] | undefined;
@@ -499,7 +499,7 @@ function createSuggestionGrounding(
     status: string;
     disposition: { summary: string } | null;
   }[],
-  memory: HoneycrispMemorySummary | null,
+  memory: AppServerMemorySummary | null,
   workflowId: string,
 ): ResearchGoalSuggestionGrounding[] {
   const limits = workflowId === "chaining" || workflowId === "reporting"

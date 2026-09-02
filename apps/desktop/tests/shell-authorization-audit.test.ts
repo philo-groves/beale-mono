@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shellAuthorizationAuditPayload } from '../src/main/honeycrispRunEngine';
+import { shellAuthorizationAuditPayload } from '../src/main/appServerRunEngine';
 
 describe('shell authorization audit projection', () => {
   it('retains only the typed Auto-Review failure diagnostic', () => {

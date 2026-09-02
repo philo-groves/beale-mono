@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { preBealeRuntimeId } from '@beale/research-agent/legacy-compatibility';
 
 export interface DatabaseMigration {
   version: number;
@@ -24,6 +25,16 @@ export function applyDatabaseMigrations(database: DatabaseSync, component: strin
       PRIMARY KEY(component, version)
     );
   `);
+  const previousRuntimeId = preBealeRuntimeId();
+  database.prepare(`
+    UPDATE schema_migrations
+    SET component = replace(component, ?, ?), name = replace(name, ?, ?)
+    WHERE instr(component, ?) > 0 OR instr(name, ?) > 0
+  `).run(
+    previousRuntimeId, 'app_server',
+    previousRuntimeId, 'app_server',
+    previousRuntimeId, previousRuntimeId
+  );
 
   const applied = database
     .prepare('SELECT version, name FROM schema_migrations WHERE component = ? ORDER BY version')

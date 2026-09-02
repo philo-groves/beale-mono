@@ -127,7 +127,7 @@ export class ReportStore {
     const query = options.query?.trim().toLowerCase() ?? "";
     const statuses = options.statuses?.filter((status) => REPORT_STATUSES.includes(status)) ?? [];
     const limit = clampInteger(options.limit ?? 50, 1, 200);
-    return (this.database.prepare("SELECT * FROM honeycrisp_reports WHERE workspace_id = ? ORDER BY updated_at DESC, id")
+    return (this.database.prepare("SELECT * FROM app_server_reports WHERE workspace_id = ? ORDER BY updated_at DESC, id")
       .all(this.context.workspaceId) as unknown as ReportRow[])
       .filter((row) => statuses.length === 0 || statuses.includes(row.status as ReportStatus))
       .filter((row) => !query || `${row.title}\n${row.summary}`.toLowerCase().includes(query))
@@ -162,7 +162,7 @@ export class ReportStore {
       const packetEntry = submissionPacketPath
         ? this.importSubmissionPacket(id, title, submissionPacketPath)
         : null;
-      this.database.prepare(`INSERT INTO honeycrisp_reports (
+      this.database.prepare(`INSERT INTO app_server_reports (
         id, workspace_id, workspace_name, subject_id, subject_name, session_id,
         title, summary, status, triage_status, artifact_id, relative_path, content_hash, size_bytes,
         submission_packet_artifact_id, submission_packet_filename,
@@ -228,7 +228,7 @@ export class ReportStore {
       const recording = recordingImport
         ? recordingFromEntry(recordingImport.entry, recordingImport.filename)
         : recordingFromRow(row);
-      this.database.prepare(`UPDATE honeycrisp_reports
+      this.database.prepare(`UPDATE app_server_reports
         SET summary = ?, status = ?, content_hash = ?, size_bytes = ?,
           submission_packet_artifact_id = ?, submission_packet_filename = ?,
           submission_packet_relative_path = ?, submission_packet_content_hash = ?,
@@ -278,7 +278,7 @@ export class ReportStore {
       }
       const revision = row.revision + 1;
       const updatedAt = new Date().toISOString();
-      this.database.prepare(`UPDATE honeycrisp_reports
+      this.database.prepare(`UPDATE app_server_reports
         SET triage_status = ?, revision = ?, updated_at = ?
         WHERE id = ? AND workspace_id = ? AND revision = ?`).run(
         input.triageStatus, revision, updatedAt, id, this.context.workspaceId, input.expectedRevision,
@@ -295,12 +295,12 @@ export class ReportStore {
   }
 
   private readRow(id: string): ReportRow | null {
-    return (this.database.prepare("SELECT * FROM honeycrisp_reports WHERE id = ? AND workspace_id = ?")
+    return (this.database.prepare("SELECT * FROM app_server_reports WHERE id = ? AND workspace_id = ?")
       .get(id, this.context.workspaceId) as unknown as ReportRow | undefined) ?? null;
   }
 
   private recordRevision(artifactId: string, revision: number, createdAt: string): void {
-    this.database.prepare(`INSERT INTO honeycrisp_artifact_revisions (
+    this.database.prepare(`INSERT INTO app_server_artifact_revisions (
       artifact_kind, artifact_id, workspace_id, session_id, revision, created_at
     ) VALUES ('report', ?, ?, ?, ?, ?)`).run(
       artifactId,

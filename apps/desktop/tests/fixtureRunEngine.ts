@@ -7,7 +7,7 @@ type ScenarioStep = (context: CreatedRunContext) => void;
 
 export type FixtureScenario = 'multi_branch_trace' | 'source_review' | 'crash_artifact' | 'scope_block' | 'verifier_pass';
 export type FixtureStartRunInput = Omit<StartRunInput, 'runEngine'> & {
-  runEngine: 'fixture' | 'honeycrisp';
+  runEngine: 'fixture' | 'app-server';
   fixtureScenario?: FixtureScenario;
 };
 

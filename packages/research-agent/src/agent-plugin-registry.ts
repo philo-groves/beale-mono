@@ -102,7 +102,7 @@ export interface AgentPluginRegistryOptions {
   runtimeEnvironment?: (plugin: AgentPluginRecord) => Record<string, string>;
 }
 
-export interface AgentPluginHoneycrispRuntime {
+export interface AgentPluginAppServerRuntime {
   runtimeDirectory: string;
   skillDirs: string[];
   selectedSkillIds: string[];
@@ -144,7 +144,7 @@ export class AgentPluginRegistry {
     };
   }
 
-  public getHoneycrispRuntime(): AgentPluginHoneycrispRuntime {
+  public getAppServerRuntime(): AgentPluginAppServerRuntime {
     const state = this.getState();
     const skillDirs: string[] = [];
     const selectedSkillIds: string[] = [];
@@ -170,7 +170,7 @@ export class AgentPluginRegistry {
           continue;
         }
         const extraEnvironment = this.options.runtimeEnvironment?.(plugin) ?? {};
-        const runtimeConfig = honeycrispMcpServerConfig(
+        const runtimeConfig = appServerMcpServerConfig(
           config,
           summary.transport,
           plugin.source.path,
@@ -584,7 +584,7 @@ function validateMcpUrl(value: string, errors: string[]): void {
   }
 }
 
-function honeycrispMcpServerConfig(
+function appServerMcpServerConfig(
   config: unknown,
   transport: AgentPluginMcpTransport,
   pluginRoot: string,
@@ -603,7 +603,9 @@ function honeycrispMcpServerConfig(
     if (Array.isArray(object.args)) {
       runtimeConfig.args = object.args
         .filter((arg): arg is string => typeof arg === 'string')
-        .map((arg) => expandPluginVariables(arg, pluginRoot, pluginDataRoot, extraEnvironment));
+        .map((arg) => arg.startsWith('${PLUGIN_ROOT}') || arg.startsWith('${PLUGIN_DATA}')
+          ? resolvePluginPathExpression(arg, pluginRoot, pluginDataRoot)
+          : expandPluginVariables(arg, pluginRoot, pluginDataRoot, extraEnvironment));
     }
     const environment: Record<string, string> = {
       PLUGIN_ROOT: pluginRoot,

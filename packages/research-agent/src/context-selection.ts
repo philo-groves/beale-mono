@@ -13,6 +13,7 @@ import type {
   ResearchWorkspaceContext,
   ResearchWorkspaceResourceContext,
 } from "./types.js";
+import { PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 
 const MAX_SELECTION_TEXT = 1_200;
 const MAX_SELECTION_ITEM_TEXT = 700;
@@ -272,7 +273,7 @@ export function createFallbackResearchContextSelection(input: {
   return {
     schemaVersion: 1,
     summary: "Deterministic startup context selected from request-matching workspace assets and current-session memory.",
-    rationale: "The model preflight was unavailable or invalid, so Honeycrisp retained a compact canonical fallback instead of restoring the full campaign dump.",
+    rationale: "The model preflight was unavailable or invalid, so app-server retained a compact canonical fallback instead of restoring the full campaign dump.",
     selectedResourceIds: resources.map((resource) => resource.id),
     selectedRepositoryRoots: repositories.map((repository) => resolve(repository.rootPath)),
     selectedMemoryIds: input.memoryIds.slice(0, MAX_SELECTED_MEMORIES),
@@ -355,7 +356,7 @@ export function discoverInstructionDirectoryHints(
     const label = line.slice(0, separator).replace(/^\s*[-*]\s*/u, "").trim().toLowerCase();
     if (!/(?:directory|prior research|resources?|source|artifacts?)/u.test(label)) continue;
     const remainder = line.slice(separator + 1);
-    for (const match of remainder.matchAll(/(?:^|\s)(\/[A-Za-z0-9_.,+@%:=~\/-]+)/gu)) {
+    for (const match of remainder.matchAll(/(?:^|\s)((?:[A-Za-z]:[\\/]|\/)[A-Za-z0-9_.,+@%:=~\\/-]+)/gu)) {
       const candidate = match[1]?.replace(/[),.;:]+$/u, "");
       if (!candidate || sensitiveInstructionPath(candidate)) continue;
       const path = resolve(candidate);
@@ -486,8 +487,11 @@ function isAlwaysProjectNote(note: string): boolean {
 }
 
 function sensitiveInstructionPath(path: string): boolean {
-  return /(?:^|\/)(?:\.ssh|\.honeycrisp|\.codex)(?:\/|$)/u.test(path)
-    || /(?:^|\/)(?:id_[^/]+|credentials?|tokens?)(?:\.[^/]*)?$/iu.test(path);
+  const normalized = path.replaceAll("\\", "/");
+  const segments = normalized.split("/");
+  return segments.some((segment) => segment === PRE_BEALE_DATA_DIRECTORY_NAME)
+    || /(?:^|\/)(?:\.ssh|\.beale|\.codex)(?:\/|$)/u.test(normalized)
+    || /(?:^|\/)(?:id_[^/]+|credentials?|tokens?)(?:\.[^/]*)?$/iu.test(normalized);
 }
 
 function isWithin(path: string, root: string): boolean {

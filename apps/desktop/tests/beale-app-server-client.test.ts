@@ -8,7 +8,7 @@ import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
   BEALE_APP_SERVER_CONTROL_VERSION
-} from 'honeycrisp/protocol';
+} from '@beale/app-server-runtime/protocol';
 import {
   attachAppServerSession,
   BealeDesktopRestartRequiredError,

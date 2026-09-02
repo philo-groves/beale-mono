@@ -2,10 +2,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { JSX } from 'react';
 import { ArrowLeft, BookOpen, CircleAlert, CircleCheck, Clock3, LoaderCircle, Play } from 'lucide-react';
 import type {
-  HoneycrispRunbookCell,
-  HoneycrispRunbookDocument,
-  HoneycrispRunbookOutput,
-  HoneycrispRunbookSummary,
+  AppServerRunbookCell,
+  AppServerRunbookDocument,
+  AppServerRunbookOutput,
+  AppServerRunbookSummary,
   RunbookExecutionSelection,
   RunbookProofTarget,
   RunbookProofTargetSelection
@@ -32,8 +32,8 @@ export const RunbookView = memo(function RunbookView({
   showBackButton = true,
   followLatest = false
 }: {
-  runbook: HoneycrispRunbookSummary;
-  document: HoneycrispRunbookDocument | null;
+  runbook: AppServerRunbookSummary;
+  document: AppServerRunbookDocument | null;
   loading: boolean;
   error: string | null;
   onBackToMain: () => void;
@@ -245,7 +245,7 @@ export const RunbookView = memo(function RunbookView({
                 type="button"
                 className="runbook-run-button"
                 disabled={!canRun}
-                title={!executionAvailable ? 'Runbooks execute only in their active Honeycrisp session.' : !rangeValid ? 'Choose a start cell that precedes the end cell.' : !selectedRangeHealthy ? 'Every selected code cell needs a supported language.' : !targetValid ? 'Enter the target device OS.' : undefined}
+                title={!executionAvailable ? 'Runbooks execute only in their active app-server session.' : !rangeValid ? 'Choose a start cell that precedes the end cell.' : !selectedRangeHealthy ? 'Every selected code cell needs a supported language.' : !targetValid ? 'Enter the target device OS.' : undefined}
                 onClick={() => void requestExecution({
                   ...(rangeStartCellId ? { startCellId: rangeStartCellId } : {}),
                   ...(rangeEndCellId ? { endCellId: rangeEndCellId } : {})
@@ -306,8 +306,8 @@ export const RunbookView = memo(function RunbookView({
 });
 
 export function runbookViewUpdateKey(
-  runbook: HoneycrispRunbookSummary,
-  document: HoneycrispRunbookDocument | null,
+  runbook: AppServerRunbookSummary,
+  document: AppServerRunbookDocument | null,
   loading: boolean,
   error: string | null
 ): string {
@@ -324,7 +324,7 @@ export function runbookViewUpdateKey(
 }
 
 interface RunbookCellViewProps {
-  cell: HoneycrispRunbookCell;
+  cell: AppServerRunbookCell;
   index: number;
   executionAvailable: boolean;
   executionRunning: boolean;
@@ -370,7 +370,7 @@ const RunbookCellView = memo(function RunbookCellView({ cell, index, executionAv
   );
 }, runbookCellViewPropsEqual);
 
-const RunbookCellSource = memo(function RunbookCellSource({ cell }: { cell: HoneycrispRunbookCell }): JSX.Element {
+const RunbookCellSource = memo(function RunbookCellSource({ cell }: { cell: AppServerRunbookCell }): JSX.Element {
   const truncated = cell.source.length > RUNBOOK_CELL_SOURCE_PREVIEW_CHARACTERS;
   const [expanded, setExpanded] = useState(false);
   const source = truncated && !expanded
@@ -408,10 +408,10 @@ function runbookCellViewPropsEqual(previous: RunbookCellViewProps, next: Runbook
     || previous.requested !== next.requested
     || previous.onRun !== next.onRun) return false;
   if ((previous.cell.latestRun?.status === 'running' || next.cell.latestRun?.status === 'running') && previous.now !== next.now) return false;
-  return honeycrispRunbookCellsEqual(previous.cell, next.cell);
+  return appServerRunbookCellsEqual(previous.cell, next.cell);
 }
 
-function honeycrispRunbookCellsEqual(previous: HoneycrispRunbookCell, next: HoneycrispRunbookCell): boolean {
+function appServerRunbookCellsEqual(previous: AppServerRunbookCell, next: AppServerRunbookCell): boolean {
   if (previous.id !== next.id
     || previous.type !== next.type
     || previous.source !== next.source
@@ -429,14 +429,14 @@ function honeycrispRunbookCellsEqual(previous: HoneycrispRunbookCell, next: Hone
   });
 }
 
-function runbookRunStatusKey(state: HoneycrispRunbookCell['latestRun']): string {
+function runbookRunStatusKey(state: AppServerRunbookCell['latestRun']): string {
   return state
     ? `${state.runId}:${state.status}:${state.startedAt}:${state.completedAt ?? ''}:${state.durationMs ?? ''}:${state.exitCode ?? ''}:${state.error ?? ''}:${state.proofTarget}:${state.deviceOs ?? ''}`
     : '';
 }
 
 function RunStatus({ state, now, compact = false }: {
-  state: NonNullable<HoneycrispRunbookDocument['latestRun']>;
+  state: NonNullable<AppServerRunbookDocument['latestRun']>;
   now: number;
   compact?: boolean;
 }): JSX.Element {
@@ -482,7 +482,7 @@ function runbookGuidance(codeCells: number, unhealthyCells: number, executionAva
   return 'Healthy runbook: run cells are bounded and repeatable; keep prerequisites, expected evidence, interpretation, and cleanup explicit.';
 }
 
-const RunbookOutputView = memo(function RunbookOutputView({ output }: { output: HoneycrispRunbookOutput }): JSX.Element {
+const RunbookOutputView = memo(function RunbookOutputView({ output }: { output: AppServerRunbookOutput }): JSX.Element {
   const truncated = output.text.length > RUNBOOK_OUTPUT_PREVIEW_CHARACTERS;
   const [expanded, setExpanded] = useState(false);
   const text = truncated && !expanded

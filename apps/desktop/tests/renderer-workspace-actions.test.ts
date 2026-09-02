@@ -45,7 +45,7 @@ describe('renderer workspace actions', () => {
 
   it('enriches commentary memory after the initial session detail paint', () => {
     const detailWithoutMemory = {} as RunDetail;
-    const detailWithMemory = { honeycrispMemory: {} } as RunDetail;
+    const detailWithMemory = { appServerMemory: {} } as RunDetail;
     expect(runDetailNeedsEnrichment(null, 'commentary')).toBe(false);
     expect(runDetailNeedsEnrichment(detailWithoutMemory, 'commentary')).toBe(true);
     expect(runDetailNeedsEnrichment(detailWithoutMemory, { mode: 'commentary', agentPath: null })).toBe(true);
@@ -58,7 +58,7 @@ describe('renderer workspace actions', () => {
     const detailSource = serviceSource.slice(detailStart, detailEnd);
     expect(detailSource).toContain('if (isCommentaryRunDetailProjection(projection))');
     expect(detailSource.indexOf('if (isCommentaryRunDetailProjection(projection))'))
-      .toBeLessThan(detailSource.indexOf('const withMemory = attachHoneycrispMemory('));
+      .toBeLessThan(detailSource.indexOf('const withMemory = attachAppServerMemory('));
 
     const memoryStart = serviceSource.indexOf('  private async memorySummaryForRuntimeAsync(');
     const memoryEnd = serviceSource.indexOf('  private scheduleMemorySummaryRefresh(', memoryStart);
@@ -68,7 +68,7 @@ describe('renderer workspace actions', () => {
     expect(memorySource).toContain('workspaceRoot: runtime.workspacePath');
     expect(memorySource).toContain('researchProfileId: researchProfile?.profileId ?? runtime.researchProfile.profileId');
     expect(memorySource).toContain('subjectId: null');
-    expect(memorySource).toContain('getHoneycrispMemorySummaryAsync(appServerMemoryContext, storage)');
+    expect(memorySource).toContain('getAppServerMemorySummaryAsync(appServerMemoryContext, storage)');
     expect(memorySource).not.toContain('{ sessionId }');
   });
 

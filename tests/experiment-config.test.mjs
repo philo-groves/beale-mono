@@ -15,7 +15,7 @@ import {
 } from "../packages/research-agent/dist/index.js";
 
 test("configured experiment tool runs allowlisted specs and registers output artifacts", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-experiment-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-experiment-"));
   const workspaceRoot = join(root, "workspace");
   const scriptPath = join(root, "echo-input.mjs");
   const configPath = join(root, "experiments.json");
@@ -105,7 +105,7 @@ test("configured experiment tool runs allowlisted specs and registers output art
 });
 
 test("configured experiment tool reports timeouts as tool errors", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-experiment-timeout-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-experiment-timeout-"));
   const scriptPath = join(root, "slow.mjs");
   const configPath = join(root, "experiments.json");
   await writeFile(
@@ -154,7 +154,7 @@ test("configured experiment tool reports timeouts as tool errors", async () => {
 });
 
 test("configured experiment tool enforces output limits and stores bounded artifacts", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-experiment-output-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-experiment-output-"));
   const workspaceRoot = join(root, "workspace");
   const scriptPath = join(root, "large-output.mjs");
   const configPath = join(root, "experiments.json");
@@ -213,7 +213,7 @@ test("configured experiment tool enforces output limits and stores bounded artif
 });
 
 test("experiment configs require explicit policy and validate directories", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-experiment-invalid-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-experiment-invalid-"));
   const scriptPath = join(root, "ok.mjs");
   const missingPolicyPath = join(root, "missing-policy.json");
   const missingCwdPath = join(root, "missing-cwd.json");

@@ -7,7 +7,7 @@ import { getZCodeSubscriptionAuthStatus } from "../packages/research-agent/dist/
 import { extractCompatibleZCodeAgentResumableState } from "../packages/research-agent/dist/zcode-agent-executor.js";
 
 test("ZCode subscription auth recognizes desktop credentials without CLI configuration", async () => {
-  const userHome = await mkdtemp(join(tmpdir(), "honeycrisp-zcode-auth-"));
+  const userHome = await mkdtemp(join(tmpdir(), "app-server-zcode-auth-"));
   try {
     const credentialsDirectory = join(userHome, ".zcode", "v2");
     await mkdir(credentialsDirectory, { recursive: true });

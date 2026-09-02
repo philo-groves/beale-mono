@@ -7,7 +7,7 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "references": [
-    { "path": "../packages/honeycrisp-host" }
+    { "path": "../packages/app-server-runtime" }
   ],
   "include": [
     "src/**/*.ts"

@@ -2,14 +2,14 @@ import { memo, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CSSProperties, JSX, ReactNode } from 'react';
 import { ArrowLeft, BadgeCheck, BookOpen, Bot, ChevronDown, ChevronRight, Database, FileText, Lightbulb, LoaderCircle, Plus, Search, X } from 'lucide-react';
 import type {
-  HoneycrispFindingSummary,
-  HoneycrispMemoryEdgeSummary,
-  HoneycrispMemoryNodeSummary,
-  HoneycrispMemorySummary,
-  HoneycrispReportDocument,
-  HoneycrispReportSummary,
-  HoneycrispRunbookDocument,
-  HoneycrispRunbookSummary,
+  AppServerFindingSummary,
+  AppServerMemoryEdgeSummary,
+  AppServerMemoryNodeSummary,
+  AppServerMemorySummary,
+  AppServerReportDocument,
+  AppServerReportSummary,
+  AppServerRunbookDocument,
+  AppServerRunbookSummary,
   RunbookExecutionSelection,
   RunbookProofTargetSelection,
   ResearchProfile,
@@ -47,9 +47,9 @@ import { ReportView } from './ReportView';
 import { renderInlineCodeText } from '../traces/traceMarkup';
 
 const EMPTY_SUBAGENT_OVERVIEW = { count: 0, activeCount: 0, completedCount: 0 };
-const EMPTY_MEMORY_NODES: HoneycrispMemoryNodeSummary[] = [];
-const EMPTY_CAMPAIGN_CLAIMS: readonly HoneycrispFindingSummary[] = [];
-const EMPTY_RUNBOOKS: readonly HoneycrispRunbookSummary[] = [];
+const EMPTY_MEMORY_NODES: AppServerMemoryNodeSummary[] = [];
+const EMPTY_CAMPAIGN_CLAIMS: readonly AppServerFindingSummary[] = [];
+const EMPTY_RUNBOOKS: readonly AppServerRunbookSummary[] = [];
 
 export type MemoryLevelFilter = 'session' | 'workspace' | 'subject';
 export const DEFAULT_MEMORY_LEVEL_FILTER: MemoryLevelFilter = 'session';
@@ -280,19 +280,19 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
 }: {
   detail: RunDetail | null;
   events: TraceDisplayEvent[];
-  memory: HoneycrispMemorySummary | null;
+  memory: AppServerMemorySummary | null;
   researchProfile?: ResearchProfile | null;
   sessionHeatPreferences?: SessionHeatPreferences;
   runId: string;
   runStatus: RunStatus | null;
   providerModelCatalog: ResearchProviderModelCatalog[];
-  selectedRunbook: HoneycrispRunbookSummary | null;
-  selectedRunbookDocument: HoneycrispRunbookDocument | null;
+  selectedRunbook: AppServerRunbookSummary | null;
+  selectedRunbookDocument: AppServerRunbookDocument | null;
   runbookLoading: boolean;
   runbookError: string | null;
   connectedDeviceOs?: string | null;
-  selectedReport?: HoneycrispReportSummary | null;
-  selectedReportDocument?: HoneycrispReportDocument | null;
+  selectedReport?: AppServerReportSummary | null;
+  selectedReportDocument?: AppServerReportDocument | null;
   reportLoading?: boolean;
   reportError?: string | null;
   selectedSubagentPath: string | null;
@@ -1221,7 +1221,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
 });
 
 export function filterCampaignRunbooks(
-  runbooks: readonly HoneycrispRunbookSummary[],
+  runbooks: readonly AppServerRunbookSummary[],
   filters: {
     query: string;
     scope: MemoryLevelFilter;
@@ -1229,7 +1229,7 @@ export function filterCampaignRunbooks(
     workspaceId: string | null;
     subjectId: string | null;
   }
-): HoneycrispRunbookSummary[] {
+): AppServerRunbookSummary[] {
   const normalizedQuery = filters.query.trim().toLocaleLowerCase();
   return runbooks.filter((runbook) => {
     const inScope = filters.scope === 'session'
@@ -1254,7 +1254,7 @@ export function filterCampaignRunbooks(
 }
 
 export function filterCampaignClaims(
-  claims: readonly HoneycrispFindingSummary[],
+  claims: readonly AppServerFindingSummary[],
   filters: {
     query: string;
     scope: MemoryLevelFilter;
@@ -1262,7 +1262,7 @@ export function filterCampaignClaims(
     workspaceId: string | null;
     subjectId: string | null;
   }
-): HoneycrispFindingSummary[] {
+): AppServerFindingSummary[] {
   const normalizedQuery = filters.query.trim().toLocaleLowerCase();
   return claims
     .filter((claim) => {
@@ -1289,12 +1289,12 @@ export function filterCampaignClaims(
 }
 
 export function filterReportCatalog(
-  reports: readonly HoneycrispReportSummary[],
+  reports: readonly AppServerReportSummary[],
   scope: RunbookScopeFilter,
   sessionId: string,
   workspaceId: string | null,
   query = ''
-): HoneycrispReportSummary[] {
+): AppServerReportSummary[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   return reports.filter((report) => {
     const inScope = scope === 'session'
@@ -1625,7 +1625,7 @@ interface CatalogMemoryTypeOption {
 }
 
 export function orderedCatalogMemoryTypes(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   definitions: readonly ResearchProfileMemoryType[]
 ): CatalogMemoryTypeOption[] {
   return [...new Set(nodes.map((node) => node.type))]
@@ -1690,7 +1690,7 @@ export function RunbookCatalogItem({
   selected,
   onOpen
 }: {
-  runbook: HoneycrispRunbookSummary;
+  runbook: AppServerRunbookSummary;
   compactTime?: boolean;
   nowMs?: number;
   providerModelCatalog?: readonly ResearchProviderModelCatalog[];
@@ -1741,7 +1741,7 @@ interface RunbookMetricsPresentation {
   latestStatus: 'running' | 'succeeded' | 'failed' | 'blocked' | null;
 }
 
-function summarizeRunbookMetrics(runbooks: readonly HoneycrispRunbookSummary[]): RunbookMetricsPresentation {
+function summarizeRunbookMetrics(runbooks: readonly AppServerRunbookSummary[]): RunbookMetricsPresentation {
   const latest = runbooks
     .flatMap((runbook) => runbook.execution.latest ? [runbook.execution.latest] : [])
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0] ?? null;
@@ -1784,7 +1784,7 @@ function claimProjectionSummaryText(leadCount: number, findingCount: number): st
   ].filter((value): value is string => value !== null).join(', ');
 }
 
-export function claimRatingSummaryText(claims: readonly HoneycrispFindingSummary[]): string {
+export function claimRatingSummaryText(claims: readonly AppServerFindingSummary[]): string {
   const critical = claims.filter((claim) => claim.rating === 'critical').length;
   const high = claims.filter((claim) => claim.rating === 'high').length;
   const medium = claims.filter((claim) => claim.rating === 'medium').length;
@@ -1811,7 +1811,7 @@ export function CampaignRunbookCatalogSection({
   selectedRunbookId,
   onOpen
 }: {
-  runbooks: readonly HoneycrispRunbookSummary[];
+  runbooks: readonly AppServerRunbookSummary[];
   nowMs: number;
   providerModelCatalog?: readonly ResearchProviderModelCatalog[];
   selectedRunbookId: string | null;
@@ -1839,7 +1839,7 @@ export function CampaignRunbookCatalogSection({
 }
 
 export function ReportCatalogItem({ report, nowMs = Date.now(), selected, onOpen }: {
-  report: HoneycrispReportSummary;
+  report: AppServerReportSummary;
   nowMs?: number;
   selected: boolean;
   onOpen: () => void;
@@ -1867,7 +1867,7 @@ export function ReportCatalogItem({ report, nowMs = Date.now(), selected, onOpen
 }
 
 function ReportCatalogSection({ reports, label, nowMs, selectedReportId, onOpen }: {
-  reports: readonly HoneycrispReportSummary[];
+  reports: readonly AppServerReportSummary[];
   label: 'Complete' | 'Stale';
   nowMs: number;
   selectedReportId: string | null;
@@ -2001,7 +2001,7 @@ export function MemoryCatalogItem({
   selected,
   onOpen
 }: {
-  node: HoneycrispMemoryNodeSummary;
+  node: AppServerMemoryNodeSummary;
   compactTime?: boolean;
   memoryStatuses?: readonly ResearchProfileMemoryStatus[];
   memoryTypes?: readonly ResearchProfileMemoryType[];
@@ -2072,7 +2072,7 @@ function MemoryCatalogAuthors({
   authors,
   providerModelCatalog
 }: {
-  authors: HoneycrispMemoryNodeSummary['authors'];
+  authors: AppServerMemoryNodeSummary['authors'];
   providerModelCatalog: readonly ResearchProviderModelCatalog[];
 }): JSX.Element | null {
   if (!authors?.length) return null;
@@ -2103,8 +2103,8 @@ export function CampaignClaimCatalogLists({
   selectedClaimId,
   onOpen
 }: {
-  findings: readonly HoneycrispFindingSummary[];
-  leads: readonly HoneycrispFindingSummary[];
+  findings: readonly AppServerFindingSummary[];
+  leads: readonly AppServerFindingSummary[];
   nowMs?: number;
   previewLimit?: number;
   providerModelCatalog?: readonly ResearchProviderModelCatalog[];
@@ -2152,7 +2152,7 @@ export function CampaignClaimCatalogSection({
   selectedClaimId,
   onOpen
 }: {
-  claims: readonly HoneycrispFindingSummary[];
+  claims: readonly AppServerFindingSummary[];
   emptyLabel?: string;
   label: 'Findings' | 'Leads';
   nowMs?: number;
@@ -2169,7 +2169,7 @@ export function CampaignClaimCatalogSection({
   const unrefutedClaimCount = label === 'Findings'
     ? claims.filter((claim) => claim.maturity !== 'refuted').length
     : null;
-  const renderClaim = (claim: HoneycrispFindingSummary): JSX.Element => {
+  const renderClaim = (claim: AppServerFindingSummary): JSX.Element => {
     const rating = campaignClaimRatingPresentation(claim);
     return (
       <article className={`memory-catalog-item campaign-claim-item is-compact is-${claim.projection} ${selectedClaimId === claim.id ? 'selected' : ''}`} key={claim.id}>
@@ -2273,7 +2273,7 @@ export function MemoryTypeCatalogSection({
   onExpand,
   onOpen
 }: {
-  nodes: readonly HoneycrispMemoryNodeSummary[];
+  nodes: readonly AppServerMemoryNodeSummary[];
   type: string;
   memoryTypes?: readonly ResearchProfileMemoryType[];
   memoryStatuses?: readonly ResearchProfileMemoryStatus[];
@@ -2331,9 +2331,9 @@ export function MemoryDetailView({
   researchProfile = null,
   sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES
 }: {
-  node: HoneycrispMemoryNodeSummary;
-  nodeById: Map<string, HoneycrispMemoryNodeSummary>;
-  relationships: HoneycrispMemoryEdgeSummary[];
+  node: AppServerMemoryNodeSummary;
+  nodeById: Map<string, AppServerMemoryNodeSummary>;
+  relationships: AppServerMemoryEdgeSummary[];
   researchProfile?: ResearchProfile | null;
   sessionHeatPreferences?: SessionHeatPreferences;
 }): JSX.Element {
@@ -2423,7 +2423,7 @@ export function CampaignClaimDetailView({
   nowMs = Date.now(),
   providerModelCatalog = []
 }: {
-  claim: HoneycrispFindingSummary;
+  claim: AppServerFindingSummary;
   nowMs?: number;
   providerModelCatalog?: readonly ResearchProviderModelCatalog[];
 }): JSX.Element {

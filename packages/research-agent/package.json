@@ -1,5 +1,5 @@
 {
-  "name": "@honeycrisp/research-agent",
+  "name": "@beale/research-agent",
   "version": "0.1.0",
   "description": "Research-agent layer built on Pi agent core and Pi AI.",
   "type": "module",
@@ -25,6 +25,10 @@
     "./knowledge": {
       "types": "./dist/knowledge.d.ts",
       "import": "./dist/knowledge.js"
+    },
+    "./legacy-compatibility": {
+      "types": "./dist/legacy-compatibility.d.ts",
+      "import": "./dist/legacy-compatibility.js"
     },
     "./harness": {
       "types": "./dist/harness.d.ts",

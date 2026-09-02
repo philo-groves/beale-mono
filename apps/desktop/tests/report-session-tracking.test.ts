@@ -4,7 +4,7 @@ import { isUntrackedResourceSession } from '../src/main/workspaceRegistry';
 
 function row(resourceContext?: Record<string, unknown>): RunRow {
   return {
-    engine: 'honeycrisp',
+    engine: 'app-server',
     sessionRuns: [],
     run: {
       id: 'run_one',

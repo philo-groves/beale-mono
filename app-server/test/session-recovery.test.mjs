@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import {
-  inspectHoneycrispSessionCompletion,
+  inspectAppServerSessionCompletion,
   isRecoverableLongSessionFailure,
   longSessionRecoveryFallbackPrompt
 } from '../dist/index.js';
@@ -28,7 +28,7 @@ test('classifies model-level capture errors even when the worker exits zero', as
     }
   }));
 
-  assert.deepEqual(await inspectHoneycrispSessionCompletion({
+  assert.deepEqual(await inspectAppServerSessionCompletion({
     code: 0,
     stderr: '',
     capturePath,
@@ -49,7 +49,7 @@ test('trusts a durable completed capture when later worker cleanup exits nonzero
     agent: { status: 'complete', outputText: 'Finished the requested review.' }
   }));
 
-  assert.deepEqual(await inspectHoneycrispSessionCompletion({
+  assert.deepEqual(await inspectAppServerSessionCompletion({
     code: 1,
     stderr: 'Cleanup hook failed after capture commit.',
     capturePath,
@@ -68,7 +68,7 @@ test('does not recover explicit stops, policy failures, credentials, or invalid 
   assert.equal(isRecoverableLongSessionFailure('Invalid research profile configuration.'), false);
   assert.equal(isRecoverableLongSessionFailure('WebSocket disconnected unexpectedly.'), true);
 
-  assert.deepEqual(await inspectHoneycrispSessionCompletion({
+  assert.deepEqual(await inspectAppServerSessionCompletion({
     code: 1,
     stderr: 'WebSocket disconnected unexpectedly.',
     capturePath: join(tmpdir(), 'missing-long-session-capture.json'),

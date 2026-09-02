@@ -4,7 +4,7 @@ const EXPLICIT_OBJECTIVE_LINE = /^\s*(?:#{1,6}\s*)?(?:(?:research|session)\s+)?(
 const MARKDOWN_PREFIX = /^\s*(?:(?:#{1,6}|[-*+]|\d+[.)])\s+)+/;
 
 /**
- * Keeps Honeycrisp's persistent objective concise and wholly derived from user
+ * Keeps app-server's persistent objective concise and wholly derived from user
  * input. This deliberately performs no model generation or semantic rewrite.
  */
 export function normalizeGoalObjective(value: string | null | undefined): string | null {

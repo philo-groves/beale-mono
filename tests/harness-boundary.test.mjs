@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { invokeHoneycrispProtocol } from "../app-server/dist/honeycrispProtocolClient.js";
+import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolClient.js";
 
 import {
   AgentPluginRegistry,
@@ -16,8 +16,8 @@ import {
   sourceRepositoryCandidates,
 } from "../packages/research-agent/dist/harness.js";
 
-test("Honeycrisp owns auxiliary routes, sources, plugins, and retained maintenance", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-harness-boundary-"));
+test("app-server owns auxiliary routes, sources, plugins, and retained maintenance", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-harness-boundary-"));
   try {
     assert.deepEqual(resolveAuxiliaryModelRoute({
       jobName: "goalSuggestions",
@@ -53,7 +53,7 @@ test("Honeycrisp owns auxiliary routes, sources, plugins, and retained maintenan
     const registry = new AgentPluginRegistry(join(root, "registry"), { builtinPlugins: [] });
     const installed = registry.addFromFilesystem(pluginRoot);
     assert.equal(installed.plugins[0].name, "boundary-plugin");
-    assert.deepEqual(registry.getHoneycrispRuntime().selectedSkillIds, ["recon"]);
+    assert.deepEqual(registry.getAppServerRuntime().selectedSkillIds, ["recon"]);
 
     const disabledBuiltinRegistry = new AgentPluginRegistry(join(root, "builtin-registry"), {
       builtinPlugins: [{
@@ -64,7 +64,7 @@ test("Honeycrisp owns auxiliary routes, sources, plugins, and retained maintenan
       }],
     });
     assert.equal(disabledBuiltinRegistry.getState().plugins[0].enabled, false);
-    assert.deepEqual(disabledBuiltinRegistry.getHoneycrispRuntime().selectedSkillIds, []);
+    assert.deepEqual(disabledBuiltinRegistry.getAppServerRuntime().selectedSkillIds, []);
 
     const workspace = join(root, "workspace");
     await mkdir(join(workspace, ".beale"), { recursive: true });
@@ -79,14 +79,14 @@ test("Honeycrisp owns auxiliary routes, sources, plugins, and retained maintenan
     assert.equal(maintained.lastRun.status, "completed");
     assert.equal((await readFile(join(workspace, "research", "notes", "notes.md"), "utf8")).trim(), "retained research");
 
-    const inspected = await invokeHoneycrispProtocol("source.inspect", {
+    const inspected = await invokeAppServerProtocol("source.inspect", {
       args: [],
       input: { value: "git@github.com:Netflix/zuul.git" },
     });
     assert.equal(inspected.normalizedUrl, "https://github.com/Netflix/zuul");
 
     await assert.rejects(
-      invokeHoneycrispProtocol("provider.complete", {
+      invokeAppServerProtocol("provider.complete", {
         args: [],
         input: { schemaVersion: 1, provider: "unknown" },
       }),

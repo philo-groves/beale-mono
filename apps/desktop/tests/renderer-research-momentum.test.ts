@@ -52,7 +52,7 @@ describe('renderer research momentum view model', () => {
     expect(momentum.reason).toBe('Repeated source availability blockers detected.');
   });
 
-  it('treats Honeycrisp memory graph mutations as building activity', () => {
+  it('treats app-server memory graph mutations as building activity', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-21T12:00:00.000Z'));
 
@@ -62,9 +62,9 @@ describe('renderer research momentum view model', () => {
           id: 'trace_memory_correct',
           source: 'tool',
           type: 'tool_result',
-          summary: 'Honeycrisp tool.observed: memory.correct',
+          summary: 'app-server tool.observed: memory.correct',
           payload: {
-            honeycrispKind: 'tool.observed',
+            appServerKind: 'tool.observed',
             payload: { toolName: 'memory.correct' }
           },
           createdAt: '2026-07-21T11:59:30.000Z'
@@ -88,7 +88,7 @@ describe('renderer research momentum view model', () => {
         createdAt: '2026-07-21T11:59:30.000Z'
       })]
     });
-    detail.honeycrispMemory = {
+    detail.appServerMemory = {
       status: 'ready',
       nodes: [{
         sessionIds: ['run_test'],
@@ -96,7 +96,7 @@ describe('renderer research momentum view model', () => {
         status: 'confirmed',
         updatedAt: '2026-07-21T11:59:45.000Z'
       }]
-    } as unknown as RunDetail['honeycrispMemory'];
+    } as unknown as RunDetail['appServerMemory'];
 
     const momentum = researchMomentumForDetail(detail, 'critical');
 
@@ -105,9 +105,9 @@ describe('renderer research momentum view model', () => {
 
   it('prefers typed campaign momentum over contradictory trace wording', () => {
     const detail = runDetail({ traceEvents: [traceEvent({ summary: 'No local source found. Retrying.' })] });
-    detail.honeycrispMemory = {
+    detail.appServerMemory = {
       campaign: { momentum: { state: 'verifying', reason: 'Independent verification is the next evidence gate.', supportingNodeIds: ['finding:one'] } }
-    } as unknown as RunDetail['honeycrispMemory'];
+    } as unknown as RunDetail['appServerMemory'];
 
     const momentum = researchMomentumForDetail(detail, 'none');
 

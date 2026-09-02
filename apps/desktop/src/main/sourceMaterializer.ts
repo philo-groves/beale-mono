@@ -2,10 +2,10 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { RepositoryCloneMode, ScopeAsset, WorkspaceScopeVersion } from '@shared/types';
 import {
-  inspectHoneycrispSources,
-  materializeHoneycrispSource,
-  materializeHoneycrispSourceSync
-} from './honeycrispCliClient';
+  inspectAppServerSources,
+  materializeAppServerSource,
+  materializeAppServerSourceSync
+} from './appServerCliClient';
 
 export interface SourceRepositoryCandidate {
   url: string;
@@ -36,26 +36,26 @@ export interface MaterializedSourceRepository {
 }
 
 export function defaultSourceRepositoryStoreDirectory(registryDirectory?: string): string {
-  const explicit = process.env.HONEYCRISP_REPOSITORY_STORE_DIR?.trim() || process.env.BEALE_REPOSITORY_STORE_DIR?.trim();
-  return resolve(explicit || join(registryDirectory ?? join(homedir(), '.honeycrisp'), 'repositories'));
+  const explicit = process.env.APP_SERVER_REPOSITORY_STORE_DIR?.trim() || process.env.BEALE_REPOSITORY_STORE_DIR?.trim();
+  return resolve(explicit || join(registryDirectory ?? join(homedir(), '.beale'), 'repositories'));
 }
 
 export function sourceRepositoryCandidates(scope: WorkspaceScopeVersion): SourceRepositoryCandidate[] {
-  return (inspectHoneycrispSources({ scope }).candidates ?? []) as SourceRepositoryCandidate[];
+  return (inspectAppServerSources({ scope }).candidates ?? []) as SourceRepositoryCandidate[];
 }
 
 export function selectSourceRepository(scope: WorkspaceScopeVersion, requested: string): SourceRepositorySelection {
-  const selection = inspectHoneycrispSources({ scope, requested }).selection;
-  if (!selection) throw new Error('Honeycrisp did not return a source selection.');
+  const selection = inspectAppServerSources({ scope, requested }).selection;
+  if (!selection) throw new Error('app-server did not return a source selection.');
   return selection as SourceRepositorySelection;
 }
 
 export function extractSourceRepositoryUrls(text: string): string[] {
-  return inspectHoneycrispSources({ text }).urls ?? [];
+  return inspectAppServerSources({ text }).urls ?? [];
 }
 
 export function normalizeSourceRepositoryUrl(value: string): string | null {
-  return inspectHoneycrispSources({ value }).normalizedUrl ?? null;
+  return inspectAppServerSources({ value }).normalizedUrl ?? null;
 }
 
 export const normalizeGitHubRepositoryUrl = normalizeSourceRepositoryUrl;
@@ -65,7 +65,7 @@ export function materializeGitRepository(
   ref: string,
   options: { cloneMode?: RepositoryCloneMode; repositoryStoreDirectory?: string } = {}
 ): MaterializedSourceRepository {
-  return materializeHoneycrispSourceSync(candidate, ref, options.repositoryStoreDirectory, options.cloneMode);
+  return materializeAppServerSourceSync(candidate, ref, options.repositoryStoreDirectory, options.cloneMode);
 }
 
 export async function materializeGitRepositoryAsync(
@@ -73,5 +73,5 @@ export async function materializeGitRepositoryAsync(
   ref: string,
   options: { cloneMode?: RepositoryCloneMode; signal?: AbortSignal; repositoryStoreDirectory?: string } = {}
 ): Promise<MaterializedSourceRepository> {
-  return materializeHoneycrispSource(candidate, ref, options.repositoryStoreDirectory, options.signal, options.cloneMode);
+  return materializeAppServerSource(candidate, ref, options.repositoryStoreDirectory, options.signal, options.cloneMode);
 }

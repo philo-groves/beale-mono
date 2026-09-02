@@ -26,6 +26,7 @@ import {
   type QueryMatch,
 } from "web-tree-sitter";
 import { nowIso } from "./ids.js";
+import { PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 import { RepositoryResearchSession } from "./repository-research-tools.js";
 import type {
   ResearchToolAction,
@@ -48,8 +49,8 @@ const CODE_IGNORED_DIRECTORIES = new Set([
   ".git",
   ".hg",
   ".svn",
-  ".honeycrisp",
   ".beale",
+  PRE_BEALE_DATA_DIRECTORY_NAME,
   "node_modules",
   "dist",
   "build",
@@ -516,7 +517,7 @@ function createCodeTool(input: {
     inputSchema: parameters,
     artifactLocations: input.rootHints,
     metadata: {
-      provider: "honeycrisp.built_in",
+      provider: "appServer.built_in",
       safetyProfile: "workspace-context-tree-sitter-read",
       parser: "tree-sitter",
       defaultBudget: {

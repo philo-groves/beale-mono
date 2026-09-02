@@ -1399,7 +1399,7 @@ private struct TranscriptMessageView: View {
     }
 
     private var isTool: Bool {
-        message.source == "honeycrisp_tool_summary"
+        message.source == "app_server_tool_summary"
     }
 
     private var toolIcon: String {

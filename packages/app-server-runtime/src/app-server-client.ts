@@ -10,9 +10,9 @@ import {
   BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
   BEALE_APP_SERVER_OPERATIONS_PATH,
   BEALE_APP_SERVER_SHUTDOWN_PATH,
-  honeycrispProtocolFailure,
-  honeycrispProtocolSuccess,
-  type HoneycrispProtocolOperation
+  appServerProtocolFailure,
+  appServerProtocolSuccess,
+  type AppServerProtocolOperation
 } from './protocol.js';
 import { installUndiciTypeOfServiceCompatibility } from './node-network-compatibility.js';
 
@@ -38,7 +38,7 @@ export async function runAppServerClient(argv: readonly string[], requestId?: st
     };
     if (!response.ok) {
       const structuredError = typeof payload.error === 'object' && payload.error !== null ? payload.error : null;
-      process.stdout.write(`${JSON.stringify(honeycrispProtocolFailure(
+      process.stdout.write(`${JSON.stringify(appServerProtocolFailure(
         operation,
         typeof structuredError?.code === 'string' ? structuredError.code : 'app_server_operation_failed',
         typeof structuredError?.message === 'string'
@@ -51,9 +51,9 @@ export async function runAppServerClient(argv: readonly string[], requestId?: st
       return;
     }
     if (payload.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION) throw new Error('App-server control version mismatch.');
-    process.stdout.write(`${JSON.stringify(honeycrispProtocolSuccess(operation, payload.result, requestId))}\n`);
+    process.stdout.write(`${JSON.stringify(appServerProtocolSuccess(operation, payload.result, requestId))}\n`);
   } catch (error) {
-    process.stdout.write(`${JSON.stringify(honeycrispProtocolFailure(
+    process.stdout.write(`${JSON.stringify(appServerProtocolFailure(
       operation, 'app_server_operation_failed', error instanceof Error ? error.message : String(error), false, requestId
     ))}\n`);
     process.exitCode = 1;
@@ -189,9 +189,9 @@ function profileSelection(input?: unknown): { profileId?: string } {
   const inputProfileId = profileIdFromInput(input);
   if (inputProfileId) return { profileId: inputProfileId };
   if (workspaceIdFromInput(input)) return {};
-  const configuredProfileId = process.env.HONEYCRISP_PROFILE_ID?.trim();
+  const configuredProfileId = process.env.APP_SERVER_PROFILE_ID?.trim();
   if (configuredProfileId) return { profileId: configuredProfileId };
-  const databasePath = process.env.HONEYCRISP_DATABASE_PATH?.trim();
+  const databasePath = process.env.APP_SERVER_DATABASE_PATH?.trim();
   if (!databasePath) return {};
   const directory = dirname(databasePath);
   const parent = basename(directory);
@@ -219,14 +219,14 @@ function profileIdFromInput(input: unknown): string | null {
   return typeof profileId === 'string' && profileId.trim() ? profileId.trim() : null;
 }
 
-function operationForArguments(argv: readonly string[]): HoneycrispProtocolOperation | null {
+function operationForArguments(argv: readonly string[]): AppServerProtocolOperation | null {
   const [group, command] = argv;
   if (group === 'protocol' && command === 'describe') return 'protocol.describe';
   if (group === 'complete') return 'provider.complete';
   const normalized = command?.replaceAll('-', '_');
-  if (group === 'session' && normalized) return `session.${normalized}` as HoneycrispProtocolOperation;
+  if (group === 'session' && normalized) return `session.${normalized}` as AppServerProtocolOperation;
   if (group === 'knowledge') {
-    const mapping: Record<string, HoneycrispProtocolOperation> = {
+    const mapping: Record<string, AppServerProtocolOperation> = {
       summary: 'memory.summary', notification_feed: 'memory.notification_feed', dreaming_prepare: 'dreaming.prepare',
       dreaming_parse_plan: 'dreaming.parse_plan', dreaming_apply: 'dreaming.apply', dreaming_record_failure: 'dreaming.record_failure',
       dreaming_restore: 'dreaming.restore', runbook_get: 'runbook.get', report_list: 'report.list', report_get: 'report.get', artifact_resolve: 'artifact.resolve'
@@ -234,7 +234,7 @@ function operationForArguments(argv: readonly string[]): HoneycrispProtocolOpera
     return normalized ? mapping[normalized] ?? null : null;
   }
   if (group === 'harness') {
-    const mapping: Record<string, HoneycrispProtocolOperation> = {
+    const mapping: Record<string, AppServerProtocolOperation> = {
       model_job_resolve: 'model_job.resolve', provider_describe: 'provider.describe', source_inspect: 'source.inspect',
       source_materialize: 'source.materialize', plugin_list: 'plugin.list', plugin_add_filesystem: 'plugin.add_filesystem',
       plugin_add_repository: 'plugin.add_repository', plugin_set_enabled: 'plugin.set_enabled', plugin_remove: 'plugin.remove',
@@ -245,7 +245,7 @@ function operationForArguments(argv: readonly string[]): HoneycrispProtocolOpera
   return null;
 }
 
-function utilityOperationForArguments(argv: readonly string[]): HoneycrispProtocolOperation | null {
+function utilityOperationForArguments(argv: readonly string[]): AppServerProtocolOperation | null {
   const [group, command] = argv;
   if (group === 'profile' && command === 'resolve') return 'profile.resolve';
   if (group === 'auth' && command === 'list') return 'auth.list';
@@ -260,7 +260,7 @@ function utilityOperationForArguments(argv: readonly string[]): HoneycrispProtoc
   return null;
 }
 
-function renderUtilityResult(operation: HoneycrispProtocolOperation, value: unknown, json: boolean): void {
+function renderUtilityResult(operation: AppServerProtocolOperation, value: unknown, json: boolean): void {
   if (json || operation === 'profile.resolve' || operation === 'tools.list'
     || operation === 'tools.config' || operation === 'config.show' || operation === 'config.set'
     || operation === 'model.list') {

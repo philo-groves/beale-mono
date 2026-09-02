@@ -1,8 +1,8 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { PassThrough } from 'node:stream';
-import { installUndiciTypeOfServiceCompatibility } from 'honeycrisp/node-network-compatibility';
-import type { ResearchLiveEventSink } from 'honeycrisp/runtime-services';
-import type { HoneycrispRuntimeTransport } from 'honeycrisp/runtime';
+import { installUndiciTypeOfServiceCompatibility } from '@beale/app-server-runtime/node-network-compatibility';
+import type { ResearchLiveEventSink } from '@beale/app-server-runtime/runtime-services';
+import type { AppServerRuntimeTransport } from '@beale/app-server-runtime/runtime';
 
 installUndiciTypeOfServiceCompatibility();
 
@@ -16,7 +16,7 @@ type HostMessage =
   | { type: 'stop' };
 
 const port = parentPort;
-if (!port) throw new Error('The Honeycrisp runtime worker requires a parent port.');
+if (!port) throw new Error('The app-server runtime worker requires a parent port.');
 
 const data = workerData as RuntimeWorkerData;
 for (const [name, value] of Object.entries(data.env)) process.env[name] = value;
@@ -25,7 +25,7 @@ const controlInput = new PassThrough();
 const eventSink: ResearchLiveEventSink = async (event) => {
   port.postMessage({ type: 'event', event });
 };
-const transport: HoneycrispRuntimeTransport = {
+const transport: AppServerRuntimeTransport = {
   controlInput,
   eventSink,
   waitForClient: async () => undefined,
@@ -41,7 +41,7 @@ port.on('message', (message: HostMessage) => {
 });
 
 try {
-  const { main } = await import('honeycrisp/runtime');
+  const { main } = await import('@beale/app-server-runtime/runtime');
   await main(data.args, { transport });
   port.postMessage({ type: 'complete', exitCode: process.exitCode ?? 0 });
 } catch (error) {

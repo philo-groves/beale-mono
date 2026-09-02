@@ -2,7 +2,7 @@
   "name": "@beale/app-server",
   "version": "0.1.0",
   "private": true,
-  "description": "Standalone tray-resident Honeycrisp execution host and client-neutral control plane.",
+  "description": "Standalone tray-resident Beale execution host and client-neutral control plane.",
   "type": "module",
   "main": "./dist/trayBootstrap.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +25,8 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "honeycrisp": "workspace:*",
+    "@beale/app-server-runtime": "workspace:*",
+    "@beale/research-agent": "workspace:*",
     "qrcode": "1.5.4",
     "ws": "8.21.0"
   },

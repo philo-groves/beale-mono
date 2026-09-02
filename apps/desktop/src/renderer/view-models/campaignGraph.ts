@@ -1,17 +1,17 @@
 import type {
-  HoneycrispCampaignGraphEdgeSummary,
-  HoneycrispCampaignGraphNodeSummary,
-  HoneycrispCampaignNodeKind
+  AppServerCampaignGraphEdgeSummary,
+  AppServerCampaignGraphNodeSummary,
+  AppServerCampaignNodeKind
 } from '@shared/types';
 
-export interface CampaignLayoutNode extends HoneycrispCampaignGraphNodeSummary {
+export interface CampaignLayoutNode extends AppServerCampaignGraphNodeSummary {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
-export interface CampaignLayoutEdge extends HoneycrispCampaignGraphEdgeSummary {
+export interface CampaignLayoutEdge extends AppServerCampaignGraphEdgeSummary {
   x1: number;
   y1: number;
   x2: number;
@@ -32,10 +32,10 @@ const ROW_GAP = 18;
 const INSET = 16;
 
 export function layoutCampaignGraph(
-  nodes: readonly HoneycrispCampaignGraphNodeSummary[],
-  edges: readonly HoneycrispCampaignGraphEdgeSummary[]
+  nodes: readonly AppServerCampaignGraphNodeSummary[],
+  edges: readonly AppServerCampaignGraphEdgeSummary[]
 ): CampaignGraphLayout {
-  const columns: HoneycrispCampaignNodeKind[][] = [
+  const columns: AppServerCampaignNodeKind[][] = [
     ['asset'],
     ['memory'],
     ['lead', 'finding'],

@@ -1,10 +1,10 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { HoneycrispRunbookDocument, HoneycrispRunbookSummary } from '../src/shared/types';
+import type { AppServerRunbookDocument, AppServerRunbookSummary } from '../src/shared/types';
 import { RunbookView, runbookViewUpdateKey } from '../src/renderer/features/research/RunbookView';
 
-const summary: HoneycrispRunbookSummary = {
+const summary: AppServerRunbookSummary = {
   id: 'runbook-1',
   workspaceId: 'workspace-1',
   workspaceName: 'Demo',
@@ -32,7 +32,7 @@ const summary: HoneycrispRunbookSummary = {
   updatedAt: '2026-07-23T11:00:00.000Z'
 };
 
-const document: HoneycrispRunbookDocument = {
+const document: AppServerRunbookDocument = {
   runbookId: summary.id,
   nbformat: 4,
   nbformatMinor: 5,
@@ -116,7 +116,7 @@ describe('RunbookView', () => {
   });
 
   it('enables whole-run and cell controls for a healthy runbook in its live session', () => {
-    const executableDocument: HoneycrispRunbookDocument = {
+    const executableDocument: AppServerRunbookDocument = {
       ...document,
       language: 'sh',
       latestRun: null,
@@ -154,7 +154,7 @@ describe('RunbookView', () => {
   });
 
   it('supports embedded rendering and versions appended content for follow-to-bottom updates', () => {
-    const appendedDocument: HoneycrispRunbookDocument = {
+    const appendedDocument: AppServerRunbookDocument = {
       ...document,
       cells: document.cells.map((cell, index) => index === 1
         ? { ...cell, outputs: [...cell.outputs, { kind: 'stream', text: 'new output\n', streamName: 'stdout', mimeType: 'text/plain' }] }
@@ -178,7 +178,7 @@ describe('RunbookView', () => {
   });
 
   it('bounds initial work for large runbooks and collapses oversized cell content and output', () => {
-    const largeDocument: HoneycrispRunbookDocument = {
+    const largeDocument: AppServerRunbookDocument = {
       ...document,
       cells: Array.from({ length: 40 }, (_, index) => ({
         ...document.cells[1]!,

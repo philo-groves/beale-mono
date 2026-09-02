@@ -40,8 +40,8 @@ describe('workspace guidance', () => {
     writeFileSync(join(workspace, 'AGENTS.md'), '# Initial instructions\n', 'utf8');
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
-      honeycrispDatabasePath: join(root, 'memory.sqlite'),
-      honeycrispArtifactDirectory: join(root, 'artifacts'),
+      appServerDatabasePath: join(root, 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'artifacts'),
       researchProfileResolver: () => resolvedTestResearchProfile()
     });
 

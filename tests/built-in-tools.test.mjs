@@ -56,7 +56,7 @@ function approvedAuthorization(request) {
 }
 
 test("shell tool enforces disabled utilities before spawning and captures argv output", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-tool-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-tool-"));
   const optionsPath = join(root, "shell-options.json");
   const protectedDirectory = join(root, "protected-core");
   const protectedChildDirectory = join(protectedDirectory, "nested");
@@ -263,7 +263,7 @@ test("shell tool exposes PowerShell and WSL guidance only on Windows", () => {
 });
 
 test("shell tool defaults Windows command form to PowerShell and keeps explicit WSL path translation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-wsl-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-wsl-"));
   const nested = join(root, "folder with space");
   const target = join(nested, "fixture.go");
   const requests = [];
@@ -340,7 +340,7 @@ test("shell tool defaults Windows command form to PowerShell and keeps explicit 
 });
 
 test("shell tool keeps direct utilities native and honors explicit runtime selection", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-runtime-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-runtime-"));
   const requests = [];
   const authorize = async (request) => {
     requests.push(request);
@@ -448,7 +448,7 @@ test("Windows PowerShell detection prefers PowerShell 7 and falls back to the in
 test("Windows shell execution routes default commands and bare pwsh through the detected host runner", {
   skip: process.platform !== "win32",
 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-powershell-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-powershell-"));
   try {
     const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root, authorize: allowShell })]);
     const command = await registry.execute({
@@ -476,7 +476,7 @@ test("Windows shell execution routes default commands and bare pwsh through the 
 });
 
 test("shell tool serializes the same utility across tool instances", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-concurrency-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-concurrency-"));
   const optionsPath = join(root, "shell-options.json");
   await writeFile(optionsPath, JSON.stringify({
     schemaVersion: 1,
@@ -516,7 +516,7 @@ test("shell tool serializes the same utility across tool instances", async () =>
 });
 
 test("shell tool terminates descendant processes when a command times out", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-timeout-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-timeout-"));
   try {
     const registry = createResearchToolRegistry([
       createShellTool({ workspaceRoot: root, authorize: allowShell }),
@@ -547,7 +547,7 @@ test("shell tool terminates descendant processes when a command times out", asyn
 });
 
 test("shell tool blocks denied commands before spawn and keeps hard guards ahead of authorization", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-denied-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-denied-"));
   const marker = join(root, "spawned.txt");
   const protectedDirectory = join(root, "protected");
   await mkdir(protectedDirectory);
@@ -607,7 +607,7 @@ test("shell tool blocks denied commands before spawn and keeps hard guards ahead
 });
 
 test("shell capture events and tool results omit stdin and redact credential argv values", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-redaction-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-redaction-"));
   const secrets = [
     "raw-stdin-secret",
     "password-argv-secret",
@@ -751,7 +751,7 @@ test("model tool results retain readable output separately from bounded metadata
 });
 
 test("tool runtime budget aborts a pending approval before any later spawn", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-budget-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-budget-"));
   const marker = join(root, "late-spawn.txt");
   let approve;
   const authorize = (request) => new Promise((resolveApproval) => {
@@ -789,16 +789,16 @@ test("tool runtime budget aborts a pending approval before any later spawn", asy
 });
 
 test("repository search finds bounded local source matches", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-repo-search-"));
   await mkdir(join(root, "Src"));
-  await mkdir(join(root, ".honeycrisp", "memory"), { recursive: true });
+  await mkdir(join(root, ".beale", "memory"), { recursive: true });
   await mkdir(join(root, ".beale"), { recursive: true });
   await writeFile(
     join(root, "Src", "parse.c"),
     "static void parse_context_save(void) {}\nparse_context_save();\n",
   );
   await writeFile(
-    join(root, ".honeycrisp", "memory", "memory.sqlite-wal"),
+    join(root, ".beale", "memory", "memory.sqlite-wal"),
     "parse_context_save stale internal memory hit\n",
   );
   await writeFile(
@@ -830,7 +830,7 @@ test("repository search finds bounded local source matches", async () => {
     assert.ok(
       result.result.output.matches.every(
         (match) =>
-          !match.path.startsWith(".honeycrisp/") &&
+          !match.path.startsWith(".beale/") &&
           !match.path.startsWith(".beale/"),
       ),
     );
@@ -877,7 +877,7 @@ test("repository search finds bounded local source matches", async () => {
 });
 
 test("repository first touch is emitted once per canonical repository revision", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-touch-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-repo-touch-"));
   await writeFile(join(root, "parser.c"), "int parser_boundary = 1;\n");
   await execFileAsync("git", ["init", "--quiet", root]);
   await execFileAsync("git", ["-C", root, "add", "parser.c"]);
@@ -913,7 +913,7 @@ test("repository first touch is emitted once per canonical repository revision",
 });
 
 test("repository first touch waits for scope-relevance review and can retry a denied trigger", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-reviewed-touch-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-repo-reviewed-touch-"));
   await writeFile(join(root, "service.c"), "int service_boundary = 1;\n");
   await execFileAsync("git", ["init", "--quiet", root]);
   await execFileAsync("git", ["-C", root, "add", "service.c"]);
@@ -958,7 +958,7 @@ test("repository first touch waits for scope-relevance review and can retry a de
 });
 
 test("repository history exposes provenance, literal fix history, and blame", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-history-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-repo-history-"));
   await writeFile(join(root, "parser.c"), "int validate = 0;\n");
   await execFileAsync("git", ["init", "--quiet", root]);
   await execFileAsync("git", ["-C", root, "add", "parser.c"]);
@@ -1033,7 +1033,7 @@ test("prior art search normalizes public advisory results with source URLs", asy
 });
 
 test("repository search bounds and interrupts non-Git traversal", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-bounds-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-repo-search-bounds-"));
   await writeFile(join(root, "first.txt"), "unrelated first file\n");
   await writeFile(join(root, "second.txt"), "unrelated second file\n");
   try {
@@ -1070,8 +1070,8 @@ test("repository search bounds and interrupts non-Git traversal", async () => {
 });
 
 test("repository search scopes configured roots and preserves bounded partial results", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-roots-"));
-  const external = await mkdtemp(join(tmpdir(), "honeycrisp-repo-search-external-"));
+  const workspace = await mkdtemp(join(tmpdir(), "app-server-repo-search-roots-"));
+  const external = await mkdtemp(join(tmpdir(), "app-server-repo-search-external-"));
   const first = join(workspace, "first-repository");
   const second = join(workspace, "second-repository");
   await mkdir(first);
@@ -1140,7 +1140,7 @@ test("repository search scopes configured roots and preserves bounded partial re
 });
 
 test("shell search treats no matches as complete and reports unavailable utilities clearly", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-shell-search-status-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-shell-search-status-"));
   await writeFile(join(root, "tracked.txt"), "present text\n");
   await execFileAsync("git", ["init", "--quiet", root]);
   await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
@@ -1162,7 +1162,7 @@ test("shell search treats no matches as complete and reports unavailable utiliti
       id: "shell_unavailable_utility",
       actionClass: "inspect",
       toolName: "shell.run",
-      input: { utility: "honeycrisp-missing-utility-fixture" },
+      input: { utility: "app-server-missing-utility-fixture" },
     });
     assert.equal(unavailable.result.status, "error");
     assert.match(unavailable.result.summary, /not available.*PATH/);
@@ -1176,8 +1176,8 @@ test("shell search treats no matches as complete and reports unavailable utiliti
 });
 
 test("structured file read supports ranges and annotates paths outside context roots", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-file-read-"));
-  const outsideRoot = await mkdtemp(join(tmpdir(), "honeycrisp-file-outside-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-file-read-"));
+  const outsideRoot = await mkdtemp(join(tmpdir(), "app-server-file-outside-"));
   const file = join(root, "notes.txt");
   const outsideFile = join(outsideRoot, "outside.txt");
   await writeFile(file, "abcdef\nsecond line\n");
@@ -1296,7 +1296,7 @@ test("analysis tool runs deterministic metrics and diffs", async () => {
 });
 
 test("code intelligence tools expose Tree-sitter detect, outline, query, context, references, and call candidates", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-code-tools-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-code-tools-"));
   await mkdir(join(root, "src"));
   await symlink(root, join(root, "src", "cycle"), process.platform === "win32" ? "junction" : "dir");
   const sourcePath = join(root, "src", "parser.js");
@@ -1505,7 +1505,7 @@ async function assertProcessExited(pid) {
 }
 
 test("storage list tool exposes manifest artifact metadata read-only", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-storage-tool-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-storage-tool-"));
   const layout = ensureResearchStorageLayout(
     createResearchStorageLayout({ workspaceRoot }),
   );
@@ -1543,7 +1543,7 @@ test("storage list tool exposes manifest artifact metadata read-only", async () 
 });
 
 test("default built-in family assembles configured tool surfaces", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-family-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-family-"));
   try {
     const tools = createDefaultBuiltInToolFamily({
       repositorySearch: {

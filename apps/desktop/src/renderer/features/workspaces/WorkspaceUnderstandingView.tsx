@@ -4,7 +4,7 @@ import { BadgeCheck, Binary, BookOpen, Boxes, Brain, Columns3, Download, GitBran
 import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../shared/types';
 import { researchKitDefinition, researchKitLabel } from '../../../shared/researchKits';
 import type {
-  HoneycrispMemorySummary,
+  AppServerMemorySummary,
   MemoryDreamingProgressPhase,
   MemoryDreamingProgressUpdate,
   ResearchProfile,
@@ -175,7 +175,7 @@ export function workspaceScopeDraftForConfigurationUpdate(
 
 export function WorkspaceUnderstandingView({
   busy,
-  honeycrispMemory,
+  appServerMemory,
   activeScope = null,
   workspaceRules = [],
   researchProfile = null,
@@ -184,7 +184,7 @@ export function WorkspaceUnderstandingView({
   researchSubjectName = '',
   workspacePath = '',
   workspaceDirectories,
-  memoryBackend = 'honeycrisp',
+  memoryBackend = 'app-server',
   providerModelCatalog = [],
   selectedClaimId = null,
   workspaceName,
@@ -216,7 +216,7 @@ export function WorkspaceUnderstandingView({
   workspaceDejunkInProgress?: boolean;
   memoryDreamingInProgress: boolean;
   memoryDreamingProgress?: MemoryDreamingProgressUpdate | null;
-  honeycrispMemory: HoneycrispMemorySummary | null;
+  appServerMemory: AppServerMemorySummary | null;
   activeScope?: WorkspaceScopeVersion | null;
   workspaceRules?: readonly WorkspaceRule[];
   researchProfile?: ResearchProfile | null;
@@ -267,46 +267,46 @@ export function WorkspaceUnderstandingView({
   const timelineNowMs = nowMs ?? clockNowMs;
   const memoryTypes = researchProfile?.memory.types ?? [];
   const campaignActive = activeView === 'campaign';
-  const workspaceId = honeycrispMemory?.contextWorkspaceId ?? null;
+  const workspaceId = appServerMemory?.contextWorkspaceId ?? null;
   const workspaceFindings = useMemo(
     () => campaignActive && activeCampaignView === 'claims'
-      ? filterCampaignClaims(honeycrispMemory?.findings ?? [], {
+      ? filterCampaignClaims(appServerMemory?.findings ?? [], {
           query: '',
           scope: 'workspace',
           sessionId: '',
           workspaceId,
-          subjectId: honeycrispMemory?.contextSubjectId ?? null
+          subjectId: appServerMemory?.contextSubjectId ?? null
         })
       : [],
-    [activeCampaignView, campaignActive, honeycrispMemory?.contextSubjectId, honeycrispMemory?.findings, workspaceId]
+    [activeCampaignView, campaignActive, appServerMemory?.contextSubjectId, appServerMemory?.findings, workspaceId]
   );
   const workspaceLeads = useMemo(
     () => campaignActive && activeCampaignView === 'claims'
-      ? filterCampaignClaims(honeycrispMemory?.leads ?? [], {
+      ? filterCampaignClaims(appServerMemory?.leads ?? [], {
           query: '',
           scope: 'workspace',
           sessionId: '',
           workspaceId,
-          subjectId: honeycrispMemory?.contextSubjectId ?? null
+          subjectId: appServerMemory?.contextSubjectId ?? null
         })
       : [],
-    [activeCampaignView, campaignActive, honeycrispMemory?.contextSubjectId, honeycrispMemory?.leads, workspaceId]
+    [activeCampaignView, campaignActive, appServerMemory?.contextSubjectId, appServerMemory?.leads, workspaceId]
   );
   const workspaceMemoryNodes = useMemo(
     () => campaignActive && activeCampaignView === 'memory'
-      ? (honeycrispMemory?.nodes ?? [])
+      ? (appServerMemory?.nodes ?? [])
           .filter((node) => workspaceId !== null && node.workspaces.some((workspace) => workspace.id === workspaceId))
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       : [],
-    [activeCampaignView, campaignActive, honeycrispMemory?.nodes, workspaceId]
+    [activeCampaignView, campaignActive, appServerMemory?.nodes, workspaceId]
   );
   const workspaceRunbooks = useMemo(
     () => campaignActive && activeCampaignView === 'runbooks'
-      ? (honeycrispMemory?.runbooks ?? [])
+      ? (appServerMemory?.runbooks ?? [])
           .filter((runbook) => workspaceId !== null && runbook.workspaceId === workspaceId)
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       : [],
-    [activeCampaignView, campaignActive, honeycrispMemory?.runbooks, workspaceId]
+    [activeCampaignView, campaignActive, appServerMemory?.runbooks, workspaceId]
   );
 
   return (
@@ -379,7 +379,7 @@ export function WorkspaceUnderstandingView({
       {activeView === 'resources' ? <WorkspaceResearchSurface
         activeScope={activeScope}
         hidden={false}
-        honeycrispMemory={honeycrispMemory}
+        appServerMemory={appServerMemory}
         nowMs={timelineNowMs}
         runs={runs}
         onAddResource={onAddResource}
@@ -389,7 +389,7 @@ export function WorkspaceUnderstandingView({
       /> : null}
 
       {campaignActive && activeCampaignView === 'trail' ? <CampaignGraphView
-        memory={honeycrispMemory}
+        memory={appServerMemory}
         providerModelCatalog={providerModelCatalog}
         workspaceName={activeScope?.workspaceName || workspaceName}
         onOpenClaim={onOpenClaim}
@@ -397,7 +397,7 @@ export function WorkspaceUnderstandingView({
       /> : null}
 
       {campaignActive && activeCampaignView === 'board' ? <CampaignBoardView
-        memory={honeycrispMemory}
+        memory={appServerMemory}
         providerModelCatalog={providerModelCatalog}
         workspaceName={activeScope?.workspaceName || workspaceName}
         onOpenClaim={onOpenClaim}
@@ -406,7 +406,7 @@ export function WorkspaceUnderstandingView({
       {campaignActive && activeCampaignView === 'claims' ? <WorkspaceClaimsPanel
         findings={workspaceFindings}
         leads={workspaceLeads}
-        loading={honeycrispMemory === null || honeycrispMemory.loading === true}
+        loading={appServerMemory === null || appServerMemory.loading === true}
         nowMs={timelineNowMs}
         onOpen={onOpenClaim}
         providerModelCatalog={providerModelCatalog}
@@ -431,7 +431,7 @@ export function WorkspaceUnderstandingView({
       {campaignActive && activeCampaignView === 'memory' ? <WorkspaceMemoryPanel
         enabled={memoryBackend !== 'disabled'}
         hidden={false}
-        loading={honeycrispMemory === null || honeycrispMemory.loading === true}
+        loading={appServerMemory === null || appServerMemory.loading === true}
         memoryTypes={memoryTypes}
         nowMs={timelineNowMs}
         nodes={workspaceMemoryNodes}
@@ -443,7 +443,7 @@ export function WorkspaceUnderstandingView({
 
       {campaignActive && activeCampaignView === 'runbooks' ? <WorkspaceRunbooksPanel
         hidden={false}
-        loading={honeycrispMemory === null || honeycrispMemory.loading === true}
+        loading={appServerMemory === null || appServerMemory.loading === true}
         nowMs={timelineNowMs}
         runbooks={workspaceRunbooks}
         onOpen={onOpenRunbook}
@@ -453,7 +453,7 @@ export function WorkspaceUnderstandingView({
       {activeView === 'utilities' ? <WorkspaceUtilitiesPanel
         busy={busy}
         hidden={false}
-        honeycrispMemory={honeycrispMemory}
+        appServerMemory={appServerMemory}
         memoryDreamingInProgress={memoryDreamingInProgress}
         memoryDreamingProgress={memoryDreamingProgress}
         memoryBackend={memoryBackend}
@@ -823,7 +823,7 @@ function WorkspaceOverviewPanel({
                   value={memoryBackend}
                   onChange={(event) => void changeMemoryBackend(event.target.value as WorkspaceMemoryBackendId)}
                 >
-                  <option value="honeycrisp">Enabled</option>
+                  <option value="app-server">Enabled</option>
                   <option value="disabled">Disabled</option>
                 </select>
               </label>
@@ -1017,11 +1017,11 @@ function workspaceHeatmapValueLabel(value: number, metric: WorkspaceHeatmapMetri
 
 export interface WorkspaceMemoryTypeGroup {
   type: string;
-  nodes: HoneycrispMemorySummary['nodes'];
+  nodes: AppServerMemorySummary['nodes'];
 }
 
 export function workspaceMemoryTypeGroups(
-  nodes: HoneycrispMemorySummary['nodes'],
+  nodes: AppServerMemorySummary['nodes'],
   memoryTypes: ResearchProfile['memory']['types'],
   profileId: string | null | undefined,
   sessionHeatPreferences: SessionHeatPreferences
@@ -1046,7 +1046,7 @@ function WorkspaceMemoryPanel({
   loading: boolean;
   memoryTypes: ResearchProfile['memory']['types'];
   nowMs: number;
-  nodes: HoneycrispMemorySummary['nodes'];
+  nodes: AppServerMemorySummary['nodes'];
   onOpen: (nodeId: string) => void;
   profileId?: string | null;
   sessionHeatPreferences: SessionHeatPreferences;
@@ -1100,7 +1100,7 @@ function WorkspaceMemoryTypeSection({
   const typeLabel = group.nodes.length === 1
     ? definition?.name ?? fallbackLabel
     : definition?.pluralName ?? workspaceMemoryTypePluralLabel(fallbackLabel);
-  const renderNode = (node: HoneycrispMemorySummary['nodes'][number]): JSX.Element => (
+  const renderNode = (node: AppServerMemorySummary['nodes'][number]): JSX.Element => (
     <MemoryCatalogItem
       key={node.id}
       node={node}
@@ -1152,8 +1152,8 @@ function WorkspaceClaimsPanel({
   selectedClaimId,
   workspaceName
 }: {
-  findings: HoneycrispMemorySummary['findings'];
-  leads: HoneycrispMemorySummary['leads'];
+  findings: AppServerMemorySummary['findings'];
+  leads: AppServerMemorySummary['leads'];
   loading: boolean;
   nowMs: number;
   onOpen: (claimId: string) => void;
@@ -1202,7 +1202,7 @@ function WorkspaceRunbooksPanel({
   hidden: boolean;
   loading: boolean;
   nowMs: number;
-  runbooks: HoneycrispMemorySummary['runbooks'];
+  runbooks: AppServerMemorySummary['runbooks'];
   onOpen: (runbookId: string) => void;
   workspaceName: string;
 }): JSX.Element {
@@ -1236,7 +1236,7 @@ function WorkspaceRunbooksPanel({
 function WorkspaceUtilitiesPanel({
   busy,
   hidden,
-  honeycrispMemory,
+  appServerMemory,
   memoryDreamingInProgress,
   memoryDreamingProgress,
   memoryBackend,
@@ -1251,7 +1251,7 @@ function WorkspaceUtilitiesPanel({
 }: {
   busy: boolean;
   hidden: boolean;
-  honeycrispMemory: HoneycrispMemorySummary | null;
+  appServerMemory: AppServerMemorySummary | null;
   memoryDreamingInProgress: boolean;
   memoryDreamingProgress: MemoryDreamingProgressUpdate | null;
   memoryBackend: WorkspaceMemoryBackendId;
@@ -1265,11 +1265,11 @@ function WorkspaceUtilitiesPanel({
   workspaceName: string;
 }): JSX.Element {
   const memoryEnabled = memoryBackend !== 'disabled' && researchProfile?.capabilities.memoryEnabled !== false;
-  const memoryLoading = honeycrispMemory?.loading === true;
-  const dreamDisabled = busy || memoryDreamingInProgress || memoryLoading || !memoryEnabled || honeycrispMemory?.dreaming.available === false;
+  const memoryLoading = appServerMemory?.loading === true;
+  const dreamDisabled = busy || memoryDreamingInProgress || memoryLoading || !memoryEnabled || appServerMemory?.dreaming.available === false;
   const dreamProgressPhase = memoryDreamingProgress?.phase ?? (memoryDreamingInProgress ? 'preparing' : null);
   const dreamProgressLabel = dreamProgressPhase ? memoryDreamingProgressLabel(dreamProgressPhase) : null;
-  const memoriesSinceDream = memoryCountSinceLastDream(honeycrispMemory);
+  const memoriesSinceDream = memoryCountSinceLastDream(appServerMemory);
   const newFileCount = workspaceDejunk?.newFileCount ?? 0;
   const activeSession = runs.some(({ run }) => isLiveResearchRunStatus(run.status));
   const dejunkLoading = workspaceDejunk?.loading === true;
@@ -1348,7 +1348,7 @@ function WorkspaceRemovalForm({
       <span className="settings-form-control-copy">
         <strong>Remove Workspace</strong>
         <small>
-          Unregisters this workspace from Beale only. Directories, .beale metadata, repository clones, scoped resources, and Honeycrisp memory remain on disk.
+          Unregisters this workspace from Beale only. Directories, .beale metadata, repository clones, scoped resources, and app-server memory remain on disk.
         </small>
       </span>
       <div className="workspace-removal-controls">
@@ -1401,7 +1401,7 @@ export function WorkspaceHousekeepingPanel({
   workspaceDejunkInProgress = false,
   memoryDreamingInProgress,
   memoryDreamingProgress = null,
-  honeycrispMemory,
+  appServerMemory,
   researchProfile = null,
   runs,
   onRunWorkspaceDejunk = () => undefined,
@@ -1412,18 +1412,18 @@ export function WorkspaceHousekeepingPanel({
   workspaceDejunkInProgress?: boolean;
   memoryDreamingInProgress: boolean;
   memoryDreamingProgress?: MemoryDreamingProgressUpdate | null;
-  honeycrispMemory: HoneycrispMemorySummary | null;
+  appServerMemory: AppServerMemorySummary | null;
   researchProfile?: ResearchProfile | null;
   runs: RunRow[];
   onRunWorkspaceDejunk?: () => void;
   onRunMemoryDreaming: () => void;
 }): JSX.Element {
   const memoryEnabled = researchProfile?.capabilities.memoryEnabled !== false;
-  const memoryLoading = honeycrispMemory?.loading === true;
-  const dreamDisabled = busy || memoryDreamingInProgress || memoryLoading || !memoryEnabled || honeycrispMemory?.dreaming.available === false;
+  const memoryLoading = appServerMemory?.loading === true;
+  const dreamDisabled = busy || memoryDreamingInProgress || memoryLoading || !memoryEnabled || appServerMemory?.dreaming.available === false;
   const dreamProgressPhase = memoryDreamingProgress?.phase ?? (memoryDreamingInProgress ? 'preparing' : null);
   const dreamProgressLabel = dreamProgressPhase ? memoryDreamingProgressLabel(dreamProgressPhase) : null;
-  const memoriesSinceDream = memoryCountSinceLastDream(honeycrispMemory);
+  const memoriesSinceDream = memoryCountSinceLastDream(appServerMemory);
   const dreamHeat = memoryDreamHeat(memoriesSinceDream);
   const newFileCount = workspaceDejunk?.newFileCount ?? 0;
   const dejunkHeat = workspaceDejunkHeat(newFileCount);
@@ -1504,7 +1504,7 @@ interface WorkspaceResearchSurfaceItem {
 export function workspaceResearchSurfaceItems(
   assets: readonly ScopeAsset[],
   runs: readonly RunRow[],
-  memory: HoneycrispMemorySummary | null | undefined
+  memory: AppServerMemorySummary | null | undefined
 ): WorkspaceResearchSurfaceItem[] {
   const assetGroups = new Map<string, ScopeAsset[]>();
   for (const asset of assets) {
@@ -1602,7 +1602,7 @@ export function workspaceResearchSurfaceKinds(items: readonly WorkspaceResearchS
 function WorkspaceResearchSurface({
   activeScope,
   hidden,
-  honeycrispMemory,
+  appServerMemory,
   nowMs,
   runs,
   onAddResource,
@@ -1612,7 +1612,7 @@ function WorkspaceResearchSurface({
 }: {
   activeScope: WorkspaceScopeVersion | null;
   hidden: boolean;
-  honeycrispMemory: HoneycrispMemorySummary | null;
+  appServerMemory: AppServerMemorySummary | null;
   nowMs: number;
   runs: RunRow[];
   onAddResource: (asset: ScopeAssetInput) => Promise<void>;
@@ -1621,8 +1621,8 @@ function WorkspaceResearchSurface({
   workspaceName: string;
 }): JSX.Element {
   const items = useMemo(
-    () => workspaceResearchSurfaceItems(activeScope?.assets ?? [], runs, honeycrispMemory),
-    [activeScope?.assets, honeycrispMemory, runs]
+    () => workspaceResearchSurfaceItems(activeScope?.assets ?? [], runs, appServerMemory),
+    [activeScope?.assets, appServerMemory, runs]
   );
   const resourceActivity = useMemo(
     () => workspaceCreationActivity(items.map((item) => item.asset), nowMs),
@@ -2189,7 +2189,7 @@ function formatSurfaceRecency(value: string, nowMs: number): string {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(Date.parse(value));
 }
 
-export function memoryCountSinceLastDream(memory: HoneycrispMemorySummary | null | undefined): number {
+export function memoryCountSinceLastDream(memory: AppServerMemorySummary | null | undefined): number {
   if (!memory || memory.status === 'missing' || memory.status === 'error') return 0;
   const lastDreamAt = Date.parse(memory.dreaming.lastRun?.completedAt ?? '');
   if (!Number.isFinite(lastDreamAt)) return memory.nodes.length;

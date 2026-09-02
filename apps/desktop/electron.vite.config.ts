@@ -10,7 +10,7 @@ export default defineConfig({
         '@main': resolve(__dirname, 'src/main')
       }
     },
-    plugins: [externalizeDepsPlugin({ exclude: ['honeycrisp'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@beale/app-server-runtime', '@beale/research-agent'] })],
     build: {
       rollupOptions: {
         input: {

@@ -5,13 +5,13 @@ import {
   nativeCommentaryCorrelationKeys
 } from './commentaryCorrelation';
 import {
-  honeycrispToolEventKind,
-  honeycrispToolName,
-  honeycrispToolPayload,
-  honeycrispToolPairingKey,
+  appServerToolEventKind,
+  appServerToolName,
+  appServerToolPayload,
+  appServerToolPairingKey,
   tracePayloadArray
 } from '../traceClassification';
-import { honeycrispToolTraceSubtext } from './traceContent';
+import { appServerToolTraceSubtext } from './traceContent';
 import type { TraceDisplayEvent } from './traceDisplay';
 import { compactUserPath } from '../lib/paths';
 
@@ -65,7 +65,7 @@ export function commentaryMessagesForSession(
   const includeInitialPrompt = options.includeInitialPrompt ?? true;
   const nativeCommentaryKeys = nativeCommentaryCorrelationKeys(events);
   const projectedEvents = coalesceLegacyReasoningSnapshots(events);
-  const toolCallsByPrimaryEventId = projectedHoneycrispToolCalls(
+  const toolCallsByPrimaryEventId = projectedAppServerToolCalls(
     projectedEvents,
     detail,
     options.repositoryMetadata ?? []
@@ -133,7 +133,7 @@ function appendRecoveryErrorFallback(
     id: `recovery-error:${recoveryEvent.id}`,
     traceEventId: recoveryEvent.id,
     kind: 'error',
-    contentMarkdown: HONEYCRISP_UNEXPECTED_ERROR_TEXT,
+    contentMarkdown: APP_SERVER_UNEXPECTED_ERROR_TEXT,
     createdAt: recoveryEvent.createdAt
   }];
 }
@@ -194,15 +194,15 @@ function commentaryMessageKind(
 
   if (role === 'user') return 'user';
   if (role !== 'assistant') return null;
-  if (payloadString(event, 'finalResultKind') === 'error' || legacyHoneycrispFinalErrorText(event)) return 'error';
-  if (source === 'honeycrisp_commentary') return 'commentary';
+  if (payloadString(event, 'finalResultKind') === 'error' || legacyAppServerFinalErrorText(event)) return 'error';
+  if (source === 'app_server_commentary') return 'commentary';
   if (source === 'openai_reasoning_summary') {
     const key = commentaryMessageCorrelationKey(event);
     if (key && nativeCommentaryKeys.has(key)) return null;
     return payloadString(event, 'provider') === 'xai' ? 'commentary' : 'progress';
   }
   if (phase === 'commentary') return 'commentary';
-  if (phase === 'final_answer' || source === 'honeycrisp') return 'final_answer';
+  if (phase === 'final_answer' || source === 'app-server') return 'final_answer';
   return 'final_answer';
 }
 
@@ -232,7 +232,7 @@ function toolUsageMessage(
 ): CommentaryMessage | null {
   const toolCall = toolCallsByPrimaryEventId.get(event.id);
   if (!toolCall) return null;
-  const toolName = honeycrispToolName(event);
+  const toolName = appServerToolName(event);
   if (!toolName || LIFECYCLE_TOOL_NAMES.has(toolName)) return null;
   return {
     id: `tool:${event.id}`,
@@ -252,7 +252,7 @@ interface MutableToolCallProjection {
   observationEvent: TraceDisplayEvent | null;
 }
 
-function projectedHoneycrispToolCalls(
+function projectedAppServerToolCalls(
   events: readonly TraceDisplayEvent[],
   detail: RunDetail,
   repositoryMetadata: readonly CommentaryRepositoryMetadata[]
@@ -260,8 +260,8 @@ function projectedHoneycrispToolCalls(
   const projections: MutableToolCallProjection[] = [];
   const requestedByKey = new Map<string, MutableToolCallProjection[]>();
   for (const event of events) {
-    const kind = honeycrispToolEventKind(event);
-    const pairingKey = honeycrispToolPairingKey(event);
+    const kind = appServerToolEventKind(event);
+    const pairingKey = appServerToolPairingKey(event);
     if (!kind) continue;
     if (kind === 'tool.requested') {
       const projection: MutableToolCallProjection = {
@@ -301,16 +301,16 @@ function commentaryToolCall(
   detail: RunDetail,
   repositoryMetadata: readonly CommentaryRepositoryMetadata[] = []
 ): CommentaryToolCall {
-  const requestPayload = projection.requestEvent ? honeycrispToolPayload(projection.requestEvent) : null;
-  const observationPayload = projection.observationEvent ? honeycrispToolPayload(projection.observationEvent) : null;
-  const toolName = honeycrispToolName(projection.primaryEvent) ?? 'tool';
+  const requestPayload = projection.requestEvent ? appServerToolPayload(projection.requestEvent) : null;
+  const observationPayload = projection.observationEvent ? appServerToolPayload(projection.observationEvent) : null;
+  const toolName = appServerToolName(projection.primaryEvent) ?? 'tool';
   const input = recordValue(requestPayload ?? observationPayload, 'normalizedInputs') ?? {};
   const output = commentaryToolCallOutput(observationPayload);
   const observationLabel = projection.observationEvent
-    ? honeycrispToolTraceSubtext(projection.observationEvent, detail)
+    ? appServerToolTraceSubtext(projection.observationEvent, detail)
     : '';
   const requestLabel = projection.requestEvent
-    ? honeycrispToolTraceSubtext(projection.requestEvent, detail)
+    ? appServerToolTraceSubtext(projection.requestEvent, detail)
     : '';
   const repositorySearch = toolName === 'repository.search'
     ? commentaryRepositorySearchDetails(input, output, repositoryMetadata)
@@ -523,7 +523,7 @@ function commentaryRunbookCallLabel(
     .find((candidate): candidate is string => candidate !== null) ?? null;
   const runbookId = firstStringValue(input, ['id']);
   const catalogTitle = runbookId
-    ? detail.honeycrispMemory?.runbooks.find((runbook) => runbook.id === runbookId)?.title ?? null
+    ? detail.appServerMemory?.runbooks.find((runbook) => runbook.id === runbookId)?.title ?? null
     : null;
   const title = writtenTitle
     ?? firstStringValue(input, ['title'])
@@ -641,7 +641,7 @@ function commentaryMemoryCallLabel(
   const output = Object.keys(wrappedOutput).length > 0 ? wrappedOutput : rawOutput;
   const memoryId = firstStringValue(input, ['id']);
   const catalogMemory = memoryId
-    ? detail.honeycrispMemory?.nodes.find((memory) => memory.id === memoryId)
+    ? detail.appServerMemory?.nodes.find((memory) => memory.id === memoryId)
     : null;
   const memoryType = firstStringValue(output, ['type'])
     ?? firstStringValue(input, ['type'])
@@ -934,30 +934,30 @@ function commentaryMessageContentMarkdown(
   kind: CommentaryMessageKind | null
 ): string {
   const text = eventText(event);
-  return kind === 'error' ? honeycrispErrorDisplayText(text) ?? text : text;
+  return kind === 'error' ? appServerErrorDisplayText(text) ?? text : text;
 }
 
-const HONEYCRISP_UNEXPECTED_ERROR_TEXT = 'Unexpected error';
+const APP_SERVER_UNEXPECTED_ERROR_TEXT = 'Unexpected error';
 
-function legacyHoneycrispFinalErrorText(event: TraceDisplayEvent): string | null {
-  if (payloadString(event, 'transcriptSource') !== 'honeycrisp') return null;
+function legacyAppServerFinalErrorText(event: TraceDisplayEvent): string | null {
+  if (payloadString(event, 'transcriptSource') !== 'app-server') return null;
   const phase = payloadString(event, 'messagePhase');
   if (phase && phase !== 'final_answer') return null;
-  return honeycrispErrorDisplayText(eventText(event));
+  return appServerErrorDisplayText(eventText(event));
 }
 
-function honeycrispErrorDisplayText(value: string): string | null {
+function appServerErrorDisplayText(value: string): string | null {
   const trimmed = value.replace(/\s+/g, ' ').trim();
   if (!trimmed) return null;
   const stripped = trimmed
     .replace(/^research agent failed:\s*/i, '')
-    .replace(/^honeycrisp process failed:\s*/i, '')
-    .replace(/^honeycrisp process finished with agent status\s*/i, '')
+    .replace(/^appServer process failed:\s*/i, '')
+    .replace(/^appServer process finished with agent status\s*/i, '')
     .replace(/^agent status\s*/i, '')
     .trim();
   const generic = stripped.toLowerCase().replace(/[.]+$/, '');
   if (['terminated', 'unexpected error', 'error', 'failed', 'failure', 'unknown'].includes(generic)) {
-    return HONEYCRISP_UNEXPECTED_ERROR_TEXT;
+    return APP_SERVER_UNEXPECTED_ERROR_TEXT;
   }
   return stripped !== trimmed ? stripped : null;
 }

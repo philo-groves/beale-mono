@@ -66,7 +66,7 @@ const workspace = {
 
 const session = {
   id: 'session_parser', registryWorkspaceId: workspace.id, workspacePath: workspace.workspacePath, workspaceId: workspace.workspaceId,
-  runId: 'run_parser', title: 'Parser investigation', status: 'completed', runEngine: 'honeycrisp', mode: 'dynamic',
+  runId: 'run_parser', title: 'Parser investigation', status: 'completed', runEngine: 'app-server', mode: 'dynamic',
   promptMarkdown: 'Investigate parser.', summary: 'Complete.', finalDisposition: null, model: 'gpt-5.6-sol', reasoningEffort: 'high',
   sandboxProfile: 'host', createdAt: '2026-08-24T00:00:00.000Z', startedAt: null, endedAt: null,
   updatedAt: '2026-08-24T00:00:00.000Z', resultViewedAt: null, archivedAt: '2026-08-24T01:00:00.000Z'

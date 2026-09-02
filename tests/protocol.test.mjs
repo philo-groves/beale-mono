@@ -18,33 +18,33 @@ import {
   decodeBealeAppServerSessionStartResult,
   decodeBealeAppServerSessionStopResult,
   decodeBealeAppServerShutdownResult,
-  decodeHoneycrispProtocolEnvelope,
-  decodeHoneycrispSessionLaunchRequest,
-  decodeHoneycrispServerMessage,
-  HONEYCRISP_PROTOCOL_OPERATIONS,
-  HONEYCRISP_PROTOCOL_VERSION,
-  HONEYCRISP_SESSION_LAUNCH_VERSION,
-  honeycrispProtocolFailure,
-  honeycrispProtocolDescriptor,
-  honeycrispProtocolSuccess,
-  parseHoneycrispProtocolArguments,
-} from "../packages/honeycrisp-host/dist/protocol.js";
+  decodeAppServerProtocolEnvelope,
+  decodeAppServerSessionLaunchRequest,
+  decodeAppServerServerMessage,
+  APP_SERVER_PROTOCOL_OPERATIONS,
+  APP_SERVER_PROTOCOL_VERSION,
+  APP_SERVER_SESSION_LAUNCH_VERSION,
+  appServerProtocolFailure,
+  appServerProtocolDescriptor,
+  appServerProtocolSuccess,
+  parseAppServerProtocolArguments,
+} from "../packages/app-server-runtime/dist/protocol.js";
 
 test("protocol envelopes are versioned, correlated, and strictly decoded", () => {
-  const success = honeycrispProtocolSuccess("protocol.describe", { available: true }, "request-1");
-  assert.deepEqual(decodeHoneycrispProtocolEnvelope(success), success);
+  const success = appServerProtocolSuccess("protocol.describe", { available: true }, "request-1");
+  assert.deepEqual(decodeAppServerProtocolEnvelope(success), success);
 
-  const failure = honeycrispProtocolFailure("protocol.describe", "unavailable", "Protocol discovery is unavailable.");
-  assert.deepEqual(decodeHoneycrispProtocolEnvelope(failure), failure);
+  const failure = appServerProtocolFailure("protocol.describe", "unavailable", "Protocol discovery is unavailable.");
+  assert.deepEqual(decodeAppServerProtocolEnvelope(failure), failure);
   assert.throws(
-    () => decodeHoneycrispProtocolEnvelope({ ...success, protocolVersion: 2 }),
+    () => decodeAppServerProtocolEnvelope({ ...success, protocolVersion: 2 }),
     /Invalid or unsupported/,
   );
 });
 
 test("protocol describe exposes a runtime-bound v13 report-catalog contract for app-server and WebSocket clients", () => {
-  const descriptor = honeycrispProtocolDescriptor();
-  assert.deepEqual(descriptor.operations, HONEYCRISP_PROTOCOL_OPERATIONS);
+  const descriptor = appServerProtocolDescriptor();
+  assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
   assert.equal(descriptor.contractVersion, 13);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 11);
@@ -61,15 +61,15 @@ test("protocol describe exposes a runtime-bound v13 report-catalog contract for 
   assert.ok(descriptor.capabilities.includes("workspace.channels.v2"));
   assert.ok(descriptor.capabilities.includes("workspace.goal-suggestions.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.prompt-expansion.v1"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("channel.list"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("channel.share"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("suggestion.generate"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("suggestion.select"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("prompt.expand"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.list"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.revise_content"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.update_triage_status"));
-  assert.ok(HONEYCRISP_PROTOCOL_OPERATIONS.includes("report.replace_recording"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("channel.list"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("channel.share"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.generate"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.select"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("prompt.expand"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.list"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.revise_content"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.update_triage_status"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.replace_recording"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-content-revise.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-triage-status.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-recording-replace.v1"));
@@ -94,14 +94,14 @@ test("protocol describe exposes a runtime-bound v13 report-catalog contract for 
 
 test("protocol argument and WebSocket DTO decoders share correlation and error semantics", () => {
   assert.deepEqual(
-    parseHoneycrispProtocolArguments(["protocol", "describe", "--request-id", "request-2", "--json"]),
+    parseAppServerProtocolArguments(["protocol", "describe", "--request-id", "request-2", "--json"]),
     { args: ["protocol", "describe", "--json"], requestId: "request-2" },
   );
   assert.throws(
-    () => parseHoneycrispProtocolArguments(["--request-id", "one", "--request-id", "two"]),
+    () => parseAppServerProtocolArguments(["--request-id", "one", "--request-id", "two"]),
     /only be provided once/,
   );
-  assert.deepEqual(decodeHoneycrispServerMessage({
+  assert.deepEqual(decodeAppServerServerMessage({
     protocolVersion: 1,
     type: "protocol.error",
     sessionId: "session-1",
@@ -113,16 +113,16 @@ test("protocol argument and WebSocket DTO decoders share correlation and error s
 
 test("the typed session launch carries an OpenAI Fast mode preference", () => {
   const request = {
-    launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+    launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
     launch: {
       workspaceId: "workspace-example",
       promptMarkdown: "Inspect the parser boundary.",
       provider: { id: "openai-codex", model: "gpt-5.6-sol", fastMode: true },
     },
   };
-  assert.deepEqual(decodeHoneycrispSessionLaunchRequest(request), request);
+  assert.deepEqual(decodeAppServerSessionLaunchRequest(request), request);
   assert.throws(
-    () => decodeHoneycrispSessionLaunchRequest({
+    () => decodeAppServerSessionLaunchRequest({
       ...request,
       launch: { ...request.launch, provider: { ...request.launch.provider, fastMode: "yes" } },
     }),
@@ -139,8 +139,8 @@ test("app-server control DTOs share strict version, route, replay, and error sem
   };
   const descriptor = {
     ...health,
-    sessionLaunchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
-    honeycrispProtocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+    sessionLaunchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
+    appServerProtocolVersion: APP_SERVER_PROTOCOL_VERSION,
     endpoints: {
       sessions: BEALE_APP_SERVER_SESSIONS_PATH,
       workspaces: BEALE_APP_SERVER_WORKSPACES_PATH,
@@ -192,7 +192,7 @@ test("app-server control DTOs share strict version, route, replay, and error sem
     attemptId: "attempt-1",
     transport: {
       path: "/v1/sessions/session-1/transport",
-      protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+      protocolVersion: APP_SERVER_PROTOCOL_VERSION,
       authentication: "bearer",
       token: "session-token",
       reconnect: "replay",

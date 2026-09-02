@@ -21,7 +21,7 @@ export function recordModelAuthorship(
   const model = author.model.trim();
   if (!provider || !model) return;
   database.prepare(`
-    INSERT OR IGNORE INTO honeycrisp_model_authorship (
+    INSERT OR IGNORE INTO app_server_model_authorship (
       resource_kind, resource_id, revision, provider, model, created_at
     ) VALUES (?, ?, ?, ?, ?, ?)
   `).run(resourceKind, resourceId, revision, provider, model, createdAt);
@@ -35,7 +35,7 @@ export function moveModelAuthorship(
 ): void {
   if (previousId === nextId || !modelAuthorshipTableExists(database)) return;
   database.prepare(`
-    UPDATE honeycrisp_model_authorship
+    UPDATE app_server_model_authorship
     SET resource_id = ?
     WHERE resource_kind = ? AND resource_id = ?
   `).run(nextId, resourceKind, previousId);
@@ -61,7 +61,7 @@ export function modelAuthorsByResource(
     const batch = ids.slice(offset, offset + 400);
     const rows = database.prepare(`
       SELECT resource_id, provider, model, MIN(created_at) AS first_authored_at
-      FROM honeycrisp_model_authorship
+      FROM app_server_model_authorship
       WHERE resource_kind = ? AND resource_id IN (${batch.map(() => "?").join(",")})
       GROUP BY resource_id, provider, model
       ORDER BY first_authored_at, provider, model
@@ -77,6 +77,6 @@ export function modelAuthorsByResource(
 
 export function modelAuthorshipTableExists(database: DatabaseSync): boolean {
   return Boolean(database.prepare(
-    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_model_authorship'",
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'app_server_model_authorship'",
   ).get());
 }

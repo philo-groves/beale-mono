@@ -53,7 +53,7 @@ test("MCP skill metadata converts to selectable skill descriptors", () => {
 });
 
 async function createSkillFixture() {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-skills-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-skills-"));
   const skillDir = join(root, "vuln-research");
   await mkdir(skillDir, { recursive: true });
   await writeFile(

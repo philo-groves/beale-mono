@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PassThrough } from "node:stream";
-import { HoneycrispControlStream } from "../packages/honeycrisp-host/dist/control-stream.js";
+import { AppServerControlStream } from "../packages/app-server-runtime/dist/control-stream.js";
 
 test("control stream queues steering and holds it while paused", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
 
   input.write(`${JSON.stringify({ schemaVersion: 1, type: "pause" })}\n`);
@@ -34,7 +34,7 @@ test("control stream queues steering and holds it while paused", async () => {
 test("control stream rejects malformed messages without closing", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
 
   input.write("not-json\n");
@@ -50,7 +50,7 @@ test("control stream rejects malformed messages without closing", async () => {
 
 test("control stream retains the latest model selection from steering", async () => {
   const input = new PassThrough();
-  const controls = new HoneycrispControlStream(input);
+  const controls = new AppServerControlStream(input);
   controls.start();
 
   input.write(`${JSON.stringify({
@@ -74,7 +74,7 @@ test("control stream retains the latest model selection from steering", async ()
 test("control stream exposes a stop signal for the complete agent tree", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
 
   assert.equal(controls.signal.aborted, false);
@@ -93,7 +93,7 @@ test("control stream validates and dispatches runbook execution requests", async
   const input = new PassThrough();
   const events = [];
   const requests = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.setRunbookExecutionHandler(async (request) => {
     requests.push(request);
   });
@@ -121,7 +121,7 @@ test("control stream validates and dispatches runbook execution requests", async
 test("control stream configures safety and correlates concurrent shell approvals", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
 
   input.write(JSON.stringify({
@@ -181,7 +181,7 @@ test("control stream configures safety and correlates concurrent shell approvals
 
 test("control stream denies pending shell approvals on EOF and close", async () => {
   const endedInput = new PassThrough();
-  const endedControls = new HoneycrispControlStream(endedInput);
+  const endedControls = new AppServerControlStream(endedInput);
   endedControls.start();
   const endedApproval = endedControls.waitForShellApproval("approval-eof");
   endedInput.end();
@@ -189,7 +189,7 @@ test("control stream denies pending shell approvals on EOF and close", async () 
   endedControls.close();
 
   const closedInput = new PassThrough();
-  const closedControls = new HoneycrispControlStream(closedInput);
+  const closedControls = new AppServerControlStream(closedInput);
   closedControls.start();
   const closedApproval = closedControls.waitForShellApproval("approval-close");
   closedControls.close();
@@ -201,7 +201,7 @@ test("control stream denies pending shell approvals on EOF and close", async () 
 test("control stream correlates host decisions for computer-use approvals", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
   const waiting = controls.waitForToolApproval("tool-approval-1");
   input.write(JSON.stringify({
@@ -224,7 +224,7 @@ test("control stream correlates host decisions for computer-use approvals", asyn
 test("control stream wakes safeguard steering waits and correlates accepted controls", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
 
   const waiting = controls.waitForSteeringInstructions();
@@ -249,7 +249,7 @@ test("control stream wakes safeguard steering waits and correlates accepted cont
 test("control stream re-acknowledges reconnect retries without applying a control twice", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
 
   const message = {
@@ -277,7 +277,7 @@ test("control stream re-acknowledges reconnect retries without applying a contro
 test("control stream correlates rejected controls and does not wait after input EOF", async () => {
   const input = new PassThrough();
   const events = [];
-  const controls = new HoneycrispControlStream(input, (event) => events.push(event));
+  const controls = new AppServerControlStream(input, (event) => events.push(event));
   controls.start();
 
   input.write(`${JSON.stringify({

@@ -2,9 +2,9 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type {
-  HoneycrispProviderAuthenticationMethod,
-  HoneycrispProviderRiskAcknowledgement
-} from 'honeycrisp/protocol';
+  AppServerProviderAuthenticationMethod,
+  AppServerProviderRiskAcknowledgement
+} from '@beale/app-server-runtime/protocol';
 import type { AppServerMemoryBackendId } from './hostRegistry.js';
 
 const DEFAULT_TOOL_MAX_BYTES = 200_000;
@@ -22,7 +22,7 @@ const PROFILE_TOOL_FAMILY_CEILING_ALLOWED = new Set([
 const PROFILE_SIDE_EFFECT_CEILING_DEFAULT = ['none', 'read', 'write', 'process'] as const;
 const PROFILE_SIDE_EFFECT_CEILING_ALLOWED = new Set(PROFILE_SIDE_EFFECT_CEILING_DEFAULT);
 
-const RISK_ACKNOWLEDGEMENT_FLAGS: Record<HoneycrispProviderRiskAcknowledgement, string> = {
+const RISK_ACKNOWLEDGEMENT_FLAGS: Record<AppServerProviderRiskAcknowledgement, string> = {
   'openai-codex': '--openai-trusted-access-cyber-risk-acknowledged',
   anthropic: '--anthropic-cvp-risk-acknowledged',
   xai: '--xai-policy-risk-acknowledged',
@@ -30,12 +30,12 @@ const RISK_ACKNOWLEDGEMENT_FLAGS: Record<HoneycrispProviderRiskAcknowledgement, 
   openrouter: '--openrouter-policy-risk-acknowledged'
 };
 
-export interface PreparedHoneycrispSessionLaunch {
+export interface PreparedAppServerSessionLaunch {
   args: string[];
   env: NodeJS.ProcessEnv;
 }
 
-export interface ResolvedHoneycrispSessionLaunch {
+export interface ResolvedAppServerSessionLaunch {
   workspaceRoot: string;
   workspaceDirectories: readonly string[];
   capturePath: string;
@@ -48,8 +48,8 @@ export interface ResolvedHoneycrispSessionLaunch {
     model?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-    riskAcknowledgements: readonly HoneycrispProviderRiskAcknowledgement[];
-    authenticationPreferences: Readonly<Record<string, HoneycrispProviderAuthenticationMethod>>;
+    riskAcknowledgements: readonly AppServerProviderRiskAcknowledgement[];
+    authenticationPreferences: Readonly<Record<string, AppServerProviderAuthenticationMethod>>;
     title?: { model?: string; effort: string };
     shellReview?: { models: Readonly<Record<string, string>>; effort: string };
   };
@@ -78,25 +78,25 @@ export interface ResolvedHoneycrispSessionLaunch {
 }
 
 /**
- * The sole mapping from the versioned app-server launch DTO to Honeycrisp's
+ * The sole mapping from the versioned app-server launch DTO to app-server's
  * hosted runtime arguments and worker environment. Mobile and desktop clients never construct
  * transport or runtime-policy flags themselves.
  */
-export function prepareHoneycrispSessionLaunch(
-  launch: ResolvedHoneycrispSessionLaunch,
+export function prepareAppServerSessionLaunch(
+  launch: ResolvedAppServerSessionLaunch,
   environment: NodeJS.ProcessEnv = process.env
-): PreparedHoneycrispSessionLaunch {
+): PreparedAppServerSessionLaunch {
   return {
-    args: honeycrispSessionArgs(launch, environment),
-    env: honeycrispSessionEnvironment(launch, environment)
+    args: appServerSessionArgs(launch, environment),
+    env: appServerSessionEnvironment(launch, environment)
   };
 }
 
-export function honeycrispSessionArgs(
-  launch: ResolvedHoneycrispSessionLaunch,
+export function appServerSessionArgs(
+  launch: ResolvedAppServerSessionLaunch,
   environment: NodeJS.ProcessEnv = process.env
 ): string[] {
-  const provider = environment.BEALE_HONEYCRISP_PROVIDER?.trim() || launch.provider.id.trim();
+  const provider = environment.BEALE_APP_SERVER_PROVIDER?.trim() || launch.provider.id.trim();
   if (!provider) throw new Error('provider.id must be non-empty.');
 
   const args = [
@@ -123,8 +123,8 @@ export function honeycrispSessionArgs(
     args.push('--goal');
     if (launch.goal.objective) args.push('--goal-objective', launch.goal.objective);
   }
-  if (enabled(environment.BEALE_HONEYCRISP_MOCK)) args.push('--mock');
-  const configPath = environment.BEALE_HONEYCRISP_CONFIG?.trim();
+  if (enabled(environment.BEALE_APP_SERVER_MOCK)) args.push('--mock');
+  const configPath = environment.BEALE_APP_SERVER_CONFIG?.trim();
   if (configPath) args.push('--config', configPath);
 
   args.push('--provider', provider);
@@ -166,20 +166,20 @@ export function honeycrispSessionArgs(
   if (!launch.profileAware && launch.memoryTypeDescriptions) {
     args.push('--memory-type-descriptions', JSON.stringify(launch.memoryTypeDescriptions));
   }
-  args.push('--tool-max-bytes', String(positiveInteger(environment.BEALE_HONEYCRISP_TOOL_MAX_BYTES) ?? DEFAULT_TOOL_MAX_BYTES));
+  args.push('--tool-max-bytes', String(positiveInteger(environment.BEALE_APP_SERVER_TOOL_MAX_BYTES) ?? DEFAULT_TOOL_MAX_BYTES));
   return args;
 }
 
-export function honeycrispSessionEnvironment(
-  launch: ResolvedHoneycrispSessionLaunch,
+export function appServerSessionEnvironment(
+  launch: ResolvedAppServerSessionLaunch,
   environment: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...environment,
     NO_COLOR: environment.NO_COLOR ?? '1',
-    HONEYCRISP_DATABASE_PATH: launch.storage.databasePath,
-    HONEYCRISP_ARTIFACT_DIRECTORY: launch.storage.artifactDirectoryPath,
-    HONEYCRISP_PROVIDER_AUTH_PREFERENCES: JSON.stringify({
+    APP_SERVER_DATABASE_PATH: launch.storage.databasePath,
+    APP_SERVER_ARTIFACT_DIRECTORY: launch.storage.artifactDirectoryPath,
+    APP_SERVER_PROVIDER_AUTH_PREFERENCES: JSON.stringify({
       'openai-codex': launch.provider.authenticationPreferences?.['openai-codex'] ?? 'subscription',
       anthropic: launch.provider.authenticationPreferences?.anthropic ?? 'subscription',
       xai: launch.provider.authenticationPreferences?.xai ?? 'subscription',
@@ -191,19 +191,19 @@ export function honeycrispSessionEnvironment(
     env.BEALE_INTROSPECTION_URL = launch.introspection.url;
     env.BEALE_INTROSPECTION_TOKEN = launch.introspection.token;
   }
-  if (!env.HONEYCRISP_CODEX_AUTH_FILE?.trim()) {
-    const codexAuthFile = resolveHoneycrispCodexAuthFile(environment);
-    if (codexAuthFile) env.HONEYCRISP_CODEX_AUTH_FILE = codexAuthFile;
+  if (!env.APP_SERVER_CODEX_AUTH_FILE?.trim()) {
+    const codexAuthFile = resolveAppServerCodexAuthFile(environment);
+    if (codexAuthFile) env.APP_SERVER_CODEX_AUTH_FILE = codexAuthFile;
   }
   return env;
 }
 
-export function resolveHoneycrispCodexAuthFile(
+export function resolveAppServerCodexAuthFile(
   environment: NodeJS.ProcessEnv = process.env,
   userHome = homedir()
 ): string | undefined {
-  const honeycrispPath = environment.HONEYCRISP_CODEX_AUTH_FILE?.trim();
-  if (honeycrispPath) return resolve(honeycrispPath.replace(/^~(?=$|[\\/])/, userHome));
+  const appServerPath = environment.APP_SERVER_CODEX_AUTH_FILE?.trim();
+  if (appServerPath) return resolve(appServerPath.replace(/^~(?=$|[\\/])/, userHome));
   const configured = environment.BEALE_OPENAI_CODEX_AUTH_FILE?.trim();
   const candidate = resolve(configured
     ? configured.replace(/^~(?=$|[\\/])/, userHome)
@@ -211,7 +211,7 @@ export function resolveHoneycrispCodexAuthFile(
   return existsSync(candidate) ? candidate : undefined;
 }
 
-function appendPluginRuntimeArgs(args: string[], launch: ResolvedHoneycrispSessionLaunch): void {
+function appendPluginRuntimeArgs(args: string[], launch: ResolvedAppServerSessionLaunch): void {
   const runtime = launch.pluginRuntime;
   if (!runtime) return;
   for (const path of runtime.skillDirectories ?? []) args.push('--skill-dir', path);
@@ -225,14 +225,14 @@ function appendPluginRuntimeArgs(args: string[], launch: ResolvedHoneycrispSessi
 function capabilityArgs(profileAware: boolean, environment: NodeJS.ProcessEnv): string[] {
   if (profileAware) {
     const toolFamilies = parseCapabilityCeiling(
-      environment.BEALE_HONEYCRISP_PROFILE_TOOL_FAMILY_CEILING_JSON,
-      'BEALE_HONEYCRISP_PROFILE_TOOL_FAMILY_CEILING_JSON',
+      environment.BEALE_APP_SERVER_PROFILE_TOOL_FAMILY_CEILING_JSON,
+      'BEALE_APP_SERVER_PROFILE_TOOL_FAMILY_CEILING_JSON',
       PROFILE_TOOL_FAMILY_CEILING_DEFAULT,
       PROFILE_TOOL_FAMILY_CEILING_ALLOWED
     );
     const sideEffects = parseCapabilityCeiling(
-      environment.BEALE_HONEYCRISP_PROFILE_SIDE_EFFECT_CEILING_JSON,
-      'BEALE_HONEYCRISP_PROFILE_SIDE_EFFECT_CEILING_JSON',
+      environment.BEALE_APP_SERVER_PROFILE_SIDE_EFFECT_CEILING_JSON,
+      'BEALE_APP_SERVER_PROFILE_SIDE_EFFECT_CEILING_JSON',
       PROFILE_SIDE_EFFECT_CEILING_DEFAULT,
       PROFILE_SIDE_EFFECT_CEILING_ALLOWED
     );
@@ -287,11 +287,11 @@ function parseCapabilityCeiling(
 }
 
 function additionalRuntimeArgs(environment: NodeJS.ProcessEnv): string[] {
-  const raw = environment.BEALE_HONEYCRISP_RUNTIME_ARGS_JSON?.trim();
+  const raw = environment.BEALE_APP_SERVER_RUNTIME_ARGS_JSON?.trim();
   if (!raw) return [];
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== 'string' || !value)) {
-    throw new Error('BEALE_HONEYCRISP_RUNTIME_ARGS_JSON must be a JSON array of non-empty strings.');
+    throw new Error('BEALE_APP_SERVER_RUNTIME_ARGS_JSON must be a JSON array of non-empty strings.');
   }
   return parsed as string[];
 }

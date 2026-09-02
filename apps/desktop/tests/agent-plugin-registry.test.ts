@@ -50,13 +50,13 @@ describe('AgentPluginRegistry', () => {
     expect(removed.plugins).toHaveLength(0);
   });
 
-  it('builds Honeycrisp runtime arguments from enabled plugins', () => {
+  it('builds app-server runtime arguments from enabled plugins', () => {
     const registry = new AgentPluginRegistry(tempDir('beale-plugin-registry-'), { builtinPlugins: [] });
     const pluginRoot = validPluginRoot('filesystem-plugin');
 
     const installed = registry.addFromFilesystem(pluginRoot);
     const sourceRoot = installed.plugins[0].source.path;
-    const runtime = registry.getHoneycrispRuntime();
+    const runtime = registry.getAppServerRuntime();
     const mcpConfigPath = runtime.mcpConfigPath ?? '';
     const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf8')) as {
       servers: Record<string, { type: string; command: string; args: string[]; cwd: string; env: Record<string, string> }>;
@@ -88,7 +88,7 @@ describe('AgentPluginRegistry', () => {
     });
 
     registry.setEnabled(installed.plugins[0].id, false);
-    expect(registry.getHoneycrispRuntime()).toMatchObject({
+    expect(registry.getAppServerRuntime()).toMatchObject({
       skillDirs: [],
       selectedSkillIds: [],
       mcpConfigPath: null,
@@ -174,7 +174,7 @@ describe('AgentPluginRegistry', () => {
       }
     ]);
 
-    const runtime = registry.getHoneycrispRuntime();
+    const runtime = registry.getAppServerRuntime();
     expect(runtime.allowedMcpServers).toEqual(['beale-introspection.beale']);
     expect(runtime.mcpConfigPath).toBeTruthy();
     const mcpConfig = JSON.parse(readFileSync(runtime.mcpConfigPath ?? '', 'utf8')) as {
@@ -195,11 +195,11 @@ describe('AgentPluginRegistry', () => {
 
     const terminatorEnabled = registry.setEnabled(terminator!.id, true);
     expect(terminatorEnabled.plugins.find((candidate) => candidate.id === terminator!.id)?.enabled).toBe(true);
-    const computerRuntime = registry.getHoneycrispRuntime();
+    const computerRuntime = registry.getAppServerRuntime();
     expect(computerRuntime.allowedMcpServers).toContain('beale-terminator.computer-use');
   });
 
-  it('speaks Honeycrisp newline-delimited JSON-RPC over stdio', () => {
+  it('speaks app-server newline-delimited JSON-RPC over stdio', () => {
     const serverPath = builtinPluginServerPath('beale-introspection');
     const input = [
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },

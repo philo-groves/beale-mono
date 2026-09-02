@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { JSX } from 'react';
-import type { HoneycrispMemorySummary, ResearchProfileMemoryType, RunRow } from '@shared/types';
+import type { AppServerMemorySummary, ResearchProfileMemoryType, RunRow } from '@shared/types';
 import { displaySessionTitle } from '../../../shared/sessionTitle';
 import { Modal } from '../../app/Modal';
 import { buildSessionTimelineProjection, formatWorkspaceTimelineDuration } from '../../view-models/workspaceTimeline';
@@ -16,7 +16,7 @@ export function SessionOverviewDialog({
   run,
   sessionHeatPreferences
 }: {
-  memory: HoneycrispMemorySummary | null;
+  memory: AppServerMemorySummary | null;
   memoryTypes: readonly ResearchProfileMemoryType[];
   nowMs?: number;
   onClose: () => void;

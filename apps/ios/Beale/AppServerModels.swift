@@ -57,7 +57,7 @@ struct AppServerPairingPayload: Equatable, Sendable {
 enum BealeAppServerContract {
     static let controlVersion = 1
     static let sessionLaunchVersion = 2
-    static let honeycrispProtocolVersion = 1
+    static let appServerProtocolVersion = 1
     static let memoryNotificationSchemaVersion = 3
     static let workspaceMemorySchemaVersion = 3
 
@@ -105,7 +105,7 @@ struct AppServerHealth: Decodable, Sendable {
 
 struct AppServerDescriptor: Decodable, Sendable {
     let sessionLaunchVersion: Int
-    let honeycrispProtocolVersion: Int
+    let appServerProtocolVersion: Int
 
     func validateCompatibility() throws {
         guard sessionLaunchVersion == BealeAppServerContract.sessionLaunchVersion else {
@@ -113,9 +113,9 @@ struct AppServerDescriptor: Decodable, Sendable {
                 "Session launch version \(sessionLaunchVersion) is not supported by this app."
             )
         }
-        guard honeycrispProtocolVersion == BealeAppServerContract.honeycrispProtocolVersion else {
+        guard appServerProtocolVersion == BealeAppServerContract.appServerProtocolVersion else {
             throw AppServerClientError.incompatible(
-                "Honeycrisp protocol version \(honeycrispProtocolVersion) is not supported by this app."
+                "app-server protocol version \(appServerProtocolVersion) is not supported by this app."
             )
         }
     }
@@ -1036,7 +1036,7 @@ enum AppServerTranscriptProjection {
     }
 
     private static func nativeCommentaryKey(_ message: AppServerTranscriptMessage) -> String? {
-        guard message.source == "honeycrisp_commentary" || (
+        guard message.source == "app_server_commentary" || (
             message.role == "assistant"
                 && message.phase == "commentary"
                 && message.source != "openai_reasoning_summary"
@@ -1079,7 +1079,7 @@ enum AppServerTranscriptProjection {
     ) -> [AppServerTranscriptMessage] {
         var coalesced: [AppServerTranscriptMessage] = []
         for message in messages {
-            guard message.source == "honeycrisp_tool_summary",
+            guard message.source == "app_server_tool_summary",
                   let toolName = message.metadata?.toolName,
                   let previous = coalesced.last,
                   previous.source == message.source,
@@ -1172,7 +1172,7 @@ struct AppServerSessionStart: Decodable, Sendable {
         guard controlVersion == BealeAppServerContract.controlVersion,
               !attemptId.isEmpty,
               transport.path == "/v1/sessions/\(session.sessionId)/transport",
-              transport.protocolVersion == BealeAppServerContract.honeycrispProtocolVersion,
+              transport.protocolVersion == BealeAppServerContract.appServerProtocolVersion,
               transport.authentication == "bearer",
               !transport.token.isEmpty,
               transport.reconnect == "replay" else {

@@ -1,20 +1,20 @@
 import WebSocket, { type RawData } from 'ws';
 import {
-  HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX,
-  HONEYCRISP_PROTOCOL_VERSION,
-  decodeHoneycrispServerMessage,
-  honeycrispClientHello,
-  honeycrispSessionControl,
-  type HoneycrispTransportBootstrap
-} from './honeycrispProtocol';
+  APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX,
+  APP_SERVER_PROTOCOL_VERSION,
+  decodeAppServerServerMessage,
+  appServerClientHello,
+  appServerSessionControl,
+  type AppServerTransportBootstrap
+} from './appServerProtocol';
 
-export const HONEYCRISP_TRANSPORT_PREFIX = HONEYCRISP_PROTOCOL_BOOTSTRAP_PREFIX;
-export { parseHoneycrispTransportBootstrap } from './honeycrispProtocol';
-export type { HoneycrispTransportBootstrap } from './honeycrispProtocol';
+export const APP_SERVER_TRANSPORT_PREFIX = APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX;
+export { parseAppServerTransportBootstrap } from './appServerProtocol';
+export type { AppServerTransportBootstrap } from './appServerProtocol';
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 
-export interface HoneycrispWebSocketClientOptions {
-  bootstrap: HoneycrispTransportBootstrap;
+export interface AppServerWebSocketClientOptions {
+  bootstrap: AppServerTransportBootstrap;
   token: string;
   clientVersion: string;
   onEvent: (event: Record<string, unknown>) => void;
@@ -23,16 +23,16 @@ export interface HoneycrispWebSocketClientOptions {
   connectTimeoutMs?: number;
 }
 
-export class HoneycrispWebSocketClient {
+export class AppServerWebSocketClient {
   private socket: WebSocket | null = null;
   private ready = false;
   private closed = false;
 
-  public constructor(private readonly options: HoneycrispWebSocketClientOptions) {}
+  public constructor(private readonly options: AppServerWebSocketClientOptions) {}
 
   public connect(): Promise<void> {
-    if (this.socket) throw new Error('Honeycrisp WebSocket transport is already connecting.');
-    if (!this.options.token.trim()) throw new Error('Honeycrisp WebSocket transport token is missing.');
+    if (this.socket) throw new Error('app-server WebSocket transport is already connecting.');
+    if (!this.options.token.trim()) throw new Error('app-server WebSocket transport token is missing.');
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -50,12 +50,12 @@ export class HoneycrispWebSocketClient {
       this.socket = socket;
       const timeout = setTimeout(() => {
         socket.terminate();
-        settleError(new Error('Timed out waiting for the Honeycrisp WebSocket handshake.'));
+        settleError(new Error('Timed out waiting for the app-server WebSocket handshake.'));
       }, this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
       timeout.unref();
 
       socket.once('open', () => {
-        socket.send(JSON.stringify(honeycrispClientHello(
+        socket.send(JSON.stringify(appServerClientHello(
           this.options.bootstrap.sessionId,
           this.options.clientVersion
         )));
@@ -63,15 +63,15 @@ export class HoneycrispWebSocketClient {
       socket.on('message', (data) => {
         let message;
         try {
-          message = decodeHoneycrispServerMessage(JSON.parse(rawDataText(data)) as unknown);
+          message = decodeAppServerServerMessage(JSON.parse(rawDataText(data)) as unknown);
         } catch {
-          settleError(new Error('Honeycrisp sent an invalid WebSocket protocol message.'));
+          settleError(new Error('app-server sent an invalid WebSocket protocol message.'));
           socket.close(1002, 'invalid protocol message');
           return;
         }
-        if (message.protocolVersion !== HONEYCRISP_PROTOCOL_VERSION
+        if (message.protocolVersion !== APP_SERVER_PROTOCOL_VERSION
           || message.sessionId !== this.options.bootstrap.sessionId) {
-          settleError(new Error('Honeycrisp WebSocket protocol or session mismatch.'));
+          settleError(new Error('app-server WebSocket protocol or session mismatch.'));
           socket.close(1002, 'protocol or session mismatch');
           return;
         }
@@ -90,7 +90,7 @@ export class HoneycrispWebSocketClient {
         }
         if (message.type === 'protocol.error') {
           const detail = message.error.message;
-          settleError(new Error(`Honeycrisp WebSocket protocol error: ${detail}`));
+          settleError(new Error(`app-server WebSocket protocol error: ${detail}`));
         }
       });
       socket.on('error', (error) => settleError(error));
@@ -98,7 +98,7 @@ export class HoneycrispWebSocketClient {
         this.ready = false;
         this.socket = null;
         if (!this.closed && !settled) {
-          settleError(new Error(`Honeycrisp WebSocket closed before its handshake (code ${code}).`));
+          settleError(new Error(`app-server WebSocket closed before its handshake (code ${code}).`));
         }
         this.options.onClose?.(code, reason.toString('utf8'));
       });
@@ -107,9 +107,9 @@ export class HoneycrispWebSocketClient {
 
   public sendControl(control: Record<string, unknown> & { requestId: string }): void {
     if (!this.ready || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error('Honeycrisp WebSocket transport is not ready.');
+      throw new Error('app-server WebSocket transport is not ready.');
     }
-    this.socket.send(JSON.stringify(honeycrispSessionControl(this.options.bootstrap.sessionId, control)));
+    this.socket.send(JSON.stringify(appServerSessionControl(this.options.bootstrap.sessionId, control)));
   }
 
   public close(): void {

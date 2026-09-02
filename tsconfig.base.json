@@ -23,8 +23,29 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@honeycrisp/research-agent": [
+      "@beale/research-agent": [
         "packages/research-agent/src/index.ts"
+      ],
+      "@beale/research-agent/*": [
+        "packages/research-agent/src/*"
+      ],
+      "@beale/app-server-runtime": [
+        "packages/app-server-runtime/src/cli.ts"
+      ],
+      "@beale/app-server-runtime/protocol": [
+        "packages/app-server-runtime/src/protocol.ts"
+      ],
+      "@beale/app-server-runtime/websocket-protocol": [
+        "packages/app-server-runtime/src/protocol.ts"
+      ],
+      "@beale/app-server-runtime/runtime": [
+        "packages/app-server-runtime/src/sessionRuntime.ts"
+      ],
+      "@beale/app-server-runtime/runtime-services": [
+        "packages/app-server-runtime/src/runtime-services.ts"
+      ],
+      "@beale/app-server-runtime/node-network-compatibility": [
+        "packages/app-server-runtime/src/node-network-compatibility.ts"
       ]
     }
   }

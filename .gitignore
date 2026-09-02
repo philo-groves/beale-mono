@@ -16,6 +16,7 @@ out/
 .beale/
 .honeycrisp/
 .honeycrisp-runs/
+.app-server-runs/
 
 tmp/
 artifacts/

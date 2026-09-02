@@ -227,7 +227,7 @@ export function optimisticRunDetail(run: RunRecord): RunDetail {
 }
 
 export function sessionSetupComplete(detail: RunDetail, version: string): boolean {
-  return version.startsWith('honeycrisp:')
+  return version.startsWith('beale:')
     || detail.run.status !== 'active'
     || detail.attempts.length > 0
     || detail.traceEvents.length > 0
@@ -248,7 +248,7 @@ export function runDetailNeedsEnrichment(
   detail: RunDetail | null,
   projection: RunDetailProjection
 ): boolean {
-  return projection !== 'full' && Boolean(detail) && detail?.honeycrispMemory === undefined;
+  return projection !== 'full' && Boolean(detail) && detail?.appServerMemory === undefined;
 }
 
 export function shouldReportRunDetailError(detail: RunDetail | null, selectedRunId: string): boolean {

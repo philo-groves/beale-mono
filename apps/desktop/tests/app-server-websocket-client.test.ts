@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HONEYCRISP_CONTRACT_VERSION } from 'honeycrisp/protocol';
+import { APP_SERVER_CONTRACT_VERSION } from '@beale/app-server-runtime/protocol';
 import {
-  HoneycrispWebSocketClient,
-  HONEYCRISP_TRANSPORT_PREFIX,
-  parseHoneycrispTransportBootstrap
-} from '../src/main/honeycrispWebSocketClient';
+  AppServerWebSocketClient,
+  APP_SERVER_TRANSPORT_PREFIX,
+  parseAppServerTransportBootstrap
+} from '../src/main/appServerWebSocketClient';
 
-describe('HoneycrispWebSocketClient', () => {
+describe('AppServerWebSocketClient', () => {
   const servers: WebSocketServer[] = [];
 
   afterEach(async () => {
@@ -18,21 +18,21 @@ describe('HoneycrispWebSocketClient', () => {
   });
 
   it('accepts only the versioned loopback session bootstrap', () => {
-    const line = `${HONEYCRISP_TRANSPORT_PREFIX}${JSON.stringify({
+    const line = `${APP_SERVER_TRANSPORT_PREFIX}${JSON.stringify({
       protocolVersion: 1,
       transport: 'websocket',
       url: 'ws://127.0.0.1:3210/v1/session',
       sessionId: 'session-1'
     })}`;
 
-    expect(parseHoneycrispTransportBootstrap(line, 'session-1')).toEqual({
+    expect(parseAppServerTransportBootstrap(line, 'session-1')).toEqual({
       protocolVersion: 1,
       transport: 'websocket',
       url: 'ws://127.0.0.1:3210/v1/session',
       sessionId: 'session-1'
     });
-    expect(parseHoneycrispTransportBootstrap(line, 'other-session')).toBeNull();
-    expect(parseHoneycrispTransportBootstrap(
+    expect(parseAppServerTransportBootstrap(line, 'other-session')).toBeNull();
+    expect(parseAppServerTransportBootstrap(
       line.replace('127.0.0.1', 'example.com'),
       'session-1'
     )).toBeNull();
@@ -58,8 +58,8 @@ describe('HoneycrispWebSocketClient', () => {
                 protocolVersion: 1,
                 type: 'server.hello',
                 sessionId: 'session-1',
-                server: { name: 'honeycrisp', version: '0.1.0', buildId: 'fixture-build' },
-                contractVersion: HONEYCRISP_CONTRACT_VERSION,
+                server: { name: 'app-server', version: '0.1.0', buildId: 'fixture-build' },
+                contractVersion: APP_SERVER_CONTRACT_VERSION,
                 schemas: { protocol: 1, session: 1, memorySummary: 11, finding: 4, campaignGraph: 4, goalSuggestions: 1 },
                 capabilities: ['session.events', 'session.controls']
               }));
@@ -79,7 +79,7 @@ describe('HoneycrispWebSocketClient', () => {
       });
     });
     const eventReceived = new Promise<Record<string, unknown>>((resolve) => {
-      const client = new HoneycrispWebSocketClient({
+      const client = new AppServerWebSocketClient({
         bootstrap: {
           protocolVersion: 1,
           transport: 'websocket',

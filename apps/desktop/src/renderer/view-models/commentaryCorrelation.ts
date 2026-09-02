@@ -14,7 +14,7 @@ export function commentaryEventString(event: TraceEventRecord, key: string): str
 
 export function isNativeCommentaryEvent(event: TraceEventRecord): boolean {
   const source = commentaryEventString(event, 'transcriptSource');
-  return source === 'honeycrisp_commentary' || (
+  return source === 'app_server_commentary' || (
     commentaryEventString(event, 'transcriptRole') === 'assistant' &&
     commentaryEventString(event, 'messagePhase') === 'commentary' &&
     source !== 'openai_reasoning_summary'

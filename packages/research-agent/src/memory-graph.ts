@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { basename, dirname, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
+import { preBealeHashDomain } from "./legacy-compatibility.js";
 import {
   modelAuthorsByResource,
   moveModelAuthorship,
@@ -28,9 +29,9 @@ const NORMALIZED_DEFAULT_SECURITY_RESEARCH_PROFILE = normalizeResearchProfile(
   DEFAULT_SECURITY_RESEARCH_PROFILE,
 );
 
-export const MEMORY_CATALOG_HASH_DOMAIN = "honeycrisp:memory-catalog:v1\0";
-export const MEMORY_CATALOG_COMPATIBILITY_HASH_DOMAIN = "honeycrisp:memory-catalog-compatibility:v1\0";
-export const MEMORY_NODE_VALIDATION_HASH_DOMAIN = "honeycrisp:memory-node-validation:v1\0";
+export const MEMORY_CATALOG_HASH_DOMAIN = preBealeHashDomain("memory-catalog:v1\0");
+export const MEMORY_CATALOG_COMPATIBILITY_HASH_DOMAIN = preBealeHashDomain("memory-catalog-compatibility:v1\0");
+export const MEMORY_NODE_VALIDATION_HASH_DOMAIN = preBealeHashDomain("memory-node-validation:v1\0");
 export const DEFAULT_SECURITY_MEMORY_CATALOG_HASH = memoryCatalogHash(
   DEFAULT_SECURITY_RESEARCH_PROFILE.memory,
 );
@@ -1005,7 +1006,7 @@ export class MemoryGraphStore {
   }
 
   public static initializeSchema(database: DatabaseSync): void {
-    applyDatabaseMigrations(database, "honeycrisp_core", [
+    applyDatabaseMigrations(database, "app_server_core", [
       {
         version: 1,
         name: "tiered_memory_graph_baseline",
@@ -1072,7 +1073,7 @@ export class MemoryGraphStore {
       CREATE INDEX IF NOT EXISTS memory_node_tags_tag_idx ON memory_node_tags(tag, node_id);
       CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges(to_id, relation);
       CREATE INDEX IF NOT EXISTS memory_evidence_node_idx ON memory_evidence_refs(node_id);
-      DROP TABLE IF EXISTS honeycrisp_meta;
+      DROP TABLE IF EXISTS app_server_meta;
           `);
           if (adoptedSubjectSchema) {
             database.exec("CREATE INDEX IF NOT EXISTS memory_nodes_subject_identity_idx ON memory_nodes(subject_id, type, title_norm, updated_at);");
@@ -1127,7 +1128,7 @@ export class MemoryGraphStore {
         name: "workspace_runbook_artifacts",
         up(database) {
           database.exec(`
-            CREATE TABLE IF NOT EXISTS honeycrisp_runbooks (
+            CREATE TABLE IF NOT EXISTS app_server_runbooks (
               id TEXT PRIMARY KEY,
               workspace_id TEXT NOT NULL,
               workspace_name TEXT NOT NULL,
@@ -1145,10 +1146,10 @@ export class MemoryGraphStore {
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS honeycrisp_runbooks_workspace_updated_idx
-              ON honeycrisp_runbooks(workspace_id, updated_at);
-            CREATE INDEX IF NOT EXISTS honeycrisp_runbooks_session_updated_idx
-              ON honeycrisp_runbooks(session_id, updated_at);
+            CREATE INDEX IF NOT EXISTS app_server_runbooks_workspace_updated_idx
+              ON app_server_runbooks(workspace_id, updated_at);
+            CREATE INDEX IF NOT EXISTS app_server_runbooks_session_updated_idx
+              ON app_server_runbooks(session_id, updated_at);
           `);
         },
       },
@@ -1255,7 +1256,7 @@ export class MemoryGraphStore {
         name: "workspace_report_artifacts",
         up(database) {
           database.exec(`
-            CREATE TABLE IF NOT EXISTS honeycrisp_reports (
+            CREATE TABLE IF NOT EXISTS app_server_reports (
               id TEXT PRIMARY KEY,
               workspace_id TEXT NOT NULL,
               workspace_name TEXT NOT NULL,
@@ -1273,10 +1274,10 @@ export class MemoryGraphStore {
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS honeycrisp_reports_workspace_updated_idx
-              ON honeycrisp_reports(workspace_id, updated_at);
-            CREATE INDEX IF NOT EXISTS honeycrisp_reports_session_updated_idx
-              ON honeycrisp_reports(session_id, updated_at);
+            CREATE INDEX IF NOT EXISTS app_server_reports_workspace_updated_idx
+              ON app_server_reports(workspace_id, updated_at);
+            CREATE INDEX IF NOT EXISTS app_server_reports_session_updated_idx
+              ON app_server_reports(session_id, updated_at);
           `);
         },
       },
@@ -1285,7 +1286,7 @@ export class MemoryGraphStore {
         name: "workspace_artifact_revision_events",
         up(database) {
           database.exec(`
-            CREATE TABLE IF NOT EXISTS honeycrisp_artifact_revisions (
+            CREATE TABLE IF NOT EXISTS app_server_artifact_revisions (
               artifact_kind TEXT NOT NULL CHECK (artifact_kind IN ('runbook', 'report')),
               artifact_id TEXT NOT NULL,
               workspace_id TEXT NOT NULL,
@@ -1294,22 +1295,22 @@ export class MemoryGraphStore {
               created_at TEXT NOT NULL,
               PRIMARY KEY (artifact_kind, artifact_id, revision)
             );
-            CREATE INDEX IF NOT EXISTS honeycrisp_artifact_revisions_workspace_created_idx
-              ON honeycrisp_artifact_revisions(workspace_id, created_at);
-            CREATE INDEX IF NOT EXISTS honeycrisp_artifact_revisions_session_created_idx
-              ON honeycrisp_artifact_revisions(session_id, created_at);
+            CREATE INDEX IF NOT EXISTS app_server_artifact_revisions_workspace_created_idx
+              ON app_server_artifact_revisions(workspace_id, created_at);
+            CREATE INDEX IF NOT EXISTS app_server_artifact_revisions_session_created_idx
+              ON app_server_artifact_revisions(session_id, created_at);
 
-            INSERT OR IGNORE INTO honeycrisp_artifact_revisions (
+            INSERT OR IGNORE INTO app_server_artifact_revisions (
               artifact_kind, artifact_id, workspace_id, session_id, revision, created_at
             )
             SELECT 'runbook', id, workspace_id, session_id, revision, updated_at
-            FROM honeycrisp_runbooks;
+            FROM app_server_runbooks;
 
-            INSERT OR IGNORE INTO honeycrisp_artifact_revisions (
+            INSERT OR IGNORE INTO app_server_artifact_revisions (
               artifact_kind, artifact_id, workspace_id, session_id, revision, created_at
             )
             SELECT 'report', id, workspace_id, session_id, revision, updated_at
-            FROM honeycrisp_reports;
+            FROM app_server_reports;
           `);
         },
       },
@@ -1317,7 +1318,7 @@ export class MemoryGraphStore {
         version: 10,
         name: "report_submission_packets",
         up(database) {
-          const columns = new Set((database.prepare("PRAGMA table_info(honeycrisp_reports)").all() as Array<{ name?: unknown }>)
+          const columns = new Set((database.prepare("PRAGMA table_info(app_server_reports)").all() as Array<{ name?: unknown }>)
             .flatMap((row) => typeof row.name === "string" ? [row.name] : []));
           const additions = [
             ["submission_packet_artifact_id", "TEXT"],
@@ -1327,10 +1328,10 @@ export class MemoryGraphStore {
             ["submission_packet_size_bytes", "INTEGER"],
           ] as const;
           for (const [name, type] of additions) {
-            if (!columns.has(name)) database.exec(`ALTER TABLE honeycrisp_reports ADD COLUMN ${name} ${type};`);
+            if (!columns.has(name)) database.exec(`ALTER TABLE app_server_reports ADD COLUMN ${name} ${type};`);
           }
-          database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS honeycrisp_reports_submission_packet_artifact_idx
-            ON honeycrisp_reports(submission_packet_artifact_id)
+          database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS app_server_reports_submission_packet_artifact_idx
+            ON app_server_reports(submission_packet_artifact_id)
             WHERE submission_packet_artifact_id IS NOT NULL;`);
         },
       },
@@ -1339,7 +1340,7 @@ export class MemoryGraphStore {
         name: "model_authorship",
         up(database) {
           database.exec(`
-            CREATE TABLE IF NOT EXISTS honeycrisp_model_authorship (
+            CREATE TABLE IF NOT EXISTS app_server_model_authorship (
               resource_kind TEXT NOT NULL CHECK (resource_kind IN ('memory', 'runbook', 'report')),
               resource_id TEXT NOT NULL,
               revision INTEGER NOT NULL CHECK (revision > 0),
@@ -1348,8 +1349,8 @@ export class MemoryGraphStore {
               created_at TEXT NOT NULL,
               PRIMARY KEY (resource_kind, resource_id, revision, provider, model)
             );
-            CREATE INDEX IF NOT EXISTS honeycrisp_model_authorship_resource_idx
-              ON honeycrisp_model_authorship(resource_kind, resource_id, created_at);
+            CREATE INDEX IF NOT EXISTS app_server_model_authorship_resource_idx
+              ON app_server_model_authorship(resource_kind, resource_id, created_at);
           `);
         },
       },
@@ -1358,9 +1359,9 @@ export class MemoryGraphStore {
         name: "runbook_execution_ledger",
         up(database) {
           database.exec(`
-            CREATE TABLE IF NOT EXISTS honeycrisp_runbook_executions (
+            CREATE TABLE IF NOT EXISTS app_server_runbook_executions (
               run_id TEXT PRIMARY KEY,
-              runbook_id TEXT NOT NULL REFERENCES honeycrisp_runbooks(id) ON DELETE CASCADE,
+              runbook_id TEXT NOT NULL REFERENCES app_server_runbooks(id) ON DELETE CASCADE,
               workspace_id TEXT NOT NULL,
               status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'blocked')),
               proof_target TEXT NOT NULL CHECK (proof_target IN ('localhost', 'device', 'vm', 'web', 'other')),
@@ -1370,8 +1371,8 @@ export class MemoryGraphStore {
               duration_ms INTEGER,
               error TEXT
             );
-            CREATE INDEX IF NOT EXISTS honeycrisp_runbook_executions_runbook_status_idx
-              ON honeycrisp_runbook_executions(workspace_id, runbook_id, status, started_at);
+            CREATE INDEX IF NOT EXISTS app_server_runbook_executions_runbook_status_idx
+              ON app_server_runbook_executions(workspace_id, runbook_id, status, started_at);
           `);
         },
       },
@@ -1379,45 +1380,45 @@ export class MemoryGraphStore {
         version: 13,
         name: "runbook_content_and_execution_metrics",
         up(database) {
-          if (!tableHasColumn(database, "honeycrisp_runbooks", "content_revision")) {
-            database.exec(`ALTER TABLE honeycrisp_runbooks
+          if (!tableHasColumn(database, "app_server_runbooks", "content_revision")) {
+            database.exec(`ALTER TABLE app_server_runbooks
               ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1 CHECK (content_revision > 0);`);
           }
-          if (!tableHasColumn(database, "honeycrisp_runbook_executions", "selected_cell_count")) {
-            database.exec(`ALTER TABLE honeycrisp_runbook_executions
+          if (!tableHasColumn(database, "app_server_runbook_executions", "selected_cell_count")) {
+            database.exec(`ALTER TABLE app_server_runbook_executions
               ADD COLUMN selected_cell_count INTEGER NOT NULL DEFAULT 0 CHECK (selected_cell_count >= 0);`);
           }
-          if (!tableHasColumn(database, "honeycrisp_runbook_executions", "completed_cell_count")) {
-            database.exec(`ALTER TABLE honeycrisp_runbook_executions
+          if (!tableHasColumn(database, "app_server_runbook_executions", "completed_cell_count")) {
+            database.exec(`ALTER TABLE app_server_runbook_executions
               ADD COLUMN completed_cell_count INTEGER NOT NULL DEFAULT 0 CHECK (completed_cell_count >= 0);`);
           }
-          if (!tableHasColumn(database, "honeycrisp_artifact_revisions", "revision_kind")) {
-            database.exec(`ALTER TABLE honeycrisp_artifact_revisions
+          if (!tableHasColumn(database, "app_server_artifact_revisions", "revision_kind")) {
+            database.exec(`ALTER TABLE app_server_artifact_revisions
               ADD COLUMN revision_kind TEXT NOT NULL DEFAULT 'content'
               CHECK (revision_kind IN ('content', 'execution'));`);
           }
           database.exec(`
-            UPDATE honeycrisp_runbooks
+            UPDATE app_server_runbooks
             SET content_revision = MAX(1, (
               SELECT COUNT(DISTINCT authorship.revision)
-              FROM honeycrisp_model_authorship AS authorship
+              FROM app_server_model_authorship AS authorship
               WHERE authorship.resource_kind = 'runbook'
-                AND authorship.resource_id = honeycrisp_runbooks.id
+                AND authorship.resource_id = app_server_runbooks.id
             ));
 
-            UPDATE honeycrisp_artifact_revisions
+            UPDATE app_server_artifact_revisions
             SET revision_kind = 'execution'
             WHERE artifact_kind = 'runbook'
               AND EXISTS (
-                SELECT 1 FROM honeycrisp_model_authorship AS any_authorship
+                SELECT 1 FROM app_server_model_authorship AS any_authorship
                 WHERE any_authorship.resource_kind = 'runbook'
-                  AND any_authorship.resource_id = honeycrisp_artifact_revisions.artifact_id
+                  AND any_authorship.resource_id = app_server_artifact_revisions.artifact_id
               )
               AND NOT EXISTS (
-                SELECT 1 FROM honeycrisp_model_authorship AS content_authorship
+                SELECT 1 FROM app_server_model_authorship AS content_authorship
                 WHERE content_authorship.resource_kind = 'runbook'
-                  AND content_authorship.resource_id = honeycrisp_artifact_revisions.artifact_id
-                  AND content_authorship.revision = honeycrisp_artifact_revisions.revision
+                  AND content_authorship.resource_id = app_server_artifact_revisions.artifact_id
+                  AND content_authorship.revision = app_server_artifact_revisions.revision
               );
           `);
         },
@@ -1426,8 +1427,8 @@ export class MemoryGraphStore {
         version: 14,
         name: "remove_runbook_lifecycle_status",
         up(database) {
-          if (tableHasColumn(database, "honeycrisp_runbooks", "status")) {
-            database.exec("ALTER TABLE honeycrisp_runbooks DROP COLUMN status;");
+          if (tableHasColumn(database, "app_server_runbooks", "status")) {
+            database.exec("ALTER TABLE app_server_runbooks DROP COLUMN status;");
           }
         },
       },
@@ -1435,7 +1436,7 @@ export class MemoryGraphStore {
         version: 15,
         name: "report_recording_attachments",
         up(database) {
-          const columns = new Set((database.prepare("PRAGMA table_info(honeycrisp_reports)").all() as Array<{ name?: unknown }>)
+          const columns = new Set((database.prepare("PRAGMA table_info(app_server_reports)").all() as Array<{ name?: unknown }>)
             .flatMap((row) => typeof row.name === "string" ? [row.name] : []));
           const additions = [
             ["recording_artifact_id", "TEXT"],
@@ -1445,10 +1446,10 @@ export class MemoryGraphStore {
             ["recording_size_bytes", "INTEGER"],
           ] as const;
           for (const [name, type] of additions) {
-            if (!columns.has(name)) database.exec(`ALTER TABLE honeycrisp_reports ADD COLUMN ${name} ${type};`);
+            if (!columns.has(name)) database.exec(`ALTER TABLE app_server_reports ADD COLUMN ${name} ${type};`);
           }
-          database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS honeycrisp_reports_recording_artifact_idx
-            ON honeycrisp_reports(recording_artifact_id)
+          database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS app_server_reports_recording_artifact_idx
+            ON app_server_reports(recording_artifact_id)
             WHERE recording_artifact_id IS NOT NULL;`);
         },
       },
@@ -1456,8 +1457,8 @@ export class MemoryGraphStore {
         version: 16,
         name: "report_triage_status",
         up(database) {
-          if (!tableHasColumn(database, "honeycrisp_reports", "triage_status")) {
-            database.exec(`ALTER TABLE honeycrisp_reports ADD COLUMN triage_status TEXT NOT NULL DEFAULT 'editing'
+          if (!tableHasColumn(database, "app_server_reports", "triage_status")) {
+            database.exec(`ALTER TABLE app_server_reports ADD COLUMN triage_status TEXT NOT NULL DEFAULT 'editing'
               CHECK (triage_status IN ('editing', 'submitted', 'reviewing', 'rejected', 'accepted'));`);
           }
         },

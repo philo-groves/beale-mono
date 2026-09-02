@@ -1,5 +1,5 @@
 import {
-  HoneycrispSessionStore,
+  AppServerSessionStore,
   ResearchChannelStore,
   AgentPluginRegistry,
   BUNDLED_RESEARCH_PROFILE_IDS,
@@ -11,8 +11,8 @@ import {
   completeAuxiliaryText,
   createResearchStorageLayout,
   extractSourceRepositoryUrls,
-  getHoneycrispMemorySummary,
-  listHoneycrispReportSummaries,
+  getAppServerMemorySummary,
+  listAppServerReportSummaries,
   getAuthStatus,
   getProviderModelCatalog,
   getKnowledgeReport,
@@ -43,50 +43,50 @@ import {
   selectStoredResearchGoalSuggestion,
   sourceRepositoryCandidates,
   type AgentPluginRecord,
-  type BeginHoneycrispSessionAttemptInput,
+  type BeginAppServerSessionAttemptInput,
   type BuiltinAgentPluginDefinition,
-  type CreateHoneycrispSessionInput,
-  type HoneycrispSessionEvent,
-  type HoneycrispSessionTransitionInput,
+  type CreateAppServerSessionInput,
+  type AppServerSessionEvent,
+  type AppServerSessionTransitionInput,
   type MemoryDreamingPlan,
   type MemoryDreamingProfileInput,
   type MemoryDreamingRunContext,
   type ResearchProfileSnapshot,
   type SourceRepositoryCandidate
-} from 'honeycrisp/runtime-services';
+} from '@beale/app-server-runtime/runtime-services';
 import {
-  honeycrispProtocolDescriptor,
+  appServerProtocolDescriptor,
   type BealeMemoryNotificationFeed,
-  type HoneycrispProtocolOperation
-} from 'honeycrisp/protocol';
+  type AppServerProtocolOperation
+} from '@beale/app-server-runtime/protocol';
 
-export interface HoneycrispProtocolStorage {
+export interface AppServerProtocolStorage {
   databasePath: string;
   artifactDirectoryPath: string;
 }
 
-export interface InvokeHoneycrispProtocolOptions {
+export interface InvokeAppServerProtocolOptions {
   args: readonly string[];
-  storage?: HoneycrispProtocolStorage;
+  storage?: AppServerProtocolStorage;
   input?: unknown;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
 
-/** Execute an allowlisted Honeycrisp operation inside the app-server process. */
-export async function invokeHoneycrispProtocol<T>(
-  operation: HoneycrispProtocolOperation,
-  options: InvokeHoneycrispProtocolOptions
+/** Execute an allowlisted app-server operation inside the app-server process. */
+export async function invokeAppServerProtocol<T>(
+  operation: AppServerProtocolOperation,
+  options: InvokeAppServerProtocolOptions
 ): Promise<T> {
   return await invokeOperation(operation, options) as T;
 }
 
-async function invokeOperation(operation: HoneycrispProtocolOperation, options: InvokeHoneycrispProtocolOptions): Promise<unknown> {
-  if (operation === 'protocol.describe') return honeycrispProtocolDescriptor();
+async function invokeOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): Promise<unknown> {
+  if (operation === 'protocol.describe') return appServerProtocolDescriptor();
   if (operation === 'profile.resolve') return profileOperation(options);
   if (operation.startsWith('auth.') || operation === 'model.list') return authOperation(operation, options);
   if (operation.startsWith('tools.') || operation.startsWith('config.')) {
-    const { executeHostedUtilityOperation } = await import('honeycrisp/runtime');
+    const { executeHostedUtilityOperation } = await import('@beale/app-server-runtime/runtime');
     return executeHostedUtilityOperation(
       operation as 'tools.list' | 'tools.config' | 'config.show' | 'config.set',
       options.args
@@ -122,7 +122,7 @@ async function invokeOperation(operation: HoneycrispProtocolOperation, options: 
   return harnessOperation(operation, options);
 }
 
-function channelOperation(operation: HoneycrispProtocolOperation, options: InvokeHoneycrispProtocolOptions): unknown {
+function channelOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): unknown {
   const storage = requiredStorage(options.storage);
   const store = new ResearchChannelStore({ databasePath: storage.databasePath });
   try {
@@ -198,7 +198,7 @@ function channelOperation(operation: HoneycrispProtocolOperation, options: Invok
   }
 }
 
-async function profileOperation(options: InvokeHoneycrispProtocolOptions): Promise<unknown> {
+async function profileOperation(options: InvokeAppServerProtocolOptions): Promise<unknown> {
   const workspaceRoot = option(options.args, '--workspace-root') ?? process.cwd();
   const profilePath = option(options.args, '--profile');
   const profileId = option(options.args, '--profile-id');
@@ -221,7 +221,7 @@ async function profileOperation(options: InvokeHoneycrispProtocolOptions): Promi
   };
 }
 
-async function authOperation(operation: HoneycrispProtocolOperation, options: InvokeHoneycrispProtocolOptions): Promise<unknown> {
+async function authOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): Promise<unknown> {
   const positionals = options.args.filter((value) => !value.startsWith('--'));
   const providerId = positionals.at(-1);
   switch (operation) {
@@ -241,10 +241,10 @@ async function authOperation(operation: HoneycrispProtocolOperation, options: In
   }
 }
 
-function sessionOperation(operation: HoneycrispProtocolOperation, options: InvokeHoneycrispProtocolOptions): unknown {
-  const store = new HoneycrispSessionStore({
+function sessionOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): unknown {
+  const store = new AppServerSessionStore({
     ...(options.storage ? { databasePath: options.storage.databasePath } : {}),
-    readOnly: new Set<HoneycrispProtocolOperation>([
+    readOnly: new Set<AppServerProtocolOperation>([
       'session.get', 'session.get_update', 'session.events', 'session.event_details',
       'session.collaboration', 'session.captures', 'session.capture', 'session.list', 'session.list_summaries'
     ]).has(operation)
@@ -252,11 +252,11 @@ function sessionOperation(operation: HoneycrispProtocolOperation, options: Invok
   try {
     const sessionId = option(options.args, '--session-id');
     switch (operation) {
-      case 'session.create': return store.create(options.input as CreateHoneycrispSessionInput);
-      case 'session.begin_attempt': return store.beginAttempt(required(sessionId, '--session-id'), options.input as BeginHoneycrispSessionAttemptInput);
+      case 'session.create': return store.create(options.input as CreateAppServerSessionInput);
+      case 'session.begin_attempt': return store.beginAttempt(required(sessionId, '--session-id'), options.input as BeginAppServerSessionAttemptInput);
       case 'session.append_event':
-      case 'session.append_event_receipt': return store.appendEventReceipt(required(sessionId, '--session-id'), options.input as HoneycrispSessionEvent);
-      case 'session.transition': return store.transition(required(sessionId, '--session-id'), options.input as HoneycrispSessionTransitionInput);
+      case 'session.append_event_receipt': return store.appendEventReceipt(required(sessionId, '--session-id'), options.input as AppServerSessionEvent);
+      case 'session.transition': return store.transition(required(sessionId, '--session-id'), options.input as AppServerSessionTransitionInput);
       case 'session.recover_interrupted': return store.recoverInterrupted(required(option(options.args, '--workspace-id'), '--workspace-id'), options.input as never);
       case 'session.import_capture': {
         const input = requiredRecord(options.input, 'capture input');
@@ -297,12 +297,12 @@ function sessionOperation(operation: HoneycrispProtocolOperation, options: Invok
   }
 }
 
-async function knowledgeOperation(operation: HoneycrispProtocolOperation, options: InvokeHoneycrispProtocolOptions): Promise<unknown> {
+async function knowledgeOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): Promise<unknown> {
   const storage = requiredStorage(options.storage);
   const layout = createResearchStorageLayout({ databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath });
   const input = requiredRecord(options.input, `${operation} input`);
   switch (operation) {
-    case 'report.list': return listHoneycrispReportSummaries(
+    case 'report.list': return listAppServerReportSummaries(
       layout.databasePath,
       requiredText(input.workspaceId, 'workspaceId')
     );
@@ -325,7 +325,7 @@ async function knowledgeOperation(operation: HoneycrispProtocolOperation, option
       } finally {
         campaignTracks.close();
       }
-      return getHoneycrispMemorySummary({
+      return getAppServerMemorySummary({
         databasePath: layout.databasePath, artifactDirectoryPath: layout.artifactDirectoryPath,
         workspaceId, subjectId: context.subjectId,
         ...(typeof input.sessionId === 'string' ? { sessionId: input.sessionId } : {}),
@@ -484,7 +484,7 @@ async function memoryNotificationFeed(layout: ReturnType<typeof createResearchSt
   const context = await resolveCanonicalMemoryContext(layout, input, workspaceId);
   if (!context.researchProfile) throw new Error('The memory notification profile could not be resolved.');
   const researchProfile = context.researchProfile;
-  const summary = getHoneycrispMemorySummary({
+  const summary = getAppServerMemorySummary({
     databasePath: layout.databasePath, artifactDirectoryPath: layout.artifactDirectoryPath,
     workspaceId, subjectId: context.subjectId,
     ...(typeof input.sessionId === 'string' ? { sessionId: input.sessionId } : {}), researchProfile
@@ -583,7 +583,7 @@ async function resolveCanonicalMemoryContext(
   };
 }
 
-async function harnessOperation(operation: HoneycrispProtocolOperation, options: InvokeHoneycrispProtocolOptions): Promise<unknown> {
+async function harnessOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): Promise<unknown> {
   const input = requiredRecord(options.input, `${operation} input`);
   switch (operation) {
     case 'source.inspect': {
@@ -605,7 +605,7 @@ async function harnessOperation(operation: HoneycrispProtocolOperation, options:
     case 'plugin.add_repository': return pluginRegistry(input).addFromRepository(requiredText(input.repositoryUrl, 'repositoryUrl'));
     case 'plugin.set_enabled': return pluginRegistry(input).setEnabled(requiredText(input.pluginId, 'pluginId'), input.enabled === true);
     case 'plugin.remove': return pluginRegistry(input).remove(requiredText(input.pluginId, 'pluginId'));
-    case 'plugin.runtime': return pluginRegistry(input).getHoneycrispRuntime();
+    case 'plugin.runtime': return pluginRegistry(input).getAppServerRuntime();
     case 'maintenance.summary': return getWorkspaceDejunkSummary(requiredText(input.workspacePath, 'workspacePath'));
     case 'maintenance.run': {
       const workspacePath = requiredText(input.workspacePath, 'workspacePath');
@@ -637,7 +637,7 @@ function pluginRegistry(input: Record<string, unknown>): AgentPluginRegistry {
   });
 }
 
-function requiredStorage(storage: HoneycrispProtocolStorage | undefined): HoneycrispProtocolStorage { if (!storage) throw new Error('Honeycrisp storage is required for this app-server operation.'); return storage; }
+function requiredStorage(storage: AppServerProtocolStorage | undefined): AppServerProtocolStorage { if (!storage) throw new Error('app-server storage is required for this app-server operation.'); return storage; }
 function option(args: readonly string[], name: string): string | undefined { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; }
 function options(args: readonly string[], name: string): string[] { return args.flatMap((value, index) => value === name && args[index + 1] ? [args[index + 1]!] : []); }
 function required(value: string | undefined, name: string): string { if (!value?.trim()) throw new Error(`Missing required option ${name}.`); return value.trim(); }

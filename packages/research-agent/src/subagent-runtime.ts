@@ -607,7 +607,7 @@ export class SubagentManager {
         properties: {
           task_name: { type: "string", description: "Lowercase letters, digits, and underscores." },
           message: { type: "string", description: "Concrete bounded task for the child." },
-          provider: { type: "string", description: "Optional enabled collaborator provider ID. The route must support the requested Advanced role. An exact provider/model route is also accepted for compatibility. Omit to let Honeycrisp select a diverse compatible provider." },
+          provider: { type: "string", description: "Optional enabled collaborator provider ID. The route must support the requested Advanced role. An exact provider/model route is also accepted for compatibility. Omit to let app-server select a diverse compatible provider." },
           fork_turns: { type: "string", description: "none, all, or a positive integer string. Defaults to all." },
           model: { type: "string", description: "Optional enabled model ID for partial or fresh inheritance. Pass the provider ID separately." },
           reasoning_effort: { type: "string", enum: [...REASONING_LEVELS] },
@@ -2056,8 +2056,8 @@ function agentMessages(authorPath: string, authorModel: string, message: string)
           JSON.stringify({ source: authorPath, message }, null, 2),
         ].join("\n\n"),
       }],
-      api: "honeycrisp-peer",
-      provider: "honeycrisp-peer",
+      api: "app-server-peer",
+      provider: "app-server-peer",
       model: authorModel,
       usage: {
         input: 0,

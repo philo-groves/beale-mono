@@ -39,6 +39,7 @@ import type {
   ResearchToolAction,
   ResearchToolDescriptor,
 } from "./types.js";
+import { PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 
 const DEFAULT_MAX_RESULTS = 20;
 const DEFAULT_MAX_BYTES = 16_384;
@@ -49,8 +50,8 @@ const REPOSITORY_SEARCH_IGNORED_DIRECTORIES = new Set([
   ".git",
   ".hg",
   ".svn",
-  ".honeycrisp",
   ".beale",
+  PRE_BEALE_DATA_DIRECTORY_NAME,
   "node_modules",
 ]);
 const REPOSITORY_SEARCH_PARAMETERS = {
@@ -166,7 +167,7 @@ export function createRepositorySearchTool(
     inputSchema: REPOSITORY_SEARCH_PARAMETERS,
     artifactLocations: rootHints,
     metadata: {
-      provider: "honeycrisp.built_in",
+      provider: "appServer.built_in",
       safetyProfile: "host-filesystem-read",
       defaultBudget: {
         maxToolCalls: 1,
@@ -300,7 +301,7 @@ export function createStructuredFileReadTool(
     inputSchema: STRUCTURED_FILE_READ_PARAMETERS,
     artifactLocations: contextRootHints,
     metadata: {
-      provider: "honeycrisp.built_in",
+      provider: "appServer.built_in",
       safetyProfile: "workspace-context-filesystem-read",
       defaultBudget: {
         maxToolCalls: 1,
@@ -380,7 +381,7 @@ export function createAnalysisTool(): ResearchExecutableTool {
     requiredPermissions: [],
     inputSchema: ANALYSIS_PARAMETERS,
     metadata: {
-      provider: "honeycrisp.built_in",
+      provider: "appServer.built_in",
       safetyProfile: "deterministic-transform",
       defaultBudget: {
         maxToolCalls: 1,
@@ -424,7 +425,7 @@ export function createExperimentTool(
     requiredPermissions: ["experiment:run"],
     inputSchema: EXPERIMENT_PARAMETERS,
     metadata: {
-      provider: "honeycrisp.built_in",
+      provider: "appServer.built_in",
       safetyProfile: "allowlisted-process",
       defaultBudget: {
         maxToolCalls: 1,
@@ -470,7 +471,7 @@ export function createSynthesisTool(): ResearchExecutableTool {
     requiredPermissions: [],
     inputSchema: SYNTHESIS_PARAMETERS,
     metadata: {
-      provider: "honeycrisp.built_in",
+      provider: "appServer.built_in",
       safetyProfile: "deterministic-synthesis",
       defaultBudget: {
         maxToolCalls: 1,
@@ -519,14 +520,14 @@ export function createStorageListTool(
   const descriptor = createDescriptor({
     name: "storage.list",
     transportName: "storage_list",
-    description: "List durable Honeycrisp storage directories and registered artifact metadata.",
+    description: "List durable app-server storage directories and registered artifact metadata.",
     actionClasses: ["inspect"],
     sideEffects: "read",
     requiredPermissions: ["storage:read"],
     inputSchema: STORAGE_LIST_PARAMETERS,
     artifactLocations: [options.storageLayout.rootPath],
     metadata: {
-      provider: "honeycrisp.built_in",
+      provider: "appServer.built_in",
       safetyProfile: "storage-read",
       defaultBudget: {
         maxToolCalls: 1,
@@ -834,7 +835,7 @@ function gitGrepCandidatePaths(
       "--",
       ".",
       ":(glob,exclude)**/.beale/**",
-      ":(glob,exclude)**/.honeycrisp/**",
+      `:(glob,exclude)**/${PRE_BEALE_DATA_DIRECTORY_NAME}/**`,
       ":(glob,exclude)**/.hg/**",
       ":(glob,exclude)**/.svn/**",
       ":(glob,exclude)**/node_modules/**",

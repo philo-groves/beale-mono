@@ -6,7 +6,7 @@ import test from 'node:test';
 import { expandStoredResearchPrompt } from '../packages/research-agent/dist/index.js';
 
 test('research prompt expansion selects the profile default lane and validates bounded JSON output', async () => {
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'honeycrisp-prompt-expansion-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'app-server-prompt-expansion-'));
   const completions = [];
   try {
     const result = await expandStoredResearchPrompt({
@@ -49,7 +49,7 @@ test('research prompt expansion selects the profile default lane and validates b
 });
 
 test('research prompt expansion rejects non-JSON model output', async () => {
-  const workspaceRoot = mkdtempSync(join(tmpdir(), 'honeycrisp-prompt-expansion-invalid-'));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'app-server-prompt-expansion-invalid-'));
   try {
     await assert.rejects(
       expandStoredResearchPrompt({

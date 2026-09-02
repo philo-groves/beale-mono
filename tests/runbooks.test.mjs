@@ -18,7 +18,7 @@ import {
 } from "../packages/research-agent/dist/index.js";
 
 test("runbook tools expose bounded artifact operations", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runbook-tools-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-tools-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const store = new RunbookStore(
     getDefaultMemoryDatabasePath(workspaceRoot),
@@ -59,7 +59,7 @@ test("runbook tools expose bounded artifact operations", async () => {
 });
 
 test("runbook tools advertise PowerShell cells only on Windows", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runbook-platform-guidance-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-platform-guidance-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const store = new RunbookStore(
     getDefaultMemoryDatabasePath(workspaceRoot),
@@ -83,7 +83,7 @@ test("runbook tools advertise PowerShell cells only on Windows", async () => {
 });
 
 test("migrations 13 and 14 separate execution revisions and remove lifecycle status", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runbook-migration-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-migration-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const databasePath = getDefaultMemoryDatabasePath(workspaceRoot);
   const context = { sessionId: "session_migration", workspaceId: "workspace_migration", workspaceName: "Migration" };
@@ -99,8 +99,8 @@ test("migrations 13 and 14 separate execution revisions and remove lifecycle sta
 
     const database = new DatabaseSync(databasePath);
     try {
-      database.prepare("UPDATE honeycrisp_runbooks SET revision = 3, content_revision = 1 WHERE id = ?").run(appended.runbook.id);
-      database.prepare(`INSERT INTO honeycrisp_artifact_revisions (
+      database.prepare("UPDATE app_server_runbooks SET revision = 3, content_revision = 1 WHERE id = ?").run(appended.runbook.id);
+      database.prepare(`INSERT INTO app_server_artifact_revisions (
         artifact_kind, artifact_id, workspace_id, session_id, revision, created_at, revision_kind
       ) VALUES ('runbook', ?, ?, ?, 3, ?, 'content')`).run(
         appended.runbook.id,
@@ -108,8 +108,8 @@ test("migrations 13 and 14 separate execution revisions and remove lifecycle sta
         context.sessionId,
         "2026-08-20T00:00:00.000Z",
       );
-      database.exec("ALTER TABLE honeycrisp_runbooks ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
-      database.prepare("DELETE FROM schema_migrations WHERE component = 'honeycrisp_core' AND version >= 13").run();
+      database.exec("ALTER TABLE app_server_runbooks ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+      database.prepare("DELETE FROM schema_migrations WHERE component = 'app_server_core' AND version >= 13").run();
     } finally {
       database.close();
     }
@@ -119,9 +119,9 @@ test("migrations 13 and 14 separate execution revisions and remove lifecycle sta
     assert.equal(migrated.contentRevision, 2);
     const migratedDatabase = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      assert.equal(migratedDatabase.prepare("PRAGMA table_info(honeycrisp_runbooks)").all().some((column) => column.name === "status"), false);
+      assert.equal(migratedDatabase.prepare("PRAGMA table_info(app_server_runbooks)").all().some((column) => column.name === "status"), false);
       assert.deepEqual(
-        migratedDatabase.prepare(`SELECT revision, revision_kind FROM honeycrisp_artifact_revisions
+        migratedDatabase.prepare(`SELECT revision, revision_kind FROM app_server_artifact_revisions
           WHERE artifact_kind = 'runbook' AND artifact_id = ? ORDER BY revision`).all(appended.runbook.id).map((row) => ({ ...row })),
         [
           { revision: 1, revision_kind: "content" },
@@ -139,7 +139,7 @@ test("migrations 13 and 14 separate execution revisions and remove lifecycle sta
 });
 
 test("runbook execution records cell status, output, and duration through the shell boundary", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runbook-execution-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-execution-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const store = new RunbookStore(
     getDefaultMemoryDatabasePath(workspaceRoot),
@@ -208,14 +208,14 @@ test("runbook execution records cell status, output, and duration through the sh
     const codeCell = notebook.cells[1];
     assert.equal(codeCell.execution_count, 1);
     assert.equal(codeCell.outputs[0].text.join(""), "proof passed\n");
-    assert.equal(codeCell.metadata.honeycrisp.latestRun.status, "succeeded");
-    assert.equal(codeCell.metadata.honeycrisp.latestRun.proofTarget, "device");
-    assert.equal(codeCell.metadata.honeycrisp.latestRun.deviceOs, "iOS 27.0");
-    assert.equal(typeof codeCell.metadata.honeycrisp.latestRun.durationMs, "number");
-    assert.equal(notebook.metadata.honeycrisp.latestRun.status, "succeeded");
-    assert.equal(notebook.metadata.honeycrisp.latestRun.proofTarget, "device");
-    assert.equal(notebook.metadata.honeycrisp.latestRun.deviceOs, "iOS 27.0");
-    assert.equal(typeof notebook.metadata.honeycrisp.latestRun.durationMs, "number");
+    assert.equal(codeCell.metadata.beale.latestRun.status, "succeeded");
+    assert.equal(codeCell.metadata.beale.latestRun.proofTarget, "device");
+    assert.equal(codeCell.metadata.beale.latestRun.deviceOs, "iOS 27.0");
+    assert.equal(typeof codeCell.metadata.beale.latestRun.durationMs, "number");
+    assert.equal(notebook.metadata.beale.latestRun.status, "succeeded");
+    assert.equal(notebook.metadata.beale.latestRun.proofTarget, "device");
+    assert.equal(notebook.metadata.beale.latestRun.deviceOs, "iOS 27.0");
+    assert.equal(typeof notebook.metadata.beale.latestRun.durationMs, "number");
     const executed = store.get(created.runbook.id);
     assert.equal(executed.contentRevision, 1);
     assert.ok(executed.revision > executed.contentRevision);
@@ -228,7 +228,7 @@ test("runbook execution records cell status, output, and duration through the sh
 
     const database = new DatabaseSync(getDefaultMemoryDatabasePath(workspaceRoot), { readOnly: true });
     try {
-      assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM honeycrisp_artifact_revisions
+      assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM app_server_artifact_revisions
         WHERE artifact_kind = 'runbook' AND artifact_id = ?`).get(created.runbook.id).count, 1);
     } finally {
       database.close();
@@ -240,7 +240,7 @@ test("runbook execution records cell status, output, and duration through the sh
 });
 
 test("runbook execution plans support inclusive cell ranges and resume-from-here selection", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-runbook-range-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-range-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const store = new RunbookStore(
     getDefaultMemoryDatabasePath(workspaceRoot),

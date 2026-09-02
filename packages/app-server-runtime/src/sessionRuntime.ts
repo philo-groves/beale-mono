@@ -5,7 +5,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import type { Readable } from "node:stream";
 import { createInterface } from "node:readline/promises";
-import { HoneycrispControlStream } from "./control-stream.js";
+import { AppServerControlStream } from "./control-stream.js";
 import {
   runResearchAgent,
   createAnalysisTool,
@@ -110,9 +110,10 @@ import {
   writeResearchToolConfig,
   ResearchDispositionRecorder,
   selectResearchGoalObjective,
-  HoneycrispSessionStore,
+  AppServerSessionStore,
   ResearchChannelStore,
-} from "@honeycrisp/research-agent";
+  installPreBealeEnvironmentAliases,
+} from "@beale/research-agent";
 import type {
   AuthEvent,
   AuthLoginCallbacks,
@@ -164,7 +165,7 @@ import type {
   ResearchResourceScopeAuthorizer,
   ShellSafetyMode,
   BundledResearchProfileId,
-} from "@honeycrisp/research-agent";
+} from "@beale/research-agent";
 
 const VERSION = "0.1.0";
 const PROFILE_CATALOG_PROTOCOL_VERSION = 1 as const;
@@ -390,7 +391,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let shellSafetyMode: ShellSafetyMode = "auto_review";
   let shellReviewModels: Readonly<Record<string, string>> | undefined;
   let shellReviewEffort: ResearchModelEffort | undefined;
-  let memoryBackend: ResearchMemoryBackendId = "honeycrisp";
+  let memoryBackend: ResearchMemoryBackendId = "app-server";
   let memoryTypeDescriptions: MemoryTypeDescriptions | undefined;
   let profilePath: string | undefined;
   let resolvedResearchProfilePath: string | undefined;
@@ -1485,10 +1486,10 @@ async function pathExists(path: string): Promise<boolean> {
 
 function usage(): string {
   return [
-    "Usage: honeycrisp -p <prompt> [--json]",
-    "       honeycrisp tools list [options]",
-    "       honeycrisp memory <command> [options]",
-    "       honeycrisp profile resolve --workspace-root <path> [--profile <path>] --json",
+    "Usage: appServer -p <prompt> [--json]",
+    "       appServer tools list [options]",
+    "       appServer memory <command> [options]",
+    "       appServer profile resolve --workspace-root <path> [--profile <path>] --json",
     "",
     "Options:",
     "  -p, --prompt <prompt>  Research request for the agent",
@@ -1503,7 +1504,7 @@ function usage(): string {
     "  --mock                 Use the deterministic mock executor (default: real model calls)",
     "  --config <path>        JSON provider/model/effort preference config for real mode",
     "  --collaboration-config <path>  Host-written channel collaborator and budget configuration",
-    "                         Defaults to .honeycrisp/config.json under --workspace-root when present",
+    "                         Defaults to .beale/config.json under --workspace-root when present",
     "  --provider <provider>  Override configured/default provider for real mode",
     "  --openai-trusted-access-cyber-risk-acknowledged  Confirm host-recorded OpenAI Trusted Access for Cyber and policy-risk acceptance",
     "  --anthropic-cvp-risk-acknowledged  Confirm host-recorded Anthropic CVP risk acceptance",
@@ -1531,7 +1532,7 @@ function usage(): string {
     "  --shell-review-models <json> Provider-to-small-reviewer-model JSON object",
     "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3, zai=glm-5-turbo, openrouter=auto",
     "  --shell-review-effort <level> Small-model review effort (default: medium)",
-    "  --memory-backend <id>  Workspace memory: honeycrisp or disabled (legacy v1/v2 values migrate in place)",
+    "  --memory-backend <id>  Workspace memory: appServer or disabled (legacy v1/v2 values migrate in place)",
     "  --memory-type-descriptions <json> Per-memory-type description overrides used by active agents",
     "  --profile <path>       Explicit research profile JSON (overrides the workspace default)",
     "  --resolved-research-profile <path> Exact normalized research profile JSON supplied by a host",
@@ -1540,8 +1541,8 @@ function usage(): string {
     "  --workflow <id>        Select a workflow from the resolved research profile",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --profile-tool-family-ceiling <name> Let the active profile request this family within a host ceiling",
-    "  --tool-config <path>   Runtime tool preference config (default: .honeycrisp/tools.json)",
-    "  --no-default-tool-config Ignore .honeycrisp/tools.json unless --tool-config is provided",
+    "  --tool-config <path>   Runtime tool preference config (default: .beale/tools.json)",
+    "  --no-default-tool-config Ignore .beale/tools.json unless --tool-config is provided",
     "  --repo-root <path>     Add a known repository context hint and enable repository.search unless disabled",
     "  --file-read-root <p>   Add a file.read context hint and enable file.read unless disabled",
     "  --source-path <path>   Add a materialized source context path",
@@ -1582,7 +1583,7 @@ function usage(): string {
     "  memory link <from> <to> <rel>    Link two nodes",
     "",
     "Memory options:",
-    "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
+    "  --workspace-root <path>  Workspace root containing .beale memory",
     "  --type <type>           Filter nodes; with correct, reclassify one node",
     "  --status <status>       Filter or set node status",
     "  --tag <tag>             Filter or add a tag (repeatable)",
@@ -1598,7 +1599,7 @@ function usage(): string {
     "  profile resolve                  Resolve and normalize the active research profile",
     "",
     "Profile options:",
-    "  --workspace-root <path>  Workspace root used for .honeycrisp/profile.json discovery",
+    "  --workspace-root <path>  Workspace root used for .beale/profile.json discovery",
     "  --profile <path>         Explicit research profile JSON (highest precedence)",
     "  --json                   Print the versioned profile catalog envelope",
     "",
@@ -1615,9 +1616,9 @@ function usage(): string {
 
 function profileUsage(): string {
   return [
-    "Usage: honeycrisp profile resolve --workspace-root <path> [--profile <path> | --profile-id <security-research|mathematics>] --json",
+    "Usage: appServer profile resolve --workspace-root <path> [--profile <path> | --profile-id <security-research|mathematics>] --json",
     "",
-    "Resolves an explicit profile or selected bundled profile, then .honeycrisp/profile.json, then the bundled security profile.",
+    "Resolves an explicit profile or selected bundled profile, then .beale/profile.json, then the bundled security profile.",
   ].join("\n");
 }
 
@@ -1817,22 +1818,23 @@ function validateModelRoute(
   }
 }
 
-export interface HoneycrispRuntimeTransport {
+export interface AppServerRuntimeTransport {
   readonly controlInput: Readable;
   readonly eventSink: ResearchLiveEventSink;
   waitForClient(): Promise<void>;
   close(): Promise<void>;
 }
 
-export interface HoneycrispRuntimeHostOptions {
+export interface AppServerRuntimeHostOptions {
   /** App-server-owned transport. When present, no private loopback server is opened. */
-  transport?: HoneycrispRuntimeTransport;
+  transport?: AppServerRuntimeTransport;
 }
 
 export async function main(
   argv: readonly string[] = process.argv.slice(2),
-  hostOptions: HoneycrispRuntimeHostOptions = {},
+  hostOptions: AppServerRuntimeHostOptions = {},
 ) {
+  installPreBealeEnvironmentAliases();
   try {
     if (argv[0] === "auth") {
       await handleAuthCommand(argv.slice(1));
@@ -1893,8 +1895,8 @@ export async function main(
     const { resolvedResearchProfile, workflow } = await resolveCliResearchProfile(args);
 
     if (!hostOptions.transport || !args.hostedSession) throw new Error('Research sessions must be launched by the Beale app-server.');
-    if (!args.sessionId) throw new Error("Hosted Honeycrisp sessions require --session-id.");
-    const hostedTransport: HoneycrispRuntimeTransport = hostOptions.transport;
+    if (!args.sessionId) throw new Error("Hosted app-server sessions require --session-id.");
+    const hostedTransport: AppServerRuntimeTransport = hostOptions.transport;
     try {
       await hostedTransport.waitForClient();
     } catch (error) {
@@ -1904,12 +1906,12 @@ export async function main(
 
     const transportEventSink = hostedTransport.eventSink;
     const sessionStore = args.sessionId && args.attemptId
-      ? new HoneycrispSessionStore()
+      ? new AppServerSessionStore()
       : undefined;
     const hostedSession = sessionStore?.getSummary(args.sessionId!);
     if (sessionStore && !hostedSession) {
       sessionStore.close();
-      throw new Error(`Honeycrisp session was not created before launch: ${args.sessionId}`);
+      throw new Error(`app-server session was not created before launch: ${args.sessionId}`);
     }
     const channelStore = hostedSession ? new ResearchChannelStore() : undefined;
     const channelContext: SubagentChannelContext | undefined = hostedSession && channelStore
@@ -1923,7 +1925,7 @@ export async function main(
     const liveEventSink = sessionStore && args.sessionId
       ? createPersistedSessionEventSink(sessionStore, args.sessionId, transportEventSink)
       : transportEventSink;
-    const controlStream = new HoneycrispControlStream(hostedTransport.controlInput, (event) => {
+    const controlStream = new AppServerControlStream(hostedTransport.controlInput, (event) => {
           void (async () => {
             const timestamp = new Date().toISOString();
             const { instruction: _instruction, ...controlEvent } = event.type === "steer"
@@ -1948,7 +1950,7 @@ export async function main(
                     contentMarkdown: event.instruction,
                     source: "user_steering",
                     metadata: {
-                      deliveredToHoneycrisp: true,
+                      deliveredToAppServer: true,
                       deliveryStatus: "accepted",
                       controlRequestId: requestId,
                     },
@@ -2239,7 +2241,7 @@ export async function main(
   } catch (error) {
     if (hostOptions.transport) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`honeycrisp: ${message}`);
+    console.error(`beale: ${message}`);
     process.exitCode = 1;
   }
 }
@@ -2644,7 +2646,7 @@ function createRealAgentExecutor(
   toolRegistry: ResearchToolRegistry | undefined,
   modelConfig: ResolvedResearchModelConfig,
   dispositionRecorder: ResearchDispositionRecorder,
-  controlStream: HoneycrispControlStream | undefined,
+  controlStream: AppServerControlStream | undefined,
   resumableState?: PiAgentResumableState | ClaudeAgentResumableState | ZCodeAgentResumableState,
   collaboration?: ResearchCollaborationConfig,
   channelContext?: SubagentChannelContext,
@@ -3268,7 +3270,7 @@ export async function executeHostedUtilityOperation(
 
 function configUsage(): string {
   return [
-    "Usage: honeycrisp config <command> [options]",
+    "Usage: appServer config <command> [options]",
     "",
     "Commands:",
     "  show                       Show model preference and authorization status",
@@ -3278,14 +3280,14 @@ function configUsage(): string {
     "",
     "Options:",
     "  --config <path>            Preference config path",
-    "  --workspace-root <path>    Project root for default .honeycrisp/config.json",
+    "  --workspace-root <path>    Project root for default .beale/config.json",
     "  --json                     Print JSON",
   ].join("\n");
 }
 
 function toolsConfigUsage(): string {
   return [
-    "Usage: honeycrisp tools config <command> [options]",
+    "Usage: appServer tools config <command> [options]",
     "",
     "Commands:",
     "  show                              Show persisted runtime tool preferences",
@@ -3302,7 +3304,7 @@ function toolsConfigUsage(): string {
     "",
     "Options:",
     "  --tool-config <path>              Runtime tool preference config path",
-    "  --workspace-root <path>           Project root for default .honeycrisp/tools.json",
+    "  --workspace-root <path>           Project root for default .beale/tools.json",
     "  --json                            Print JSON",
   ].join("\n");
 }
@@ -3686,14 +3688,14 @@ function renderConfigInspection(input: {
 
 function toolsUsage(): string {
   return [
-    "Usage: honeycrisp tools list [options]",
+    "Usage: appServer tools list [options]",
     "",
     "Options:",
     "  --tool-family <name>        Enable shell, local-inspection, repository-search, file-read, code, analysis, synthesis, storage, or experiment",
     "  --shell-options <path>      Harness-wide shell utility policy JSON",
     "  --disable-tool-family <n>   Disable a tool family after implicit/default enables",
-    "  --tool-config <path>        Runtime tool preference config (default: .honeycrisp/tools.json)",
-    "  --no-default-tool-config    Ignore .honeycrisp/tools.json unless --tool-config is provided",
+    "  --tool-config <path>        Runtime tool preference config (default: .beale/tools.json)",
+    "  --no-default-tool-config    Ignore .beale/tools.json unless --tool-config is provided",
     "  --repo-root <path>          Add a known repository context hint and enable repository.search unless disabled",
     "  --file-read-root <path>     Add a file.read context hint and enable file.read unless disabled",
     "  --source-path <path>        Add a materialized source context path",
@@ -3751,7 +3753,7 @@ function renderToolsList(capture: Record<string, unknown>): string {
 
 function memoryUsage(): string {
   return [
-    "Usage: honeycrisp memory <command> [options]",
+    "Usage: appServer memory <command> [options]",
     "",
     "Commands:",
     "  state                     Summarize durable knowledge",
@@ -3763,7 +3765,7 @@ function memoryUsage(): string {
     "  link <from> <to> <rel>    Link two nodes",
     "",
     "Options:",
-    "  --workspace-root <path>  Workspace root containing .honeycrisp memory",
+    "  --workspace-root <path>  Workspace root containing .beale memory",
     "  --profile <path>         Explicit research profile (otherwise use the workspace default)",
     "  --type <type>           Filter nodes; with correct, reclassify one node",
     "  --status <status>       Filter or set node status",
@@ -4072,7 +4074,7 @@ async function createRuntimeConfig(args: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`honeycrisp: campaign track post-session refresh failed: ${message.slice(0, 500)}`);
+        console.error(`beale: campaign track post-session refresh failed: ${message.slice(0, 500)}`);
       } finally {
         campaignTrackStore?.close();
       }
@@ -4948,7 +4950,7 @@ async function writeFlowCapture(
 }
 
 function createPersistedSessionEventSink(
-  store: HoneycrispSessionStore,
+  store: AppServerSessionStore,
   sessionId: string,
   downstream: ResearchLiveEventSink | undefined,
 ): ResearchLiveEventSink {
@@ -5021,7 +5023,7 @@ async function handleAuthCommand(argv: readonly string[]): Promise<void> {
   if (command === "login") {
     const providerId = argv[1];
     if (!providerId) {
-      throw new Error("Usage: honeycrisp auth login <provider>");
+      throw new Error("Usage: appServer auth login <provider>");
     }
 
     const callbacks = createTerminalAuthCallbacks();
@@ -5040,7 +5042,7 @@ async function handleAuthCommand(argv: readonly string[]): Promise<void> {
   if (command === "logout") {
     const providerId = argv[1];
     if (!providerId) {
-      throw new Error("Usage: honeycrisp auth logout <provider>");
+      throw new Error("Usage: appServer auth logout <provider>");
     }
 
     await logoutAuthProvider(providerId);
@@ -5051,7 +5053,7 @@ async function handleAuthCommand(argv: readonly string[]): Promise<void> {
   if (command === "verify") {
     const providerId = argv[1];
     if (!providerId) {
-      throw new Error("Usage: honeycrisp auth verify <provider> [model]");
+      throw new Error("Usage: appServer auth verify <provider> [model]");
     }
 
     const result = await verifyProviderAuth(providerId, argv[2]);
@@ -5065,14 +5067,14 @@ async function handleAuthCommand(argv: readonly string[]): Promise<void> {
   }
 
   throw new Error(
-    "Usage: honeycrisp auth <list|status|login|logout|verify> [provider] [model]",
+    "Usage: appServer auth <list|status|login|logout|verify> [provider] [model]",
   );
 }
 
 function handleModelsCommand(argv: readonly string[]): void {
   const command = argv[0] ?? "list";
   if (command !== "list") {
-    throw new Error("Usage: honeycrisp models list [provider] [--json]");
+    throw new Error("Usage: appServer models list [provider] [--json]");
   }
   const providerId = argv.find((value, index) => index > 0 && !value.startsWith("--"));
   const catalogs = getProviderModelCatalog(providerId);

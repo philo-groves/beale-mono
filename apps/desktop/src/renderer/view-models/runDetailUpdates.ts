@@ -23,7 +23,7 @@ export function runDetailMetricDetail(detail: RunDetail): DevMetricDetail {
     traceEvents: detail.traceEvents.length,
     transcripts: detail.transcriptMessages.length,
     artifacts: detail.artifacts.length,
-    memoryNodes: detail.honeycrispMemory?.nodes.length ?? 0
+    memoryNodes: detail.appServerMemory?.nodes.length ?? 0
   };
 }
 
@@ -35,15 +35,15 @@ export function runDetailUpdateMetricDetail(update: RunDetailUpdate): DevMetricD
     traceEvents: update.traceEvents.length,
     transcripts: update.transcriptMessages.length,
     artifacts: update.artifacts.length,
-    memoryNodes: update.honeycrispMemory?.nodes.length ?? 0
+    memoryNodes: update.appServerMemory?.nodes.length ?? 0
   };
 }
 
 export function runDetailUpdateCursor(detail: RunDetail): RunDetailUpdateCursor {
   if (detail.projectionCursor) return detail.projectionCursor;
   const latestTrace = detail.traceEvents.at(-1);
-  const sessionEventId = typeof latestTrace?.payload.honeycrispSessionEventId === 'string'
-    ? latestTrace.payload.honeycrispSessionEventId
+  const sessionEventId = typeof latestTrace?.payload.appServerSessionEventId === 'string'
+    ? latestTrace.payload.appServerSessionEventId
     : latestTrace?.id ?? null;
   return {
     afterTraceSequence: latestTrace?.sequence ?? -1,
@@ -74,7 +74,7 @@ export function mergeRunDetailUpdate(current: RunDetail, update: RunDetailUpdate
     contextCompactions: mergeRecordsById(current.contextCompactions, update.contextCompactions),
     policyEvents: mergeRecordsById(current.policyEvents, update.policyEvents),
     exports: mergeRecordsById(current.exports, update.exports),
-    honeycrispMemory: update.honeycrispMemory ?? current.honeycrispMemory,
+    appServerMemory: update.appServerMemory ?? current.appServerMemory,
     subagentPreviews: mergeSubagentPreviews(current.subagentPreviews ?? [], update.subagentPreviews ?? []),
     projectionCursor: update.projectionCursor ?? current.projectionCursor
   };

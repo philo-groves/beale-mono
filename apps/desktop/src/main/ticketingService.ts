@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type {
-  HoneycrispReportDocument,
-  HoneycrispReportSummary,
+  AppServerReportDocument,
+  AppServerReportSummary,
   TicketingMode,
   TicketingProviderId,
   TicketingSettings,
@@ -136,7 +136,7 @@ export class TicketingService {
     return this.getSettings();
   }
 
-  public async submit(report: HoneycrispReportSummary, document: HoneycrispReportDocument): Promise<TicketSubmissionResult> {
+  public async submit(report: AppServerReportSummary, document: AppServerReportDocument): Promise<TicketSubmissionResult> {
     if (this.provider === 'local') throw new Error('Ticketing is set to Local Reports Only.');
     if (report.status !== 'complete') throw new Error('Only complete reports can be submitted to ticketing systems.');
     const provider = this.provider;
@@ -171,8 +171,8 @@ export class TicketingService {
   }
 
   public async submitAutomatically(
-    reports: readonly HoneycrispReportSummary[],
-    getDocument: (report: HoneycrispReportSummary) => HoneycrispReportDocument | Promise<HoneycrispReportDocument>
+    reports: readonly AppServerReportSummary[],
+    getDocument: (report: AppServerReportSummary) => AppServerReportDocument | Promise<AppServerReportDocument>
   ): Promise<void> {
     if (this.humanInTheLoop || this.provider === 'local' || !this.automaticSubmissionEnabledAt) return;
     const provider = this.provider;

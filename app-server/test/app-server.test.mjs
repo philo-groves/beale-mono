@@ -11,9 +11,9 @@ import {
   acquireDiscoveryLock,
   createAppServerPairingPayload,
   discoveryLockPath,
-  honeycrispWorkerEnvironment,
-  honeycrispSessionArgs,
-  honeycrispSessionEnvironment,
+  appServerWorkerEnvironment,
+  appServerSessionArgs,
+  appServerSessionEnvironment,
   operatorTokenPath,
   nextAutomationRunAt,
   releaseDiscoveryLock,
@@ -23,15 +23,15 @@ import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
   BEALE_APP_SERVER_CONTROL_VERSION,
-} from "honeycrisp/protocol";
-import { HoneycrispSessionStore } from "../../packages/research-agent/dist/index.js";
+} from "@beale/app-server-runtime/protocol";
+import { AppServerSessionStore } from "../../packages/research-agent/dist/index.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const WebSocket = requireFromHere("ws");
 
 const servers = [];
 const temporaryDirectories = [];
-const originalMockMode = process.env.BEALE_HONEYCRISP_MOCK;
+const originalMockMode = process.env.BEALE_APP_SERVER_MOCK;
 
 test("creates a versioned app-server pairing payload without altering credentials", () => {
   const payload = new URL(createAppServerPairingPayload(
@@ -50,7 +50,7 @@ test("creates a versioned app-server pairing payload without altering credential
 });
 
 beforeEach(() => {
-  process.env.BEALE_HONEYCRISP_MOCK = "1";
+  process.env.BEALE_APP_SERVER_MOCK = "1";
 });
 
 afterEach(async () => {
@@ -60,8 +60,8 @@ afterEach(async () => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
-  if (originalMockMode === undefined) delete process.env.BEALE_HONEYCRISP_MOCK;
-  else process.env.BEALE_HONEYCRISP_MOCK = originalMockMode;
+  if (originalMockMode === undefined) delete process.env.BEALE_APP_SERVER_MOCK;
+  else process.env.BEALE_APP_SERVER_MOCK = originalMockMode;
 });
 
 test("health endpoint responds ok without an operator token", async () => {
@@ -182,7 +182,7 @@ test("routes campaign-track operations through registered workspace storage", as
   temporaryDirectories.push(directory);
   const calls = [];
   const service = new AppServerHostService({
-    registry: hostRegistryFixture(directory, { memoryBackend: "honeycrisp" }),
+    registry: hostRegistryFixture(directory, { memoryBackend: "app-server" }),
     invokeProtocol: async (operation, options) => {
       calls.push({ operation, options });
       return [{ id: "investigation_one" }];
@@ -261,9 +261,9 @@ test("routes the host Codex OAuth bridge into OpenAI suggestion generation", asy
   temporaryDirectories.push(directory);
   const codexAuthFile = join(directory, "codex-auth.json");
   writeFileSync(codexAuthFile, "{}", { mode: 0o600 });
-  const previousHoneycrispPath = process.env.HONEYCRISP_CODEX_AUTH_FILE;
+  const previousAppServerPath = process.env.APP_SERVER_CODEX_AUTH_FILE;
   const previousBealePath = process.env.BEALE_OPENAI_CODEX_AUTH_FILE;
-  delete process.env.HONEYCRISP_CODEX_AUTH_FILE;
+  delete process.env.APP_SERVER_CODEX_AUTH_FILE;
   process.env.BEALE_OPENAI_CODEX_AUTH_FILE = codexAuthFile;
   try {
     const calls = [];
@@ -289,8 +289,8 @@ test("routes the host Codex OAuth bridge into OpenAI suggestion generation", asy
 
     assert.equal(calls[0].options.input.provider.codexAuthFile, codexAuthFile);
   } finally {
-    if (previousHoneycrispPath === undefined) delete process.env.HONEYCRISP_CODEX_AUTH_FILE;
-    else process.env.HONEYCRISP_CODEX_AUTH_FILE = previousHoneycrispPath;
+    if (previousAppServerPath === undefined) delete process.env.APP_SERVER_CODEX_AUTH_FILE;
+    else process.env.APP_SERVER_CODEX_AUTH_FILE = previousAppServerPath;
     if (previousBealePath === undefined) delete process.env.BEALE_OPENAI_CODEX_AUTH_FILE;
     else process.env.BEALE_OPENAI_CODEX_AUTH_FILE = previousBealePath;
   }
@@ -370,12 +370,12 @@ test("rejects prompt expansion through a provider that is not connected", async 
   );
 });
 
-test("maps transient Honeycrisp failures to typed retryable HTTP errors", async () => {
+test("maps transient app-server failures to typed retryable HTTP errors", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-errors-"));
   temporaryDirectories.push(directory);
   const hostService = testHostService(directory);
   hostService.workspaceSessions = async () => {
-    throw new Error("Honeycrisp protocol operation timed out after 30000ms.");
+    throw new Error("app-server protocol operation timed out after 30000ms.");
   };
   const server = await startAppServer({ hostService });
   servers.push(server);
@@ -388,14 +388,14 @@ test("maps transient Honeycrisp failures to typed retryable HTTP errors", async 
     controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
     error: {
       code: "temporarily_unavailable",
-      message: "Honeycrisp protocol operation timed out after 30000ms.",
+      message: "app-server protocol operation timed out after 30000ms.",
       retryable: true,
     },
   });
 });
 
-test("runs Honeycrisp workers in Node mode when hosted by Electron", () => {
-  const environment = honeycrispWorkerEnvironment({
+test("runs app-server workers in Node mode when hosted by Electron", () => {
+  const environment = appServerWorkerEnvironment({
     BEALE_TEST_CHILD_ENVIRONMENT: "preserved",
     ELECTRON_RUN_AS_NODE: "0",
   }, "41.3.0");
@@ -404,7 +404,7 @@ test("runs Honeycrisp workers in Node mode when hosted by Electron", () => {
   assert.equal(environment.ELECTRON_RUN_AS_NODE, "1");
 });
 
-test("serves host workspaces and canonical Honeycrisp reads from one authenticated control plane", async () => {
+test("serves host workspaces and canonical app-server reads from one authenticated control plane", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-control-"));
   temporaryDirectories.push(directory);
   const server = await startAppServer({ hostService: testHostService(directory) });
@@ -502,7 +502,7 @@ test("resolves workspace identity and host policy from the shared Beale registry
       "security-research",
       "general",
       "[]",
-      "honeycrisp",
+      "app-server",
       "2026-08-21T00:02:00.000Z",
     );
     database.prepare(`INSERT INTO research_sessions VALUES (?, ?, ?)`).run(
@@ -822,7 +822,7 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
   const prepared = await service.prepareSession(request, "generated-session");
 
   assert.equal(prepared.launch.provider.fastMode, true);
-  assert.ok(honeycrispSessionArgs(prepared.launch, {}).includes("--fast-mode"));
+  assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--fast-mode"));
   const createCall = calls.find((call) => call.operation === "session.create");
   assert.equal(
     createCall.options.input.metadata.appServerRestartLaunch.launch.provider.fastMode,
@@ -975,7 +975,7 @@ test("prepares automatic recovery as a child attempt and pauses an interrupted a
   assert.equal(prepared.launch.resumeCapturePath, join(
     directory,
     ".beale",
-    "honeycrisp-runs",
+    "app-server-runs",
     "session-recovery-policy.capture.json",
   ));
   const transitionCall = calls.find((call) => call.operation === "session.transition");
@@ -1014,7 +1014,7 @@ test("startup recovery continues only interrupted sessions with a sanitized rest
     updatedAt: "2026-08-28T00:00:00.000Z",
     workspacePath: directory,
     workspaceDirectories: [directory],
-    memoryBackend: "honeycrisp",
+    memoryBackend: "app-server",
   }];
   const service = new AppServerHostService({
     registry,
@@ -1063,7 +1063,7 @@ test("startup recovery continues only interrupted sessions with a sanitized rest
   assert.equal(recovery.recovered[0].prepared.launch.resumeCapturePath, join(
     directory,
     ".beale",
-    "honeycrisp-runs",
+    "app-server-runs",
     "session-startup-recovery.capture.json",
   ));
   const beginCall = calls.find((call) => call.operation === "session.begin_attempt");
@@ -1137,7 +1137,7 @@ test("discovers overdue automations from canonical session metadata and rebuilds
 test("automatically launches due automations while the app-server is resident", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-automation-loop-"));
   temporaryDirectories.push(directory);
-  const upstream = await createFakeHoneycrispSessionHost();
+  const upstream = await createFakeAppServerSessionHost();
   const hostService = testHostService(directory);
   const prepareSession = hostService.prepareSession.bind(hostService);
   let automationRequest;
@@ -1226,7 +1226,7 @@ test("startup recovery leaves manually paused and stopped sessions untouched", a
     updatedAt: "2026-08-28T00:00:00.000Z",
     workspacePath: directory,
     workspaceDirectories: [directory],
-    memoryBackend: "honeycrisp",
+    memoryBackend: "app-server",
   }];
   const service = new AppServerHostService({
     registry,
@@ -1358,7 +1358,7 @@ test("workspace launches retain the standard plugin runtime while authenticating
   });
 });
 
-test("session requests validate their input before spawning Honeycrisp", async () => {
+test("session requests validate their input before spawning app-server", async () => {
   const server = await startAppServer();
   servers.push(server);
   const auth = { authorization: `Bearer ${server.operatorToken}`, "content-type": "application/json" };
@@ -1439,7 +1439,7 @@ test("authenticated shutdown requests are delegated to the process host", async 
 test("control-plane shutdown cannot interrupt an active research session", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-shutdown-guard-"));
   temporaryDirectories.push(directory);
-  const upstream = await createFakeHoneycrispSessionHost();
+  const upstream = await createFakeAppServerSessionHost();
   servers.push(upstream);
   let requested = false;
   const server = await startAppServer({
@@ -1490,7 +1490,7 @@ test("control-plane shutdown cannot interrupt an active research session", async
   await waitFor(() => requested);
 });
 
-test("expands typed session intent into app-server-owned Honeycrisp policy", () => {
+test("expands typed session intent into app-server-owned runtime policy", () => {
   const request = sessionLaunchRequest("C:\\workspace", {
     sessionId: "session-compose",
     researchProfile: {
@@ -1505,13 +1505,13 @@ test("expands typed session intent into app-server-owned Honeycrisp policy", () 
     researchProfileHash: request.launch.researchProfileHash,
     workflowId: request.launch.workflowId,
   });
-  const args = honeycrispSessionArgs({
+  const args = appServerSessionArgs({
     ...launch,
     provider: { ...launch.provider, fastMode: true },
   }, {
-    BEALE_HONEYCRISP_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["repository-search", "file-read"]),
-    BEALE_HONEYCRISP_PROFILE_SIDE_EFFECT_CEILING_JSON: JSON.stringify(["none", "read"]),
-    BEALE_HONEYCRISP_TOOL_MAX_BYTES: "123456",
+    BEALE_APP_SERVER_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["repository-search", "file-read"]),
+    BEALE_APP_SERVER_PROFILE_SIDE_EFFECT_CEILING_JSON: JSON.stringify(["none", "read"]),
+    BEALE_APP_SERVER_TOOL_MAX_BYTES: "123456",
   });
 
   assert.equal("args" in request, false);
@@ -1523,18 +1523,18 @@ test("expands typed session intent into app-server-owned Honeycrisp policy", () 
   ]);
   assert.equal(args[args.indexOf("--workspace-context") + 1], "C:\\workspace\\workspace-context.json");
   assert.equal(args[args.indexOf("--attempt-id") + 1], "attempt-test");
-  assert.equal(args[args.indexOf("--memory-backend") + 1], "honeycrisp");
+  assert.equal(args[args.indexOf("--memory-backend") + 1], "app-server");
   assert.ok(args.includes("--no-default-tool-config"));
   assert.ok(args.includes("--fast-mode"));
   assert.ok(args.includes("--profile-tool-family-ceiling"));
   assert.ok(args.includes("--profile-side-effect-ceiling"));
   assert.equal(args.includes("--disable-tool-family"), false);
   assert.equal(args[args.indexOf("--tool-max-bytes") + 1], "123456");
-  assert.throws(() => honeycrispSessionArgs(launch, {
-    BEALE_HONEYCRISP_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["unknown-family"]),
+  assert.throws(() => appServerSessionArgs(launch, {
+    BEALE_APP_SERVER_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["unknown-family"]),
   }), /unsupported capability: unknown-family/);
 
-  const introspectionEnvironment = honeycrispSessionEnvironment({
+  const introspectionEnvironment = appServerSessionEnvironment({
     ...launch,
     introspection: {
       url: "http://127.0.0.1:42125",
@@ -1678,7 +1678,7 @@ test("proxies a real mock run over the versioned session transport and retains i
 test("replays hosted events after a mobile client disconnects and reconnects", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-replay-"));
   temporaryDirectories.push(directory);
-  const upstream = await createFakeHoneycrispSessionHost();
+  const upstream = await createFakeAppServerSessionHost();
   servers.push(upstream);
   const server = await startAppServer({
     hostService: testHostService(directory),
@@ -1743,10 +1743,10 @@ test("replays hosted events after a mobile client disconnects and reconnects", a
   await waitForSocketClose(resumedSocket);
 });
 
-test("fans one Honeycrisp session out to independently authenticated desktop and mobile clients", async () => {
+test("fans one app-server session out to independently authenticated desktop and mobile clients", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-multi-client-"));
   temporaryDirectories.push(directory);
-  const upstream = await createFakeHoneycrispSessionHost();
+  const upstream = await createFakeAppServerSessionHost();
   servers.push(upstream);
   const server = await startAppServer({
     hostService: testHostService(directory),
@@ -2027,7 +2027,7 @@ test("recovers a failed long session without replacing its client transport", as
 test("app-server startup relaunches interrupted sessions before clients attach", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-startup-recovery-"));
   temporaryDirectories.push(directory);
-  const fakeHost = await createFakeHoneycrispSessionHost();
+  const fakeHost = await createFakeAppServerSessionHost();
   const request = sessionLaunchRequest(directory, {
     sessionId: "session-startup-recovery",
     promptMarkdown: "Resume after the app-server restart.",
@@ -2093,7 +2093,7 @@ test("app-server startup relaunches interrupted sessions before clients attach",
 test("accepted pause and stop controls are persisted as intentional session state", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-control-state-"));
   temporaryDirectories.push(directory);
-  const upstream = await createFakeHoneycrispSessionHost();
+  const upstream = await createFakeAppServerSessionHost();
   const hostService = testHostService(directory);
   const states = [];
   hostService.recordSessionControlState = async (input) => { states.push(input.state); };
@@ -2140,7 +2140,7 @@ test("accepted pause and stop controls are persisted as intentional session stat
 test("graceful app-server shutdown leaves active canonical sessions eligible for startup recovery", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-graceful-restart-"));
   temporaryDirectories.push(directory);
-  const upstream = await createFakeHoneycrispSessionHost();
+  const upstream = await createFakeAppServerSessionHost();
   const hostService = testHostService(directory);
   const states = [];
   hostService.recordSessionControlState = async (input) => { states.push(input.state); };
@@ -2191,7 +2191,7 @@ function webSocketUrl(baseUrl, path) {
   return `${baseUrl.replace(/^http/u, "ws")}${path}`;
 }
 
-async function createFakeHoneycrispSessionHost() {
+async function createFakeAppServerSessionHost() {
   const listeners = new Set();
   let sessionId = "";
   let exitResolved = false;
@@ -2311,7 +2311,7 @@ function resolvedSessionLaunch(directory, options = {}) {
     ...(options.researchProfileHash ? { researchProfileHash: options.researchProfileHash } : {}),
     ...(options.workflowId ? { workflowId: options.workflowId } : {}),
     profileAware: true,
-    memoryBackend: options.memoryBackend ?? "honeycrisp",
+    memoryBackend: options.memoryBackend ?? "app-server",
     storage: {
       databasePath: join(directory, "memory.sqlite"),
       artifactDirectoryPath: join(directory, "artifacts"),
@@ -2336,7 +2336,7 @@ function testHostService(directory, options = {}) {
     async prepareSession(request) {
       const workspaceContextPath = join(directory, "workspace-context.json");
       const databasePath = join(directory, "memory.sqlite");
-      const store = new HoneycrispSessionStore({ databasePath });
+      const store = new AppServerSessionStore({ databasePath });
       try {
         if (!store.getSummary(request.sessionId ?? "session-generated")) {
           store.create({
@@ -2401,7 +2401,7 @@ function hostRegistryFixture(directory, options = {}) {
       updatedAt: "2026-08-21T00:00:00.000Z",
       workspacePath: directory,
       workspaceDirectories: [directory],
-      memoryBackend: options.memoryBackend ?? "honeycrisp",
+      memoryBackend: options.memoryBackend ?? "app-server",
     } : null,
     providerSettings: () => ({
       defaultProviderId: "openai-codex",

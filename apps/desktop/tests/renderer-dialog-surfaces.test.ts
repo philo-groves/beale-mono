@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { HoneycrispMemoryNodeSummary, ResearchCollaborationProviderPreference, ResearchGoalSuggestionsByPhase, RunDetail, TraceEventRecord, WorkspaceSnapshot } from '@shared/types';
+import type { AppServerMemoryNodeSummary, ResearchCollaborationProviderPreference, ResearchGoalSuggestionsByPhase, RunDetail, TraceEventRecord, WorkspaceSnapshot } from '@shared/types';
 import { BottomSheet, Modal } from '../src/renderer/app/Modal';
 import { ModelSelectionPicker } from '../src/renderer/app/ModelSelectionPicker';
 import { MemoryDetailView } from '../src/renderer/features/research/MemorySidePanel';
@@ -849,7 +849,7 @@ describe('renderer dialog surfaces', () => {
   });
 
   it('renders memory record details in a bottom sheet', () => {
-    const node: HoneycrispMemoryNodeSummary = {
+    const node: AppServerMemoryNodeSummary = {
       id: 'primitive_one',
       sessionIds: ['run_one'],
       workspaces: [{ id: 'workspace_one', name: 'Parser Research' }],

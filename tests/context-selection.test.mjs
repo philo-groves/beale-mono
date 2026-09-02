@@ -224,7 +224,7 @@ function workspaceContext(fixture) {
 }
 
 function contextFixture() {
-  const root = mkdtempSync(join(tmpdir(), "honeycrisp-context-selection-"));
+  const root = mkdtempSync(join(tmpdir(), "app-server-context-selection-"));
   const workspace = join(root, "workspace");
   const targetRepository = join(root, "target-kernel");
   const unrelatedRepository = join(root, "unrelated-repository");

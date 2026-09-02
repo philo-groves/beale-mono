@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { preBealeRuntimeId } from "./legacy-compatibility.js";
 
 export interface DatabaseMigration {
   version: number;
@@ -22,6 +23,7 @@ export function applyDatabaseMigrations(
       PRIMARY KEY(component, version)
     );
   `);
+  migratePreBealeDatabaseNames(database);
 
   const appliedRows = database
     .prepare("SELECT version, name FROM schema_migrations WHERE component = ? ORDER BY version")
@@ -58,6 +60,60 @@ export function applyDatabaseMigrations(
       throw new Error(`Migration ${component}:${migration.version} (${migration.name}) failed: ${message}`, { cause: error });
     }
   }
+}
+
+function migratePreBealeDatabaseNames(database: DatabaseSync): void {
+  const previousPrefix = `${preBealeRuntimeId()}_`;
+  const currentPrefix = "app_server_";
+  const objects = database.prepare(`
+    SELECT type, name, sql
+    FROM sqlite_master
+    WHERE name LIKE ? AND type IN ('table', 'index', 'trigger', 'view')
+    ORDER BY CASE type WHEN 'view' THEN 0 WHEN 'trigger' THEN 1 WHEN 'index' THEN 2 ELSE 3 END
+  `).all(`${previousPrefix}%`) as Array<{ type: string; name: string; sql: string | null }>;
+  const migrationRows = database.prepare(`
+    SELECT 1
+    FROM schema_migrations
+    WHERE instr(component, ?) > 0 OR instr(name, ?) > 0
+    LIMIT 1
+  `).get(preBealeRuntimeId(), preBealeRuntimeId());
+  if (objects.length === 0 && !migrationRows) return;
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const recreated = objects.filter((object) => object.type !== "table" && object.sql);
+    for (const object of recreated) {
+      database.exec(`DROP ${object.type.toUpperCase()} IF EXISTS ${quotedIdentifier(object.name)}`);
+    }
+    for (const object of objects.filter((candidate) => candidate.type === "table")) {
+      const nextName = object.name.replace(previousPrefix, currentPrefix);
+      const collision = database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(nextName);
+      if (collision) {
+        throw new Error(`Cannot adopt the pre-Beale table ${object.name}: ${nextName} already exists.`);
+      }
+      database.exec(`ALTER TABLE ${quotedIdentifier(object.name)} RENAME TO ${quotedIdentifier(nextName)}`);
+    }
+    for (const object of recreated.reverse()) {
+      database.exec(object.sql!.split(preBealeRuntimeId()).join("app_server"));
+    }
+    database.prepare(`
+      UPDATE schema_migrations
+      SET component = replace(component, ?, ?), name = replace(name, ?, ?)
+      WHERE instr(component, ?) > 0 OR instr(name, ?) > 0
+    `).run(
+      preBealeRuntimeId(), "app_server",
+      preBealeRuntimeId(), "app_server",
+      preBealeRuntimeId(), preBealeRuntimeId(),
+    );
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function quotedIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function validateMigrationDefinitions(component: string, migrations: readonly DatabaseMigration[]): void {

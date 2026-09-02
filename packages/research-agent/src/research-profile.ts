@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { compatibleExistingPath, PRE_BEALE_DATA_DIRECTORY_NAME, preBealeHashDomain } from "./legacy-compatibility.js";
 
 export const RESEARCH_PROFILE_SCHEMA_VERSION = 1 as const;
-export const DEFAULT_RESEARCH_PROFILE_RELATIVE_PATH = ".honeycrisp/profile.json";
+export const DEFAULT_RESEARCH_PROFILE_RELATIVE_PATH = ".beale/profile.json";
 
 export type ResearchProfileAuthorizationMode =
   | "required_for_live_network"
@@ -481,7 +482,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       "The system explanation must describe the relevant components, objects, trust or ownership boundary, normal data flow, and violated invariant as if the triager is unfamiliar with the subsystem.",
       "Present the chain as a readable narrative followed by numbered state transitions. Separate demonstrated consequences from plausible downstream consequences and preserve material limitations.",
       "Put complete scripts and bulky evidence in submission.zip. In the report, name the packet, state its hash and prerequisites, give one exact entry command, enumerate the proof actions and decisive expected output, include independent rerun and cleanup results, and point to packet files for deeper inspection.",
-      "Create submission.zip inside the active workspace and pass submissionPacketPath to report.create. Honeycrisp imports the candidate packet into durable report storage; a security report is not complete without it.",
+      "Create submission.zip inside the active workspace and pass submissionPacketPath to report.create. app-server imports the candidate packet into durable report storage; a security report is not complete without it.",
       "Reports are Markdown artifacts, not memories. Keep each one coherent and standalone, and mark it stale when superseded or no longer accurate.",
     ],
   },
@@ -1048,7 +1049,10 @@ export function bundledResearchProfile(profileId: BundledResearchProfileId): Res
 }
 
 export function getDefaultResearchProfilePath(workspaceRoot: string = process.cwd()): string {
-  return resolve(workspaceRoot, DEFAULT_RESEARCH_PROFILE_RELATIVE_PATH);
+  return compatibleExistingPath(
+    resolve(workspaceRoot, DEFAULT_RESEARCH_PROFILE_RELATIVE_PATH),
+    resolve(workspaceRoot, PRE_BEALE_DATA_DIRECTORY_NAME, "profile.json"),
+  );
 }
 
 export async function loadResearchProfile(path: string): Promise<ResearchProfile> {
@@ -1174,7 +1178,7 @@ function normalizeClaims(value: unknown): ResearchProfileClaims {
 
 export function researchProfileHash(profile: ResearchProfile): string {
   return createHash("sha256")
-    .update("honeycrisp:research-profile:v1\0")
+    .update(preBealeHashDomain("research-profile:v1\0"))
     .update(stableJson(profile))
     .digest("hex");
 }
@@ -1183,7 +1187,7 @@ export function researchProfileHash(profile: ResearchProfile): string {
 export function legacyResearchProfileHash(profile: ResearchProfile): string {
   const { claims: _claims, ...legacyProfile } = profile;
   return createHash("sha256")
-    .update("honeycrisp:research-profile:v1\0")
+    .update(preBealeHashDomain("research-profile:v1\0"))
     .update(stableJson(legacyProfile))
     .digest("hex");
 }

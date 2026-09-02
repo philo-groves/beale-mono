@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, JSX, ReactNode } from 'react';
-import type { ApprovalRecord, HoneycrispMemorySummary, HoneycrispReportDocument, HoneycrispReportSummary, HoneycrispRunbookDocument, HoneycrispRunbookSummary, MemoryDreamingProgressUpdate, PolicyReviewDecision, ProviderModelDefaults, RepositoryCloneMode, ResearchKitId, ResearchKitRefreshInput, ResearchKitRefreshResult, ResearchModelProviderId, ResearchModelSelection, ResearchProfile, ResearchProviderModelCatalog, RunDetail, RunRow, RunbookExecutionSelection, RunbookProofTarget, RunbookProofTargetSelection, ScopeAssetInput, SteeringAction, TraceEventRecord, WorkspaceDejunkSummary, WorkspaceMemoryBackendId, WorkspaceRule, WorkspaceScopeVersion } from '@shared/types';
+import type { ApprovalRecord, AppServerMemorySummary, AppServerReportDocument, AppServerReportSummary, AppServerRunbookDocument, AppServerRunbookSummary, MemoryDreamingProgressUpdate, PolicyReviewDecision, ProviderModelDefaults, RepositoryCloneMode, ResearchKitId, ResearchKitRefreshInput, ResearchKitRefreshResult, ResearchModelProviderId, ResearchModelSelection, ResearchProfile, ResearchProviderModelCatalog, RunDetail, RunRow, RunbookExecutionSelection, RunbookProofTarget, RunbookProofTargetSelection, ScopeAssetInput, SteeringAction, TraceEventRecord, WorkspaceDejunkSummary, WorkspaceMemoryBackendId, WorkspaceRule, WorkspaceScopeVersion } from '@shared/types';
 import { WorkspaceUnderstandingView } from '../workspaces/WorkspaceUnderstandingView';
 import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from '../workspaces/WorkspaceUnderstandingView';
 import { ResearchSidePanel } from '../research/MemorySidePanel';
@@ -37,7 +37,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   allEvents,
   providerModelCatalog,
   providerModelDefaults,
-  honeycrispMemory,
+  appServerMemory,
   activeScope = null,
   workspaceRules = [],
   researchProfile,
@@ -48,7 +48,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   researchSubjectName = '',
   workspacePath = '',
   workspaceDirectories,
-  workspaceMemoryBackend = 'honeycrisp',
+  workspaceMemoryBackend = 'app-server',
   workspaceName,
   viewState: viewStateInput,
   newResearchContent = null,
@@ -91,10 +91,10 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onOpenSession = () => undefined,
   onWorkspaceViewChange,
   onResearchDetailsOpenChange,
-  onOpenHoneycrispRunbook,
-  onRunHoneycrispRunbook = async () => undefined,
+  onOpenAppServerRunbook,
+  onRunAppServerRunbook = async () => undefined,
   onBackToRunbooks,
-  onOpenHoneycrispReport = () => undefined,
+  onOpenAppServerReport = () => undefined,
   onBackToReports = () => undefined,
   onBackToSubagents,
   onSelectSubagent,
@@ -109,7 +109,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   allEvents: TraceDisplayEvent[];
   providerModelCatalog: ResearchProviderModelCatalog[];
   providerModelDefaults?: Partial<Record<ResearchModelProviderId, ProviderModelDefaults>>;
-  honeycrispMemory: HoneycrispMemorySummary | null;
+  appServerMemory: AppServerMemorySummary | null;
   activeScope?: WorkspaceScopeVersion | null;
   workspaceRules?: WorkspaceRule[];
   researchProfile: ResearchProfile | null;
@@ -129,13 +129,13 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   selectedRunId: string | null;
   researchDetailsOpen: boolean;
   selectedRunbookId: string | null;
-  selectedRunbook: HoneycrispRunbookSummary | null;
-  selectedRunbookDocument: HoneycrispRunbookDocument | null;
+  selectedRunbook: AppServerRunbookSummary | null;
+  selectedRunbookDocument: AppServerRunbookDocument | null;
   runbookLoading: boolean;
   runbookError: string | null;
   selectedReportId?: string | null;
-  selectedReport?: HoneycrispReportSummary | null;
-  selectedReportDocument?: HoneycrispReportDocument | null;
+  selectedReport?: AppServerReportSummary | null;
+  selectedReportDocument?: AppServerReportDocument | null;
   reportLoading?: boolean;
   reportError?: string | null;
   selectedSubagentPath: string | null;
@@ -163,10 +163,10 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onOpenSession?: (runId: string) => void;
   onWorkspaceViewChange?: (viewName: string) => void;
   onResearchDetailsOpenChange: (expanded: boolean) => void;
-  onOpenHoneycrispRunbook: (runbookId: string) => void;
-  onRunHoneycrispRunbook?: (runbookId: string, selection: RunbookExecutionSelection, target: RunbookProofTargetSelection) => Promise<void>;
+  onOpenAppServerRunbook: (runbookId: string) => void;
+  onRunAppServerRunbook?: (runbookId: string, selection: RunbookExecutionSelection, target: RunbookProofTargetSelection) => Promise<void>;
   onBackToRunbooks: () => void;
-  onOpenHoneycrispReport?: (reportId: string) => void;
+  onOpenAppServerReport?: (reportId: string) => void;
   onBackToReports?: () => void;
   onBackToSubagents: () => void;
   onSelectSubagent: (path: string) => void;
@@ -214,7 +214,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     return () => observer.disconnect();
   }, [containerRef]);
   const viewSpace = viewState === 'session' ? 'session' : 'workspace';
-  const researchSidePanelKey = selectedRunId ?? `workspace:${honeycrispMemory?.contextWorkspaceId ?? 'current'}`;
+  const researchSidePanelKey = selectedRunId ?? `workspace:${appServerMemory?.contextWorkspaceId ?? 'current'}`;
   const researchSideData = useCoalescedResearchSideData({
     detail,
     events: allEvents,
@@ -224,7 +224,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   useEffect(() => {
     setSelectedWorkspaceClaimId(null);
     setSelectedWorkspaceMemoryId(null);
-  }, [honeycrispMemory?.contextWorkspaceId, selectedRunId]);
+  }, [appServerMemory?.contextWorkspaceId, selectedRunId]);
   useEffect(() => {
     if (!workspaceView) {
       setWorkspaceSidePanelMounted(false);
@@ -265,7 +265,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   const openWorkspaceRunbook = (runbookId: string): void => {
     setSelectedWorkspaceClaimId(null);
     setSelectedWorkspaceMemoryId(null);
-    onOpenHoneycrispRunbook(runbookId);
+    onOpenAppServerRunbook(runbookId);
     onResearchDetailsOpenChange(true);
   };
   const closeWorkspaceClaim = (): void => {
@@ -361,7 +361,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           workspaceDejunkInProgress={workspaceDejunkInProgress}
           memoryDreamingInProgress={memoryDreamingInProgress}
           memoryDreamingProgress={memoryDreamingProgress}
-          honeycrispMemory={honeycrispMemory}
+          appServerMemory={appServerMemory}
           researchProfile={researchProfile}
           researchKitId={researchKitId}
           sessionHeatPreferences={sessionHeatPreferences}
@@ -433,7 +433,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
         <ResearchSidePanel
           detail={researchSideData.detail}
           events={researchSideData.events}
-          memory={viewSpace === 'workspace' ? honeycrispMemory : researchSideData.detail?.honeycrispMemory ?? null}
+          memory={viewSpace === 'workspace' ? appServerMemory : researchSideData.detail?.appServerMemory ?? null}
           researchProfile={researchProfile}
           sessionHeatPreferences={sessionHeatPreferences}
           providerModelCatalog={providerModelCatalog}
@@ -457,12 +457,12 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           searchHighlightQuery={searchHighlightQuery}
           onSelectSubagent={onSelectSubagent}
           onOpenClaim={!selectedRunId ? openWorkspaceClaim : undefined}
-          onOpenRunbook={selectedRunId ? onOpenHoneycrispRunbook : openWorkspaceRunbook}
-          onRunbookExecute={selectedRunId ? onRunHoneycrispRunbook : undefined}
+          onOpenRunbook={selectedRunId ? onOpenAppServerRunbook : openWorkspaceRunbook}
+          onRunbookExecute={selectedRunId ? onRunAppServerRunbook : undefined}
           onBackToRunbooks={selectedRunId ? onBackToRunbooks : closeWorkspaceRunbook}
           onBackToClaim={!selectedRunId ? closeWorkspaceClaim : undefined}
           onBackToMemory={!selectedRunId ? closeWorkspaceMemory : undefined}
-          onOpenReport={onOpenHoneycrispReport}
+          onOpenReport={onOpenAppServerReport}
           onBackToReports={onBackToReports}
           onBackToSubagents={onBackToSubagents}
           onExpandedChange={changeResearchDetailsOpen}

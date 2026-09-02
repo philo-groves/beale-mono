@@ -368,12 +368,12 @@ test("MCP discovery denylist defaults to no servers and execution reports timeou
 });
 
 test("configured stdio MCP client tolerates diagnostics and executes a live fixture server", async () => {
-  const root = await mkdtemp(join(tmpdir(), "honeycrisp-live-mcp-"));
+  const root = await mkdtemp(join(tmpdir(), "app-server-live-mcp-"));
   const serverPath = join(root, "fixture-mcp.mjs");
   const configPath = join(root, "mcp.json");
   await writeFile(serverPath, createFixtureMcpServerSource(), "utf8");
-  const previousFixtureValue = process.env.HONEYCRISP_TEST_MCP_VALUE;
-  process.env.HONEYCRISP_TEST_MCP_VALUE = "resolved-runtime-value";
+  const previousFixtureValue = process.env.APP_SERVER_TEST_MCP_VALUE;
+  process.env.APP_SERVER_TEST_MCP_VALUE = "resolved-runtime-value";
   await writeFile(
     configPath,
     JSON.stringify({
@@ -384,7 +384,7 @@ test("configured stdio MCP client tolerates diagnostics and executes a live fixt
           command: process.execPath,
           args: [serverPath],
           env: {
-            FIXTURE_RUNTIME_VALUE: "${HONEYCRISP_TEST_MCP_VALUE}",
+            FIXTURE_RUNTIME_VALUE: "${APP_SERVER_TEST_MCP_VALUE}",
           },
         },
       },
@@ -421,8 +421,8 @@ test("configured stdio MCP client tolerates diagnostics and executes a live fixt
     assert.equal(result.result.output.output.content[0].text, "echo:parser:resolved-runtime-value");
   } finally {
     await client.close();
-    if (previousFixtureValue === undefined) delete process.env.HONEYCRISP_TEST_MCP_VALUE;
-    else process.env.HONEYCRISP_TEST_MCP_VALUE = previousFixtureValue;
+    if (previousFixtureValue === undefined) delete process.env.APP_SERVER_TEST_MCP_VALUE;
+    else process.env.APP_SERVER_TEST_MCP_VALUE = previousFixtureValue;
     await rm(root, { recursive: true, force: true });
   }
 });

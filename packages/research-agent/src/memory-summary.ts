@@ -14,24 +14,25 @@ import {
   memoryCatalogPreservesLegacyNodeIds
 } from './memory-dreaming.js';
 import type {
-  ArtifactRevisionSummary as HoneycrispArtifactRevisionSummary,
-  MemoryDirectorySummary as HoneycrispMemoryDirectorySummary,
-  MemoryEdgeSummary as HoneycrispMemoryEdgeSummary,
-  MemoryEvidenceRefSummary as HoneycrispMemoryEvidenceRefSummary,
-  MemoryNodeCatalogValidationSummary as HoneycrispMemoryNodeCatalogValidationSummary,
-  MemoryNodeProvenanceSummary as HoneycrispMemoryNodeProvenanceSummary,
-  MemoryNodeSummary as HoneycrispMemoryNodeSummary,
-  RunbookSummary as HoneycrispRunbookSummary,
-  ReportSummary as HoneycrispReportSummary,
-  MemorySummary as HoneycrispMemorySummary,
+  ArtifactRevisionSummary as AppServerArtifactRevisionSummary,
+  MemoryDirectorySummary as AppServerMemoryDirectorySummary,
+  MemoryEdgeSummary as AppServerMemoryEdgeSummary,
+  MemoryEvidenceRefSummary as AppServerMemoryEvidenceRefSummary,
+  MemoryNodeCatalogValidationSummary as AppServerMemoryNodeCatalogValidationSummary,
+  MemoryNodeProvenanceSummary as AppServerMemoryNodeProvenanceSummary,
+  MemoryNodeSummary as AppServerMemoryNodeSummary,
+  RunbookSummary as AppServerRunbookSummary,
+  ReportSummary as AppServerReportSummary,
+  MemorySummary as AppServerMemorySummary,
   LeadSummary,
   ResearchProfileSnapshot
 } from './knowledge-types.js';
 import { legacyResearchProfileHash, researchProfileHash } from './research-profile.js';
+import { preBealeHashDomain } from './legacy-compatibility.js';
 
 const ARTIFACT_MANIFEST_FILENAME = 'manifest.json';
-const MEMORY_CATALOG_HASH_DOMAIN = 'honeycrisp:memory-catalog:v1\0';
-const MEMORY_NODE_VALIDATION_HASH_DOMAIN = 'honeycrisp:memory-node-validation:v1\0';
+const MEMORY_CATALOG_HASH_DOMAIN = preBealeHashDomain("memory-catalog:v1\0");
+const MEMORY_NODE_VALIDATION_HASH_DOMAIN = preBealeHashDomain("memory-node-validation:v1\0");
 
 type SqlRow = Record<string, unknown>;
 
@@ -43,7 +44,7 @@ interface ActiveMemoryCatalog {
   preservesLegacyNodeIds: boolean;
 }
 
-export interface HoneycrispMemorySummaryOptions {
+export interface AppServerMemorySummaryOptions {
   databasePath: string;
   artifactDirectoryPath: string;
   sessionId?: string;
@@ -57,22 +58,22 @@ export interface HoneycrispMemorySummaryOptions {
   assetIds?: readonly string[];
 }
 
-export function listHoneycrispReportSummaries(
+export function listAppServerReportSummaries(
   databasePath: string,
   workspaceId: string
-): HoneycrispReportSummary[] {
+): AppServerReportSummary[] {
   if (!existsSync(databasePath)) return [];
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     database.exec('PRAGMA busy_timeout = 5000;');
-    if (!tableExists(database, 'honeycrisp_reports')) return [];
+    if (!tableExists(database, 'app_server_reports')) return [];
     return readReports(database, workspaceId, readArtifactRevisions(database, workspaceId));
   } finally {
     database.close();
   }
 }
 
-export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptions): HoneycrispMemorySummary {
+export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions): AppServerMemorySummary {
   const { databasePath, artifactDirectoryPath, sessionId, workspaceId, subjectId } = options;
   const contextSubjectId = subjectId ?? fallbackMemorySubjectId(workspaceId);
   const storageRoot = dirname(databasePath);
@@ -118,8 +119,8 @@ export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptio
     const edges = tableExists(database, 'memory_edges') ? readEdges(database, visibleNodeIds) : [];
     const evidenceRefCount = nodes.reduce((count, node) => count + node.evidenceRefs.length, 0);
     const artifactRevisions = readArtifactRevisions(database, workspaceId);
-    const runbooks = tableExists(database, 'honeycrisp_runbooks') ? readRunbooks(database, workspaceId, artifactRevisions) : [];
-    const reports = tableExists(database, 'honeycrisp_reports') ? readReports(database, workspaceId, artifactRevisions) : [];
+    const runbooks = tableExists(database, 'app_server_runbooks') ? readRunbooks(database, workspaceId, artifactRevisions) : [];
+    const reports = tableExists(database, 'app_server_reports') ? readReports(database, workspaceId, artifactRevisions) : [];
     const leads = claims.filter((claim): claim is LeadSummary => claim.projection === 'lead');
     const findings = claims.filter((claim) => claim.projection === 'finding');
     const tracks = readCampaignTrackSummaries(database, workspaceId);
@@ -139,7 +140,7 @@ export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptio
     });
     return {
       ...base,
-      source: 'honeycrisp_sqlite',
+      source: 'app_server_sqlite',
       status: nodes.length > 0 || claims.length > 0 ? 'ready' : 'empty',
       databaseSizeBytes: fileSize(databasePath),
       nodeCount: nodes.length,
@@ -182,7 +183,7 @@ function emptySummary(
   contextWorkspaceId: string,
   contextSubjectId: string,
   activeCatalogHash: string | null
-): HoneycrispMemorySummary {
+): AppServerMemorySummary {
   return {
     status: 'missing',
     source: 'none',
@@ -219,12 +220,12 @@ function emptySummary(
 function readRunbooks(
   database: DatabaseSync,
   workspaceId: string,
-  artifactRevisions: ReadonlyMap<string, HoneycrispArtifactRevisionSummary[]>
-): HoneycrispRunbookSummary[] {
+  artifactRevisions: ReadonlyMap<string, AppServerArtifactRevisionSummary[]>
+): AppServerRunbookSummary[] {
   const rows = database
-    .prepare('SELECT * FROM honeycrisp_runbooks WHERE workspace_id = ? ORDER BY updated_at ASC, id')
+    .prepare('SELECT * FROM app_server_runbooks WHERE workspace_id = ? ORDER BY updated_at ASC, id')
     .all(workspaceId) as SqlRow[];
-  const hasContentRevision = tableHasColumn(database, 'honeycrisp_runbooks', 'content_revision');
+  const hasContentRevision = tableHasColumn(database, 'app_server_runbooks', 'content_revision');
   const executionMetrics = runbookExecutionMetrics(database, workspaceId);
   const authors = modelAuthorsByResource(database, 'runbook', rows.map((row) => requiredString(row.id)));
   return rows.map((row) => {
@@ -253,14 +254,14 @@ function readRunbooks(
 function runbookExecutionMetrics(
   database: DatabaseSync,
   workspaceId: string,
-): Map<string, HoneycrispRunbookSummary['execution']> {
-  const result = new Map<string, HoneycrispRunbookSummary['execution']>();
-  if (!tableExists(database, 'honeycrisp_runbook_executions')) return result;
-  const completedCells = tableHasColumn(database, 'honeycrisp_runbook_executions', 'completed_cell_count')
+): Map<string, AppServerRunbookSummary['execution']> {
+  const result = new Map<string, AppServerRunbookSummary['execution']>();
+  if (!tableExists(database, 'app_server_runbook_executions')) return result;
+  const completedCells = tableHasColumn(database, 'app_server_runbook_executions', 'completed_cell_count')
     ? 'completed_cell_count'
     : '0 AS completed_cell_count';
   const rows = database.prepare(`SELECT run_id, runbook_id, status, started_at, ${completedCells}
-    FROM honeycrisp_runbook_executions
+    FROM app_server_runbook_executions
     WHERE workspace_id = ?
     ORDER BY started_at DESC, run_id DESC`).all(workspaceId) as SqlRow[];
   for (const row of rows) {
@@ -278,7 +279,7 @@ function runbookExecutionMetrics(
   return result;
 }
 
-function emptyRunbookExecutionMetrics(): HoneycrispRunbookSummary['execution'] {
+function emptyRunbookExecutionMetrics(): AppServerRunbookSummary['execution'] {
   return { runCount: 0, completedRunCount: 0, executedCellCount: 0, latest: null, latestSuccessfulRunId: null };
 }
 
@@ -287,7 +288,7 @@ function readNodes(
   context: { sessionId?: string; workspaceId: string; subjectId: string },
   activeCatalog: ActiveMemoryCatalog | null,
   includeForeignCatalogs: boolean
-): HoneycrispMemoryNodeSummary[] {
+): AppServerMemoryNodeSummary[] {
   const membershipSchema = tableExists(database, 'memory_node_sessions') && tableExists(database, 'memory_node_workspaces');
   const catalogColumn = tableHasColumn(database, 'memory_nodes', 'catalog_hash');
   const visibility = memoryVisibility(
@@ -311,7 +312,7 @@ function readNodes(
   const authors = modelAuthorsByResource(database, 'memory', [...visibleNodeIds]);
   const nodes = rows.map((row) => {
     const id = requiredString(row.id);
-    const node: Omit<HoneycrispMemoryNodeSummary, 'provenance'> = {
+    const node: Omit<AppServerMemoryNodeSummary, 'provenance'> = {
       id,
       sessionIds: inferredSessionNodeIds.has(id) && context.sessionId
         ? [...new Set([...(membershipSchema
@@ -359,10 +360,10 @@ function readNodes(
 function readReports(
   database: DatabaseSync,
   workspaceId: string,
-  artifactRevisions: ReadonlyMap<string, HoneycrispArtifactRevisionSummary[]>
-): HoneycrispReportSummary[] {
+  artifactRevisions: ReadonlyMap<string, AppServerArtifactRevisionSummary[]>
+): AppServerReportSummary[] {
   const rows = database
-    .prepare('SELECT * FROM honeycrisp_reports WHERE workspace_id = ? ORDER BY updated_at ASC, id')
+    .prepare('SELECT * FROM app_server_reports WHERE workspace_id = ? ORDER BY updated_at ASC, id')
     .all(workspaceId) as SqlRow[];
   const authors = modelAuthorsByResource(database, 'report', rows.map((row) => requiredString(row.id)));
   return rows.map((row) => ({
@@ -389,7 +390,7 @@ function readReports(
   }));
 }
 
-function reportSubmissionPacket(row: SqlRow): HoneycrispReportSummary['submissionPacket'] {
+function reportSubmissionPacket(row: SqlRow): AppServerReportSummary['submissionPacket'] {
   if (
     typeof row.submission_packet_artifact_id !== 'string'
     || typeof row.submission_packet_filename !== 'string'
@@ -404,7 +405,7 @@ function reportSubmissionPacket(row: SqlRow): HoneycrispReportSummary['submissio
   };
 }
 
-function reportRecording(row: SqlRow): HoneycrispReportSummary['recording'] {
+function reportRecording(row: SqlRow): AppServerReportSummary['recording'] {
   if (
     typeof row.recording_artifact_id !== 'string'
     || typeof row.recording_filename !== 'string'
@@ -422,14 +423,14 @@ function reportRecording(row: SqlRow): HoneycrispReportSummary['recording'] {
 function readArtifactRevisions(
   database: DatabaseSync,
   workspaceId: string
-): Map<string, HoneycrispArtifactRevisionSummary[]> {
-  const grouped = new Map<string, HoneycrispArtifactRevisionSummary[]>();
-  if (!tableExists(database, 'honeycrisp_artifact_revisions')) return grouped;
-  const contentRevisionFilter = tableHasColumn(database, 'honeycrisp_artifact_revisions', 'revision_kind')
+): Map<string, AppServerArtifactRevisionSummary[]> {
+  const grouped = new Map<string, AppServerArtifactRevisionSummary[]>();
+  if (!tableExists(database, 'app_server_artifact_revisions')) return grouped;
+  const contentRevisionFilter = tableHasColumn(database, 'app_server_artifact_revisions', 'revision_kind')
     ? " AND revision_kind = 'content'"
     : '';
   const rows = database.prepare(`SELECT artifact_kind, artifact_id, session_id, revision, created_at
-    FROM honeycrisp_artifact_revisions
+    FROM app_server_artifact_revisions
     WHERE workspace_id = ?${contentRevisionFilter}
     ORDER BY created_at, artifact_kind, artifact_id, revision`).all(workspaceId) as SqlRow[];
   for (const row of rows) {
@@ -446,10 +447,10 @@ function readArtifactRevisions(
 }
 
 function revisionsForArtifact(
-  revisions: ReadonlyMap<string, HoneycrispArtifactRevisionSummary[]>,
+  revisions: ReadonlyMap<string, AppServerArtifactRevisionSummary[]>,
   kind: 'runbook' | 'report',
   row: SqlRow
-): HoneycrispArtifactRevisionSummary[] {
+): AppServerArtifactRevisionSummary[] {
   return revisions.get(artifactRevisionKey(kind, requiredString(row.id))) ?? [{
     revision: requiredNumber(row.revision),
     sessionId: optionalString(row.session_id),
@@ -482,9 +483,9 @@ function groupedWorkspaceMemberships(
   return grouped;
 }
 
-function readEvidence(database: DatabaseSync, visibleNodeIds: ReadonlySet<string>): Map<string, HoneycrispMemoryEvidenceRefSummary[]> {
+function readEvidence(database: DatabaseSync, visibleNodeIds: ReadonlySet<string>): Map<string, AppServerMemoryEvidenceRefSummary[]> {
   if (!tableExists(database, 'memory_evidence_refs')) return new Map();
-  const grouped = new Map<string, HoneycrispMemoryEvidenceRefSummary[]>();
+  const grouped = new Map<string, AppServerMemoryEvidenceRefSummary[]>();
   const rows = database.prepare('SELECT * FROM memory_evidence_refs ORDER BY created_at, id').all() as SqlRow[];
   for (const row of rows) {
     const nodeId = requiredString(row.node_id);
@@ -525,10 +526,10 @@ function activeMemoryCatalog(snapshot: ResearchProfileSnapshot | null): ActiveMe
 
 function readMemoryNodeProvenance(
   database: DatabaseSync,
-  node: Omit<HoneycrispMemoryNodeSummary, 'provenance'>,
+  node: Omit<AppServerMemoryNodeSummary, 'provenance'>,
   catalogHash: string | null,
   activeCatalog: ActiveMemoryCatalog | null
-): HoneycrispMemoryNodeProvenanceSummary {
+): AppServerMemoryNodeProvenanceSummary {
   if (catalogHash === null) {
     return {
       state: 'legacy_unrecorded',
@@ -586,7 +587,7 @@ function readMemoryNodeProvenance(
   const profileHash = nullableSqlText(row.research_profile_hash);
   const profileId = nullableSqlText(row.research_profile_id);
   const profileVersion = nullableSqlText(row.research_profile_version);
-  const validation: HoneycrispMemoryNodeCatalogValidationSummary = {
+  const validation: AppServerMemoryNodeCatalogValidationSummary = {
     nodeRevision: requiredNumber(row.node_revision),
     catalogHash: requiredString(row.catalog_hash),
     contentHash: requiredString(row.node_content_hash),
@@ -611,7 +612,7 @@ function readMemoryNodeProvenance(
       };
 }
 
-function memoryNodeValidationHash(node: Omit<HoneycrispMemoryNodeSummary, 'provenance'>): string {
+function memoryNodeValidationHash(node: Omit<AppServerMemoryNodeSummary, 'provenance'>): string {
   const evidence = node.evidenceRefs.map((item) => ({
     id: item.id,
     kind: item.kind,
@@ -646,11 +647,11 @@ function memoryNodeValidationHash(node: Omit<HoneycrispMemoryNodeSummary, 'prove
     .digest('hex');
 }
 
-function isMemoryNodeValidationKind(value: unknown): value is HoneycrispMemoryNodeCatalogValidationSummary['kind'] {
+function isMemoryNodeValidationKind(value: unknown): value is AppServerMemoryNodeCatalogValidationSummary['kind'] {
   return value === 'full' || value === 'scoped' || value === 'inherited';
 }
 
-function readEdges(database: DatabaseSync, visibleNodeIds: ReadonlySet<string>): HoneycrispMemoryEdgeSummary[] {
+function readEdges(database: DatabaseSync, visibleNodeIds: ReadonlySet<string>): AppServerMemoryEdgeSummary[] {
   const rows = database.prepare('SELECT * FROM memory_edges ORDER BY updated_at DESC, from_id, to_id').all() as SqlRow[];
   return rows.flatMap((row) => {
     const fromId = requiredString(row.from_id);
@@ -678,13 +679,13 @@ function groupedStrings(database: DatabaseSync, sql: string, visibleNodeIds: Rea
 }
 
 function inferredSessionMemoryNodeIds(database: DatabaseSync, sessionId: string): Set<string> {
-  if (!tableExists(database, 'honeycrisp_session_events')) return new Set();
+  if (!tableExists(database, 'app_server_session_events')) return new Set();
   const rows = database.prepare(`
     SELECT DISTINCT COALESCE(
       json_extract(event_json, '$.payload.event.payload.result.id'),
       json_extract(event_json, '$.payload.result.id')
     ) AS node_id
-    FROM honeycrisp_session_events
+    FROM app_server_session_events
     WHERE session_id = ?
       AND COALESCE(
         json_extract(event_json, '$.payload.event.kind'),
@@ -729,8 +730,8 @@ function memoryVisibility(
 }
 
 function groupedNodeCounts(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
-  select: (node: HoneycrispMemoryNodeSummary) => string
+  nodes: readonly AppServerMemoryNodeSummary[],
+  select: (node: AppServerMemoryNodeSummary) => string
 ): Record<string, number> {
   return nodes.reduce<Record<string, number>>((counts, node) => {
     const name = select(node);
@@ -739,7 +740,7 @@ function groupedNodeCounts(
   }, {});
 }
 
-function artifactDirectorySummary(path: string): HoneycrispMemoryDirectorySummary {
+function artifactDirectorySummary(path: string): AppServerMemoryDirectorySummary {
   return {
     name: 'artifacts',
     path,
@@ -803,20 +804,20 @@ function fallbackMemorySubjectId(workspaceId: string): string {
   return `subject_workspace:${workspaceId}`;
 }
 
-function requiredRunbookExecutionStatus(value: unknown): NonNullable<HoneycrispRunbookSummary['execution']['latest']>['status'] {
+function requiredRunbookExecutionStatus(value: unknown): NonNullable<AppServerRunbookSummary['execution']['latest']>['status'] {
   if (value === 'running' || value === 'succeeded' || value === 'failed' || value === 'blocked') return value;
-  throw new Error('Expected a Honeycrisp runbook execution status.');
+  throw new Error('Expected an app-server runbook execution status.');
 }
 
-function requiredReportStatus(value: unknown): HoneycrispReportSummary['status'] {
+function requiredReportStatus(value: unknown): AppServerReportSummary['status'] {
   if (value === 'complete' || value === 'stale') return value;
-  throw new Error('Expected a Honeycrisp report status.');
+  throw new Error('Expected an app-server report status.');
 }
 
-function requiredReportTriageStatus(value: unknown): HoneycrispReportSummary['triageStatus'] {
+function requiredReportTriageStatus(value: unknown): AppServerReportSummary['triageStatus'] {
   if (value === undefined || value === null) return 'editing';
   if (value === 'editing' || value === 'submitted' || value === 'reviewing' || value === 'rejected' || value === 'accepted') return value;
-  throw new Error('Expected a Honeycrisp report triage status.');
+  throw new Error('Expected an app-server report triage status.');
 }
 
 function stableJson(value: unknown): string {

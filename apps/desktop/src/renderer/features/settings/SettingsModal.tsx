@@ -2803,7 +2803,7 @@ function ProviderOptionalModelsControls({
           <label key={model.modelId}>
             <span className="provider-optional-model-copy">
               <strong>{model.name}</strong>
-              <small>{model.accessNote}{available ? '' : ' Not available in the installed Honeycrisp model catalog.'}</small>
+              <small>{model.accessNote}{available ? '' : ' Not available in the installed app-server model catalog.'}</small>
             </span>
             <input
               type="checkbox"

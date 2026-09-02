@@ -1314,7 +1314,7 @@ export function safetyRecoverySteeringMessage(
     || (
       message.role === "assistant"
       && message.provider !== RESEARCH_CHECKPOINT_HOST_PROVIDER
-      && message.provider !== "honeycrisp-peer"
+      && message.provider !== "app-server-peer"
     )
   ));
   const concerning = /\b(?:credential stuffing|password spraying|phishing|social engineering|persistence|stealth|evasion|cover(?:ing)? tracks|exfiltrat|ransomware|malware|destructive|denial of service|ddos|brute force|mass scanning)\b/i.test(behavioralTranscript);
@@ -1999,14 +1999,14 @@ function userAgentMessage(content: string): AgentMessage {
   return { role: "user", content, timestamp: Date.now() };
 }
 
-const RESEARCH_CHECKPOINT_CONTENT_PREFIX = "[[HONEYCRISP_HOST_RESEARCH_CHECKPOINT_V1]]\n";
-const RESEARCH_CHECKPOINT_CONTENT_SUFFIX = "\n[[/HONEYCRISP_HOST_RESEARCH_CHECKPOINT_V1]]";
-const RESEARCH_CHECKPOINT_HOST_API = "honeycrisp-host";
-const RESEARCH_CHECKPOINT_HOST_PROVIDER = "honeycrisp-host";
+const RESEARCH_CHECKPOINT_CONTENT_PREFIX = "[[APP_SERVER_HOST_RESEARCH_CHECKPOINT_V1]]\n";
+const RESEARCH_CHECKPOINT_CONTENT_SUFFIX = "\n[[/APP_SERVER_HOST_RESEARCH_CHECKPOINT_V1]]";
+const RESEARCH_CHECKPOINT_HOST_API = "app-server-runtime";
+const RESEARCH_CHECKPOINT_HOST_PROVIDER = "app-server-runtime";
 const RESEARCH_CHECKPOINT_HOST_MODEL = "research-checkpoint-v1";
-const RESEARCH_CHECKPOINT_NOTICE_PREFIX = "[[HONEYCRISP_HOST_RESEARCH_CHECKPOINT_NOTICE_V1:";
-const AUTHORITATIVE_STEERING_REMINDER_PREFIX = "[[HONEYCRISP_HOST_AUTHORITATIVE_STEERING_V1]]\n";
-const AUTHORITATIVE_STEERING_REMINDER_SUFFIX = "\n[[/HONEYCRISP_HOST_AUTHORITATIVE_STEERING_V1]]";
+const RESEARCH_CHECKPOINT_NOTICE_PREFIX = "[[APP_SERVER_HOST_RESEARCH_CHECKPOINT_NOTICE_V1:";
+const AUTHORITATIVE_STEERING_REMINDER_PREFIX = "[[APP_SERVER_HOST_AUTHORITATIVE_STEERING_V1]]\n";
+const AUTHORITATIVE_STEERING_REMINDER_SUFFIX = "\n[[/APP_SERVER_HOST_AUTHORITATIVE_STEERING_V1]]";
 
 interface ValidResearchCheckpoint {
   checkpoint: string;
@@ -2139,7 +2139,7 @@ function researchCheckpointHash(checkpoint: string): string {
 }
 
 function researchCheckpointMessageId(checkpointHash: string): string {
-  return `honeycrisp_checkpoint_${checkpointHash}`;
+  return `app_server_checkpoint_${checkpointHash}`;
 }
 
 function researchCheckpointNotice(checkpointHash: string): string {
@@ -2152,7 +2152,7 @@ function researchCheckpointNotice(checkpointHash: string): string {
 
 function parseResearchCheckpointNotice(message: AgentMessage): string | null {
   if (!isRecord(message) || message.role !== "user" || typeof message.content !== "string") return null;
-  const match = message.content.match(/^\[\[HONEYCRISP_HOST_RESEARCH_CHECKPOINT_NOTICE_V1:([a-f0-9]{64})\]\]/u);
+  const match = message.content.match(/^\[\[APP_SERVER_HOST_RESEARCH_CHECKPOINT_NOTICE_V1:([a-f0-9]{64})\]\]/u);
   if (!match || message.content !== researchCheckpointNotice(match[1]!)) return null;
   return match[1]!;
 }

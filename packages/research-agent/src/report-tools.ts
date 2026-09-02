@@ -12,7 +12,7 @@ const CREATE_PARAMETERS = { type: "object", required: ["title", "summary", "cont
   content: { type: "string", description: "The complete Markdown report." }, status: { type: "string", enum: [...REPORT_STATUSES] },
   sourceFindingId: { type: "string", description: "The verified security.chain claim this report documents." },
   sourceChainId: { type: "string", description: "Deprecated legacy alias for sourceFindingId." },
-  submissionPacketPath: { type: "string", description: "Path to the completed submission.zip inside the active workspace. Honeycrisp imports it into durable report storage." },
+  submissionPacketPath: { type: "string", description: "Path to the completed submission.zip inside the active workspace. app-server imports it into durable report storage." },
 } };
 const REVISE_PARAMETERS = { type: "object", required: ["id", "expectedRevision", "content"], properties: {
   id: { type: "string" }, expectedRevision: { type: "number" }, content: { type: "string", description: "The complete replacement Markdown report." },

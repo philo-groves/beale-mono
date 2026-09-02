@@ -1,17 +1,18 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from 'electron';
+import { installPreBealeEnvironmentAliases } from '@beale/research-agent/legacy-compatibility';
 import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { installUndiciTypeOfServiceCompatibility } from 'honeycrisp/node-network-compatibility';
+import { installUndiciTypeOfServiceCompatibility } from '@beale/app-server-runtime/node-network-compatibility';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { runDetailProjectionMetricLabel } from '../shared/runDetailProjection';
 import type {
   ComputerUsePermissionMode,
-  HoneycrispMemoryDirectorySummary,
+  AppServerMemoryDirectorySummary,
   AutomationUpdateInput,
   AppServerRemoteAccessUpdate,
-  HoneycrispToolingConfigUpdate,
+  AppServerToolingConfigUpdate,
   NativeMenuAction,
   ProfilingReport,
   WorkspaceRegistryState,
@@ -31,7 +32,7 @@ import type {
   TicketingMode,
   TicketingProviderId,
   TicketingTarget,
-  HoneycrispReportLocator,
+  AppServerReportLocator,
   ReportContentUpdateInput,
   ReportTriageStatusUpdateInput,
   ReportSessionStartInput,
@@ -86,6 +87,7 @@ import {
   updateAppServerRemoteAccess
 } from './appServerRemoteAccess';
 
+installPreBealeEnvironmentAliases();
 installUndiciTypeOfServiceCompatibility();
 
 const APP_NAME = 'Beale';
@@ -832,16 +834,16 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.getProfilingState, () => workspaceService.getProfilingState());
   ipcMain.handle(IPC_CHANNELS.setProfilingEnabled, (_event, enabled: boolean) => workspaceService.setProfilingEnabled(enabled));
   ipcMain.handle(IPC_CHANNELS.recordProfilingReport, (_event, report: ProfilingReport) => workspaceService.recordProfilingReport(report));
-  ipcMain.handle(IPC_CHANNELS.openHoneycrispMemoryDirectory, (_event, name: HoneycrispMemoryDirectorySummary['name']) =>
-    timedMainIpcAsync('openHoneycrispMemoryDirectory', { directory: String(name) }, async () => {
-      const path = workspaceService.resolveHoneycrispMemoryDirectoryPath(name);
+  ipcMain.handle(IPC_CHANNELS.openAppServerMemoryDirectory, (_event, name: AppServerMemoryDirectorySummary['name']) =>
+    timedMainIpcAsync('openAppServerMemoryDirectory', { directory: String(name) }, async () => {
+      const path = workspaceService.resolveAppServerMemoryDirectoryPath(name);
       const error = await shell.openPath(path);
       if (error) throw new Error(error);
     })
   );
-  ipcMain.handle(IPC_CHANNELS.getHoneycrispRunbook, (_event, runbookId: string) =>
-    timedMainIpcAsync('getHoneycrispRunbook', { runbook: shortMetricId(runbookId) }, () =>
-      workspaceService.getHoneycrispRunbook(runbookId)
+  ipcMain.handle(IPC_CHANNELS.getAppServerRunbook, (_event, runbookId: string) =>
+    timedMainIpcAsync('getAppServerRunbook', { runbook: shortMetricId(runbookId) }, () =>
+      workspaceService.getAppServerRunbook(runbookId)
     )
   );
   ipcMain.handle(IPC_CHANNELS.listAutomations, () =>
@@ -853,16 +855,16 @@ function registerIpc(): void {
     ipcMain.handle(IPC_CHANNELS.listReportingReports, () =>
     timedMainIpcAsync('listReportingReports', {}, async () => {
       const reports = await workspaceService.listReportingReports();
-      void ticketingService.submitAutomatically(reports, (report) => workspaceService.getHoneycrispReport({
+      void ticketingService.submitAutomatically(reports, (report) => workspaceService.getAppServerReport({
         workspaceId: report.workspaceId,
         reportId: report.id
       }));
       return reports;
     })
   );
-  ipcMain.handle(IPC_CHANNELS.getHoneycrispReport, (_event, locator: HoneycrispReportLocator) =>
-    timedMainIpc('getHoneycrispReport', { report: shortMetricId(locator.reportId) }, () =>
-      workspaceService.getHoneycrispReport(locator)
+  ipcMain.handle(IPC_CHANNELS.getAppServerReport, (_event, locator: AppServerReportLocator) =>
+    timedMainIpc('getAppServerReport', { report: shortMetricId(locator.reportId) }, () =>
+      workspaceService.getAppServerReport(locator)
     )
   );
   ipcMain.handle(IPC_CHANNELS.updateReportContent, (_event, input: ReportContentUpdateInput) =>
@@ -875,14 +877,14 @@ function registerIpc(): void {
       workspaceService.updateReportTriageStatus(input)
     )
   );
-  ipcMain.handle(IPC_CHANNELS.openReportSubmissionPacket, async (_event, locator: HoneycrispReportLocator) =>
+  ipcMain.handle(IPC_CHANNELS.openReportSubmissionPacket, async (_event, locator: AppServerReportLocator) =>
     timedMainIpcAsync('openReportSubmissionPacket', { report: shortMetricId(locator.reportId) }, async () => {
       const path = await workspaceService.resolveReportSubmissionPacketPath(locator);
       const error = await shell.openPath(path);
       if (error) throw new Error(error);
     })
   );
-  ipcMain.handle(IPC_CHANNELS.chooseReportSubmissionPacket, async (_event, locator: HoneycrispReportLocator) => {
+  ipcMain.handle(IPC_CHANNELS.chooseReportSubmissionPacket, async (_event, locator: AppServerReportLocator) => {
     const result = await dialog.showOpenDialog({
       title: 'Choose report submission packet',
       properties: ['openFile'],
@@ -891,7 +893,7 @@ function registerIpc(): void {
     const path = result.filePaths[0] ?? null;
     return result.canceled || !path ? null : workspaceService.replaceReportSubmissionPacket(locator, path);
   });
-  ipcMain.handle(IPC_CHANNELS.chooseReportRecording, async (_event, locator: HoneycrispReportLocator) => {
+  ipcMain.handle(IPC_CHANNELS.chooseReportRecording, async (_event, locator: AppServerReportLocator) => {
     const result = await dialog.showOpenDialog({
       title: 'Choose report recording',
       properties: ['openFile'],
@@ -903,11 +905,11 @@ function registerIpc(): void {
     const path = result.filePaths[0] ?? null;
     return result.canceled || !path ? null : workspaceService.replaceReportRecording(locator, path);
   });
-  ipcMain.handle(IPC_CHANNELS.submitReportTicket, async (_event, locator: HoneycrispReportLocator) => {
+  ipcMain.handle(IPC_CHANNELS.submitReportTicket, async (_event, locator: AppServerReportLocator) => {
     const report = (await workspaceService.listReportingReports()).find((candidate) =>
       candidate.workspaceId === locator.workspaceId.trim() && candidate.id === locator.reportId.trim());
     if (!report) throw new Error(`Report not found: ${locator.reportId}`);
-    return ticketingService.submit(report, workspaceService.getHoneycrispReport(locator));
+    return ticketingService.submit(report, workspaceService.getAppServerReport(locator));
   });
   ipcMain.handle(IPC_CHANNELS.openExternalUrl, async (_event, value: string) => {
     const url = new URL(value);
@@ -939,11 +941,11 @@ function registerIpc(): void {
       workspaceService.restoreMemoryDreamingChange(changeId)
     )
   );
-  ipcMain.handle(IPC_CHANNELS.getHoneycrispToolingSummary, () =>
-    timedMainIpc('getHoneycrispToolingSummary', {}, () => workspaceService.getHoneycrispToolingSummary())
+  ipcMain.handle(IPC_CHANNELS.getAppServerToolingSummary, () =>
+    timedMainIpc('getAppServerToolingSummary', {}, () => workspaceService.getAppServerToolingSummary())
   );
-  ipcMain.handle(IPC_CHANNELS.updateHoneycrispToolingConfig, (_event, update: HoneycrispToolingConfigUpdate) =>
-    timedMainIpc('updateHoneycrispToolingConfig', { type: update.type }, () => workspaceService.updateHoneycrispToolingConfig(update))
+  ipcMain.handle(IPC_CHANNELS.updateAppServerToolingConfig, (_event, update: AppServerToolingConfigUpdate) =>
+    timedMainIpc('updateAppServerToolingConfig', { type: update.type }, () => workspaceService.updateAppServerToolingConfig(update))
   );
   ipcMain.handle(IPC_CHANNELS.generateResearchGoalSuggestions, async (_event, input: ResearchGoalSuggestionInput) => {
     const workspaceId = workspaceService.getSnapshot()?.workspace.workspaceId;

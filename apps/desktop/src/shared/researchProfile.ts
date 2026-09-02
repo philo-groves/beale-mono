@@ -271,7 +271,7 @@ export function migrateResearchProfile(value: unknown): ResearchProfileMigration
   };
 }
 
-/** Decode the normalized Honeycrisp wire contract at the Beale host boundary. */
+/** Decode the normalized app-server wire contract at the Beale host boundary. */
 export function decodeResearchProfile(value: unknown): ResearchProfile {
   return migrateResearchProfile(value).profile;
 }
@@ -503,7 +503,7 @@ export function decodeResearchProfileJson(value: string): ResearchProfile {
   return decodeResearchProfile(JSON.parse(value) as unknown);
 }
 
-/** Stable serialization matching Honeycrisp's version-one profile hash input. */
+/** Stable serialization matching app-server's version-one profile hash input. */
 export function serializeResearchProfile(profile: ResearchProfile): string {
   return stableJson(profile);
 }

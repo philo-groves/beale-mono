@@ -20,9 +20,12 @@ importers:
 
   app-server:
     dependencies:
-      honeycrisp:
+      '@beale/app-server-runtime':
         specifier: workspace:*
-        version: link:../packages/honeycrisp-host
+        version: link:../packages/app-server-runtime
+      '@beale/research-agent':
+        specifier: workspace:*
+        version: link:../packages/research-agent
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
@@ -42,6 +45,12 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@beale/app-server-runtime':
+        specifier: workspace:*
+        version: link:../../packages/app-server-runtime
+      '@beale/research-agent':
+        specifier: workspace:*
+        version: link:../../packages/research-agent
       '@mediar-ai/terminator':
         specifier: 0.24.32
         version: 0.24.32
@@ -51,9 +60,6 @@ importers:
       '@xterm/xterm':
         specifier: ^6.0.0
         version: 6.0.0
-      honeycrisp:
-        specifier: workspace:*
-        version: link:../../packages/honeycrisp-host
       katex:
         specifier: ^0.18.4
         version: 0.18.4
@@ -94,9 +100,6 @@ importers:
         specifier: ^8.21.3
         version: 8.21.3
     devDependencies:
-      '@honeycrisp/research-agent':
-        specifier: workspace:*
-        version: link:../../packages/research-agent
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -125,9 +128,9 @@ importers:
         specifier: ^4.1.5
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(vite@7.3.6(@types/node@24.12.4)(yaml@2.9.0))
 
-  packages/honeycrisp-host:
+  packages/app-server-runtime:
     dependencies:
-      '@honeycrisp/research-agent':
+      '@beale/research-agent':
         specifier: workspace:*
         version: link:../research-agent
       ws:

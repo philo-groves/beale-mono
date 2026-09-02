@@ -17,14 +17,14 @@ import {
   createResearchToolRegistry,
   createResearchStorageLayout,
   ensureResearchStorageLayout,
-  getHoneycrispMemorySummary,
+  getAppServerMemorySummary,
   migrateWorkspaceResearchClaims,
 } from "../packages/research-agent/dist/index.js";
 
 const workspace = { workspaceId: "workspace_findings", workspaceName: "Findings", subjectId: "subject_findings", subjectName: "Findings" };
 
 test("finding lifecycle is canonical, evidence-gated, and supports same-session independent verification and reporting", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-findings-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-findings-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const originGraph = new MemoryGraphStore({ workspaceRoot, context: { ...workspace, sessionId: "session_origin" } });
   const findings = new FindingStore(originGraph);
@@ -308,7 +308,7 @@ test("campaign graph exposes uncovered territory, lifecycle gates, contradiction
 });
 
 test("legacy claim-shaped memories migrate once into stable lead and finding projections", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "honeycrisp-claim-migration-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-claim-migration-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const legacyMemory = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE.memory);
   legacyMemory.types = legacyMemory.types.map((definition) =>
@@ -371,7 +371,7 @@ test("legacy claim-shaped memories migrate once into stable lead and finding pro
       reopened.close();
     }
 
-    const summary = getHoneycrispMemorySummary({
+    const summary = getAppServerMemorySummary({
       databasePath: graph.databasePath,
       artifactDirectoryPath: layout.artifactDirectoryPath,
       workspaceId: workspace.workspaceId,
@@ -387,18 +387,18 @@ test("legacy claim-shaped memories migrate once into stable lead and finding pro
 });
 
 test("claim schema initializes before a workspace has any knowledge-memory tables", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "honeycrisp-claim-empty-"));
+  const directory = await mkdtemp(join(tmpdir(), "app-server-claim-empty-"));
   const databasePath = join(directory, "memory.sqlite");
   try {
     migrateWorkspaceResearchClaims(databasePath, "workspace_empty");
     const database = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM honeycrisp_research_claims").get().count, 0);
-      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('honeycrisp_research_claims') WHERE name = 'security_tracking_json'").get().count, 1);
-      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('honeycrisp_research_claims') WHERE name = 'rating'").get().count, 1);
-      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'honeycrisp_research_claims'").get().version, 5);
-      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('honeycrisp_claim_transitions') WHERE name = 'session_id'").get().count, 1);
-      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'honeycrisp_findings'").get().count, 0);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_server_research_claims").get().count, 0);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'security_tracking_json'").get().count, 1);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'rating'").get().count, 1);
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 5);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'session_id'").get().count, 1);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'app_server_findings'").get().count, 0);
     } finally {
       database.close();
     }

@@ -84,14 +84,14 @@ export class ResearchResourceCatalog {
 
   public list(): TrackedResearchResource[] {
     return (this.#database.prepare(`
-      SELECT * FROM honeycrisp_research_resources
+      SELECT * FROM app_server_research_resources
       WHERE workspace_id = ? ORDER BY updated_at DESC, id
     `).all(this.#workspaceId) as Record<string, unknown>[]).map(decodeResource);
   }
 
   public get(id: string): TrackedResearchResource | null {
     const row = this.#database.prepare(`
-      SELECT * FROM honeycrisp_research_resources WHERE workspace_id = ? AND id = ?
+      SELECT * FROM app_server_research_resources WHERE workspace_id = ? AND id = ?
     `).get(this.#workspaceId, requiredText(id, "resourceId")) as Record<string, unknown> | undefined;
     return row ? decodeResource(row) : null;
   }
@@ -109,7 +109,7 @@ export class ResearchResourceCatalog {
     const existing = this.#findByIdentity(kind, locator);
     if (existing) {
       this.#database.prepare(`
-        UPDATE honeycrisp_research_resources
+        UPDATE app_server_research_resources
         SET name = ?, rationale = CASE WHEN source = 'explicit_scope' THEN rationale ELSE ? END, updated_at = ?
         WHERE id = ?
       `).run(name, rationale, nowIso(), existing.id);
@@ -118,7 +118,7 @@ export class ResearchResourceCatalog {
     const timestamp = nowIso();
     const id = stableResourceId(this.#workspaceId, kind, locator);
     this.#database.prepare(`
-      INSERT INTO honeycrisp_research_resources (
+      INSERT INTO app_server_research_resources (
         id, workspace_id, kind, name, locator, normalized_locator, source,
         direction, scope_asset_id, rationale, review_status, review_reason,
         discovered_at, updated_at
@@ -129,7 +129,7 @@ export class ResearchResourceCatalog {
 
   public hasTouch(resourceId: string, revisionKey: string): boolean {
     return Boolean(this.#database.prepare(`
-      SELECT 1 FROM honeycrisp_research_resource_touches
+      SELECT 1 FROM app_server_research_resource_touches
       WHERE resource_id = ? AND revision_key = ?
     `).get(requiredText(resourceId, "resourceId"), requiredText(revisionKey, "revisionKey")));
   }
@@ -137,7 +137,7 @@ export class ResearchResourceCatalog {
   public recordReview(resourceId: string, decision: ResearchResourceScopeReviewDecision): TrackedResearchResource {
     const reviewStatus = decision.decision === "relevant" ? "relevant" : "not_relevant";
     this.#database.prepare(`
-      UPDATE honeycrisp_research_resources
+      UPDATE app_server_research_resources
       SET review_status = ?, review_reason = ?, updated_at = ?
       WHERE workspace_id = ? AND id = ?
     `).run(reviewStatus, boundedText(decision.reason, 2_000), nowIso(), this.#workspaceId, resourceId);
@@ -147,7 +147,7 @@ export class ResearchResourceCatalog {
   public recordTouch(resourceId: string, revisionKey: string): string {
     const touchedAt = nowIso();
     this.#database.prepare(`
-      INSERT OR IGNORE INTO honeycrisp_research_resource_touches(resource_id, revision_key, touched_at)
+      INSERT OR IGNORE INTO app_server_research_resource_touches(resource_id, revision_key, touched_at)
       VALUES (?, ?, ?)
     `).run(requiredText(resourceId, "resourceId"), requiredText(revisionKey, "revisionKey"), touchedAt);
     return touchedAt;
@@ -155,7 +155,7 @@ export class ResearchResourceCatalog {
 
   #findByIdentity(kind: ResearchResourceKind, locator: string): TrackedResearchResource | null {
     const row = this.#database.prepare(`
-      SELECT * FROM honeycrisp_research_resources
+      SELECT * FROM app_server_research_resources
       WHERE workspace_id = ? AND kind = ? AND normalized_locator = ?
     `).get(this.#workspaceId, kind, normalizeLocator(locator)) as Record<string, unknown> | undefined;
     return row ? decodeResource(row) : null;
@@ -167,7 +167,7 @@ export class ResearchResourceCatalog {
     const id = existing?.id ?? stableResourceId(this.#workspaceId, resource.kind, resource.locator);
     const reviewStatus = resource.direction === "out_of_scope" ? "explicit_out_of_scope" : existing?.reviewStatus ?? "unreviewed";
     this.#database.prepare(`
-      INSERT INTO honeycrisp_research_resources (
+      INSERT INTO app_server_research_resources (
         id, workspace_id, kind, name, locator, normalized_locator, source,
         direction, scope_asset_id, rationale, review_status, review_reason,
         discovered_at, updated_at
@@ -183,8 +183,8 @@ export class ResearchResourceCatalog {
         rationale = excluded.rationale,
         review_status = CASE
           WHEN excluded.direction = 'out_of_scope' THEN 'explicit_out_of_scope'
-          WHEN honeycrisp_research_resources.review_status = 'explicit_out_of_scope' THEN 'unreviewed'
-          ELSE honeycrisp_research_resources.review_status
+          WHEN app_server_research_resources.review_status = 'explicit_out_of_scope' THEN 'unreviewed'
+          ELSE app_server_research_resources.review_status
         END,
         updated_at = excluded.updated_at
     `).run(
@@ -207,7 +207,7 @@ export class ResearchResourceCatalog {
     this.#database.exec("BEGIN IMMEDIATE");
     try {
       this.#database.prepare(`
-        UPDATE honeycrisp_research_resources
+        UPDATE app_server_research_resources
         SET source = 'runtime_discovery', direction = NULL, scope_asset_id = NULL,
             review_status = 'unreviewed', review_reason = NULL, updated_at = ?
         WHERE workspace_id = ? AND source = 'explicit_scope'
@@ -222,7 +222,7 @@ export class ResearchResourceCatalog {
 
   #migrate(): void {
     this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS honeycrisp_research_resources (
+      CREATE TABLE IF NOT EXISTS app_server_research_resources (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
         kind TEXT NOT NULL CHECK(kind IN ('domain', 'repository', 'binary', 'service', 'tool', 'documentation', 'other')),
@@ -239,10 +239,10 @@ export class ResearchResourceCatalog {
         updated_at TEXT NOT NULL,
         UNIQUE(workspace_id, kind, normalized_locator)
       );
-      CREATE INDEX IF NOT EXISTS honeycrisp_research_resources_workspace_updated
-        ON honeycrisp_research_resources(workspace_id, updated_at DESC);
-      CREATE TABLE IF NOT EXISTS honeycrisp_research_resource_touches (
-        resource_id TEXT NOT NULL REFERENCES honeycrisp_research_resources(id) ON DELETE CASCADE,
+      CREATE INDEX IF NOT EXISTS app_server_research_resources_workspace_updated
+        ON app_server_research_resources(workspace_id, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS app_server_research_resource_touches (
+        resource_id TEXT NOT NULL REFERENCES app_server_research_resources(id) ON DELETE CASCADE,
         revision_key TEXT NOT NULL,
         touched_at TEXT NOT NULL,
         PRIMARY KEY(resource_id, revision_key)
@@ -286,7 +286,7 @@ export function createResearchResourceTool(options: ResearchResourceToolOptions)
       requiredPermissions: ["research-resource:inventory"],
       inputSchema: RESOURCE_PARAMETERS,
       metadata: {
-        provider: "honeycrisp.built_in",
+        provider: "appServer.built_in",
         safetyProfile: "non-authoring-resource-inventory",
         discoveryAuthorship: "none",
       },

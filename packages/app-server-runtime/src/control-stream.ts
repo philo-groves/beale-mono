@@ -1,24 +1,24 @@
 import type { Readable } from "node:stream";
-import { RUNBOOK_PROOF_TARGETS } from "@honeycrisp/research-agent";
+import { RUNBOOK_PROOF_TARGETS } from "@beale/research-agent";
 import type {
   ManualShellApprovalResult,
   ManualToolApprovalResult,
   RunbookProofTarget,
   RunbookExecutionRequest,
   ShellSafetyMode,
-} from "@honeycrisp/research-agent";
+} from "@beale/research-agent";
 
-interface HoneycrispControlRequest {
+interface AppServerControlRequest {
   schemaVersion: 1;
   requestId?: string;
 }
 
-export type HoneycrispControlMessage = HoneycrispControlRequest & (
+export type AppServerControlMessage = AppServerControlRequest & (
   | { type: "pause" }
   | { type: "resume" }
   | { type: "stop" }
-  | { type: "configure"; modelSelection: HoneycrispModelSelection }
-  | { type: "steer"; instruction: string; modelSelection?: HoneycrispModelSelection }
+  | { type: "configure"; modelSelection: AppServerModelSelection }
+  | { type: "steer"; instruction: string; modelSelection?: AppServerModelSelection }
   | { type: "configure_shell_safety"; shellSafetyMode: ShellSafetyMode }
   | {
       type: "runbook_execute";
@@ -41,13 +41,13 @@ export type HoneycrispControlMessage = HoneycrispControlRequest & (
     }
 );
 
-export interface HoneycrispModelSelection {
+export interface AppServerModelSelection {
   provider: string;
   model: string;
   reasoningEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
-export type HoneycrispControlEvent =
+export type AppServerControlEvent =
   | {
       type: "steer";
       accepted: true;
@@ -89,15 +89,15 @@ interface ToolApprovalWaiter {
   abort?: () => void;
 }
 
-export class HoneycrispControlStream {
+export class AppServerControlStream {
   private buffer = "";
   private paused = false;
   private readonly steeringInstructions: string[] = [];
   private readonly processedControls = new Map<string, {
     message: string;
-    event: HoneycrispControlEvent & { accepted: true };
+    event: AppServerControlEvent & { accepted: true };
   }>();
-  private modelSelection: HoneycrispModelSelection | undefined;
+  private modelSelection: AppServerModelSelection | undefined;
   private shellSafetyMode: ShellSafetyMode | undefined;
   private readonly resumeWaiters = new Set<() => void>();
   private readonly steeringWaiters = new Set<SteeringWaiter>();
@@ -111,7 +111,7 @@ export class HoneycrispControlStream {
 
   public constructor(
     private readonly input: Readable,
-    private readonly onEvent: (event: HoneycrispControlEvent) => void = () => undefined,
+    private readonly onEvent: (event: AppServerControlEvent) => void = () => undefined,
   ) {}
 
   public start(): void {
@@ -169,7 +169,7 @@ export class HoneycrispControlStream {
     });
   }
 
-  public getModelSelection(): HoneycrispModelSelection | undefined {
+  public getModelSelection(): AppServerModelSelection | undefined {
     return this.modelSelection ? { ...this.modelSelection } : undefined;
   }
 
@@ -300,7 +300,7 @@ export class HoneycrispControlStream {
         this.resolveSteeringWaiters([]);
         this.denyShellApprovalWaiters("Manual Approval denied because the run was stopped.");
         this.denyToolApprovalWaiters("Tool approval denied because the run was stopped.");
-        this.stopController.abort(new Error("Honeycrisp run stopped by the host."));
+        this.stopController.abort(new Error("app-server run stopped by the host."));
       } else if (message.type === "configure") {
         this.modelSelection = message.modelSelection;
       } else if (message.type === "configure_shell_safety") {
@@ -347,7 +347,7 @@ export class HoneycrispControlStream {
           this.resolveSteeringWaiters(this.steeringInstructions.splice(0));
         }
       }
-      const event: HoneycrispControlEvent & { accepted: true } = message.type === "steer"
+      const event: AppServerControlEvent & { accepted: true } = message.type === "steer"
         ? {
           type: "steer",
           accepted: true,
@@ -437,7 +437,7 @@ export class HoneycrispControlStream {
   }
 }
 
-function parseControlMessage(line: string): HoneycrispControlMessage {
+function parseControlMessage(line: string): AppServerControlMessage {
   const parsed = JSON.parse(line) as unknown;
   if (!isRecord(parsed) || parsed.schemaVersion !== 1) {
     throw new Error("Control messages require schemaVersion 1.");
@@ -534,7 +534,7 @@ function parseControlMessage(line: string): HoneycrispControlMessage {
       ...(requestId ? { requestId } : {}),
     };
   }
-  throw new Error("Unknown Honeycrisp control message type.");
+  throw new Error("Unknown app-server control message type.");
 }
 
 function parseShellSafetyMode(value: unknown): ShellSafetyMode {
@@ -577,7 +577,7 @@ function requestIdFromLine(line: string): string | undefined {
   }
 }
 
-function parseModelSelection(value: unknown): HoneycrispModelSelection {
+function parseModelSelection(value: unknown): AppServerModelSelection {
   if (!isRecord(value)) throw new Error("Model selection must be an object.");
   const provider = typeof value.provider === "string" ? value.provider.trim() : "";
   const model = typeof value.model === "string" ? value.model.trim() : "";

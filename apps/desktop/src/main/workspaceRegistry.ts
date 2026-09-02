@@ -28,7 +28,7 @@ import type {
   WorkspaceSnapshot,
   WorkspaceMemoryBackendId
 } from '@shared/types';
-import type { HoneycrispSessionSummary } from './honeycrispCliClient';
+import type { AppServerSessionSummary } from './appServerCliClient';
 import type { ResearchProfileId } from '@shared/types';
 import { DEFAULT_MEMORY_TYPE_DESCRIPTIONS, isResearchKitId, isResearchProfileId, isWorkspaceMemoryBackendId, MEMORY_NODE_TYPES } from '../shared/types';
 import { isOptionalProviderModel, isOptionalProviderModelEnabled } from '../shared/optionalProviderModels';
@@ -490,10 +490,10 @@ export class WorkspaceRegistry {
     return result.changes === 1;
   }
 
-  public reconcileHoneycrispSessions(
+  public reconcileAppServerSessions(
     researchProfileId: ResearchProfileId,
     workspaceId: string,
-    sessions: readonly HoneycrispSessionSummary[]
+    sessions: readonly AppServerSessionSummary[]
   ): void {
     const workspace = rowOrUndefined(this.db.prepare(`
       SELECT id, workspace_path FROM workspaces
@@ -506,13 +506,13 @@ export class WorkspaceRegistry {
     const workspacePath = text(workspace, 'workspace_path');
     const selectBreakoutRooms = this.db.prepare(`
       SELECT breakout_rooms_json FROM research_sessions
-      WHERE research_profile_id = ? AND workspace_id = ? AND run_id = ? AND run_engine = 'honeycrisp'
+      WHERE research_profile_id = ? AND workspace_id = ? AND run_id = ? AND run_engine = 'app-server'
     `);
     this.db.exec('BEGIN IMMEDIATE;');
     try {
       for (const session of sessions) {
         if (session.workspaceId !== workspaceId) continue;
-        const row = registryRowFromHoneycrispSession(session);
+        const row = registryRowFromAppServerSession(session);
         if (isUntrackedResourceSession(row)) continue;
         const current = rowOrUndefined(selectBreakoutRooms.get(researchProfileId, workspaceId, session.id));
         row.breakoutRooms = breakoutRoomSummariesForRunStatus(
@@ -535,7 +535,7 @@ export class WorkspaceRegistry {
     }
   }
 
-  public markHoneycrispSessionsInterrupted(
+  public markAppServerSessionsInterrupted(
     researchProfileId: ResearchProfileId,
     workspaceId: string,
     runIds: readonly string[],
@@ -543,7 +543,7 @@ export class WorkspaceRegistry {
   ): void {
     const selectBreakoutRooms = this.db.prepare(`
       SELECT breakout_rooms_json FROM research_sessions
-      WHERE research_profile_id = ? AND workspace_id = ? AND run_id = ? AND run_engine = 'honeycrisp'
+      WHERE research_profile_id = ? AND workspace_id = ? AND run_id = ? AND run_engine = 'app-server'
     `);
     const update = this.db.prepare(`
       UPDATE research_sessions SET
@@ -555,7 +555,7 @@ export class WorkspaceRegistry {
       WHERE research_profile_id = ?
         AND workspace_id = ?
         AND run_id = ?
-        AND run_engine = 'honeycrisp'
+        AND run_engine = 'app-server'
         AND status = 'active'
     `);
     this.db.exec('BEGIN IMMEDIATE;');
@@ -753,7 +753,7 @@ export class WorkspaceRegistry {
       up: (database) => {
         const workspaceColumns = database.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name?: unknown }>;
         if (!workspaceColumns.some((column) => column.name === 'memory_backend')) {
-          database.exec("ALTER TABLE workspaces ADD COLUMN memory_backend TEXT NOT NULL DEFAULT 'honeycrisp';");
+          database.exec("ALTER TABLE workspaces ADD COLUMN memory_backend TEXT NOT NULL DEFAULT 'app-server';");
         }
       }
     }, {
@@ -990,7 +990,7 @@ export class WorkspaceRegistry {
       scopeOwner: text(row, 'scope_owner'),
       researchProfileId: isResearchProfileId(row.research_profile_id) ? row.research_profile_id : DEFAULT_RESEARCH_PROFILE_ID,
       researchKitId: isResearchKitId(row.research_kit_id) ? row.research_kit_id : 'general',
-      memoryBackend: row.memory_backend === 'disabled' ? 'disabled' : 'honeycrisp',
+      memoryBackend: row.memory_backend === 'disabled' ? 'disabled' : 'app-server',
       descriptionMarkdown: text(row, 'description_markdown'),
       rulesMarkdown: text(row, 'rules_markdown'),
       expiresAt: nullableText(row, 'expires_at'),
@@ -1037,12 +1037,12 @@ function sessionBecameFinal(previous: RunStatus, current: RunStatus): boolean {
   return !isFinalRunStatus(previous) && isFinalRunStatus(current);
 }
 
-function registryRowFromHoneycrispSession(
-  session: HoneycrispSessionSummary
+function registryRowFromAppServerSession(
+  session: AppServerSessionSummary
 ): WorkspaceSnapshot['runs'][number] {
   const storedRun = objectRecord(session.metadata.bealeRun);
   return {
-    engine: 'honeycrisp',
+    engine: 'app-server',
     lastMessageAt: session.lastMessageAt ?? session.updatedAt,
     sessionRuns: [],
     run: {

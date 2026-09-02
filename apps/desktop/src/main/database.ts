@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, posix, relative, resolve 
 import { performance } from 'node:perf_hooks';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
+import { adoptPreBealeRecordKeys, preBealeHashDomain, preBealeRuntimeId } from '@beale/research-agent/legacy-compatibility';
 import { applyDatabaseMigrations } from './databaseMigrations';
 import { resolvedBreakoutRoomStatus } from './breakoutRoomStatus';
 import { decodeResearchProfileJson, decodeResolvedResearchProfile, serializeResearchProfile } from '../shared/researchProfile';
@@ -592,7 +593,7 @@ function parseJson(value: SqlPrimitive | undefined): Record<string, unknown> {
   }
   const parsed: unknown = JSON.parse(value);
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
+    return adoptPreBealeRecordKeys(parsed) as Record<string, unknown>;
   }
   return {};
 }
@@ -2988,7 +2989,7 @@ export class WorkspaceDatabase {
       for (const row of interruptedApprovalRows) {
         this.db
           .prepare("UPDATE approvals SET decision = 'denied', reason = ?, decided_at = ? WHERE id = ? AND decision = 'pending' AND decided_at IS NULL")
-          .run('Shell approval denied because the prior Honeycrisp process was interrupted.', recoveredAt, text(row, 'id'));
+          .run('Shell approval denied because the prior app-server process was interrupted.', recoveredAt, text(row, 'id'));
       }
       for (const row of interruptedRunRows) {
         const runId = text(row, 'id');
@@ -3046,7 +3047,7 @@ export class WorkspaceDatabase {
             role: 'assistant',
             phase: 'final_answer',
             contentMarkdown: 'Unexpected error',
-            source: 'honeycrisp',
+            source: 'app-server',
             metadata: {
               finalResultKind: 'error',
               agentStatus: 'interrupted',
@@ -3088,7 +3089,7 @@ export class WorkspaceDatabase {
     const resolved = decodeResolvedResearchProfile(resolvedProfile);
     const profileJson = serializeResearchProfile(resolved.profile);
     const calculatedHash = createHash('sha256')
-      .update('honeycrisp:research-profile:v1\0')
+      .update(preBealeHashDomain('research-profile:v1\0'))
       .update(profileJson)
       .digest('hex');
     if (calculatedHash !== resolved.hash) {
@@ -4836,6 +4837,7 @@ export class WorkspaceDatabase {
   private listRunRowsFiltered(runId: string | null): RunRow[] {
     const runFilter = runId ? ' AND r.id = ?' : '';
     const params = runId ? [this.workspaceId, runId] : [this.workspaceId];
+    const previousRuntimeKindKey = `${preBealeRuntimeId()}Kind`;
     const runRows = rows(
       this.db
         .prepare(`SELECT r.*, (
@@ -4888,7 +4890,10 @@ export class WorkspaceDatabase {
                  AND json_extract(trace.payload_json, '$.awaitingSteering') = 1
                )
                OR (
-                 json_extract(trace.payload_json, '$.honeycrispKind') = 'error.observed'
+                 COALESCE(
+                   json_extract(trace.payload_json, '$.appServerKind'),
+                   json_extract(trace.payload_json, '$.${previousRuntimeKindKey}')
+                 ) = 'error.observed'
                  AND (
                    instr(lower(COALESCE(json_extract(trace.payload_json, '$.payload.summary'), '')), 'cybersecurity risk') > 0
                    OR instr(lower(COALESCE(json_extract(trace.payload_json, '$.payload.summary'), '')), 'safety guardrail') > 0
@@ -5903,19 +5908,23 @@ export class WorkspaceDatabase {
       },
       {
         version: 2,
-        name: 'reconcile_errored_honeycrisp_run_status',
+        name: 'reconcile_errored_app_server_run_status',
         up: (database) => {
           const migratedAt = nowIso();
-          const summary = 'Honeycrisp capture reported an agent error.';
+          const summary = 'app-server capture reported an agent error.';
+          const previousAgentStatusKey = `${preBealeRuntimeId()}AgentStatus`;
           const erroredLatestSessionIds = `
             SELECT candidate.id
             FROM model_sessions AS candidate
-            WHERE candidate.provider = 'honeycrisp'
+            WHERE candidate.provider = 'app-server'
               AND candidate.transport = 'host_process'
               AND candidate.status = 'completed'
               AND CASE
                 WHEN json_valid(candidate.metadata_json)
-                THEN json_extract(candidate.metadata_json, '$.honeycrispAgentStatus')
+                THEN COALESCE(
+                  json_extract(candidate.metadata_json, '$.appServerAgentStatus'),
+                  json_extract(candidate.metadata_json, '$.${previousAgentStatusKey}')
+                )
                 ELSE NULL
               END = 'error'
               AND candidate.id = (
@@ -5999,7 +6008,7 @@ export class WorkspaceDatabase {
       },
       {
         version: 4,
-        name: 'honeycrisp_owned_research_memory',
+        name: 'app_server_owned_research_memory',
         up: (database) => {
           if (tableHasColumn(database, 'verifier_contracts', 'hypothesis_id')) {
             database.exec(`
@@ -7984,7 +7993,7 @@ export class WorkspaceDatabase {
   }
 
   private runEngineFromBudget(budget: Record<string, unknown>): RunEngineKind {
-    if (budget.runEngine === 'honeycrisp') return 'honeycrisp';
+    if (budget.runEngine === 'app-server' || budget.runEngine === preBealeRuntimeId()) return 'app-server';
     return 'fixture';
   }
 }

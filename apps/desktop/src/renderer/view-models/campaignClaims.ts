@@ -1,9 +1,9 @@
-import type { HoneycrispFindingSummary, ResearchClaimRating } from '@shared/types';
+import type { AppServerFindingSummary, ResearchClaimRating } from '@shared/types';
 import { traceLabel } from '../lib/formatting';
 
 export type CampaignClaimRatingValue = ResearchClaimRating | 'none';
 
-export function campaignClaimIsActive(claim: HoneycrispFindingSummary): boolean {
+export function campaignClaimIsActive(claim: AppServerFindingSummary): boolean {
   return claim.status !== 'rejected';
 }
 
@@ -15,7 +15,7 @@ export function cvssQualitativeSeverityLabel(score: number): 'None' | 'Low' | 'M
   return 'Critical';
 }
 
-export function campaignClaimRatingPresentation(claim: HoneycrispFindingSummary): {
+export function campaignClaimRatingPresentation(claim: AppServerFindingSummary): {
   label: string;
   title: string;
   value: CampaignClaimRatingValue;

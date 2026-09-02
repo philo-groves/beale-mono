@@ -95,7 +95,7 @@ export function createConfiguredExperimentTool(
       requiredPermissions,
       inputSchema: EXPERIMENT_CONFIG_PARAMETERS,
       metadata: {
-        provider: "honeycrisp.configured_experiment",
+        provider: "appServer.configured_experiment",
         safetyProfile: "allowlisted-process",
         experiments: options.config.experiments.map((experiment) => ({
           name: experiment.name,

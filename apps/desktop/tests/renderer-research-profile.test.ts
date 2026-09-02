@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type {
-  HoneycrispMemoryNodeSummary,
+  AppServerMemoryNodeSummary,
   ResearchProfile,
   ResearchProfileWorkflow,
   WorkspaceSnapshot
@@ -331,7 +331,7 @@ function snapshot(profile: ResearchProfile): WorkspaceSnapshot {
       profileVersion: profile.version,
       profileHash: 'a'.repeat(64),
       source: 'explicit',
-      sourcePath: '.honeycrisp/profile.json',
+      sourcePath: '.beale/profile.json',
       profile,
       active: true,
       createdAt: '2026-08-10T00:00:00.000Z'
@@ -339,7 +339,7 @@ function snapshot(profile: ResearchProfile): WorkspaceSnapshot {
   } as WorkspaceSnapshot;
 }
 
-function node(id: string, type: string, status: string): HoneycrispMemoryNodeSummary {
+function node(id: string, type: string, status: string): AppServerMemoryNodeSummary {
   return {
     id,
     sessionIds: ['run_one'],

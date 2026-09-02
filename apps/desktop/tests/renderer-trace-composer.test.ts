@@ -52,7 +52,7 @@ describe('renderer session composer', () => {
         role: 'assistant',
         phase: 'final_answer',
         contentMarkdown: 'Final result.',
-        source: 'honeycrisp',
+        source: 'app-server',
         metadata: {
           nextPromptSuggestions: [{
             title: 'Validate crash',
@@ -78,7 +78,7 @@ describe('renderer session composer', () => {
           role: 'assistant',
           phase: 'final_answer',
           contentMarkdown: 'Final result.',
-          source: 'honeycrisp',
+          source: 'app-server',
           metadata: {
             nextPromptSuggestions: [{
               title: 'Validate crash',

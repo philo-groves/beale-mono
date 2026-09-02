@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ReportSummarySidebar } from '../src/renderer/features/reports/ReportsWorkspace';
 import { SettingsSidebar, TicketingSettingsView } from '../src/renderer/features/settings/SettingsModal';
-import type { HoneycrispReportSummary, TicketingSettings } from '../src/shared/types';
+import type { AppServerReportSummary, TicketingSettings } from '../src/shared/types';
 
 describe('renderer ticketing settings', () => {
   it('adds Ticketing to Agent Settings and defaults to local reports only', () => {
@@ -88,7 +88,7 @@ function localSettings(): TicketingSettings {
   return { provider: 'local', automation: { humanInTheLoop: true }, github: { ...empty }, linear: { ...empty } };
 }
 
-function report(): HoneycrispReportSummary {
+function report(): AppServerReportSummary {
   return {
     id: 'report-1',
     workspaceId: 'workspace-1',

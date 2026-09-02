@@ -3,16 +3,21 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { resolveHoneycrispProtocolInvocation } from './honeycrispInvocation';
+import { resolveAppServerProtocolInvocation } from './appServerInvocation';
 import { invokeAppServerOperation } from './bealeAppServerClient';
-import { honeycrispProtocolSuccess, type HoneycrispProtocolOperation } from 'honeycrisp/protocol';
+import { appServerProtocolSuccess, type AppServerProtocolOperation } from '@beale/app-server-runtime/protocol';
+import {
+  compatibleExistingPath,
+  PRE_BEALE_DATA_DIRECTORY_NAME,
+  preBealeRuntimeId
+} from '@beale/research-agent/legacy-compatibility';
 import type {
-  HoneycrispMemorySummary,
-  HoneycrispMemoryEdgeSummary,
-  HoneycrispMemoryNodeSummary,
-  HoneycrispReportDocument,
-  HoneycrispReportSummary,
-  HoneycrispRunbookDocument,
+  AppServerMemorySummary,
+  AppServerMemoryEdgeSummary,
+  AppServerMemoryNodeSummary,
+  AppServerReportDocument,
+  AppServerReportSummary,
+  AppServerRunbookDocument,
   MemoryDreamingRunSummary,
   ResearchProfileSnapshot,
   AgentPluginRegistryState,
@@ -21,27 +26,27 @@ import type {
 } from '@shared/types';
 import type { ResolvedResearchProfile } from '../shared/researchProfile';
 import {
-  decodeHoneycrispProtocolDescriptor,
-  decodeHoneycrispProtocolEnvelope,
-  type HoneycrispProtocolDescriptor,
-  type HoneycrispProtocolEnvelope,
-  type HoneycrispProtocolSuccess
-} from './honeycrispProtocol';
+  decodeAppServerProtocolDescriptor,
+  decodeAppServerProtocolEnvelope,
+  type AppServerProtocolDescriptor,
+  type AppServerProtocolEnvelope,
+  type AppServerProtocolSuccess
+} from './appServerProtocol';
 export {
-  HONEYCRISP_PROTOCOL_VERSION,
-  HONEYCRISP_PROTOCOL_WEBSOCKET_PATH,
-  decodeHoneycrispProtocolEnvelope
-} from './honeycrispProtocol';
+  APP_SERVER_PROTOCOL_VERSION,
+  APP_SERVER_PROTOCOL_WEBSOCKET_PATH,
+  decodeAppServerProtocolEnvelope
+} from './appServerProtocol';
 export type {
-  HoneycrispProtocolDescriptor,
-  HoneycrispProtocolEnvelope,
-  HoneycrispProtocolFailure,
-  HoneycrispProtocolSuccess
-} from './honeycrispProtocol';
+  AppServerProtocolDescriptor,
+  AppServerProtocolEnvelope,
+  AppServerProtocolFailure,
+  AppServerProtocolSuccess
+} from './appServerProtocol';
 
-export type HoneycrispSessionStatus = 'active' | 'paused' | 'blocked' | 'completed' | 'failed' | 'stopped';
+export type AppServerSessionStatus = 'active' | 'paused' | 'blocked' | 'completed' | 'failed' | 'stopped';
 
-export interface HoneycrispSessionTokenUsage {
+export interface AppServerSessionTokenUsage {
   totalTokens: number;
   totalCostUsd?: number;
   inputTokens?: number;
@@ -50,12 +55,12 @@ export interface HoneycrispSessionTokenUsage {
   cachePromptTokens?: number;
 }
 
-export interface HoneycrispSessionActivityCounts {
+export interface AppServerSessionActivityCounts {
   memorySearches: number;
   memoryUpdates: number;
 }
 
-export interface HoneycrispSessionEvent {
+export interface AppServerSessionEvent {
   id: string;
   kind: string;
   timestamp: string;
@@ -66,10 +71,10 @@ export interface HoneycrispSessionEvent {
   parentAgentId?: string;
 }
 
-export interface HoneycrispSessionAttempt {
+export interface AppServerSessionAttempt {
   id: string;
   parentAttemptId: string | null;
-  status: HoneycrispSessionStatus;
+  status: AppServerSessionStatus;
   summary: string;
   startedAt: string;
   endedAt: string | null;
@@ -77,11 +82,11 @@ export interface HoneycrispSessionAttempt {
   metadata: Record<string, unknown>;
 }
 
-export interface HoneycrispSessionRecord {
+export interface AppServerSessionRecord {
   schemaVersion: 1;
   id: string;
   workspaceId: string;
-  status: HoneycrispSessionStatus;
+  status: AppServerSessionStatus;
   title: string;
   prompt: string;
   summary: string;
@@ -93,59 +98,59 @@ export interface HoneycrispSessionRecord {
   metadata: Record<string, unknown>;
   finalDisposition: Record<string, unknown> | null;
   finalResponse: string | null;
-  attempts: HoneycrispSessionAttempt[];
-  events: HoneycrispSessionEvent[];
+  attempts: AppServerSessionAttempt[];
+  events: AppServerSessionEvent[];
   createdAt: string;
   startedAt: string;
   endedAt: string | null;
   updatedAt: string;
   revision: number;
   /** Present when materialized from a canonical session summary/update. */
-  tokenUsage?: HoneycrispSessionTokenUsage;
+  tokenUsage?: AppServerSessionTokenUsage;
   /** Present when materialized from a canonical session summary/update. */
-  activityCounts?: HoneycrispSessionActivityCounts;
+  activityCounts?: AppServerSessionActivityCounts;
 }
 
-export type HoneycrispSessionSummary = Omit<
-  HoneycrispSessionRecord,
+export type AppServerSessionSummary = Omit<
+  AppServerSessionRecord,
   'attempts' | 'events' | 'finalResponse'
 > & {
-  attempts: Array<Omit<HoneycrispSessionAttempt, 'capture'>>;
+  attempts: Array<Omit<AppServerSessionAttempt, 'capture'>>;
   lastMessageAt: string | null;
-  tokenUsage?: HoneycrispSessionTokenUsage;
-  activityCounts?: HoneycrispSessionActivityCounts;
+  tokenUsage?: AppServerSessionTokenUsage;
+  activityCounts?: AppServerSessionActivityCounts;
 };
 
-export interface HoneycrispSessionUpdate {
-  session: HoneycrispSessionSummary;
+export interface AppServerSessionUpdate {
+  session: AppServerSessionSummary;
   finalResponse: string | null;
-  events: HoneycrispSessionEvent[];
+  events: AppServerSessionEvent[];
   eventOffset: number;
   nextAfterEventId: string | null;
   hasEarlier: boolean;
   hasMore: boolean;
 }
 
-export interface HoneycrispSessionEventPage {
+export interface AppServerSessionEventPage {
   sessionId: string;
   stream: 'all' | 'transcript' | 'trace';
-  events: HoneycrispSessionEvent[];
+  events: AppServerSessionEvent[];
   eventOffset: number;
   nextAfterEventId: string | null;
   hasEarlier: boolean;
   hasMore: boolean;
 }
 
-export interface HoneycrispSessionCollaborationState {
+export interface AppServerSessionCollaborationState {
   sessionId: string;
   revision: number;
-  rooms: HoneycrispSessionEvent[];
-  members: HoneycrispSessionEvent[];
-  messages: HoneycrispSessionEvent[];
-  subagents: HoneycrispSessionEvent[];
+  rooms: AppServerSessionEvent[];
+  members: AppServerSessionEvent[];
+  messages: AppServerSessionEvent[];
+  subagents: AppServerSessionEvent[];
 }
 
-export interface HoneycrispSessionCaptureSummary {
+export interface AppServerSessionCaptureSummary {
   attemptId: string;
   capturedAt: string;
   schemaVersion: number;
@@ -154,20 +159,20 @@ export interface HoneycrispSessionCaptureSummary {
   eventStreams: Record<string, unknown>;
 }
 
-export interface HoneycrispSessionMutationReceipt {
+export interface AppServerSessionMutationReceipt {
   sessionId: string;
-  status: HoneycrispSessionStatus;
+  status: AppServerSessionStatus;
   revision: number;
   updatedAt: string;
 }
 
-export interface HoneycrispSessionStorage {
+export interface AppServerSessionStorage {
   databasePath: string;
   artifactDirectoryPath: string;
   profileId?: string;
 }
 
-export interface HoneycrispSessionRecoveryReport {
+export interface AppServerSessionRecoveryReport {
   workspaceId: string;
   recoveredAt: string;
   reason: string;
@@ -176,17 +181,23 @@ export interface HoneycrispSessionRecoveryReport {
   sessionIds: string[];
 }
 
-export function resolveHoneycrispStoragePaths(
+export function resolveAppServerStoragePaths(
   profileId: string,
   options: { databasePath?: string; artifactDirectoryPath?: string; registryDirectory?: string } = {}
-): HoneycrispSessionStorage {
-  const databasePath = options.databasePath
+): AppServerSessionStorage {
+  const canonicalDatabasePath = options.databasePath
     ? profileId === 'security-research'
       ? resolve(options.databasePath)
       : join(dirname(resolve(options.databasePath)), 'profiles', profileId, 'memory.sqlite')
     : options.registryDirectory
-      ? resolve(options.registryDirectory, 'honeycrisp', 'profiles', profileId, 'memory.sqlite')
-      : join(homedir(), '.honeycrisp', 'profiles', profileId, 'memory.sqlite');
+      ? resolve(options.registryDirectory, 'app-server', 'profiles', profileId, 'memory.sqlite')
+      : join(homedir(), '.beale', 'profiles', profileId, 'memory.sqlite');
+  const previousDatabasePath = options.databasePath
+    ? canonicalDatabasePath
+    : options.registryDirectory
+      ? resolve(options.registryDirectory, preBealeRuntimeId(), 'profiles', profileId, 'memory.sqlite')
+      : join(homedir(), PRE_BEALE_DATA_DIRECTORY_NAME, 'profiles', profileId, 'memory.sqlite');
+  const databasePath = compatibleExistingPath(canonicalDatabasePath, previousDatabasePath);
   const artifactDirectoryPath = options.artifactDirectoryPath
     ? profileId === 'security-research'
       ? resolve(options.artifactDirectoryPath)
@@ -232,14 +243,14 @@ export interface MemoryDreamingRunContext {
   inputSessionCount: number;
 }
 
-export interface HoneycrispDreamingPreparation {
+export interface AppServerDreamingPreparation {
   instructions: string;
   typeDescriptions: Record<string, string>;
   modelJobDefaults: { size: string; reasoningEffort: string } | null;
   inputTexts: string[];
 }
 
-export interface HoneycrispDreamingSessionInput {
+export interface AppServerDreamingSessionInput {
   id: string;
   title: string;
   status: string;
@@ -250,7 +261,7 @@ export interface HoneycrispDreamingSessionInput {
   transcript: Array<{ role: string; source: string; createdAt: string; content: string }>;
 }
 
-export interface HoneycrispResolvedArtifact {
+export interface AppServerResolvedArtifact {
   id: string;
   kind: string;
   purpose: string;
@@ -263,13 +274,13 @@ export interface HoneycrispResolvedArtifact {
   updatedAt: string;
 }
 
-export interface HoneycrispAuxiliaryModelRoute {
+export interface AppServerAuxiliaryModelRoute {
   provider: 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter';
   model: string;
   effort: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
-export interface HoneycrispProviderSemantics {
+export interface AppServerProviderSemantics {
   providers: Array<'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter'>;
   aliases: Record<string, 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter'>;
   defaultSmallModels: Record<'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter', string>;
@@ -278,12 +289,12 @@ export interface HoneycrispProviderSemantics {
   shellReviewEffort: 'medium';
 }
 
-let providerSemanticsCache: HoneycrispProviderSemantics | null = null;
-let compatibleProtocolCache: { invocationKey: string; descriptor: HoneycrispProtocolDescriptor } | null = null;
-const HONEYCRISP_PROTOCOL_MAX_STDOUT_BYTES = 64 * 1024 * 1024;
-const HONEYCRISP_PROTOCOL_MAX_STDERR_CHARS = 2_000_000;
+let providerSemanticsCache: AppServerProviderSemantics | null = null;
+let compatibleProtocolCache: { invocationKey: string; descriptor: AppServerProtocolDescriptor } | null = null;
+const APP_SERVER_PROTOCOL_MAX_STDOUT_BYTES = 64 * 1024 * 1024;
+const APP_SERVER_PROTOCOL_MAX_STDERR_CHARS = 2_000_000;
 
-export interface HoneycrispSourceRepositoryCandidate {
+export interface AppServerSourceRepositoryCandidate {
   url: string;
   label: string;
   sourceAssetId: string;
@@ -292,7 +303,7 @@ export interface HoneycrispSourceRepositoryCandidate {
   clonedDirectory: string | null;
 }
 
-export interface HoneycrispMaterializedSourceRepository {
+export interface AppServerMaterializedSourceRepository {
   repositoryUrl: string;
   localPath: string;
   cloned: boolean;
@@ -305,24 +316,24 @@ export interface HoneycrispMaterializedSourceRepository {
   cloneMode: RepositoryCloneMode;
 }
 
-export interface HoneycrispWorkspaceRepositoryCandidate {
+export interface AppServerWorkspaceRepositoryCandidate {
   path: string;
   repositoryUrl?: string;
   ref?: string;
 }
 
-export interface HoneycrispWorkspaceRepositoryRelocation {
+export interface AppServerWorkspaceRepositoryRelocation {
   fromPath: string;
   toPath: string;
   repositoryUrl: string | null;
 }
 
-export interface HoneycrispMaintenanceRunResult {
+export interface AppServerMaintenanceRunResult {
   summary: WorkspaceDejunkSummary;
-  repositoryRelocations: HoneycrispWorkspaceRepositoryRelocation[];
+  repositoryRelocations: AppServerWorkspaceRepositoryRelocation[];
 }
 
-export interface HoneycrispAgentPluginRuntime {
+export interface AppServerAgentPluginRuntime {
   runtimeDirectory: string;
   skillDirs: string[];
   selectedSkillIds: string[];
@@ -332,48 +343,48 @@ export interface HoneycrispAgentPluginRuntime {
   warnings: string[];
 }
 
-export interface HoneycrispBuiltinPlugin {
+export interface AppServerBuiltinPlugin {
   id: string;
   path: string;
   installedAt: string;
   enabledByDefault?: boolean;
 }
 
-export function getHoneycrispProtocolDescriptor(): HoneycrispProtocolDescriptor {
-  const envelope = invokeHoneycrispCliProtocol<HoneycrispProtocolDescriptor>(
+export function getAppServerProtocolDescriptor(): AppServerProtocolDescriptor {
+  const envelope = invokeAppServerCliProtocol<AppServerProtocolDescriptor>(
     'protocol.describe',
     ['protocol', 'describe', '--json']
   );
-  return decodeHoneycrispProtocolDescriptor(envelope.result);
+  return decodeAppServerProtocolDescriptor(envelope.result);
 }
 
-export function assertHoneycrispProtocolCompatibility(): HoneycrispProtocolDescriptor {
-  const invocationKey = honeycrispInvocationKey();
+export function assertAppServerProtocolCompatibility(): AppServerProtocolDescriptor {
+  const invocationKey = appServerInvocationKey();
   if (compatibleProtocolCache?.invocationKey === invocationKey) return compatibleProtocolCache.descriptor;
-  const descriptor = getHoneycrispProtocolDescriptor();
+  const descriptor = getAppServerProtocolDescriptor();
   compatibleProtocolCache = { invocationKey, descriptor };
   return descriptor;
 }
 
-export function honeycrispOwnsSessions(): boolean {
-  // The app-server is the canonical Honeycrisp host. Session ownership is no
+export function appServerOwnsSessions(): boolean {
+  // The app-server is the canonical app-server host. Session ownership is no
   // longer conditional on probing a separately installed CLI executable.
   return true;
 }
 
-export function createHoneycrispSession(
+export function createAppServerSession(
   input: Record<string, unknown>,
-  storage: HoneycrispSessionStorage
-): HoneycrispSessionRecord {
-  return invokeWithJsonInput<HoneycrispSessionRecord>('session.create', ['session', 'create'], input, storage).result;
+  storage: AppServerSessionStorage
+): AppServerSessionRecord {
+  return invokeWithJsonInput<AppServerSessionRecord>('session.create', ['session', 'create'], input, storage).result;
 }
 
-export function beginHoneycrispSessionAttempt(
+export function beginAppServerSessionAttempt(
   sessionId: string,
   input: Record<string, unknown>,
-  storage: HoneycrispSessionStorage
-): HoneycrispSessionRecord {
-  return invokeWithJsonInput<HoneycrispSessionRecord>(
+  storage: AppServerSessionStorage
+): AppServerSessionRecord {
+  return invokeWithJsonInput<AppServerSessionRecord>(
     'session.begin_attempt',
     ['session', 'begin-attempt', '--session-id', sessionId],
     input,
@@ -381,12 +392,12 @@ export function beginHoneycrispSessionAttempt(
   ).result;
 }
 
-export function appendHoneycrispSessionEvent(
+export function appendAppServerSessionEvent(
   sessionId: string,
-  input: HoneycrispSessionEvent,
-  storage: HoneycrispSessionStorage
-): HoneycrispSessionMutationReceipt {
-  return invokeWithJsonInput<HoneycrispSessionMutationReceipt>(
+  input: AppServerSessionEvent,
+  storage: AppServerSessionStorage
+): AppServerSessionMutationReceipt {
+  return invokeWithJsonInput<AppServerSessionMutationReceipt>(
     'session.append_event_receipt',
     ['session', 'append-event-receipt', '--session-id', sessionId],
     input,
@@ -394,13 +405,13 @@ export function appendHoneycrispSessionEvent(
   ).result;
 }
 
-export async function appendHoneycrispSessionEventAsync(
+export async function appendAppServerSessionEventAsync(
   sessionId: string,
-  input: HoneycrispSessionEvent,
-  storage: HoneycrispSessionStorage,
+  input: AppServerSessionEvent,
+  storage: AppServerSessionStorage,
   signal?: AbortSignal
-): Promise<HoneycrispSessionMutationReceipt> {
-  return (await invokeWithJsonInputAsync<HoneycrispSessionMutationReceipt>(
+): Promise<AppServerSessionMutationReceipt> {
+  return (await invokeWithJsonInputAsync<AppServerSessionMutationReceipt>(
     'session.append_event_receipt',
     ['session', 'append-event-receipt', '--session-id', sessionId],
     input,
@@ -410,12 +421,12 @@ export async function appendHoneycrispSessionEventAsync(
   )).result;
 }
 
-export function transitionHoneycrispSession(
+export function transitionAppServerSession(
   sessionId: string,
   input: Record<string, unknown>,
-  storage: HoneycrispSessionStorage
-): HoneycrispSessionRecord {
-  return invokeWithJsonInput<HoneycrispSessionRecord>(
+  storage: AppServerSessionStorage
+): AppServerSessionRecord {
+  return invokeWithJsonInput<AppServerSessionRecord>(
     'session.transition',
     ['session', 'transition', '--session-id', sessionId],
     input,
@@ -423,12 +434,12 @@ export function transitionHoneycrispSession(
   ).result;
 }
 
-export function recoverInterruptedHoneycrispSessions(
+export function recoverInterruptedAppServerSessions(
   workspaceId: string,
   input: { reason?: string; at?: string },
-  storage: HoneycrispSessionStorage
-): HoneycrispSessionRecoveryReport {
-  return invokeWithJsonInput<HoneycrispSessionRecoveryReport>(
+  storage: AppServerSessionStorage
+): AppServerSessionRecoveryReport {
+  return invokeWithJsonInput<AppServerSessionRecoveryReport>(
     'session.recover_interrupted',
     ['session', 'recover-interrupted', '--workspace-id', workspaceId],
     input,
@@ -436,12 +447,12 @@ export function recoverInterruptedHoneycrispSessions(
   ).result;
 }
 
-export async function recoverInterruptedHoneycrispSessionsAsync(
+export async function recoverInterruptedAppServerSessionsAsync(
   workspaceId: string,
   input: { reason?: string; at?: string },
-  storage: HoneycrispSessionStorage
-): Promise<HoneycrispSessionRecoveryReport> {
-  return (await invokeWithJsonInputAsync<HoneycrispSessionRecoveryReport>(
+  storage: AppServerSessionStorage
+): Promise<AppServerSessionRecoveryReport> {
+  return (await invokeWithJsonInputAsync<AppServerSessionRecoveryReport>(
     'session.recover_interrupted',
     ['session', 'recover-interrupted', '--workspace-id', workspaceId],
     input,
@@ -451,8 +462,8 @@ export async function recoverInterruptedHoneycrispSessionsAsync(
   )).result;
 }
 
-export function getHoneycrispSession(sessionId: string, storage: HoneycrispSessionStorage): HoneycrispSessionRecord {
-  const summary = invokeHoneycrispCliProtocol<HoneycrispSessionSummary>(
+export function getAppServerSession(sessionId: string, storage: AppServerSessionStorage): AppServerSessionRecord {
+  const summary = invokeAppServerCliProtocol<AppServerSessionSummary>(
     'session.get',
     ['session', 'get', '--session-id', sessionId, '--json'],
     { env: storageEnvironment(storage) }
@@ -460,12 +471,12 @@ export function getHoneycrispSession(sessionId: string, storage: HoneycrispSessi
   return sessionRecordFromSummary(summary);
 }
 
-export async function getHoneycrispSessionAsync(
+export async function getAppServerSessionAsync(
   sessionId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   signal?: AbortSignal
-): Promise<HoneycrispSessionRecord> {
-  const summary = (await invokeHoneycrispCliProtocolAsync<HoneycrispSessionSummary>(
+): Promise<AppServerSessionRecord> {
+  const summary = (await invokeAppServerCliProtocolAsync<AppServerSessionSummary>(
     'session.get',
     ['session', 'get', '--session-id', sessionId, '--json'],
     { env: storageEnvironment(storage), timeoutMs: 30_000, ...(signal ? { signal } : {}) }
@@ -473,48 +484,48 @@ export async function getHoneycrispSessionAsync(
   return sessionRecordFromSummary(summary);
 }
 
-export function getHoneycrispSessionUpdate(
+export function getAppServerSessionUpdate(
   sessionId: string,
   afterEventId: string | null,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   options: { tail?: boolean; limit?: number; maxBytes?: number } = {}
-): HoneycrispSessionUpdate {
-  return invokeHoneycrispCliProtocol<HoneycrispSessionUpdate>(
+): AppServerSessionUpdate {
+  return invokeAppServerCliProtocol<AppServerSessionUpdate>(
     'session.get_update',
     sessionUpdateArguments(sessionId, afterEventId, options),
     { env: storageEnvironment(storage) }
   ).result;
 }
 
-export async function getHoneycrispSessionUpdateAsync(
+export async function getAppServerSessionUpdateAsync(
   sessionId: string,
   afterEventId: string | null,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   signal?: AbortSignal,
   options: { tail?: boolean; limit?: number; maxBytes?: number } = {}
-): Promise<HoneycrispSessionUpdate> {
-  return (await invokeHoneycrispCliProtocolAsync<HoneycrispSessionUpdate>(
+): Promise<AppServerSessionUpdate> {
+  return (await invokeAppServerCliProtocolAsync<AppServerSessionUpdate>(
     'session.get_update',
     sessionUpdateArguments(sessionId, afterEventId, options),
     { env: storageEnvironment(storage), timeoutMs: 30_000, ...(signal ? { signal } : {}) }
   )).result;
 }
 
-export function getHoneycrispSessionCollaborationState(
+export function getAppServerSessionCollaborationState(
   sessionId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   messageLimit = 200
-): HoneycrispSessionCollaborationState {
-  return invokeHoneycrispCliProtocol<HoneycrispSessionCollaborationState>(
+): AppServerSessionCollaborationState {
+  return invokeAppServerCliProtocol<AppServerSessionCollaborationState>(
     'session.collaboration',
     ['session', 'collaboration', '--session-id', sessionId, '--message-limit', String(messageLimit), '--json'],
     { env: storageEnvironment(storage) }
   ).result;
 }
 
-export function getHoneycrispSessionEventPage(
+export function getAppServerSessionEventPage(
   sessionId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   options: {
     stream?: 'all' | 'transcript' | 'trace';
     afterEventId?: string;
@@ -522,8 +533,8 @@ export function getHoneycrispSessionEventPage(
     limit?: number;
     maxBytes?: number;
   } = {}
-): HoneycrispSessionEventPage {
-  return invokeHoneycrispCliProtocol<HoneycrispSessionEventPage>(
+): AppServerSessionEventPage {
+  return invokeAppServerCliProtocol<AppServerSessionEventPage>(
     'session.events',
     [
       'session', 'events', '--session-id', sessionId,
@@ -538,76 +549,76 @@ export function getHoneycrispSessionEventPage(
   ).result;
 }
 
-export async function getHoneycrispSessionEventDetailsAsync(
+export async function getAppServerSessionEventDetailsAsync(
   sessionId: string,
   eventIds: readonly string[],
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   signal?: AbortSignal
-): Promise<HoneycrispSessionEvent[]> {
+): Promise<AppServerSessionEvent[]> {
   if (eventIds.length === 0) return [];
-  return (await invokeHoneycrispCliProtocolAsync<HoneycrispSessionEvent[]>(
+  return (await invokeAppServerCliProtocolAsync<AppServerSessionEvent[]>(
     'session.event_details',
     ['session', 'event-details', '--session-id', sessionId, ...eventIds.flatMap((id) => ['--event-id', id]), '--json'],
     { env: storageEnvironment(storage), timeoutMs: 30_000, ...(signal ? { signal } : {}) }
   )).result;
 }
 
-export async function listHoneycrispSessionCaptureSummariesAsync(
+export async function listAppServerSessionCaptureSummariesAsync(
   sessionId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   signal?: AbortSignal
-): Promise<HoneycrispSessionCaptureSummary[]> {
-  return (await invokeHoneycrispCliProtocolAsync<HoneycrispSessionCaptureSummary[]>(
+): Promise<AppServerSessionCaptureSummary[]> {
+  return (await invokeAppServerCliProtocolAsync<AppServerSessionCaptureSummary[]>(
     'session.captures',
     ['session', 'captures', '--session-id', sessionId, '--json'],
     { env: storageEnvironment(storage), timeoutMs: 30_000, ...(signal ? { signal } : {}) }
   )).result;
 }
 
-export function listHoneycrispSessions(
+export function listAppServerSessions(
   workspaceId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   limit = 100
-): HoneycrispSessionRecord[] {
-  return invokeHoneycrispCliProtocol<HoneycrispSessionSummary[]>(
+): AppServerSessionRecord[] {
+  return invokeAppServerCliProtocol<AppServerSessionSummary[]>(
     'session.list',
     ['session', 'list', '--workspace-id', workspaceId, '--limit', String(limit), '--json'],
     { env: storageEnvironment(storage) }
   ).result.map(sessionRecordFromSummary);
 }
 
-export function listHoneycrispSessionSummaries(
+export function listAppServerSessionSummaries(
   workspaceId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   limit = 100
-): HoneycrispSessionSummary[] {
-  return invokeHoneycrispCliProtocol<HoneycrispSessionSummary[]>(
+): AppServerSessionSummary[] {
+  return invokeAppServerCliProtocol<AppServerSessionSummary[]>(
     'session.list_summaries',
     ['session', 'list-summaries', '--workspace-id', workspaceId, '--limit', String(limit), '--json'],
     { env: storageEnvironment(storage) }
   ).result;
 }
 
-export async function listHoneycrispSessionSummariesAsync(
+export async function listAppServerSessionSummariesAsync(
   workspaceId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   limit = 200
-): Promise<HoneycrispSessionSummary[]> {
-  return (await invokeHoneycrispCliProtocolAsync<HoneycrispSessionSummary[]>(
+): Promise<AppServerSessionSummary[]> {
+  return (await invokeAppServerCliProtocolAsync<AppServerSessionSummary[]>(
     'session.list_summaries',
     ['session', 'list-summaries', '--workspace-id', workspaceId, '--limit', String(limit), '--json'],
     { env: storageEnvironment(storage), timeoutMs: 30_000 }
   )).result;
 }
 
-export async function listHoneycrispSessionSummariesForWorkspacesAsync(
+export async function listAppServerSessionSummariesForWorkspacesAsync(
   workspaceIds: readonly string[],
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   limitPerWorkspace = 200
-): Promise<HoneycrispSessionSummary[]> {
+): Promise<AppServerSessionSummary[]> {
   const normalizedWorkspaceIds = [...new Set(workspaceIds.map((workspaceId) => workspaceId.trim()).filter(Boolean))];
   if (normalizedWorkspaceIds.length === 0) return [];
-  return (await invokeHoneycrispCliProtocolAsync<HoneycrispSessionSummary[]>(
+  return (await invokeAppServerCliProtocolAsync<AppServerSessionSummary[]>(
     'session.list_summaries',
     [
       'session',
@@ -621,7 +632,7 @@ export async function listHoneycrispSessionSummariesForWorkspacesAsync(
   )).result;
 }
 
-export function getHoneycrispMemorySummary(
+export function getAppServerMemorySummary(
   input: {
     workspaceId: string;
     subjectId: string | null;
@@ -630,14 +641,14 @@ export function getHoneycrispMemorySummary(
     includeForeignCatalogs?: boolean;
     assetIds?: string[];
   },
-  storage: HoneycrispSessionStorage
-): HoneycrispMemorySummary {
-  return decodeHoneycrispMemorySummary(
+  storage: AppServerSessionStorage
+): AppServerMemorySummary {
+  return decodeAppServerMemorySummary(
     invokeWithJsonInput<unknown>('memory.summary', ['knowledge', 'summary'], input, storage).result
   );
 }
 
-export async function getHoneycrispMemorySummaryAsync(
+export async function getAppServerMemorySummaryAsync(
   input: {
     workspaceId: string;
     workspaceRoot?: string;
@@ -648,10 +659,10 @@ export async function getHoneycrispMemorySummaryAsync(
     includeForeignCatalogs?: boolean;
     assetIds?: string[];
   },
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   signal?: AbortSignal
-): Promise<HoneycrispMemorySummary> {
-  return decodeHoneycrispMemorySummary((await invokeWithJsonInputAsync<unknown>(
+): Promise<AppServerMemorySummary> {
+  return decodeAppServerMemorySummary((await invokeWithJsonInputAsync<unknown>(
     'memory.summary',
     ['knowledge', 'summary'],
     input,
@@ -661,15 +672,15 @@ export async function getHoneycrispMemorySummaryAsync(
   )).result);
 }
 
-export async function listHoneycrispReportSummariesAsync(
+export async function listAppServerReportSummariesAsync(
   input: {
     workspaceId: string;
     workspaceRoot?: string;
     researchProfileId?: string;
   },
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   signal?: AbortSignal
-): Promise<HoneycrispReportSummary[]> {
+): Promise<AppServerReportSummary[]> {
   const value = (await invokeWithJsonInputAsync<unknown>(
     'report.list',
     ['knowledge', 'report-list'],
@@ -679,20 +690,20 @@ export async function listHoneycrispReportSummariesAsync(
     10_000
   )).result;
   if (!Array.isArray(value) || !value.every(validReportSummary)) {
-    throw new Error('Honeycrisp returned an invalid report catalog payload.');
+    throw new Error('app-server returned an invalid report catalog payload.');
   }
-  return value as HoneycrispReportSummary[];
+  return value as AppServerReportSummary[];
 }
 
-export function prepareHoneycrispMemoryDreaming(
+export function prepareAppServerMemoryDreaming(
   typeDescriptions: Record<string, string>,
   profileInput: MemoryDreamingProfileInput,
-  nodes: HoneycrispMemoryNodeSummary[],
-  edges: HoneycrispMemoryEdgeSummary[],
-  sessions: HoneycrispDreamingSessionInput[],
-  storage: HoneycrispSessionStorage
-): HoneycrispDreamingPreparation {
-  return invokeWithJsonInput<HoneycrispDreamingPreparation>(
+  nodes: AppServerMemoryNodeSummary[],
+  edges: AppServerMemoryEdgeSummary[],
+  sessions: AppServerDreamingSessionInput[],
+  storage: AppServerSessionStorage
+): AppServerDreamingPreparation {
+  return invokeWithJsonInput<AppServerDreamingPreparation>(
     'dreaming.prepare',
     ['knowledge', 'dreaming-prepare'],
     { typeDescriptions, profileInput, nodes, edges, sessions },
@@ -700,10 +711,10 @@ export function prepareHoneycrispMemoryDreaming(
   ).result;
 }
 
-export function parseHoneycrispMemoryDreamingPlan(
+export function parseAppServerMemoryDreamingPlan(
   output: string,
   profileInput: MemoryDreamingProfileInput,
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): MemoryDreamingPlan {
   return invokeWithJsonInput<MemoryDreamingPlan>(
     'dreaming.parse_plan',
@@ -713,12 +724,12 @@ export function parseHoneycrispMemoryDreamingPlan(
   ).result;
 }
 
-export function applyHoneycrispMemoryDreaming(
+export function applyAppServerMemoryDreaming(
   workspaceId: string,
   plan: MemoryDreamingPlan,
   context: MemoryDreamingRunContext,
   profileInput: MemoryDreamingProfileInput,
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): MemoryDreamingRunSummary {
   return invokeWithJsonInput<MemoryDreamingRunSummary>(
     'dreaming.apply',
@@ -728,12 +739,12 @@ export function applyHoneycrispMemoryDreaming(
   ).result;
 }
 
-export function recordHoneycrispMemoryDreamingFailure(
+export function recordAppServerMemoryDreamingFailure(
   workspaceId: string,
   context: MemoryDreamingRunContext,
   errorMessage: string,
   profileInput: MemoryDreamingProfileInput,
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): MemoryDreamingRunSummary {
   return invokeWithJsonInput<MemoryDreamingRunSummary>(
     'dreaming.record_failure',
@@ -743,10 +754,10 @@ export function recordHoneycrispMemoryDreamingFailure(
   ).result;
 }
 
-export function restoreHoneycrispMemoryDreamingChange(
+export function restoreAppServerMemoryDreamingChange(
   workspaceId: string,
   changeId: string,
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): void {
   invokeWithJsonInput<{ restored: true }>(
     'dreaming.restore',
@@ -756,12 +767,12 @@ export function restoreHoneycrispMemoryDreamingChange(
   );
 }
 
-export async function getHoneycrispRunbookDocument(
+export async function getAppServerRunbookDocument(
   workspaceId: string,
   runbookId: string,
-  storage: HoneycrispSessionStorage
-): Promise<HoneycrispRunbookDocument> {
-  return (await invokeWithJsonInputAsync<HoneycrispRunbookDocument>(
+  storage: AppServerSessionStorage
+): Promise<AppServerRunbookDocument> {
+  return (await invokeWithJsonInputAsync<AppServerRunbookDocument>(
     'runbook.get',
     ['knowledge', 'runbook-get'],
     { workspaceId, runbookId },
@@ -771,12 +782,12 @@ export async function getHoneycrispRunbookDocument(
   )).result;
 }
 
-export function getHoneycrispReportDocument(
+export function getAppServerReportDocument(
   workspaceId: string,
   reportId: string,
-  storage: HoneycrispSessionStorage
-): HoneycrispReportDocument {
-  return invokeWithJsonInput<HoneycrispReportDocument>(
+  storage: AppServerSessionStorage
+): AppServerReportDocument {
+  return invokeWithJsonInput<AppServerReportDocument>(
     'report.get',
     ['knowledge', 'report-get'],
     { workspaceId, reportId },
@@ -784,7 +795,7 @@ export function getHoneycrispReportDocument(
   ).result;
 }
 
-export async function reviseHoneycrispReportContent(
+export async function reviseAppServerReportContent(
   input: {
     workspaceId: string;
     workspaceName: string;
@@ -792,7 +803,7 @@ export async function reviseHoneycrispReportContent(
     expectedRevision: number;
     content: string;
   },
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): Promise<void> {
   await invokeAppServerOperation({
     operation: 'report.revise_content',
@@ -801,7 +812,7 @@ export async function reviseHoneycrispReportContent(
   });
 }
 
-export async function updateHoneycrispReportTriageStatus(
+export async function updateAppServerReportTriageStatus(
   input: {
     workspaceId: string;
     workspaceName: string;
@@ -809,7 +820,7 @@ export async function updateHoneycrispReportTriageStatus(
     expectedRevision: number;
     triageStatus: 'editing' | 'submitted' | 'reviewing' | 'rejected' | 'accepted';
   },
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): Promise<void> {
   await invokeAppServerOperation({
     operation: 'report.update_triage_status',
@@ -818,7 +829,7 @@ export async function updateHoneycrispReportTriageStatus(
   });
 }
 
-export async function replaceHoneycrispReportSubmissionPacket(
+export async function replaceAppServerReportSubmissionPacket(
   input: {
     workspaceId: string;
     workspaceName: string;
@@ -826,7 +837,7 @@ export async function replaceHoneycrispReportSubmissionPacket(
     reportId: string;
     submissionPacketPath: string;
   },
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): Promise<void> {
   await invokeAppServerOperation({
     operation: 'report.replace_packet',
@@ -835,7 +846,7 @@ export async function replaceHoneycrispReportSubmissionPacket(
   });
 }
 
-export async function replaceHoneycrispReportRecording(
+export async function replaceAppServerReportRecording(
   input: {
     workspaceId: string;
     workspaceName: string;
@@ -843,7 +854,7 @@ export async function replaceHoneycrispReportRecording(
     reportId: string;
     recordingPath: string;
   },
-  storage: HoneycrispSessionStorage
+  storage: AppServerSessionStorage
 ): Promise<void> {
   await invokeAppServerOperation({
     operation: 'report.replace_recording',
@@ -852,12 +863,12 @@ export async function replaceHoneycrispReportRecording(
   });
 }
 
-export function resolveHoneycrispArtifact(
+export function resolveAppServerArtifact(
   artifactId: string,
-  storage: HoneycrispSessionStorage,
+  storage: AppServerSessionStorage,
   expectedKind?: string
-): HoneycrispResolvedArtifact {
-  return invokeWithJsonInput<HoneycrispResolvedArtifact>(
+): AppServerResolvedArtifact {
+  return invokeWithJsonInput<AppServerResolvedArtifact>(
     'artifact.resolve',
     ['knowledge', 'artifact-resolve'],
     { artifactId, ...(expectedKind ? { expectedKind } : {}) },
@@ -865,8 +876,8 @@ export function resolveHoneycrispArtifact(
   ).result;
 }
 
-export function resolveHoneycrispAuxiliaryModelRoute(input: Record<string, unknown>): HoneycrispAuxiliaryModelRoute {
-  return invokeWithJsonInput<HoneycrispAuxiliaryModelRoute>(
+export function resolveAppServerAuxiliaryModelRoute(input: Record<string, unknown>): AppServerAuxiliaryModelRoute {
+  return invokeWithJsonInput<AppServerAuxiliaryModelRoute>(
     'model_job.resolve',
     ['harness', 'model-job-resolve'],
     input,
@@ -874,8 +885,8 @@ export function resolveHoneycrispAuxiliaryModelRoute(input: Record<string, unkno
   ).result;
 }
 
-export function getHoneycrispProviderSemantics(): HoneycrispProviderSemantics {
-  providerSemanticsCache ??= invokeWithJsonInput<HoneycrispProviderSemantics>(
+export function getAppServerProviderSemantics(): AppServerProviderSemantics {
+  providerSemanticsCache ??= invokeWithJsonInput<AppServerProviderSemantics>(
     'provider.describe',
     ['harness', 'provider-describe'],
     {},
@@ -884,28 +895,28 @@ export function getHoneycrispProviderSemantics(): HoneycrispProviderSemantics {
   return providerSemanticsCache;
 }
 
-export function inspectHoneycrispSources(input: Record<string, unknown>): {
+export function inspectAppServerSources(input: Record<string, unknown>): {
   urls?: string[];
   normalizedUrl?: string | null;
-  candidates?: HoneycrispSourceRepositoryCandidate[];
-  selection?: { candidate: HoneycrispSourceRepositoryCandidate | null; candidates: HoneycrispSourceRepositoryCandidate[]; reason: 'matched' | 'ambiguous' | 'not_found' };
+  candidates?: AppServerSourceRepositoryCandidate[];
+  selection?: { candidate: AppServerSourceRepositoryCandidate | null; candidates: AppServerSourceRepositoryCandidate[]; reason: 'matched' | 'ambiguous' | 'not_found' };
 } {
   return invokeWithJsonInput<{
     urls?: string[];
     normalizedUrl?: string | null;
-    candidates?: HoneycrispSourceRepositoryCandidate[];
-    selection?: { candidate: HoneycrispSourceRepositoryCandidate | null; candidates: HoneycrispSourceRepositoryCandidate[]; reason: 'matched' | 'ambiguous' | 'not_found' };
+    candidates?: AppServerSourceRepositoryCandidate[];
+    selection?: { candidate: AppServerSourceRepositoryCandidate | null; candidates: AppServerSourceRepositoryCandidate[]; reason: 'matched' | 'ambiguous' | 'not_found' };
   }>('source.inspect', ['harness', 'source-inspect'], input, null).result;
 }
 
-export async function materializeHoneycrispSource(
-  candidate: HoneycrispSourceRepositoryCandidate,
+export async function materializeAppServerSource(
+  candidate: AppServerSourceRepositoryCandidate,
   ref: string,
   repositoryStoreDirectory: string | undefined,
   signal?: AbortSignal,
   cloneMode: RepositoryCloneMode = 'deep'
-): Promise<HoneycrispMaterializedSourceRepository> {
-  return (await invokeWithJsonInputAsync<HoneycrispMaterializedSourceRepository>(
+): Promise<AppServerMaterializedSourceRepository> {
+  return (await invokeWithJsonInputAsync<AppServerMaterializedSourceRepository>(
     'source.materialize',
     ['harness', 'source-materialize'],
     { candidate, ref, cloneMode, ...(repositoryStoreDirectory ? { repositoryStoreDirectory } : {}) },
@@ -915,13 +926,13 @@ export async function materializeHoneycrispSource(
   )).result;
 }
 
-export function materializeHoneycrispSourceSync(
-  candidate: HoneycrispSourceRepositoryCandidate,
+export function materializeAppServerSourceSync(
+  candidate: AppServerSourceRepositoryCandidate,
   ref: string,
   repositoryStoreDirectory?: string,
   cloneMode: RepositoryCloneMode = 'deep'
-): HoneycrispMaterializedSourceRepository {
-  return invokeWithJsonInput<HoneycrispMaterializedSourceRepository>(
+): AppServerMaterializedSourceRepository {
+  return invokeWithJsonInput<AppServerMaterializedSourceRepository>(
     'source.materialize',
     ['harness', 'source-materialize'],
     { candidate, ref, cloneMode, ...(repositoryStoreDirectory ? { repositoryStoreDirectory } : {}) },
@@ -929,109 +940,109 @@ export function materializeHoneycrispSourceSync(
   ).result;
 }
 
-export function listHoneycrispPlugins(input: Record<string, unknown>): AgentPluginRegistryState {
+export function listAppServerPlugins(input: Record<string, unknown>): AgentPluginRegistryState {
   return invokeWithJsonInput<AgentPluginRegistryState>('plugin.list', ['harness', 'plugin-list'], input, null).result;
 }
 
-export function addHoneycrispPluginFromFilesystem(input: Record<string, unknown>): AgentPluginRegistryState {
+export function addAppServerPluginFromFilesystem(input: Record<string, unknown>): AgentPluginRegistryState {
   return invokeWithJsonInput<AgentPluginRegistryState>('plugin.add_filesystem', ['harness', 'plugin-add-filesystem'], input, null).result;
 }
 
-export async function addHoneycrispPluginFromRepository(input: Record<string, unknown>): Promise<AgentPluginRegistryState> {
+export async function addAppServerPluginFromRepository(input: Record<string, unknown>): Promise<AgentPluginRegistryState> {
   return (await invokeWithJsonInputAsync<AgentPluginRegistryState>(
     'plugin.add_repository', ['harness', 'plugin-add-repository'], input, null
   )).result;
 }
 
-export function setHoneycrispPluginEnabled(input: Record<string, unknown>): AgentPluginRegistryState {
+export function setAppServerPluginEnabled(input: Record<string, unknown>): AgentPluginRegistryState {
   return invokeWithJsonInput<AgentPluginRegistryState>('plugin.set_enabled', ['harness', 'plugin-set-enabled'], input, null).result;
 }
 
-export function removeHoneycrispPlugin(input: Record<string, unknown>): AgentPluginRegistryState {
+export function removeAppServerPlugin(input: Record<string, unknown>): AgentPluginRegistryState {
   return invokeWithJsonInput<AgentPluginRegistryState>('plugin.remove', ['harness', 'plugin-remove'], input, null).result;
 }
 
-export function getHoneycrispPluginRuntime(input: Record<string, unknown>): HoneycrispAgentPluginRuntime {
-  return invokeWithJsonInput<HoneycrispAgentPluginRuntime>('plugin.runtime', ['harness', 'plugin-runtime'], input, null).result;
+export function getAppServerPluginRuntime(input: Record<string, unknown>): AppServerAgentPluginRuntime {
+  return invokeWithJsonInput<AppServerAgentPluginRuntime>('plugin.runtime', ['harness', 'plugin-runtime'], input, null).result;
 }
 
-export function getHoneycrispMaintenanceSummary(workspacePath: string): WorkspaceDejunkSummary {
+export function getAppServerMaintenanceSummary(workspacePath: string): WorkspaceDejunkSummary {
   return invokeWithJsonInput<WorkspaceDejunkSummary>(
     'maintenance.summary', ['harness', 'maintenance-summary'], { workspacePath }, null
   ).result;
 }
 
-export async function getHoneycrispMaintenanceSummaryAsync(workspacePath: string): Promise<WorkspaceDejunkSummary> {
+export async function getAppServerMaintenanceSummaryAsync(workspacePath: string): Promise<WorkspaceDejunkSummary> {
   return (await invokeWithJsonInputAsync<WorkspaceDejunkSummary>(
     'maintenance.summary', ['harness', 'maintenance-summary'], { workspacePath }, null
   )).result;
 }
 
-export function runHoneycrispMaintenance(workspacePath: string): WorkspaceDejunkSummary;
-export function runHoneycrispMaintenance(
+export function runAppServerMaintenance(workspacePath: string): WorkspaceDejunkSummary;
+export function runAppServerMaintenance(
   workspacePath: string,
   options: {
     repositoryStoreDirectory: string;
-    repositories?: HoneycrispWorkspaceRepositoryCandidate[];
+    repositories?: AppServerWorkspaceRepositoryCandidate[];
   }
-): HoneycrispMaintenanceRunResult;
-export function runHoneycrispMaintenance(
+): AppServerMaintenanceRunResult;
+export function runAppServerMaintenance(
   workspacePath: string,
   options?: {
     repositoryStoreDirectory: string;
-    repositories?: HoneycrispWorkspaceRepositoryCandidate[];
+    repositories?: AppServerWorkspaceRepositoryCandidate[];
   }
-): WorkspaceDejunkSummary | HoneycrispMaintenanceRunResult {
-  return invokeWithJsonInput<WorkspaceDejunkSummary | HoneycrispMaintenanceRunResult>(
+): WorkspaceDejunkSummary | AppServerMaintenanceRunResult {
+  return invokeWithJsonInput<WorkspaceDejunkSummary | AppServerMaintenanceRunResult>(
     'maintenance.run', ['harness', 'maintenance-run'], { workspacePath, ...options }, null
   ).result;
 }
 
-export async function runHoneycrispMaintenanceAsync(
+export async function runAppServerMaintenanceAsync(
   workspacePath: string,
   options: {
     repositoryStoreDirectory: string;
-    repositories?: HoneycrispWorkspaceRepositoryCandidate[];
+    repositories?: AppServerWorkspaceRepositoryCandidate[];
   }
-): Promise<HoneycrispMaintenanceRunResult> {
-  return (await invokeWithJsonInputAsync<HoneycrispMaintenanceRunResult>(
+): Promise<AppServerMaintenanceRunResult> {
+  return (await invokeWithJsonInputAsync<AppServerMaintenanceRunResult>(
     'maintenance.run', ['harness', 'maintenance-run'], { workspacePath, ...options }, null, undefined, null
   )).result;
 }
 
-export function invokeHoneycrispCliProtocol<T>(
+export function invokeAppServerCliProtocol<T>(
   operation: string,
   args: readonly string[],
   options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}
-): HoneycrispProtocolSuccess<T> {
-  const invocation = resolveHoneycrispProtocolInvocation();
+): AppServerProtocolSuccess<T> {
+  const invocation = resolveAppServerProtocolInvocation();
   const requestId = `beale-${randomUUID()}`;
   const result = spawnSync(invocation.command, [...invocation.prefixArgs, ...args, '--request-id', requestId], {
     cwd: invocation.cwd,
     encoding: 'utf8',
     env: protocolEnvironment(options.env),
     timeout: options.timeoutMs ?? 30_000,
-    maxBuffer: HONEYCRISP_PROTOCOL_MAX_STDOUT_BYTES,
+    maxBuffer: APP_SERVER_PROTOCOL_MAX_STDOUT_BYTES,
     windowsHide: true
   });
-  let envelope: HoneycrispProtocolEnvelope<T>;
+  let envelope: AppServerProtocolEnvelope<T>;
   try {
-    envelope = decodeHoneycrispProtocolEnvelope<T>(String(result.stdout ?? '').trim());
+    envelope = decodeAppServerProtocolEnvelope<T>(String(result.stdout ?? '').trim());
   } catch (error) {
     const detail = protocolProcessDetail(result);
-    throw new Error(`Honeycrisp ${operation} returned an invalid protocol envelope${detail ? ` (${detail})` : ''}.`, { cause: error });
+    throw new Error(`app-server ${operation} returned an invalid protocol envelope${detail ? ` (${detail})` : ''}.`, { cause: error });
   }
   if (envelope.operation !== operation) {
-    throw new Error(`Honeycrisp protocol operation mismatch: expected ${operation}, received ${envelope.operation}.`);
+    throw new Error(`app-server protocol operation mismatch: expected ${operation}, received ${envelope.operation}.`);
   }
   if (envelope.requestId !== requestId) {
-    throw new Error(`Honeycrisp protocol request mismatch: expected ${requestId}, received ${envelope.requestId ?? 'none'}.`);
+    throw new Error(`app-server protocol request mismatch: expected ${requestId}, received ${envelope.requestId ?? 'none'}.`);
   }
   if (!envelope.ok) {
-    throw new Error(`Honeycrisp ${operation} failed (${envelope.error.code}): ${envelope.error.message}`);
+    throw new Error(`app-server ${operation} failed (${envelope.error.code}): ${envelope.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(`Honeycrisp ${operation} returned a success envelope with exit status ${String(result.status)}.`);
+    throw new Error(`app-server ${operation} returned a success envelope with exit status ${String(result.status)}.`);
   }
   return envelope;
 }
@@ -1040,13 +1051,13 @@ function invokeWithJsonInput<T>(
   operation: string,
   args: readonly string[],
   input: unknown,
-  storage: HoneycrispSessionStorage | null
-): HoneycrispProtocolSuccess<T> {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-protocol-'));
+  storage: AppServerSessionStorage | null
+): AppServerProtocolSuccess<T> {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-protocol-'));
   const inputPath = join(directory, 'input.json');
   try {
     writeFileSync(inputPath, `${JSON.stringify(input)}\n`, { encoding: 'utf8', mode: 0o600 });
-    return invokeHoneycrispCliProtocol<T>(operation, [...args, '--input', inputPath, '--json'], {
+    return invokeAppServerCliProtocol<T>(operation, [...args, '--input', inputPath, '--json'], {
       ...(storage ? { env: storageEnvironment(storage) } : {})
     });
   } finally {
@@ -1058,15 +1069,15 @@ async function invokeWithJsonInputAsync<T>(
   operation: string,
   args: readonly string[],
   input: unknown,
-  storage: HoneycrispSessionStorage | null,
+  storage: AppServerSessionStorage | null,
   signal?: AbortSignal,
   timeoutMs?: number | null
-): Promise<HoneycrispProtocolSuccess<T>> {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-honeycrisp-protocol-'));
+): Promise<AppServerProtocolSuccess<T>> {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-protocol-'));
   const inputPath = join(directory, 'input.json');
   try {
     writeFileSync(inputPath, `${JSON.stringify(input)}\n`, { encoding: 'utf8', mode: 0o600 });
-    return await invokeHoneycrispCliProtocolAsync<T>(operation, [...args, '--input', inputPath, '--json'], {
+    return await invokeAppServerCliProtocolAsync<T>(operation, [...args, '--input', inputPath, '--json'], {
       ...(storage ? { env: storageEnvironment(storage) } : {}),
       ...(signal ? { signal } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {})
@@ -1076,11 +1087,11 @@ async function invokeWithJsonInputAsync<T>(
   }
 }
 
-export function invokeHoneycrispCliProtocolAsync<T>(
+export function invokeAppServerCliProtocolAsync<T>(
   operation: string,
   args: readonly string[],
   options: { timeoutMs?: number | null; env?: NodeJS.ProcessEnv; signal?: AbortSignal; stdin?: string } = {}
-): Promise<HoneycrispProtocolSuccess<T>> {
+): Promise<AppServerProtocolSuccess<T>> {
   const requestId = `beale-${randomUUID()}`;
   const inputPathIndex = args.indexOf('--input');
   const input = options.stdin?.trim()
@@ -1093,12 +1104,12 @@ export function invokeHoneycrispCliProtocolAsync<T>(
     ? AbortSignal.any([options.signal, timeoutSignal])
     : options.signal ?? timeoutSignal ?? undefined;
   return invokeAppServerOperation<T>({
-    operation: operation as HoneycrispProtocolOperation,
+    operation: operation as AppServerProtocolOperation,
     args,
     ...(input !== undefined ? { input } : {}),
     ...profileSelection(options.env, input),
     ...(signal ? { signal } : {})
-  }).then((result) => honeycrispProtocolSuccess(operation as HoneycrispProtocolOperation, result, requestId));
+  }).then((result) => appServerProtocolSuccess(operation as AppServerProtocolOperation, result, requestId));
 }
 
 function profileSelection(environment: NodeJS.ProcessEnv | undefined, input?: unknown): { profileId?: string } {
@@ -1110,9 +1121,9 @@ function profileSelection(environment: NodeJS.ProcessEnv | undefined, input?: un
   if (inputProfileId) return { profileId: inputProfileId };
   // Do not infer a competing profile for an already-scoped workspace.
   if (workspaceIdFromInput(input)) return {};
-  const configuredProfileId = environment?.HONEYCRISP_PROFILE_ID?.trim();
+  const configuredProfileId = environment?.APP_SERVER_PROFILE_ID?.trim();
   if (configuredProfileId) return { profileId: configuredProfileId };
-  const databasePath = environment?.HONEYCRISP_DATABASE_PATH?.trim();
+  const databasePath = environment?.APP_SERVER_DATABASE_PATH?.trim();
   if (!databasePath) return {};
   const directory = dirname(databasePath);
   const parent = directory.split(/[\\/]/u).at(-1);
@@ -1186,7 +1197,7 @@ function asyncProtocolProcessDetail(code: number | null, stdout: string, stderr:
   return details.length > 0 ? `(${details.join('; ')})` : '';
 }
 
-function sessionRecordFromSummary(summary: HoneycrispSessionSummary): HoneycrispSessionRecord {
+function sessionRecordFromSummary(summary: AppServerSessionSummary): AppServerSessionRecord {
   return {
     ...summary,
     attempts: summary.attempts.map((attempt) => ({ ...attempt, capture: null })),
@@ -1213,16 +1224,16 @@ function sessionUpdateArguments(
   ];
 }
 
-function storageEnvironment(storage: HoneycrispSessionStorage): NodeJS.ProcessEnv {
+function storageEnvironment(storage: AppServerSessionStorage): NodeJS.ProcessEnv {
   return {
-    HONEYCRISP_DATABASE_PATH: storage.databasePath,
-    HONEYCRISP_ARTIFACT_DIRECTORY: storage.artifactDirectoryPath,
-    ...(storage.profileId ? { HONEYCRISP_PROFILE_ID: storage.profileId } : {})
+    APP_SERVER_DATABASE_PATH: storage.databasePath,
+    APP_SERVER_ARTIFACT_DIRECTORY: storage.artifactDirectoryPath,
+    ...(storage.profileId ? { APP_SERVER_PROFILE_ID: storage.profileId } : {})
   };
 }
 
-function honeycrispInvocationKey(): string {
-  const invocation = resolveHoneycrispProtocolInvocation();
+function appServerInvocationKey(): string {
+  const invocation = resolveAppServerProtocolInvocation();
   const executablePath = invocation.prefixArgs.find((argument) => /(?:^|[\\/])cli\.js$/u.test(argument));
   let executableFingerprint = '';
   if (executablePath) {
@@ -1236,7 +1247,7 @@ function honeycrispInvocationKey(): string {
   return [invocation.command, invocation.cwd, ...invocation.prefixArgs, executableFingerprint].join('\0');
 }
 
-export function decodeHoneycrispMemorySummary(value: unknown): HoneycrispMemorySummary {
+export function decodeAppServerMemorySummary(value: unknown): AppServerMemorySummary {
   if (!isPlainRecord(value)
     || !nonNegativeNumber(value.nodeCount)
     || !nonNegativeNumber(value.edgeCount)
@@ -1249,9 +1260,9 @@ export function decodeHoneycrispMemorySummary(value: unknown): HoneycrispMemoryS
     || !Array.isArray(value.findings)
     || !value.findings.every(validFindingSummary)
     || !validCampaignGraph(value.campaign)) {
-    throw new Error('Honeycrisp returned an invalid memory summary v9 payload.');
+    throw new Error('app-server returned an invalid memory summary v9 payload.');
   }
-  return value as unknown as HoneycrispMemorySummary;
+  return value as unknown as AppServerMemorySummary;
 }
 
 function validRunbookSummary(value: unknown): boolean {

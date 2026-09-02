@@ -1,7 +1,8 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { compatibleExistingPath, PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 
-export const DEFAULT_RESEARCH_TOOL_CONFIG_RELATIVE_PATH = ".honeycrisp/tools.json";
+export const DEFAULT_RESEARCH_TOOL_CONFIG_RELATIVE_PATH = ".beale/tools.json";
 
 export interface ResearchToolConfigPreference {
   schemaVersion?: 1;
@@ -35,7 +36,10 @@ export interface WriteResearchToolConfigOptions {
 export function getDefaultResearchToolConfigPath(
   workspaceRoot: string = process.cwd(),
 ): string {
-  return resolve(workspaceRoot, DEFAULT_RESEARCH_TOOL_CONFIG_RELATIVE_PATH);
+  return compatibleExistingPath(
+    resolve(workspaceRoot, DEFAULT_RESEARCH_TOOL_CONFIG_RELATIVE_PATH),
+    resolve(workspaceRoot, PRE_BEALE_DATA_DIRECTORY_NAME, "tools.json"),
+  );
 }
 
 export async function loadResearchToolConfig(

@@ -7,7 +7,7 @@ import {
   buildTraceTimelineEntries,
   coalesceConsecutiveReasoningEntries,
   groupRenderedTraceEntries,
-  pendingHoneycrispToolRequestEventIds,
+  pendingAppServerToolRequestEventIds,
   traceDisplayEventContainsId,
   traceGroupStatusLabel,
   type TraceTimelineGroup
@@ -102,17 +102,17 @@ describe('renderer trace display view models', () => {
     ]);
   });
 
-  it('temporarily shows pending Honeycrisp tool requests and hides them after matching observations', () => {
-    const searchRequest = honeycrispToolEvent('tool.requested', 'action_search', 'memory.search', 1);
-    const readRequest = honeycrispToolEvent('tool.requested', 'action_read', 'file.read', 2);
-    const searchObservation = honeycrispToolEvent('tool.observed', 'action_search', 'memory.search', 3);
+  it('temporarily shows pending app-server tool requests and hides them after matching observations', () => {
+    const searchRequest = appServerToolEvent('tool.requested', 'action_search', 'memory.search', 1);
+    const readRequest = appServerToolEvent('tool.requested', 'action_read', 'file.read', 2);
+    const searchObservation = appServerToolEvent('tool.observed', 'action_search', 'memory.search', 3);
     const pendingEvents = [searchRequest, readRequest];
     const completedEvents = [...pendingEvents, searchObservation];
 
     expect(traceCategoryForEvent(searchRequest)).toBe('non_standard');
-    expect([...pendingHoneycrispToolRequestEventIds(pendingEvents)]).toEqual(['trace_tool_1', 'trace_tool_2']);
+    expect([...pendingAppServerToolRequestEventIds(pendingEvents)]).toEqual(['trace_tool_1', 'trace_tool_2']);
     expect(buildTraceTimelineEntries(pendingEvents, ['tools']).map((entry) => entry.event.id)).toEqual(['trace_tool_1', 'trace_tool_2']);
-    expect([...pendingHoneycrispToolRequestEventIds(completedEvents)]).toEqual(['trace_tool_2']);
+    expect([...pendingAppServerToolRequestEventIds(completedEvents)]).toEqual(['trace_tool_2']);
     expect(buildTraceTimelineEntries(completedEvents, ['tools']).map((entry) => entry.event.id)).toEqual(['trace_tool_2', 'trace_tool_3']);
     expect(buildTraceTimelineEntries(completedEvents, ['tools', 'non_standard']).map((entry) => entry.event.id)).toEqual([
       'trace_tool_1',
@@ -287,7 +287,7 @@ describe('renderer trace display view models', () => {
         transcriptMessage({
           id: 'message_root',
           phase: 'commentary',
-          source: 'honeycrisp_commentary',
+          source: 'app_server_commentary',
           contentMarkdown: 'Checking the boundary.',
           metadata: {
             agentPath: '/root',
@@ -299,7 +299,7 @@ describe('renderer trace display view models', () => {
         transcriptMessage({
           id: 'message_child',
           phase: 'commentary',
-          source: 'honeycrisp_commentary',
+          source: 'app_server_commentary',
           contentMarkdown: 'Checking the boundary.',
           metadata: {
             agentPath: '/root/parser_review',
@@ -385,16 +385,16 @@ function traceEvent(input: Partial<TraceEventRecord> = {}): TraceEventRecord {
   };
 }
 
-function honeycrispToolEvent(kind: 'tool.requested' | 'tool.observed', toolActionId: string, toolName: string, sequence: number): TraceEventRecord {
+function appServerToolEvent(kind: 'tool.requested' | 'tool.observed', toolActionId: string, toolName: string, sequence: number): TraceEventRecord {
   return traceEvent({
     id: `trace_tool_${sequence}`,
     sequence,
     source: kind === 'tool.requested' ? 'model' : 'tool',
     type: kind === 'tool.requested' ? 'tool_call' : 'tool_result',
-    summary: `Honeycrisp ${kind}: ${toolName}`,
+    summary: `app-server ${kind}: ${toolName}`,
     payload: {
       agentPath: '/root',
-      honeycrispKind: kind,
+      appServerKind: kind,
       payload: { toolActionId, toolName, normalizedInputs: {} }
     }
   });

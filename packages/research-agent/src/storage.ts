@@ -23,11 +23,16 @@ import type {
   ResearchStorageDirectoryName,
   ResearchStorageLayout,
 } from "./types.js";
+import {
+  compatibleExistingPath,
+  PRE_BEALE_DATA_DIRECTORY_NAME,
+  readCompatibleEnvironment,
+} from "./legacy-compatibility.js";
 
-export const DEFAULT_MEMORY_DATABASE_RELATIVE_PATH = ".honeycrisp/memory.sqlite";
-export const DEFAULT_ARTIFACT_RELATIVE_PATH = ".honeycrisp/artifacts";
-const TEST_MEMORY_DATABASE_RELATIVE_PATH = ".honeycrisp/memory/memory.sqlite";
-const TEST_ARTIFACT_RELATIVE_PATH = ".honeycrisp/memory/artifacts";
+export const DEFAULT_MEMORY_DATABASE_RELATIVE_PATH = ".beale/memory.sqlite";
+export const DEFAULT_ARTIFACT_RELATIVE_PATH = ".beale/artifacts";
+const TEST_MEMORY_DATABASE_RELATIVE_PATH = ".beale/memory/memory.sqlite";
+const TEST_ARTIFACT_RELATIVE_PATH = ".beale/memory/artifacts";
 export const RESEARCH_STORAGE_MANIFEST_FILENAME = "manifest.json";
 
 const DEFAULT_STORAGE_DIRECTORIES: readonly {
@@ -77,21 +82,31 @@ export interface RegisterResearchStorageArtifactInput {
 }
 
 export function getDefaultMemoryDatabasePath(workspaceRoot?: string): string {
-  if (process.env.HONEYCRISP_TEST_WORKSPACE_STORAGE === "1") {
+  if (process.env.APP_SERVER_TEST_WORKSPACE_STORAGE === "1") {
     return resolve(workspaceRoot ?? process.cwd(), TEST_MEMORY_DATABASE_RELATIVE_PATH);
   }
-  const configured = process.env.HONEYCRISP_DATABASE_PATH?.trim();
-  return configured ? resolve(configured) : resolve(homedir(), DEFAULT_MEMORY_DATABASE_RELATIVE_PATH);
+  const configured = readCompatibleEnvironment("APP_SERVER_DATABASE_PATH")?.trim();
+  return configured
+    ? resolve(configured)
+    : compatibleExistingPath(
+        resolve(homedir(), DEFAULT_MEMORY_DATABASE_RELATIVE_PATH),
+        resolve(homedir(), PRE_BEALE_DATA_DIRECTORY_NAME, "memory.sqlite"),
+      );
 }
 
 export function getDefaultMemoryArtifactDirectoryPath(
   workspaceRoot?: string,
 ): string {
-  if (process.env.HONEYCRISP_TEST_WORKSPACE_STORAGE === "1") {
+  if (process.env.APP_SERVER_TEST_WORKSPACE_STORAGE === "1") {
     return resolve(workspaceRoot ?? process.cwd(), TEST_ARTIFACT_RELATIVE_PATH);
   }
-  const configured = process.env.HONEYCRISP_ARTIFACT_DIRECTORY?.trim();
-  return configured ? resolve(configured) : resolve(homedir(), DEFAULT_ARTIFACT_RELATIVE_PATH);
+  const configured = readCompatibleEnvironment("APP_SERVER_ARTIFACT_DIRECTORY")?.trim();
+  return configured
+    ? resolve(configured)
+    : compatibleExistingPath(
+        resolve(homedir(), DEFAULT_ARTIFACT_RELATIVE_PATH),
+        resolve(homedir(), PRE_BEALE_DATA_DIRECTORY_NAME, "artifacts"),
+      );
 }
 
 export function createResearchStorageLayout(

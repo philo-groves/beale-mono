@@ -12,6 +12,7 @@ import {
 import { createHash } from 'node:crypto';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { normalizeSourceRepositoryUrl, sourceRepositoryCheckoutPath } from './source-materializer.js';
+import { PRE_BEALE_DATA_DIRECTORY_NAME } from './legacy-compatibility.js';
 export interface WorkspaceDejunkRunSummary {
   status: 'completed' | 'failed';
   startedAt: string;
@@ -57,6 +58,7 @@ const LARGE_IPSW_EXTRACTION_BYTES = 128 * 1024 * 1024;
 const STANDARD_RESEARCH_DIRECTORY = 'research';
 const PROTECTED_TOP_LEVEL_NAMES = new Set([
   '.beale',
+  PRE_BEALE_DATA_DIRECTORY_NAME,
   '.git',
   'research'
 ]);
@@ -293,7 +295,7 @@ function countNewWorkspaceFiles(workspacePath: string, baselineMs: number): { co
     }
     for (const entry of entries) {
       if (count >= NEW_FILE_COUNT_LIMIT) break;
-      if (entry.name === '.beale' || entry.name === '.git') continue;
+      if (isMetadataOrGitDirectory(entry.name)) continue;
       const path = join(directory, entry.name);
       let stats;
       try {
@@ -397,7 +399,7 @@ function deleteLargeReclaimableTrees(workspacePath: string): { pathCount: number
   const candidates: Array<{ path: string; size: number }> = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name === '.beale' || entry.name === '.git') continue;
+      if (!entry.isDirectory() || isMetadataOrGitDirectory(entry.name)) continue;
       const path = join(directory, entry.name);
       const stats = lstatSync(path);
       if (stats.isSymbolicLink() || existsSync(join(path, '.git'))) continue;
@@ -554,7 +556,7 @@ function findWorkspaceGitRepositories(workspacePath: string, configuredPaths: st
   const repositories = new Set(
     configuredPaths.filter((path) => isWorkspaceChild(workspacePath, path) && existsSync(join(path, '.git')))
   );
-  const legacyRepositoryRoot = join(workspacePath, '.beale', 'repositories');
+  const legacyRepositoryRoot = join(workspacePath, PRE_BEALE_DATA_DIRECTORY_NAME, 'repositories');
   const stack = [workspacePath, ...(existsSync(legacyRepositoryRoot) ? [legacyRepositoryRoot] : [])];
   while (stack.length > 0) {
     const directory = stack.pop();
@@ -570,7 +572,7 @@ function findWorkspaceGitRepositories(workspacePath: string, configuredPaths: st
       continue;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === '.beale' || entry.name === '.git') continue;
+      if (!entry.isDirectory() || isMetadataOrGitDirectory(entry.name)) continue;
       const path = join(directory, entry.name);
       try {
         if (!lstatSync(path).isSymbolicLink()) stack.push(path);
@@ -582,6 +584,10 @@ function findWorkspaceGitRepositories(workspacePath: string, configuredPaths: st
   return [...repositories]
     .sort((left, right) => left.length - right.length || left.localeCompare(right))
     .filter((candidate, index, paths) => !paths.slice(0, index).some((parent) => isWorkspaceChild(parent, candidate)));
+}
+
+function isMetadataOrGitDirectory(name: string): boolean {
+  return name === '.beale' || name === PRE_BEALE_DATA_DIRECTORY_NAME || name === '.git';
 }
 
 function readOriginRepositoryUrl(repositoryPath: string): string {

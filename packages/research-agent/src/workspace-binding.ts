@@ -129,7 +129,7 @@ export function resolveStoredResearchWorkspaceBinding(
 
 /**
  * Resolve Beale's active immutable profile snapshot for a workspace, falling
- * back to Honeycrisp's workspace profile resolution when no snapshot exists.
+ * back to app-server's workspace profile resolution when no snapshot exists.
  * Host storage paths, including a snapshot's source_path, are never returned.
  */
 export async function resolveStoredResearchProfile(
@@ -358,9 +358,9 @@ function readStoredRunBudget(
     if (parsed) return parsed;
   }
 
-  const sessionColumns = tableColumns(database, "honeycrisp_sessions");
+  const sessionColumns = tableColumns(database, "app_server_sessions");
   if (!sessionColumns.has("id") || !sessionColumns.has("document_json")) return undefined;
-  const row = database.prepare("SELECT document_json FROM honeycrisp_sessions WHERE id = ?").get(sessionId) as
+  const row = database.prepare("SELECT document_json FROM app_server_sessions WHERE id = ?").get(sessionId) as
     | Record<string, unknown>
     | undefined;
   const session = parseStoredRecord(row?.document_json);

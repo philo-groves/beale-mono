@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WorkspaceRegistry } from '../src/main/workspaceRegistry';
-import type { HoneycrispSessionSummary } from '../src/main/honeycrispCliClient';
+import type { AppServerSessionSummary } from '../src/main/appServerCliClient';
 import type { WorkspaceSnapshot } from '../src/shared/types';
 
 const temporaryDirectories: string[] = [];
@@ -58,7 +58,7 @@ describe('workspace registry synchronization', () => {
     try {
       registry.syncWorkspace(registrySnapshot());
       const workspace = registry.getState().workspaces[0]!;
-      expect(workspace.memoryBackend).toBe('honeycrisp');
+      expect(workspace.memoryBackend).toBe('app-server');
       expect(registry.setWorkspaceMemoryBackend(workspace.id, 'disabled')).toMatchObject({
         id: workspace.id,
         memoryBackend: 'disabled',
@@ -132,7 +132,7 @@ describe('workspace registry synchronization', () => {
 
     try {
       registry.syncWorkspace(snapshot);
-      registry.reconcileHoneycrispSessions(
+      registry.reconcileAppServerSessions(
         'security-research',
         snapshot.workspace.workspaceId,
         [canonicalSessionSummary()]
@@ -144,7 +144,7 @@ describe('workspace registry synchronization', () => {
         workspaceId: snapshot.workspace.workspaceId,
         title: 'iOS research session',
         status: 'active',
-        runEngine: 'honeycrisp',
+        runEngine: 'app-server',
         mode: 'open_discovery',
         promptMarkdown: 'Inspect the authorized target from iOS.',
         model: 'gpt-5.6-sol',
@@ -301,7 +301,7 @@ function registrySnapshot(): WorkspaceSnapshot {
     },
     researchProfile: { profileId: 'security-research' },
     runs: [{
-      engine: 'honeycrisp',
+      engine: 'app-server',
       run: {
         id: 'run_valid',
         status: 'completed',
@@ -322,7 +322,7 @@ function registrySnapshot(): WorkspaceSnapshot {
   } as unknown as WorkspaceSnapshot;
 }
 
-function canonicalSessionSummary(): HoneycrispSessionSummary {
+function canonicalSessionSummary(): AppServerSessionSummary {
   return {
     schemaVersion: 1,
     id: 'session_ios',
@@ -342,7 +342,7 @@ function canonicalSessionSummary(): HoneycrispSessionSummary {
       id: 'attempt_ios',
       parentAttemptId: null,
       status: 'active',
-      summary: 'Starting the Honeycrisp research session.',
+      summary: 'Starting the app-server research session.',
       startedAt: '2026-08-28T12:00:00.000Z',
       endedAt: null,
       metadata: {}

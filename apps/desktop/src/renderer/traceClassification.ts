@@ -15,7 +15,7 @@ export type TraceCategoryId =
   | 'events';
 
 export type TraceEventOutcome = 'success' | 'failure' | null;
-export type HoneycrispToolEventKind = 'tool.requested' | 'tool.observed';
+export type AppServerToolEventKind = 'tool.requested' | 'tool.observed';
 
 const SUCCESS_STATUSES = new Set(['success', 'completed', 'complete', 'pass', 'passed', 'ok']);
 const FAILURE_STATUSES = new Set(['failure', 'failed', 'timeout', 'timed_out', 'policy_blocked', 'executor_error', 'error', 'blocked']);
@@ -24,7 +24,7 @@ const FAILURE_SUMMARY_PATTERN = /\b(failed|failure|timeout|timed out|blocked|err
 const RECOVERY_SUMMARY_PATTERN = /\b(retry|retried|recover|recovered|recovery|fallback)\b/i;
 
 export function traceCategoryForEvent(event: TraceEventRecord): TraceCategoryId {
-  if (honeycrispToolEventKind(event) === 'tool.requested' || isNonStandardLifecycleEvent(event)) return 'non_standard';
+  if (appServerToolEventKind(event) === 'tool.requested' || isNonStandardLifecycleEvent(event)) return 'non_standard';
 
   const transcriptRole = tracePayloadPrimitive(event.payload, 'transcriptRole');
   const transcriptSource = tracePayloadPrimitive(event.payload, 'transcriptSource');
@@ -82,29 +82,29 @@ export function stringRecordValue(record: Record<string, unknown>, key: string):
   return null;
 }
 
-export function honeycrispToolEventKind(event: TraceEventRecord): HoneycrispToolEventKind | null {
-  const explicitKind = tracePayloadPrimitive(event.payload, 'honeycrispKind');
+export function appServerToolEventKind(event: TraceEventRecord): AppServerToolEventKind | null {
+  const explicitKind = tracePayloadPrimitive(event.payload, 'appServerKind');
   if (explicitKind === 'tool.requested' || explicitKind === 'tool.observed') return explicitKind;
   const summary = typeof event.summary === 'string' ? event.summary : '';
-  if (summary.startsWith('Honeycrisp tool.requested')) return 'tool.requested';
-  if (summary.startsWith('Honeycrisp tool.observed')) return 'tool.observed';
+  if (summary.startsWith('app-server tool.requested')) return 'tool.requested';
+  if (summary.startsWith('app-server tool.observed')) return 'tool.observed';
   return null;
 }
 
-export function honeycrispToolPayload(event: TraceEventRecord): Record<string, unknown> | null {
-  return honeycrispToolEventKind(event) ? tracePayloadRecord(event.payload, 'payload') : null;
+export function appServerToolPayload(event: TraceEventRecord): Record<string, unknown> | null {
+  return appServerToolEventKind(event) ? tracePayloadRecord(event.payload, 'payload') : null;
 }
 
-export function honeycrispToolName(event: TraceEventRecord): string | null {
-  const payload = honeycrispToolPayload(event);
+export function appServerToolName(event: TraceEventRecord): string | null {
+  const payload = appServerToolPayload(event);
   return tracePayloadPrimitive(event.payload, 'toolName') ?? (payload ? stringRecordValue(payload, 'toolName') : null);
 }
 
-export function honeycrispToolPairingKey(event: TraceEventRecord): string | null {
-  const payload = honeycrispToolPayload(event);
+export function appServerToolPairingKey(event: TraceEventRecord): string | null {
+  const payload = appServerToolPayload(event);
   if (!payload) return null;
   const actionId = stringRecordValue(payload, 'toolActionId');
-  const toolName = honeycrispToolName(event);
+  const toolName = appServerToolName(event);
   const actionKey = actionId ? `action:${actionId}` : toolName ? `tool:${toolName}` : null;
   if (!actionKey) return null;
   const agentIdentity = tracePayloadPrimitive(event.payload, 'agentPath') ?? tracePayloadPrimitive(event.payload, 'agentId') ?? '/root';
@@ -128,7 +128,7 @@ export function isToolCallNamed(event: TraceEventRecord, toolName: string): bool
 }
 
 function traceToolName(event: TraceEventRecord): string | null {
-  return honeycrispToolName(event) ?? tracePayloadPrimitive(event.payload, 'toolName') ?? toolNameFromSummary(event.summary);
+  return appServerToolName(event) ?? tracePayloadPrimitive(event.payload, 'toolName') ?? toolNameFromSummary(event.summary);
 }
 
 function isPolicyScopeEvent(event: TraceEventRecord): boolean {

@@ -204,7 +204,7 @@ function captureAgentControlEvents(
       ...(nonEmptyString(candidate.parentAgentId)
         ? { parentAgentId: nonEmptyString(candidate.parentAgentId)! }
         : {}),
-      summary: `Honeycrisp host control: ${type}`,
+      summary: `app-server host control: ${type}`,
       payload: candidate,
     }];
   });

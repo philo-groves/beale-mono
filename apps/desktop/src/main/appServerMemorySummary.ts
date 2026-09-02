@@ -1,7 +1,7 @@
-import { getHoneycrispMemorySummary as queryHoneycrispMemorySummary } from './honeycrispCliClient';
-import type { HoneycrispMemorySummary, ResearchProfileSnapshot } from '@shared/types';
+import { getAppServerMemorySummary as queryAppServerMemorySummary } from './appServerCliClient';
+import type { AppServerMemorySummary, ResearchProfileSnapshot } from '@shared/types';
 
-export interface HoneycrispMemorySummaryOptions {
+export interface AppServerMemorySummaryOptions {
   databasePath: string;
   artifactDirectoryPath: string;
   sessionId?: string;
@@ -12,9 +12,9 @@ export interface HoneycrispMemorySummaryOptions {
   assetIds?: string[];
 }
 
-/** @deprecated Use the typed Honeycrisp client directly. */
-export function getHoneycrispMemorySummary(options: HoneycrispMemorySummaryOptions): HoneycrispMemorySummary {
-  return queryHoneycrispMemorySummary({
+/** @deprecated Use the typed app-server client directly. */
+export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions): AppServerMemorySummary {
+  return queryAppServerMemorySummary({
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     workspaceId: options.workspaceId,
     subjectId: options.subjectId,

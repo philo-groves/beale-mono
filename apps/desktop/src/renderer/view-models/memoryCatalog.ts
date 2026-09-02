@@ -1,13 +1,13 @@
 import type {
-  HoneycrispMemoryEdgeSummary,
-  HoneycrispMemoryNodeSummary,
+  AppServerMemoryEdgeSummary,
+  AppServerMemoryNodeSummary,
   ResearchProfileMemory,
   ResearchProfileMemoryStatus,
   ResearchProfileMemoryType,
   SessionActivityCounts,
   TraceEventRecord
 } from '@shared/types';
-import { honeycrispToolEventKind, honeycrispToolName, honeycrispToolPairingKey, honeycrispToolPayload, stringRecordValue } from '../traceClassification';
+import { appServerToolEventKind, appServerToolName, appServerToolPairingKey, appServerToolPayload, stringRecordValue } from '../traceClassification';
 import { SESSION_HEAT_LEVELS } from './sessionHeat';
 import type { SessionHeatPreferenceOverrides } from './sessionHeat';
 
@@ -26,16 +26,16 @@ export interface MemoryCatalogStatusSection {
   id: string;
   label: string;
   polarity: ResearchProfileMemoryStatus['polarity'] | 'unknown';
-  nodes: HoneycrispMemoryNodeSummary[];
+  nodes: AppServerMemoryNodeSummary[];
 }
 
 export interface MemoryTypeGroup {
   type: string;
-  nodes: HoneycrispMemoryNodeSummary[];
+  nodes: AppServerMemoryNodeSummary[];
 }
 
 export function memoryTypeGroupsByHeat(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   memoryTypes: readonly ResearchProfileMemoryType[],
   profileId: string | null | undefined,
   overrides: SessionHeatPreferenceOverrides = {}
@@ -44,7 +44,7 @@ export function memoryTypeGroupsByHeat(
   const aliasToType = new Map(memoryTypes.flatMap((definition) =>
     (definition.aliases ?? []).map((alias) => [alias, definition] as const)
   ));
-  const groups = new Map<string, HoneycrispMemoryNodeSummary[]>();
+  const groups = new Map<string, AppServerMemoryNodeSummary[]>();
   for (const node of nodes) {
     const definition = typeById.get(node.type) ?? aliasToType.get(node.type) ?? null;
     const type = definition?.id ?? node.type;
@@ -66,18 +66,18 @@ export function memoryTypeGroupsByHeat(
 }
 
 export function memoryCatalogStatusGroups(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   statuses?: readonly ResearchProfileMemoryStatus[]
-): Record<MemoryStatusGroup, HoneycrispMemoryNodeSummary[]> {
+): Record<MemoryStatusGroup, AppServerMemoryNodeSummary[]> {
   if (statuses) {
-    const groups: Record<string, HoneycrispMemoryNodeSummary[]> = Object.fromEntries(
+    const groups: Record<string, AppServerMemoryNodeSummary[]> = Object.fromEntries(
       statuses.map((status) => [status.id, []])
     );
     for (const node of nodes) (groups[node.status] ??= []).push(node);
     for (const group of Object.values(groups)) sortMemoryNodes(group);
     return groups;
   }
-  const groups: Record<MemoryStatusGroup, HoneycrispMemoryNodeSummary[]> = {
+  const groups: Record<MemoryStatusGroup, AppServerMemoryNodeSummary[]> = {
     suspected: [],
     confirmed: [],
     rejected: []
@@ -92,7 +92,7 @@ export function memoryCatalogStatusGroups(
 }
 
 export function memoryCatalogStatusSections(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   statuses: readonly ResearchProfileMemoryStatus[]
 ): MemoryCatalogStatusSection[] {
   const orderedStatuses = [...statuses].sort(compareProfileOrder);
@@ -116,25 +116,25 @@ export function memoryCatalogStatusSections(
 }
 
 export function memoryCatalogGroupPreview(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   expanded: boolean,
   limit = 5
-): { visibleNodes: HoneycrispMemoryNodeSummary[]; hiddenCount: number } {
+): { visibleNodes: AppServerMemoryNodeSummary[]; hiddenCount: number } {
   if (expanded || nodes.length <= limit) return { visibleNodes: [...nodes], hiddenCount: 0 };
   return { visibleNodes: nodes.slice(0, limit), hiddenCount: nodes.length - limit };
 }
 
 export function activeMemoryCount(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   statuses?: readonly ResearchProfileMemoryStatus[]
 ): number {
   return nodes.filter((node) => isActiveMemoryNode(node, statuses)).length;
 }
 
 export function sessionMemoryCatalogNodes(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   sessionId: string
-): HoneycrispMemoryNodeSummary[] {
+): AppServerMemoryNodeSummary[] {
   return nodes.filter((node) => node.sessionIds.includes(sessionId));
 }
 
@@ -202,7 +202,7 @@ function memoryTypeHeatRank(
 }
 
 export function sessionMemoryTypeSummaries(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   memory?: ResearchProfileMemory
 ): SessionMemoryTypeSummary[] {
   if (memory) return dynamicSessionMemoryTypeSummaries(nodes, memory);
@@ -259,7 +259,7 @@ export function sessionMemoryActivitySummary(
   const knownUpdateSaves = new Set<string>();
 
   for (const event of events) {
-    const toolName = honeycrispToolName(event);
+    const toolName = appServerToolName(event);
     const activity = toolName === 'memory.search'
       ? 'search'
       : toolName === 'memory.save'
@@ -269,11 +269,11 @@ export function sessionMemoryActivitySummary(
           : null;
     if (!activity) continue;
 
-    const kind = honeycrispToolEventKind(event);
+    const kind = appServerToolEventKind(event);
     if (!kind) continue;
-    const payload = honeycrispToolPayload(event);
+    const payload = appServerToolPayload(event);
     const actionId = payload ? stringRecordValue(payload, 'toolActionId') : null;
-    const pairingKey = honeycrispToolPairingKey(event) ?? (actionId ? `${activity}:${actionId}` : null);
+    const pairingKey = appServerToolPairingKey(event) ?? (actionId ? `${activity}:${actionId}` : null);
     if (activity === 'save' && kind === 'tool.observed' && payload && pairingKey) {
       const result = recordValue(payload.result);
       const revision = result ? numberRecordValue(result, 'revision') : null;
@@ -307,7 +307,7 @@ export function sessionMemoryActivitySummary(
 }
 
 export function sessionMemoryCreationCount(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   startedAt: string | null | undefined,
   endedAt?: string | null
 ): number {
@@ -333,7 +333,7 @@ function numberRecordValue(record: Record<string, unknown>, key: string): number
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
-export function filterMemoryCatalogNodes(nodes: HoneycrispMemoryNodeSummary[], filters: MemoryCatalogFilters): HoneycrispMemoryNodeSummary[] {
+export function filterMemoryCatalogNodes(nodes: AppServerMemoryNodeSummary[], filters: MemoryCatalogFilters): AppServerMemoryNodeSummary[] {
   const query = filters.query.trim().toLocaleLowerCase();
   return nodes
     .filter((node) => {
@@ -344,7 +344,7 @@ export function filterMemoryCatalogNodes(nodes: HoneycrispMemoryNodeSummary[], f
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id));
 }
 
-function memoryNodeMatchesScope(node: HoneycrispMemoryNodeSummary, filters: MemoryCatalogFilters): boolean {
+function memoryNodeMatchesScope(node: AppServerMemoryNodeSummary, filters: MemoryCatalogFilters): boolean {
   if (filters.scope === 'all') return true;
   if (filters.scope === 'session') return node.sessionIds.includes(filters.sessionId);
   if (filters.scope === 'workspace') return filters.workspaceId !== null && node.workspaces.some((workspace) => workspace.id === filters.workspaceId);
@@ -352,7 +352,7 @@ function memoryNodeMatchesScope(node: HoneycrispMemoryNodeSummary, filters: Memo
 }
 
 function isActiveMemoryNode(
-  node: HoneycrispMemoryNodeSummary,
+  node: AppServerMemoryNodeSummary,
   statuses?: readonly ResearchProfileMemoryStatus[]
 ): boolean {
   if (!statuses) return node.status.trim().toLowerCase() !== 'stale';
@@ -373,7 +373,7 @@ function memoryTypeCountLabel(type: string, count: number): string {
 }
 
 function dynamicSessionMemoryTypeSummaries(
-  nodes: readonly HoneycrispMemoryNodeSummary[],
+  nodes: readonly AppServerMemoryNodeSummary[],
   memory: ResearchProfileMemory
 ): SessionMemoryTypeSummary[] {
   const typeById = new Map(memory.types.map((type) => [type.id, type]));
@@ -448,7 +448,7 @@ function compareProfileOrder(left: { order: number; id: string }, right: { order
   return left.order - right.order || left.id.localeCompare(right.id);
 }
 
-function sortMemoryNodes(nodes: HoneycrispMemoryNodeSummary[]): void {
+function sortMemoryNodes(nodes: AppServerMemoryNodeSummary[]): void {
   nodes.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
 }
 
@@ -467,8 +467,8 @@ function memoryTypeStatusLabel(summary: SessionMemoryTypeSummary): string {
   ].filter((label): label is string => label !== null).join(', ');
 }
 
-export function groupMemoryRelationships(edges: HoneycrispMemoryEdgeSummary[]): Map<string, HoneycrispMemoryEdgeSummary[]> {
-  const grouped = new Map<string, HoneycrispMemoryEdgeSummary[]>();
+export function groupMemoryRelationships(edges: AppServerMemoryEdgeSummary[]): Map<string, AppServerMemoryEdgeSummary[]> {
+  const grouped = new Map<string, AppServerMemoryEdgeSummary[]>();
   for (const edge of edges) {
     grouped.set(edge.fromId, [...(grouped.get(edge.fromId) ?? []), edge]);
     if (edge.toId !== edge.fromId) grouped.set(edge.toId, [...(grouped.get(edge.toId) ?? []), edge]);
@@ -476,11 +476,11 @@ export function groupMemoryRelationships(edges: HoneycrispMemoryEdgeSummary[]): 
   return grouped;
 }
 
-export function memoryCatalogUpdateKey(nodes: HoneycrispMemoryNodeSummary[]): string {
+export function memoryCatalogUpdateKey(nodes: AppServerMemoryNodeSummary[]): string {
   return nodes.map((node) => `${node.id}:${node.updatedAt}`).join('|');
 }
 
-function memoryNodeSearchText(node: HoneycrispMemoryNodeSummary): string {
+function memoryNodeSearchText(node: AppServerMemoryNodeSummary): string {
   return [
     node.type,
     node.title,

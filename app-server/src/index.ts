@@ -24,21 +24,21 @@ export {
 export type { AppServerDiscoveryRecord } from './discovery.js';
 export {
   generateSessionToken,
-  honeycrispWorkerEnvironment,
-  spawnHoneycrispSession
-} from './honeycrispSession.js';
+  appServerWorkerEnvironment,
+  spawnAppServerSession
+} from './appServerSession.js';
 export type {
-  HoneycrispSession,
-  SpawnHoneycrispSessionOptions
-} from './honeycrispSession.js';
+  AppServerSession,
+  SpawnAppServerSessionOptions
+} from './appServerSession.js';
 export {
-  honeycrispSessionArgs,
-  honeycrispSessionEnvironment,
-  prepareHoneycrispSessionLaunch,
-  resolveHoneycrispCodexAuthFile
+  appServerSessionArgs,
+  appServerSessionEnvironment,
+  prepareAppServerSessionLaunch,
+  resolveAppServerCodexAuthFile
 } from './sessionLaunch.js';
-export type { PreparedHoneycrispSessionLaunch } from './sessionLaunch.js';
-export type { ResolvedHoneycrispSessionLaunch } from './sessionLaunch.js';
+export type { PreparedAppServerSessionLaunch } from './sessionLaunch.js';
+export type { ResolvedAppServerSessionLaunch } from './sessionLaunch.js';
 export { AppServerHostRegistry } from './hostRegistry.js';
 export type {
   AppServerHostProviderSettings,
@@ -57,15 +57,15 @@ export type {
 } from './hostService.js';
 export {
   DEFAULT_LONG_SESSION_RECOVERY_ATTEMPTS,
-  inspectHoneycrispSessionCompletion,
+  inspectAppServerSessionCompletion,
   isRecoverableLongSessionFailure,
   longSessionRecoveryDelayMs,
   longSessionRecoveryFallbackPrompt
 } from './sessionRecovery.js';
-export type { HoneycrispSessionCompletion } from './sessionRecovery.js';
-export { invokeHoneycrispProtocol } from './honeycrispProtocolClient.js';
+export type { AppServerSessionCompletion } from './sessionRecovery.js';
+export { invokeAppServerProtocol } from './appServerProtocolClient.js';
 export type {
-  HoneycrispProtocolStorage,
-  InvokeHoneycrispProtocolOptions
-} from './honeycrispProtocolClient.js';
+  AppServerProtocolStorage,
+  InvokeAppServerProtocolOptions
+} from './appServerProtocolClient.js';
 export { createAppServerPairingPayload } from './pairing.js';

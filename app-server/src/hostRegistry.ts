@@ -4,11 +4,17 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
   BealeAppServerWorkspaceSummary,
-  HoneycrispProviderAuthenticationMethod,
-  HoneycrispProviderRiskAcknowledgement
-} from 'honeycrisp/protocol';
+  AppServerProviderAuthenticationMethod,
+  AppServerProviderRiskAcknowledgement
+} from '@beale/app-server-runtime/protocol';
+import {
+  compatibleExistingPath,
+  PRE_BEALE_DATA_DIRECTORY_NAME,
+  preBealeRuntimeId,
+  readCompatibleEnvironment
+} from '@beale/research-agent/legacy-compatibility';
 
-export type AppServerMemoryBackendId = 'honeycrisp' | 'disabled';
+export type AppServerMemoryBackendId = 'app-server' | 'disabled';
 
 interface SqlRow {
   [key: string]: unknown;
@@ -23,8 +29,8 @@ export interface AppServerHostWorkspace extends BealeAppServerWorkspaceSummary {
 export interface AppServerHostProviderSettings {
   defaultProviderId: string | null;
   modelDefaults: Readonly<Record<string, { leadModel?: string; smallModel?: string; reasoningEffort?: string }>>;
-  authenticationPreferences: Readonly<Record<string, HoneycrispProviderAuthenticationMethod>>;
-  riskAcknowledgements: readonly HoneycrispProviderRiskAcknowledgement[];
+  authenticationPreferences: Readonly<Record<string, AppServerProviderAuthenticationMethod>>;
+  riskAcknowledgements: readonly AppServerProviderRiskAcknowledgement[];
 }
 
 export interface AppServerHostStorage {
@@ -34,15 +40,15 @@ export interface AppServerHostStorage {
 
 export interface AppServerHostRegistryOptions {
   registryDirectory?: string;
-  honeycrispDatabasePath?: string;
-  honeycrispArtifactDirectory?: string;
+  appServerDatabasePath?: string;
+  appServerArtifactDirectory?: string;
 }
 
 const PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 /**
  * App-server-owned view of Beale host metadata. This opens only Beale's
- * workspace registry; canonical Honeycrisp storage remains behind the app-server
+ * workspace registry; canonical app-server storage remains behind the app-server
  * protocol boundary.
  */
 export class AppServerHostRegistry {
@@ -98,7 +104,7 @@ export class AppServerHostRegistry {
     const authenticationPreferences = authenticationPreferenceRecord(
       meta.get('provider_preferred_authentication_methods_json')
     );
-    const riskAcknowledgements: HoneycrispProviderRiskAcknowledgement[] = [];
+    const riskAcknowledgements: AppServerProviderRiskAcknowledgement[] = [];
     for (const [key, acknowledgement] of [
       ['openai_trusted_access_cyber_risk_acknowledged', 'openai-codex'],
       ['anthropic_cvp_risk_acknowledged', 'anthropic'],
@@ -130,19 +136,25 @@ export class AppServerHostRegistry {
     if (!PROFILE_ID_PATTERN.test(normalizedProfileId)) {
       throw new Error(`Unsupported research profile id: ${profileId}`);
     }
-    const configuredDatabase = this.options.honeycrispDatabasePath
-      ?? process.env.HONEYCRISP_DATABASE_PATH?.trim();
-    const configuredArtifacts = this.options.honeycrispArtifactDirectory
-      ?? process.env.HONEYCRISP_ARTIFACT_DIRECTORY?.trim();
+    const configuredDatabase = this.options.appServerDatabasePath
+      ?? readCompatibleEnvironment('APP_SERVER_DATABASE_PATH')?.trim();
+    const configuredArtifacts = this.options.appServerArtifactDirectory
+      ?? readCompatibleEnvironment('APP_SERVER_ARTIFACT_DIRECTORY')?.trim();
     const configuredRegistryDirectory = this.options.registryDirectory
       ?? process.env.BEALE_WORKSPACE_REGISTRY_DIR?.trim();
-    const databasePath = configuredDatabase
+    const canonicalDatabasePath = configuredDatabase
       ? normalizedProfileId === 'security-research'
         ? resolve(configuredDatabase)
         : join(dirname(resolve(configuredDatabase)), 'profiles', normalizedProfileId, 'memory.sqlite')
       : configuredRegistryDirectory
-        ? resolve(configuredRegistryDirectory, 'honeycrisp', 'profiles', normalizedProfileId, 'memory.sqlite')
-        : join(homedir(), '.honeycrisp', 'profiles', normalizedProfileId, 'memory.sqlite');
+        ? resolve(configuredRegistryDirectory, 'app-server', 'profiles', normalizedProfileId, 'memory.sqlite')
+        : join(homedir(), '.beale', 'profiles', normalizedProfileId, 'memory.sqlite');
+    const previousDatabasePath = configuredDatabase
+      ? canonicalDatabasePath
+      : configuredRegistryDirectory
+        ? resolve(configuredRegistryDirectory, preBealeRuntimeId(), 'profiles', normalizedProfileId, 'memory.sqlite')
+        : join(homedir(), PRE_BEALE_DATA_DIRECTORY_NAME, 'profiles', normalizedProfileId, 'memory.sqlite');
+    const databasePath = compatibleExistingPath(canonicalDatabasePath, previousDatabasePath);
     const artifactDirectoryPath = configuredArtifacts
       ? normalizedProfileId === 'security-research'
         ? resolve(configuredArtifacts)
@@ -188,7 +200,7 @@ function projectHostWorkspace(row: SqlRow): AppServerHostWorkspace {
 }
 
 function appServerMemoryBackendId(value: unknown): AppServerMemoryBackendId {
-  return value === 'disabled' ? 'disabled' : 'honeycrisp';
+  return value === 'disabled' ? 'disabled' : 'app-server';
 }
 
 function projectWorkspaceSummary(row: SqlRow): BealeAppServerWorkspaceSummary {
@@ -212,7 +224,7 @@ function workspaceDirectories(value: unknown, workspacePath: string): string[] {
   return [...new Set([workspacePath, ...paths])];
 }
 
-function authenticationPreferenceRecord(value: unknown): Record<string, HoneycrispProviderAuthenticationMethod> {
+function authenticationPreferenceRecord(value: unknown): Record<string, AppServerProviderAuthenticationMethod> {
   const parsed = parseJson(value);
   if (!isRecord(parsed)) return {};
   return Object.fromEntries(Object.entries(parsed).flatMap(([key, entry]) => (

@@ -274,13 +274,13 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
       ].map((candidate) => agentToolAsSdkTool(candidate, abortController.signal));
       const allMcpTools = [...mcpTools, ...collaborationMcpTools];
       const allMcpServer = createSdkMcpServer({
-        name: "honeycrisp",
+        name: "app-server",
         version: "1.0.0",
-        instructions: "These are Honeycrisp's governed research and durable channel tools. Use them for workspace-persistent research and bounded collaboration.",
+        instructions: "These are app-server's governed research and durable channel tools. Use them for workspace-persistent research and bounded collaboration.",
         tools: allMcpTools,
         alwaysLoad: true,
       });
-      const allMcpToolNames = allMcpTools.map((candidate) => `mcp__honeycrisp__${candidate.name}`);
+      const allMcpToolNames = allMcpTools.map((candidate) => `mcp__app_server__${candidate.name}`);
 
       let sessionId = options.resumableState?.providerSessionId;
       let result: SDKResultMessage | undefined;
@@ -308,7 +308,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 cwd: options.workspaceRoot,
                 model: options.model,
                 ...(options.resumableState ? { resume: options.resumableState.providerSessionId } : {}),
-                mcpServers: { honeycrisp: allMcpServer },
+                mcpServers: { beale: allMcpServer },
                 tools: [],
                 allowedTools: allMcpToolNames,
                 permissionMode: "dontAsk",
@@ -394,7 +394,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               cwd: options.workspaceRoot,
               model: options.model,
               resume: sessionId,
-              mcpServers: { honeycrisp: allMcpServer },
+              mcpServers: { beale: allMcpServer },
               tools: [],
               allowedTools: allMcpToolNames,
               permissionMode: "dontAsk",

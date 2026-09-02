@@ -3,7 +3,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
-import { installUndiciTypeOfServiceCompatibility } from 'honeycrisp/node-network-compatibility';
+import { installPreBealeEnvironmentAliases } from '@beale/research-agent/legacy-compatibility';
+import { installUndiciTypeOfServiceCompatibility } from '@beale/app-server-runtime/node-network-compatibility';
 import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTROL_VERSION,
@@ -16,13 +17,13 @@ import {
   BEALE_APP_SERVER_SESSIONS_PATH,
   BEALE_APP_SERVER_SHUTDOWN_PATH,
   BEALE_APP_SERVER_WORKSPACES_PATH,
-  HONEYCRISP_PROTOCOL_VERSION,
-  HONEYCRISP_PROTOCOL_OPERATIONS,
-  HONEYCRISP_SESSION_LAUNCH_VERSION,
-  decodeHoneycrispClientMessage,
-  decodeHoneycrispSessionLaunchRequest,
-  honeycrispServerHello,
-  honeycrispSessionEvent,
+  APP_SERVER_PROTOCOL_VERSION,
+  APP_SERVER_PROTOCOL_OPERATIONS,
+  APP_SERVER_SESSION_LAUNCH_VERSION,
+  decodeAppServerClientMessage,
+  decodeAppServerSessionLaunchRequest,
+  appServerServerHello,
+  appServerSessionEvent,
   type BealeAppServerDescriptor,
   type BealeAppServerHealth,
   type BealeAppServerSessionCatalog,
@@ -32,14 +33,14 @@ import {
   type BealeAppServerSessionStartResult,
   type BealeAppServerSessionStopResult,
   type BealeAppServerShutdownResult,
-  type HoneycrispSessionLaunchRequest
-} from 'honeycrisp/protocol';
+  type AppServerSessionLaunchRequest
+} from '@beale/app-server-runtime/protocol';
 import {
   generateSessionToken,
-  spawnHoneycrispSession,
-  type HoneycrispSession,
-  type SpawnHoneycrispSessionOptions
-} from './honeycrispSession.js';
+  spawnAppServerSession,
+  type AppServerSession,
+  type SpawnAppServerSessionOptions
+} from './appServerSession.js';
 import {
   clearDiscoveryRecord,
   generateOperatorToken,
@@ -49,7 +50,7 @@ import {
   type AppServerDiscoveryRecord,
   type AppServerHostMode
 } from './discovery.js';
-import { prepareHoneycrispSessionLaunch } from './sessionLaunch.js';
+import { prepareAppServerSessionLaunch } from './sessionLaunch.js';
 import {
   AppServerHostService,
   type AppServerStartupRecoveryResult,
@@ -57,7 +58,7 @@ import {
 } from './hostService.js';
 import {
   DEFAULT_LONG_SESSION_RECOVERY_ATTEMPTS,
-  inspectHoneycrispSessionCompletion,
+  inspectAppServerSessionCompletion,
   longSessionRecoveryDelayMs,
   longSessionRecoveryFallbackPrompt
 } from './sessionRecovery.js';
@@ -82,7 +83,7 @@ export interface AppServerOptions {
   onChange?: () => void;
   onShutdownRequested?: () => void;
   hostService?: AppServerHostService;
-  spawnSession?: (options: SpawnHoneycrispSessionOptions) => Promise<HoneycrispSession>;
+  spawnSession?: (options: SpawnAppServerSessionOptions) => Promise<AppServerSession>;
   recoverInterruptedOnStart?: boolean;
   automationScheduler?: false | {
     scanIntervalMs?: number;
@@ -94,7 +95,7 @@ export interface AppServerOptions {
   };
 }
 
-export type SessionStartRequest = HoneycrispSessionLaunchRequest;
+export type SessionStartRequest = AppServerSessionLaunchRequest;
 
 export type StartedSession = BealeAppServerSessionStartResult;
 export type SessionCatalogEntry = BealeAppServerSessionCatalogEntry;
@@ -137,10 +138,10 @@ type SessionState = SessionCatalogEntry['state'];
 
 interface SessionRuntime {
   readonly sessionId: string;
-  readonly request: HoneycrispSessionLaunchRequest;
+  readonly request: AppServerSessionLaunchRequest;
   readonly clientTokens: Set<string>;
   readonly startedAt: string;
-  session: HoneycrispSession | null;
+  session: AppServerSession | null;
   readonly clientSockets: Set<WebSocket>;
   readonly readyClientSockets: Set<WebSocket>;
   readonly pendingClientFrames: Buffer[];
@@ -171,6 +172,7 @@ function isTerminal(state: SessionState): boolean {
 }
 
 export async function startAppServer(options: AppServerOptions = {}): Promise<AppServerHandle> {
+  installPreBealeEnvironmentAliases();
   const host = options.host ?? DEFAULT_HOST;
   const publicUrl = options.publicUrl ? normalizePublicUrl(options.publicUrl) : null;
   const operatorToken = options.operatorToken?.trim()
@@ -178,7 +180,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       ? readOrCreateOperatorToken(operatorTokenPath(options.discoveryFile))
       : generateOperatorToken());
   const hostService = options.hostService ?? new AppServerHostService();
-  const spawnSession = options.spawnSession ?? spawnHoneycrispSession;
+  const spawnSession = options.spawnSession ?? spawnAppServerSession;
   const recoveryOptions = options.longSessionRecovery === false
     ? null
     : options.longSessionRecovery ?? {};
@@ -343,7 +345,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       }
       const goalObjective = residentText(explicit.goalObjective);
       const started = await startSession({
-        launchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
+        launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
         launch: {
           workspaceId: binding.workspaceId,
           promptMarkdown,
@@ -391,8 +393,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   function descriptorResponse(): BealeAppServerDescriptor {
     return {
       ...healthResponse(),
-      sessionLaunchVersion: HONEYCRISP_SESSION_LAUNCH_VERSION,
-      honeycrispProtocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+      sessionLaunchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
+      appServerProtocolVersion: APP_SERVER_PROTOCOL_VERSION,
       endpoints: {
         sessions: BEALE_APP_SERVER_SESSIONS_PATH,
         workspaces: BEALE_APP_SERVER_WORKSPACES_PATH,
@@ -459,8 +461,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (request.method === 'POST' && url.pathname === BEALE_APP_SERVER_OPERATIONS_PATH) {
       const body = await readJsonBody(request);
       if (!isRecord(body) || typeof body.operation !== 'string'
-        || !HONEYCRISP_PROTOCOL_OPERATIONS.includes(body.operation as never)) {
-        throw new HttpError(400, 'A supported Honeycrisp operation is required.');
+        || !APP_SERVER_PROTOCOL_OPERATIONS.includes(body.operation as never)) {
+        throw new HttpError(400, 'A supported app-server operation is required.');
       }
       if (body.args !== undefined && (!Array.isArray(body.args) || body.args.some((value) => typeof value !== 'string'))) {
         throw new HttpError(400, 'Operation args must be an array of strings.');
@@ -474,7 +476,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         sendJson(response, 200, {
           controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
           result: await hostCall(() => hostService.executeOperation({
-            operation: body.operation as (typeof HONEYCRISP_PROTOCOL_OPERATIONS)[number],
+            operation: body.operation as (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number],
             ...(Array.isArray(body.args) ? { args: body.args as string[] } : {}),
             ...(body.input !== undefined ? { input: body.input } : {}),
             ...(typeof body.profileId === 'string' && body.profileId.trim() ? { profileId: body.profileId.trim() } : {}),
@@ -689,10 +691,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     throw new HttpError(404, 'Not found.');
   }
 
-  function normalizeSessionRequest(input: unknown): { sessionId: string; request: HoneycrispSessionLaunchRequest } {
-    let request: HoneycrispSessionLaunchRequest;
+  function normalizeSessionRequest(input: unknown): { sessionId: string; request: AppServerSessionLaunchRequest } {
+    let request: AppServerSessionLaunchRequest;
     try {
-      request = decodeHoneycrispSessionLaunchRequest(input);
+      request = decodeAppServerSessionLaunchRequest(input);
     } catch (error) {
       throw new HttpError(400, error instanceof Error ? error.message : 'Invalid session launch request.');
     }
@@ -762,14 +764,14 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       notifyChange();
       const detail = error instanceof Error ? error.message : String(error);
       runtime.diagnostic = boundedDiagnostic(detail);
-      throw new HttpError(502, `Honeycrisp session failed to start: ${detail}`);
+      throw new HttpError(502, `app-server session failed to start: ${detail}`);
     }
   }
 
   async function scanDueAutomations(): Promise<void> {
     if (closing || automationScanInProgress) return;
     const service = hostService as AppServerHostService & {
-      dueAutomations?: (at?: Date) => Promise<Array<{ request: HoneycrispSessionLaunchRequest }>>;
+      dueAutomations?: (at?: Date) => Promise<Array<{ request: AppServerSessionLaunchRequest }>>;
     };
     if (typeof service.dueAutomations !== 'function') return;
     automationScanInProgress = true;
@@ -793,7 +795,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   }
 
   function createSessionRuntime(
-    request: HoneycrispSessionLaunchRequest,
+    request: AppServerSessionLaunchRequest,
     prepared: PreparedAppServerSession
   ): SessionRuntime {
     return {
@@ -862,7 +864,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
           runtime,
           'failed',
           null,
-          `Honeycrisp startup recovery failed to launch: ${error instanceof Error ? error.message : String(error)}`
+          `app-server startup recovery failed to launch: ${error instanceof Error ? error.message : String(error)}`
         );
       }
     }
@@ -891,7 +893,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         itemId: 'text:0'
       }
     };
-    deliverClientFrame(runtime, Buffer.from(JSON.stringify(honeycrispSessionEvent(runtime.sessionId, event))));
+    deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
   }
 
   async function launchPreparedSession(
@@ -899,7 +901,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     prepared: PreparedAppServerSession,
     attemptWasInitial = false
   ): Promise<void> {
-    const { args, env } = prepareHoneycrispSessionLaunch(prepared.launch);
+    const { args, env } = prepareAppServerSessionLaunch(prepared.launch);
     const session = await spawnSession({ sessionId: runtime.sessionId, args, env });
     if (runtime.stopRequested || sessions.get(runtime.sessionId) !== runtime) {
       session.stop();
@@ -908,10 +910,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime.session = session;
     runtime.currentAttemptId = prepared.attemptId;
     runtime.currentAttemptWasInitial = attemptWasInitial;
-    runtime.handshakeFrame ??= Buffer.from(JSON.stringify(honeycrispServerHello(runtime.sessionId, '0.1.0')));
+    runtime.handshakeFrame ??= Buffer.from(JSON.stringify(appServerServerHello(runtime.sessionId, '0.1.0')));
     runtime.unsubscribeSessionEvents = session.onEvent((event) => {
       observeSessionControlState(runtime, event);
-      deliverClientFrame(runtime, Buffer.from(JSON.stringify(honeycrispSessionEvent(runtime.sessionId, event))));
+      deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
     });
     runtime.state = 'running';
     runtime.endedAt = null;
@@ -939,7 +941,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   ): Promise<void> {
     const service = hostService as AppServerHostService & {
       recordSessionControlState?: (input: {
-        request: HoneycrispSessionLaunchRequest;
+        request: AppServerSessionLaunchRequest;
         sessionId: string;
         attemptId: string;
         state: 'active' | 'paused' | 'stopped';
@@ -962,7 +964,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
 
   async function handleSessionExit(
     runtime: SessionRuntime,
-    session: HoneycrispSession,
+    session: AppServerSession,
     prepared: PreparedAppServerSession,
     result: { code: number | null; stderr: string }
   ): Promise<void> {
@@ -970,7 +972,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime.unsubscribeSessionEvents?.();
     runtime.unsubscribeSessionEvents = null;
     runtime.session = null;
-    const completion = await inspectHoneycrispSessionCompletion({
+    const completion = await inspectAppServerSessionCompletion({
       code: result.code,
       stderr: result.stderr,
       capturePath: prepared.launch.capturePath,
@@ -993,7 +995,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       notifyChange();
       runtime.recoveryTimer = setTimeout(() => {
         runtime.recoveryTimer = null;
-        void recoverSession(runtime, prepared, completion.diagnostic ?? 'Unexpected Honeycrisp worker failure.');
+        void recoverSession(runtime, prepared, completion.diagnostic ?? 'Unexpected app-server worker failure.');
       }, delayMs);
       runtime.recoveryTimer.unref();
       return;
@@ -1047,7 +1049,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         runtime,
         runtime.stopRequested ? 'stopped' : 'failed',
         null,
-        runtime.stopRequested ? null : `Honeycrisp recovery failed to start: ${detail}`
+        runtime.stopRequested ? null : `app-server recovery failed to start: ${detail}`
       );
     }
   }
@@ -1086,7 +1088,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         itemId: 'text:0'
       }
     };
-    deliverClientFrame(runtime, Buffer.from(JSON.stringify(honeycrispSessionEvent(runtime.sessionId, event))));
+    deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
   }
 
   /**
@@ -1191,7 +1193,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   ): boolean {
     let message;
     try {
-      message = decodeHoneycrispClientMessage(JSON.parse(frame.toString('utf8')) as unknown);
+      message = decodeAppServerClientMessage(JSON.parse(frame.toString('utf8')) as unknown);
     } catch {
       clientSocket.close(1002, 'invalid protocol message');
       return receivedClientHello;
@@ -1276,7 +1278,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   function sessionTransport(runtime: SessionRuntime, token: string): BealeAppServerSessionStartResult['transport'] {
     return {
       path: `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(runtime.sessionId)}/transport`,
-      protocolVersion: HONEYCRISP_PROTOCOL_VERSION,
+      protocolVersion: APP_SERVER_PROTOCOL_VERSION,
       authentication: 'bearer',
       token,
       reconnect: 'replay'
@@ -1410,7 +1412,7 @@ function httpErrorCode(status: number): string {
   if (status === 413) return 'request_too_large';
   if (status === 429) return 'rate_limited';
   if (status === 501) return 'unsupported';
-  if (status === 502) return 'honeycrisp_failure';
+  if (status === 502) return 'app_server_failure';
   if (status === 503 || status === 504) return 'temporarily_unavailable';
   return 'internal_error';
 }
@@ -1428,12 +1430,12 @@ async function hostCall<T>(operation: () => Promise<T> | T): Promise<T> {
     const message = error instanceof Error ? error.message : String(error);
     if (/database disk image is malformed|file is not a database|database corruption|SQLITE_CORRUPT|SQLITE_NOTADB/iu.test(message)) {
       throw new HttpError(500,
-        'Honeycrisp database integrity failed. Stop active writers and restore a verified backup or run SQLite recovery against the configured database before retrying. The original database must be preserved until recovery is validated.',
+        'app-server database integrity failed. Stop active writers and restore a verified backup or run SQLite recovery against the configured database before retrying. The original database must be preserved until recovery is validated.',
         { code: 'database_corrupt', retryable: false });
     }
     if (/failed (?:its|the) integrity check/iu.test(message)) {
       throw new HttpError(500,
-        'Honeycrisp session integrity validation failed. Stop active writers, preserve the database, and restore or repair the affected session data before retrying.',
+        'app-server session integrity validation failed. Stop active writers, preserve the database, and restore or repair the affected session data before retrying.',
         { code: 'session_integrity_failed', retryable: false });
     }
     if (/workspace is not registered|does not belong to workspace/iu.test(message)) throw new HttpError(404, message);

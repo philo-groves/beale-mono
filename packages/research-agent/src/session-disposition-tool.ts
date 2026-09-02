@@ -117,7 +117,7 @@ export function createSessionDispositionTool(recorder: ResearchDispositionRecord
       sideEffects: "none",
       requiredPermissions: [],
       inputSchema: PARAMETERS,
-      metadata: { provider: "honeycrisp.session", requiredBeforeFinalResponse: true },
+      metadata: { provider: "appServer.session", requiredBeforeFinalResponse: true },
     },
     parameters: PARAMETERS,
     async execute(action): Promise<ResearchToolExecutionResult> {

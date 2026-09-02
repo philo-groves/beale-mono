@@ -120,5 +120,5 @@ test("Anthropic subscription preference removes API billing from the Agent SDK e
   const env = router.claudeEnvironment({ ANTHROPIC_API_KEY: "test-key", PATH: "test-path" });
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
   assert.equal(env.PATH, "test-path");
-  assert.equal(env.CLAUDE_AGENT_SDK_CLIENT_APP, "honeycrisp/0.1.0");
+  assert.equal(env.CLAUDE_AGENT_SDK_CLIENT_APP, "appServer/0.1.0");
 });

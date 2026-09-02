@@ -1,5 +1,6 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { compatibleExistingPath, PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 import {
   getAuthStatus,
   verifyProviderAuth,
@@ -30,7 +31,7 @@ export interface ResolvedResearchModelConfig {
   configPath?: string;
 }
 
-export const DEFAULT_RESEARCH_MODEL_CONFIG_RELATIVE_PATH = ".honeycrisp/config.json";
+export const DEFAULT_RESEARCH_MODEL_CONFIG_RELATIVE_PATH = ".beale/config.json";
 
 export interface ResolveResearchModelConfigOptions
   extends FileCredentialStoreOptions {
@@ -59,7 +60,10 @@ export interface WriteResearchModelConfigOptions {
 export function getDefaultResearchModelConfigPath(
   workspaceRoot: string = process.cwd(),
 ): string {
-  return resolve(workspaceRoot, DEFAULT_RESEARCH_MODEL_CONFIG_RELATIVE_PATH);
+  return compatibleExistingPath(
+    resolve(workspaceRoot, DEFAULT_RESEARCH_MODEL_CONFIG_RELATIVE_PATH),
+    resolve(workspaceRoot, PRE_BEALE_DATA_DIRECTORY_NAME, "config.json"),
+  );
 }
 
 export async function loadResearchModelConfig(
@@ -144,7 +148,7 @@ export async function resolveResearchModelConfig(
     const verified = await verify(provider, model, authOptions);
     if (!verified.configured) {
       throw new Error(
-        `research config selected ${verified.providerName} (${verified.providerId}) model ${verified.modelId}, but that provider is not authorized. Run: honeycrisp auth login ${verified.providerId}.`,
+        `research config selected ${verified.providerName} (${verified.providerId}) model ${verified.modelId}, but that provider is not authorized. Run: appServer auth login ${verified.providerId}.`,
       );
     }
 
@@ -180,7 +184,7 @@ export async function resolveResearchModelConfig(
   }
 
   throw new Error(
-    "No authorized model provider found. Run: honeycrisp auth login <provider>, or pass --config <path> with provider/model preferences for an already authorized provider.",
+    "No authorized model provider found. Run: appServer auth login <provider>, or pass --config <path> with provider/model preferences for an already authorized provider.",
   );
 }
 
@@ -293,7 +297,7 @@ function rejectAuthLikeConfig(
   const forbidden = forbiddenKeys.find((key) => key in value);
   if (forbidden) {
     throw new Error(
-      `Research config ${configPath} contains ${forbidden}; model config stores preferences only. Use honeycrisp auth login for credentials.`,
+      `Research config ${configPath} contains ${forbidden}; model config stores preferences only. Use appServer auth login for credentials.`,
     );
   }
 }

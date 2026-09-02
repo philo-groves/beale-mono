@@ -3,13 +3,13 @@ import { Worker } from 'node:worker_threads';
 
 const MAX_STDERR_CHARS = 8_000;
 
-export interface SpawnHoneycrispSessionOptions {
+export interface SpawnAppServerSessionOptions {
   sessionId: string;
   args?: readonly string[];
   env?: NodeJS.ProcessEnv;
 }
 
-export interface HoneycrispSession {
+export interface AppServerSession {
   sessionId: string;
   onEvent(listener: (event: Record<string, unknown>) => void): () => void;
   sendControl(control: Record<string, unknown>): void;
@@ -22,7 +22,7 @@ export function generateSessionToken(): string {
   return randomBytes(24).toString('base64url');
 }
 
-export function honeycrispWorkerEnvironment(
+export function appServerWorkerEnvironment(
   additions: NodeJS.ProcessEnv = {},
   electronVersion: string | undefined = process.versions.electron
 ): NodeJS.ProcessEnv {
@@ -33,8 +33,8 @@ export function honeycrispWorkerEnvironment(
   };
 }
 
-export function spawnHoneycrispSession(options: SpawnHoneycrispSessionOptions): Promise<HoneycrispSession> {
-  const workerEnvironment = honeycrispWorkerEnvironment(options.env ?? {});
+export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Promise<AppServerSession> {
+  const workerEnvironment = appServerWorkerEnvironment(options.env ?? {});
   const worker = new Worker(new URL('./runtimeWorker.js', import.meta.url), {
     workerData: {
       args: ['--hosted-session', '--session-id', options.sessionId, ...(options.args ?? [])],
@@ -66,13 +66,13 @@ export function spawnHoneycrispSession(options: SpawnHoneycrispSessionOptions): 
       } else if (record.type === 'complete') {
         resolvedCode = typeof record.exitCode === 'number' ? record.exitCode : 0;
       } else if (record.type === 'failed') {
-        failureMessage = typeof record.error === 'string' ? record.error : 'Honeycrisp runtime worker failed.';
+        failureMessage = typeof record.error === 'string' ? record.error : 'app-server runtime worker failed.';
         resolvedCode = 1;
       }
     });
     worker.once('exit', (code) => resolve({ code: resolvedCode ?? code, stderr: failureMessage || stderr }));
   });
-  const session: HoneycrispSession = {
+  const session: AppServerSession = {
     sessionId: options.sessionId,
     onEvent: (listener) => {
       listeners.add(listener);
