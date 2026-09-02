@@ -983,7 +983,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         const nextReason = runtime.checkpointReason;
         runtime.checkpointReason = null;
         try {
-          const result = await hostService.checkpointSession?.(runtime.request.launch.workspaceId, runtime.sessionId, nextReason, cleanupScratch);
+          const result = await hostService.checkpointSession?.(runtime.request.launch.workspaceId, runtime.sessionId, nextReason, cleanupScratch, runtime.request.launch.investigationId);
           if (result?.status === 'failed') throw new Error(result.error ?? 'Workspace checkpoint failed.');
         } catch (error) {
           const message = `Workspace checkpoint failed; working files were preserved. ${error instanceof Error ? error.message : String(error)}`;

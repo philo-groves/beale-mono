@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import { createResearchStorageLayout, loadResearchStorageManifest } from "./storage.js";
-import { assertWorkspaceChild, atomicWorkspaceWrite, checkpointWorkspace, publishWorkspaceFiles, readWorkspaceProject, recoverWorkspacePublication, retainWorkspaceArtifact, workspaceFileHash, workspaceContentHash, type WorkspaceCheckpointResult } from "./workspace-project.js";
+import { assertWorkspaceChild, atomicWorkspaceWrite, checkpointWorkspace, publishWorkspaceFiles, readWorkspaceProject, recoverWorkspacePublication, retainWorkspaceArtifact, workspaceFileHash, workspaceContentHash, type WorkspaceCheckpointResult, type WorkspaceCommitContext } from "./workspace-project.js";
 
 type Row = Record<string, unknown>;
 export interface WorkspacePublicationOptions {
@@ -12,6 +12,7 @@ export interface WorkspacePublicationOptions {
   databasePath: string;
   artifactDirectoryPath: string;
   sessionId?: string;
+  investigationId?: string;
 }
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
@@ -21,7 +22,7 @@ function identifier(value: unknown): string {
 }
 
 /** Reads one SQLite snapshot, scoped to one workspace. Database files and session launch credentials are never exported. */
-export function publishWorkspaceResearch(options: WorkspacePublicationOptions): void {
+export function publishWorkspaceResearch(options: WorkspacePublicationOptions): WorkspaceCommitContext | undefined {
   const root = options.workspaceRoot;
   const project = readWorkspaceProject(root);
   if (!project) return;
@@ -31,6 +32,10 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
   const files: Record<string, string> = {};
   const pins: Record<string, string> = {};
   const rawFiles: Record<string, string> = {};
+  const attribution: WorkspaceCommitContext = {
+    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options.investigationId ? { investigationId: options.investigationId } : {}),
+  };
   const referencedArtifacts = new Set<string>();
   const artifactPaths = new Map<string, string>();
   const layout = createResearchStorageLayout({ workspaceRoot: root, databasePath: options.databasePath, artifactDirectoryPath: options.artifactDirectoryPath });
@@ -62,6 +67,11 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     const rows = (table: string, where: string, parameters: SQLInputValue[] = [options.workspaceId]): Row[] => has(table)
       ? database.prepare(`SELECT * FROM ${table} WHERE ${where}`).all(...parameters) as Row[] : [];
     const owned = (table: string) => rows(table, "workspace_id = ?");
+    if (!attribution.investigationId && options.sessionId && has('campaign_tracks') && has('campaign_track_sessions')) {
+      const track = database.prepare(`SELECT t.id FROM campaign_tracks t JOIN campaign_track_sessions s ON s.investigation_id = t.id
+        WHERE t.workspace_id = ? AND s.session_id = ? ORDER BY s.linked_at DESC, t.id LIMIT 1`).get(options.workspaceId, options.sessionId) as { id: string } | undefined;
+      if (track) attribution.investigationId = track.id;
+    }
     if (has('scope_versions')) files['references/scope.json'] = json({ schemaVersion: 1, workspaceId: options.workspaceId,
       scopes: owned('scope_versions').map((scope) => ({ ...scope, assets: rows('scope_assets', 'scope_version_id = ?', [String(scope.id)]).filter((asset) => asset.kind !== 'credential_ref') })),
       rules: owned('workspace_rules'), subject: owned('workspace_research_subjects'),
@@ -152,6 +162,7 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       if (path in pins) pins[path] = workspaceContentHash(portable);
     }
     publishWorkspaceFiles(root, files, pins, rawFiles);
+    return attribution;
   } catch (error) {
     try { database.exec("ROLLBACK"); } catch { /* Read snapshot already ended. */ }
     throw error;
@@ -170,5 +181,6 @@ function exportTrace(database: DatabaseSync, root: string, sessionId: string): v
 }
 
 export function checkpointWorkspaceResearch(options: WorkspacePublicationOptions, reason: string): WorkspaceCheckpointResult {
-  return checkpointWorkspace(options.workspaceRoot, reason, () => publishWorkspaceResearch(options));
+  const context: WorkspaceCommitContext = {};
+  return checkpointWorkspace(options.workspaceRoot, reason, () => { Object.assign(context, publishWorkspaceResearch(options)); }, context);
 }

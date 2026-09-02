@@ -33,6 +33,25 @@ export interface WorkspaceCheckpointResult {
   error?: string;
   imported?: boolean;
 }
+export interface WorkspaceCommitContext {
+  investigationId?: string;
+  sessionId?: string;
+}
+
+/** Stable final trailers support git log --grep and Git's trailer filtering. */
+export function formatWorkspaceCommitMessage(message: string, context: WorkspaceCommitContext = {}): string {
+  const body = message.trimEnd();
+  const id = (value: string | undefined): string => {
+    if (value === undefined) return 'none';
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/u.test(value)) throw new Error('Commit attribution IDs must be nonempty single-line identifiers.');
+    return value;
+  };
+  const existing = /\n\nInvestigation-ID: ([a-zA-Z0-9][a-zA-Z0-9_.:-]*)\nSession-ID: ([a-zA-Z0-9][a-zA-Z0-9_.:-]*)$/u.exec(body);
+  const subject = existing ? body.slice(0, existing.index) : body;
+  if (!subject.trim()) throw new Error('A research commit requires a nonempty message before its attribution trailers.');
+  if (/^(?:Investigation-ID|Session-ID):/mu.test(subject)) throw new Error('Commit attribution must appear exactly once as the final Investigation-ID and Session-ID trailers.');
+  return `${subject}\n\nInvestigation-ID: ${id(context.investigationId ?? existing?.[1])}\nSession-ID: ${id(context.sessionId ?? existing?.[2])}\n`;
+}
 export interface WorkspaceProjectHealth {
   fileCount: number;
   totalBytes: number;
@@ -138,6 +157,7 @@ This directory is one research workspace. Source repositories belong in the host
 
 Keep related scripts and fixtures with their investigation or runbook. Default shell execution uses session scratch; specify an external repository cwd for source work and an explicit investigation directory for persistent candidate work.
 App-server creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
+Every commit ends with Investigation-ID and Session-ID trailers. Supply the actual IDs for manual research commits; use none only when there is no associated investigation or session.
 Host commands retain the operator's privileges; these conventions are not filesystem isolation.
 `;
 
@@ -148,12 +168,18 @@ export function installWorkspaceGitHook(root: string): void {
   if (!existsSync(gitDir) || !lstatSync(gitDir).isDirectory()) throw new Error("A research workspace requires its own local Git repository.");
   const hooks = join(gitDir, "hooks");
   mkdirSync(hooks, { recursive: true });
-  const hook = join(hooks, "pre-commit");
   const marker = "# Beale managed research guard";
-  if (existsSync(hook) && !readFileSync(hook, "utf8").includes(marker)) throw new Error("An unmanaged pre-commit hook exists; preserve it and explicitly integrate the Beale guard before checkpointing.");
   const source = fileURLToPath(import.meta.url).replace(/\\/gu, "/");
-  writeFileSync(hook, `#!/bin/sh\n${marker}\nexec env ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath.replace(/\\/gu, "/"))} ${shellQuote(source)} --beale-workspace-precommit\n`);
-  chmodSync(hook, 0o755);
+  const managedHooks = [['pre-commit', '--beale-workspace-precommit'], ['commit-msg', '--beale-workspace-commitmsg']] as const;
+  for (const [name] of managedHooks) {
+    const hook = join(hooks, name);
+    if (existsSync(hook) && !readFileSync(hook, 'utf8').includes(marker)) throw new Error(`An unmanaged ${name} hook exists; preserve it and explicitly integrate the Beale guard before checkpointing.`);
+  }
+  for (const [name, argument] of managedHooks) {
+    const hook = join(hooks, name);
+    writeFileSync(hook, `#!/bin/sh\n${marker}\nexec env ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath.replace(/\\/gu, '/'))} ${shellQuote(source)} ${argument} "$@"\n`);
+    chmodSync(hook, 0o755);
+  }
   // Local-only configuration; no remote is created or used.
   git(root, ["config", "--local", "core.hooksPath", ".git/hooks"]);
 }
@@ -307,13 +333,14 @@ function recoverCheckpointIndex(root: string, owner: number): void {
 }
 
 /** No reset, stash, clean, remote operation, or working-tree rollback is used. */
-export function checkpointWorkspace(root: string, reason: string, publish?: () => void): WorkspaceCheckpointResult {
+export function checkpointWorkspace(root: string, reason: string, publish?: () => void, context: WorkspaceCommitContext = {}): WorkspaceCheckpointResult {
   if (!readWorkspaceProject(root)) return { status: "unmanaged", reason };
   try {
     checkpointDeadline = Date.now() + 60_000;
     return withProjectLock(root, () => {
       installWorkspaceGitHook(root);
       publish?.();
+      const message = formatWorkspaceCommitMessage(reason, context);
       // Reserve the real index while preparing a separate index. Manual staging is never consumed.
       const indexLock = join(root, ".git", "index.lock");
       const lock = openSync(indexLock, "wx");
@@ -338,7 +365,7 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
           writeCheckpointStatus(root, result);
           return result;
         }
-        git(root, ["-c", "user.name=Beale", "-c", "user.email=beale@example.invalid", "-c", "commit.gpgSign=false", "commit", "-m", reason], env);
+        git(root, ["-c", "user.name=Beale", "-c", "user.email=beale@example.invalid", "-c", "commit.gpgSign=false", "commit", "-m", message], env);
         copyFileSync(temporaryIndex, indexLock);
         closeSync(lock);
         indexLockOpen = false;
@@ -550,4 +577,14 @@ if (process.argv[2] === "--beale-workspace-precommit" && resolve(process.argv[1]
   checkpointDeadline = Date.now() + 30_000;
   try { validateWorkspaceCommit(process.cwd()); }
   catch (error) { process.stderr.write(`Beale pre-commit: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
+}
+
+if (process.argv[2] === '--beale-workspace-commitmsg' && resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+  try {
+    const path = process.argv[3];
+    if (!path) throw new Error('Git commit message path is required.');
+    const message = readFileSync(path, 'utf8').replace(/\r\n/gu, '\n');
+    if (!git(process.cwd(), ['stripspace', '--strip-comments'], {}, message).trim()) throw new Error('A research commit requires a nonempty message.');
+    writeFileSync(path, formatWorkspaceCommitMessage(message));
+  } catch (error) { process.stderr.write(`Beale commit-msg: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
 }

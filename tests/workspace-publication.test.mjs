@@ -3,9 +3,10 @@ import { test } from 'node:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import {
   initializeWorkspaceProject, checkpointWorkspaceResearch, importWorkspaceResearchFile,
-  MemoryGraphStore, FindingStore, RunbookStore, ReportStore,
+  MemoryGraphStore, FindingStore, RunbookStore, ReportStore, CampaignTrackStore,
   createResearchStorageLayout, ensureResearchStorageLayout,
 } from '../packages/research-agent/dist/index.js';
 
@@ -68,6 +69,14 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
     importWorkspaceResearchFile(options, runbookPath, runbook.revision);
     assert.equal(runbooks.get(runbook.id).contentRevision, runbook.contentRevision + 1);
     assert.equal(checkpointWorkspaceResearch(options, 'Imported procedure').status, 'committed');
+    const tracks = new CampaignTrackStore({ databasePath, context });
+    try {
+      const track = tracks.ensureForSession({ sessionId: 'session-example', objective: 'Example investigation', source: 'runtime' });
+      const attributed = checkpointWorkspaceResearch({ ...options, sessionId: 'session-example' }, 'Linked investigation checkpoint');
+      assert.equal(attributed.status, 'committed', attributed.error);
+      const message = spawnSync('git', ['log', '-1', '--format=%B'], { cwd: workspaceRoot, encoding: 'utf8', windowsHide: true }).stdout.trim();
+      assert.equal(message, `Linked investigation checkpoint\n\nInvestigation-ID: ${track.id}\nSession-ID: session-example`);
+    } finally { tracks.close(); }
   } finally {
     reports.close(); runbooks.close(); claims.close(); graph.close(); other.close();
     rmSync(directory, { recursive: true, force: true });

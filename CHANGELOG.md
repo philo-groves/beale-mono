@@ -1104,6 +1104,7 @@
 
 #### Added
 
+- Research workspace commits now end with investigation and session ID trailers for history filtering. Automatic checkpoints resolve session attribution, and manual commits receive explicit `none` values when no attribution is supplied; existing history is preserved.
 - Host-owned Git checkpoints at creation, session boundaries, research milestones, periodic intervals, and canonical client edits. Staged-content guards protect layout, canonical exports, evidence, credentials, and size limits while preserving manual staging and failed-checkpoint work.
 - Workspace-scoped research snapshots, raw evidence retention, JSONL trace exports, recoverable file publication, and explicit revision-checked file imports. Contract version 21 adds `workspace.project` and `workspace.research-project.v1`; rebuild both clients and host.
 

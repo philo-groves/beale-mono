@@ -51,14 +51,16 @@ test('research checkpoints are host-owned and a pending milestone does not delay
   const hostService = testHostService(directory);
   const reasons = [];
   let releaseMilestone;
-  hostService.checkpointSession = async (_workspaceId, _sessionId, reason) => {
+  hostService.checkpointSession = async (_workspaceId, sessionId, reason, _cleanupScratch, investigationId) => {
+    assert.equal(sessionId, 'session-checkpoint-example');
+    assert.equal(investigationId, 'investigation-example');
     reasons.push(reason);
     if (reason === 'Research milestone') await new Promise((resolve) => { releaseMilestone = resolve; });
     return { status: 'unchanged', reason };
   };
   const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
   servers.push(server);
-  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example' }));
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example', investigationId: 'investigation-example' }));
   assert.deepEqual(reasons, ['Before research session']);
   upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'finding.transition', status: 'complete' } });
   await waitFor(() => Boolean(releaseMilestone));

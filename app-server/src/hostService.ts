@@ -249,7 +249,11 @@ export class AppServerHostService {
       || request.operation === 'workspace.state' && isRecord(request.input) && ['saveScope', 'setResearchSubject', 'addWorkspaceRules', 'addWorkspaceRule'].includes(String(request.input.action));
     if (workspace && storage && researchMutation && readWorkspaceProject(workspace.workspacePath)) {
       // Canonical persistence already succeeded. A Git failure is reported separately and never rolls it back.
-      await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage }, 'Canonical research updated');
+      const mutation = isRecord(operationInput) ? operationInput : {};
+      await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage,
+        ...(nonEmpty(mutation.sessionId) ? { sessionId: nonEmpty(mutation.sessionId)! } : {}),
+        ...(nonEmpty(mutation.investigationId) ? { investigationId: nonEmpty(mutation.investigationId)! } : {}),
+      }, 'Canonical research updated');
     }
     if (workspace?.memoryBackend !== 'disabled') return result;
     if (request.operation === 'memory.summary') return withoutWorkspaceMemory(result);
@@ -540,7 +544,7 @@ export class AppServerHostService {
     };
   }
 
-  public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false): Promise<WorkspaceCheckpointResult> {
+  public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false, investigationId?: string): Promise<WorkspaceCheckpointResult> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
     if (!readWorkspaceProject(workspace.workspacePath)) return { status: 'unmanaged', reason };
     const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
@@ -548,6 +552,7 @@ export class AppServerHostService {
       workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId,
       databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
       sessionId,
+      ...(investigationId ? { investigationId } : {}),
     }, reason, undefined, cleanupScratch ? sessionId : undefined);
     if (result.status === 'committed' || result.status === 'failed') {
       await this.invokeProtocol('session.append_event', {
