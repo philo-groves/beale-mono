@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "apple-target-flags",
+  "version": "0.1.0",
+  "description": "Evidence guidance for selecting, capturing, and validating Apple Security Bounty Target Flags without overstating the demonstrated primitive.",
+  "author": {
+    "name": "Beale"
+  },
+  "keywords": [
+    "apple-security",
+    "apple-security-bounty",
+    "exploit-evidence",
+    "target-flags"
+  ]
+}

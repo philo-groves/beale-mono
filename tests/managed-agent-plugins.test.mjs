@@ -8,6 +8,36 @@ import { AgentPluginRegistry } from '../packages/research-agent/dist/agent-plugi
 
 const pluginRoot = resolve('managed-plugins/apple-security-devices');
 const serverPath = join(pluginRoot, 'server.mjs');
+const targetFlagsPluginRoot = resolve('managed-plugins/apple-target-flags');
+
+test('managed apple-target-flags is importable as a guidance-only Agent Plugin', () => {
+  const registryRoot = mkdtempSync(join(tmpdir(), 'beale-target-flags-plugin-registry-'));
+  try {
+    const registry = new AgentPluginRegistry(registryRoot, { builtinPlugins: [] });
+    const state = registry.addFromFilesystem(targetFlagsPluginRoot);
+    assert.equal(state.specVersion, '1.0.0');
+    assert.equal(state.plugins.length, 1);
+    assert.equal(state.plugins[0].name, 'apple-target-flags');
+    assert.equal(state.plugins[0].status, 'ready');
+    assert.equal(state.plugins[0].enabled, true);
+    assert.deepEqual(state.plugins[0].skills.map((skill) => skill.id), ['apple-target-flags']);
+    assert.deepEqual(state.plugins[0].mcpServers, []);
+    assert.deepEqual(state.plugins[0].warnings, []);
+    assert.deepEqual(state.plugins[0].errors, []);
+
+    const runtime = registry.getAppServerRuntime();
+    assert.deepEqual(runtime.skillDirs, [join(targetFlagsPluginRoot, 'skills')]);
+    assert.deepEqual(runtime.selectedSkillIds, ['apple-target-flags']);
+    assert.equal(runtime.mcpConfigPath, null);
+    assert.deepEqual(runtime.allowedMcpServers, []);
+    assert.deepEqual(runtime.args, [
+      '--skill-dir', join(targetFlagsPluginRoot, 'skills'),
+      '--skill', 'apple-target-flags'
+    ]);
+  } finally {
+    rmSync(registryRoot, { recursive: true, force: true });
+  }
+});
 
 test('managed apple-security-devices is importable through the Beale Agent Plugin registry', () => {
   const registryRoot = mkdtempSync(join(tmpdir(), 'beale-managed-plugin-registry-'));

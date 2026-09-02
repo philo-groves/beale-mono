@@ -15,6 +15,7 @@
 
 #### Added
 
+- Added the managed Agent Plugins 1.0.0 `apple-target-flags` guidance package, covering Apple Security Bounty commpage and TCC flags, same-boot evidence binding, UID-0 userspace captures, exact-build kernel panic validation, and conservative primitive/report-readiness boundaries.
 - Desktop claim, memory, and runbook details, plus Beale iOS claim and memory details, can now mark records as duplicates through one workspace-history operation. Duplicates leave normal catalogs and searches, remain in a final Duplicates section under the canonical parent, and can be restored with Undo; legacy claim relationships and client operations remain compatible.
 - Added a top-level `managed-plugins` collection with the portable Agent Plugins 1.0.0 `apple-security-devices` package, including realistic Tart macOS, physical-iPhone CoreDevice, and low-level `darwin-vm` research workflows with explicit mutation confirmation and an enforced iOS Simulator prohibition.
 - Desktop Lead-model settings now offer OpenAI Fast mode for new research and Quick Chat sessions. The choice persists across continuations, forks, recovery, and repeated automation launches; the typed launch preference, `session.openai-fast-mode.v1` capability, and advanced app-server contract timestamp keep Desktop and its host synchronized.
