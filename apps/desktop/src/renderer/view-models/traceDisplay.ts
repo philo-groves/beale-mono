@@ -364,7 +364,6 @@ function transcriptMessageDisplayKey(message: TranscriptMessageRecord): string |
   const messagePhase = message.phase ?? stringRecordValue(message.metadata, 'messagePhase') ?? '';
   return [
     message.runId,
-    message.attemptId ?? '',
     agentPath,
     message.role,
     message.source,

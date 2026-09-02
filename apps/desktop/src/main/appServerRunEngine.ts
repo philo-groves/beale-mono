@@ -19,6 +19,7 @@ import type {
   ProviderSettings,
   ResearchProfile,
   ResearchProfileSnapshot,
+  RunDetail,
   RunRecord,
   RunbookExecutionSelection,
   RunbookProofTarget,
@@ -414,7 +415,8 @@ export class AppServerRunEngine {
       fallbackPrompt: string;
     }
   ): AppServerRunHandle {
-    const rootTurnOffset = continuation ? latestRootTurn(this.db.getRunDetail(context.run.id).traceEvents) : 0;
+    const existingDetail = this.db.getRunDetail(context.run.id);
+    const rootTurnOffset = continuation ? latestRootTurn(existingDetail.traceEvents) : 0;
     const workflowId = researchProfile
       ? resolveResearchWorkflowId(
           researchProfile.profile,
@@ -483,7 +485,7 @@ export class AppServerRunEngine {
       stopReason: null,
       budgetTimer: null,
       forceStopTimer: null,
-      liveAppServerEventIds: new Set(),
+      liveAppServerEventIds: appServerEventIdsFromDetail(existingDetail),
       liveReasoningSummaries: new Map(),
       pendingControls: new Map(),
       queuedContinuations: new Map(),
@@ -690,7 +692,8 @@ export class AppServerRunEngine {
     if (this.disposed) return false;
     if (this.activeRuns.has(runId)) return true;
     const run = this.db.getRun(runId);
-    const attempt = this.db.getRunDetail(runId).attempts.at(-1);
+    const detail = this.db.getRunDetail(runId);
+    const attempt = detail.attempts.at(-1);
     if (!run || run.status !== 'active' || !attempt) return false;
     const context: CreatedRunContext = { run, attempt };
     let resolveTransportReady!: (connected: boolean) => void;
@@ -701,13 +704,13 @@ export class AppServerRunEngine {
     this.computerUseBinaryGrants.set(runId, approvedComputerUseTargetBinaries);
     const active: ActiveAppServerRun = {
       context,
-      rootTurnOffset: latestRootTurn(this.db.getRunDetail(runId).traceEvents),
+      rootTurnOffset: latestRootTurn(detail.traceEvents),
       paused: false,
       stopped: false,
       stopReason: null,
       budgetTimer: null,
       forceStopTimer: null,
-      liveAppServerEventIds: new Set(),
+      liveAppServerEventIds: appServerEventIdsFromDetail(detail),
       liveReasoningSummaries: new Map(),
       pendingControls: new Map(),
       queuedContinuations: new Map(),
@@ -1492,6 +1495,9 @@ export class AppServerRunEngine {
 
   private recordLiveEvent(context: CreatedRunContext, event: AppServerLiveEvent): void {
     const active = this.activeRuns.get(context.run.id);
+    const eventId = appServerLiveEventId(event);
+    if (eventId && active?.liveAppServerEventIds.has(eventId)) return;
+    if (eventId) active?.liveAppServerEventIds.add(eventId);
     event = offsetRootTurn(event, active?.rootTurnOffset ?? 0);
     if (event.kind === 'session.title') {
       const title = stringPayload(event.payload ?? {}, 'title');
@@ -1531,8 +1537,6 @@ export class AppServerRunEngine {
     if (event.kind === 'research.event') {
       const appServerEvent = appServerCaptureEventFromLiveEvent(event);
       if (!appServerEvent) return;
-      if (appServerEvent.id && active?.liveAppServerEventIds.has(appServerEvent.id)) return;
-      if (appServerEvent.id) active?.liveAppServerEventIds.add(appServerEvent.id);
       if (active) this.markReportRevisionCompleted(active, appServerEvent);
       const messageRecorded = this.recordLiveResearchSummary(context, appServerEvent);
       if (messageRecorded) this.notifyRegistrySessionActivity(context, event.timestamp);
@@ -1589,9 +1593,6 @@ export class AppServerRunEngine {
         return;
       }
       if (isAgentResearchControlEventType(eventType)) {
-        const eventId = stringPayload(event.payload ?? {}, 'eventId');
-        if (eventId && active?.liveAppServerEventIds.has(eventId)) return;
-        if (eventId) active?.liveAppServerEventIds.add(eventId);
         this.recordAgentResearchControl(context, event);
         return;
       }
@@ -2216,6 +2217,7 @@ export class AppServerRunEngine {
     const subagent = Boolean(agentPath && agentPath !== '/root');
     if (phase !== 'completed' || !text || !commentary) return;
     const responseId = stringPayload(payload, 'responseId');
+    const appServerEventId = stringPayload(payload, 'eventId');
     const itemId = stringPayload(payload, 'itemId') ?? 'text:0';
     const turn = numberPayload(payload, 'turn');
     const provider = stringPayload(payload, 'provider');
@@ -2252,6 +2254,7 @@ export class AppServerRunEngine {
         agentPath,
         parentAgentId: stringPayload(payload, 'parentAgentId'),
         ...(responseId ? { responseId } : {}),
+        ...(appServerEventId ? { appServerEventId } : {}),
         itemId,
         messagePhase: 'commentary',
         turn,
@@ -2531,6 +2534,29 @@ function decodeAppServerLiveEvent(value: unknown): AppServerLiveEvent | null {
     timestamp: typeof value.timestamp === 'string' ? value.timestamp : undefined,
     payload: isRecord(value.payload) ? value.payload : undefined
   };
+}
+
+function appServerLiveEventId(event: AppServerLiveEvent): string | null {
+  const payload = event.payload ?? {};
+  return stringPayload(payload, 'eventId')
+    ?? stringPayload(recordValue(payload.event) ?? {}, 'id');
+}
+
+function appServerEventIdsFromDetail(
+  detail: Pick<RunDetail, 'traceEvents' | 'transcriptMessages'>
+): Set<string> {
+  const ids = new Set<string>();
+  for (const event of detail.traceEvents) {
+    const sessionEventId = stringPayload(event.payload, 'appServerSessionEventId');
+    const appServerEventId = stringPayload(event.payload, 'appServerEventId');
+    if (sessionEventId) ids.add(sessionEventId);
+    if (appServerEventId) ids.add(appServerEventId);
+  }
+  for (const message of detail.transcriptMessages) {
+    const appServerEventId = stringPayload(message.metadata, 'appServerEventId');
+    if (appServerEventId) ids.add(appServerEventId);
+  }
+  return ids;
 }
 
 function appServerCaptureEventFromLiveEvent(event: AppServerLiveEvent): AppServerCaptureEvent | null {

@@ -47,7 +47,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 17 as const;
+export const APP_SERVER_CONTRACT_VERSION = 18 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -55,7 +55,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-02T22:30:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-03T00:15:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
@@ -64,6 +64,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.exit-diagnostics",
   "session.transport-path.v1",
   "session.reconnect.v1",
+  "session.event-identity.v1",
   "session.startup-recovery.v1",
   "session.multi-client.v1",
   "host.control.v1",
@@ -342,7 +343,11 @@ export interface BealeWorkspaceClaimSecurityTracking {
   externalReferences: Array<{ kind: string; identifier: string; url: string | null }>;
 }
 
-export const APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES = ["session.events", "session.controls"] as const;
+export const APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES = [
+  "session.events",
+  "session.controls",
+  "session.event-identity.v1",
+] as const;
 export const APP_SERVER_PROTOCOL_MAX_REQUEST_ID_LENGTH = 200 as const;
 export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "knowledge.findings",
@@ -359,6 +364,7 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "knowledge.evidence_gates",
   "session.append_only",
   "session.controls",
+  "session.event_identity",
   "session.bounded_reads",
   "session.targeted_details",
   "workspace.channels.v2",

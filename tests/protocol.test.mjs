@@ -42,10 +42,10 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v17 persistence and workspace-history contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v18 persistence, event-identity, and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 17);
+  assert.equal(descriptor.contractVersion, 18);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 12);
   assert.equal(descriptor.schemas.finding, 5);
@@ -60,6 +60,7 @@ test("protocol describe exposes a runtime-bound v17 persistence and workspace-hi
   assert.ok(descriptor.capabilities.includes("knowledge.history_deduplication"));
   assert.ok(descriptor.capabilities.includes("session.bounded_reads"));
   assert.ok(descriptor.capabilities.includes("session.targeted_details"));
+  assert.ok(descriptor.capabilities.includes("session.event_identity"));
   assert.ok(descriptor.capabilities.includes("workspace.channels.v2"));
   assert.ok(descriptor.capabilities.includes("workspace.goal-suggestions.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.prompt-expansion.v1"));
@@ -89,6 +90,7 @@ test("protocol describe exposes a runtime-bound v17 persistence and workspace-hi
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.goal-suggestions.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.startup-recovery.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-fast-mode.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.event-identity.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.prompt-expansion.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.campaign-tracks.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("source.clone-modes.v1"));
@@ -106,6 +108,7 @@ test("protocol describe exposes a runtime-bound v17 persistence and workspace-hi
   assert.equal(descriptor.transports.websocket.framing, "json-message");
   assert.equal(descriptor.transports.websocket.errors, "protocol-error-message");
   assert.equal(descriptor.transports.websocket.correlation, "request-id");
+  assert.ok(descriptor.transports.websocket.capabilities.includes("session.event-identity.v1"));
 });
 
 test("protocol argument and WebSocket DTO decoders share correlation and error semantics", () => {

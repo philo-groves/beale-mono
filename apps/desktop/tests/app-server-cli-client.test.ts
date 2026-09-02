@@ -30,7 +30,7 @@ const compatibleDescriptor = {
   operations: ['protocol.describe'],
   transports: {
     appServer: { path: '/v1/operations', authentication: 'operator-bearer', framing: 'json', errors: 'http-problem' },
-    websocket: { path: '/v1/session', authentication: 'bearer', framing: 'json-message', errors: 'protocol-error-message', correlation: 'request-id', capabilities: ['session.events', 'session.controls'] }
+    websocket: { path: '/v1/session', authentication: 'bearer', framing: 'json-message', errors: 'protocol-error-message', correlation: 'request-id', capabilities: ['session.events', 'session.controls', 'session.event-identity.v1'] }
   }
 };
 

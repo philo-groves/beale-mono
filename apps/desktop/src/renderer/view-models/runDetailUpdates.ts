@@ -165,6 +165,7 @@ function sameTerminalResponse(left: TranscriptMessageRecord, right: TranscriptMe
 }
 
 function canAppendTraceEvents(current: readonly TraceEventRecord[], incoming: readonly TraceEventRecord[]): boolean {
+  if (hasDuplicateRecordIds(current, incoming)) return false;
   const lastSequence = current.at(-1)?.sequence;
   if (lastSequence !== undefined && incoming[0]!.sequence <= lastSequence) return false;
   return incoming.every((event, index) => index === 0 || incoming[index - 1]!.sequence < event.sequence);
@@ -174,9 +175,19 @@ function canAppendTranscriptMessages(
   current: readonly TranscriptMessageRecord[],
   incoming: readonly TranscriptMessageRecord[]
 ): boolean {
+  if (hasDuplicateRecordIds(current, incoming)) return false;
   const lastCurrent = current.at(-1);
   if (lastCurrent && compareTranscriptMessages(lastCurrent, incoming[0]!) >= 0) return false;
   return incoming.every((message, index) => index === 0 || compareTranscriptMessages(incoming[index - 1]!, message) < 0);
+}
+
+function hasDuplicateRecordIds<T extends { id: string }>(current: readonly T[], incoming: readonly T[]): boolean {
+  const ids = new Set(current.map((record) => record.id));
+  for (const record of incoming) {
+    if (ids.has(record.id)) return true;
+    ids.add(record.id);
+  }
+  return false;
 }
 
 function compareTranscriptMessages(left: TranscriptMessageRecord, right: TranscriptMessageRecord): number {

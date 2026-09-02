@@ -1272,9 +1272,9 @@ function sessionDetail(
     event,
     eventSequenceOffset + index + 1
   ));
-  const persistedTranscripts = latestRecords(events.flatMap((event) => event.kind === 'beale.transcript'
+  const persistedTranscripts = uniqueCorrelatedTranscripts(latestRecords(events.flatMap((event) => event.kind === 'beale.transcript'
     ? recordArrayValue<TranscriptMessageRecord>(event.payload)
-    : []));
+    : [])));
   const persistedTranscriptKeys = new Set(persistedTranscripts.flatMap((message) => {
     const key = transcriptCorrelationKey(message);
     return key ? [key] : [];
@@ -1458,6 +1458,7 @@ function transcriptFromCanonicalModelEvent(
       parentAgentId: stringValue(payload.parentAgentId) ?? event.parentAgentId,
       responseId: stringValue(payload.responseId),
       itemId: stringValue(payload.itemId),
+      appServerEventId: event.id,
       turn: typeof payload.turn === 'number' ? payload.turn : undefined,
       provider: stringValue(payload.provider),
       model: stringValue(payload.model),
@@ -1479,15 +1480,30 @@ function transcriptCorrelationKey(message: TranscriptMessageRecord): string | nu
     && message.source !== 'openai_reasoning_summary') return null;
   const responseId = stringValue(message.metadata.responseId);
   const itemId = stringValue(message.metadata.itemId);
+  const appServerEventId = stringValue(message.metadata.appServerEventId);
   const turn = typeof message.metadata.turn === 'number' ? String(message.metadata.turn) : '';
-  if (!responseId && !itemId) return null;
+  const content = message.contentMarkdown.replace(/\s+/g, ' ').trim();
+  if ((!responseId && !itemId && !appServerEventId) || !content) return null;
   return [
     message.source,
     stringValue(message.metadata.agentPath) ?? '/root',
     responseId ?? '',
     itemId ?? '',
-    turn
+    responseId ? '' : appServerEventId ?? turn,
+    content
   ].join('\u0000');
+}
+
+function uniqueCorrelatedTranscripts(messages: readonly TranscriptMessageRecord[]): TranscriptMessageRecord[] {
+  const seen = new Set<string>();
+  return messages.filter((message) => {
+    const key = transcriptCorrelationKey(message);
+    if (!key || !seen.has(key)) {
+      if (key) seen.add(key);
+      return true;
+    }
+    return false;
+  });
 }
 
 function sessionNextStepSuggestions(session: AppServerSessionRecord): GeneratedResearchGoalSuggestions | null {

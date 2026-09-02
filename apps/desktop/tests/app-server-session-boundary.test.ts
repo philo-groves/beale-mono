@@ -1323,6 +1323,36 @@ describe('app-server session persistence boundary', () => {
           },
           agentPath: '/root/reviewer'
         });
+        for (const [id, attemptId, turn] of [
+          ['mirrored_root_commentary', 'attempt-test', 7],
+          ['replayed_root_commentary', 'attempt-follow-up', 9]
+        ] as const) {
+          store.appendEventReceipt(context.run.id, {
+            id,
+            kind: 'beale.transcript',
+            timestamp: `2026-08-28T20:00:0${turn}.000Z`,
+            summary: 'Mirrored Desktop commentary.',
+            payload: {
+              record: {
+                id: `transcript_${id}`,
+                runId: context.run.id,
+                attemptId,
+                traceEventId: `trace_${id}`,
+                role: 'assistant',
+                phase: 'commentary',
+                contentMarkdown: 'Root commentary from the canonical worker.',
+                source: 'app_server_commentary',
+                metadata: {
+                  agentPath: '/root',
+                  responseId: 'response_root',
+                  itemId: 'text:0',
+                  turn
+                },
+                createdAt: `2026-08-28T20:00:0${turn}.000Z`
+              }
+            }
+          });
+        }
       } finally {
         store.close();
       }
@@ -1340,6 +1370,9 @@ describe('app-server session persistence boundary', () => {
           metadata: expect.objectContaining({ agentPath: '/root/reviewer' })
         })
       ]));
+      expect(detail?.transcriptMessages.filter((message) => (
+        message.contentMarkdown === 'Root commentary from the canonical worker.'
+      ))).toHaveLength(1);
     } finally {
       database.close();
     }

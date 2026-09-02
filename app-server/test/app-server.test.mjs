@@ -1810,6 +1810,11 @@ test("proxies a real mock run over the versioned session transport and retains i
     throw new Error(`${error.message} Frames: ${JSON.stringify(messages)} Session: ${JSON.stringify(diagnostic)}`);
   });
   await waitForSocketClose(socket);
+  const deliveredEvents = messages.filter((message) => message.type === "session.event");
+  assert.ok(deliveredEvents.length > 0);
+  assert.equal(deliveredEvents.every((message) => (
+    typeof message.event?.payload?.eventId === "string" && message.event.payload.eventId.length > 0
+  )), true);
   assert.equal(existsSync(capturePath), true);
   const capture = JSON.parse(readFileSync(capturePath, "utf8"));
   assert.equal(capture.runtimeConfig.memoryBackend, "disabled");
@@ -1829,6 +1834,14 @@ test("proxies a real mock run over the versioned session transport and retains i
   assert.equal(entry.exitCode, 0);
   assert.equal(entry.diagnostic, null);
   assert.equal(entry.replay.droppedFrames, 0);
+
+  const persistedStore = new AppServerSessionStore({ databasePath: join(directory, "memory.sqlite") });
+  try {
+    const persistedIds = new Set(persistedStore.get("session-facade").events.map((event) => event.id));
+    assert.equal(deliveredEvents.some((message) => persistedIds.has(message.event.payload.eventId)), true);
+  } finally {
+    persistedStore.close();
+  }
 
   const removed = await fetch(`${server.url}/v1/sessions/session-facade`, {
     method: "DELETE",

@@ -110,6 +110,29 @@ describe('renderer run detail update view model', () => {
     expect(merged.transcriptMessages).toEqual([messageOld, messageNew]);
   });
 
+  it('does not fast-append replayed rows whose ids are already present', () => {
+    const currentTrace = traceEvent({ id: 'trace_replayed', sequence: 1, summary: 'original' });
+    const currentMessage = transcriptMessage({
+      id: 'message_replayed',
+      createdAt: '2026-04-30T00:01:00.000Z',
+      contentMarkdown: 'original'
+    });
+    const replayedTrace = traceEvent({ id: 'trace_replayed', sequence: 2, summary: 'replayed' });
+    const replayedMessage = transcriptMessage({
+      id: 'message_replayed',
+      createdAt: '2026-04-30T00:02:00.000Z',
+      contentMarkdown: 'replayed'
+    });
+
+    const merged = mergeRunDetailUpdate(
+      runDetail({ traceEvents: [currentTrace], transcriptMessages: [currentMessage] }),
+      runDetailUpdate({ traceEvents: [replayedTrace], transcriptMessages: [replayedMessage] })
+    );
+
+    expect(merged.traceEvents).toEqual([replayedTrace]);
+    expect(merged.transcriptMessages).toEqual([replayedMessage]);
+  });
+
   it('replaces a provisional terminal response with its canonical transcript record', () => {
     const provisional = transcriptMessage({
       id: 'transcript_final_run_test_attempt_one',

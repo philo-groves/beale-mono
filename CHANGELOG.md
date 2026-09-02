@@ -6,6 +6,7 @@
 
 #### Fixed
 
+- Session WebSocket events now carry the same stable identity used by canonical app-server persistence. Desktop suppresses replayed events across reconnects and follow-up attempts, and session projection coalesces legacy mirrored transcript duplicates; the shared app-server contract advances to v18.
 - Opening large workspaces or sessions no longer sends the complete memory and campaign snapshot through registry synchronization. The app-server now reads compact workspace and run metadata directly from its workspace store, avoiding request-size failures and unnecessary session-load work; the shared app-server contract advances to v17.
 - Desktop development startup now bundles the narrow pre-Beale compatibility helper instead of leaving its ESM-only package subpath for the CommonJS Electron main process to load, and protocol subprocesses force Electron's Node runtime when an Electron executable is selected.
 - Desktop left-sidenav sessions now sort by updated minute instead of second, with alphabetical titles breaking same-minute ties to prevent excessive row movement.

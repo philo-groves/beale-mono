@@ -4973,28 +4973,33 @@ function createPersistedSessionEventSink(
   downstream: ResearchLiveEventSink | undefined,
 ): ResearchLiveEventSink {
   return async (event) => {
-    if (shouldPersistSessionEvent(event)) {
-      const payload = isRecord(event.payload) ? event.payload : {};
-      const nestedEvent = isRecord(payload.event) ? payload.event : {};
-      const approvalRequestId = nonEmptySessionText(payload.approvalRequestId);
-      const approvalEventType = nonEmptySessionText(payload.type);
+    const payload = isRecord(event.payload) ? event.payload : {};
+    const nestedEvent = isRecord(payload.event) ? payload.event : {};
+    const approvalRequestId = nonEmptySessionText(payload.approvalRequestId);
+    const approvalEventType = nonEmptySessionText(payload.type);
+    const eventId = nonEmptySessionText(payload.eventId)
+      ?? nonEmptySessionText(nestedEvent.id)
+      // Request and resolution events share an approval request id. Include
+      // their type so append-only persistence retains both lifecycle edges.
+      ?? (approvalRequestId ? `${approvalRequestId}:${approvalEventType ?? "approval"}` : undefined)
+      ?? randomUUID();
+    const identifiedEvent = {
+      ...event,
+      payload: { ...payload, eventId },
+    };
+    if (shouldPersistSessionEvent(identifiedEvent)) {
       store.appendEventReceipt(sessionId, {
-        id: nonEmptySessionText(payload.eventId)
-          ?? nonEmptySessionText(nestedEvent.id)
-          // Request and resolution events share an approval request id. Include
-          // their type so append-only persistence retains both lifecycle edges.
-          ?? (approvalRequestId ? `${approvalRequestId}:${approvalEventType ?? "approval"}` : undefined)
-          ?? randomUUID(),
+        id: eventId,
         kind: event.kind,
         timestamp: event.timestamp,
         summary: nonEmptySessionText(payload.summary) ?? nonEmptySessionText(payload.eventType) ?? event.kind,
-        payload: event.payload,
+        payload: identifiedEvent.payload,
         ...(nonEmptySessionText(payload.agentId) ? { agentId: nonEmptySessionText(payload.agentId)! } : {}),
         ...(nonEmptySessionText(payload.agentPath) ? { agentPath: nonEmptySessionText(payload.agentPath)! } : {}),
         ...(nonEmptySessionText(payload.parentAgentId) ? { parentAgentId: nonEmptySessionText(payload.parentAgentId)! } : {}),
       });
     }
-    await downstream?.(event);
+    await downstream?.(identifiedEvent);
   };
 }
 

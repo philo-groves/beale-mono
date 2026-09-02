@@ -265,8 +265,8 @@ describe('renderer trace display view models', () => {
   it('deduplicates transcript display events by source, response item, and normalized text', () => {
     const detail = runDetail({
       transcriptMessages: [
-        transcriptMessage({ id: 'message_one', contentMarkdown: 'Hello   world', metadata: { responseId: 'resp_1', itemId: 'item_1' } }),
-        transcriptMessage({ id: 'message_duplicate', contentMarkdown: 'Hello world', metadata: { responseId: 'resp_1', itemId: 'item_1' } }),
+        transcriptMessage({ id: 'message_one', attemptId: 'attempt_one', contentMarkdown: 'Hello   world', metadata: { responseId: 'resp_1', itemId: 'item_1' } }),
+        transcriptMessage({ id: 'message_duplicate', attemptId: 'attempt_follow_up', contentMarkdown: 'Hello world', metadata: { responseId: 'resp_1', itemId: 'item_1' } }),
         transcriptMessage({ id: 'message_distinct', contentMarkdown: 'Hello world', metadata: { responseId: 'resp_1', itemId: 'item_2' } }),
         transcriptMessage({ id: 'message_unkeyed', contentMarkdown: 'Hello world', metadata: {} }),
         transcriptMessage({ id: 'message_unkeyed_duplicate', contentMarkdown: 'Hello world', metadata: {} })
