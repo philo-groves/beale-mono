@@ -14,6 +14,7 @@ import {
   buildCampaignGraph,
   createCampaignModelContext,
   createFindingTools,
+  createWorkspaceHistoryDuplicateTools,
   createResearchToolRegistry,
   createResearchStorageLayout,
   ensureResearchStorageLayout,
@@ -98,15 +99,19 @@ test("duplicate claims are hidden from catalogs, nested under their canonical pa
       classification: "security.primitive",
       rating: "high",
     });
-    const registry = createResearchToolRegistry(createFindingTools(claims));
+    const registry = createResearchToolRegistry([
+      ...createFindingTools(claims),
+      ...createWorkspaceHistoryDuplicateTools({ claimStore: claims }),
+    ]);
     const marked = await registry.execute({
       id: "mark_duplicate_claim",
-      toolName: "claim.mark_duplicate",
+      toolName: "history.mark_duplicate",
       actionClass: "synthesize",
       input: {
+        type: "claim",
         id: duplicate.id,
         expectedRevision: duplicate.revision,
-        parentClaimId: parent.id,
+        parentId: parent.id,
         reason: "Both claims describe the same unchecked frame length reaching the same allocation.",
       },
     }, { modelAuthor: { provider: "openai", model: "gpt-5.6" }, agentId: "agent_deduplicator" });
@@ -164,9 +169,10 @@ test("duplicate claims are hidden from catalogs, nested under their canonical pa
 
     const restored = await registry.execute({
       id: "undo_duplicate_claim",
-      toolName: "claim.undo_duplicate",
+      toolName: "history.undo_duplicate",
       actionClass: "synthesize",
       input: {
+        type: "claim",
         id: duplicate.id,
         expectedRevision: 2,
         reason: "Further review showed that the allocation paths differ.",

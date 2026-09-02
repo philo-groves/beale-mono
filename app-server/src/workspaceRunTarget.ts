@@ -1,7 +1,25 @@
 import { existsSync } from 'node:fs';
 import { basename, isAbsolute, resolve } from 'node:path';
-import { repositoryClonedDirectory } from '../shared/types';
-import type { RunRecord, ScopeAsset } from '@shared/types';
+
+interface ScopeAsset {
+  id: string;
+  kind: 'domain' | 'repo' | 'binary' | 'service' | 'documentation' | 'other';
+  direction: 'in_scope' | 'out_of_scope';
+  value: string;
+  attributes?: Record<string, unknown>;
+}
+
+interface RunTargetRecord {
+  targetAssetId: string | null;
+  targetPath: string | null;
+  title: string;
+  promptMarkdown: string;
+}
+
+function repositoryClonedDirectory(asset: Pick<ScopeAsset, 'kind' | 'attributes'>): string | null {
+  const value = asset.kind === 'repo' ? asset.attributes?.clonedDirectory : null;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
 
 const LOCAL_ASSET_KINDS: ReadonlySet<ScopeAsset['kind']> = new Set(['repo', 'binary', 'documentation', 'other']);
 const GENERIC_ALIASES: ReadonlySet<string> = new Set(['asset', 'assets', 'code', 'edit', 'github', 'primary', 'repo', 'scope', 'scopes', 'source', 'target']);
@@ -57,9 +75,10 @@ export function selectRunTarget(assets: ScopeAsset[], input: RunTargetSelectionI
 
   const localAssets = assets.filter((asset) => scopedLocalPath(asset));
   if (localAssets.length === 1) {
+    const onlyAsset = localAssets[0]!;
     return {
-      targetAssetId: localAssets[0].id,
-      targetPath: scopedLocalPath(localAssets[0]),
+      targetAssetId: onlyAsset.id,
+      targetPath: scopedLocalPath(onlyAsset),
       score: 1,
       reason: 'only_local_asset'
     };
@@ -68,7 +87,7 @@ export function selectRunTarget(assets: ScopeAsset[], input: RunTargetSelectionI
   return { targetAssetId: null, targetPath: null, score: 0, reason: 'no_target_selected' };
 }
 
-export function localRunTargetPath(assets: ScopeAsset[], run: Pick<RunRecord, 'targetAssetId' | 'targetPath' | 'title' | 'promptMarkdown'>): string | null {
+export function localRunTargetPath(assets: ScopeAsset[], run: RunTargetRecord): string | null {
   if (run.targetPath && isScopedLocalPath(run.targetPath, assets)) return resolve(run.targetPath);
 
   if (run.targetAssetId) {
@@ -182,7 +201,7 @@ function materializedRepositoryName(value: string): string | null {
 
 function repositoryNameFromMaterializedSlug(value: string): string | null {
   const segments = value.split('_').filter(Boolean);
-  if (segments.length < 3 || !/^(?:github|gitlab)\.com$/iu.test(segments[0])) return null;
+  if (segments.length < 3 || !/^(?:github|gitlab)\.com$/iu.test(segments[0]!)) return null;
   return segments.at(-1)?.replace(/\.git$/iu, '') ?? null;
 }
 

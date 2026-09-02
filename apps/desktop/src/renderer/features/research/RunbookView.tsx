@@ -23,10 +23,14 @@ const RUNBOOK_OUTPUT_PREVIEW_CHARACTERS = 12_000;
 export const RunbookView = memo(function RunbookView({
   runbook,
   document,
+  runbookCandidates = [],
   loading,
   error,
+  mutationBusy = false,
   onBackToMain,
   onRun,
+  onMarkDuplicate,
+  onUndoDuplicate,
   executionAvailable = false,
   connectedDeviceOs = null,
   showBackButton = true,
@@ -34,10 +38,14 @@ export const RunbookView = memo(function RunbookView({
 }: {
   runbook: AppServerRunbookSummary;
   document: AppServerRunbookDocument | null;
+  runbookCandidates?: readonly AppServerRunbookSummary[];
   loading: boolean;
   error: string | null;
+  mutationBusy?: boolean;
   onBackToMain: () => void;
   onRun?: (selection: RunbookExecutionSelection, target: RunbookProofTargetSelection) => Promise<void>;
+  onMarkDuplicate?: (id: string, parentId: string, expectedRevision: number) => void;
+  onUndoDuplicate?: (id: string, expectedRevision: number) => void;
   executionAvailable?: boolean;
   connectedDeviceOs?: string | null;
   showBackButton?: boolean;
@@ -51,6 +59,7 @@ export const RunbookView = memo(function RunbookView({
   const [deviceOs, setDeviceOs] = useState('');
   const [rangeStartCellId, setRangeStartCellId] = useState('');
   const [rangeEndCellId, setRangeEndCellId] = useState('');
+  const [duplicateParentId, setDuplicateParentId] = useState('');
   const executionRunning = document?.latestRun?.status === 'running' || document?.latestRun?.status === 'queued';
   const executableCellOptions = useMemo(() => document?.cells
     .map((cell, index) => ({ cell, index }))
@@ -121,6 +130,7 @@ export const RunbookView = memo(function RunbookView({
   useEffect(() => {
     setRangeStartCellId('');
     setRangeEndCellId('');
+    setDuplicateParentId('');
   }, [runbook.id]);
 
   const requestExecution = useCallback(async (selection: RunbookExecutionSelection = {}): Promise<void> => {
@@ -300,6 +310,51 @@ export const RunbookView = memo(function RunbookView({
         ) : (
           <div className="runbook-view-state">This runbook has no cells.</div>
         )}
+        {(runbook.duplicateRunbooks?.length ?? 0) > 0 || (onMarkDuplicate && runbookCandidates.some((candidate) => candidate.id !== runbook.id)) ? (
+          <section className="memory-catalog-subsection campaign-claim-duplicates runbook-duplicates" aria-label="Duplicate runbook management">
+            <h4>Duplicates</h4>
+            {(runbook.duplicateRunbooks?.length ?? 0) > 0 ? (
+              <div className="campaign-claim-duplicate-list">
+                {runbook.duplicateRunbooks!.map((duplicate) => (
+                  <article key={duplicate.id} className="campaign-claim-duplicate-row">
+                    <div>
+                      <span>Runbook</span>
+                      <strong>{duplicate.title}</strong>
+                    </div>
+                    {onUndoDuplicate ? (
+                      <button type="button" disabled={mutationBusy} onClick={() => onUndoDuplicate(duplicate.id, duplicate.revision)}>Undo</button>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : <p>No runbooks are marked as duplicates of this runbook.</p>}
+            {onMarkDuplicate && runbookCandidates.some((candidate) => candidate.id !== runbook.id) ? (
+              <div className="campaign-claim-duplicate-controls">
+                <label htmlFor={`duplicate-parent-${runbook.id}`}>Mark this runbook as a duplicate of</label>
+                <div>
+                  <select
+                    id={`duplicate-parent-${runbook.id}`}
+                    value={duplicateParentId}
+                    disabled={mutationBusy}
+                    onChange={(event) => setDuplicateParentId(event.target.value)}
+                  >
+                    <option value="">Choose a canonical runbook</option>
+                    {runbookCandidates.filter((candidate) => candidate.id !== runbook.id).map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>{candidate.title}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={mutationBusy || !duplicateParentId}
+                    onClick={() => onMarkDuplicate(runbook.id, duplicateParentId, runbook.revision)}
+                  >
+                    Mark duplicate
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
       </div>
     </section>
   );

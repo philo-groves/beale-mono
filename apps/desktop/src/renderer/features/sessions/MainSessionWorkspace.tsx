@@ -79,8 +79,8 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   memoryDreamingProgress = null,
   onRunWorkspaceDejunk = () => undefined,
   onRunMemoryDreaming,
-  onMarkClaimDuplicate = () => undefined,
-  onUndoClaimDuplicate = () => undefined,
+  onMarkHistoryDuplicate = () => undefined,
+  onUndoHistoryDuplicate = () => undefined,
   onAddWorkspaceResource = async () => undefined,
   onChangeWorkspaceResource = async () => undefined,
   onCloneWorkspaceRepository = async () => undefined,
@@ -153,8 +153,8 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   memoryDreamingProgress?: MemoryDreamingProgressUpdate | null;
   onRunWorkspaceDejunk?: () => void;
   onRunMemoryDreaming: () => void;
-  onMarkClaimDuplicate?: (claimId: string, parentClaimId: string, expectedRevision: number) => void;
-  onUndoClaimDuplicate?: (claimId: string, expectedRevision: number) => void;
+  onMarkHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, parentId: string, expectedRevision: number) => void;
+  onUndoHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, expectedRevision: number) => void;
   onAddWorkspaceResource?: (asset: ScopeAssetInput) => Promise<void>;
   onChangeWorkspaceResource?: (assetIds: string[], asset: ScopeAssetInput | null) => Promise<void>;
   onCloneWorkspaceRepository?: (assetId: string, cloneMode: RepositoryCloneMode) => Promise<void>;
@@ -461,9 +461,9 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           searchHighlightQuery={searchHighlightQuery}
           onSelectSubagent={onSelectSubagent}
           onOpenClaim={!selectedRunId ? openWorkspaceClaim : undefined}
-          claimMutationBusy={busy}
-          onMarkClaimDuplicate={onMarkClaimDuplicate}
-          onUndoClaimDuplicate={onUndoClaimDuplicate}
+          historyMutationBusy={busy}
+          onMarkHistoryDuplicate={onMarkHistoryDuplicate}
+          onUndoHistoryDuplicate={onUndoHistoryDuplicate}
           onOpenRunbook={selectedRunId ? onOpenAppServerRunbook : openWorkspaceRunbook}
           onRunbookExecute={selectedRunId ? onRunAppServerRunbook : undefined}
           onBackToRunbooks={selectedRunId ? onBackToRunbooks : closeWorkspaceRunbook}

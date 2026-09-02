@@ -297,6 +297,8 @@ function toolLabelInputKeys(toolName: string): readonly string[] {
     case 'resource.catalog': return ['operation'];
     case 'history.search':
     case 'memory.search': return ['query'];
+    case 'history.mark_duplicate': return ['type', 'id', 'parentId'];
+    case 'history.undo_duplicate': return ['type', 'id'];
     case 'memory.save': return ['type', 'status'];
     case 'memory.link': return ['fromId', 'relation', 'toId'];
     case 'memory.correct': return ['id', 'status'];

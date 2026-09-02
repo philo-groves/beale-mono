@@ -247,6 +247,7 @@ describe('renderer research profile presentation', () => {
     expect(html).toContain('>Undo</button>');
     expect(html).toContain('Canonical allocator boundary');
     expect(html).toContain('>Mark duplicate</button>');
+    expect(html.lastIndexOf('<section')).toBe(html.indexOf('<section class="memory-catalog-subsection campaign-claim-duplicates"'));
   });
 
   it('renders product-wide attention colors in Appearance with a light and dark toggle', () => {

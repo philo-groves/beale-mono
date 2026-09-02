@@ -837,7 +837,7 @@ private struct WorkspaceMemoriesView: View {
                 Section("\(filteredNodes.count) \(filteredNodes.count == 1 ? "Memory" : "Memories")") {
                     ForEach(filteredNodes) { node in
                         NavigationLink {
-                            WorkspaceMemoryDetailView(node: node)
+                            WorkspaceMemoryDetailView(workspace: workspace, initialNode: node, model: model)
                         } label: {
                             WorkspaceMemoryRow(node: node)
                         }
@@ -1085,10 +1085,11 @@ private struct WorkspaceClaimDetailView: View {
         mutationError = nil
         Task {
             do {
-                try await model.markClaimDuplicate(
+                try await model.markHistoryDuplicate(
                     in: workspace,
-                    claimId: claim.id,
-                    parentClaimId: selectedParentId,
+                    type: "claim",
+                    id: claim.id,
+                    parentId: selectedParentId,
                     expectedRevision: claim.revision
                 )
                 dismiss()
@@ -1104,9 +1105,10 @@ private struct WorkspaceClaimDetailView: View {
         mutationError = nil
         Task {
             do {
-                try await model.undoClaimDuplicate(
+                try await model.undoHistoryDuplicate(
                     in: workspace,
-                    claimId: duplicate.id,
+                    type: "claim",
+                    id: duplicate.id,
                     expectedRevision: duplicate.revision
                 )
             } catch {
@@ -1144,7 +1146,21 @@ private struct WorkspaceMemoryRow: View {
 }
 
 private struct WorkspaceMemoryDetailView: View {
-    let node: AppServerWorkspaceMemoryNode
+    let workspace: AppServerWorkspace
+    let initialNode: AppServerWorkspaceMemoryNode
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedParentId = ""
+    @State private var mutationBusy = false
+    @State private var mutationError: String?
+
+    private var node: AppServerWorkspaceMemoryNode {
+        model.memoryCatalog(for: workspace)?.nodes.first { $0.id == initialNode.id } ?? initialNode
+    }
+
+    private var parentCandidates: [AppServerWorkspaceMemoryNode] {
+        (model.memoryCatalog(for: workspace)?.nodes ?? []).filter { $0.id != node.id }
+    }
 
     var body: some View {
         List {
@@ -1165,6 +1181,35 @@ private struct WorkspaceMemoryDetailView: View {
                     LabeledContent("Tags", value: node.tags.joined(separator: ", "))
                 }
             }
+            if !(node.duplicateMemories ?? []).isEmpty || !parentCandidates.isEmpty {
+                Section("Duplicates") {
+                    ForEach(node.duplicateMemories ?? []) { duplicate in
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(duplicate.title).foregroundStyle(BealeTheme.text)
+                                Text("\(duplicate.type.memoryTypeLabel) · \(duplicate.status.capitalized)")
+                                    .font(.caption)
+                                    .foregroundStyle(BealeTheme.muted)
+                            }
+                            Spacer(minLength: 8)
+                            Button("Undo") { undo(duplicate) }.disabled(mutationBusy)
+                        }
+                    }
+                    if !parentCandidates.isEmpty {
+                        Picker("Mark this memory as a duplicate of", selection: $selectedParentId) {
+                            Text("Choose a canonical memory").tag("")
+                            ForEach(parentCandidates) { candidate in
+                                Text(candidate.title).tag(candidate.id)
+                            }
+                        }
+                        Button("Mark Duplicate") { markDuplicate() }
+                            .disabled(mutationBusy || selectedParentId.isEmpty)
+                    }
+                    if let mutationError {
+                        Text(mutationError).font(.caption).foregroundStyle(.orange)
+                    }
+                }
+            }
         }
         .navigationTitle("Memory")
         .navigationBarTitleDisplayMode(.inline)
@@ -1172,6 +1217,45 @@ private struct WorkspaceMemoryDetailView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .scrollContentBackground(.hidden)
         .background(BealeTheme.panel)
+    }
+
+    private func markDuplicate() {
+        guard !selectedParentId.isEmpty else { return }
+        mutationBusy = true
+        mutationError = nil
+        Task {
+            do {
+                try await model.markHistoryDuplicate(
+                    in: workspace,
+                    type: "memory",
+                    id: node.id,
+                    parentId: selectedParentId,
+                    expectedRevision: node.revision
+                )
+                dismiss()
+            } catch {
+                mutationError = error.localizedDescription
+            }
+            mutationBusy = false
+        }
+    }
+
+    private func undo(_ duplicate: AppServerWorkspaceMemoryDuplicate) {
+        mutationBusy = true
+        mutationError = nil
+        Task {
+            do {
+                try await model.undoHistoryDuplicate(
+                    in: workspace,
+                    type: "memory",
+                    id: duplicate.id,
+                    expectedRevision: duplicate.revision
+                )
+            } catch {
+                mutationError = error.localizedDescription
+            }
+            mutationBusy = false
+        }
     }
 }
 
@@ -1499,6 +1583,7 @@ private struct TranscriptMessageView: View {
         case "shell.run", "experiment.run": "terminal"
         case "file.read": "wrench"
         case "history.search", "memory.get", "memory.search": "internaldrive"
+        case "history.mark_duplicate", "history.undo_duplicate": "arrow.triangle.merge"
         default: "wrench.and.screwdriver"
         }
     }

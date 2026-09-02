@@ -6,6 +6,7 @@ import {
   CampaignTrackStore,
   MemoryGraphStore,
   ResearchClaimStore,
+  RunbookStore,
   attentionHeatForClaim,
   attentionHeatForMemoryNode,
   RESEARCH_PROFILE_SCHEMA_VERSION,
@@ -61,6 +62,8 @@ import {
   type BealeMemoryNotificationFeed,
   type AppServerProtocolOperation
 } from '@beale/app-server-runtime/protocol';
+import { WorkspaceDatabase } from './workspaceDatabase.js';
+import { WorkspaceRegistry } from './workspaceRegistryStore.js';
 
 export interface AppServerProtocolStorage {
   databasePath: string;
@@ -115,7 +118,10 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
     selectStoredResearchGoalSuggestion(requiredRecord(options.input, 'research goal suggestion selection') as never);
     return { selected: true };
   }
+  if (operation === 'workspace.state') return workspaceStateOperation(options);
+  if (operation === 'registry.state') return registryStateOperation(options);
   if (operation.startsWith('memory.') || operation.startsWith('dreaming.')
+    || operation.startsWith('history.')
     || operation.startsWith('claim.')
     || operation.startsWith('investigation.')
     || operation === 'runbook.get' || operation.startsWith('report.')
@@ -338,6 +344,8 @@ async function knowledgeOperation(operation: AppServerProtocolOperation, options
       });
     }
     case 'memory.notification_feed': return memoryNotificationFeed(layout, input);
+    case 'history.mark_duplicate':
+    case 'history.undo_duplicate':
     case 'claim.mark_duplicate':
     case 'claim.undo_duplicate': {
       const workspaceId = requiredText(input.workspaceId, 'workspaceId');
@@ -352,25 +360,38 @@ async function knowledgeOperation(operation: AppServerProtocolOperation, options
           ...(optionalText(input.sessionId) ? { sessionId: optionalText(input.sessionId)! } : {})
         }
       });
-      const claims = new ResearchClaimStore(graph);
+      const recordType = operation.startsWith('claim.') ? 'claim' : requiredHistoryRecordType(input.type);
+      const claims = recordType === 'claim' ? new ResearchClaimStore(graph) : null;
+      const runbooks = recordType === 'runbook' ? new RunbookStore(layout.databasePath, layout, graph.getContext()) : null;
       try {
-        const claimId = requiredText(input.claimId, 'claimId');
+        const id = operation.startsWith('claim.') ? requiredText(input.claimId, 'claimId') : requiredText(input.id, 'id');
         const expectedRevision = input.expectedRevision;
         if (!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 1) {
           throw new Error('expectedRevision must be a positive integer.');
         }
-        return operation === 'claim.mark_duplicate'
-          ? claims.markDuplicate(claimId, {
-              expectedRevision: expectedRevision as number,
-              parentClaimId: requiredText(input.parentClaimId, 'parentClaimId'),
-              reason: optionalText(input.reason) ?? 'Marked as a duplicate by the Beale user.'
-            }, undefined, optionalText(input.actorId) ?? 'human')
-          : claims.undoDuplicate(claimId, {
-              expectedRevision: expectedRevision as number,
-              reason: optionalText(input.reason) ?? 'Duplicate marking undone by the Beale user.'
-            }, undefined, optionalText(input.actorId) ?? 'human');
+        const undo = operation === 'history.undo_duplicate' || operation === 'claim.undo_duplicate';
+        const reason = optionalText(input.reason) ?? (undo
+          ? 'Duplicate marking undone by the Beale user.'
+          : 'Marked as a duplicate by the Beale user.');
+        const parentId = undo ? null : operation === 'claim.mark_duplicate'
+          ? requiredText(input.parentClaimId, 'parentClaimId')
+          : requiredText(input.parentId, 'parentId');
+        if (recordType === 'claim') {
+          return undo
+            ? claims!.undoDuplicate(id, { expectedRevision: expectedRevision as number, reason }, undefined, optionalText(input.actorId) ?? 'human')
+            : claims!.markDuplicate(id, { expectedRevision: expectedRevision as number, parentClaimId: parentId!, reason }, undefined, optionalText(input.actorId) ?? 'human');
+        }
+        if (recordType === 'memory') {
+          return undo
+            ? graph.undoDuplicate(id, { expectedRevision: expectedRevision as number, reason })
+            : graph.markDuplicate(id, { expectedRevision: expectedRevision as number, parentMemoryId: parentId!, reason });
+        }
+        return undo
+          ? runbooks!.undoDuplicate(id, { expectedRevision: expectedRevision as number, reason })
+          : runbooks!.markDuplicate(id, { expectedRevision: expectedRevision as number, parentRunbookId: parentId!, reason });
       } finally {
-        claims.close();
+        claims?.close();
+        runbooks?.close();
         graph.close();
       }
     }
@@ -515,6 +536,176 @@ async function knowledgeOperation(operation: AppServerProtocolOperation, options
     });
     default: throw new Error(`Unsupported app-server knowledge operation: ${operation}`);
   }
+}
+
+const WORKSPACE_STATE_ACTIONS = new Set([
+  'checkpoint', 'getLastWorkspaceBackup', 'recordWorkspaceBackup', 'recoverInterruptedState',
+  'getActiveScope', 'getScopeVersion', 'activateResearchProfileSnapshot', 'getActiveResearchProfileSnapshot',
+  'getResearchProfileSnapshot', 'getResearchProfileSnapshotForWorkspace', 'getRunResearchProfileSnapshot',
+  'getResearchSubject', 'setResearchSubject', 'saveScope', 'rewriteRepositoryPathReferences',
+  'listWorkspaceRules', 'addWorkspaceRules', 'addWorkspaceRule', 'createRun', 'createModelSession',
+  'createContextCompaction', 'setContextCompactionTrace', 'createAttempt', 'updateModelSessionByRun',
+  'appendTraceEvent', 'createTranscriptMessage', 'upsertBreakoutRoom', 'upsertBreakoutRoomMember',
+  'createBreakoutRoomMessage', 'interruptActiveBreakoutRooms', 'findBreakoutRoomMember',
+  'refreshBreakoutRoomStatus', 'listBreakoutRoomSummaries', 'createNotification', 'listNotifications',
+  'markNotificationOpened', 'dismissNotification', 'createToolCall', 'linkToolCallTrace', 'finishToolCall',
+  'updateRunStatus', 'beginSessionRunActivity', 'getSessionNextStepSuggestions',
+  'getCapturedSessionNextPromptSuggestions', 'saveSessionNextStepSuggestions',
+  'getResearchGoalSuggestionContextRevision', 'getResearchGoalSuggestionCache',
+  'saveResearchGoalSuggestionCache', 'listResearchGoalSuggestionHistory', 'selectResearchGoalSuggestion',
+  'updateRunTitle', 'updateRunPrompt', 'updateRunModelSelection', 'updateRunShellSafetyMode', 'updateRunBudget',
+  'updateAttemptState', 'createArtifact', 'setArtifactProvenance', 'markArtifactSensitive',
+  'createVerifierContract', 'updateVerifierContract', 'createVerifierRun', 'countCodeBrowserReadsForPath',
+  'countCodeBrowserReadsForPathAndHash', 'countCodeBrowserReadsForPathHashAndRange', 'countBroadSearchesForRun',
+  'markPostSourceIndexingDeferred', 'getProjectIndexingDeferredState', 'recordRunSetupState',
+  'getRunSetupState', 'listRunFixtureSetups', 'createExportRecord', 'updateExportReview', 'createApproval',
+  'updateApprovalDecision', 'listPendingShellApprovals', 'listRunRows', 'getRunRow',
+  'listResearchRecommendationRuns', 'getRunDetail', 'searchTranscriptMessages',
+  'searchTranscriptMessagesAcrossWorkspaces', 'getProjectInventorySummary', 'getProjectRetrievalFeedbackSummary',
+  'findProjectInventoryItemByPath', 'getProjectStructureSummary', 'getProjectStructureCoverageRecords',
+  'listProjectSourceReviewObservations', 'findProjectStructureEntity', 'findProjectStructureEntityContainingLine',
+  'listProjectStructureEntitiesInRange', 'listProjectStructureRelationsForEntity',
+  'listProjectStructureReferencesForTarget', 'ensureProjectInventory', 'refreshProjectInventory',
+  'rebuildProjectSearchIndex', 'searchProjectDocumentsForRun', 'getRunDetailUpdate', 'getRunDetailVersion',
+  'getRun', 'getFirstAttempt', 'getFirstArtifact', 'getFirstVerifierContract',
+]);
+
+function workspaceStateOperation(options: InvokeAppServerProtocolOptions): unknown {
+  const storage = requiredStorage(options.storage);
+  const input = requiredRecord(options.input, 'workspace state input');
+  const workspacePath = requiredText(input.workspacePath, 'workspacePath');
+  const workspaceId = optionalText(input.workspaceId) ?? undefined;
+  const researchKitId = optionalText(input.researchKitId) ?? undefined;
+  const artifactRoot = requiredText(input.artifactRoot, 'artifactRoot');
+  const database = new WorkspaceDatabase(storage.databasePath, artifactRoot, {
+    workspacePath,
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(researchKitId ? { researchKitId } : {}),
+  });
+  try {
+    database.initialize();
+    const action = requiredText(input.action, 'action');
+    if (action === 'initialize') {
+      return {
+        workspaceId: database.getWorkspaceId(),
+        researchKitId: database.getResearchKitId(),
+        activeScope: database.getActiveScope(),
+        activeResearchProfile: database.getActiveResearchProfileSnapshot(),
+        researchSubject: database.getResearchSubject(),
+        workspaceRules: database.listWorkspaceRules(),
+        lastWorkspaceBackup: database.getLastWorkspaceBackup(),
+      };
+    }
+    if (!WORKSPACE_STATE_ACTIONS.has(action)) throw new Error(`Unsupported workspace state action: ${action}`);
+    const method = Reflect.get(database, action) as unknown;
+    if (typeof method !== 'function') throw new Error(`Workspace state action is unavailable: ${action}`);
+    const args = Array.isArray(input.args) ? input.args : [];
+    if (action === 'createArtifact') restoreArtifactBuffer(args);
+    return Reflect.apply(method, database, args) ?? null;
+  } finally {
+    database.close();
+  }
+}
+
+function restoreArtifactBuffer(args: unknown[]): void {
+  const artifact = args[0];
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return;
+  const record = artifact as Record<string, unknown>;
+  const content = record.content;
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return;
+  const serialized = content as Record<string, unknown>;
+  if (serialized.type !== 'Buffer' || !Array.isArray(serialized.data)
+    || serialized.data.some((value) => !Number.isInteger(value) || Number(value) < 0 || Number(value) > 255)) return;
+  record.content = Buffer.from(serialized.data as number[]);
+}
+
+const REGISTRY_STATE_ACTIONS = new Set([
+  'getState', 'markResearchSessionViewed', 'archiveResearchSession', 'restoreResearchSession',
+  'listArchivedQuickChats', 'getProfilingEnabled', 'setProfilingEnabled', 'getDeveloperSettings',
+  'getDeveloperModeEnabled', 'setDeveloperModeEnabled', 'getProviderSettings', 'setDefaultProviderId',
+  'setProviderModelDefaults', 'setProviderOptionalModelEnabled', 'setProviderCyberPolicyRiskAcknowledged',
+  'setProviderPreferredAuthenticationMethod', 'getMemorySettings', 'setMemoryTypeDescriptions',
+  'setWorkspaceMemoryBackend', 'getShellOptions', 'setShellOptions', 'getShellOptionsPath',
+  'inspectDirectory', 'getWorkspace', 'getWorkspaceByPath', 'getDebuggingSettings', 'setTracesEnabled',
+  'getComputerUseSettings', 'setComputerUsePermissionMode', 'getWorkspaceByDirectory',
+  'setWorkspaceDirectories', 'getLastKnownWorkspace', 'rememberWorkspaceOpened',
+  'removeRegisteredWorkspace', 'syncWorkspace', 'syncWorkspaceFromStorage', 'syncResearchSession', 'touchResearchSessionActivity',
+  'reconcileAppServerSessions', 'markAppServerSessionsInterrupted',
+]);
+
+function registryStateOperation(options: InvokeAppServerProtocolOptions): unknown {
+  const input = requiredRecord(options.input, 'registry state input');
+  const registryDirectory = requiredText(input.registryDirectory, 'registryDirectory');
+  const action = requiredText(input.action, 'action');
+  const registry = new WorkspaceRegistry(registryDirectory);
+  try {
+    if (action === 'initialize') {
+      return {
+        state: registry.getState(),
+        profilingEnabled: registry.getProfilingEnabled(),
+        developerSettings: registry.getDeveloperSettings(),
+        providerSettings: registry.getProviderSettings(),
+        memorySettings: registry.getMemorySettings(),
+        shellOptions: registry.getShellOptions(),
+        debuggingSettings: registry.getDebuggingSettings(),
+        computerUseSettings: registry.getComputerUseSettings(),
+        lastKnownWorkspace: registry.getLastKnownWorkspace(),
+      };
+    }
+    if (!REGISTRY_STATE_ACTIONS.has(action)) throw new Error(`Unsupported registry state action: ${action}`);
+    if (action === 'syncWorkspaceFromStorage') {
+      return syncRegistryWorkspaceFromStorage(registry, input);
+    }
+    const method = Reflect.get(registry, action) as unknown;
+    if (typeof method !== 'function') throw new Error(`Registry state action is unavailable: ${action}`);
+    return Reflect.apply(method, registry, Array.isArray(input.args) ? input.args : []) ?? null;
+  } finally {
+    registry.close();
+  }
+}
+
+function syncRegistryWorkspaceFromStorage(registry: WorkspaceRegistry, input: Record<string, unknown>): {
+  state: unknown;
+  lastKnownWorkspace: unknown;
+} {
+  const args = Array.isArray(input.args) ? input.args : [];
+  const sync = requiredRecord(args[0], 'workspace registry storage sync');
+  const workspacePath = requiredText(sync.workspacePath, 'workspacePath');
+  const databasePath = requiredText(sync.databasePath, 'databasePath');
+  const artifactRoot = requiredText(sync.artifactRoot, 'artifactRoot');
+  const researchProfileId = requiredText(sync.researchProfileId, 'researchProfileId');
+  const workspaceDirectories = Array.isArray(sync.workspaceDirectories)
+    ? sync.workspaceDirectories.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [workspacePath];
+  const database = new WorkspaceDatabase(databasePath, artifactRoot, { workspacePath });
+  try {
+    database.initialize();
+    registry.syncWorkspace({
+      workspace: {
+        workspaceId: database.getWorkspaceId(),
+        workspacePath,
+        workspaceDirectories,
+        researchKitId: database.getResearchKitId(),
+      },
+      activeScope: database.getActiveScope(),
+      researchProfile: { profileId: researchProfileId },
+      runs: database.listRunRows(),
+    } as never, {
+      rememberLast: sync.rememberLast !== false,
+      researchProfileId,
+    } as never);
+    return {
+      state: registry.getState(),
+      lastKnownWorkspace: registry.getLastKnownWorkspace(),
+    };
+  } finally {
+    database.close();
+  }
+}
+
+function requiredHistoryRecordType(value: unknown): 'claim' | 'memory' | 'runbook' {
+  if (value === 'claim' || value === 'memory' || value === 'runbook') return value;
+  throw new Error('type must be claim, memory, or runbook.');
 }
 
 async function memoryNotificationFeed(layout: ReturnType<typeof createResearchStorageLayout>, input: Record<string, unknown>): Promise<BealeMemoryNotificationFeed> {

@@ -177,6 +177,35 @@ describe('RunbookView', () => {
     );
   });
 
+  it('renders duplicate runbooks as the bottom detail section', () => {
+    const canonical = {
+      ...summary,
+      duplicateRunbooks: [{
+        id: 'runbook-duplicate',
+        title: 'Repeated parser procedure',
+        purpose: 'The same procedure.',
+        revision: 3,
+        markedAt: '2026-09-02T12:00:00.000Z'
+      }]
+    };
+    const candidate = { ...summary, id: 'runbook-other', title: 'Other parser procedure' };
+    const html = renderToStaticMarkup(createElement(RunbookView, {
+      runbook: canonical,
+      runbookCandidates: [canonical, candidate],
+      document,
+      loading: false,
+      error: null,
+      onBackToMain: () => undefined,
+      onMarkDuplicate: () => undefined,
+      onUndoDuplicate: () => undefined
+    }));
+
+    expect(html).toContain('aria-label="Duplicate runbook management"');
+    expect(html).toContain('Repeated parser procedure');
+    expect(html).toContain('Other parser procedure');
+    expect(html.lastIndexOf('<section')).toBe(html.indexOf('<section class="memory-catalog-subsection campaign-claim-duplicates runbook-duplicates"'));
+  });
+
   it('bounds initial work for large runbooks and collapses oversized cell content and output', () => {
     const largeDocument: AppServerRunbookDocument = {
       ...document,

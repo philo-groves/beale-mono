@@ -537,22 +537,24 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func markClaimDuplicate(
+    func markHistoryDuplicate(
         in workspace: AppServerWorkspace,
-        claimId: String,
-        parentClaimId: String,
+        type: String,
+        id: String,
+        parentId: String,
         expectedRevision: Int
     ) async throws {
         guard isConnected else {
-            throw AppServerClientError.rejected(status: 503, message: "Connect to the app-server before changing claims.")
+            throw AppServerClientError.rejected(status: 503, message: "Connect to the app-server before changing workspace history.")
         }
         let requestedServerURL = serverURL
         let requestedToken = operatorToken
         let client = try appServerClient(serverURL: requestedServerURL, token: requestedToken)
-        try await client.markClaimDuplicate(
+        try await client.markHistoryDuplicate(
             workspaceId: workspace.workspaceId,
-            claimId: claimId,
-            parentClaimId: parentClaimId,
+            type: type,
+            id: id,
+            parentId: parentId,
             expectedRevision: expectedRevision
         )
         guard connectionMatches(serverURL: requestedServerURL, token: requestedToken) else {
@@ -561,20 +563,22 @@ final class AppModel: ObservableObject {
         await loadMemory(for: workspace, force: true)
     }
 
-    func undoClaimDuplicate(
+    func undoHistoryDuplicate(
         in workspace: AppServerWorkspace,
-        claimId: String,
+        type: String,
+        id: String,
         expectedRevision: Int
     ) async throws {
         guard isConnected else {
-            throw AppServerClientError.rejected(status: 503, message: "Connect to the app-server before changing claims.")
+            throw AppServerClientError.rejected(status: 503, message: "Connect to the app-server before changing workspace history.")
         }
         let requestedServerURL = serverURL
         let requestedToken = operatorToken
         let client = try appServerClient(serverURL: requestedServerURL, token: requestedToken)
-        try await client.undoClaimDuplicate(
+        try await client.undoHistoryDuplicate(
             workspaceId: workspace.workspaceId,
-            claimId: claimId,
+            type: type,
+            id: id,
             expectedRevision: expectedRevision
         )
         guard connectionMatches(serverURL: requestedServerURL, token: requestedToken) else {

@@ -165,44 +165,48 @@ struct AppServerClient: Sendable {
         return try response.validatedResult(workspaceId: workspaceId)
     }
 
-    func markClaimDuplicate(
+    func markHistoryDuplicate(
         workspaceId: String,
-        claimId: String,
-        parentClaimId: String,
+        type: String,
+        id: String,
+        parentId: String,
         expectedRevision: Int
     ) async throws {
         let response: AppServerOperationResponse<AppServerClaimMutationResult> = try await operation(
-            "claim.mark_duplicate",
-            input: AppServerClaimDuplicateOperationInput(
+            "history.mark_duplicate",
+            input: AppServerHistoryDuplicateOperationInput(
                 workspaceId: workspaceId,
-                claimId: claimId,
-                parentClaimId: parentClaimId,
+                type: type,
+                id: id,
+                parentId: parentId,
                 expectedRevision: expectedRevision
             ),
             timeoutInterval: 15
         )
         guard response.controlVersion == BealeAppServerContract.controlVersion else {
-            throw AppServerClientError.incompatible("The claim mutation used an unsupported control version.")
+            throw AppServerClientError.incompatible("The workspace-history mutation used an unsupported control version.")
         }
     }
 
-    func undoClaimDuplicate(
+    func undoHistoryDuplicate(
         workspaceId: String,
-        claimId: String,
+        type: String,
+        id: String,
         expectedRevision: Int
     ) async throws {
         let response: AppServerOperationResponse<AppServerClaimMutationResult> = try await operation(
-            "claim.undo_duplicate",
-            input: AppServerClaimDuplicateOperationInput(
+            "history.undo_duplicate",
+            input: AppServerHistoryDuplicateOperationInput(
                 workspaceId: workspaceId,
-                claimId: claimId,
-                parentClaimId: nil,
+                type: type,
+                id: id,
+                parentId: nil,
                 expectedRevision: expectedRevision
             ),
             timeoutInterval: 15
         )
         guard response.controlVersion == BealeAppServerContract.controlVersion else {
-            throw AppServerClientError.incompatible("The claim mutation used an unsupported control version.")
+            throw AppServerClientError.incompatible("The workspace-history mutation used an unsupported control version.")
         }
     }
 

@@ -120,6 +120,7 @@ describe('app-server protocol client', () => {
       "const requestId = args[args.indexOf('--request-id') + 1];",
       `if (args[0] === 'protocol' && args[1] === 'describe') { console.log(JSON.stringify({ protocol: 'app-server', protocolVersion: 1, operation: 'protocol.describe', requestId, ok: true, result: ${JSON.stringify(compatibleDescriptor)} })); process.exit(0); }`,
       "if (process.env.NODE_NO_WARNINGS !== '1') process.stderr.write('ExperimentalWarning: protocol noise\\n');",
+      "if (process.env.ELECTRON_RUN_AS_NODE !== '1') process.exit(3);",
       "console.log(JSON.stringify({ protocol: 'app-server', protocolVersion: 1, operation: 'session.list', requestId, ok: true, result: [] }));"
     ].join('\n'));
     chmodSync(fixture, 0o700);

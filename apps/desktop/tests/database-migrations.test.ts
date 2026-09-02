@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyDatabaseMigrations } from '../src/main/databaseMigrations';
+import { applyDatabaseMigrations } from '@beale/research-agent';
 
 const directories: string[] = [];
 

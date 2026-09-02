@@ -268,9 +268,9 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   onRunbookExecute,
   onOpenReport = () => undefined,
   onOpenClaim,
-  claimMutationBusy = false,
-  onMarkClaimDuplicate,
-  onUndoClaimDuplicate,
+  historyMutationBusy = false,
+  onMarkHistoryDuplicate,
+  onUndoHistoryDuplicate,
   onSelectSubagent,
   onBackToRunbooks,
   onBackToReports = () => undefined,
@@ -308,9 +308,9 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   onRunbookExecute?: (runbookId: string, selection: RunbookExecutionSelection, target: RunbookProofTargetSelection) => Promise<void>;
   onOpenReport?: (reportId: string) => void;
   onOpenClaim?: (claimId: string) => void;
-  claimMutationBusy?: boolean;
-  onMarkClaimDuplicate?: (claimId: string, parentClaimId: string, expectedRevision: number) => void;
-  onUndoClaimDuplicate?: (claimId: string, expectedRevision: number) => void;
+  historyMutationBusy?: boolean;
+  onMarkHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, parentId: string, expectedRevision: number) => void;
+  onUndoHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, expectedRevision: number) => void;
   onSelectSubagent: (path: string) => void;
   onBackToRunbooks: () => void;
   onBackToReports?: () => void;
@@ -975,9 +975,13 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
               followLatest
               loading={runbookLoading}
               runbook={visibleSelectedRunbook}
+              runbookCandidates={runbooks}
+              mutationBusy={historyMutationBusy}
               showBackButton={false}
               onBackToMain={onBackToRunbooks}
               onRun={onRunbookExecute ? (selection, target) => onRunbookExecute(visibleSelectedRunbook.id, selection, target) : undefined}
+              onMarkDuplicate={onMarkHistoryDuplicate ? (id, parentId, revision) => onMarkHistoryDuplicate('runbook', id, parentId, revision) : undefined}
+              onUndoDuplicate={onUndoHistoryDuplicate ? (id, revision) => onUndoHistoryDuplicate('runbook', id, revision) : undefined}
             />
           </div>
         ) : visibleSelectedRunbookId ? (
@@ -1001,10 +1005,14 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
           >
             <MemoryDetailView
               node={selectedNode}
+              nodeCandidates={nodes}
               nodeById={nodeById}
+              mutationBusy={historyMutationBusy}
               relationships={relationshipsByNodeId.get(selectedNode.id) ?? []}
               researchProfile={researchProfile}
               sessionHeatPreferences={sessionHeatPreferences}
+              onMarkDuplicate={onMarkHistoryDuplicate ? (id, parentId, revision) => onMarkHistoryDuplicate('memory', id, parentId, revision) : undefined}
+              onUndoDuplicate={onUndoHistoryDuplicate ? (id, revision) => onUndoHistoryDuplicate('memory', id, revision) : undefined}
             />
           </MainSideScrollRegion>
         ) : selectedClaim ? (
@@ -1016,10 +1024,10 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
             <CampaignClaimDetailView
               claim={selectedClaim}
               claimCandidates={[...findings, ...leads]}
-              mutationBusy={claimMutationBusy}
+              mutationBusy={historyMutationBusy}
               providerModelCatalog={providerModelCatalog}
-              onMarkDuplicate={onMarkClaimDuplicate}
-              onUndoDuplicate={onUndoClaimDuplicate}
+              onMarkDuplicate={onMarkHistoryDuplicate ? (id, parentId, revision) => onMarkHistoryDuplicate('claim', id, parentId, revision) : undefined}
+              onUndoDuplicate={onUndoHistoryDuplicate ? (id, revision) => onUndoHistoryDuplicate('claim', id, revision) : undefined}
             />
           </MainSideScrollRegion>
         ) : activeView === 'memory' ? (
@@ -2339,16 +2347,24 @@ export function MemoryTypeCatalogSection({
 
 export function MemoryDetailView({
   node,
+  nodeCandidates = [],
   nodeById,
   relationships,
   researchProfile = null,
-  sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES
+  sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
+  mutationBusy = false,
+  onMarkDuplicate,
+  onUndoDuplicate
 }: {
   node: AppServerMemoryNodeSummary;
+  nodeCandidates?: readonly AppServerMemoryNodeSummary[];
   nodeById: Map<string, AppServerMemoryNodeSummary>;
   relationships: AppServerMemoryEdgeSummary[];
   researchProfile?: ResearchProfile | null;
   sessionHeatPreferences?: SessionHeatPreferences;
+  mutationBusy?: boolean;
+  onMarkDuplicate?: (id: string, parentId: string, expectedRevision: number) => void;
+  onUndoDuplicate?: (id: string, expectedRevision: number) => void;
 }): JSX.Element {
   const memoryProfile = researchProfile?.memory;
   const statusDefinition = memoryProfile?.statuses.find((status) => status.id === node.status);
@@ -2426,6 +2442,25 @@ export function MemoryDetailView({
             </div>
           </section>
         ) : null}
+        <DuplicateManagementSection
+          recordId={node.id}
+          recordLabel="memory"
+          recordRevision={node.revision}
+          duplicates={(node.duplicateMemories ?? []).map((duplicate) => ({
+            id: duplicate.id,
+            title: duplicate.title,
+            secondary: `${traceLabel(duplicate.type)} · ${traceLabel(duplicate.status)}`,
+            revision: duplicate.revision
+          }))}
+          candidates={nodeCandidates.filter((candidate) => candidate.id !== node.id && candidate.subjectId === node.subjectId).map((candidate) => ({
+            id: candidate.id,
+            title: candidate.title,
+            secondary: `${traceLabel(candidate.type)} · ${traceLabel(candidate.status)}`
+          }))}
+          mutationBusy={mutationBusy}
+          onMarkDuplicate={onMarkDuplicate}
+          onUndoDuplicate={onUndoDuplicate}
+        />
       </div>
     </article>
   );
@@ -2453,13 +2488,11 @@ export function CampaignClaimDetailView({
   const securityTracking = claim.securityTracking;
   const latestCvss = securityTracking?.cvssAssessments.at(-1) ?? null;
   const latestRiskDecision = securityTracking?.riskDecisions.at(-1) ?? null;
-  const [duplicateParentId, setDuplicateParentId] = useState('');
   const duplicateParentCandidates = claimCandidates.filter((candidate) => (
     candidate.id !== claim.id
       && candidate.workspaceId === claim.workspaceId
       && candidate.subjectId === claim.subjectId
   ));
-  useEffect(() => setDuplicateParentId(''), [claim.id]);
   return (
     <article className={`memory-detail campaign-claim-detail is-${claim.projection}`}>
       <header className="memory-detail-heading">
@@ -2550,59 +2583,6 @@ export function CampaignClaimDetailView({
           </p>
         ) : null}
         {claim.staleReason ? <p className="memory-catalog-body"><strong>Stale reason:</strong> {claim.staleReason}</p> : null}
-        {claim.duplicateClaims.length > 0 || (onMarkDuplicate && duplicateParentCandidates.length > 0) ? (
-          <section className="memory-catalog-subsection campaign-claim-duplicates" aria-label="Duplicate claim management">
-            <h4>Duplicates</h4>
-            {claim.duplicateClaims.length > 0 ? (
-              <div className="campaign-claim-duplicate-list">
-                {claim.duplicateClaims.map((duplicate) => (
-                  <article key={duplicate.id} className="campaign-claim-duplicate-row">
-                    <div>
-                      <span>{traceLabel(duplicate.projection)} · {traceLabel(duplicate.maturity)}</span>
-                      <strong>{duplicate.title}</strong>
-                    </div>
-                    {onUndoDuplicate ? (
-                      <button
-                        type="button"
-                        disabled={mutationBusy}
-                        onClick={() => onUndoDuplicate(duplicate.id, duplicate.revision)}
-                      >
-                        Undo
-                      </button>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            ) : <p>No claims are marked as duplicates of this claim.</p>}
-            {onMarkDuplicate && duplicateParentCandidates.length > 0 ? (
-              <div className="campaign-claim-duplicate-controls">
-                <label htmlFor={`duplicate-parent-${claim.id}`}>Mark this claim as a duplicate of</label>
-                <div>
-                  <select
-                    id={`duplicate-parent-${claim.id}`}
-                    value={duplicateParentId}
-                    disabled={mutationBusy}
-                    onChange={(event) => setDuplicateParentId(event.target.value)}
-                  >
-                    <option value="">Choose a canonical claim</option>
-                    {duplicateParentCandidates.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>
-                        {candidate.projection === 'finding' ? 'Finding' : 'Lead'} · {candidate.title}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={mutationBusy || !duplicateParentId}
-                    onClick={() => onMarkDuplicate(claim.id, duplicateParentId, claim.revision)}
-                  >
-                    Mark duplicate
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
         {securityTracking && securityTracking.cvssAssessments.length > 0 ? (
           <section className="memory-catalog-subsection" aria-label="CVSS assessments">
             <h4>CVSS Assessments</h4>
@@ -2673,8 +2653,98 @@ export function CampaignClaimDetailView({
             </div>
           </section>
         ) : null}
+        <DuplicateManagementSection
+          recordId={claim.id}
+          recordLabel="claim"
+          recordRevision={claim.revision}
+          duplicates={claim.duplicateClaims.map((duplicate) => ({
+            id: duplicate.id,
+            title: duplicate.title,
+            secondary: `${traceLabel(duplicate.projection)} · ${traceLabel(duplicate.maturity)}`,
+            revision: duplicate.revision
+          }))}
+          candidates={duplicateParentCandidates.map((candidate) => ({
+            id: candidate.id,
+            title: candidate.title,
+            secondary: candidate.projection === 'finding' ? 'Finding' : 'Lead'
+          }))}
+          mutationBusy={mutationBusy}
+          onMarkDuplicate={onMarkDuplicate}
+          onUndoDuplicate={onUndoDuplicate}
+        />
       </div>
     </article>
+  );
+}
+
+function DuplicateManagementSection({
+  recordId,
+  recordLabel,
+  recordRevision,
+  duplicates,
+  candidates,
+  mutationBusy,
+  onMarkDuplicate,
+  onUndoDuplicate
+}: {
+  recordId: string;
+  recordLabel: 'claim' | 'memory';
+  recordRevision: number;
+  duplicates: readonly { id: string; title: string; secondary: string; revision: number }[];
+  candidates: readonly { id: string; title: string; secondary: string }[];
+  mutationBusy: boolean;
+  onMarkDuplicate?: (id: string, parentId: string, expectedRevision: number) => void;
+  onUndoDuplicate?: (id: string, expectedRevision: number) => void;
+}): JSX.Element | null {
+  const [parentId, setParentId] = useState('');
+  useEffect(() => setParentId(''), [recordId]);
+  if (duplicates.length === 0 && (!onMarkDuplicate || candidates.length === 0)) return null;
+  return (
+    <section className="memory-catalog-subsection campaign-claim-duplicates" aria-label={`Duplicate ${recordLabel} management`}>
+      <h4>Duplicates</h4>
+      {duplicates.length > 0 ? (
+        <div className="campaign-claim-duplicate-list">
+          {duplicates.map((duplicate) => (
+            <article key={duplicate.id} className="campaign-claim-duplicate-row">
+              <div>
+                <span>{duplicate.secondary}</span>
+                <strong>{duplicate.title}</strong>
+              </div>
+              {onUndoDuplicate ? (
+                <button type="button" disabled={mutationBusy} onClick={() => onUndoDuplicate(duplicate.id, duplicate.revision)}>
+                  Undo
+                </button>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : <p>No {recordLabel}s are marked as duplicates of this {recordLabel}.</p>}
+      {onMarkDuplicate && candidates.length > 0 ? (
+        <div className="campaign-claim-duplicate-controls">
+          <label htmlFor={`duplicate-parent-${recordId}`}>Mark this {recordLabel} as a duplicate of</label>
+          <div>
+            <select
+              id={`duplicate-parent-${recordId}`}
+              value={parentId}
+              disabled={mutationBusy}
+              onChange={(event) => setParentId(event.target.value)}
+            >
+              <option value="">Choose a canonical {recordLabel}</option>
+              {candidates.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>{candidate.secondary} · {candidate.title}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={mutationBusy || !parentId}
+              onClick={() => onMarkDuplicate(recordId, parentId, recordRevision)}
+            >
+              Mark duplicate
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

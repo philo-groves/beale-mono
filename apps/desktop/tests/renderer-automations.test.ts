@@ -337,7 +337,7 @@ describe('automation workspace', () => {
   it('exposes workspace-independent list and update contracts with retained inactive schedules', () => {
     const types = readFileSync(new URL('../src/shared/types.ts', import.meta.url), 'utf8');
     const service = readFileSync(new URL('../src/main/workspaceService.ts', import.meta.url), 'utf8');
-    const database = readFileSync(new URL('../src/main/database.ts', import.meta.url), 'utf8');
+    const database = readFileSync(new URL('../../../app-server/src/workspaceDatabase.ts', import.meta.url), 'utf8');
 
     expect(types).toContain('listAutomations(): Promise<AutomationSummary[]>;');
     expect(types).toContain('updateAutomation(input: AutomationUpdateInput): Promise<AutomationSummary>;');

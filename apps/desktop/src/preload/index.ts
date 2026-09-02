@@ -40,8 +40,8 @@ import type {
   AutomationSummary,
   AutomationUpdateInput,
   MemoryDreamingProgressUpdate,
-  MarkClaimDuplicateInput,
-  UndoClaimDuplicateInput,
+  MarkHistoryDuplicateInput,
+  UndoHistoryDuplicateInput,
   AppServerRunbookDocument,
   AppServerReportDocument,
   AppServerReportLocator,
@@ -458,11 +458,11 @@ const api: BealeApi = {
   restoreMemoryDreamingChange(changeId: string) {
     return ipcRenderer.invoke(IPC_CHANNELS.restoreMemoryDreamingChange, changeId);
   },
-  markClaimDuplicate(input: MarkClaimDuplicateInput) {
-    return ipcRenderer.invoke(IPC_CHANNELS.markClaimDuplicate, input);
+  markHistoryDuplicate(input: MarkHistoryDuplicateInput) {
+    return ipcRenderer.invoke(IPC_CHANNELS.markHistoryDuplicate, input);
   },
-  undoClaimDuplicate(input: UndoClaimDuplicateInput) {
-    return ipcRenderer.invoke(IPC_CHANNELS.undoClaimDuplicate, input);
+  undoHistoryDuplicate(input: UndoHistoryDuplicateInput) {
+    return ipcRenderer.invoke(IPC_CHANNELS.undoHistoryDuplicate, input);
   },
   getAppServerToolingSummary() {
     return ipcRenderer.invoke(IPC_CHANNELS.getAppServerToolingSummary);

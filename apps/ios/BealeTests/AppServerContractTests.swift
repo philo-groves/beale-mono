@@ -269,6 +269,7 @@ final class AppServerContractTests: XCTestCase {
                 "memory.notifications.v3",
                 "knowledge.claims.v2",
                 "knowledge.claim-deduplication.v1",
+                "knowledge.history-deduplication.v1",
                 "workspace.goal-suggestions.v1",
                 "workspace.prompt-expansion.v1"
               ]

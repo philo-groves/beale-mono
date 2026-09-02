@@ -72,6 +72,9 @@ export interface MemoryNodeSummary {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  duplicateOfMemoryId: string | null;
+  duplicateMarkedAt: string | null;
+  duplicateMemories: MemoryNodeDuplicateSummary[];
   authors: ModelAuthorSummary[];
   provenance?: MemoryNodeProvenanceSummary;
 }
@@ -193,6 +196,15 @@ export interface FindingSecurityTracking {
   affectedAssetIds: string[];
   affectedVersions: FindingAffectedVersion[];
   externalReferences: FindingExternalReference[];
+}
+
+export interface MemoryNodeDuplicateSummary {
+  id: string;
+  type: string;
+  title: string;
+  status: string;
+  revision: number;
+  markedAt: string;
 }
 
 export interface ResearchClaimDuplicateSummary {
@@ -455,6 +467,9 @@ export interface RunbookSummary {
   artifactId: string;
   revision: number;
   contentRevision: number;
+  duplicateOfRunbookId: string | null;
+  duplicateMarkedAt: string | null;
+  duplicateRunbooks: RunbookDuplicateSummary[];
   execution: {
     runCount: number;
     completedRunCount: number;
@@ -470,6 +485,14 @@ export interface RunbookSummary {
   authors: ModelAuthorSummary[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RunbookDuplicateSummary {
+  id: string;
+  title: string;
+  purpose: string;
+  revision: number;
+  markedAt: string;
 }
 
 export interface ReportSummary {

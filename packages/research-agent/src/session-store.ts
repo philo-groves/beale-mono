@@ -1914,6 +1914,8 @@ function sessionToolActivityEntries(
     if (!toolName || ![
       "memory.search",
       "history.search",
+      "history.mark_duplicate",
+      "history.undo_duplicate",
       "memory.save",
       "memory.correct",
       "memory.link",
@@ -2287,6 +2289,8 @@ function commentaryToolCopy(
     "memory.get": ["Read a memory", "Read {count} memories"],
     "memory.search": ["Searched memory", "Ran {count} memory searches"],
     "history.search": ["Searched workspace history", "Ran {count} workspace history searches"],
+    "history.mark_duplicate": ["Marked a workspace-history duplicate", "Marked {count} workspace-history duplicates"],
+    "history.undo_duplicate": ["Restored a workspace-history record", "Restored {count} workspace-history records"],
     "investigation.status": ["Read the campaign track", "Read the campaign track {count} times"],
     "investigation.recall": ["Recalled campaign evidence", "Ran {count} campaign recalls"],
     "investigation.question": ["Updated a research question", "Updated {count} research questions"],

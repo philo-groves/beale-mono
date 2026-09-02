@@ -42,10 +42,10 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v14 claim-deduplication contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v17 persistence and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 14);
+  assert.equal(descriptor.contractVersion, 17);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 12);
   assert.equal(descriptor.schemas.finding, 5);
@@ -57,11 +57,15 @@ test("protocol describe exposes a runtime-bound v14 claim-deduplication contract
   assert.ok(descriptor.capabilities.includes("knowledge.claims.v2"));
   assert.ok(descriptor.capabilities.includes("knowledge.claim_security_tracking"));
   assert.ok(descriptor.capabilities.includes("knowledge.claim_deduplication"));
+  assert.ok(descriptor.capabilities.includes("knowledge.history_deduplication"));
   assert.ok(descriptor.capabilities.includes("session.bounded_reads"));
   assert.ok(descriptor.capabilities.includes("session.targeted_details"));
   assert.ok(descriptor.capabilities.includes("workspace.channels.v2"));
   assert.ok(descriptor.capabilities.includes("workspace.goal-suggestions.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.prompt-expansion.v1"));
+  assert.ok(descriptor.capabilities.includes("workspace.state"));
+  assert.ok(descriptor.capabilities.includes("registry.state"));
+  assert.ok(descriptor.capabilities.includes("registry.workspace_sync.v2"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("channel.list"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("channel.share"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.generate"));
@@ -73,6 +77,10 @@ test("protocol describe exposes a runtime-bound v14 claim-deduplication contract
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.replace_recording"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("claim.mark_duplicate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("claim.undo_duplicate"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("history.mark_duplicate"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("history.undo_duplicate"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("workspace.state"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("registry.state"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-content-revise.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-triage-status.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-recording-replace.v1"));
@@ -88,6 +96,10 @@ test("protocol describe exposes a runtime-bound v14 claim-deduplication contract
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("memory.notifications.v3"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.report-list.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.claim-deduplication.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.history-deduplication.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.state.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));
   assert.equal(descriptor.transports.websocket.path, "/v1/session");
   assert.equal(descriptor.transports.appServer.path, "/v1/operations");
   assert.equal(descriptor.transports.appServer.authentication, "operator-bearer");

@@ -115,7 +115,7 @@ export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions
     const migratedClaimMemoryIds = new Set(allClaims.flatMap((claim) => claim.memoryNodeId ? [claim.memoryNodeId] : []));
     // Claim-shaped v1 nodes remain in SQLite as migration/audit aliases, but are no longer
     // projected as knowledge memory. Their stable claim IDs are exposed below instead.
-    const nodes = allNodes.filter((node) => !migratedClaimMemoryIds.has(node.id));
+    const nodes = allNodes.filter((node) => !migratedClaimMemoryIds.has(node.id) && node.duplicateOfMemoryId === null);
     const visibleNodeIds = new Set(nodes.map((node) => node.id));
     const edges = tableExists(database, 'memory_edges') ? readEdges(database, visibleNodeIds) : [];
     const evidenceRefCount = nodes.reduce((count, node) => count + node.evidenceRefs.length, 0);
@@ -223,9 +223,18 @@ function readRunbooks(
   workspaceId: string,
   artifactRevisions: ReadonlyMap<string, AppServerArtifactRevisionSummary[]>
 ): AppServerRunbookSummary[] {
-  const rows = database
+  const hasDuplicates = tableHasColumn(database, 'app_server_runbooks', 'duplicate_of_runbook_id');
+  const allRows = database
     .prepare('SELECT * FROM app_server_runbooks WHERE workspace_id = ? ORDER BY updated_at ASC, id')
     .all(workspaceId) as SqlRow[];
+  const rows = hasDuplicates ? allRows.filter((row) => optionalString(row.duplicate_of_runbook_id) === null) : allRows;
+  const duplicateRows = new Map<string, SqlRow[]>();
+  if (hasDuplicates) {
+    for (const row of allRows) {
+      const parentId = optionalString(row.duplicate_of_runbook_id);
+      if (parentId) duplicateRows.set(parentId, [...(duplicateRows.get(parentId) ?? []), row]);
+    }
+  }
   const hasContentRevision = tableHasColumn(database, 'app_server_runbooks', 'content_revision');
   const executionMetrics = runbookExecutionMetrics(database, workspaceId);
   const authors = modelAuthorsByResource(database, 'runbook', rows.map((row) => requiredString(row.id)));
@@ -243,6 +252,15 @@ function readRunbooks(
       artifactId: requiredString(row.artifact_id),
       revision: requiredNumber(row.revision),
       contentRevision: hasContentRevision ? requiredNumber(row.content_revision) : 1,
+      duplicateOfRunbookId: hasDuplicates ? optionalString(row.duplicate_of_runbook_id) : null,
+      duplicateMarkedAt: hasDuplicates ? optionalString(row.duplicate_marked_at) : null,
+      duplicateRunbooks: (duplicateRows.get(id) ?? []).map((duplicate) => ({
+        id: requiredString(duplicate.id),
+        title: requiredString(duplicate.title),
+        purpose: requiredString(duplicate.purpose),
+        revision: requiredNumber(duplicate.revision),
+        markedAt: requiredString(duplicate.duplicate_marked_at),
+      })),
       execution: executionMetrics.get(id) ?? emptyRunbookExecutionMetrics(),
       revisions: revisionsForArtifact(artifactRevisions, 'runbook', row),
       authors: authors.get(id) ?? [],
@@ -292,6 +310,7 @@ function readNodes(
 ): AppServerMemoryNodeSummary[] {
   const membershipSchema = tableExists(database, 'memory_node_sessions') && tableExists(database, 'memory_node_workspaces');
   const catalogColumn = tableHasColumn(database, 'memory_nodes', 'catalog_hash');
+  const hasDuplicates = tableHasColumn(database, 'memory_nodes', 'duplicate_of_memory_id');
   const visibility = memoryVisibility(
     context,
     membershipSchema
@@ -311,6 +330,13 @@ function readNodes(
   const tags = groupedStrings(database, 'SELECT node_id, tag AS value FROM memory_node_tags ORDER BY tag', visibleNodeIds);
   const evidence = readEvidence(database, visibleNodeIds);
   const authors = modelAuthorsByResource(database, 'memory', [...visibleNodeIds]);
+  const duplicateRows = new Map<string, SqlRow[]>();
+  if (hasDuplicates) {
+    for (const row of rows) {
+      const parentId = optionalString(row.duplicate_of_memory_id);
+      if (parentId) duplicateRows.set(parentId, [...(duplicateRows.get(parentId) ?? []), row]);
+    }
+  }
   const nodes = rows.map((row) => {
     const id = requiredString(row.id);
     const node: Omit<AppServerMemoryNodeSummary, 'provenance'> = {
@@ -340,6 +366,16 @@ function readNodes(
       createdAt: requiredString(row.created_at),
       updatedAt: requiredString(row.updated_at),
       revision: requiredNumber(row.revision),
+      duplicateOfMemoryId: hasDuplicates ? optionalString(row.duplicate_of_memory_id) : null,
+      duplicateMarkedAt: hasDuplicates ? optionalString(row.duplicate_marked_at) : null,
+      duplicateMemories: (duplicateRows.get(id) ?? []).map((duplicate) => ({
+        id: requiredString(duplicate.id),
+        type: requiredString(duplicate.type),
+        title: requiredString(duplicate.title),
+        status: requiredString(duplicate.status),
+        revision: requiredNumber(duplicate.revision),
+        markedAt: requiredString(duplicate.duplicate_marked_at),
+      })),
       authors: authors.get(id) ?? []
     };
     return {

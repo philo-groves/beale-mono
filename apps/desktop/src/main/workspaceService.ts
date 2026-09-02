@@ -73,8 +73,8 @@ import {
   resolveAppServerAuxiliaryModelRoute,
   resolveAppServerStoragePaths,
   restoreAppServerMemoryDreamingChange,
-  markAppServerClaimDuplicate,
-  undoAppServerClaimDuplicate,
+  markAppServerHistoryDuplicate,
+  undoAppServerHistoryDuplicate,
   type AppServerSessionSummary,
   type MemoryDreamingProfileInput,
   type MemoryDreamingPlan,
@@ -144,8 +144,8 @@ import type {
   AppServerMemoryNodeSummary,
   AppServerMemorySummary,
   MemoryDreamingProgressUpdate,
-  MarkClaimDuplicateInput,
-  UndoClaimDuplicateInput,
+  MarkHistoryDuplicateInput,
+  UndoHistoryDuplicateInput,
   MemorySettings,
   MemoryTypeDescriptions,
   NotificationRecord,
@@ -1895,46 +1895,48 @@ export class WorkspaceService {
     return this.requireSnapshot();
   }
 
-  public async markClaimDuplicate(input: MarkClaimDuplicateInput): Promise<WorkspaceSnapshot> {
-    const runtime = this.requireClaimWorkspace(input.workspaceId);
+  public async markHistoryDuplicate(input: MarkHistoryDuplicateInput): Promise<WorkspaceSnapshot> {
+    const runtime = this.requireHistoryWorkspace(input.workspaceId, input.type);
     const scope = runtime.db.getActiveScope();
     const subject = runtime.db.getResearchSubject();
-    await markAppServerClaimDuplicate({
+    await markAppServerHistoryDuplicate({
       workspaceId: runtime.db.getWorkspaceId(),
       workspaceName: scope.workspaceName,
       subjectId: subject.id,
       subjectName: subject.name,
-      claimId: input.claimId,
-      parentClaimId: input.parentClaimId,
+      type: input.type,
+      id: input.id,
+      parentId: input.parentId,
       expectedRevision: input.expectedRevision
     }, this.appServerStorage(runtime));
     this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
     return this.requireSnapshot();
   }
 
-  public async undoClaimDuplicate(input: UndoClaimDuplicateInput): Promise<WorkspaceSnapshot> {
-    const runtime = this.requireClaimWorkspace(input.workspaceId);
+  public async undoHistoryDuplicate(input: UndoHistoryDuplicateInput): Promise<WorkspaceSnapshot> {
+    const runtime = this.requireHistoryWorkspace(input.workspaceId, input.type);
     const scope = runtime.db.getActiveScope();
     const subject = runtime.db.getResearchSubject();
-    await undoAppServerClaimDuplicate({
+    await undoAppServerHistoryDuplicate({
       workspaceId: runtime.db.getWorkspaceId(),
       workspaceName: scope.workspaceName,
       subjectId: subject.id,
       subjectName: subject.name,
-      claimId: input.claimId,
+      type: input.type,
+      id: input.id,
       expectedRevision: input.expectedRevision
     }, this.appServerStorage(runtime));
     this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
     return this.requireSnapshot();
   }
 
-  private requireClaimWorkspace(workspaceId: string): WorkspaceRuntime {
+  private requireHistoryWorkspace(workspaceId: string, type: MarkHistoryDuplicateInput['type']): WorkspaceRuntime {
     const runtime = this.getForegroundRuntime();
     if (!runtime || runtime.db.getWorkspaceId() !== workspaceId.trim()) {
       throw new Error(`Workspace is no longer open: ${workspaceId}`);
     }
-    if (runtime.memoryBackend === 'disabled') {
-      throw new Error('Claim management is disabled for this workspace.');
+    if (runtime.memoryBackend === 'disabled' && type !== 'runbook') {
+      throw new Error(`${type === 'claim' ? 'Claim' : 'Memory'} management is disabled for this workspace.`);
     }
     return runtime;
   }
@@ -4815,10 +4817,7 @@ export class WorkspaceService {
     if (!this.workspaceRegistry) return;
     const foreground = this.getForegroundRuntime();
     if (foreground) {
-      this.workspaceRegistry.syncWorkspace(this.snapshotForRuntime(foreground), {
-        rememberLast: true,
-        researchProfileId: foreground.profileId
-      });
+      this.syncWorkspaceRegistryForRuntime(foreground, true);
     }
     for (const runtime of this.backgroundRuntimes.values()) {
       this.syncWorkspaceRegistryForRuntime(runtime, false);
@@ -4830,10 +4829,12 @@ export class WorkspaceService {
 
   private syncWorkspaceRegistryForRuntime(runtime: WorkspaceRuntime, rememberLast: boolean): void {
     if (!this.workspaceRegistry) return;
-    this.workspaceRegistry.syncWorkspace(this.snapshotForRuntime(runtime), {
-      rememberLast,
-      researchProfileId: runtime.profileId
-    });
+    this.workspaceRegistry.syncWorkspaceFromStorage({
+      workspacePath: runtime.workspacePath,
+      databasePath: runtime.db.getDatabasePath(),
+      artifactRoot: runtime.db.getArtifactRoot(),
+      researchProfileId: runtime.profileId,
+    }, { rememberLast });
   }
 
   private syncActiveResearchSessionsToRegistry(runtime: WorkspaceRuntime): boolean {

@@ -157,32 +157,6 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       ...(Array.isArray(input.componentClaimIds) ? { componentClaimIds: input.componentClaimIds.map((id) => requiredString(id, "componentClaimIds[]")) } : {}),
       ...(input.securityTracking !== undefined ? { securityTracking: parseSecurityTrackingUpdate(input.securityTracking) } : {}),
     }, context?.modelAuthor, context?.agentId)),
-    findingTool("claim.mark_duplicate", "claim_mark_duplicate", "Coalesce a redundant lead or finding under the strongest existing canonical claim. The duplicate is hidden from ordinary claim lists and searches but remains auditable and reversible from the canonical parent's details. Use only for the same underlying claim; related components, variants, and composable steps are not duplicates.", "write", {
-      type: "object",
-      required: ["id", "expectedRevision", "parentClaimId", "reason"],
-      properties: {
-        id: { type: "string", description: "The redundant claim to hide as a duplicate." },
-        expectedRevision: { type: "number" },
-        parentClaimId: { type: "string", description: "The canonical claim that should remain visible." },
-        reason: { type: "string", description: "Why both records represent the same underlying claim." },
-      },
-    }, (input, context) => store.markDuplicate(requiredString(input.id, "id"), {
-      expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"),
-      parentClaimId: requiredString(input.parentClaimId, "parentClaimId"),
-      reason: requiredString(input.reason, "reason"),
-    }, context?.modelAuthor, context?.agentId)),
-    findingTool("claim.undo_duplicate", "claim_undo_duplicate", "Restore a claim that was incorrectly coalesced as a duplicate. This makes the claim visible in ordinary claim lists and searches again.", "write", {
-      type: "object",
-      required: ["id", "expectedRevision", "reason"],
-      properties: {
-        id: { type: "string", description: "The hidden duplicate claim to restore." },
-        expectedRevision: { type: "number" },
-        reason: { type: "string" },
-      },
-    }, (input, context) => store.undoDuplicate(requiredString(input.id, "id"), {
-      expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"),
-      reason: requiredString(input.reason, "reason"),
-    }, context?.modelAuthor, context?.agentId)),
     findingTool("finding.transition", "finding_transition", "Update a canonical claim through its evidence-gated lifecycle, or append new evidence by using its current status as toStatus. Same-status evidence appends retain the claim ID and maturity while creating an immutable revision. Direct observation promotes a lead to the finding view without changing its ID. Reproduction requires a successful runbook; verification must be independent; reporting and disclosure require matching durable references.", "write", {
       type: "object",
       required: ["id", "expectedRevision", "toStatus", "reason"],

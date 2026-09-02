@@ -47,7 +47,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 14 as const;
+export const APP_SERVER_CONTRACT_VERSION = 17 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -55,7 +55,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-02T16:00:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-02T22:30:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
@@ -80,6 +80,10 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "knowledge.campaign-tracks.v2",
   "knowledge.claims.v2",
   "knowledge.claim-deduplication.v1",
+  "knowledge.history-deduplication.v1",
+  "workspace.state.v1",
+  "registry.state.v1",
+  "registry.workspace-sync.v2",
   "knowledge.claim-security-tracking.v1",
   "workspace.channels.v2",
   "workspace.channels.archive.v1",
@@ -274,6 +278,16 @@ export interface BealeWorkspaceMemoryNode {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  duplicateMemories: BealeWorkspaceMemoryDuplicate[];
+}
+
+export interface BealeWorkspaceMemoryDuplicate {
+  id: string;
+  type: string;
+  title: string;
+  status: string;
+  revision: number;
+  markedAt: string;
 }
 
 export interface BealeWorkspaceMemoryCatalog {
@@ -334,6 +348,10 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "knowledge.findings",
   "knowledge.claims.v2",
   "knowledge.claim_deduplication",
+  "knowledge.history_deduplication",
+  "workspace.state",
+  "registry.state",
+  "registry.workspace_sync.v2",
   "knowledge.claim_security_tracking",
   "knowledge.finding_staleness",
   "knowledge.campaign_graph",
@@ -366,7 +384,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
   "channel.list", "channel.get", "channel.create", "channel.join", "channel.post", "channel.share", "channel.archive", "channel.restore", "channel.delete",
-  "memory.summary", "memory.notification_feed", "claim.mark_duplicate", "claim.undo_duplicate", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
+  "memory.summary", "memory.notification_feed", "history.mark_duplicate", "history.undo_duplicate", "claim.mark_duplicate", "claim.undo_duplicate", "workspace.state", "registry.state", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
   "investigation.list", "investigation.get", "investigation.replay",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",

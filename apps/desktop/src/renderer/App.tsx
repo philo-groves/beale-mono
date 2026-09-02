@@ -1105,16 +1105,16 @@ export function App(): JSX.Element {
       .finally(() => setMemoryDreamingInProgress(false));
   }, [runAction, snapshot?.researchProfile.profile.capabilities.memoryEnabled]);
 
-  const markClaimDuplicate = useCallback((claimId: string, parentClaimId: string, expectedRevision: number): void => {
+  const markHistoryDuplicate = useCallback((type: 'claim' | 'memory' | 'runbook', id: string, parentId: string, expectedRevision: number): void => {
     const workspaceId = snapshot?.workspace.workspaceId;
     if (!workspaceId) return;
-    void runAction(() => window.beale.markClaimDuplicate({ workspaceId, claimId, parentClaimId, expectedRevision }));
+    void runAction(() => window.beale.markHistoryDuplicate({ workspaceId, type, id, parentId, expectedRevision }));
   }, [runAction, snapshot?.workspace.workspaceId]);
 
-  const undoClaimDuplicate = useCallback((claimId: string, expectedRevision: number): void => {
+  const undoHistoryDuplicate = useCallback((type: 'claim' | 'memory' | 'runbook', id: string, expectedRevision: number): void => {
     const workspaceId = snapshot?.workspace.workspaceId;
     if (!workspaceId) return;
-    void runAction(() => window.beale.undoClaimDuplicate({ workspaceId, claimId, expectedRevision }));
+    void runAction(() => window.beale.undoHistoryDuplicate({ workspaceId, type, id, expectedRevision }));
   }, [runAction, snapshot?.workspace.workspaceId]);
 
   const runWorkspaceDejunk = useCallback((): void => {
@@ -2586,8 +2586,8 @@ export function App(): JSX.Element {
               memoryDreamingProgress={memoryDreamingProgress}
               onRunWorkspaceDejunk={runWorkspaceDejunk}
               onRunMemoryDreaming={runMemoryDreaming}
-              onMarkClaimDuplicate={markClaimDuplicate}
-              onUndoClaimDuplicate={undoClaimDuplicate}
+              onMarkHistoryDuplicate={markHistoryDuplicate}
+              onUndoHistoryDuplicate={undoHistoryDuplicate}
               onAddWorkspaceResource={addWorkspaceResource}
               onChangeWorkspaceResource={changeWorkspaceResource}
               onCloneWorkspaceRepository={cloneWorkspaceRepository}

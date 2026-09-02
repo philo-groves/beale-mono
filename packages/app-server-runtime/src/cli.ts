@@ -52,7 +52,9 @@ function isProtocolCommand(command: string | undefined): boolean {
     || command === "protocol"
     || command === "session"
     || command === "knowledge"
-    || command === "harness";
+    || command === "harness"
+    || command === "workspace"
+    || command === "registry";
 }
 
 await main();

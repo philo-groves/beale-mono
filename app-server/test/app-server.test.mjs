@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -175,6 +175,86 @@ test("executes canonical operations inside the app-server host", async () => {
   const payload = await response.json();
   assert.equal(payload.controlVersion, BEALE_APP_SERVER_CONTROL_VERSION);
   assert.equal(payload.result.sessionTitleEffort, "medium");
+});
+
+test("owns Desktop workspace and registry persistence behind allowlisted operations", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-persistence-"));
+  temporaryDirectories.push(directory);
+  const workspacePath = join(directory, "workspace");
+  const registryDirectory = join(directory, "registry");
+  const databasePath = join(directory, "memory.sqlite");
+  const artifactDirectoryPath = join(directory, "artifacts");
+  mkdirSync(workspacePath, { recursive: true });
+  const server = await startAppServer({
+    hostService: new AppServerHostService({ registry: hostRegistryFixture(directory) }),
+  });
+  servers.push(server);
+
+  const invoke = async (operation, input) => {
+    const response = await fetch(`${server.url}/v1/operations`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${server.operatorToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ operation, input }),
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
+
+  const registry = await invoke("registry.state", {
+    registryDirectory,
+    action: "initialize",
+  });
+  assert.deepEqual(registry.state.workspaces, []);
+  assert.equal(registry.computerUseSettings.permissionMode, "every_action");
+  assert.equal(existsSync(join(registryDirectory, "workspace-registry.sqlite")), true);
+  assert.deepEqual(await invoke("registry.state", {
+    registryDirectory,
+    action: "setTracesEnabled",
+    args: [true],
+  }), { tracesEnabled: true });
+
+  const workspace = await invoke("workspace.state", {
+    workspacePath,
+    artifactRoot: join(workspacePath, ".beale", "artifacts"),
+    databasePath,
+    artifactDirectoryPath,
+    researchKitId: "general",
+    action: "initialize",
+  });
+  assert.equal(typeof workspace.workspaceId, "string");
+  assert.equal(workspace.researchKitId, "general");
+  assert.equal(existsSync(databasePath), true);
+  assert.equal(await invoke("workspace.state", {
+    workspacePath,
+    workspaceId: workspace.workspaceId,
+    artifactRoot: join(workspacePath, ".beale", "artifacts"),
+    databasePath,
+    artifactDirectoryPath,
+    researchKitId: "general",
+    action: "addWorkspaceRule",
+    args: ["Keep the persistence boundary explicit."],
+  }).then((rule) => rule.text), "Keep the persistence boundary explicit.");
+
+  const synchronized = await invoke("registry.state", {
+    registryDirectory,
+    action: "syncWorkspaceFromStorage",
+    args: [{
+      workspacePath,
+      workspaceDirectories: [workspacePath],
+      databasePath,
+      artifactRoot: join(workspacePath, ".beale", "artifacts"),
+      researchProfileId: "security-research",
+      rememberLast: true,
+    }],
+  });
+  const synchronizedRegistry = synchronized.state;
+  assert.equal(synchronizedRegistry.workspaces.length, 1);
+  assert.equal(synchronizedRegistry.workspaces[0].workspaceId, workspace.workspaceId);
+  assert.equal(synchronizedRegistry.workspaces[0].workspaceName, "Untitled Workspace");
+  assert.equal(synchronized.lastKnownWorkspace.workspaceId, workspace.workspaceId);
 });
 
 test("routes campaign-track operations through registered workspace storage", async () => {
@@ -745,6 +825,7 @@ test("projects workspace memory into a path-free mobile catalog", async () => {
       createdAt: "2026-08-22T00:01:00.000Z",
       updatedAt: "2026-08-22T00:02:00.000Z",
       revision: 2,
+      duplicateMemories: [],
     }],
     leads: [],
     findings: [{

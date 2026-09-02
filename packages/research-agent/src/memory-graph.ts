@@ -157,8 +157,20 @@ export interface MemoryNode {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  duplicateOfMemoryId: string | null;
+  duplicateMarkedAt: string | null;
+  duplicateMemories: MemoryNodeDuplicateSummary[];
   authors: ModelAuthor[];
   provenance: MemoryNodeProvenance;
+}
+
+export interface MemoryNodeDuplicateSummary {
+  id: string;
+  type: MemoryNodeType;
+  title: string;
+  status: MemoryNodeStatus;
+  revision: number;
+  markedAt: string;
 }
 
 export interface SaveMemoryNodeInput {
@@ -388,6 +400,9 @@ export class MemoryGraphStore {
           createdAt: now,
           updatedAt: now,
           revision: 1,
+          duplicateOfMemoryId: null,
+          duplicateMarkedAt: null,
+          duplicateMemories: [],
           authors: [],
           provenance: {
             state: "catalog_unvalidated",
@@ -428,6 +443,7 @@ export class MemoryGraphStore {
     const located = this.locate(id);
     const existing = located?.node;
     if (!existing || !located) throw new Error(`Memory node not found: ${id}`);
+    this.requireCanonicalNode(existing);
     if (existing.revision !== expectedRevision) {
       throw new Error(`Memory node revision conflict for ${id}: expected ${expectedRevision}, found ${existing.revision}.`);
     }
@@ -539,6 +555,67 @@ export class MemoryGraphStore {
     return this.locate(id)?.node ?? null;
   }
 
+  public markDuplicate(
+    id: string,
+    input: { expectedRevision: number; parentMemoryId: string; reason: string },
+    author?: ModelAuthor,
+  ): MemoryNode {
+    const current = this.get(id);
+    if (!current) throw new Error(`Memory node not found: ${id}`);
+    if (current.revision !== input.expectedRevision) {
+      throw new Error(`Memory node revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
+    }
+    if (current.duplicateOfMemoryId) {
+      throw new Error(`Memory node ${id} is already marked as a duplicate of ${current.duplicateOfMemoryId}.`);
+    }
+    const parentMemoryId = requiredInputText(input.parentMemoryId, "Canonical parent memory id");
+    requiredInputText(input.reason, "Duplicate reason");
+    if (parentMemoryId === id) throw new Error("A memory cannot be marked as a duplicate of itself.");
+    const parent = this.get(parentMemoryId);
+    if (!parent) throw new Error(`Canonical parent memory not found: ${parentMemoryId}.`);
+    if (parent.subjectId !== current.subjectId) throw new Error("Duplicate memories must belong to the same research subject.");
+    if (parent.duplicateOfMemoryId) {
+      throw new Error(`Canonical parent ${parentMemoryId} is itself a duplicate; choose its canonical parent instead.`);
+    }
+    if (current.duplicateMemories.length > 0) {
+      throw new Error(`Memory ${id} owns duplicate memories; undo or reassign them before coalescing it.`);
+    }
+    const now = new Date().toISOString();
+    const nextRevision = current.revision + 1;
+    const result = this.local.database.prepare(`UPDATE memory_nodes SET
+      duplicate_of_memory_id = ?, duplicate_marked_at = ?, updated_at = ?, revision = ?
+      WHERE id = ? AND revision = ? AND duplicate_of_memory_id IS NULL`).run(
+      parentMemoryId, now, now, nextRevision, id, current.revision,
+    );
+    if (Number(result.changes) !== 1) throw new Error(`Memory node revision conflict for ${id}.`);
+    recordModelAuthorship(this.local.database, "memory", id, nextRevision, author, now);
+    return this.get(parentMemoryId)!;
+  }
+
+  public undoDuplicate(
+    id: string,
+    input: { expectedRevision: number; reason: string },
+    author?: ModelAuthor,
+  ): MemoryNode {
+    const current = this.get(id);
+    if (!current) throw new Error(`Memory node not found: ${id}`);
+    if (current.revision !== input.expectedRevision) {
+      throw new Error(`Memory node revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
+    }
+    if (!current.duplicateOfMemoryId) throw new Error(`Memory node ${id} is not marked as a duplicate.`);
+    requiredInputText(input.reason, "Duplicate undo reason");
+    const now = new Date().toISOString();
+    const nextRevision = current.revision + 1;
+    const result = this.local.database.prepare(`UPDATE memory_nodes SET
+      duplicate_of_memory_id = NULL, duplicate_marked_at = NULL, updated_at = ?, revision = ?
+      WHERE id = ? AND revision = ? AND duplicate_of_memory_id IS NOT NULL`).run(
+      now, nextRevision, id, current.revision,
+    );
+    if (Number(result.changes) !== 1) throw new Error(`Memory node revision conflict for ${id}.`);
+    recordModelAuthorship(this.local.database, "memory", id, nextRevision, author, now);
+    return this.get(id)!;
+  }
+
   private getFromDatabase(database: DatabaseSync, id: string): MemoryNode | null {
     return this.getManyFromDatabase(database, [id])[0] ?? null;
   }
@@ -583,6 +660,14 @@ export class MemoryGraphStore {
         `SELECT * FROM memory_evidence_refs WHERE node_id IN (${placeholders}) ORDER BY created_at, id`,
     ));
     const authors = modelAuthorsByResource(database, "memory", orderedIds);
+    const duplicates = groupedRows(queryInChunks<Record<string, unknown>>(
+      database,
+      orderedIds,
+      (placeholders) => `SELECT duplicate_of_memory_id AS node_id, id, type, title, status, revision,
+        duplicate_marked_at FROM memory_nodes
+        WHERE duplicate_of_memory_id IN (${placeholders})
+        ORDER BY duplicate_marked_at, id`,
+    ));
     const validations = new Map(
       queryInChunks<Record<string, unknown>>(
         database,
@@ -635,6 +720,16 @@ export class MemoryGraphStore {
         createdAt: text(row.created_at),
         updatedAt: text(row.updated_at),
         revision: number(row.revision),
+        duplicateOfMemoryId: nullableText(row.duplicate_of_memory_id),
+        duplicateMarkedAt: nullableText(row.duplicate_marked_at),
+        duplicateMemories: (duplicates.get(id) ?? []).map((duplicate) => ({
+          id: text(duplicate.id),
+          type: text(duplicate.type),
+          title: text(duplicate.title),
+          status: text(duplicate.status),
+          revision: number(duplicate.revision),
+          markedAt: text(duplicate.duplicate_marked_at),
+        })),
         authors: authors.get(id) ?? [],
       };
       const catalogHash = nullableText(row.catalog_hash);
@@ -682,6 +777,7 @@ export class MemoryGraphStore {
     const params: Array<string | number> = [];
     const visibility = visibilityClause(this.local.context);
     clauses.push(visibility.sql);
+    clauses.push("n.duplicate_of_memory_id IS NULL");
     params.push(...visibility.params);
     if (input.query?.trim()) {
       const terms = memorySearchTerms(input.query);
@@ -761,6 +857,8 @@ export class MemoryGraphStore {
     const from = this.locate(fromId);
     const to = this.locate(toId);
     if (!from || !to) throw new Error("Both memory edge nodes must belong to the current subject.");
+    this.requireCanonicalNode(from.node);
+    this.requireCanonicalNode(to.node);
     if (!nodeCanParticipateInActiveCatalog(from.node, this.catalog)
       || !nodeCanParticipateInActiveCatalog(to.node, this.catalog)) {
       throw new Error("Memory edge nodes from another catalog must be explicitly reclassified before linking.");
@@ -836,6 +934,7 @@ export class MemoryGraphStore {
       .prepare(
         `SELECT n.id FROM memory_nodes n
          WHERE n.subject_id = ? AND n.catalog_hash IS NOT NULL AND n.type = ? AND n.title_norm = ?
+           AND n.duplicate_of_memory_id IS NULL
          ORDER BY CASE WHEN n.catalog_hash = ? THEN 0 ELSE 1 END, n.updated_at DESC, n.id`,
       )
       .all(this.local.context.subjectId, type, titleNorm, this.catalog.hash) as Array<{ id?: unknown }>;
@@ -847,6 +946,12 @@ export class MemoryGraphStore {
       }
     }
     return null;
+  }
+
+  private requireCanonicalNode(node: MemoryNode): void {
+    if (node.duplicateOfMemoryId) {
+      throw new Error(`Memory node ${node.id} is marked as a duplicate of ${node.duplicateOfMemoryId}; update the canonical memory instead.`);
+    }
   }
 
   private requireCreatableType(typeOrAlias: string): ResearchProfileMemoryType {
@@ -1461,6 +1566,30 @@ export class MemoryGraphStore {
             database.exec(`ALTER TABLE app_server_reports ADD COLUMN triage_status TEXT NOT NULL DEFAULT 'editing'
               CHECK (triage_status IN ('editing', 'submitted', 'reviewing', 'rejected', 'accepted'));`);
           }
+        },
+      },
+      {
+        version: 17,
+        name: "workspace_history_duplicate_relationships",
+        up(database) {
+          if (!tableHasColumn(database, "memory_nodes", "duplicate_of_memory_id")) {
+            database.exec("ALTER TABLE memory_nodes ADD COLUMN duplicate_of_memory_id TEXT REFERENCES memory_nodes(id) ON DELETE RESTRICT;");
+          }
+          if (!tableHasColumn(database, "memory_nodes", "duplicate_marked_at")) {
+            database.exec("ALTER TABLE memory_nodes ADD COLUMN duplicate_marked_at TEXT;");
+          }
+          if (!tableHasColumn(database, "app_server_runbooks", "duplicate_of_runbook_id")) {
+            database.exec("ALTER TABLE app_server_runbooks ADD COLUMN duplicate_of_runbook_id TEXT REFERENCES app_server_runbooks(id) ON DELETE RESTRICT;");
+          }
+          if (!tableHasColumn(database, "app_server_runbooks", "duplicate_marked_at")) {
+            database.exec("ALTER TABLE app_server_runbooks ADD COLUMN duplicate_marked_at TEXT;");
+          }
+          database.exec(`
+            CREATE INDEX IF NOT EXISTS memory_nodes_duplicate_parent_idx
+              ON memory_nodes(subject_id, duplicate_of_memory_id, duplicate_marked_at);
+            CREATE INDEX IF NOT EXISTS app_server_runbooks_duplicate_parent_idx
+              ON app_server_runbooks(workspace_id, duplicate_of_runbook_id, duplicate_marked_at);
+          `);
         },
       },
     ]);
@@ -2414,6 +2543,7 @@ function edgeFromRow(row: Record<string, unknown>): MemoryEdge { return { fromId
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function jsonObject(value: unknown): Record<string, unknown> { if (typeof value !== "string") return {}; const parsed = JSON.parse(value) as unknown; return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; }
 function text(value: unknown): string { if (typeof value !== "string") throw new Error("Expected SQLite text value."); return value; }
+function requiredInputText(value: unknown, label: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string.`); return value.trim(); }
 function nullableText(value: unknown): string | null { if (value === null || value === undefined) return null; return text(value); }
 function number(value: unknown): number { if (typeof value !== "number") throw new Error("Expected SQLite number value."); return value; }
 

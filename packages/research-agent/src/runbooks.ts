@@ -84,10 +84,21 @@ export interface RunbookRecord {
   cellCount: number;
   revision: number;
   contentRevision: number;
+  duplicateOfRunbookId: string | null;
+  duplicateMarkedAt: string | null;
+  duplicateRunbooks: RunbookDuplicateSummary[];
   execution: RunbookExecutionMetrics;
   createdAt: string;
   updatedAt: string;
   authors: ModelAuthor[];
+}
+
+export interface RunbookDuplicateSummary {
+  id: string;
+  title: string;
+  purpose: string;
+  revision: number;
+  markedAt: string;
 }
 
 export interface RunbookPage extends RunbookRecord {
@@ -111,6 +122,8 @@ interface RunbookRow {
   size_bytes: number;
   revision: number;
   content_revision: number;
+  duplicate_of_runbook_id: string | null;
+  duplicate_marked_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -157,7 +170,7 @@ export class RunbookStore {
     const query = options.query?.trim().toLowerCase() ?? "";
     const limit = clampInteger(options.limit ?? 50, 1, 200);
     return (this.database
-      .prepare("SELECT * FROM app_server_runbooks WHERE workspace_id = ? ORDER BY updated_at DESC, id")
+      .prepare("SELECT * FROM app_server_runbooks WHERE workspace_id = ? AND duplicate_of_runbook_id IS NULL ORDER BY updated_at DESC, id")
       .all(this.context.workspaceId) as unknown as RunbookRow[])
       .filter((row) => !query || `${row.title}\n${row.purpose}`.toLowerCase().includes(query))
       .slice(0, limit)
@@ -177,6 +190,69 @@ export class RunbookStore {
       cells: notebook.cells.slice(offset, offset + limit).map((cell, index) =>
         notebookCellToRecord(cell, offset + index)),
     };
+  }
+
+  public markDuplicate(
+    id: string,
+    input: { expectedRevision: number; parentRunbookId: string; reason: string },
+    author?: ModelAuthor,
+  ): RunbookRecord {
+    const current = this.readRow(requiredText(id, "id", 200));
+    if (!current) throw new Error(`Runbook not found in this workspace: ${id}`);
+    if (current.revision !== input.expectedRevision) {
+      throw new Error(`Runbook revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
+    }
+    if (current.duplicate_of_runbook_id) {
+      throw new Error(`Runbook ${id} is already marked as a duplicate of ${current.duplicate_of_runbook_id}.`);
+    }
+    const parentRunbookId = requiredText(input.parentRunbookId, "Canonical parent runbook id", 200);
+    requiredText(input.reason, "Duplicate reason", 4_000);
+    if (parentRunbookId === id) throw new Error("A runbook cannot be marked as a duplicate of itself.");
+    const parent = this.readRow(parentRunbookId);
+    if (!parent) throw new Error(`Canonical parent runbook not found: ${parentRunbookId}.`);
+    if (parent.duplicate_of_runbook_id) {
+      throw new Error(`Canonical parent ${parentRunbookId} is itself a duplicate; choose its canonical parent instead.`);
+    }
+    const childCount = this.database.prepare(
+      "SELECT COUNT(*) AS count FROM app_server_runbooks WHERE duplicate_of_runbook_id = ?",
+    ).get(id) as { count?: unknown } | undefined;
+    if (Number(childCount?.count ?? 0) > 0) {
+      throw new Error(`Runbook ${id} owns duplicate runbooks; undo or reassign them before coalescing it.`);
+    }
+    const now = new Date().toISOString();
+    const nextRevision = current.revision + 1;
+    const result = this.database.prepare(`UPDATE app_server_runbooks SET
+      duplicate_of_runbook_id = ?, duplicate_marked_at = ?, updated_at = ?, revision = ?
+      WHERE id = ? AND workspace_id = ? AND revision = ? AND duplicate_of_runbook_id IS NULL`).run(
+      parentRunbookId, now, now, nextRevision, id, this.context.workspaceId, current.revision,
+    );
+    if (Number(result.changes) !== 1) throw new Error(`Runbook revision conflict for ${id}.`);
+    recordModelAuthorship(this.database, "runbook", id, nextRevision, author, now);
+    return this.toRecord(parent);
+  }
+
+  public undoDuplicate(
+    id: string,
+    input: { expectedRevision: number; reason: string },
+    author?: ModelAuthor,
+  ): RunbookRecord {
+    const current = this.readRow(requiredText(id, "id", 200));
+    if (!current) throw new Error(`Runbook not found in this workspace: ${id}`);
+    if (current.revision !== input.expectedRevision) {
+      throw new Error(`Runbook revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
+    }
+    if (!current.duplicate_of_runbook_id) throw new Error(`Runbook ${id} is not marked as a duplicate.`);
+    requiredText(input.reason, "Duplicate undo reason", 4_000);
+    const now = new Date().toISOString();
+    const nextRevision = current.revision + 1;
+    const result = this.database.prepare(`UPDATE app_server_runbooks SET
+      duplicate_of_runbook_id = NULL, duplicate_marked_at = NULL, updated_at = ?, revision = ?
+      WHERE id = ? AND workspace_id = ? AND revision = ? AND duplicate_of_runbook_id IS NOT NULL`).run(
+      now, nextRevision, id, this.context.workspaceId, current.revision,
+    );
+    if (Number(result.changes) !== 1) throw new Error(`Runbook revision conflict for ${id}.`);
+    recordModelAuthorship(this.database, "runbook", id, nextRevision, author, now);
+    return this.toRecord({ ...current, duplicate_of_runbook_id: null, duplicate_marked_at: null, updated_at: now, revision: nextRevision });
   }
 
   public create(input: {
@@ -260,6 +336,7 @@ export class RunbookStore {
     try {
       const row = this.readRow(id);
       if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
+      this.requireCanonical(row);
       if (row.revision !== input.expectedRevision) {
         throw new Error(`Runbook revision conflict for ${id}: expected ${input.expectedRevision}, found ${row.revision}.`);
       }
@@ -313,6 +390,7 @@ export class RunbookStore {
   public executionPlan(id: string, selection: RunbookExecutionSelection = {}): RunbookExecutionPlanCell[] {
     const row = this.readRow(requiredText(id, "id", 200));
     if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
+    this.requireCanonical(row);
     const cellId = optionalText(selection.cellId, "cellId", 200);
     const startCellId = optionalText(selection.startCellId, "startCellId", 200);
     const endCellId = optionalText(selection.endCellId, "endCellId", 200);
@@ -537,6 +615,7 @@ export class RunbookStore {
     try {
       const row = this.readRow(requiredText(id, "id", 200));
       if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
+      this.requireCanonical(row);
       const notebook = this.readNotebook(row);
       mutate(notebook);
       delete notebook.metadata.beale.status;
@@ -582,6 +661,12 @@ export class RunbookStore {
   }
 
   private toRecord(row: RunbookRow, knownCellCount?: number): RunbookRecord {
+    const duplicates = this.database.prepare(`SELECT id, title, purpose, revision, duplicate_marked_at
+      FROM app_server_runbooks
+      WHERE workspace_id = ? AND duplicate_of_runbook_id = ?
+      ORDER BY duplicate_marked_at, id`).all(this.context.workspaceId, row.id) as Array<{
+        id: string; title: string; purpose: string; revision: number; duplicate_marked_at: string;
+      }>;
     return {
       id: row.id,
       workspaceId: row.workspace_id,
@@ -595,11 +680,26 @@ export class RunbookStore {
       cellCount: knownCellCount ?? this.readNotebook(row).cells.length,
       revision: row.revision,
       contentRevision: row.content_revision,
+      duplicateOfRunbookId: row.duplicate_of_runbook_id,
+      duplicateMarkedAt: row.duplicate_marked_at,
+      duplicateRunbooks: duplicates.map((duplicate) => ({
+        id: duplicate.id,
+        title: duplicate.title,
+        purpose: duplicate.purpose,
+        revision: duplicate.revision,
+        markedAt: duplicate.duplicate_marked_at,
+      })),
       execution: this.readExecutionMetrics(row.id),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       authors: modelAuthorsForResource(this.database, "runbook", row.id),
     };
+  }
+
+  private requireCanonical(row: RunbookRow): void {
+    if (row.duplicate_of_runbook_id) {
+      throw new Error(`Runbook ${row.id} is marked as a duplicate of ${row.duplicate_of_runbook_id}; update or run the canonical runbook instead.`);
+    }
   }
 
   private readExecutionMetrics(runbookId: string): RunbookExecutionMetrics {

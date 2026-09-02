@@ -17,6 +17,7 @@ import {
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
   createWorkspaceHistorySearchTool,
+  createWorkspaceHistoryDuplicateTools,
   createCampaignTrackTools,
   createFindingTools,
   FindingStore,
@@ -4104,12 +4105,16 @@ async function createRuntimeConfig(args: {
     cleanupCallbacks.push(async () => runbooks.close());
   }
   if (memoryActive || runbookStore) {
-    const historySearchTool = createWorkspaceHistorySearchTool({
+    const historyToolOptions = {
       ...(memoryActive ? { memoryStore: memoryGraph, claimStore: findingStore } : {}),
       ...(runbookStore ? { runbookStore } : {}),
-    });
-    executableTools.push(historySearchTool);
-    toolDescriptors.push(historySearchTool.descriptor);
+    };
+    const historyTools = [
+      createWorkspaceHistorySearchTool(historyToolOptions),
+      ...createWorkspaceHistoryDuplicateTools(historyToolOptions),
+    ];
+    executableTools.push(...historyTools);
+    toolDescriptors.push(...historyTools.map((tool) => tool.descriptor));
   }
   if (resolvedResearchProfile.profile.capabilities.reportsEnabled === true
     && (resolvedResearchProfile.profile.id !== "security-research" || memoryActive)) {
@@ -4166,6 +4171,9 @@ async function createRuntimeConfig(args: {
     createdAt: node.createdAt,
     updatedAt: node.updatedAt,
     revision: node.revision,
+    duplicateOfMemoryId: node.duplicateOfMemoryId,
+    duplicateMarkedAt: node.duplicateMarkedAt,
+    duplicateMemories: [...node.duplicateMemories],
     authors: [],
   }));
   const campaignReplayMetrics = campaignTrackStore

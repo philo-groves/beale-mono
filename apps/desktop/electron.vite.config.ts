@@ -10,7 +10,13 @@ export default defineConfig({
         '@main': resolve(__dirname, 'src/main')
       }
     },
-    plugins: [externalizeDepsPlugin({ exclude: ['@beale/app-server-runtime', '@beale/research-agent'] })],
+    plugins: [externalizeDepsPlugin({
+      exclude: [
+        '@beale/app-server-runtime',
+        '@beale/research-agent',
+        '@beale/research-agent/legacy-compatibility'
+      ]
+    })],
     build: {
       rollupOptions: {
         input: {

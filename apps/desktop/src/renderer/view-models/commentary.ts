@@ -407,6 +407,8 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'memory.save': { singular: 'Saving a Memory', plural: (count) => `Saving ${count} Memories` },
   'memory.search': { singular: 'Searching Memory', plural: (count) => `Searching Memory with ${count} Queries` },
   'history.search': { singular: 'Searching Workspace History', plural: (count) => `Searching Workspace History with ${count} Queries` },
+  'history.mark_duplicate': { singular: 'Coalescing a Workspace History Duplicate', plural: (count) => `Coalescing ${count} Workspace History Duplicates` },
+  'history.undo_duplicate': { singular: 'Restoring a Workspace History Record', plural: (count) => `Restoring ${count} Workspace History Records` },
   'repository.search': { singular: 'Searching the Repository', plural: (count) => `Running ${count} Repository Searches` },
   'runbook.append': { singular: 'Updating a Runbook', plural: (count) => `Updating ${count} Runbooks` },
   'runbook.create': { singular: 'Creating a Runbook', plural: (count) => `Creating ${count} Runbooks` },
@@ -498,7 +500,8 @@ function commentaryStructuredToolCallLabel(
   outputValue: unknown,
   detail: RunDetail
 ): string | null {
-  return commentaryRunbookCallLabel(toolName, inputValue, outputValue, detail)
+  return commentaryHistoryDuplicateCallLabel(toolName, inputValue)
+    ?? commentaryRunbookCallLabel(toolName, inputValue, outputValue, detail)
     ?? commentaryLeadListCallLabel(toolName, inputValue)
     ?? commentaryResearchCatalogCallLabel(toolName, inputValue)
     ?? commentarySubagentCallLabel(toolName, inputValue)
@@ -693,6 +696,15 @@ function commentaryHistorySearchUsageText(
   return toolName === 'history.search'
     ? `Searching workspace history with ${normalizedCount} queries`
     : `Searching memory with ${normalizedCount} queries`;
+}
+
+function commentaryHistoryDuplicateCallLabel(toolName: string, inputValue: unknown): string | null {
+  if (toolName !== 'history.mark_duplicate' && toolName !== 'history.undo_duplicate') return null;
+  const input = unknownRecord(inputValue);
+  const type = firstStringValue(input, ['type']) ?? 'history record';
+  return toolName === 'history.mark_duplicate'
+    ? `Coalescing duplicate ${type}`
+    : `Restoring duplicate ${type}`;
 }
 
 function commentaryHistorySearchCallLabel(toolName: 'history.search' | 'memory.search', inputValue: unknown): string {

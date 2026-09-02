@@ -41,8 +41,8 @@ import type {
   RunMessageDetailRequest,
   SessionTranscriptSearchInput,
   MemoryTypeDescriptions,
-  MarkClaimDuplicateInput,
-  UndoClaimDuplicateInput,
+  MarkHistoryDuplicateInput,
+  UndoHistoryDuplicateInput,
   ShellOptions,
   StartRunInput,
   SteeringAction,
@@ -943,14 +943,14 @@ function registerIpc(): void {
       workspaceService.restoreMemoryDreamingChange(changeId)
     )
   );
-  ipcMain.handle(IPC_CHANNELS.markClaimDuplicate, (_event, input: MarkClaimDuplicateInput) =>
-    timedMainIpcAsync('markClaimDuplicate', { claim: shortMetricId(input.claimId) }, () =>
-      workspaceService.markClaimDuplicate(input)
+  ipcMain.handle(IPC_CHANNELS.markHistoryDuplicate, (_event, input: MarkHistoryDuplicateInput) =>
+    timedMainIpcAsync('markHistoryDuplicate', { type: input.type, record: shortMetricId(input.id) }, () =>
+      workspaceService.markHistoryDuplicate(input)
     )
   );
-  ipcMain.handle(IPC_CHANNELS.undoClaimDuplicate, (_event, input: UndoClaimDuplicateInput) =>
-    timedMainIpcAsync('undoClaimDuplicate', { claim: shortMetricId(input.claimId) }, () =>
-      workspaceService.undoClaimDuplicate(input)
+  ipcMain.handle(IPC_CHANNELS.undoHistoryDuplicate, (_event, input: UndoHistoryDuplicateInput) =>
+    timedMainIpcAsync('undoHistoryDuplicate', { type: input.type, record: shortMetricId(input.id) }, () =>
+      workspaceService.undoHistoryDuplicate(input)
     )
   );
   ipcMain.handle(IPC_CHANNELS.getAppServerToolingSummary, () =>

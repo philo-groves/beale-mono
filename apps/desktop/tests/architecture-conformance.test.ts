@@ -55,16 +55,25 @@ describe('architecture conformance', () => {
     expect(findPatternHits(files, forbidden)).toEqual([]);
   });
 
-  it('keeps authoritative SQL mutation inside the persistence service', () => {
-    const persistenceFiles = new Set([
-      'src/main/database.ts',
-      'src/main/databaseMigrations.ts',
-      'src/main/workspaceRegistry.ts'
-    ]);
-    const files = filesUnder('src').filter(isSourceFile).filter((path) => !persistenceFiles.has(normalizePath(path)));
+  it('keeps all database access out of the Desktop application', () => {
+    const files = filesUnder('src').filter(isSourceFile);
     const forbiddenSql = [/\bINSERT INTO\b/i, /\bCREATE TABLE\b/i, /\bDELETE FROM\b/i, /\bALTER TABLE\b/i, /\bUPDATE\s+[a-z_]+\s+SET\b/i, /\bPRAGMA\b/i];
 
+    expect(findPatternHits(files, [/node:sqlite|new\s+DatabaseSync\s*\(/])).toEqual([]);
     expect(findPatternHits(files, forbiddenSql)).toEqual([]);
+  });
+
+  it('synchronizes the registry from app-server storage without serializing a workspace snapshot', () => {
+    const workspaceService = readFileSync(join(ROOT, 'src/main/workspaceService.ts'), 'utf8');
+    const methodStart = workspaceService.indexOf('private syncWorkspaceRegistryForRuntime(');
+    const methodEnd = workspaceService.indexOf('\n  private ', methodStart + 1);
+    const method = workspaceService.slice(methodStart, methodEnd);
+    const registryClient = readFileSync(join(ROOT, 'src/main/workspaceRegistry.ts'), 'utf8');
+
+    expect(methodStart).toBeGreaterThan(-1);
+    expect(method).toContain('syncWorkspaceFromStorage({');
+    expect(method).not.toContain('snapshotForRuntime(');
+    expect(registryClient).not.toContain("this.invoke<void>('syncWorkspace', [snapshot");
   });
 
   it('keeps host subprocess use limited to auth, device, editor-launch, and app-server host-agent boundaries', () => {
@@ -111,11 +120,6 @@ describe('architecture conformance', () => {
       'src/main/appServerSessionBoundary.ts',
       'src/main/researchProfileService.ts'
     ]);
-    // The Beale database still owns workbench-only records during the remaining
-    // migration. All knowledge features use the app-server protocol boundary.
-    const legacyDirectAccessFiles = new Set([
-      'src/main/database.ts'
-    ]);
     const patterns = [
       /memory\.sqlite/,
       /APP_SERVER_DATABASE_PATH/,
@@ -129,14 +133,10 @@ describe('architecture conformance', () => {
     const hits = findPatternHits(filesUnder('src/main').filter(isSourceFile), patterns);
     const unexpected = hits.filter((hit) => {
       const path = normalizePath(hit.path);
-      return !cliBoundaryFiles.has(path) && !legacyDirectAccessFiles.has(path);
+      return !cliBoundaryFiles.has(path);
     });
-    const observedLegacyFiles = new Set(hits
-      .map((hit) => normalizePath(hit.path))
-      .filter((path) => legacyDirectAccessFiles.has(path)));
 
     expect(unexpected).toEqual([]);
-    expect(observedLegacyFiles).toEqual(legacyDirectAccessFiles);
     for (const path of cliBoundaryFiles) {
       const content = readFileSync(join(ROOT, path), 'utf8');
       expect(content).not.toMatch(/node:sqlite|new\s+DatabaseSync\s*\(/);
@@ -191,9 +191,10 @@ describe('architecture conformance', () => {
     expect(packageImports.filter(({ specifier }) => specifier !== '@beale/research-agent/legacy-compatibility')).toEqual([]);
 
     const electronViteConfig = readFileSync(join(ROOT, 'electron.vite.config.ts'), 'utf8');
-    expect(electronViteConfig).toMatch(
-      /externalizeDepsPlugin\(\{\s*exclude:\s*\[['"]@beale\/app-server-runtime['"],\s*['"]@beale\/research-agent['"]\]\s*\}\)/
-    );
+    expect(electronViteConfig).toMatch(/externalizeDepsPlugin\(\{/);
+    expect(electronViteConfig).toContain("'@beale/app-server-runtime'");
+    expect(electronViteConfig).toContain("'@beale/research-agent'");
+    expect(electronViteConfig).toContain("'@beale/research-agent/legacy-compatibility'");
   });
 
   it('keeps retired graph, semantic indexing, VM state, and duplicate protocol code out of Beale surfaces', () => {

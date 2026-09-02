@@ -75,6 +75,7 @@ enum BealeAppServerContract {
         "memory.notifications.v3",
         "knowledge.claims.v2",
         "knowledge.claim-deduplication.v1",
+        "knowledge.history-deduplication.v1",
         "workspace.goal-suggestions.v1",
         "workspace.prompt-expansion.v1"
     ]
@@ -268,6 +269,16 @@ struct AppServerWorkspaceMemoryNode: Decodable, Identifiable, Sendable {
     let createdAt: String
     let updatedAt: String
     let revision: Int
+    let duplicateMemories: [AppServerWorkspaceMemoryDuplicate]?
+}
+
+struct AppServerWorkspaceMemoryDuplicate: Decodable, Identifiable, Sendable {
+    let id: String
+    let type: String
+    let title: String
+    let status: String
+    let revision: Int
+    let markedAt: String
 }
 
 struct AppServerMemoryNotificationFeed: Decodable, Sendable {
@@ -545,10 +556,11 @@ struct AppServerResearchSuggestionOperationInput: Encodable, Sendable {
     let refresh: Bool
 }
 
-struct AppServerClaimDuplicateOperationInput: Encodable, Sendable {
+struct AppServerHistoryDuplicateOperationInput: Encodable, Sendable {
     let workspaceId: String
-    let claimId: String
-    let parentClaimId: String?
+    let type: String
+    let id: String
+    let parentId: String?
     let expectedRevision: Int
 }
 

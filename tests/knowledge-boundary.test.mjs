@@ -87,6 +87,70 @@ test("app-server exposes reversible canonical claim deduplication", async () => 
   }
 });
 
+test("app-server exposes unified memory and runbook deduplication", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-history-deduplication-boundary-"));
+  const databasePath = join(root, "memory.sqlite");
+  const artifactDirectoryPath = join(root, "artifacts");
+  const context = {
+    workspaceId: "workspace_history_deduplication",
+    workspaceName: "History deduplication",
+    subjectId: "subject_history_deduplication",
+    subjectName: "History deduplication",
+  };
+  const graph = new MemoryGraphStore({ databasePath, context });
+  const runbooks = new RunbookStore(
+    databasePath,
+    ensureResearchStorageLayout(createResearchStorageLayout({ databasePath, artifactDirectoryPath })),
+    context,
+  );
+  try {
+    const parentMemory = graph.save({ type: "invariant", title: "Canonical parser boundary" });
+    const duplicateMemory = graph.save({ type: "invariant", title: "Repeated parser boundary" });
+    const parentRunbook = runbooks.create({
+      title: "Canonical parser procedure",
+      purpose: "Exercise the parser boundary.",
+    }).runbook;
+    const duplicateRunbook = runbooks.create({
+      title: "Repeated parser procedure",
+      purpose: "Exercise the same parser boundary.",
+    }).runbook;
+
+    for (const item of [
+      { type: "memory", id: duplicateMemory.id, parentId: parentMemory.id, expectedRevision: duplicateMemory.revision },
+      { type: "runbook", id: duplicateRunbook.id, parentId: parentRunbook.id, expectedRevision: duplicateRunbook.revision },
+    ]) {
+      await invokeAppServerProtocol("history.mark_duplicate", {
+        args: [],
+        input: { ...context, ...item, reason: "Same underlying workspace-history record." },
+        storage: { databasePath, artifactDirectoryPath },
+      });
+    }
+
+    assert.deepEqual(graph.search({ scope: "workspace", limit: 20 }).map((node) => node.id), [parentMemory.id]);
+    assert.equal(graph.get(parentMemory.id).duplicateMemories[0].id, duplicateMemory.id);
+    assert.deepEqual(runbooks.list({ limit: 20 }).map((runbook) => runbook.id), [parentRunbook.id]);
+    assert.equal(runbooks.get(parentRunbook.id).duplicateRunbooks[0].id, duplicateRunbook.id);
+
+    for (const item of [
+      { type: "memory", id: duplicateMemory.id },
+      { type: "runbook", id: duplicateRunbook.id },
+    ]) {
+      await invokeAppServerProtocol("history.undo_duplicate", {
+        args: [],
+        input: { ...context, ...item, expectedRevision: 2, reason: "The records differ after review." },
+        storage: { databasePath, artifactDirectoryPath },
+      });
+    }
+
+    assert.equal(graph.search({ scope: "workspace", limit: 20 }).length, 2);
+    assert.equal(runbooks.list({ limit: 20 }).length, 2);
+  } finally {
+    runbooks.close();
+    graph.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("memory summary does not mutate finding staleness", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-summary-staleness-"));
   const databasePath = join(root, "memory.sqlite");

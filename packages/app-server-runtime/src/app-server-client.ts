@@ -223,6 +223,8 @@ function operationForArguments(argv: readonly string[]): AppServerProtocolOperat
   const [group, command] = argv;
   if (group === 'protocol' && command === 'describe') return 'protocol.describe';
   if (group === 'complete') return 'provider.complete';
+  if (group === 'workspace' && command === 'state') return 'workspace.state';
+  if (group === 'registry' && command === 'state') return 'registry.state';
   const normalized = command?.replaceAll('-', '_');
   if (group === 'session' && normalized) return `session.${normalized}` as AppServerProtocolOperation;
   if (group === 'knowledge') {

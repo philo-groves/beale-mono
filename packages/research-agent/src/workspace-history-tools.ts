@@ -26,6 +26,8 @@ export interface WorkspaceHistorySearchToolOptions {
   runbookStore?: RunbookStore;
 }
 
+export type WorkspaceHistoryRecordType = "claim" | "memory" | "runbook";
+
 interface HistoryCandidate {
   key: string;
   revision: number;
@@ -81,6 +83,79 @@ export function createWorkspaceHistorySearchTool(
   );
 }
 
+export function createWorkspaceHistoryDuplicateTools(
+  options: WorkspaceHistorySearchToolOptions,
+): ResearchExecutableTool[] {
+  const availableTypes = [
+    ...(options.claimStore ? ["claim" as const] : []),
+    ...(options.memoryStore ? ["memory" as const] : []),
+    ...(options.runbookStore ? ["runbook" as const] : []),
+  ];
+  if (availableTypes.length === 0) throw new Error("Workspace history duplicate tools require at least one history store.");
+  const common = {
+    type: "object",
+    required: ["type", "id", "expectedRevision", "reason"],
+    properties: {
+      type: { type: "string", enum: availableTypes, description: "The workspace-history record type." },
+      id: { type: "string", description: "The duplicate record." },
+      expectedRevision: { type: "number", minimum: 1 },
+      reason: { type: "string", description: "Why the records are or are not duplicates." },
+    },
+  };
+  return [
+    duplicateTool(
+      "history.mark_duplicate",
+      "history_mark_duplicate",
+      "Coalesce a duplicate claim, memory, or runbook under the strongest canonical record of the same type. The duplicate disappears from normal catalogs and history.search, remains visible at the bottom of the canonical record's details, and can be restored. Coalesce only records with the same underlying meaning or procedure; related components and useful variants are not duplicates.",
+      {
+        ...common,
+        required: [...common.required, "parentId"],
+        properties: {
+          ...common.properties,
+          parentId: { type: "string", description: "The canonical record that should remain visible." },
+        },
+      },
+      (input, context) => mutateDuplicate(options, input, false, context),
+    ),
+    duplicateTool(
+      "history.undo_duplicate",
+      "history_undo_duplicate",
+      "Restore a claim, memory, or runbook that was incorrectly marked as a duplicate. The record becomes visible in normal catalogs and history.search again.",
+      common,
+      (input, context) => mutateDuplicate(options, input, true, context),
+    ),
+  ];
+}
+
+function mutateDuplicate(
+  options: WorkspaceHistorySearchToolOptions,
+  input: Record<string, unknown>,
+  undo: boolean,
+  context?: ResearchToolExecutionContext,
+): unknown {
+  const type = historyRecordType(input.type);
+  const id = requiredText(input.id, "id");
+  const expectedRevision = requiredPositiveInteger(input.expectedRevision, "expectedRevision");
+  const reason = requiredText(input.reason, "reason");
+  const parentId = undo ? null : requiredText(input.parentId, "parentId");
+  if (type === "claim") {
+    if (!options.claimStore) throw new Error("Claim history is unavailable in this research profile.");
+    return undo
+      ? options.claimStore.undoDuplicate(id, { expectedRevision, reason }, context?.modelAuthor, context?.agentId)
+      : options.claimStore.markDuplicate(id, { expectedRevision, parentClaimId: parentId!, reason }, context?.modelAuthor, context?.agentId);
+  }
+  if (type === "memory") {
+    if (!options.memoryStore) throw new Error("Memory history is unavailable in this research profile.");
+    return undo
+      ? options.memoryStore.undoDuplicate(id, { expectedRevision, reason }, context?.modelAuthor)
+      : options.memoryStore.markDuplicate(id, { expectedRevision, parentMemoryId: parentId!, reason }, context?.modelAuthor);
+  }
+  if (!options.runbookStore) throw new Error("Runbook history is unavailable in this research profile.");
+  return undo
+    ? options.runbookStore.undoDuplicate(id, { expectedRevision, reason }, context?.modelAuthor)
+    : options.runbookStore.markDuplicate(id, { expectedRevision, parentRunbookId: parentId!, reason }, context?.modelAuthor);
+}
+
 function searchWorkspaceHistory(
   options: WorkspaceHistorySearchToolOptions,
   input: Record<string, unknown>,
@@ -119,6 +194,7 @@ function searchWorkspaceHistory(
           summary: truncateText(node.summary), status: node.status, confidence: node.confidence,
           ...(node.tags.length ? { tags: node.tags.slice(0, MAX_TAGS) } : {}),
           evidenceCount: node.evidence.length,
+          duplicateCount: node.duplicateMemories.length,
           ...(node.evidence.length ? { evidenceRefs: node.evidence.slice(0, MAX_EVIDENCE_REFS).map((evidence) => ({
             id: evidence.id, kind: evidence.kind,
             ...(evidence.pathBase ? { pathBase: evidence.pathBase } : {}),
@@ -179,6 +255,7 @@ function searchWorkspaceHistory(
           detail: "summary", type: "runbook", id: runbook.id, title: runbook.title,
           purpose: truncateText(runbook.purpose), cellCount: runbook.cellCount,
           contentRevision: runbook.contentRevision, execution: runbook.execution,
+          duplicateCount: runbook.duplicateRunbooks.length,
           updatedAt: runbook.updatedAt, revision: runbook.revision,
         },
       });
@@ -218,6 +295,27 @@ function tool(
 ): ResearchExecutableTool {
   return {
     descriptor: { name, transportName, description, actionClasses: ["recall"], sideEffects: "read", requiredPermissions: ["memory:read"], inputSchema: parameters },
+    parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
+    async execute(action: ResearchToolAction, context?: ResearchToolExecutionContext): Promise<ResearchToolExecutionResult> {
+      const startedAt = nowIso();
+      try {
+        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: `${name} completed.`, output: run(isRecord(action.input) ? action.input : {}, context), followUpActions: [] };
+      } catch (error) {
+        return { action, status: "error", startedAt, completedAt: nowIso(), summary: `${name} failed.`, error: { message: error instanceof Error ? error.message : String(error) }, followUpActions: [] };
+      }
+    },
+  };
+}
+
+function duplicateTool(
+  name: string,
+  transportName: string,
+  description: string,
+  parameters: Record<string, unknown>,
+  run: (input: Record<string, unknown>, context?: ResearchToolExecutionContext) => unknown,
+): ResearchExecutableTool {
+  return {
+    descriptor: { name, transportName, description, actionClasses: ["synthesize"], sideEffects: "write", requiredPermissions: ["memory:write"], inputSchema: parameters },
     parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action: ResearchToolAction, context?: ResearchToolExecutionContext): Promise<ResearchToolExecutionResult> {
       const startedAt = nowIso();
@@ -274,6 +372,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function requiredText(value: unknown, label: string): string {
+  const result = text(value);
+  if (!result) throw new Error(`${label} must be a non-empty string.`);
+  return result;
+}
+
+function requiredPositiveInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return value;
+}
+
+function historyRecordType(value: unknown): WorkspaceHistoryRecordType {
+  if (value === "claim" || value === "memory" || value === "runbook") return value;
+  throw new Error("type must be claim, memory, or runbook.");
 }
 
 function strings(value: unknown): string[] {

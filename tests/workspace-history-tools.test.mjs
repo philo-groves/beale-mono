@@ -8,6 +8,7 @@ import {
   createResearchStorageLayout,
   createResearchToolRegistry,
   createWorkspaceHistorySearchTool,
+  createWorkspaceHistoryDuplicateTools,
   ensureResearchStorageLayout,
   MemoryGraphStore,
   ResearchClaimStore,
@@ -107,6 +108,77 @@ test("workspace history search unifies canonical claims, memories, and runbooks 
     });
     assert.equal(unchanged.result.output.unchanged, true);
     assert.deepEqual(unchanged.result.output.results, []);
+  } finally {
+    runbooks.close();
+    claims.close();
+    memory.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("workspace history duplicate tools coalesce and restore memories and runbooks", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "beale-workspace-history-deduplication-"));
+  const context = {
+    sessionId: "session_history_deduplication",
+    workspaceId: "workspace_history_deduplication",
+    workspaceName: "History deduplication",
+    subjectId: "subject_history_deduplication",
+    subjectName: "History deduplication",
+  };
+  const memory = new MemoryGraphStore({ workspaceRoot, context });
+  const claims = new ResearchClaimStore(memory);
+  const runbooks = new RunbookStore(
+    memory.databasePath,
+    ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot })),
+    context,
+  );
+  try {
+    const parentMemory = memory.save({ type: "invariant", title: "Canonical parser boundary" });
+    const duplicateMemory = memory.save({ type: "invariant", title: "Repeated parser boundary" });
+    const parentRunbook = runbooks.create({ title: "Canonical parser procedure", purpose: "Exercise the parser boundary." }).runbook;
+    const duplicateRunbook = runbooks.create({ title: "Repeated parser procedure", purpose: "Exercise the same parser boundary." }).runbook;
+    const registry = createResearchToolRegistry([
+      createWorkspaceHistorySearchTool({ memoryStore: memory, claimStore: claims, runbookStore: runbooks }),
+      ...createWorkspaceHistoryDuplicateTools({ memoryStore: memory, claimStore: claims, runbookStore: runbooks }),
+    ]);
+    assert.deepEqual(
+      registry.listDescriptors().map((descriptor) => descriptor.name),
+      ["history.search", "history.mark_duplicate", "history.undo_duplicate"],
+    );
+
+    for (const item of [
+      { type: "memory", id: duplicateMemory.id, parentId: parentMemory.id, revision: duplicateMemory.revision },
+      { type: "runbook", id: duplicateRunbook.id, parentId: parentRunbook.id, revision: duplicateRunbook.revision },
+    ]) {
+      const result = await registry.execute({
+        id: `mark_${item.type}`,
+        actionClass: "synthesize",
+        toolName: "history.mark_duplicate",
+        input: { type: item.type, id: item.id, parentId: item.parentId, expectedRevision: item.revision, reason: "Same underlying record." },
+      });
+      assert.equal(result.result.status, "complete");
+    }
+    assert.deepEqual(memory.search({ scope: "workspace", limit: 20 }).map((node) => node.id), [parentMemory.id]);
+    assert.equal(memory.get(parentMemory.id).duplicateMemories[0].id, duplicateMemory.id);
+    assert.deepEqual(runbooks.list({ limit: 20 }).map((runbook) => runbook.id), [parentRunbook.id]);
+    assert.equal(runbooks.get(parentRunbook.id).duplicateRunbooks[0].id, duplicateRunbook.id);
+    assert.throws(() => memory.correct(duplicateMemory.id, 2, { summary: "Hidden edit" }), /canonical memory/);
+    assert.throws(() => runbooks.append({ id: duplicateRunbook.id, expectedRevision: 2, cells: [{ kind: "markdown", source: "Hidden edit" }] }), /canonical runbook/);
+
+    for (const item of [
+      { type: "memory", id: duplicateMemory.id },
+      { type: "runbook", id: duplicateRunbook.id },
+    ]) {
+      const result = await registry.execute({
+        id: `undo_${item.type}`,
+        actionClass: "synthesize",
+        toolName: "history.undo_duplicate",
+        input: { type: item.type, id: item.id, expectedRevision: 2, reason: "The records differ after review." },
+      });
+      assert.equal(result.result.status, "complete");
+    }
+    assert.equal(memory.search({ scope: "workspace", limit: 20 }).length, 2);
+    assert.equal(runbooks.list({ limit: 20 }).length, 2);
   } finally {
     runbooks.close();
     claims.close();

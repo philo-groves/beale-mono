@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { resolveAppServerProtocolInvocation } from './appServerInvocation';
@@ -767,38 +768,71 @@ export function restoreAppServerMemoryDreamingChange(
   );
 }
 
-export async function markAppServerClaimDuplicate(
+export interface AppServerWorkspaceStateInput {
+  workspacePath: string;
+  workspaceId?: string;
+  researchKitId?: string;
+  artifactRoot: string;
+  databasePath: string;
+  artifactDirectoryPath: string;
+  action: string;
+  args?: unknown[];
+}
+
+export function invokeAppServerWorkspaceState<T>(
+  input: AppServerWorkspaceStateInput,
+  storage: AppServerSessionStorage,
+): T {
+  return invokeWithJsonInput<T>('workspace.state', ['workspace', 'state'], input, storage).result;
+}
+
+export function invokeAppServerRegistryState<T>(
+  registryDirectory: string,
+  action: string,
+  args: readonly unknown[] = [],
+): T {
+  return invokeWithJsonInput<T>(
+    'registry.state',
+    ['registry', 'state'],
+    { registryDirectory, action, args: [...args] },
+    null,
+  ).result;
+}
+
+export async function markAppServerHistoryDuplicate(
   input: {
     workspaceId: string;
     workspaceName: string;
     subjectId: string;
     subjectName: string;
-    claimId: string;
-    parentClaimId: string;
+    type: 'claim' | 'memory' | 'runbook';
+    id: string;
+    parentId: string;
     expectedRevision: number;
   },
   storage: AppServerSessionStorage
 ): Promise<void> {
   await invokeAppServerOperation({
-    operation: 'claim.mark_duplicate',
+    operation: 'history.mark_duplicate',
     input,
     ...(storage.profileId ? { profileId: storage.profileId } : {})
   });
 }
 
-export async function undoAppServerClaimDuplicate(
+export async function undoAppServerHistoryDuplicate(
   input: {
     workspaceId: string;
     workspaceName: string;
     subjectId: string;
     subjectName: string;
-    claimId: string;
+    type: 'claim' | 'memory' | 'runbook';
+    id: string;
     expectedRevision: number;
   },
   storage: AppServerSessionStorage
 ): Promise<void> {
   await invokeAppServerOperation({
-    operation: 'claim.undo_duplicate',
+    operation: 'history.undo_duplicate',
     input,
     ...(storage.profileId ? { profileId: storage.profileId } : {})
   });
@@ -1057,7 +1091,7 @@ export function invokeAppServerCliProtocol<T>(
   const result = spawnSync(invocation.command, [...invocation.prefixArgs, ...args, '--request-id', requestId], {
     cwd: invocation.cwd,
     encoding: 'utf8',
-    env: protocolEnvironment(options.env),
+    env: protocolEnvironment(options.env, invocation.usesNodeRuntime),
     timeout: options.timeoutMs ?? 30_000,
     maxBuffer: APP_SERVER_PROTOCOL_MAX_STDOUT_BYTES,
     windowsHide: true
@@ -1094,9 +1128,18 @@ function invokeWithJsonInput<T>(
   const inputPath = join(directory, 'input.json');
   try {
     writeFileSync(inputPath, `${JSON.stringify(input)}\n`, { encoding: 'utf8', mode: 0o600 });
-    return invokeAppServerCliProtocol<T>(operation, [...args, '--input', inputPath, '--json'], {
+    const operationArgs = [...args, '--input', inputPath, '--json'];
+    if ((operation === 'workspace.state' || operation === 'registry.state') && existsSync(stateDiscoveryPath())) {
+      try {
+        return invokeStateOperationThroughHost<T>(operation, operationArgs, input, directory);
+      } catch {
+        // Let the normal client bootstrap or replace an unavailable host.
+      }
+    }
+    const result = invokeAppServerCliProtocol<T>(operation, operationArgs, {
       ...(storage ? { env: storageEnvironment(storage) } : {})
     });
+    return result;
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1203,12 +1246,13 @@ function safeProtocolDetail(value: unknown): string {
     .slice(-2_000);
 }
 
-function protocolEnvironment(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function protocolEnvironment(overrides?: NodeJS.ProcessEnv, usesNodeRuntime = false): NodeJS.ProcessEnv {
   return {
     ...process.env,
     NO_COLOR: process.env.NO_COLOR ?? '1',
     NODE_NO_WARNINGS: '1',
-    ...overrides
+    ...overrides,
+    ...(usesNodeRuntime ? { ELECTRON_RUN_AS_NODE: '1' } : {})
   };
 }
 
@@ -1384,6 +1428,91 @@ function validFindingSummary(value: unknown): boolean {
     && value.authors.every((author) => isPlainRecord(author)
       && nonEmptyText(author.provider)
       && nonEmptyText(author.model));
+}
+
+let stateTransportWorker: Worker | null = null;
+let stateTransportRequestId = 0;
+
+function invokeStateOperationThroughHost<T>(
+  operation: string,
+  args: readonly string[],
+  input: unknown,
+  directory: string,
+): AppServerProtocolSuccess<T> {
+  const worker = stateTransportWorker ??= createStateTransportWorker();
+  const requestId = `beale-state-${++stateTransportRequestId}`;
+  const responsePath = join(directory, 'response.json');
+  const signalBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const signal = new Int32Array(signalBuffer);
+  worker.postMessage({
+    requestId,
+    operation,
+    args,
+    inputJson: JSON.stringify(input),
+    responsePath,
+    signalBuffer,
+    discoveryPath: stateDiscoveryPath(),
+  });
+  const waitResult = Atomics.wait(signal, 0, 0, 30_000);
+  if (waitResult === 'timed-out') throw new Error(`app-server ${operation} timed out.`);
+  const response = JSON.parse(readFileSync(responsePath, 'utf8')) as {
+    requestId?: unknown;
+    status?: unknown;
+    payload?: unknown;
+    error?: unknown;
+  };
+  if (response.requestId !== requestId) throw new Error(`app-server ${operation} response correlation failed.`);
+  if (typeof response.error === 'string') throw new Error(response.error);
+  if (typeof response.status !== 'number' || !response.payload || typeof response.payload !== 'object') {
+    throw new Error(`app-server ${operation} returned an invalid hosted response.`);
+  }
+  const payload = response.payload as { result?: unknown; error?: string | { code?: unknown; message?: unknown } };
+  if (response.status < 200 || response.status >= 300) {
+    const structured = payload.error && typeof payload.error === 'object' ? payload.error : null;
+    const message = structured && typeof structured.message === 'string'
+      ? structured.message
+      : typeof payload.error === 'string' ? payload.error : `HTTP ${response.status}`;
+    throw new Error(`app-server ${operation} failed: ${message}`);
+  }
+  return appServerProtocolSuccess(operation as AppServerProtocolOperation, payload.result as T, requestId);
+}
+
+function stateDiscoveryPath(): string {
+  return process.env.BEALE_APP_SERVER_STATE_FILE?.trim() || join(homedir(), '.beale', 'app-server.json');
+}
+
+function createStateTransportWorker(): Worker {
+  const worker = new Worker(`
+    const { parentPort } = require('node:worker_threads');
+    const { readFileSync, writeFileSync } = require('node:fs');
+    parentPort.on('message', async (message) => {
+      const signal = new Int32Array(message.signalBuffer);
+      let response;
+      try {
+        const discovery = JSON.parse(readFileSync(message.discoveryPath, 'utf8'));
+        const baseUrl = String(discovery.localUrl || discovery.url || '').trim();
+        const request = await fetch(baseUrl + '/v1/operations', {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + discovery.operatorToken,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ operation: message.operation, args: message.args, input: JSON.parse(message.inputJson) }),
+        });
+        response = { requestId: message.requestId, status: request.status, payload: await request.json() };
+      } catch (error) {
+        response = { requestId: message.requestId, error: error instanceof Error ? error.message : String(error) };
+      }
+      try {
+        writeFileSync(message.responsePath, JSON.stringify(response), { encoding: 'utf8', mode: 0o600 });
+      } finally {
+        Atomics.store(signal, 0, 1);
+        Atomics.notify(signal, 0);
+      }
+    });
+  `, { eval: true });
+  worker.unref();
+  return worker;
 }
 
 function validResearchClaimDuplicateSummary(value: unknown): boolean {

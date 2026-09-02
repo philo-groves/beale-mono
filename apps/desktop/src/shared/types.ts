@@ -583,6 +583,9 @@ export interface AppServerMemoryNodeSummary {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  duplicateOfMemoryId?: string | null;
+  duplicateMarkedAt?: string | null;
+  duplicateMemories?: AppServerMemoryDuplicateSummary[];
   /** Missing only on legacy summaries produced before model authorship tracking. */
   authors?: AppServerModelAuthor[];
   /** Optional only for compatibility with summaries produced before catalog provenance existed. */
@@ -598,6 +601,14 @@ export interface AppServerMemoryEdgeSummary {
   updatedAt: string;
 }
 
+export interface AppServerRunbookDuplicateSummary {
+  id: string;
+  title: string;
+  purpose: string;
+  revision: number;
+  markedAt: string;
+}
+
 export interface AppServerRunbookSummary {
   id: string;
   workspaceId: string;
@@ -610,6 +621,9 @@ export interface AppServerRunbookSummary {
   artifactId: string;
   revision: number;
   contentRevision: number;
+  duplicateOfRunbookId?: string | null;
+  duplicateMarkedAt?: string | null;
+  duplicateRunbooks?: AppServerRunbookDuplicateSummary[];
   execution: {
     runCount: number;
     completedRunCount: number;
@@ -711,6 +725,15 @@ export interface AppServerFindingSecurityTracking {
   externalReferences: Array<{ kind: string; identifier: string; url: string | null }>;
 }
 
+export interface AppServerMemoryDuplicateSummary {
+  id: string;
+  type: string;
+  title: string;
+  status: string;
+  revision: number;
+  markedAt: string;
+}
+
 export interface AppServerResearchClaimDuplicateSummary {
   id: string;
   projection: 'lead' | 'finding';
@@ -760,16 +783,20 @@ export interface AppServerFindingSummary {
   revision: number;
 }
 
-export interface MarkClaimDuplicateInput {
+export type WorkspaceHistoryRecordType = 'claim' | 'memory' | 'runbook';
+
+export interface MarkHistoryDuplicateInput {
   workspaceId: string;
-  claimId: string;
-  parentClaimId: string;
+  type: WorkspaceHistoryRecordType;
+  id: string;
+  parentId: string;
   expectedRevision: number;
 }
 
-export interface UndoClaimDuplicateInput {
+export interface UndoHistoryDuplicateInput {
   workspaceId: string;
-  claimId: string;
+  type: WorkspaceHistoryRecordType;
+  id: string;
   expectedRevision: number;
 }
 
@@ -2492,8 +2519,8 @@ export interface BealeApi {
   runMemoryDreaming(): Promise<WorkspaceSnapshot>;
   onMemoryDreamingProgress(listener: (update: MemoryDreamingProgressUpdate) => void): () => void;
   restoreMemoryDreamingChange(changeId: string): Promise<WorkspaceSnapshot>;
-  markClaimDuplicate(input: MarkClaimDuplicateInput): Promise<WorkspaceSnapshot>;
-  undoClaimDuplicate(input: UndoClaimDuplicateInput): Promise<WorkspaceSnapshot>;
+  markHistoryDuplicate(input: MarkHistoryDuplicateInput): Promise<WorkspaceSnapshot>;
+  undoHistoryDuplicate(input: UndoHistoryDuplicateInput): Promise<WorkspaceSnapshot>;
   getAppServerToolingSummary(): Promise<AppServerToolingSummary>;
   updateAppServerToolingConfig(update: AppServerToolingConfigUpdate): Promise<AppServerToolingSummary>;
   generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions>;

@@ -6,14 +6,15 @@
 
 #### Fixed
 
-- Desktop development startup now bundles the narrow pre-Beale compatibility helper instead of leaving its ESM-only package subpath for the CommonJS Electron main process to load.
+- Opening large workspaces or sessions no longer sends the complete memory and campaign snapshot through registry synchronization. The app-server now reads compact workspace and run metadata directly from its workspace store, avoiding request-size failures and unnecessary session-load work; the shared app-server contract advances to v17.
+- Desktop development startup now bundles the narrow pre-Beale compatibility helper instead of leaving its ESM-only package subpath for the CommonJS Electron main process to load, and protocol subprocesses force Electron's Node runtime when an Electron executable is selected.
 - Desktop left-sidenav sessions now sort by updated minute instead of second, with alphabetical titles breaking same-minute ties to prevent excessive row movement.
 - Frameless Desktop windows now apply an explicit rounded native window region on Windows instead of relying only on OS-managed corner composition.
 - Desktop reporting now reads report catalogs through a dedicated read-only app-server operation, so unrelated stale database references cannot make the reporting view fail; the app-server contract advances to v13 with report-list capability metadata.
 
 #### Added
 
-- Desktop and Beale iOS claim details can now mark a Lead or Finding as a duplicate of a canonical claim. Duplicates leave normal claim catalogs and searches, remain listed under the parent, and can be restored with Undo.
+- Desktop claim, memory, and runbook details, plus Beale iOS claim and memory details, can now mark records as duplicates through one workspace-history operation. Duplicates leave normal catalogs and searches, remain in a final Duplicates section under the canonical parent, and can be restored with Undo; legacy claim relationships and client operations remain compatible.
 - Added a top-level `managed-plugins` collection with the portable Agent Plugins 1.0.0 `apple-security-devices` package, including realistic Tart macOS, physical-iPhone CoreDevice, and low-level `darwin-vm` research workflows with explicit mutation confirmation and an enforced iOS Simulator prohibition.
 - Desktop Lead-model settings now offer OpenAI Fast mode for new research and Quick Chat sessions. The choice persists across continuations, forks, recovery, and repeated automation launches; the typed launch preference, `session.openai-fast-mode.v1` capability, and advanced app-server contract timestamp keep Desktop and its host synchronized.
 - Beale iOS active-session composers now expose the shared app-server Stop action in the Send button position, including while a shell or computer-use approval is pending; typing a steering message changes the same control back to Send.
@@ -58,6 +59,7 @@
 
 #### Changed
 
+- Desktop workspace and registry persistence now runs through allowlisted app-server operations. Beale retains synchronous compatibility facades and in-place database migration while no longer importing SQLite, issuing SQL, or owning database handles; the shared app-server contract advances to v16.
 - Agent Plugin stdio runtime materialization now expands standard plugin variables in arguments, provides reserved `PLUGIN_ROOT` and `PLUGIN_DATA` environment variables, and rejects plugin attempts to override them.
 - Desktop automation details now label the right summary sidenav Automation and show the configured Interval above a divider-separated run history.
 - Beale iOS New Research model controls now use dropdowns populated from a path-free app-server catalog of connected providers, label the host's default provider and Lead/subagent models, and restrict collaborator reasoning choices to the selected model's supported levels.
@@ -1049,6 +1051,7 @@
 
 #### Changed
 
+- The app-server now owns the existing workspace-state and user-global registry stores, including migrations, settings, session indexing, artifacts, and project-structure persistence, behind versioned allowlisted operations.
 - Removed the former app-server codename from Beale source, packages, protocol adapters, UI, tests, and documentation. Runtime packages now use the `@beale` namespace and app-server terminology throughout.
 - Existing projects retain their profile and memory hashes, and pre-Beale storage directories, environment overrides, runbook metadata, migration histories, and SQLite tables are adopted without deleting stored data.
 - OpenAI-led hosted sessions now map the app-server-owned Fast mode preference to the Responses API `service_tier=priority` request field while rejecting the option for non-OpenAI Lead providers.

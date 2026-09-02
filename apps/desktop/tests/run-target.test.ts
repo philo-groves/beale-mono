@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ScopeAsset } from '../src/shared/types';
-import { selectRunTarget } from '../src/main/runTarget';
+import { selectRunTarget } from '../../../app-server/src/workspaceRunTarget';
 
 describe('run target selection', () => {
   it('matches GitLab materialized checkout paths by repository slug instead of checkout folder', () => {

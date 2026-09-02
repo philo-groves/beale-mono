@@ -180,7 +180,9 @@ export class AppServerHostService {
       throw new Error(`Workspace ${workspace.workspaceId} has memory disabled.`);
     }
     const storageProfileId = workspace?.researchProfileId ?? request.profileId;
-    const storage = storageProfileId ? this.registry.storageForProfile(storageProfileId) : null;
+    const storage = request.operation === 'workspace.state'
+      ? persistenceStorageFromInput(request.input)
+      : storageProfileId ? this.registry.storageForProfile(storageProfileId) : null;
     const operationInput = workspace && storage
       ? request.operation.startsWith('suggestion.')
         ? this.hostedSuggestionInput(request.operation, request.input, workspace, storage)
@@ -1260,7 +1262,31 @@ function pathFreeWorkspaceMemoryNode(value: unknown): BealeWorkspaceMemoryNode[]
     updatedAt: nonEmpty(node.updatedAt) ?? new Date(0).toISOString(),
     revision: typeof node.revision === 'number' && Number.isInteger(node.revision) && node.revision > 0
       ? node.revision
-      : 1
+      : 1,
+    duplicateMemories: Array.isArray(node.duplicateMemories)
+      ? node.duplicateMemories.flatMap(pathFreeWorkspaceMemoryDuplicate)
+      : []
+  }];
+}
+
+function pathFreeWorkspaceMemoryDuplicate(value: unknown): BealeWorkspaceMemoryNode['duplicateMemories'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const duplicate = value as Record<string, unknown>;
+  const id = nonEmpty(duplicate.id);
+  const type = nonEmpty(duplicate.type);
+  const title = nonEmpty(duplicate.title);
+  const status = nonEmpty(duplicate.status);
+  const markedAt = nonEmpty(duplicate.markedAt);
+  if (!id || !type || !title || !status || !markedAt) return [];
+  return [{
+    id,
+    type,
+    title,
+    status,
+    revision: typeof duplicate.revision === 'number' && Number.isInteger(duplicate.revision) && duplicate.revision > 0
+      ? duplicate.revision
+      : 1,
+    markedAt
   }];
 }
 
@@ -1548,6 +1574,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function workspaceIdentifierFromInput(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return nonEmpty((value as Record<string, unknown>).workspaceId);
+}
+
+function persistenceStorageFromInput(value: unknown): AppServerHostStorage {
+  if (!isRecord(value)) throw new Error('Workspace persistence input is required.');
+  const databasePath = nonEmpty(value.databasePath);
+  const artifactDirectoryPath = nonEmpty(value.artifactDirectoryPath);
+  if (!databasePath || !artifactDirectoryPath) {
+    throw new Error('Workspace persistence storage paths are required.');
+  }
+  return { databasePath: resolve(databasePath), artifactDirectoryPath: resolve(artifactDirectoryPath) };
 }
 
 function boundedInteger(value: number, min: number, max: number): number {

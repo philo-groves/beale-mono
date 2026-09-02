@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { WorkspaceRegistry } from '../src/main/workspaceRegistry';
+import { WorkspaceRegistry } from '../../../app-server/src/workspaceRegistryStore';
 import type { AppServerSessionSummary } from '../src/main/appServerCliClient';
 import type { WorkspaceSnapshot } from '../src/shared/types';
 
@@ -270,7 +270,7 @@ describe('workspace registry synchronization', () => {
 
     try {
       registry.syncWorkspace(snapshot);
-      expect(registry.getState().researchSessions.map((session) => session.runId)).toEqual([
+      expect(registry.getState().researchSessions.map((session: { runId: string }) => session.runId)).toEqual([
         'run_valid',
         'run_newer_creation'
       ]);

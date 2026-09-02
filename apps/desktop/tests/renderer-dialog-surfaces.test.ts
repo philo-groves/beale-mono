@@ -868,13 +868,24 @@ describe('renderer dialog surfaces', () => {
       createdAt: '2026-07-28T00:00:00.000Z',
       updatedAt: '2026-07-28T00:05:00.000Z',
       revision: 2,
+      duplicateMemories: [{
+        id: 'primitive_duplicate',
+        type: 'primitive',
+        title: 'Repeated parser length',
+        status: 'suspected',
+        revision: 3,
+        markedAt: '2026-09-02T12:00:00.000Z'
+      }],
       authors: [{ provider: 'anthropic', model: 'claude-sonnet-4-5' }]
     };
     const html = renderToStaticMarkup(
       createElement(MemoryDetailView, {
         node,
+        nodeCandidates: [node, { ...node, id: 'primitive_other', title: 'Other parser boundary' }],
         nodeById: new Map([[node.id, node]]),
-        relationships: []
+        relationships: [],
+        onMarkDuplicate: () => undefined,
+        onUndoDuplicate: () => undefined
       })
     );
 
@@ -885,6 +896,10 @@ describe('renderer dialog surfaces', () => {
     expect(html).toContain('claude-sonnet-4-5');
     expect(html).toContain('class="memory-type-label memory-type-primitive"');
     expect(html).toContain('class="memory-type-dot memory-type-primitive" aria-hidden="true"');
+    expect(html).toContain('aria-label="Duplicate memory management"');
+    expect(html).toContain('Repeated parser length');
+    expect(html).toContain('Other parser boundary');
+    expect(html.lastIndexOf('<section')).toBe(html.indexOf('<section class="memory-catalog-subsection campaign-claim-duplicates"'));
   });
 
 });
