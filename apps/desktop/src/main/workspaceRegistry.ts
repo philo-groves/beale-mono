@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import type {
   AppServerSessionSummary,
 } from './appServerCliClient';
-import { invokeAppServerRegistryState } from './appServerCliClient';
+import { invokeAppServerRegistryState, invokeAppServerRegistryStateAsync } from './appServerCliClient';
 import type {
   ComputerUsePermissionMode,
   ComputerUseSettings,
@@ -303,6 +303,24 @@ export class WorkspaceRegistry {
     return touched;
   }
 
+  public touchResearchSessionActivityCached(
+    workspaceId: string,
+    runId: string,
+    updatedAt: string,
+  ): boolean {
+    const sessionIndex = this.state.researchSessions.findIndex((session) => (
+      session.workspaceId === workspaceId && session.runId === runId
+    ));
+    if (sessionIndex < 0) return false;
+    const current = this.state.researchSessions[sessionIndex]!;
+    if (current.updatedAt >= updatedAt) return true;
+    const researchSessions = [...this.state.researchSessions];
+    researchSessions[sessionIndex] = { ...current, updatedAt };
+    researchSessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    this.state = { ...this.state, researchSessions };
+    return true;
+  }
+
   public reconcileAppServerSessions(
     researchProfileId: ResearchProfileId,
     workspaceId: string,
@@ -310,6 +328,14 @@ export class WorkspaceRegistry {
   ): void {
     this.invoke<void>('reconcileAppServerSessions', [researchProfileId, workspaceId, sessions]);
     this.invalidateState();
+  }
+
+  public async reconcileAppServerSessionsAsync(
+    researchProfileId: ResearchProfileId,
+    workspaceId: string,
+    sessions: readonly AppServerSessionSummary[],
+  ): Promise<void> {
+    await this.invokeAsync<void>('reconcileAppServerSessions', [researchProfileId, workspaceId, sessions]);
   }
 
   public markAppServerSessionsInterrupted(
@@ -324,8 +350,33 @@ export class WorkspaceRegistry {
     this.invalidateState();
   }
 
+  public async markAppServerSessionsInterruptedAsync(
+    researchProfileId: ResearchProfileId,
+    workspaceId: string,
+    runIds: readonly string[],
+    updatedAt?: string,
+  ): Promise<void> {
+    const args: unknown[] = [researchProfileId, workspaceId, runIds];
+    if (updatedAt !== undefined) args.push(updatedAt);
+    await this.invokeAsync<void>('markAppServerSessionsInterrupted', args);
+  }
+
+  public async refreshStateAsync(): Promise<void> {
+    const currentSessions = new Map(this.state.researchSessions.map((session) => [session.runId, session]));
+    const refreshed = await this.invokeAsync<WorkspaceRegistryState>('getState');
+    const researchSessions = refreshed.researchSessions.map((session) => {
+      const current = currentSessions.get(session.runId);
+      return current && current.updatedAt > session.updatedAt ? current : session;
+    }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    this.state = { ...refreshed, researchSessions };
+  }
+
   private invoke<T>(action: string, args: readonly unknown[] = []): T {
     return invokeAppServerRegistryState<T>(this.registryDirectory, action, args);
+  }
+
+  private async invokeAsync<T>(action: string, args: readonly unknown[] = []): Promise<T> {
+    return await invokeAppServerRegistryStateAsync<T>(this.registryDirectory, action, args);
   }
 
   private invalidateState(): void {

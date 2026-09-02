@@ -240,6 +240,31 @@ test("owns Desktop workspace and registry persistence behind allowlisted operati
     args: ["Keep the persistence boundary explicit."],
   }).then((rule) => rule.text), "Keep the persistence boundary explicit.");
 
+  const sessions = new AppServerSessionStore({ databasePath });
+  try {
+    sessions.create({
+      id: "session-registry-sync",
+      workspaceId: workspace.workspaceId,
+      attemptId: "attempt-registry-sync",
+      title: "Canonical registry session",
+      prompt: "Verify canonical sessions reach the workspace registry.",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      metadata: {
+        bealeRun: {
+          id: "session-registry-sync",
+          mode: "open_discovery",
+          attemptStrategy: "iterative_research",
+          sandboxProfile: "host",
+          budget: { runEngine: "app-server" },
+        },
+      },
+    });
+  } finally {
+    sessions.close();
+  }
+
   const synchronized = await invoke("registry.state", {
     registryDirectory,
     action: "syncWorkspaceFromStorage",
@@ -256,6 +281,16 @@ test("owns Desktop workspace and registry persistence behind allowlisted operati
   assert.equal(synchronizedRegistry.workspaces.length, 1);
   assert.equal(synchronizedRegistry.workspaces[0].workspaceId, workspace.workspaceId);
   assert.equal(synchronizedRegistry.workspaces[0].workspaceName, "Untitled Workspace");
+  assert.equal(synchronizedRegistry.workspaces[0].runCount, 1);
+  assert.deepEqual(synchronizedRegistry.researchSessions.map((session) => ({
+    runId: session.runId,
+    title: session.title,
+    status: session.status,
+  })), [{
+    runId: "session-registry-sync",
+    title: "Canonical registry session",
+    status: "active",
+  }]);
   assert.equal(synchronized.lastKnownWorkspace.workspaceId, workspace.workspaceId);
 });
 

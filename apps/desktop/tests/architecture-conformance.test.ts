@@ -76,6 +76,24 @@ describe('architecture conformance', () => {
     expect(registryClient).not.toContain("this.invoke<void>('syncWorkspace', [snapshot");
   });
 
+  it('keeps live-session registry refreshes off Electron main-thread blocking storage calls', () => {
+    const workspaceService = readFileSync(join(ROOT, 'src/main/workspaceService.ts'), 'utf8');
+    const clientMethodStart = workspaceService.indexOf('public async getWorkspaceRegistryStateForClient(');
+    const clientMethodEnd = workspaceService.indexOf('\n  public ', clientMethodStart + 1);
+    const clientMethod = workspaceService.slice(clientMethodStart, clientMethodEnd);
+    const activityMethodStart = workspaceService.indexOf('private syncResearchSessionActivityToRegistry(');
+    const activityMethodEnd = workspaceService.indexOf('\n  private ', activityMethodStart + 1);
+    const activityMethod = workspaceService.slice(activityMethodStart, activityMethodEnd);
+    const registryClient = readFileSync(join(ROOT, 'src/main/workspaceRegistry.ts'), 'utf8');
+
+    expect(clientMethodStart).toBeGreaterThan(-1);
+    expect(clientMethod).not.toContain('this.syncWorkspaceRegistry()');
+    expect(clientMethod).toContain('this.reconcileCanonicalSessions(registry)');
+    expect(activityMethod).toContain('touchResearchSessionActivityCached(');
+    expect(activityMethod).not.toContain('touchResearchSessionActivity(');
+    expect(registryClient).toContain('invokeAppServerRegistryStateAsync');
+  });
+
   it('keeps host subprocess use limited to auth, device, editor-launch, and app-server host-agent boundaries', () => {
     const files = filesUnder('src/main').filter(isSourceFile);
     const hits = findPatternHits(files, [/node:child_process|spawnSync\(|\bspawn\(|\bexecFile\(|\bfork\(/]).filter(

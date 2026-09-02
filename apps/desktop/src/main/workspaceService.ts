@@ -741,7 +741,6 @@ export class WorkspaceService {
 
   public async getWorkspaceRegistryStateForClient(): Promise<WorkspaceRegistryState> {
     const registry = this.getWorkspaceRegistry();
-    this.syncWorkspaceRegistry();
     if (!this.registryLifecycleReconciliation) {
       this.registryLifecycleReconciliation = this.reconcileCanonicalSessions(registry)
         .finally(() => {
@@ -3300,7 +3299,9 @@ export class WorkspaceService {
 
   public startRun(input: StartRunInput, _mode: 'scheduled' | 'complete' = 'scheduled'): WorkspaceSnapshot {
     this.beginRun(input);
-    this.emitChangeNow();
+    const runtime = this.getForegroundRuntime();
+    const registryChanged = runtime ? this.syncActiveResearchSessionsToRegistry(runtime) : false;
+    this.emitChangeNow({ syncWorkspaceRegistry: false, workspaceRegistryChanged: registryChanged });
     return this.requireSnapshot();
   }
 
@@ -3403,7 +3404,9 @@ export class WorkspaceService {
     }
     const handle = this.beginRun(input);
     await handle.transportReady;
-    this.emitChangeNow();
+    const runtime = this.getForegroundRuntime();
+    const registryChanged = runtime ? this.syncActiveResearchSessionsToRegistry(runtime) : false;
+    this.emitChangeNow({ syncWorkspaceRegistry: false, workspaceRegistryChanged: registryChanged });
     return this.requireSnapshot();
   }
 
@@ -4209,7 +4212,7 @@ export class WorkspaceService {
         }
         for (const workspace of workspaces) {
           const canonicalSessions = sessionsByWorkspace.get(workspace.workspaceId) ?? [];
-          registry.reconcileAppServerSessions(profileId, workspace.workspaceId, canonicalSessions);
+          await registry.reconcileAppServerSessionsAsync(profileId, workspace.workspaceId, canonicalSessions);
           const runtime = this.runtimeForWorkspacePath(workspace.workspacePath);
           if (runtime?.appServerEngine.hasActiveRuns()) continue;
           const canonicalIds = new Set(canonicalSessions.map((session) => session.id));
@@ -4219,7 +4222,7 @@ export class WorkspaceService {
               && session.status === 'active'
               && !canonicalIds.has(session.runId))
             .map((session) => session.runId);
-          registry.markAppServerSessionsInterrupted(
+          await registry.markAppServerSessionsInterruptedAsync(
             profileId,
             workspace.workspaceId,
             missingActiveRunIds
@@ -4231,6 +4234,12 @@ export class WorkspaceService {
         // falsely pausing or hiding them would suppress app-server reattachment.
       }
     }));
+    try {
+      await registry.refreshStateAsync();
+    } catch {
+      // Registry reads are advisory for the renderer. Keep serving the cache
+      // while the app-server is starting or temporarily unavailable.
+    }
   }
 
   public async removeProvider(providerId: ResearchModelProviderId): Promise<ProviderSettings> {
@@ -4861,8 +4870,7 @@ export class WorkspaceService {
     activity: NonNullable<AppServerRunEngineChange['registrySessionActivity']>
   ): boolean {
     if (!this.workspaceRegistry) return false;
-    return this.workspaceRegistry.touchResearchSessionActivity(
-      runtime.profileId,
+    return this.workspaceRegistry.touchResearchSessionActivityCached(
       runtime.db.getWorkspaceId(),
       activity.runId,
       activity.updatedAt

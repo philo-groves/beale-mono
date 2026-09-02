@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AppServerRunEngine } from '../src/main/appServerRunEngine';
 
 interface EngineHarness {
@@ -12,6 +12,14 @@ interface EngineHarness {
     context: { run: { id: string }; attempt: { id: string } },
     event: { schemaVersion: number; kind: string; timestamp: string; payload: Record<string, unknown> }
   ) => void;
+}
+
+interface PendingControlFinalizationHarness {
+  db: {
+    updateApprovalDecision: () => never;
+    appendTraceEvent: ReturnType<typeof vi.fn>;
+  };
+  finalizePendingControls: (active: Record<string, unknown>, reason: 'engine_disposed') => void;
 }
 
 describe('app-server live event deduplication', () => {
@@ -53,5 +61,27 @@ describe('app-server live event deduplication', () => {
     expect(traces).toHaveLength(1);
     expect(transcripts).toHaveLength(1);
     expect(transcripts[0]?.metadata).toMatchObject({ appServerEventId: 'event_stable_commentary' });
+  });
+
+  it('does not let an already-removed canonical approval escape engine disposal', () => {
+    const engine = Object.create(AppServerRunEngine.prototype) as PendingControlFinalizationHarness;
+    engine.db = {
+      updateApprovalDecision: () => { throw new Error('Approval not found for run run_one: approval_one'); },
+      appendTraceEvent: vi.fn()
+    };
+    const active = {
+      context: { run: { id: 'run_one' }, attempt: { id: 'attempt_one' } },
+      stopped: false,
+      pendingControls: new Map(),
+      queuedContinuations: new Map(),
+      shellApprovalRecords: new Map([['request_one', 'approval_one']]),
+      shellApprovalDecisionsInFlight: new Map(),
+      toolApprovalRequestIds: new Set(),
+      toolApprovalSessionGrantTargets: new Map()
+    };
+
+    expect(() => engine.finalizePendingControls(active, 'engine_disposed')).not.toThrow();
+    expect(active.shellApprovalRecords.size).toBe(0);
+    expect(engine.db.appendTraceEvent).not.toHaveBeenCalled();
   });
 });

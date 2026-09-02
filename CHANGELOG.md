@@ -6,6 +6,8 @@
 
 #### Fixed
 
+- Live sessions no longer run periodic workspace-storage synchronization or per-message registry writes on Electron's main thread, preventing renderer stalls, SQLite lock contention, and app-server readiness starvation. Desktop shutdown also tolerates approvals already removed from canonical session state.
+- Newly launched app-server-owned research sessions now enter the Desktop workspace registry during storage synchronization, so the left sidenav updates as soon as a session starts.
 - Session WebSocket events now carry the same stable identity used by canonical app-server persistence. Desktop suppresses replayed events across reconnects and follow-up attempts, and session projection coalesces legacy mirrored transcript duplicates; the shared app-server contract advances to v18.
 - Opening large workspaces or sessions no longer sends the complete memory and campaign snapshot through registry synchronization. The app-server now reads compact workspace and run metadata directly from its workspace store, avoiding request-size failures and unnecessary session-load work; the shared app-server contract advances to v17.
 - Desktop development startup now bundles the narrow pre-Beale compatibility helper instead of leaving its ESM-only package subpath for the CommonJS Electron main process to load, and protocol subprocesses force Electron's Node runtime when an Electron executable is selected.

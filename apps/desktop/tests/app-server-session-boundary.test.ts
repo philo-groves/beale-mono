@@ -975,6 +975,9 @@ describe('app-server session persistence boundary', () => {
         ({ run }) => run.promptMarkdown === 'Inspect the canonical session boundary.'
       )?.run.id;
       if (!runId) throw new Error('Expected the canonical app-server session to start.');
+      expect(service.getCachedWorkspaceRegistryState().researchSessions).toContainEqual(
+        expect.objectContaining({ runId, status: 'active', endedAt: null })
+      );
       await waitFor(() => service.getRunDetail(runId).run.status !== 'active');
       try {
         await waitFor(() => broadcastStatuses.includes('completed'));
@@ -1012,6 +1015,15 @@ describe('app-server session persistence boundary', () => {
       } finally {
         registryDatabase.close();
       }
+      const staleCachedSession = service.getCachedWorkspaceRegistryState().researchSessions.find(
+        (session) => session.runId === runId
+      );
+      if (!staleCachedSession) throw new Error('Expected the completed session in the workspace registry cache.');
+      Object.assign(staleCachedSession, {
+        status: 'active',
+        endedAt: null,
+        summary: 'Session is active.'
+      });
       expect(service.getCachedWorkspaceRegistryState().researchSessions).toContainEqual(
         expect.objectContaining({ runId, status: 'active', endedAt: null })
       );
@@ -1057,6 +1069,10 @@ describe('app-server session persistence boundary', () => {
     });
     try {
       service.createWorkspace(workspace);
+      const runtime = (service as unknown as {
+        getForegroundRuntime(): { appServerEngine: { hasActiveRuns(): boolean } } | null;
+      }).getForegroundRuntime();
+      expect(runtime).not.toBeNull();
       const started = service.startRun({
         runEngine: 'app-server',
         provider: 'openai-codex',
@@ -1089,6 +1105,7 @@ describe('app-server session persistence boundary', () => {
       });
       await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
         .some((session) => session.runId === runId && session.status === 'stopped'));
+      await waitFor(() => !runtime!.appServerEngine.hasActiveRuns());
 
       watchForContinuedRegistry = true;
       const accepted = await service.steerRunForClient({

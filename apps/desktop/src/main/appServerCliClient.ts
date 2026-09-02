@@ -799,6 +799,19 @@ export function invokeAppServerRegistryState<T>(
   ).result;
 }
 
+export async function invokeAppServerRegistryStateAsync<T>(
+  registryDirectory: string,
+  action: string,
+  args: readonly unknown[] = [],
+): Promise<T> {
+  return (await invokeWithJsonInputAsync<T>(
+    'registry.state',
+    ['registry', 'state'],
+    { registryDirectory, action, args: [...args] },
+    null,
+  )).result;
+}
+
 export async function markAppServerHistoryDuplicate(
   input: {
     workspaceId: string;

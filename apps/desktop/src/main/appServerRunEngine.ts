@@ -1240,26 +1240,31 @@ export class AppServerRunEngine {
     if (reason === 'engine_disposed' || active.stopped) active.queuedContinuations.clear();
     for (const [approvalRequestId, approvalId] of active.shellApprovalRecords) {
       const computerUse = active.toolApprovalRequestIds.has(approvalRequestId);
-      this.db.updateApprovalDecision(
-        approvalId,
-        active.context.run.id,
-        'denied',
-        reason === 'engine_disposed'
-          ? `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the app-server engine closed.`
-          : `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the app-server process exited.`
-      );
-      this.db.appendTraceEvent({
-        runId: active.context.run.id,
-        attemptId: active.context.attempt.id,
-        type: 'approval_event',
-        source: 'policy',
-        summary: computerUse
-          ? 'Pending computer-use action denied when app-server closed.'
-          : 'Pending shell command denied when app-server closed.',
-        payload: { approvalId, approvalRequestId, decision: 'denied', reason },
-        approvalId,
-        modelVisible: false
-      });
+      try {
+        this.db.updateApprovalDecision(
+          approvalId,
+          active.context.run.id,
+          'denied',
+          reason === 'engine_disposed'
+            ? `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the app-server engine closed.`
+            : `${computerUse ? 'Computer-use' : 'Shell'} approval was denied because the app-server process exited.`
+        );
+        this.db.appendTraceEvent({
+          runId: active.context.run.id,
+          attemptId: active.context.attempt.id,
+          type: 'approval_event',
+          source: 'policy',
+          summary: computerUse
+            ? 'Pending computer-use action denied when app-server closed.'
+            : 'Pending shell command denied when app-server closed.',
+          payload: { approvalId, approvalRequestId, decision: 'denied', reason },
+          approvalId,
+          modelVisible: false
+        });
+      } catch {
+        // Disposal is best-effort: canonical state may already have removed or
+        // resolved an approval before this Desktop attachment closes.
+      }
     }
     active.shellApprovalRecords.clear();
     active.toolApprovalRequestIds.clear();

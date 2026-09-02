@@ -680,9 +680,10 @@ function syncRegistryWorkspaceFromStorage(registry: WorkspaceRegistry, input: Re
   const database = new WorkspaceDatabase(databasePath, artifactRoot, { workspacePath });
   try {
     database.initialize();
+    const workspaceId = database.getWorkspaceId();
     registry.syncWorkspace({
       workspace: {
-        workspaceId: database.getWorkspaceId(),
+        workspaceId,
         workspacePath,
         workspaceDirectories,
         researchKitId: database.getResearchKitId(),
@@ -694,6 +695,16 @@ function syncRegistryWorkspaceFromStorage(registry: WorkspaceRegistry, input: Re
       rememberLast: sync.rememberLast !== false,
       researchProfileId,
     } as never);
+    const sessions = new AppServerSessionStore({ databasePath, readOnly: true });
+    try {
+      registry.reconcileAppServerSessions(
+        researchProfileId as never,
+        workspaceId,
+        sessions.listSummaries(workspaceId, 200) as never,
+      );
+    } finally {
+      sessions.close();
+    }
     return {
       state: registry.getState(),
       lastKnownWorkspace: registry.getLastKnownWorkspace(),

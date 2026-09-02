@@ -288,6 +288,31 @@ export function createAppServerSessionBoundary(
       { tail: true, limit: 1_000, maxBytes: 2 * 1024 * 1024 }
     )), sessionWrites);
   };
+  const sessionRow = (session: AppServerSessionRecord | AppServerSessionSummary): RunRow => {
+    const recovery = sessionRecovery(session);
+    const lastMessageAt = 'lastMessageAt' in session ? session.lastMessageAt : null;
+    const tokenUsage = 'tokenUsage' in session ? session.tokenUsage : undefined;
+    return {
+      run: sessionRun(session),
+      engine: 'app-server',
+      lastMessageAt: latestSessionMessageAt(lastMessageAt, sessionWrites.overlayEvents(session.id)),
+      tokenUsage: tokenUsage ?? { totalTokens: 0 },
+      sessionRuns: [{
+        id: `session_run_${session.id}`,
+        runId: session.id,
+        attemptId: session.attempts.at(-1)?.id ?? null,
+        status: sessionStatus(session.status),
+        activityIntervals: [{
+          id: `activity_${session.id}`,
+          runId: session.id,
+          attemptId: session.attempts.at(-1)?.id ?? null,
+          startedAt: session.startedAt,
+          endedAt: session.status === 'paused' && recovery ? recovery.recoveredAt : session.endedAt
+        }],
+        terminationCause: session.status === 'paused' && recovery ? 'workspace_recovery' : null
+      }]
+    };
+  };
   const appendRecordEvent = (runId: string, kind: string, record: Record<string, unknown>): void => {
     sessionWrites.enqueueEvent(runId, {
       // The session log is append-only and deduplicates by event ID. Record IDs
@@ -404,6 +429,11 @@ export function createAppServerSessionBoundary(
       return session ? sessionRun(session) : database.getRun(runId);
     }) as WorkspaceDatabase['getRun'],
 
+    getRunRow: ((runId: string): RunRow | null => {
+      const session = getSessionMetadata(runId);
+      return session ? sessionRow(session) : database.getRunRow(runId);
+    }) as WorkspaceDatabase['getRunRow'],
+
     getRunDetail: ((runId: string): RunDetail => {
       const session = getSession(runId);
       return session ? sessionDetail(session, database) : database.getRunDetail(runId);
@@ -469,29 +499,7 @@ export function createAppServerSessionBoundary(
       const sessions = prefetchedSessionSummaries ?? listAppServerSessionSummaries(workspaceId, storage);
       prefetchedSessionSummaries = null;
       for (const session of sessions) ownedRunIds.add(session.id);
-      const appServerRows: RunRow[] = sessions.map((session) => {
-        const recovery = sessionRecovery(session);
-        return {
-          run: sessionRun(session),
-          engine: 'app-server',
-          lastMessageAt: latestSessionMessageAt(session.lastMessageAt, sessionWrites.overlayEvents(session.id)),
-          tokenUsage: session.tokenUsage ?? { totalTokens: 0 },
-          sessionRuns: [{
-            id: `session_run_${session.id}`,
-            runId: session.id,
-            attemptId: session.attempts.at(-1)?.id ?? null,
-            status: sessionStatus(session.status),
-            activityIntervals: [{
-              id: `activity_${session.id}`,
-              runId: session.id,
-              attemptId: session.attempts.at(-1)?.id ?? null,
-              startedAt: session.startedAt,
-              endedAt: session.status === 'paused' && recovery ? recovery.recoveredAt : session.endedAt
-            }],
-            terminationCause: session.status === 'paused' && recovery ? 'workspace_recovery' : null
-          }]
-        };
-      });
+      const appServerRows = sessions.map(sessionRow);
       return [...appServerRows, ...database.listRunRows().filter((row) => !ownedRunIds.has(row.run.id))];
     }) as WorkspaceDatabase['listRunRows'],
 
