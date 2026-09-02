@@ -80,7 +80,7 @@ export interface FindingToolDefaults {
 
 export function createFindingTools(store: ResearchClaimStore, defaults: FindingToolDefaults = {}): ResearchExecutableTool[] {
   return [
-    findingTool("lead.list", "lead_list", "List proposed or refuted research leads. Leads and findings are views of one claim ledger, so a lead keeps the same ID when evidence promotes it to a finding.", "read", {
+    findingTool("lead.list", "lead_list", "List proposed or refuted research leads when the full lead catalog or complete claim state is needed. Use history.search for normal workspace-history search. Leads and findings are views of one claim ledger, so a lead keeps the same ID when evidence promotes it to a finding.", "read", {
       type: "object",
       properties: {
         query: { type: "string" },
@@ -90,7 +90,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
         afterRevision: { type: "string" },
       },
     }, (input) => projectClaimCatalog(store.listLeads(), input, "leads")),
-    findingTool("finding.list", "finding_list", "List evidence-backed findings. Findings are promoted views of canonical research claims, not duplicate memory records.", "read", {
+    findingTool("finding.list", "finding_list", "List evidence-backed findings when the full finding catalog or complete claim state is needed. Use history.search for normal workspace-history search. Findings are promoted views of canonical research claims, not duplicate memory records.", "read", {
       type: "object",
       properties: {
         query: { type: "string" },
@@ -111,7 +111,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       requiredString(input.id, "id"),
       optionalCompletionTarget(input.targetStatus) ?? "verified",
     )),
-    findingTool("lead.create", "lead_create", "Record one new research lead. Search leads and findings first; do not duplicate an existing claim. This creates a proposed claim without asserting observation. The qualitative rating is an untrusted estimate for prioritization and notifications, not an evidence-backed severity assessment.", "write", {
+    findingTool("lead.create", "lead_create", "Record one new research lead. Search claims with history.search first; do not duplicate an existing claim. This creates a proposed claim without asserting observation. The qualitative rating is an untrusted estimate for prioritization and notifications, not an evidence-backed severity assessment.", "write", {
       type: "object",
       required: ["title", "classification", "rating"],
       properties: {

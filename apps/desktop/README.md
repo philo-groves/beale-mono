@@ -64,7 +64,7 @@ The guiding philosophy is **human-steered, verifiable research** rather than ful
 - Electron + Vite + TypeScript foundation
 - User-global registry of local Beale workspaces
 - app-server-owned global SQLite persistence under `~/.beale/memory.sqlite`, with workspace and research-profile ownership retained on records
-- A canonical research-claim ledger with one stable identity from Lead to Finding, append-only evidence-gated transitions, independent verification, source/environment staleness, profile classifications, composite claims, reversible duplicate coalescing, and durable runbook/report/disclosure references
+- A canonical research-claim ledger with one stable identity from Lead to Finding, append-only evidence-gated transitions, independent verification, source/environment staleness, profile classifications, composite claims, reversible duplicate coalescing, durable runbook/report/disclosure references, and unified workspace-history search across claims, memories, and runbooks
 - A workspace Campaign graph that maps authorized assets through research memory and findings to proof/report artifacts, ranks uncovered territory and contradictions, and seeds focused follow-up runs
 - app-server-backed research session execution
 - Workspace-local Cybersecurity and Mathematics research profiles with profile-specific sessions, memory, workflows, prompts, collaboration recipes, and catalogs

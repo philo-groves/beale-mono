@@ -741,7 +741,7 @@ test("model tool results retain readable output separately from bounded metadata
 
   const boundedMemoryProjection = projectModelToolResult({
     ...result,
-    action: { ...result.action, toolName: "memory.search" },
+    action: { ...result.action, toolName: "history.search" },
     status: "complete",
     output: { text: "x".repeat(20_000) },
     error: undefined,

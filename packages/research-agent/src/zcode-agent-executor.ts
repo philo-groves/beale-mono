@@ -177,7 +177,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
       const tools = [...registryTools, ...agentTools];
       const systemPrompt = createResearchSystemPrompt({
         hasTools: registryTools.length > 0,
-        hasMemoryTools: hasTool(options.toolRegistry, "memory_search"),
+        hasMemoryTools: hasTool(options.toolRegistry, "history_search"),
         hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
         hasReportTools: hasTool(options.toolRegistry, "report_list"),
         hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),

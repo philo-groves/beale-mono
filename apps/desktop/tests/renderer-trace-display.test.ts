@@ -103,9 +103,9 @@ describe('renderer trace display view models', () => {
   });
 
   it('temporarily shows pending app-server tool requests and hides them after matching observations', () => {
-    const searchRequest = appServerToolEvent('tool.requested', 'action_search', 'memory.search', 1);
+    const searchRequest = appServerToolEvent('tool.requested', 'action_search', 'history.search', 1);
     const readRequest = appServerToolEvent('tool.requested', 'action_read', 'file.read', 2);
-    const searchObservation = appServerToolEvent('tool.observed', 'action_search', 'memory.search', 3);
+    const searchObservation = appServerToolEvent('tool.observed', 'action_search', 'history.search', 3);
     const pendingEvents = [searchRequest, readRequest];
     const completedEvents = [...pendingEvents, searchObservation];
 

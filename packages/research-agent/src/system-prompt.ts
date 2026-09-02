@@ -93,15 +93,15 @@ export function createResearchSystemPrompt(
       ...memoryTypeDescriptions,
       "Use durable memory as a concise research graph:",
       ...(profile?.agent.memoryInstructions.map((instruction) => `- ${instruction}`) ?? [
-        "- Search knowledge memory, leads, and findings early and as research crosses system boundaries. Favor security-sensitive code near dangerous sinks, established findings, historical precedent, and relevant successful trajectories.",
-        "- Apply the authoritative type descriptions above. Before saving, search for an existing memory with the same underlying fact or root cause and refine it instead of creating a differently worded duplicate.",
+        "- Search claims, knowledge memories, and runbooks together with history.search early and as research crosses system boundaries. Favor security-sensitive code near dangerous sinks, established findings, historical precedent, and relevant successful trajectories.",
+        "- Apply the authoritative type descriptions above. Before saving, use history.search to find an existing memory with the same underlying fact or root cause and refine it instead of creating a differently worded duplicate.",
         "- Evidence is attached to knowledge or claims, not stored as its own memory type. Never represent a lead or finding as a memory node.",
       ]),
     ] : []),
     ...(options.hasFindingTools ? [
       "Use one canonical, evidence-gated research claim ledger, separate from knowledge memory:",
       `- The active profile declares these classifications: ${profile?.claims.classifications.map((classification) => `${classification.id} (${classification.name}${classification.composite ? ", composite" : ""})`).join(", ") ?? "general.result"}.`,
-      "- Call lead.list and finding.list before pursuing a candidate. Continue an existing claim or coverage gap instead of repeating completed, refuted, or already-covered work.",
+      "- Search claims with history.search before pursuing a candidate, then use lead.list or finding.list when complete claim state is needed. Continue an existing claim or coverage gap instead of repeating completed, refuted, or already-covered work.",
       "- When list results expose two records for the same underlying claim, coalesce the weaker or redundant record with claim.mark_duplicate and keep the strongest evidence-bearing record as the canonical parent. Do not coalesce related components, distinct affected conditions, or claims that can compose into a chain.",
       "- Create only through lead.create. Direct observation promotes that same stable claim ID into the finding view through finding.transition; never copy it into a new finding or memory node.",
       "- Append new evidence to an existing claim with finding.transition and its current status as toStatus. This preserves its maturity and identity while recording a new revision; never create a duplicate claim merely to retain same-maturity evidence.",
@@ -116,7 +116,7 @@ export function createResearchSystemPrompt(
     ...(options.hasRunbookTools ? [
       "Use runbooks as durable executable research artifacts:",
       ...(profile?.agent.runbookInstructions.map((instruction) => `- ${instruction}`) ?? [
-        "- List existing workspace runbooks before creating one. Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
+        "- Search runbooks with history.search before creating one, then use runbook.list or runbook.get when the full catalog or procedure is needed. Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
         "- Keep runbooks healthy and reproducible: record prerequisites, exact bounded commands or code, an explicit supported language per code cell, expected evidence, interpretation, and cleanup. Execute all proofing through runbook.run; Auto-Review denies proof commands outside runbooks.",
         "- If a run fails late, repair the cause and resume with runbook.run startCellId/endCellId using the cell IDs returned by runbook.get. Do not repeat an already-successful prefix unless its state must be rebuilt.",
         "- Prefer appending to the relevant runbook over scattering reusable procedure across narration or memory. Keep concise research facts in memory and multi-step procedures in runbooks.",

@@ -109,6 +109,7 @@ describe('renderer commentary projection', () => {
     expect(renderToStaticMarkup(commentaryMessageIcon('tool', 'wait_agent')!)).toContain('lucide-bot');
     expect(renderToStaticMarkup(commentaryMessageIcon('tool', 'runbook.get')!)).toContain('lucide-book-open');
     expect(renderToStaticMarkup(commentaryMessageIcon('tool', 'memory.search')!)).toContain('lucide-database');
+    expect(renderToStaticMarkup(commentaryMessageIcon('tool', 'history.search')!)).toContain('lucide-database');
     expect(renderToStaticMarkup(commentaryMessageIcon('tool', 'shell.run')!)).toContain('lucide-terminal');
     expect(renderToStaticMarkup(commentaryMessageIcon('tool', 'experiment.run')!)).toContain('lucide-terminal');
     expect(renderToStaticMarkup(commentaryMessageIcon('tool', 'file.read')!)).toContain('lucide-wrench');
@@ -136,6 +137,7 @@ describe('renderer commentary projection', () => {
     expect(commentaryToolUsageText('file.read', 3, undefined, true)).toBe('Reading 3 files');
     expect(commentaryToolUsageText('memory.get', 3)).toBe('Reading 3 memories');
     expect(commentaryToolUsageText('memory.search', 3)).toBe('Searching memory with 3 queries');
+    expect(commentaryToolUsageText('history.search', 3)).toBe('Searching workspace history with 3 queries');
     expect(commentaryToolUsageText('shell.run', 1)).toBe('Running a command');
     expect(commentaryToolUsageText('shell.run', 1, 'npm run Check')).toBe('Running npm run Check');
     expect(commentaryToolUsageText('shell.run', 4)).toBe('Running 4 commands');
@@ -364,34 +366,34 @@ describe('renderer commentary projection', () => {
     expect(sameRepository?.contentMarkdown).toBe('Searching 1 repository with 2 queries');
   });
 
-  it('labels singular and grouped memory searches with their queries', () => {
-    const detail = runDetail('Search memory.');
+  it('labels singular and grouped workspace history searches with their queries', () => {
+    const detail = runDetail('Search workspace history.');
     const singular = commentaryMessagesForSession(detail, [
-      toolEvent('memory-one', 'tool.requested', 'memory.search', 'memory-one', {
+      toolEvent('history-one', 'tool.requested', 'history.search', 'history-one', {
         query: 'parser boundary'
       })
-    ]).find((message) => message.toolName === 'memory.search');
+    ]).find((message) => message.toolName === 'history.search');
     expect(singular).toMatchObject({
       toolCount: 1,
-      contentMarkdown: 'Searching memory for "parser boundary"'
+      contentMarkdown: 'Searching workspace history for "parser boundary"'
     });
-    expect(singular?.toolCalls?.[0]?.label).toBe('Searching memory for "parser boundary"');
+    expect(singular?.toolCalls?.[0]?.label).toBe('Searching workspace history for "parser boundary"');
 
     const grouped = commentaryMessagesForSession(detail, [
-      toolEvent('memory-parser', 'tool.requested', 'memory.search', 'memory-parser', {
+      toolEvent('history-parser', 'tool.requested', 'history.search', 'history-parser', {
         query: 'parser boundary'
       }),
-      toolEvent('memory-runtime', 'tool.requested', 'memory.search', 'memory-runtime', {
+      toolEvent('history-runtime', 'tool.requested', 'history.search', 'history-runtime', {
         query: 'runtime assumptions'
       })
-    ]).find((message) => message.toolName === 'memory.search');
+    ]).find((message) => message.toolName === 'history.search');
     expect(grouped).toMatchObject({
       toolCount: 2,
-      contentMarkdown: 'Searching memory with 2 queries'
+      contentMarkdown: 'Searching workspace history with 2 queries'
     });
     expect(grouped?.toolCalls?.map((toolCall) => toolCall.label)).toEqual([
-      'Searching memory for "parser boundary"',
-      'Searching memory for "runtime assumptions"'
+      'Searching workspace history for "parser boundary"',
+      'Searching workspace history for "runtime assumptions"'
     ]);
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const summaryTextStyles = styles.match(/\.main-commentary-tool-summary\s*>\s*span\s*\{([^}]*)\}/)?.[1] ?? '';

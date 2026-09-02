@@ -610,8 +610,8 @@ test("session summaries durably deduplicate canonical memory activity", () => {
       reasoningEffort: "high",
     });
     for (const [id, kind, toolActionId, toolName] of [
-      ["search_requested", "tool.requested", "search_one", "memory.search"],
-      ["search_observed", "tool.observed", "search_one", "memory.search"],
+      ["search_requested", "tool.requested", "search_one", "history.search"],
+      ["search_observed", "tool.observed", "search_one", "history.search"],
       ["save_observed", "tool.observed", "save_one", "memory.save"],
       ["correct_observed", "tool.observed", "correct_one", "memory.correct"],
     ]) {
@@ -640,8 +640,8 @@ test("session summaries durably deduplicate canonical memory activity", () => {
           type: "tool_result",
           payload: {
             appServerKind: "tool.observed",
-            toolName: "memory.search",
-            payload: { toolActionId: "search_one", toolName: "memory.search" },
+            toolName: "history.search",
+            payload: { toolActionId: "search_one", toolName: "history.search" },
           },
         }],
       },

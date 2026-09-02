@@ -1070,6 +1070,7 @@
 
 #### Added
 
+- Agent recall now uses one workspace-scoped `history.search` tool across canonical claims, knowledge memories, and runbooks, with multi-category and category-specific filters. The prior memory-only search is removed from new sessions while historical activity remains readable and counted.
 - Added reversible research-claim deduplication with optimistic revisions, audit transitions, canonical-only catalogs, and model tools that coalesce redundant claims during research. Protocol contract v14 advances memory-summary schema to v12, finding schema to v5, and the path-free mobile workspace-memory catalog to v4.
 - Added a durable research-resource catalog that distinguishes operator-listed scope resources from ambient campaign dependencies such as sandbox runtimes and platform-default binaries or services. Discovery and categorization are non-authoring inventory operations; Auto-Review must verify campaign relevance before first touch, and relevance never expands live-target authorization.
 - Added research-claim migration 3 and model-tool support for an explicitly untrusted qualitative rating. Existing claims default to Informational; CVSS, reachability, evidence maturity, and operator risk treatment remain separate trusted records.

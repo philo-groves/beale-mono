@@ -1498,7 +1498,7 @@ private struct TranscriptMessageView: View {
         switch message.metadata?.toolName {
         case "shell.run", "experiment.run": "terminal"
         case "file.read": "wrench"
-        case "memory.get", "memory.search": "internaldrive"
+        case "history.search", "memory.get", "memory.search": "internaldrive"
         default: "wrench.and.screwdriver"
         }
     }

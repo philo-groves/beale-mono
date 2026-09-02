@@ -1635,7 +1635,7 @@ export class AppServerSessionStore {
     const rows = this.database.prepare(`
       SELECT
         session_id,
-        SUM(CASE WHEN tool_name = 'memory.search' THEN 1 ELSE 0 END) AS memory_searches,
+        SUM(CASE WHEN tool_name IN ('history.search', 'memory.search') THEN 1 ELSE 0 END) AS memory_searches,
         SUM(CASE WHEN tool_name IN ('memory.save', 'memory.correct', 'memory.link') THEN 1 ELSE 0 END) AS memory_updates
       FROM app_server_session_tool_activity
       WHERE session_id IN (${placeholders})
@@ -1891,7 +1891,7 @@ function sessionActivityCounts(events: readonly AppServerSessionEvent[]): AppSer
   let memoryUpdates = 0;
   for (const activity of activities) {
     const toolName = activity.slice(0, activity.indexOf("\u0000"));
-    if (toolName === "memory.search") memorySearches += 1;
+    if (toolName === "history.search" || toolName === "memory.search") memorySearches += 1;
     if (toolName === "memory.save" || toolName === "memory.correct" || toolName === "memory.link") {
       memoryUpdates += 1;
     }
@@ -1913,6 +1913,7 @@ function sessionToolActivityEntries(
     const toolName = optionalString(payload?.toolName) ?? optionalString(outer?.toolName);
     if (!toolName || ![
       "memory.search",
+      "history.search",
       "memory.save",
       "memory.correct",
       "memory.link",
@@ -2285,6 +2286,7 @@ function commentaryToolCopy(
   const copies: Readonly<Record<string, readonly [string, string]>> = {
     "memory.get": ["Read a memory", "Read {count} memories"],
     "memory.search": ["Searched memory", "Ran {count} memory searches"],
+    "history.search": ["Searched workspace history", "Ran {count} workspace history searches"],
     "investigation.status": ["Read the campaign track", "Read the campaign track {count} times"],
     "investigation.recall": ["Recalled campaign evidence", "Ran {count} campaign recalls"],
     "investigation.question": ["Updated a research question", "Updated {count} research questions"],

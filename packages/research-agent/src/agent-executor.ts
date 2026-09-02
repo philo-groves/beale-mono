@@ -433,7 +433,7 @@ export function createPiAgentExecutor(
       const researchToolNames = new Set(
         options.toolRegistry?.listTools().map((tool) => getToolTransportName(tool)) ?? [],
       );
-      const hasMemoryTools = researchToolNames.has("memory_search")
+      const hasMemoryTools = researchToolNames.has("history_search")
         && researchToolNames.has("memory_save")
         && researchToolNames.has("memory_link");
       const hasFindingTools = researchToolNames.has("finding_list")
@@ -1934,7 +1934,7 @@ function createToolCallFromHook(
 
 const RECALL_TOOL_NAMES = new Set([
   "memory_get",
-  "memory_search",
+  "history_search",
   "runbook_get",
   "runbook_list",
 ]);

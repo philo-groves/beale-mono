@@ -10,6 +10,7 @@ import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   MemoryGraphStore,
   createMemoryGraphTools,
+  createWorkspaceHistorySearchTool,
   createResearchToolRegistry,
   getDefaultMemoryDatabasePath,
   memoryCatalogHash,
@@ -128,26 +129,29 @@ test("memory graph saves concise knowledge additively and corrects it by revisio
   }
 });
 
-test("memory graph tools expose search, save, get, correct, and link", async () => {
+test("memory graph tools expose workspace history search, save, get, correct, and link", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-memory-tools-"));
   const store = new MemoryGraphStore({ workspaceRoot });
-  const registry = createResearchToolRegistry(createMemoryGraphTools(store));
+  const registry = createResearchToolRegistry([
+    createWorkspaceHistorySearchTool({ memoryStore: store }),
+    ...createMemoryGraphTools(store),
+  ]);
   try {
     const descriptors = registry.listDescriptors();
-    assert.deepEqual(descriptors.map((tool) => tool.name), ["memory.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
-    const searchDescriptor = descriptors.find((tool) => tool.name === "memory.search");
+    assert.deepEqual(descriptors.map((tool) => tool.name), ["history.search", "memory.get", "memory.save", "memory.correct", "memory.link"]);
+    const searchDescriptor = descriptors.find((tool) => tool.name === "history.search");
     const saveDescriptor = descriptors.find((tool) => tool.name === "memory.save");
-    assert.match(searchDescriptor.description, /current workspace by default/);
-    assert.match(searchDescriptor.description, /compact cards/);
-    assert.match(searchDescriptor.inputSchema.properties.scope.description, /Defaults to workspace/);
-    assert.equal(searchDescriptor.inputSchema.properties.limit.maximum, 25);
+    assert.match(searchDescriptor.description, /current workspace's canonical claims/);
+    assert.match(searchDescriptor.description, /compact typed cards/);
+    assert.deepEqual(searchDescriptor.inputSchema.properties.types.items.enum, ["memories"]);
+    assert.equal(searchDescriptor.inputSchema.properties.limit.maximum, 40);
     assert.match(saveDescriptor.description, /refined in place/);
     assert.equal("tier" in saveDescriptor.inputSchema.properties, false);
     const saveSchema = saveDescriptor.inputSchema;
     assert.deepEqual(saveSchema.properties.type.enum, ["asset", "invariant", "mitigation", "flow-endpoint", "trajectory"]);
-    assert.deepEqual(searchDescriptor.inputSchema.properties.types.items.enum, saveSchema.properties.type.enum);
-    assert.equal(searchDescriptor.inputSchema.properties.types.items.enum.includes("source"), false);
-    assert.equal(searchDescriptor.inputSchema.properties.types.items.enum.includes("sink"), false);
+    assert.deepEqual(searchDescriptor.inputSchema.properties.memoryTypes.items.enum, saveSchema.properties.type.enum);
+    assert.equal(searchDescriptor.inputSchema.properties.memoryTypes.items.enum.includes("source"), false);
+    assert.equal(searchDescriptor.inputSchema.properties.memoryTypes.items.enum.includes("sink"), false);
     assert.equal(saveSchema.properties.type.enum.includes("evidence"), false);
     assert.equal(saveSchema.properties.type.enum.includes("finding"), false);
     assert.deepEqual(saveSchema.properties.status.enum, ["draft", "suspected", "confirmed", "rejected", "stale"]);
@@ -184,12 +188,11 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     const firstSearch = await registry.execute({
       id: "search_flow_first",
       actionClass: "recall",
-      toolName: "memory.search",
+      toolName: "history.search",
       input: { query: "request template", limit: 8 },
     }, { agentId: "root" });
     assert.equal(firstSearch.result.status, "complete");
     assert.equal(firstSearch.result.output.detail, "summary");
-    assert.equal(firstSearch.result.output.unchangedReferenceCount, 0);
     assert.ok(firstSearch.result.output.results.length > 0);
     assert.ok(firstSearch.result.output.results.every((result) => result.detail === "summary"));
     assert.ok(firstSearch.result.output.results.every((result) => !("body" in result)));
@@ -198,19 +201,15 @@ test("memory graph tools expose search, save, get, correct, and link", async () 
     const repeatedSearch = await registry.execute({
       id: "search_flow_repeated",
       actionClass: "recall",
-      toolName: "memory.search",
+      toolName: "history.search",
       input: { query: "request template", limit: 8 },
     }, { agentId: "root" });
-    assert.equal(
-      repeatedSearch.result.output.unchangedReferenceCount,
-      repeatedSearch.result.output.resultCount,
-    );
-    assert.ok(repeatedSearch.result.output.results.every((result) => result.detail === "reference"));
+    assert.ok(repeatedSearch.result.output.results.every((result) => result.detail === "summary"));
 
     const peerSearch = await registry.execute({
       id: "search_flow_peer",
       actionClass: "recall",
-      toolName: "memory.search",
+      toolName: "history.search",
       input: { query: "request template", limit: 8 },
     }, { agentId: "peer" });
     assert.ok(peerSearch.result.output.results.every((result) => result.detail === "summary"));
@@ -435,12 +434,15 @@ test("memory graph uses a runtime profile for aliases, validation, and tool sche
     assert.deepEqual(store.search({ types: ["finding"] }).map((node) => node.id), [verified.id, aliasNode.id]);
     assert.equal(store.link(aliasNode.id, verified.id, "qualifies-evidence").relation, "qualifies-evidence");
 
-    const descriptors = createResearchToolRegistry(createMemoryGraphTools(store)).listDescriptors();
-    const searchSchema = descriptors.find((tool) => tool.name === "memory.search").inputSchema;
+    const descriptors = createResearchToolRegistry([
+      createWorkspaceHistorySearchTool({ memoryStore: store }),
+      ...createMemoryGraphTools(store),
+    ]).listDescriptors();
+    const searchSchema = descriptors.find((tool) => tool.name === "history.search").inputSchema;
     const saveDescriptor = descriptors.find((tool) => tool.name === "memory.save");
     const saveSchema = saveDescriptor.inputSchema;
     assert.deepEqual(saveSchema.properties.type.enum, ["claim", "finding"]);
-    assert.deepEqual(searchSchema.properties.types.items.enum, ["claim", "finding", "imported"]);
+    assert.deepEqual(searchSchema.properties.memoryTypes.items.enum, ["claim", "finding", "imported"]);
     assert.deepEqual(saveSchema.properties.status.enum, ["draft", "verified", "obsolete"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.kind.enum, ["citation", "note"]);
     assert.deepEqual(saveSchema.properties.evidence.items.properties.pathBase.enum, ["workspace", "external"]);

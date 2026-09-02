@@ -57,7 +57,7 @@ export function createRunbookTools(
     tool(
       "runbook.list",
       "runbook_list",
-      "List workspace runbooks before creating or repeating a reusable procedure.",
+      "List the bounded workspace runbook catalog when complete runbook records are needed. Use history.search for normal workspace-history search before creating or repeating a reusable procedure.",
       "read",
       LIST_PARAMETERS,
       (input) => {

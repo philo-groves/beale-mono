@@ -6,6 +6,7 @@ export * from "./memory-taxonomy.js";
 export * from "./database-migrations.js";
 export * from "./legacy-compatibility.js";
 export * from "./memory-graph-tools.js";
+export * from "./workspace-history-tools.js";
 export * from "./findings.js";
 export * from "./finding-tools.js";
 export * from "./campaign-graph.js";

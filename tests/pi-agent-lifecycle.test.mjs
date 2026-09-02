@@ -489,8 +489,8 @@ test("memory prompt gives root agents and subagents direct persistence ownership
       ...(agentPath ? { agentPath } : {}),
     });
     assert.match(prompt, /Use durable memory as a concise research graph/);
-    assert.match(prompt, /Search knowledge memory, leads, and findings early/);
-    assert.match(prompt, /Before saving, search for an existing memory/);
+    assert.match(prompt, /Search claims, knowledge memories, and runbooks together with history\.search early/);
+    assert.match(prompt, /Before saving, use history\.search to find an existing memory/);
     assert.doesNotMatch(prompt, /background curator|memory\.request|read-only to you/);
   }
 });
@@ -637,8 +637,8 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   const searchTool = createFixtureInspectTool([]);
   searchTool.descriptor = {
     ...searchTool.descriptor,
-    name: "memory.search",
-    transportName: "memory_search",
+    name: "history.search",
+    transportName: "history_search",
   };
   const linkTool = createFixtureInspectTool([]);
   linkTool.descriptor = {
@@ -663,7 +663,7 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   const systemPrompt = contexts[0].systemPrompt;
   assert.doesNotMatch(systemPrompt, /Never use the \$HOME environment variable/);
   assert.match(systemPrompt, /Use durable memory as a concise research graph/);
-  assert.match(systemPrompt, /Search knowledge memory plus leads and findings early/);
+  assert.match(systemPrompt, /Search claims, knowledge memories, and runbooks together with history\.search early/);
   assert.match(systemPrompt, /Evidence is attached to knowledge or claim records/);
   assert.match(systemPrompt, /Record suspected results with lead\.create/);
   assert.match(systemPrompt, /sources introduce attacker-controlled or lower-trust influence/);

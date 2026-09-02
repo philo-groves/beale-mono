@@ -90,7 +90,7 @@ const TOOL_RUNTIME_BUDGET_MS_BY_TOOL = new Map<string, number>([
   ["code.call_candidates", 30_000],
 ]);
 const MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL = new Map<string, number>([
-  ["memory.search", 12_000],
+  ["history.search", 12_000],
   ["finding.list", 8_000],
   ["investigation.status", 8_000],
   ["investigation.recall", 10_000],

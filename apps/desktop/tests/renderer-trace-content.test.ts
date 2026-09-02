@@ -305,7 +305,7 @@ describe('renderer trace content view models', () => {
       stderrTruncated: false
     });
     expect(appServerShellTraceOutput(appServerToolRequest('shell.run', { utility: 'make', args: ['test'] }))).toBeNull();
-    expect(appServerShellTraceOutput(appServerToolObservation('memory.search', { query: 'test' }, []))).toBeNull();
+    expect(appServerShellTraceOutput(appServerToolObservation('history.search', { query: 'test' }, { results: [] }))).toBeNull();
   });
 
   it('builds python previews and prose decisions for trace rows', () => {
@@ -381,6 +381,28 @@ describe('renderer trace content view models', () => {
     });
     expect(isProseTraceEvent(traceEvent({ source: 'model', type: 'model_message', payload: { text: 'Agent response', transcriptRole: 'assistant' } }), 'agent_output')).toBe(true);
     expect(lineRangePart({ lineStart: 12, lineEnd: 19 })).toBe('lines 12-19');
+  });
+
+  it('projects typed workspace history search results while retaining legacy memory-search traces', () => {
+    const history = appServerToolObservation('history.search', { query: 'parser' }, {
+      resultCount: 2,
+      results: [
+        { type: 'claim', id: 'claim_parser', title: 'Parser allocation' },
+        { type: 'runbook', id: 'runbook_parser', title: 'Parser reproduction' }
+      ]
+    });
+    expect(appServerMemorySearchResults(history)).toMatchObject({
+      allTitles: ['Parser allocation', 'Parser reproduction'],
+      resultCount: 2,
+      truncated: false
+    });
+    expect(isEmptyAppServerMemorySearchObservation(history)).toBe(false);
+    expect(isEmptyAppServerMemorySearchObservation(
+      appServerToolObservation('history.search', { types: ['claims'] }, { results: [] })
+    )).toBe(true);
+    expect(isEmptyAppServerMemorySearchObservation(
+      appServerToolObservation('memory.search', { query: 'legacy' }, [])
+    )).toBe(true);
   });
 
   it('builds structured verifier previews without raw id-heavy detail text', () => {

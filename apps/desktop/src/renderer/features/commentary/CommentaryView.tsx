@@ -1016,7 +1016,12 @@ export function commentaryMessageIcon(
   if (normalizedToolName.startsWith('report.') || normalizedToolName.startsWith('report_')) {
     return <FileText size={16} />;
   }
-  if (normalizedToolName.startsWith('memory.') || normalizedToolName.startsWith('memory_')) {
+  if (
+    normalizedToolName.startsWith('memory.')
+    || normalizedToolName.startsWith('memory_')
+    || normalizedToolName === 'history.search'
+    || normalizedToolName === 'history_search'
+  ) {
     return <Database size={16} />;
   }
   if (

@@ -203,7 +203,7 @@ export function createResearchContextSelectionPrompt(request: string): string {
   return [
     "You are the context preflight for a research session. Build the smallest useful starting context for the lead agent; do not conduct the research itself.",
     "",
-    "Inspect the compact workspace and research indexes, then use the available read-only tools to retrieve only material directly relevant to the request. Search existing memory, leads, findings, runbooks, and reports before scanning files. You may inspect the workspace and instruction-declared directory hints when that improves target orientation. Do not modify files, memory, claims, runbooks, reports, resources, or external state.",
+    "Inspect the compact workspace and research indexes, then use the available read-only tools to retrieve only material directly relevant to the request. Search existing claims, memories, and runbooks together with history.search, and inspect reports before scanning files. You may inspect the workspace and instruction-declared directory hints when that improves target orientation. Do not modify files, memory, claims, runbooks, reports, resources, or external state.",
     "",
     "Prefer exact canonical IDs, repository roots, evidence references, established negative results, current target/build facts, and unresolved proof obligations. Exclude merely recent or globally important research that is unrelated to this request. The lead agent retains all normal tools and may depart from your selection.",
     "",

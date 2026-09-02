@@ -318,8 +318,8 @@ function commentaryToolCall(
   const structuredLabel = commentaryStructuredToolCallLabel(toolName, input, output, detail);
   const label = repositorySearch
     ? commentaryRepositorySearchCallLabel(repositorySearch)
-    : toolName === 'memory.search'
-      ? commentaryMemorySearchCallLabel(input)
+    : toolName === 'history.search' || toolName === 'memory.search'
+      ? commentaryHistorySearchCallLabel(toolName, input)
       : structuredLabel ?? (observationLabel || requestLabel || humanizeToolName(toolName));
   const detailsDeferred = projection.requestEvent?.payload.commentaryDetailDeferred === true ||
     projection.observationEvent?.payload.commentaryDetailDeferred === true;
@@ -406,6 +406,7 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'memory.link': { singular: 'Linking Memories', plural: (count) => `Linking Memories ${count} Times` },
   'memory.save': { singular: 'Saving a Memory', plural: (count) => `Saving ${count} Memories` },
   'memory.search': { singular: 'Searching Memory', plural: (count) => `Searching Memory with ${count} Queries` },
+  'history.search': { singular: 'Searching Workspace History', plural: (count) => `Searching Workspace History with ${count} Queries` },
   'repository.search': { singular: 'Searching the Repository', plural: (count) => `Running ${count} Repository Searches` },
   'runbook.append': { singular: 'Updating a Runbook', plural: (count) => `Updating ${count} Runbooks` },
   'runbook.create': { singular: 'Creating a Runbook', plural: (count) => `Creating ${count} Runbooks` },
@@ -462,7 +463,7 @@ function commentaryToolMessageUsageText(
   useActiveToolTense = false
 ): string {
   if (toolName === 'repository.search') return commentaryRepositorySearchUsageText(count, toolCalls);
-  if (toolName === 'memory.search') return commentaryMemorySearchUsageText(count, toolCalls);
+  if (toolName === 'history.search' || toolName === 'memory.search') return commentaryHistorySearchUsageText(toolName, count, toolCalls);
   if (STRUCTURED_SINGULAR_TOOL_NAMES.has(toolName) && count === 1 && toolCalls[0]?.label) return toolCalls[0].label;
   const completed = !useActiveToolTense && toolCalls.length > 0 && toolCalls.every((toolCall) => toolCall.detailsDeferred
     ? Boolean(toolCall.observationTraceEventId)
@@ -680,20 +681,24 @@ function commentaryRunbookGetSelection(
   return 'entirety';
 }
 
-function commentaryMemorySearchUsageText(
+function commentaryHistorySearchUsageText(
+  toolName: 'history.search' | 'memory.search',
   count: number,
   toolCalls: readonly CommentaryToolCall[]
 ): string {
   const normalizedCount = Math.max(1, Math.floor(count));
   if (normalizedCount === 1) {
-    return toolCalls[0]?.label ?? commentaryToolUsageText('memory.search', 1);
+    return toolCalls[0]?.label ?? commentaryToolUsageText(toolName, 1);
   }
-  return `Searching memory with ${normalizedCount} queries`;
+  return toolName === 'history.search'
+    ? `Searching workspace history with ${normalizedCount} queries`
+    : `Searching memory with ${normalizedCount} queries`;
 }
 
-function commentaryMemorySearchCallLabel(inputValue: unknown): string {
+function commentaryHistorySearchCallLabel(toolName: 'history.search' | 'memory.search', inputValue: unknown): string {
   const query = firstStringValue(unknownRecord(inputValue), ['query']);
-  return query ? `Searching memory for "${query}"` : commentaryToolUsageText('memory.search', 1);
+  const subject = toolName === 'history.search' ? 'workspace history' : 'memory';
+  return query ? `Searching ${subject} for "${query}"` : commentaryToolUsageText(toolName, 1);
 }
 
 function commentaryRepositorySearchUsageText(

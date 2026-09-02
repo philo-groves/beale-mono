@@ -260,7 +260,7 @@ export function sessionMemoryActivitySummary(
 
   for (const event of events) {
     const toolName = appServerToolName(event);
-    const activity = toolName === 'memory.search'
+    const activity = toolName === 'history.search' || toolName === 'memory.search'
       ? 'search'
       : toolName === 'memory.save'
         ? 'save'

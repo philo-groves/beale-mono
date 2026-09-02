@@ -16,6 +16,7 @@ import {
   createLocalInspectionTool,
   createDeterministicAgentExecutor,
   createMemoryGraphTools,
+  createWorkspaceHistorySearchTool,
   createCampaignTrackTools,
   createFindingTools,
   FindingStore,
@@ -2508,7 +2509,8 @@ async function runInitialContextPreflight(input: {
 
 function isInitialContextReadTool(descriptor: ResearchToolDescriptor): boolean {
   if (descriptor.sideEffects !== "none" && descriptor.sideEffects !== "read") return false;
-  return descriptor.name === "lead.list"
+  return descriptor.name === "history.search"
+    || descriptor.name === "lead.list"
     || descriptor.name === "finding.list"
     || descriptor.name === "finding.completion_check"
     || descriptor.name === "investigation.status"
@@ -4100,6 +4102,14 @@ async function createRuntimeConfig(args: {
     executableTools.push(...runbookTools);
     toolDescriptors.push(...runbookTools.map((tool) => tool.descriptor));
     cleanupCallbacks.push(async () => runbooks.close());
+  }
+  if (memoryActive || runbookStore) {
+    const historySearchTool = createWorkspaceHistorySearchTool({
+      ...(memoryActive ? { memoryStore: memoryGraph, claimStore: findingStore } : {}),
+      ...(runbookStore ? { runbookStore } : {}),
+    });
+    executableTools.push(historySearchTool);
+    toolDescriptors.push(historySearchTool.descriptor);
   }
   if (resolvedResearchProfile.profile.capabilities.reportsEnabled === true
     && (resolvedResearchProfile.profile.id !== "security-research" || memoryActive)) {

@@ -135,15 +135,15 @@ describe('app-server session persistence boundary', () => {
           }
         });
         sessionStore.appendEvent(context.run.id, {
-          id: 'event_canonical_memory_search',
+          id: 'event_canonical_history_search',
           kind: 'research.event',
           timestamp: new Date().toISOString(),
           summary: 'Memory search completed.',
           payload: {
             event: {
-              id: 'nested_canonical_memory_search',
+              id: 'nested_canonical_history_search',
               kind: 'tool.observed',
-              payload: { toolActionId: 'memory_search_one', toolName: 'memory.search' }
+              payload: { toolActionId: 'history_search_one', toolName: 'history.search' }
             }
           }
         });

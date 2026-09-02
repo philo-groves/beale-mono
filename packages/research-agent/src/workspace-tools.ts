@@ -14,6 +14,12 @@ export {
 } from "./memory-graph.js";
 export { createMemoryGraphTools } from "./memory-graph-tools.js";
 export {
+  createWorkspaceHistorySearchTool,
+  WORKSPACE_HISTORY_TYPES,
+  type WorkspaceHistorySearchToolOptions,
+  type WorkspaceHistoryType,
+} from "./workspace-history-tools.js";
+export {
   CampaignTrackStore,
   readCampaignTrackSummaries,
   readLatestCampaignTrackReplayMetrics,

@@ -150,7 +150,7 @@ export function appServerToolTraceSubtext(event: TraceEventRecord, detail: RunDe
     return shellCommandPreview(inputs) || shellCommandPreview(result);
   }
   if (!inputs) return '';
-  if (toolName === 'memory.search') return stringRecordValue(inputs, 'query') ?? '';
+  if (toolName === 'history.search' || toolName === 'memory.search') return stringRecordValue(inputs, 'query') ?? '';
   if (toolName === 'memory.save') {
     const result = tracePayloadRecord(payload, 'result');
     const memoryType = (result ? stringRecordValue(result, 'type') : null) ?? stringRecordValue(inputs, 'type');
@@ -432,9 +432,16 @@ function oneLineShellCommand(value: string): string {
 }
 
 export function isEmptyAppServerMemorySearchObservation(event: TraceEventRecord): boolean {
-  if (appServerToolEventKind(event) !== 'tool.observed' || appServerToolName(event) !== 'memory.search' || isAppServerToolObservationError(event)) return false;
+  const toolName = appServerToolName(event);
+  if (appServerToolEventKind(event) !== 'tool.observed' || (toolName !== 'history.search' && toolName !== 'memory.search') || isAppServerToolObservationError(event)) return false;
   const payload = appServerEventToolPayload(event);
-  return Boolean(payload && Array.isArray(payload.result) && payload.result.length === 0);
+  const result = payload?.result;
+  const items = Array.isArray(result)
+    ? result
+    : result && typeof result === 'object' && !Array.isArray(result) && Array.isArray((result as Record<string, unknown>).results)
+      ? (result as Record<string, unknown>).results as unknown[]
+      : null;
+  return Boolean(items && items.length === 0);
 }
 
 export interface AppServerMemorySearchResultsPreview {
@@ -448,10 +455,16 @@ export function appServerMemorySearchResults(
   event: TraceEventRecord,
   maxResults = DEFAULT_TRACE_PREVIEW_LINE_LIMIT
 ): AppServerMemorySearchResultsPreview | null {
-  if (appServerToolEventKind(event) !== 'tool.observed' || appServerToolName(event) !== 'memory.search' || isAppServerToolObservationError(event)) return null;
+  const toolName = appServerToolName(event);
+  if (appServerToolEventKind(event) !== 'tool.observed' || (toolName !== 'history.search' && toolName !== 'memory.search') || isAppServerToolObservationError(event)) return null;
   const payload = appServerEventToolPayload(event);
-  const result = payload?.result;
-  if (!Array.isArray(result) || result.length === 0) return null;
+  const rawResult = payload?.result;
+  const result = Array.isArray(rawResult)
+    ? rawResult
+    : rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult) && Array.isArray((rawResult as Record<string, unknown>).results)
+      ? (rawResult as Record<string, unknown>).results as unknown[]
+      : null;
+  if (!result || result.length === 0) return null;
 
   const allTitles = result.flatMap((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];

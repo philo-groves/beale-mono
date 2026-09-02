@@ -321,6 +321,7 @@ test("workspace-tools exposes the compatibility surface without generic global a
     "MemoryGraphStore",
     "RunbookStore",
     "createMemoryGraphTools",
+    "createWorkspaceHistorySearchTool",
     "createRunbookTools",
     "createResearchToolRegistry",
     "resolveResearchProfile",

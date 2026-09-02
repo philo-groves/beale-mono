@@ -295,6 +295,7 @@ function toolLabelInputKeys(toolName: string): readonly string[] {
     case 'channel_list': return [];
     case 'channel_read': return ['channel_name'];
     case 'resource.catalog': return ['operation'];
+    case 'history.search':
     case 'memory.search': return ['query'];
     case 'memory.save': return ['type', 'status'];
     case 'memory.link': return ['fromId', 'relation', 'toId'];
