@@ -23,6 +23,63 @@ import {
 
 const workspace = { workspaceId: "workspace_findings", workspaceName: "Findings", subjectId: "subject_findings", subjectName: "Findings" };
 
+test("same-status finding transitions append evidence without creating duplicate claims", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-finding-evidence-append-"));
+  const graph = new MemoryGraphStore({ workspaceRoot, context: { ...workspace, sessionId: "session_append" } });
+  const claims = new FindingStore(graph);
+  try {
+    let claim = claims.create({
+      title: "Parser accepts an ambiguous frame",
+      summary: "A crafted frame reaches an ambiguous parser branch.",
+      classification: "security.primitive",
+      rating: "medium",
+    });
+    claim = claims.transition(claim.id, {
+      expectedRevision: claim.revision,
+      toStatus: "observed",
+      reason: "The ambiguous branch is directly reachable.",
+      evidence: [{ kind: "code", referenceId: "src/frame-parser.ts:84", summary: "The branch accepts both frame forms." }],
+    });
+    const firstEvidenceId = claim.evidence[0].id;
+
+    assert.throws(() => claims.transition(claim.id, {
+      expectedRevision: claim.revision,
+      toStatus: "observed",
+      reason: "No new evidence was supplied.",
+    }), /requires at least one new evidence item/);
+
+    const registry = createResearchToolRegistry(createFindingTools(claims));
+    const appended = await registry.execute({
+      id: "append_same_status_evidence",
+      toolName: "finding.transition",
+      actionClass: "synthesize",
+      input: {
+        id: claim.id,
+        expectedRevision: claim.revision,
+        toStatus: "observed",
+        reason: "A second source location confirms the same observed behavior.",
+        evidence: [{ kind: "code", referenceId: "src/frame-validator.ts:31", summary: "Validation preserves the ambiguous form." }],
+      },
+    });
+    assert.equal(appended.result.status, "complete");
+    claim = appended.result.output;
+
+    assert.equal(claim.status, "observed");
+    assert.equal(claim.maturity, "observed");
+    assert.equal(claim.revision, 3);
+    assert.equal(claim.evidence.length, 2);
+    assert.equal(claim.evidence[0].id, firstEvidenceId);
+    assert.equal(claim.transitions.at(-1).fromStatus, "observed");
+    assert.equal(claim.transitions.at(-1).toStatus, "observed");
+    assert.deepEqual(claim.transitions.at(-1).evidenceIds, [claim.evidence[1].id]);
+    assert.equal(claims.list().length, 1);
+  } finally {
+    claims.close();
+    graph.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("finding lifecycle is canonical, evidence-gated, and supports same-session independent verification and reporting", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-findings-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));

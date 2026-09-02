@@ -157,7 +157,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       ...(Array.isArray(input.componentClaimIds) ? { componentClaimIds: input.componentClaimIds.map((id) => requiredString(id, "componentClaimIds[]")) } : {}),
       ...(input.securityTracking !== undefined ? { securityTracking: parseSecurityTrackingUpdate(input.securityTracking) } : {}),
     }, context?.modelAuthor, context?.agentId)),
-    findingTool("finding.transition", "finding_transition", "Update a canonical claim through its evidence-gated lifecycle. Direct observation promotes a lead to the finding view without changing its ID. Reproduction requires a successful runbook; verification must be independent; reporting and disclosure require matching durable references.", "write", {
+    findingTool("finding.transition", "finding_transition", "Update a canonical claim through its evidence-gated lifecycle, or append new evidence by using its current status as toStatus. Same-status evidence appends retain the claim ID and maturity while creating an immutable revision. Direct observation promotes a lead to the finding view without changing its ID. Reproduction requires a successful runbook; verification must be independent; reporting and disclosure require matching durable references.", "write", {
       type: "object",
       required: ["id", "expectedRevision", "toStatus", "reason"],
       properties: {

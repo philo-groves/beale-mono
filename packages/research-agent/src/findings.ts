@@ -208,8 +208,12 @@ export class ResearchClaimStore {
     if (current.revision !== input.expectedRevision) {
       throw new Error(`Research claim revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
     }
-    if (!ALLOWED_TRANSITIONS[current.status].includes(input.toStatus)) {
+    const appendingEvidenceAtCurrentStatus = current.status === input.toStatus;
+    if (!appendingEvidenceAtCurrentStatus && !ALLOWED_TRANSITIONS[current.status].includes(input.toStatus)) {
       throw new Error(`Research claim transition ${current.status} -> ${input.toStatus} is not allowed.`);
+    }
+    if (appendingEvidenceAtCurrentStatus && (input.evidence?.length ?? 0) === 0) {
+      throw new Error(`Research claim ${current.status} evidence append requires at least one new evidence item.`);
     }
     const context = this.memoryGraph.getContext();
     if (current.workspaceId !== context.workspaceId) throw new Error("Finding is outside the active workspace.");
