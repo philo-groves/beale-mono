@@ -116,29 +116,28 @@ function mergeTraceEvents(current: TraceEventRecord[], incoming: TraceEventRecor
 }
 
 function mergeTranscriptMessages(current: TranscriptMessageRecord[], incoming: TranscriptMessageRecord[]): TranscriptMessageRecord[] {
-  if (incoming.length === 0) return current;
-  if (canAppendTranscriptMessages(current, incoming) && !replacesSyntheticTerminalResponse(current, incoming)) {
-    return [...current, ...incoming];
+  if (incoming.length === 0) return coalesceEquivalentTerminalResponses(current);
+  if (canAppendTranscriptMessages(current, incoming)) {
+    return coalesceEquivalentTerminalResponses([...current, ...incoming]);
   }
   const byId = new Map(current.map((message) => [message.id, message]));
-  for (const message of incoming) {
-    if (isCanonicalTerminalResponse(message)) {
-      for (const [id, existing] of byId) {
-        if (isSyntheticTerminalResponse(existing) && sameTerminalResponse(existing, message)) byId.delete(id);
-      }
-    }
-    byId.set(message.id, message);
-  }
-  return Array.from(byId.values()).sort(compareTranscriptMessages);
+  for (const message of incoming) byId.set(message.id, message);
+  return coalesceEquivalentTerminalResponses(Array.from(byId.values())).sort(compareTranscriptMessages);
 }
 
-function replacesSyntheticTerminalResponse(
-  current: readonly TranscriptMessageRecord[],
-  incoming: readonly TranscriptMessageRecord[]
-): boolean {
-  return incoming.some((message) => isCanonicalTerminalResponse(message) && current.some((existing) => (
-    isSyntheticTerminalResponse(existing) && sameTerminalResponse(existing, message)
-  )));
+function coalesceEquivalentTerminalResponses(messages: TranscriptMessageRecord[]): TranscriptMessageRecord[] {
+  const canonicalResponseKeys = new Set(
+    messages.filter(isCanonicalTerminalResponse).map(terminalResponseKey)
+  );
+  const hasEquivalentSynthetic = messages.some((message) => (
+    isSyntheticTerminalResponse(message)
+    && canonicalResponseKeys.has(terminalResponseKey(message))
+  ));
+  if (!hasEquivalentSynthetic) return messages;
+  return messages.filter((message) => (
+    !isSyntheticTerminalResponse(message)
+    || !canonicalResponseKeys.has(terminalResponseKey(message))
+  ));
 }
 
 function isSyntheticTerminalResponse(message: TranscriptMessageRecord): boolean {
@@ -154,14 +153,15 @@ function isCanonicalTerminalResponse(message: TranscriptMessageRecord): boolean 
     && message.phase === 'final_answer';
 }
 
-function sameTerminalResponse(left: TranscriptMessageRecord, right: TranscriptMessageRecord): boolean {
-  const leftAgentPath = typeof left.metadata.agentPath === 'string' ? left.metadata.agentPath : '/root';
-  const rightAgentPath = typeof right.metadata.agentPath === 'string' ? right.metadata.agentPath : '/root';
-  return left.runId === right.runId
-    && left.attemptId === right.attemptId
-    && leftAgentPath === rightAgentPath
-    && left.source === right.source
-    && left.contentMarkdown.replace(/\s+/g, ' ').trim() === right.contentMarkdown.replace(/\s+/g, ' ').trim();
+function terminalResponseKey(message: TranscriptMessageRecord): string {
+  const agentPath = typeof message.metadata.agentPath === 'string' ? message.metadata.agentPath : '/root';
+  return [
+    message.runId,
+    message.attemptId ?? '',
+    agentPath,
+    message.source,
+    message.contentMarkdown.replace(/\s+/g, ' ').trim()
+  ].join('\u0000');
 }
 
 function canAppendTraceEvents(current: readonly TraceEventRecord[], incoming: readonly TraceEventRecord[]): boolean {

@@ -879,11 +879,15 @@ function registerIpc(): void {
       workspaceService.updateReportTriageStatus(input)
     )
   );
+  ipcMain.handle(IPC_CHANNELS.getReportSubmissionPacketPath, (_event, locator: AppServerReportLocator) =>
+    timedMainIpcAsync('getReportSubmissionPacketPath', { report: shortMetricId(locator.reportId) }, () =>
+      workspaceService.resolveReportSubmissionPacketPath(locator)
+    )
+  );
   ipcMain.handle(IPC_CHANNELS.openReportSubmissionPacket, async (_event, locator: AppServerReportLocator) =>
     timedMainIpcAsync('openReportSubmissionPacket', { report: shortMetricId(locator.reportId) }, async () => {
       const path = await workspaceService.resolveReportSubmissionPacketPath(locator);
-      const error = await shell.openPath(path);
-      if (error) throw new Error(error);
+      shell.showItemInFolder(path);
     })
   );
   ipcMain.handle(IPC_CHANNELS.chooseReportSubmissionPacket, async (_event, locator: AppServerReportLocator) => {

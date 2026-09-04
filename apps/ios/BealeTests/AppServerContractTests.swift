@@ -42,6 +42,18 @@ private final class TestOperatorTokenStore: OperatorTokenStore, @unchecked Senda
 }
 
 final class AppServerContractTests: XCTestCase {
+    func testContinuationRequestEncodesWorkspaceAndInstruction() throws {
+        let encoded = try JSONEncoder().encode(
+            AppServerSessionContinuationRequest(
+                workspaceId: "workspace-example",
+                instruction: "Continue with the retained session history."
+            )
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: String])
+        XCTAssertEqual(object["workspaceId"], "workspace-example")
+        XCTAssertEqual(object["instruction"], "Continue with the retained session history.")
+    }
+
     @MainActor
     func testPersistsMultipleIndependentConnections() async {
         let (defaults, suiteName) = makeIsolatedDefaults()
@@ -260,6 +272,8 @@ final class AppServerContractTests: XCTestCase {
                 "session.exit-diagnostics",
                 "session.transport-path.v1",
                 "session.reconnect.v1",
+                "session.event-identity.v1",
+                "session.continuation.v1",
                 "session.multi-client.v1",
                 "host.control.v1",
                 "host.descriptor.v1",
@@ -278,6 +292,71 @@ final class AppServerContractTests: XCTestCase {
         )
         let health = try JSONDecoder().decode(AppServerHealth.self, from: data)
         XCTAssertNoThrow(try health.validateCompatibility())
+    }
+
+    func testValidatesCurrentWebSocketServerHello() throws {
+        let data = try XCTUnwrap(
+            """
+            {
+              "protocolVersion": 1,
+              "type": "server.hello",
+              "sessionId": "session-1",
+              "server": {
+                "name": "app-server",
+                "version": "0.1.0",
+                "buildId": "build-current"
+              },
+              "contractVersion": 19,
+              "schemas": {
+                "protocol": 1,
+                "session": 1,
+                "memorySummary": 12,
+                "finding": 5,
+                "campaignGraph": 4,
+                "goalSuggestions": 1
+              },
+              "capabilities": [
+                "session.events",
+                "session.controls",
+                "session.event-identity.v1"
+              ]
+            }
+            """.data(using: .utf8)
+        )
+        let hello = try JSONDecoder().decode(AppServerWebSocketServerHello.self, from: data)
+
+        XCTAssertNoThrow(try hello.validateCompatibility(sessionId: "session-1"))
+        XCTAssertThrowsError(try hello.validateCompatibility(sessionId: "session-2"))
+    }
+
+    func testRejectsPreviousWebSocketContract() throws {
+        let data = try XCTUnwrap(
+            """
+            {
+              "protocolVersion": 1,
+              "type": "server.hello",
+              "sessionId": "session-1",
+              "server": {
+                "name": "app-server",
+                "version": "0.1.0",
+                "buildId": "build-old"
+              },
+              "contractVersion": 18,
+              "schemas": {
+                "protocol": 1,
+                "session": 1,
+                "memorySummary": 12,
+                "finding": 5,
+                "campaignGraph": 4,
+                "goalSuggestions": 1
+              },
+              "capabilities": ["session.events", "session.controls"]
+            }
+            """.data(using: .utf8)
+        )
+        let hello = try JSONDecoder().decode(AppServerWebSocketServerHello.self, from: data)
+
+        XCTAssertThrowsError(try hello.validateCompatibility(sessionId: "session-1"))
     }
 
     func testRejectsMissingCapabilities() throws {

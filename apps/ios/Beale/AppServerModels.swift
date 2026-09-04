@@ -58,14 +58,23 @@ enum BealeAppServerContract {
     static let controlVersion = 1
     static let sessionLaunchVersion = 2
     static let appServerProtocolVersion = 1
+    static let appServerContractVersion = 19
     static let memoryNotificationSchemaVersion = 3
     static let workspaceMemorySchemaVersion = 4
+
+    static let requiredWebSocketCapabilities: Set<String> = [
+        "session.events",
+        "session.controls",
+        "session.event-identity.v1"
+    ]
 
     static let requiredCapabilities: Set<String> = [
         "session.typed-launch.v2",
         "session.exit-diagnostics",
         "session.transport-path.v1",
         "session.reconnect.v1",
+        "session.event-identity.v1",
+        "session.continuation.v1",
         "session.multi-client.v1",
         "host.control.v1",
         "host.descriptor.v1",
@@ -100,6 +109,66 @@ struct AppServerHealth: Decodable, Sendable {
         guard missing.isEmpty else {
             throw AppServerClientError.incompatible(
                 "The app-server is missing required capabilities: \(missing.sorted().joined(separator: ", "))."
+            )
+        }
+    }
+}
+
+struct AppServerWebSocketSchemas: Decodable, Sendable {
+    let protocolSchema: Int
+    let session: Int
+    let memorySummary: Int
+    let finding: Int
+    let campaignGraph: Int
+    let goalSuggestions: Int
+
+    enum CodingKeys: String, CodingKey {
+        case protocolSchema = "protocol"
+        case session
+        case memorySummary
+        case finding
+        case campaignGraph
+        case goalSuggestions
+    }
+
+    var isCompatible: Bool {
+        protocolSchema == 1
+            && session == 1
+            && memorySummary == 12
+            && finding == 5
+            && campaignGraph == 4
+            && goalSuggestions == 1
+    }
+}
+
+struct AppServerWebSocketServerHello: Decodable, Sendable {
+    struct Server: Decodable, Sendable {
+        let name: String
+        let version: String
+        let buildId: String
+    }
+
+    let protocolVersion: Int
+    let type: String
+    let sessionId: String
+    let server: Server
+    let contractVersion: Int
+    let schemas: AppServerWebSocketSchemas
+    let capabilities: [String]
+
+    func validateCompatibility(sessionId expectedSessionId: String) throws {
+        let missingCapabilities = BealeAppServerContract.requiredWebSocketCapabilities.subtracting(capabilities)
+        guard protocolVersion == BealeAppServerContract.appServerProtocolVersion,
+              type == "server.hello",
+              sessionId == expectedSessionId,
+              server.name == "app-server",
+              !server.version.isEmpty,
+              !server.buildId.isEmpty,
+              contractVersion == BealeAppServerContract.appServerContractVersion,
+              schemas.isCompatible,
+              missingCapabilities.isEmpty else {
+            throw AppServerClientError.incompatible(
+                "The session transport uses an unsupported app-server contract."
             )
         }
     }
@@ -518,6 +587,11 @@ struct AppServerSessionLaunchRequest: Encodable, Sendable {
             generateTitle: true
         )
     }
+}
+
+struct AppServerSessionContinuationRequest: Encodable, Sendable {
+    let workspaceId: String
+    let instruction: String
 }
 
 struct AppServerResearchPromptSuggestion: Decodable, Identifiable, Sendable {

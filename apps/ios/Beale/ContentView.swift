@@ -1381,12 +1381,28 @@ private struct RemoteSessionView: View {
                                 steeringInstruction = ""
                             }
                         },
-                        stop: { await model.stopSession(session, in: workspace) }
+                        stop: { await model.stopSession(session, in: workspace) },
+                        allowsStop: true
                     )
                 }
+            } else if ["blocked", "completed", "failed", "stopped"].contains(currentSession.status) {
+                SessionSteeringComposer(
+                    instruction: $steeringInstruction,
+                    isSending: model.isSendingSteering(for: session),
+                    isStopping: false,
+                    error: model.steeringError(for: session),
+                    send: {
+                        let submitted = steeringInstruction
+                        if await model.sendSteering(submitted, to: session, in: workspace) {
+                            steeringInstruction = ""
+                        }
+                    },
+                    stop: { false },
+                    allowsStop: false
+                )
             }
         }
-        .task(id: session.id) {
+        .task(id: "\(session.id):\(currentSession.status)") {
             await model.followSession(session, in: workspace)
         }
     }
@@ -1485,6 +1501,7 @@ private struct SessionSteeringComposer: View {
     let error: String?
     let send: () async -> Void
     let stop: () async -> Bool
+    let allowsStop: Bool
 
     private var hasInstruction: Bool {
         !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1513,7 +1530,7 @@ private struct SessionSteeringComposer: View {
                     Task {
                         if hasInstruction {
                             await send()
-                        } else {
+                        } else if allowsStop {
                             _ = await stop()
                         }
                     }
@@ -1525,17 +1542,21 @@ private struct SessionSteeringComposer: View {
                         Image(systemName: "arrow.up")
                             .font(.body.weight(.bold))
                             .frame(width: 20, height: 20)
-                    } else {
+                    } else if allowsStop {
                         Image(systemName: "square.fill")
                             .font(.system(size: 10, weight: .bold))
+                            .frame(width: 20, height: 20)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.body.weight(.bold))
                             .frame(width: 20, height: 20)
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.circle)
-                .tint(hasInstruction ? BealeTheme.text : .red)
-                .disabled(hasInstruction ? !canSend : isSending || isStopping)
-                .accessibilityLabel(hasInstruction ? "Send message" : "Stop session")
+                .tint(hasInstruction || !allowsStop ? BealeTheme.text : .red)
+                .disabled(hasInstruction ? !canSend : !allowsStop || isSending || isStopping)
+                .accessibilityLabel(hasInstruction || !allowsStop ? "Send message" : "Stop session")
             }
         }
         .padding(.horizontal, 12)

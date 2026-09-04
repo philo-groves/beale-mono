@@ -21,6 +21,7 @@ import {
   APP_SERVER_PROTOCOL_OPERATIONS,
   APP_SERVER_SESSION_LAUNCH_VERSION,
   decodeAppServerClientMessage,
+  decodeBealeAppServerSessionContinuationRequest,
   decodeAppServerSessionLaunchRequest,
   appServerServerHello,
   appServerSessionEvent,
@@ -62,6 +63,7 @@ import {
   longSessionRecoveryDelayMs,
   longSessionRecoveryFallbackPrompt
 } from './sessionRecovery.js';
+import { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
 
 installUndiciTypeOfServiceCompatibility();
 
@@ -179,8 +181,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     || (options.discoveryFile
       ? readOrCreateOperatorToken(operatorTokenPath(options.discoveryFile))
       : generateOperatorToken());
-  const hostService = options.hostService ?? new AppServerHostService();
-  const spawnSession = options.spawnSession ?? spawnAppServerSession;
+  const databaseCoordinator = new AppServerWorkerDatabaseCoordinator();
+  const hostService = options.hostService ?? new AppServerHostService({ databaseCoordinator });
+  const spawnSession = options.spawnSession ?? ((spawnOptions: SpawnAppServerSessionOptions) => (
+    spawnAppServerSession({ ...spawnOptions, databaseCoordinator })
+  ));
   const recoveryOptions = options.longSessionRecovery === false
     ? null
     : options.longSessionRecovery ?? {};
@@ -626,6 +631,32 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       sendJson(response, 201, started);
       return;
     }
+    const continuationMatch = /^\/v1\/sessions\/([^/]+)\/continuations$/.exec(url.pathname);
+    if (continuationMatch && request.method === 'POST') {
+      const sessionId = decodeURIComponent(continuationMatch[1] ?? '');
+      const current = sessions.get(sessionId);
+      if (current && !isTerminal(current.state)) {
+        throw new HttpError(409, `Session ${sessionId} is still active.`);
+      }
+      let continuation;
+      try {
+        continuation = decodeBealeAppServerSessionContinuationRequest(await readJsonBody(request));
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : 'Invalid session continuation request.');
+      }
+      const launchRequest = await hostCall(() => hostService.createSessionContinuationRequest(
+        continuation.workspaceId,
+        sessionId,
+        continuation.instruction
+      ));
+      const started = await startSession(
+        launchRequest,
+        false,
+        () => hostCall(() => hostService.recordSessionContinuationInstruction(launchRequest))
+      );
+      sendJson(response, 201, started);
+      return;
+    }
     if (request.method === 'POST' && url.pathname === BEALE_APP_SERVER_SHUTDOWN_PATH) {
       if (!options.onShutdownRequested) {
         throw new HttpError(501, 'This app-server host does not support control-plane shutdown.');
@@ -707,7 +738,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     return { sessionId, request };
   }
 
-  async function startSession(input: unknown, residentIntrospection = false): Promise<StartedSession> {
+  async function startSession(
+    input: unknown,
+    residentIntrospection = false,
+    beforeLaunch?: () => Promise<void>
+  ): Promise<StartedSession> {
     const normalized = normalizeSessionRequest(input);
     let request = normalized.request;
     let residentIntrospectionToken: string | null = null;
@@ -729,13 +764,16 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         workspaceId: request.launch.workspaceId
       });
     }
-    const prepared = await hostCall(() => hostService.prepareSession(
-      request,
-      normalized.sessionId
-    )).catch((error) => {
-      if (residentIntrospectionToken) introspectionBindings.delete(residentIntrospectionToken);
-      throw error;
-    });
+    const prepared = await (async () => {
+      try {
+        const result = await hostCall(() => hostService.prepareSession(request, normalized.sessionId));
+        await beforeLaunch?.();
+        return result;
+      } catch (error) {
+        if (residentIntrospectionToken) introspectionBindings.delete(residentIntrospectionToken);
+        throw error;
+      }
+    })();
     const { sessionId, attemptId } = prepared;
     const existing = sessions.get(sessionId);
     if (existing && !isTerminal(existing.state)) {

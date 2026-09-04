@@ -26,7 +26,10 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
 } from "@beale/app-server-runtime/protocol";
 import { AppServerSessionStore } from "../../packages/research-agent/dist/index.js";
-import { AppServerWorkerDatabaseBroker } from "../dist/workerDatabaseBroker.js";
+import {
+  AppServerWorkerDatabaseBroker,
+  AppServerWorkerDatabaseCoordinator,
+} from "../dist/workerDatabaseBroker.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const WebSocket = requireFromHere("ws");
@@ -126,6 +129,63 @@ test("control plane requires the operator bearer token", async () => {
     operations: "/v1/operations",
     shutdown: "/v1/server/shutdown",
   });
+});
+
+test("continues a terminal session through the authenticated control plane", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-continuation-route-"));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const hostService = testHostService(directory);
+  const continuationCalls = [];
+  hostService.createSessionContinuationRequest = async (workspaceId, sessionId, instruction) => {
+    continuationCalls.push({ workspaceId, sessionId, instruction });
+    const request = sessionLaunchRequest(directory, { sessionId, promptMarkdown: instruction });
+    request.launch.attemptId = "attempt-continuation";
+    request.launch.generateTitle = false;
+    request.launch.continuation = {
+      resumeAttemptId: "attempt-original",
+      resumeFromInitialAttempt: true,
+      fallbackPrompt: "Retained canonical session history.",
+    };
+    return request;
+  };
+  hostService.recordSessionContinuationInstruction = async (request) => {
+    continuationCalls.push({ recordedAttemptId: request.launch.attemptId });
+  };
+  const server = await startAppServer({
+    hostService,
+    spawnSession: async (...args) => {
+      continuationCalls.push({ spawned: true });
+      return await upstream.spawnSession(...args);
+    },
+    operatorToken: "operator-secret",
+  });
+  servers.push(server);
+
+  const response = await fetch(`${server.url}/v1/sessions/session-existing/continuations`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer operator-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      workspaceId: "workspace-test",
+      instruction: "Continue from the prior evidence.",
+    }),
+  });
+  assert.equal(response.status, 201);
+  const started = await response.json();
+  assert.equal(started.session.sessionId, "session-existing");
+  assert.deepEqual(continuationCalls, [
+    {
+      workspaceId: "workspace-test",
+      sessionId: "session-existing",
+      instruction: "Continue from the prior evidence.",
+    },
+    { recordedAttemptId: "attempt-continuation" },
+    { spawned: true },
+  ]);
+  upstream.complete();
 });
 
 test("publishes a path-free model catalog for connected providers with host defaults", async () => {
@@ -577,6 +637,82 @@ test("mediates runtime-worker SQLite operations through host-owned connections",
   }
 });
 
+test("serializes cross-worker transactions without blocking the app-server event loop", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-worker-database-lease-"));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, "memory.sqlite");
+  const coordinator = new AppServerWorkerDatabaseCoordinator();
+  const firstBroker = new AppServerWorkerDatabaseBroker(databasePath, coordinator);
+  const secondBroker = new AppServerWorkerDatabaseBroker(databasePath, coordinator);
+  try {
+    const firstConnectionId = brokerRequest(firstBroker, {
+      operation: "open",
+      databasePath,
+    }).value;
+    const secondConnectionId = brokerRequest(secondBroker, {
+      operation: "open",
+      databasePath,
+    }).value;
+    assert.equal(brokerRequest(firstBroker, {
+      operation: "exec",
+      connectionId: firstConnectionId,
+      sql: "CREATE TABLE runbook_updates (id TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    }).ok, true);
+    assert.equal(brokerRequest(firstBroker, {
+      operation: "exec",
+      connectionId: firstConnectionId,
+      sql: "BEGIN IMMEDIATE",
+    }).ok, true);
+
+    const queuedInsert = brokerRequestMessage({
+      operation: "run",
+      connectionId: secondConnectionId,
+      sql: "INSERT INTO runbook_updates (id, value) VALUES (?, ?)",
+      parameters: ["second", "queued"],
+    });
+    secondBroker.handle(queuedInsert.message);
+    assert.equal(Atomics.load(new Int32Array(queuedInsert.responseBuffer, 0, 2), 0), 0);
+
+    let hostReadStarted = false;
+    const hostRead = coordinator.runWhenAvailable(databasePath, () => {
+      hostReadStarted = true;
+      const database = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        return database.prepare("SELECT COUNT(*) AS count FROM runbook_updates").get().count;
+      } finally {
+        database.close();
+      }
+    });
+    assert.equal(hostReadStarted, false);
+
+    assert.equal(brokerRequest(firstBroker, {
+      operation: "run",
+      connectionId: firstConnectionId,
+      sql: "INSERT INTO runbook_updates (id, value) VALUES (?, ?)",
+      parameters: ["first", "transaction owner"],
+    }).ok, true);
+    assert.equal(brokerRequest(firstBroker, {
+      operation: "exec",
+      connectionId: firstConnectionId,
+      sql: "COMMIT",
+    }).ok, true);
+
+    assert.equal(brokerResponse(queuedInsert.responseBuffer).ok, true);
+    assert.equal(await hostRead, 2);
+    assert.deepEqual(brokerRequest(secondBroker, {
+      operation: "all",
+      connectionId: secondConnectionId,
+      sql: "SELECT id, value FROM runbook_updates ORDER BY id",
+    }).value, [
+      { id: "first", value: "transaction owner" },
+      { id: "second", value: "queued" },
+    ]);
+  } finally {
+    firstBroker.close();
+    secondBroker.close();
+  }
+});
+
 test("keeps SQLite construction out of the app-server runtime worker", () => {
   const workerSource = readFileSync(new URL("../dist/runtimeWorker.js", import.meta.url), "utf8");
   const clientSource = readFileSync(new URL("../dist/workerDatabaseClient.js", import.meta.url), "utf8");
@@ -828,6 +964,85 @@ test("validates session update ownership without a redundant summary read", asyn
     "session", "get-update", "--session-id", "session-test",
     "--tail", "--limit", "25", "--max-bytes", "4096",
   ]);
+});
+
+test("continues an inactive canonical session with its original prompt and transcript history", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-continuation-"));
+  temporaryDirectories.push(directory);
+  const calls = [];
+  const originalPrompt = "Inspect the example parser without restarting the investigation.";
+  const session = {
+    id: "session-continue",
+    workspaceId: "workspace-test",
+    status: "completed",
+    prompt: originalPrompt,
+    attempts: [{ id: "attempt-original", parentAttemptId: null }],
+    metadata: {
+      appServerRestartLaunch: {
+        schemaVersion: 1,
+        eligible: true,
+        launch: {
+          workspaceId: "workspace-test",
+          promptMarkdown: originalPrompt,
+          provider: { id: "openai-codex" },
+          shellSafetyMode: "auto_review",
+          researchProfileId: "security-research",
+        },
+      },
+    },
+  };
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation, options) => {
+      calls.push({ operation, options });
+      if (operation === "session.get_update") {
+        return {
+          session,
+          events: [{
+            payload: {
+              record: {
+                role: "assistant",
+                contentMarkdown: "The parser shares mutable state across requests.",
+                metadata: { agentPath: "/root" },
+              },
+            },
+          }],
+        };
+      }
+      if (operation === "provider.describe") {
+        return { defaultSmallModels: {}, sessionTitleEffort: "medium", shellReviewEffort: "medium" };
+      }
+      if (operation === "plugin.runtime") {
+        return { skillDirs: [], selectedSkillIds: [], allowedMcpServers: [] };
+      }
+      if (operation === "session.get") return session;
+      if (["session.begin_attempt", "session.transition", "session.append_event"].includes(operation)) {
+        return { revision: 2 };
+      }
+      throw new Error(`Unexpected operation: ${operation}`);
+    },
+  });
+
+  const request = await service.createSessionContinuationRequest(
+    "workspace-test",
+    "session-continue",
+    "Verify whether the race is exploitable.",
+  );
+  assert.equal(request.sessionId, "session-continue");
+  assert.equal(request.launch.promptMarkdown, "Verify whether the race is exploitable.");
+  assert.equal(request.launch.generateTitle, false);
+  assert.equal(request.launch.continuation.resumeAttemptId, "attempt-original");
+  assert.match(request.launch.continuation.fallbackPrompt, /Inspect the example parser/);
+  assert.match(request.launch.continuation.fallbackPrompt, /shares mutable state/);
+  assert.match(request.launch.continuation.fallbackPrompt, /Verify whether the race is exploitable/);
+
+  await service.prepareSession(request, "unused-generated-session");
+  await service.recordSessionContinuationInstruction(request);
+  const transition = calls.find((call) => call.operation === "session.transition");
+  assert.equal(Object.hasOwn(transition.options.input.configuration, "prompt"), false);
+  const appended = calls.find((call) => call.operation === "session.append_event");
+  assert.equal(appended.options.input.id, `session_continuation_${request.launch.attemptId}`);
+  assert.equal(appended.options.input.payload.record.contentMarkdown, "Verify whether the race is exploitable.");
 });
 
 test("projects heat-bearing memory through the canonical notification feed", async () => {
@@ -2724,8 +2939,20 @@ function canonicalFixture(kind) {
 }
 
 function brokerRequest(broker, request) {
+  const pending = brokerRequestMessage(request);
+  broker.handle(pending.message);
+  return brokerResponse(pending.responseBuffer);
+}
+
+function brokerRequestMessage(request) {
   const responseBuffer = new SharedArrayBuffer(1024 * 1024);
-  broker.handle({ type: "database.request", request, responseBuffer });
+  return {
+    message: { type: "database.request", request, responseBuffer },
+    responseBuffer,
+  };
+}
+
+function brokerResponse(responseBuffer) {
   const header = new Int32Array(responseBuffer, 0, 2);
   assert.equal(Atomics.load(header, 0), 1);
   const length = Atomics.load(header, 1);

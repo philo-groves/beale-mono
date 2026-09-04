@@ -6,6 +6,12 @@
 
 #### Fixed
 
+- New Research now surfaces prompt-context failures and provider safeguard pauses inline, so sessions waiting for user steering no longer appear to start without doing anything.
+- Claude research agents and subagents can use their app-server tools again. The SDK's registered `beale` MCP server name and its non-interactive tool allowlist now share one identifier, preventing all tool calls from being rejected as unapproved after the server rename.
+- Goal completion audits now recognize phrases such as “no unresolved requirements remain” as successful closure instead of treating their negation as an unmet target requirement and repeatedly scheduling achieved-audit turns.
+- Desktop session polling now coalesces a late synthesized terminal fallback with its already-loaded canonical agent response, preventing end-of-session output from appearing twice regardless of arrival order.
+- Completed, failed, blocked, and stopped sessions can be continued again from Desktop and Beale iOS. Continuations retain the original request and append to the existing transcript and attempt chain; the shared app-server contract advances to v19 with an authenticated continuation operation.
+- Beale iOS now requires the app-server v18 event-identity capability and validates the complete versioned WebSocket server handshake before attaching to a live session.
 - Live sessions no longer run periodic workspace-storage synchronization or per-message registry writes on Electron's main thread, preventing renderer stalls, SQLite lock contention, and app-server readiness starvation. Desktop shutdown also tolerates approvals already removed from canonical session state.
 - Newly launched app-server-owned research sessions now enter the Desktop workspace registry during storage synchronization, so the left sidenav updates as soon as a session starts.
 - Session WebSocket events now carry the same stable identity used by canonical app-server persistence. Desktop suppresses replayed events across reconnects and follow-up attempts, and session projection coalesces legacy mirrored transcript duplicates; the shared app-server contract advances to v18.
@@ -17,6 +23,9 @@
 
 #### Added
 
+- Added GPT-6 Astra to the OpenAI Codex research-model catalog with its low-through-max reasoning levels and published context and output limits.
+- Desktop report packet rows now show the absolute `submission.zip` path in an in-app tooltip and use separate controls to replace the packet or reveal it in the host file explorer.
+- Desktop Finding and Lead details now show the stable claim identifier alongside their workspace, subject, and originating session scope.
 - Added the managed Agent Plugins 1.0.0 `apple-target-flags` guidance package, covering Apple Security Bounty commpage and TCC flags, same-boot evidence binding, UID-0 userspace captures, exact-build kernel panic validation, and conservative primitive/report-readiness boundaries.
 - Desktop claim, memory, and runbook details, plus Beale iOS claim and memory details, can now mark records as duplicates through one workspace-history operation. Duplicates leave normal catalogs and searches, remain in a final Duplicates section under the canonical parent, and can be restored with Undo; legacy claim relationships and client operations remain compatible.
 - Added a top-level `managed-plugins` collection with the portable Agent Plugins 1.0.0 `apple-security-devices` package, including realistic Tart macOS, physical-iPhone CoreDevice, and low-level `darwin-vm` research workflows with explicit mutation confirmation and an enforced iOS Simulator prohibition.
@@ -1110,6 +1119,7 @@
 
 #### Fixed
 
+- Runtime-worker database transactions now hold an app-server broker lease through commit or rollback, queueing concurrent worker writes and host catalog reads instead of deadlocking the main event loop or failing with `database is locked`.
 - Research claims now accept same-status evidence appends as immutable revisions, allowing agents to preserve one finding identity when new research confirms its existing maturity instead of creating a duplicate claim.
 - Goal-mode sessions now audit an achieved disposition against the current request and all live user steering before stopping, preventing a broader persistent objective from ending research while a stricter requested result remains unmet.
 - Native and local research-context compaction now preserve current user steering as authoritative user-role context, preventing resumed goals from reverting to an older broad objective or crediting unchanged historical claims and reports as new session work.

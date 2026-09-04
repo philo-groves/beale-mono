@@ -162,6 +162,62 @@ describe('renderer run detail update view model', () => {
     expect(merged.transcriptMessages).toEqual([canonical]);
   });
 
+  it('ignores a late provisional terminal response after its canonical event is loaded', () => {
+    const canonical = transcriptMessage({
+      id: 'transcript_model_output_final',
+      attemptId: 'attempt_one',
+      traceEventId: 'event_model_output_final',
+      phase: 'final_answer',
+      contentMarkdown: 'Objective achieved. Verification completed.',
+      source: 'app-server',
+      metadata: { agentPath: '/root', responseId: 'response_final', itemId: 'text_final' },
+      createdAt: '2026-04-30T00:01:00.000Z'
+    });
+    const provisional = transcriptMessage({
+      id: 'transcript_final_run_test_attempt_one',
+      attemptId: 'attempt_one',
+      phase: 'final_answer',
+      contentMarkdown: 'Objective achieved.\n\nVerification completed.',
+      source: 'app-server',
+      metadata: { agentPath: '/root' },
+      createdAt: '2026-04-30T00:01:01.000Z'
+    });
+
+    const merged = mergeRunDetailUpdate(
+      runDetail({ transcriptMessages: [canonical] }),
+      runDetailUpdate({ transcriptMessages: [provisional] })
+    );
+
+    expect(merged.transcriptMessages).toEqual([canonical]);
+  });
+
+  it('repairs an already-merged canonical and provisional terminal duplicate', () => {
+    const canonical = transcriptMessage({
+      id: 'transcript_model_output_final',
+      attemptId: 'attempt_one',
+      traceEventId: 'event_model_output_final',
+      phase: 'final_answer',
+      contentMarkdown: 'Objective achieved. Verification completed.',
+      source: 'app-server',
+      metadata: { agentPath: '/root', responseId: 'response_final', itemId: 'text_final' }
+    });
+    const provisional = transcriptMessage({
+      id: 'transcript_final_run_test_attempt_one',
+      attemptId: 'attempt_one',
+      phase: 'final_answer',
+      contentMarkdown: 'Objective achieved.\n\nVerification completed.',
+      source: 'app-server',
+      metadata: { agentPath: '/root' }
+    });
+
+    const merged = mergeRunDetailUpdate(
+      runDetail({ transcriptMessages: [canonical, provisional] }),
+      runDetailUpdate()
+    );
+
+    expect(merged.transcriptMessages).toEqual([canonical]);
+  });
+
   it('keeps distinct canonical terminal responses with identical text', () => {
     const first = transcriptMessage({
       id: 'transcript_first',

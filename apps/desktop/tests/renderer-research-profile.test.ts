@@ -247,6 +247,8 @@ describe('renderer research profile presentation', () => {
     expect(html).toContain('>Undo</button>');
     expect(html).toContain('Canonical allocator boundary');
     expect(html).toContain('>Mark duplicate</button>');
+    expect(html).toContain('<dt><strong>Claim</strong></dt><dd>claim_parent</dd>');
+    expect(html.indexOf('<dt><strong>Claim</strong>')).toBeLessThan(html.indexOf('<dt><strong>Workspace</strong>'));
     expect(html.lastIndexOf('<section')).toBe(html.indexOf('<section class="memory-catalog-subsection campaign-claim-duplicates"'));
   });
 

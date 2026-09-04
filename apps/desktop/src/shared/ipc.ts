@@ -97,6 +97,7 @@ export const IPC_CHANNELS = {
   getAppServerReport: 'beale:get-app-server-report',
   updateReportContent: 'beale:update-report-content',
   updateReportTriageStatus: 'beale:update-report-triage-status',
+  getReportSubmissionPacketPath: 'beale:get-report-submission-packet-path',
   openReportSubmissionPacket: 'beale:open-report-submission-packet',
   chooseReportSubmissionPacket: 'beale:choose-report-submission-packet',
   chooseReportRecording: 'beale:choose-report-recording',

@@ -71,7 +71,10 @@ export function commentaryMessagesForSession(
     options.repositoryMetadata ?? []
   );
   const useActiveToolTense = detail.run.status === 'active';
+  const hasStoredSafetyPause = projectedEvents.some((event) => Boolean(modelSafetyPausePayload(event, false)));
   let messages = projectedEvents.flatMap((event) => {
+    const safetyPause = modelSafetyPauseMessage(event, detail.run.model, hasStoredSafetyPause);
+    if (safetyPause) return [safetyPause];
     const activity = subagentActivityMessage(event);
     if (activity) return [activity];
     const toolUsage = toolUsageMessage(event, toolCallsByPrimaryEventId, useActiveToolTense);
@@ -111,6 +114,41 @@ export function commentaryMessagesForSession(
     contentMarkdown: detail.run.promptMarkdown.trim(),
     createdAt: detail.run.createdAt
   }, ...messages];
+}
+
+function modelSafetyPauseMessage(
+  event: TraceDisplayEvent,
+  modelId: string | undefined,
+  hasStoredSafetyPause: boolean
+): CommentaryMessage | null {
+  const directPayload = modelSafetyPausePayload(event, false);
+  const retryPayload = directPayload ?? (hasStoredSafetyPause ? null : modelSafetyPausePayload(event, true));
+  if (!retryPayload) return null;
+  const modelLabel = modelId?.trim() ? `\`${modelId.trim()}\`` : 'The model';
+  return {
+    id: `model-safety-pause:${event.id}`,
+    traceEventId: event.id,
+    kind: 'error',
+    contentMarkdown: `${modelLabel} is waiting for a steering instruction after the provider flagged the request for possible cybersecurity risk. Clarify the authorized scope or revise the request, then send the steering message to continue.`,
+    createdAt: event.createdAt
+  };
+}
+
+function modelSafetyPausePayload(
+  event: TraceDisplayEvent,
+  nested: boolean
+): Record<string, unknown> | null {
+  const payload = nested ? recordValue(event.payload, 'payload') : event.payload;
+  if (!payload) return null;
+  if (
+    stringValue(payload.type) !== 'model_retry' ||
+    stringValue(payload.recoveryKind) !== 'safety_guardrail' ||
+    payload.awaitingSteering !== true ||
+    stringValue(payload.contextPhase) === 'initial_context_preflight'
+  ) {
+    return null;
+  }
+  return payload;
 }
 
 function appendRecoveryErrorFallback(

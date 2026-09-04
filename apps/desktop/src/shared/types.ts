@@ -2508,6 +2508,7 @@ export interface BealeApi {
   getAppServerReport(locator: AppServerReportLocator): Promise<AppServerReportDocument>;
   updateReportContent(input: ReportContentUpdateInput): Promise<AppServerReportSummary>;
   updateReportTriageStatus(input: ReportTriageStatusUpdateInput): Promise<AppServerReportSummary>;
+  getReportSubmissionPacketPath(locator: AppServerReportLocator): Promise<string>;
   openReportSubmissionPacket(locator: AppServerReportLocator): Promise<void>;
   chooseReportSubmissionPacket(locator: AppServerReportLocator): Promise<AppServerReportSummary | null>;
   chooseReportRecording(locator: AppServerReportLocator): Promise<AppServerReportSummary | null>;

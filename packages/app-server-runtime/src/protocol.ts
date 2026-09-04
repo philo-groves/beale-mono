@@ -47,7 +47,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 18 as const;
+export const APP_SERVER_CONTRACT_VERSION = 19 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -55,7 +55,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-03T00:15:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-03T01:45:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
@@ -65,6 +65,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.transport-path.v1",
   "session.reconnect.v1",
   "session.event-identity.v1",
+  "session.continuation.v1",
   "session.startup-recovery.v1",
   "session.multi-client.v1",
   "host.control.v1",
@@ -193,6 +194,13 @@ export interface BealeAppServerSessionStartResult {
   attemptId: string;
   transport: BealeAppServerSessionTransport;
 }
+
+export interface BealeAppServerSessionContinuationRequest {
+  workspaceId: string;
+  instruction: string;
+}
+
+export type BealeAppServerSessionContinuationResult = BealeAppServerSessionStartResult;
 
 export interface BealeAppServerSessionAttachResult {
   controlVersion: typeof BEALE_APP_SERVER_CONTROL_VERSION;
@@ -922,6 +930,15 @@ export function decodeBealeAppServerSessionStartResult(value: unknown): BealeApp
     attemptId: value.attemptId,
     transport: value.transport as unknown as BealeAppServerSessionTransport,
   };
+}
+
+export function decodeBealeAppServerSessionContinuationRequest(
+  value: unknown,
+): BealeAppServerSessionContinuationRequest {
+  if (!isRecord(value)) throw new Error("Session continuation body must be a JSON object.");
+  requiredBoundedString(value, "workspaceId", 256);
+  requiredBoundedString(value, "instruction", 131_072);
+  return value as unknown as BealeAppServerSessionContinuationRequest;
 }
 
 export function decodeBealeAppServerSessionAttachResult(value: unknown): BealeAppServerSessionAttachResult {

@@ -27,6 +27,9 @@ const COMMENTARY_EVENT_PAYLOAD_KEYS = [
   'transcriptMessageId',
   'type',
   'action',
+  'recoveryKind',
+  'awaitingSteering',
+  'contextPhase',
   'interruptedByRecovery',
   'fixtureOnly',
   'appServerKind',
@@ -81,6 +84,16 @@ const COMMENTARY_SUBAGENT_PAYLOAD_KEYS = [
   'channel_name',
   'status',
   'message'
+] as const;
+
+const COMMENTARY_MODEL_RETRY_PAYLOAD_KEYS = [
+  'type',
+  'agentId',
+  'agentPath',
+  'parentAgentId',
+  'recoveryKind',
+  'awaitingSteering',
+  'contextPhase'
 ] as const;
 
 const COMMENTARY_TRANSCRIPT_METADATA_KEYS = [
@@ -186,6 +199,8 @@ export function projectCommentaryTraceEvent(
     const contextScaffold = nestedPayload
       ? nestedPayload.type === 'subagent.activity'
         ? pickRecordValues(nestedPayload, COMMENTARY_SUBAGENT_PAYLOAD_KEYS)
+        : nestedPayload.type === 'model_retry'
+          ? pickRecordValues(nestedPayload, COMMENTARY_MODEL_RETRY_PAYLOAD_KEYS)
         : pickRecordValues(nestedPayload, ['agentPath', 'contextUsageEligible'] as const)
       : {};
     if (Object.keys(contextScaffold).length > 0) payload.payload = contextScaffold;

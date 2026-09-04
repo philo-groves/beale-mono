@@ -311,6 +311,31 @@ struct AppServerClient: Sendable {
         return response
     }
 
+    func continueSession(
+        workspaceId: String,
+        sessionId: String,
+        instruction: String
+    ) async throws -> AppServerSessionStart {
+        let body = try JSONEncoder().encode(
+            AppServerSessionContinuationRequest(
+                workspaceId: workspaceId,
+                instruction: instruction
+            )
+        )
+        let response: AppServerSessionStart = try await request(
+            url: endpoint.url(pathComponents: ["v1", "sessions", sessionId, "continuations"]),
+            method: "POST",
+            authenticated: true,
+            body: body,
+            timeoutInterval: 60
+        )
+        try response.validateCompatibility()
+        guard response.session.sessionId == sessionId else {
+            throw AppServerClientError.incompatible("The continued session did not match this request.")
+        }
+        return response
+    }
+
     func stopSession(sessionId: String) async throws -> Bool {
         do {
             let response: AppServerSessionStopResult = try await request(
@@ -523,13 +548,13 @@ final class AppServerSessionControlChannel {
             "client": ["name": "beale-ios", "version": "0.1.0"]
         ])))
 
-        let hello = try await socket.receive()
-        let envelope = try decodeEnvelope(hello)
-        guard envelope.protocolVersion == BealeAppServerContract.appServerProtocolVersion,
-              envelope.sessionId == sessionId,
-              envelope.type == "server.hello" else {
+        let helloMessage = try await socket.receive()
+        do {
+            let hello = try decodeServerHello(helloMessage)
+            try hello.validateCompatibility(sessionId: sessionId)
+        } catch {
             close()
-            throw AppServerClientError.incompatible("The session transport returned an invalid handshake.")
+            throw error
         }
         isConnected = true
         receiveTask = Task { [weak self] in
@@ -680,13 +705,27 @@ final class AppServerSessionControlChannel {
     }
 
     private func decodeEnvelope(_ message: URLSessionWebSocketTask.Message) throws -> ServerEnvelope {
+        try JSONDecoder().decode(ServerEnvelope.self, from: messageData(message))
+    }
+
+    private func decodeServerHello(_ message: URLSessionWebSocketTask.Message) throws -> AppServerWebSocketServerHello {
+        do {
+            return try JSONDecoder().decode(AppServerWebSocketServerHello.self, from: messageData(message))
+        } catch let error as AppServerClientError {
+            throw error
+        } catch {
+            throw AppServerClientError.incompatible("The session transport returned an invalid handshake.")
+        }
+    }
+
+    private func messageData(_ message: URLSessionWebSocketTask.Message) throws -> Data {
         let data: Data
         switch message {
         case .data(let value): data = value
         case .string(let value): data = Data(value.utf8)
         @unknown default: throw AppServerClientError.invalidResponse
         }
-        return try JSONDecoder().decode(ServerEnvelope.self, from: data)
+        return data
     }
 
     private func jsonString(_ object: [String: Any]) throws -> String {

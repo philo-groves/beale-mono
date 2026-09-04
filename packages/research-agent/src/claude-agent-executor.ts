@@ -87,6 +87,19 @@ export interface ClaudeAgentTextCompletion {
   structuredOutput?: unknown;
 }
 
+export interface ClaudeAgentMcpToolAccess {
+  serverName: "beale";
+  allowedTools: string[];
+}
+
+export function claudeAgentMcpToolAccess(toolNames: readonly string[]): ClaudeAgentMcpToolAccess {
+  const serverName = "beale" as const;
+  return {
+    serverName,
+    allowedTools: toolNames.map((name) => `mcp__${serverName}__${name}`),
+  };
+}
+
 /**
  * Runs small Anthropic support tasks through the same official Claude Agent
  * SDK and bundled Claude Code process as primary research turns. This keeps
@@ -273,14 +286,14 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
         ...(options.collaborationTools ?? []),
       ].map((candidate) => agentToolAsSdkTool(candidate, abortController.signal));
       const allMcpTools = [...mcpTools, ...collaborationMcpTools];
+      const mcpToolAccess = claudeAgentMcpToolAccess(allMcpTools.map((candidate) => candidate.name));
       const allMcpServer = createSdkMcpServer({
-        name: "app-server",
+        name: mcpToolAccess.serverName,
         version: "1.0.0",
         instructions: "These are app-server's governed research and durable channel tools. Use them for workspace-persistent research and bounded collaboration.",
         tools: allMcpTools,
         alwaysLoad: true,
       });
-      const allMcpToolNames = allMcpTools.map((candidate) => `mcp__app_server__${candidate.name}`);
 
       let sessionId = options.resumableState?.providerSessionId;
       let result: SDKResultMessage | undefined;
@@ -308,9 +321,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 cwd: options.workspaceRoot,
                 model: options.model,
                 ...(options.resumableState ? { resume: options.resumableState.providerSessionId } : {}),
-                mcpServers: { beale: allMcpServer },
+                mcpServers: { [mcpToolAccess.serverName]: allMcpServer },
                 tools: [],
-                allowedTools: allMcpToolNames,
+                allowedTools: mcpToolAccess.allowedTools,
                 permissionMode: "dontAsk",
                 settingSources: [],
                 systemPrompt: {
@@ -394,9 +407,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               cwd: options.workspaceRoot,
               model: options.model,
               resume: sessionId,
-              mcpServers: { beale: allMcpServer },
+              mcpServers: { [mcpToolAccess.serverName]: allMcpServer },
               tools: [],
-              allowedTools: allMcpToolNames,
+              allowedTools: mcpToolAccess.allowedTools,
               permissionMode: "dontAsk",
               settingSources: [],
               systemPrompt: {

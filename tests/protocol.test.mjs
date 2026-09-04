@@ -15,6 +15,7 @@ import {
   decodeBealeAppServerErrorResponse,
   decodeBealeAppServerProviderCatalog,
   decodeBealeAppServerSessionAttachResult,
+  decodeBealeAppServerSessionContinuationRequest,
   decodeBealeAppServerSessionStartResult,
   decodeBealeAppServerSessionStopResult,
   decodeBealeAppServerShutdownResult,
@@ -42,10 +43,10 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v18 persistence, event-identity, and workspace-history contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v19 persistence, continuation, and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 18);
+  assert.equal(descriptor.contractVersion, 19);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 12);
   assert.equal(descriptor.schemas.finding, 5);
@@ -91,6 +92,7 @@ test("protocol describe exposes a runtime-bound v18 persistence, event-identity,
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.startup-recovery.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-fast-mode.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.event-identity.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.continuation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.prompt-expansion.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.campaign-tracks.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("source.clone-modes.v1"));
@@ -218,6 +220,17 @@ test("app-server control DTOs share strict version, route, replay, and error sem
     },
   };
   assert.deepEqual(decodeBealeAppServerSessionStartResult(started), started);
+  assert.deepEqual(decodeBealeAppServerSessionContinuationRequest({
+    workspaceId: "workspace-1",
+    instruction: "Continue with the retained history.",
+  }), {
+    workspaceId: "workspace-1",
+    instruction: "Continue with the retained history.",
+  });
+  assert.throws(
+    () => decodeBealeAppServerSessionContinuationRequest({ workspaceId: "workspace-1", instruction: "" }),
+    /instruction/,
+  );
   const attachment = {
     controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
     session,

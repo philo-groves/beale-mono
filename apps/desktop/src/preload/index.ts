@@ -423,6 +423,9 @@ const api: BealeApi = {
   updateReportTriageStatus(input: ReportTriageStatusUpdateInput): Promise<AppServerReportSummary> {
     return ipcRenderer.invoke(IPC_CHANNELS.updateReportTriageStatus, input);
   },
+  getReportSubmissionPacketPath(locator: AppServerReportLocator): Promise<string> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getReportSubmissionPacketPath, locator);
+  },
   openReportSubmissionPacket(locator: AppServerReportLocator): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.openReportSubmissionPacket, locator);
   },

@@ -33,6 +33,7 @@ import {
   type ResolvedAppServerSessionLaunch
 } from './sessionLaunch.js';
 import { longSessionRecoveryFallbackPrompt } from './sessionRecovery.js';
+import type { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
 
 type ProtocolInvoker = <T>(
   operation: AppServerProtocolOperation,
@@ -63,6 +64,7 @@ interface AppServerSessionSummaryProjection {
 
 interface AppServerSessionUpdateProjection {
   session?: AppServerSessionSummaryProjection;
+  events?: unknown;
 }
 
 interface AppServerPluginRuntimeProjection {
@@ -104,6 +106,7 @@ export interface DueAppServerAutomation {
 export interface AppServerHostServiceOptions extends AppServerHostRegistryOptions {
   registry?: AppServerHostRegistry;
   invokeProtocol?: ProtocolInvoker;
+  databaseCoordinator?: AppServerWorkerDatabaseCoordinator;
 }
 
 export class AppServerHostService {
@@ -118,7 +121,15 @@ export class AppServerHostService {
 
   public constructor(options: AppServerHostServiceOptions = {}) {
     this.registry = options.registry ?? new AppServerHostRegistry(options);
-    this.invokeProtocol = options.invokeProtocol ?? invokeAppServerProtocol;
+    const invokeProtocol = options.invokeProtocol ?? invokeAppServerProtocol;
+    this.invokeProtocol = options.databaseCoordinator
+      ? (operation, invokeOptions) => invokeOptions.storage
+        ? options.databaseCoordinator!.runWhenAvailable(
+            invokeOptions.storage.databasePath,
+            () => invokeProtocol(operation, invokeOptions)
+          )
+        : invokeProtocol(operation, invokeOptions)
+      : invokeProtocol;
   }
 
   public listWorkspaces(): BealeAppServerWorkspaceList {
@@ -495,6 +506,90 @@ export class AppServerHostService {
         }
       }
     }, input.sessionId);
+  }
+
+  public async createSessionContinuationRequest(
+    workspaceId: string,
+    sessionId: string,
+    instruction: string
+  ): Promise<AppServerSessionLaunchRequest> {
+    const normalizedInstruction = instruction.trim();
+    if (!normalizedInstruction) throw new Error('A session continuation instruction is required.');
+    const workspace = this.requireWorkspace(workspaceId);
+    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    const update = await this.invokeProtocol<AppServerSessionUpdateProjection>('session.get_update', {
+      args: [
+        'session', 'get-update', '--session-id', sessionId,
+        '--tail', '--limit', '500', '--max-bytes', String(2 * 1024 * 1024)
+      ],
+      storage
+    });
+    const session = update.session;
+    if (!session || nonEmpty(session.id) !== sessionId || nonEmpty(session.workspaceId) !== workspace.workspaceId) {
+      throw new Error(`Session ${sessionId} does not belong to workspace ${workspace.workspaceId}.`);
+    }
+    const status = nonEmpty(session.status);
+    if (!status || !['blocked', 'completed', 'failed', 'stopped'].includes(status)) {
+      throw new Error(`Session ${sessionId} is not inactive and cannot be continued.`);
+    }
+    const restart = decodeRestartLaunchDescriptor(session.metadata);
+    if (!restart) {
+      throw new Error(`Session ${sessionId} does not contain a compatible continuation launch descriptor.`);
+    }
+    const previousAttempt = latestAttempt(session.attempts);
+    if (!previousAttempt) throw new Error(`Session ${sessionId} does not contain a resumable attempt.`);
+    return {
+      launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
+      sessionId,
+      launch: {
+        ...restart.launch,
+        attemptId: `attempt-${randomUUID()}`,
+        promptMarkdown: normalizedInstruction,
+        generateTitle: false,
+        continuation: {
+          resumeAttemptId: previousAttempt.id,
+          resumeFromInitialAttempt: previousAttempt.parentAttemptId === null,
+          fallbackPrompt: manualContinuationFallbackPrompt(session, update.events, normalizedInstruction)
+        }
+      }
+    };
+  }
+
+  public async recordSessionContinuationInstruction(
+    request: AppServerSessionLaunchRequest
+  ): Promise<void> {
+    const sessionId = request.sessionId;
+    const attemptId = request.launch.attemptId;
+    if (!sessionId || !attemptId || !request.launch.continuation) return;
+    const workspace = this.requireWorkspace(request.launch.workspaceId);
+    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    const eventId = `session_continuation_${attemptId}`;
+    const timestamp = new Date().toISOString();
+    await this.invokeProtocol('session.append_event', {
+      args: ['session', 'append-event', '--session-id', sessionId],
+      storage,
+      input: {
+        id: eventId,
+        kind: 'beale.transcript',
+        timestamp,
+        summary: 'beale.transcript',
+        payload: {
+          record: {
+            id: `transcript_${eventId}`,
+            runId: sessionId,
+            attemptId,
+            traceEventId: eventId,
+            role: 'user',
+            phase: null,
+            contentMarkdown: request.launch.promptMarkdown,
+            source: 'user_steering',
+            metadata: { continuation: true },
+            createdAt: timestamp
+          }
+        },
+        agentPath: '/root'
+      }
+    });
   }
 
   public async recoverInterruptedSessions(): Promise<AppServerStartupRecoveryResult> {
@@ -1024,7 +1119,7 @@ export class AppServerHostService {
         attemptId: input.attemptId,
         metadata: { appServerRestartLaunch: input.restartLaunch },
         configuration: {
-          prompt: input.prompt,
+          ...(!input.continuation ? { prompt: input.prompt } : {}),
           provider: input.providerId,
           model: input.model ?? 'default',
           reasoningEffort: input.reasoningEffort ?? 'medium',
@@ -1524,6 +1619,63 @@ function decodeRestartLaunchDescriptor(value: unknown): StoredRestartLaunchDescr
   } catch {
     return null;
   }
+}
+
+function latestAttempt(value: unknown): { id: string; parentAttemptId: string | null } | null {
+  if (!Array.isArray(value)) return null;
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    const attempt = value[index];
+    if (!isRecord(attempt)) continue;
+    const id = nonEmpty(attempt.id);
+    if (id) return { id, parentAttemptId: nonEmpty(attempt.parentAttemptId) };
+  }
+  return null;
+}
+
+function manualContinuationFallbackPrompt(
+  session: AppServerSessionSummaryProjection,
+  value: unknown,
+  instruction: string
+): string {
+  const originalRequest = nonEmpty(session.prompt) ?? '';
+  const turns = Array.isArray(value)
+    ? value.flatMap((event) => {
+        if (!isRecord(event) || !isRecord(event.payload) || !isRecord(event.payload.record)) return [];
+        const record = event.payload.record;
+        const content = nonEmpty(record.contentMarkdown);
+        if (!content) return [];
+        const role = nonEmpty(record.role) ?? 'unknown';
+        const metadata = isRecord(record.metadata) ? record.metadata : null;
+        const agentPath = nonEmpty(metadata?.agentPath);
+        const label = role === 'assistant'
+          ? `Agent${agentPath && agentPath !== '/root' ? ` ${agentPath}` : ''}`
+          : role === 'user' ? 'User' : 'System';
+        return [`${label}:\n${content}`];
+      })
+    : [];
+  const contextLimit = 32_000;
+  const retained: string[] = [];
+  let retainedLength = Math.min(originalRequest.length, contextLimit / 2);
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (!turn) continue;
+    const remaining = contextLimit - retainedLength;
+    if (remaining <= 0) break;
+    retained.unshift(turn.length > remaining ? `[Earlier content omitted]\n${turn.slice(-remaining)}` : turn);
+    retainedLength += Math.min(turn.length, remaining);
+  }
+  return [
+    '# Continue the existing Beale research session',
+    '',
+    'Continue from the prior durable session state. Preserve established facts, decisions, explored paths, and tool-backed observations. Do not restart the investigation or treat this as turn 1.',
+    '',
+    '## New steering instruction',
+    instruction,
+    '',
+    '## Existing session context',
+    `Original request:\n${originalRequest.slice(0, contextLimit / 2)}`,
+    ...(retained.length > 0 ? ['', ...retained] : [])
+  ].join('\n');
 }
 
 function interruptedAttempt(value: unknown): { id: string; parentAttemptId: string | null } | null {

@@ -79,6 +79,29 @@ describe('renderer commentary projection', () => {
     expect(html).not.toContain('Loading session');
   });
 
+  it('renders feedback below the new research composer', () => {
+    const html = renderToStaticMarkup(
+      createElement(CommentaryView, {
+        busy: false,
+        state: 'new-research',
+        detail: null,
+        events: [],
+        providerModelCatalog: [],
+        selectedRunId: null,
+        showBackToMain: false,
+        searchHighlightQuery: '',
+        postComposerContent: createElement('div', { role: 'alert' }, 'Could not add context.'),
+        onBackToMain: () => undefined,
+        onInitialInstruction: () => undefined,
+        onSessionAction: () => undefined,
+        onSteerInstruction: () => undefined
+      })
+    );
+
+    expect(html).toContain('main-steer-post-composer-content');
+    expect(html).toContain('Could not add context.');
+  });
+
   it('keeps the working disclosure aligned to the commentary text width', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const messageStyles = styles.match(/\.main-commentary-message\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -1198,6 +1221,58 @@ describe('renderer commentary projection', () => {
     expect(messages.map(({ kind, contentMarkdown }) => [kind, contentMarkdown])).toEqual([
       ['commentary', 'I am checking the parser boundary.'],
       ['error', 'Provider request failed.']
+    ]);
+  });
+
+  it('shows an actionable error when a model safety guardrail is waiting for steering', () => {
+    const detail = runDetail('Review the authorized target.');
+    detail.run.model = 'gpt-6-astra';
+    const messages = commentaryMessagesForSession(detail, [
+      displayEvent('canonical-session-event', {
+        payload: {
+          type: 'model_retry',
+          recoveryKind: 'safety_guardrail',
+          awaitingSteering: true,
+          errorMessage: 'Provider safety guardrail.'
+        }
+      }, { source: 'executor', type: 'research_event' }),
+      displayEvent('automatic-retry', {
+        type: 'model_retry',
+        recoveryKind: 'safety_guardrail',
+        errorMessage: 'Provider safety guardrail.'
+      }, { source: 'system' }),
+      displayEvent('preflight-steering', {
+        type: 'model_retry',
+        recoveryKind: 'safety_guardrail',
+        awaitingSteering: true,
+        contextPhase: 'initial_context_preflight',
+        errorMessage: 'Provider safety guardrail.'
+      }, { source: 'system' }),
+      displayEvent('session-steering', {
+        type: 'model_retry',
+        recoveryKind: 'safety_guardrail',
+        awaitingSteering: true,
+        errorMessage: 'Provider safety guardrail.'
+      }, { source: 'system' })
+    ], { includeInitialPrompt: false });
+
+    expect(messages.map(({ id, kind, contentMarkdown }) => [id, kind, contentMarkdown])).toEqual([[
+      'model-safety-pause:session-steering',
+      'error',
+      '`gpt-6-astra` is waiting for a steering instruction after the provider flagged the request for possible cybersecurity risk. Clarify the authorized scope or revise the request, then send the steering message to continue.'
+    ]]);
+
+    const canonicalOnly = commentaryMessagesForSession(detail, [
+      displayEvent('canonical-session-event', {
+        payload: {
+          type: 'model_retry',
+          recoveryKind: 'safety_guardrail',
+          awaitingSteering: true
+        }
+      }, { source: 'executor', type: 'research_event' })
+    ], { includeInitialPrompt: false });
+    expect(canonicalOnly.map(({ id, kind }) => [id, kind])).toEqual([
+      ['model-safety-pause:canonical-session-event', 'error']
     ]);
   });
 });

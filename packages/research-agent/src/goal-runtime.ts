@@ -49,9 +49,24 @@ const GOAL_REQUIREMENTS_MAX_COUNT = 8;
 const GOAL_AUDIT_RESPONSE_MAX_CHARS = 4_000;
 const GOAL_AUDIT_STOP_WORDS = new Set([
   "active", "binding", "completion", "continue", "current", "goal", "later",
-  "objective", "request", "requested", "requirement", "research", "session",
+  "objective", "request", "requested", "requirement", "requirements", "research", "session",
   "steering", "until", "user", "with",
 ]);
+const RESOLVED_REQUIREMENT_NOUN = "(?:requirements?|blockers?|dependencies?|gaps?|issues?|conditions?|criteria|tasks?|work)";
+const RESOLVED_REQUIREMENT_QUALIFIER = "(?:binding|required|remaining|unresolved|unmet|outstanding|open|pending|missing)";
+const RESOLVED_REQUIREMENT_STATE = "(?:unresolved|unmet|outstanding|open|pending|missing|left)";
+const RESOLVED_REQUIREMENT_CLAIMS = [
+  new RegExp(
+    `\\bno\\s+(?:${RESOLVED_REQUIREMENT_QUALIFIER}\\s+){0,3}${RESOLVED_REQUIREMENT_NOUN}`
+      + `(?:\\s+(?:remain|remains|are|is))?(?:\\s+${RESOLVED_REQUIREMENT_STATE})?\\b`,
+    "giu",
+  ),
+  new RegExp(
+    `\\bwithout\\s+(?:any\\s+)?(?:${RESOLVED_REQUIREMENT_QUALIFIER}\\s+){0,3}${RESOLVED_REQUIREMENT_NOUN}\\b`,
+    "giu",
+  ),
+  /\b(?:nothing|none)\s+(?:material\s+)?remains?\s+(?:unresolved|unmet|outstanding|open|pending|missing|to\s+do)\b/giu,
+] as const;
 
 export function selectResearchGoalObjective(input: {
   explicitObjective?: string;
@@ -468,9 +483,15 @@ function hasExplicitRequirementContradiction(
   return response
     .toLocaleLowerCase()
     .split(/(?:\r?\n|(?<=[.!?])\s+)/u)
-    .some((segment) => negative.test(segment) && [...requirementTerms].some((term) =>
-      segment.includes(term)
-    ));
+    .some((segment) => {
+      const contradictionCandidate = RESOLVED_REQUIREMENT_CLAIMS.reduce(
+        (candidate, resolvedClaim) => candidate.replace(resolvedClaim, " "),
+        segment,
+      );
+      return negative.test(contradictionCandidate) && [...requirementTerms].some((term) =>
+        contradictionCandidate.includes(term)
+      );
+    });
 }
 
 function compactText(value: string, maxChars: number): string {

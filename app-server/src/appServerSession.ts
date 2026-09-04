@@ -1,6 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
-import { AppServerWorkerDatabaseBroker } from './workerDatabaseBroker.js';
+import {
+  AppServerWorkerDatabaseBroker,
+  AppServerWorkerDatabaseCoordinator
+} from './workerDatabaseBroker.js';
 import type { WorkerDatabaseRequestMessage } from './workerDatabaseClient.js';
 
 const MAX_STDERR_CHARS = 8_000;
@@ -9,6 +12,7 @@ export interface SpawnAppServerSessionOptions {
   sessionId: string;
   args?: readonly string[];
   env?: NodeJS.ProcessEnv;
+  databaseCoordinator?: AppServerWorkerDatabaseCoordinator;
 }
 
 export interface AppServerSession {
@@ -39,7 +43,7 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
   const workerEnvironment = appServerWorkerEnvironment(options.env ?? {});
   const databasePath = workerEnvironment.APP_SERVER_DATABASE_PATH?.trim();
   if (!databasePath) throw new Error('App-server runtime workers require app-server-owned database storage.');
-  const databaseBroker = new AppServerWorkerDatabaseBroker(databasePath);
+  const databaseBroker = new AppServerWorkerDatabaseBroker(databasePath, options.databaseCoordinator);
   const worker = new Worker(new URL('./runtimeWorker.js', import.meta.url), {
     workerData: {
       args: ['--hosted-session', '--session-id', options.sessionId, ...(options.args ?? [])],

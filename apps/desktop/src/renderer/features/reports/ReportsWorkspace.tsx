@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
-import { ArrowUp, CircleAlert, CircleDot, FileArchive, FileText, LoaderCircle, Pencil, Video } from 'lucide-react';
+import { ArrowUp, CircleAlert, CircleDot, FileArchive, FileText, FolderOpen, LoaderCircle, Pencil, RefreshCw, Video } from 'lucide-react';
 import type {
   AppServerReportDocument,
   AppServerReportSummary,
@@ -119,6 +119,7 @@ export function ReportsIndex({
 
 export function ReportSessionWorkspace({
   report,
+  submissionPacketPath,
   document,
   loading,
   error,
@@ -126,9 +127,11 @@ export function ReportSessionWorkspace({
   onReportMarkdownChange,
   onStatusChange,
   onChooseSubmissionPacket,
+  onRevealSubmissionPacket,
   onChooseRecording
 }: {
   report: AppServerReportSummary;
+  submissionPacketPath: string | null;
   document: AppServerReportDocument | null;
   loading: boolean;
   error: string | null;
@@ -136,6 +139,7 @@ export function ReportSessionWorkspace({
   onReportMarkdownChange: (content: string) => Promise<void>;
   onStatusChange: (status: AppServerReportTriageStatus) => Promise<void>;
   onChooseSubmissionPacket: () => Promise<void>;
+  onRevealSubmissionPacket: () => Promise<void>;
   onChooseRecording: () => Promise<void>;
 }): JSX.Element {
   return (
@@ -151,8 +155,10 @@ export function ReportSessionWorkspace({
       <div className="report-session-sidenav-gutter" aria-hidden="true" />
       <ReportSummarySidebar
         report={report}
+        submissionPacketPath={submissionPacketPath}
         onStatusChange={onStatusChange}
         onChooseSubmissionPacket={onChooseSubmissionPacket}
+        onRevealSubmissionPacket={onRevealSubmissionPacket}
         onChooseRecording={onChooseRecording}
       />
     </div>
@@ -373,16 +379,21 @@ export function EditableReport({
 
 export function ReportSummarySidebar({
   report,
+  submissionPacketPath = null,
   onStatusChange,
   onChooseSubmissionPacket,
+  onRevealSubmissionPacket = async () => undefined,
   onChooseRecording
 }: {
   report: AppServerReportSummary;
+  submissionPacketPath?: string | null;
   onStatusChange: (status: AppServerReportTriageStatus) => Promise<void>;
   onChooseSubmissionPacket: () => Promise<void>;
+  onRevealSubmissionPacket?: () => Promise<void>;
   onChooseRecording: () => Promise<void>;
 }): JSX.Element {
   const [choosing, setChoosing] = useState<'packet' | 'recording' | null>(null);
+  const [revealingPacket, setRevealingPacket] = useState(false);
   const [statusPending, setStatusPending] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
 
@@ -395,6 +406,19 @@ export function ReportSummarySidebar({
       setAttachmentError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setChoosing(null);
+    }
+  };
+
+  const revealPacket = async (): Promise<void> => {
+    if (!report.submissionPacket) return;
+    setRevealingPacket(true);
+    setAttachmentError(null);
+    try {
+      await onRevealSubmissionPacket();
+    } catch (caught: unknown) {
+      setAttachmentError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRevealingPacket(false);
     }
   };
 
@@ -432,17 +456,43 @@ export function ReportSummarySidebar({
               ))}
             </select>
           </label>
-          <button
-            type="button"
-            className="session-summary-item report-summary-item"
-            disabled={choosing !== null || statusPending}
-            title={report.submissionPacket?.filename ?? 'Choose File'}
-            onClick={() => void choose('packet')}
-          >
+          <div className="session-summary-item report-summary-item report-summary-attachment">
             <FileArchive size={15} aria-hidden="true" />
             <span>Packet</span>
-            <span className="session-summary-meta">{choosing === 'packet' ? 'Choosing…' : report.submissionPacket?.filename ?? 'Choose File'}</span>
-          </button>
+            <div
+              className={`report-summary-file-tooltip${submissionPacketPath ? ' has-path-tooltip' : ''}`}
+              data-tooltip={submissionPacketPath ?? undefined}
+              aria-label={submissionPacketPath
+                ? `${report.submissionPacket?.filename ?? 'Submission packet'}: ${submissionPacketPath}`
+                : undefined}
+            >
+              <span className="session-summary-meta report-summary-file-name">
+                {choosing === 'packet' ? 'Choosing…' : report.submissionPacket?.filename ?? 'No file'}
+              </span>
+            </div>
+            <div className="report-summary-attachment-actions">
+              <button
+                type="button"
+                className="report-summary-attachment-action"
+                disabled={choosing !== null || revealingPacket || statusPending}
+                title={report.submissionPacket ? `Replace ${report.submissionPacket.filename}` : 'Choose submission packet'}
+                aria-label={report.submissionPacket ? `Replace ${report.submissionPacket.filename}` : 'Choose submission packet'}
+                onClick={() => void choose('packet')}
+              >
+                <RefreshCw size={14} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="report-summary-attachment-action"
+                disabled={!report.submissionPacket || choosing !== null || revealingPacket || statusPending}
+                title={report.submissionPacket ? `Show ${report.submissionPacket.filename} in file explorer` : 'No submission packet to show'}
+                aria-label={report.submissionPacket ? `Show ${report.submissionPacket.filename} in file explorer` : 'No submission packet to show'}
+                onClick={() => void revealPacket()}
+              >
+                <FolderOpen size={14} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
           <button
             type="button"
             className="session-summary-item report-summary-item"

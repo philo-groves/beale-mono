@@ -131,6 +131,41 @@ test("binding requests and steering require a consistent completion audit before
   assert.equal(runtime.snapshot().status, "complete");
 });
 
+test("completion audits accept resolved-requirement language without scheduling another audit", () => {
+  for (const auditResponse of [
+    "Audit passed: objective achieved. No binding requirements remain unresolved.",
+    "Objective achieved. The target flag is verified; no unresolved requirements remain.",
+    "Audit passed. The target flag is captured with no outstanding requirements.",
+    "Objective achieved; no binding requirements remain.",
+    "Audit passed. No requirement remains unresolved.",
+    "Objective achieved. No required work remains.",
+  ]) {
+    const recorder = new ResearchDispositionRecorder();
+    const runtime = new ResearchGoalRuntime({
+      objective: "Establish deterministic kernel target-flag capture.",
+      currentRequest: "Do not stop until the target flag is captured and independently verified.",
+      getDisposition: () => recorder.get(),
+      resetDisposition: () => recorder.resetForGoalContinuation(),
+    });
+
+    recorder.record(disposition({
+      outcome: "objective_achieved",
+      summary: "Deterministic, independently verified target-flag capture is established.",
+    }));
+    assert.equal(runtime.continueAfterRootResponse(
+      "Objective achieved. The target flag is captured; no unresolved requirements remain.",
+    ).length, 1);
+
+    recorder.record(disposition({
+      outcome: "objective_achieved",
+      summary: "The completion audit confirms the target-flag capture.",
+    }));
+    assert.deepEqual(runtime.continueAfterRootResponse(auditResponse), []);
+    assert.equal(runtime.snapshot().status, "complete");
+    assert.equal(runtime.snapshot().turnsUsed, 2);
+  }
+});
+
 test("research goal blocking is inferred immediately from a valid external-state disposition", () => {
   const recorder = new ResearchDispositionRecorder();
   const runtime = createRuntime("Validate behavior against the authorized live target.", recorder);

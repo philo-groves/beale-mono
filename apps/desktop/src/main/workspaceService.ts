@@ -3871,7 +3871,7 @@ export class WorkspaceService {
           : null;
         if (runEngine === 'app-server' && !appServerDispatch) {
           if (isEndedResearchRunStatus(run.status)) {
-            void runtime.appServerEngine.extendRunWhenInactive(action.runId, instruction).catch((error: unknown) => {
+            const reportContinuationFailure = (error: unknown): void => {
               try {
                 const continuationAttemptId = db.getRunDetail(action.runId).attempts.at(-1)?.id ?? null;
                 db.appendTraceEvent({
@@ -3896,7 +3896,16 @@ export class WorkspaceService {
               } catch {
                 // The workspace may have closed while the detached continuation was waiting.
               }
-            });
+            };
+            const continuation = runtime.appServerEngine.extendRunWhenInactive(action.runId, instruction);
+            if (waitForContinuationTransport) {
+              continuationTransportReady = continuation.catch((error: unknown) => {
+                reportContinuationFailure(error);
+                throw error;
+              });
+            } else {
+              void continuation.catch(reportContinuationFailure);
+            }
           } else {
             continuationTransportReady = runtime.appServerEngine.extendRun(action.runId, instruction).transportReady;
           }

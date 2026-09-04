@@ -97,6 +97,7 @@ For iOS, the recommended deployment is a loopback listener behind Tailscale Serv
 - `GET /v1/sessions` — typed catalog of known sessions with state (`starting`, `running`, `completed`, `failed`, `stopped`), timestamps, exit codes, client attachment, replay-buffer counts, and a bounded diagnostic for failed app-server exits. Terminal sessions are retained up to 50 entries; `DELETE` removes them.
 - `GET /v1/sessions/<id>` — one typed live-process catalog entry, avoiding a full catalog poll.
 - `POST /v1/sessions/<id>/attachments` — mint an independent transport token for another Desktop or mobile client to join an active session. Terminal sessions return `410`.
+- `POST /v1/sessions/<id>/continuations` — continue a canonical blocked, completed, failed, or stopped session. The authenticated body supplies `workspaceId` and the new `instruction`; app-server appends a child attempt to the same session, preserves its original request and transcript, and returns a fresh session transport.
 - `DELETE /v1/sessions/<id>` — stop a running session (`202`) or remove a retained terminal record (`200`). Unknown ids return `404`.
 - `POST /v1/server/shutdown` — authenticated graceful process-host shutdown used by Desktop when replacing an older app-server.
 

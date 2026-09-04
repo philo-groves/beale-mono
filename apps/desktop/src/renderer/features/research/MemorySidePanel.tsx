@@ -2564,6 +2564,9 @@ export function CampaignClaimDetailView({
               {latestCvss.score.toFixed(1)} · {latestCvss.nomenclature}
             </ClaimDetailAttribute>
           ) : null}
+          <ClaimDetailAttribute title="Claim">
+            {claim.id}
+          </ClaimDetailAttribute>
           <ClaimDetailAttribute title="Workspace">
             {claim.workspaceId}
           </ClaimDetailAttribute>

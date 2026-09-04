@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   appendClaudeAgentProgressGuidance,
+  claudeAgentMcpToolAccess,
   createPiAgentExecutor,
   extractCompatibleClaudeAgentResumableState,
   projectClaudeAgentAssistantOutput,
@@ -42,6 +43,20 @@ test("Claude Agent SDK resume state is pinned to model, profile, and workflow", 
       workflowId: "discovery",
     }),
     undefined,
+  );
+});
+
+test("Claude Agent SDK auto-approves tools under its registered Beale MCP server name", () => {
+  assert.deepEqual(
+    claudeAgentMcpToolAccess(["history_search", "file_read", "shell_run"]),
+    {
+      serverName: "beale",
+      allowedTools: [
+        "mcp__beale__history_search",
+        "mcp__beale__file_read",
+        "mcp__beale__shell_run",
+      ],
+    },
   );
 });
 

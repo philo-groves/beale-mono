@@ -336,6 +336,7 @@ describe('reports resource views', () => {
     expect(apiSource).toContain('getAppServerReport(locator: AppServerReportLocator)');
     expect(apiSource).toContain('updateReportContent(input: ReportContentUpdateInput)');
     expect(apiSource).toContain('updateReportTriageStatus(input: ReportTriageStatusUpdateInput)');
+    expect(apiSource).toContain('getReportSubmissionPacketPath(locator: AppServerReportLocator)');
     expect(apiSource).toContain('openReportSubmissionPacket(locator: AppServerReportLocator)');
     expect(apiSource).toContain('chooseReportSubmissionPacket(locator: AppServerReportLocator)');
     expect(apiSource).toContain('chooseReportRecording(locator: AppServerReportLocator)');
@@ -347,6 +348,8 @@ describe('reports resource views', () => {
     expect(mainSource).toContain('IPC_CHANNELS.openReportSubmissionPacket');
     expect(mainSource).toContain('IPC_CHANNELS.updateReportContent');
     expect(mainSource).toContain('IPC_CHANNELS.updateReportTriageStatus');
+    expect(mainSource).toContain('IPC_CHANNELS.getReportSubmissionPacketPath');
+    expect(mainSource).toContain('shell.showItemInFolder(path)');
     expect(mainSource).toContain('IPC_CHANNELS.chooseReportSubmissionPacket');
     expect(mainSource).toContain('IPC_CHANNELS.chooseReportRecording');
     expect(mainSource).toContain("filters: [{ name: 'ZIP archives', extensions: ['zip'] }]");
@@ -382,6 +385,7 @@ describe('reports resource views', () => {
   });
 
   it('shows an existing packet filename as the replacement file-picker action', () => {
+    const submissionPacketPath = '/srv/beale/example/artifacts/submission.zip';
     const packetReport: AppServerReportSummary = {
       ...report,
       submissionPacket: {
@@ -399,13 +403,19 @@ describe('reports resource views', () => {
     };
     const html = renderToStaticMarkup(createElement(ReportSummarySidebar, {
       report: packetReport,
+      submissionPacketPath,
       onStatusChange: async () => undefined,
       onChooseSubmissionPacket: async () => undefined,
+      onRevealSubmissionPacket: async () => undefined,
       onChooseRecording: async () => undefined
     }));
 
     expect(html).toContain('<span>Packet</span>');
     expect(html).toContain('submission.zip');
+    expect(html).toContain(`data-tooltip="${submissionPacketPath}"`);
+    expect(html).toContain('aria-label="Replace submission.zip"');
+    expect(html).toContain('aria-label="Show submission.zip in file explorer"');
+    expect(html).not.toContain('<button type="button" class="session-summary-item report-summary-item report-summary-attachment"');
     expect(html).toContain('<span>Recording</span>');
     expect(html).toContain('parser-demo.mov');
     expect(html).not.toContain('12.0 KB');
@@ -442,6 +452,7 @@ describe('reports resource views', () => {
     expect(html).not.toContain('report-ticketing-action');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     expect(styles).toMatch(/\.report-summary-status select\s*\{[^}]*justify-self:\s*end;[^}]*background-color:\s*transparent;/s);
+    expect(styles).toMatch(/\.report-summary-file-tooltip\.has-path-tooltip::after\s*\{[^}]*content:\s*attr\(data-tooltip\);/s);
   });
 
   it('uses the first Markdown line as the report title without Markdown symbols', () => {

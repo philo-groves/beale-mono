@@ -70,6 +70,62 @@ describe('run detail commentary projection', () => {
     expect(projectRunDetailForRenderer(detail, 'full')).toBe(detail);
   });
 
+  it('retains safeguard steering state without exposing the provider error body', () => {
+    const errorMessage = 'Sensitive provider error details.';
+    const storedRetry = traceEvent('stored-retry', {
+      source: 'system',
+      type: 'model_message',
+      payload: {
+        type: 'model_retry',
+        agentPath: '/root',
+        recoveryKind: 'safety_guardrail',
+        awaitingSteering: true,
+        errorMessage
+      }
+    });
+    const canonicalRetry = traceEvent('canonical-retry', {
+      source: 'executor',
+      type: 'research_event',
+      payload: {
+        agentPath: '/root',
+        payload: {
+          type: 'model_retry',
+          agentPath: '/root',
+          recoveryKind: 'safety_guardrail',
+          awaitingSteering: true,
+          errorMessage
+        }
+      }
+    });
+
+    const projected = projectRunDetailForRenderer(runDetail({
+      traceEvents: [storedRetry, canonicalRetry]
+    }), 'commentary');
+
+    expect(projected.traceEvents[0]?.payload).toMatchObject({
+      type: 'model_retry',
+      agentPath: '/root',
+      recoveryKind: 'safety_guardrail',
+      awaitingSteering: true
+    });
+    expect(projected.traceEvents[1]?.payload.payload).toEqual({
+      type: 'model_retry',
+      agentPath: '/root',
+      recoveryKind: 'safety_guardrail',
+      awaitingSteering: true
+    });
+    expect(JSON.stringify(projected)).not.toContain(errorMessage);
+
+    const messages = commentaryMessagesForSession(
+      projected,
+      buildTraceDisplayEventsForAgentPath(projected, null),
+      { includeInitialPrompt: false }
+    );
+    expect(messages.map(({ id, kind }) => [id, kind])).toEqual([
+      ['model-safety-pause:stored-retry', 'error']
+    ]);
+  });
+
   it('retains breakout-room records while projecting commentary', () => {
     const detail = runDetail({
       breakoutRooms: [{ id: 'room_one', title: 'Parser challenge', status: 'active' }] as RunDetail['breakoutRooms'],

@@ -369,6 +369,12 @@ export function App(): JSX.Element {
     request: Promise<AppServerRunbookDocument>;
   } | null>(null);
   const [selectedReportDocument, setSelectedReportDocument] = useState<AppServerReportDocument | null>(null);
+  const [reportSubmissionPacketPath, setReportSubmissionPacketPath] = useState<{
+    workspaceId: string;
+    reportId: string;
+    artifactId: string;
+    path: string;
+  } | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1981,6 +1987,36 @@ export function App(): JSX.Element {
       });
     return () => { cancelled = true; };
   }, [selectedReport?.revision, selectedReport?.workspaceId, selectedReportId]);
+  useEffect(() => {
+    const artifactId = selectedReport?.submissionPacket?.artifactId;
+    if (!selectedReport || !artifactId) {
+      setReportSubmissionPacketPath(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setReportSubmissionPacketPath((current) => (
+      current?.workspaceId === selectedReport.workspaceId
+        && current.reportId === selectedReport.id
+        && current.artifactId === artifactId
+        ? current
+        : null
+    ));
+    void window.beale.getReportSubmissionPacketPath({
+      workspaceId: selectedReport.workspaceId,
+      reportId: selectedReport.id
+    }).then((path) => {
+      if (cancelled) return;
+      setReportSubmissionPacketPath({
+        workspaceId: selectedReport.workspaceId,
+        reportId: selectedReport.id,
+        artifactId,
+        path
+      });
+    }).catch(() => {
+      if (!cancelled) setReportSubmissionPacketPath(null);
+    });
+    return () => { cancelled = true; };
+  }, [selectedReport?.id, selectedReport?.submissionPacket?.artifactId, selectedReport?.workspaceId]);
 
   const activeTraceEvents = useMemo(
     () => (renderedRunDetail && selectedSubagentPath
@@ -2441,6 +2477,13 @@ export function App(): JSX.Element {
               selectedReport ? (
                 <ReportSessionWorkspace
                   report={selectedReport}
+                  submissionPacketPath={
+                    reportSubmissionPacketPath?.workspaceId === selectedReport.workspaceId
+                      && reportSubmissionPacketPath.reportId === selectedReport.id
+                      && reportSubmissionPacketPath.artifactId === selectedReport.submissionPacket?.artifactId
+                      ? reportSubmissionPacketPath.path
+                      : null
+                  }
                   document={selectedReportDocument}
                   loading={reportLoading}
                   error={reportError}
@@ -2488,6 +2531,16 @@ export function App(): JSX.Element {
                       const message = errorMessage(caught);
                       setReportError(message);
                       throw new Error(message);
+                    }
+                  }}
+                  onRevealSubmissionPacket={async () => {
+                    try {
+                      await window.beale.openReportSubmissionPacket({
+                        workspaceId: selectedReport.workspaceId,
+                        reportId: selectedReport.id
+                      });
+                    } catch (caught: unknown) {
+                      throw new Error(errorMessage(caught));
                     }
                   }}
                   onChooseRecording={async () => {

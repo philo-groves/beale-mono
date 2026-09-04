@@ -726,8 +726,10 @@ final class AppModel: ObservableObject {
     ) async -> Bool {
         let instruction = rawInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionId = session.id
+        let current = currentSession(session, in: workspace)
+        let canContinue = ["blocked", "completed", "failed", "stopped"].contains(current.status)
         guard !instruction.isEmpty,
-              currentSession(session, in: workspace).status == "active",
+              current.status == "active" || canContinue,
               !sendingSessionSteering.contains(sessionId) else {
             return false
         }
@@ -736,11 +738,47 @@ final class AppModel: ObservableObject {
         sessionSteeringErrors[sessionId] = nil
         defer { sendingSessionSteering.remove(sessionId) }
         do {
-            let requestId = try await sendSteeringOverChannel(instruction, sessionId: sessionId)
+            let optimisticId: String
+            let optimisticAttemptId: String?
+            if current.status == "active" {
+                let requestId = try await sendSteeringOverChannel(instruction, sessionId: sessionId)
+                optimisticId = "transcript_steering_\(requestId)"
+                optimisticAttemptId = nil
+            } else {
+                let requestedServerURL = serverURL
+                let requestedToken = operatorToken
+                let client = try appServerClient(serverURL: requestedServerURL, token: requestedToken)
+                let started = try await client.continueSession(
+                    workspaceId: workspace.workspaceId,
+                    sessionId: sessionId,
+                    instruction: instruction
+                )
+                guard connectionMatches(serverURL: requestedServerURL, token: requestedToken) else {
+                    throw CancellationError()
+                }
+                sessionControlChannels.removeValue(forKey: sessionId)?.close()
+                sessions.removeAll { $0.id == started.session.id }
+                sessions.insert(started.session, at: 0)
+                let resumed = AppServerWorkspaceSession(
+                    id: current.id,
+                    workspaceId: current.workspaceId,
+                    status: started.session.isActive ? "active" : started.session.state,
+                    title: current.title,
+                    prompt: current.prompt,
+                    startedAt: current.startedAt,
+                    updatedAt: started.session.endedAt ?? started.session.startedAt
+                )
+                workspaceSessions[workspace.workspaceId] = inserting(
+                    resumed,
+                    into: workspaceSessions[workspace.workspaceId] ?? []
+                )
+                optimisticId = "transcript_session_continuation_\(started.attemptId)"
+                optimisticAttemptId = started.attemptId
+            }
             let optimistic = AppServerTranscriptMessage(
-                id: "transcript_steering_\(requestId)",
+                id: optimisticId,
                 runId: sessionId,
-                attemptId: nil,
+                attemptId: optimisticAttemptId,
                 traceEventId: nil,
                 role: "user",
                 phase: nil,

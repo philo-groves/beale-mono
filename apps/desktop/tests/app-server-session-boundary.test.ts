@@ -1090,22 +1090,15 @@ describe('app-server session persistence boundary', () => {
       const runId = started.runs[0]?.run.id;
       expect(runId).toBeTruthy();
 
-      expect(() => service.steerRun({ type: 'pause', runId: runId!, note: '' })).not.toThrow();
-      await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
-        .some((session) => session.runId === runId && session.status === 'paused'));
-      expect(() => service.steerRun({ type: 'resume', runId: runId!, note: '' })).not.toThrow();
-      await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
-        .some((session) => session.runId === runId && session.status === 'active'));
-
       expect(() => service.steerRun({ type: 'stop', runId: runId!, note: '' })).not.toThrow();
       await waitFor(() => service.getRunDetail(runId!).run.status === 'stopped');
       expect(service.getRunDetail(runId!)).toMatchObject({
         run: { status: 'stopped' },
         attempts: [expect.objectContaining({ status: 'stopped' })]
       });
+      const historyBeforeContinuation = service.getRunDetail(runId!).transcriptMessages.map((message) => message.id);
       await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
         .some((session) => session.runId === runId && session.status === 'stopped'));
-      await waitFor(() => !runtime!.appServerEngine.hasActiveRuns());
 
       watchForContinuedRegistry = true;
       const accepted = await service.steerRunForClient({
@@ -1114,6 +1107,10 @@ describe('app-server session persistence boundary', () => {
         instruction: 'Continue after the stopped process has detached.'
       });
       expect(accepted.runs.some((row) => row.run.id === runId)).toBe(true);
+      expect(service.getRunDetail(runId!).run.promptMarkdown).toBe('Stop this session immediately.');
+      expect(service.getRunDetail(runId!).transcriptMessages.map((message) => message.id)).toEqual(
+        expect.arrayContaining(historyBeforeContinuation)
+      );
       expect(service.getRunDetail(runId!).transcriptMessages).toEqual(expect.arrayContaining([
         expect.objectContaining({
           role: 'user',

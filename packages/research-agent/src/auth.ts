@@ -211,6 +211,41 @@ const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>
   ],
   "openai-codex": [
     {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      compat: {
+        supportsToolSearch: true,
+      },
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        xhigh: "xhigh",
+        max: "max",
+      },
+      input: ["text", "image"],
+      cost: {
+        input: 10,
+        output: 50,
+        cacheRead: 1,
+        cacheWrite: 12.5,
+        tiers: [
+          {
+            inputTokensAbove: 272_000,
+            input: 20,
+            output: 75,
+            cacheRead: 2,
+            cacheWrite: 25,
+          },
+        ],
+      },
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    },
+    {
       id: "gpt-daybreak-blue-latest",
       name: "Daybreak Blue",
       api: "openai-codex-responses",

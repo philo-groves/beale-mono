@@ -860,6 +860,11 @@ export function ResearchSettingsForm({
   };
 
   if (formPresentation === 'session') {
+    const generationFeedback = generatingPrompt
+      ? 'Adding useful context…'
+      : generationError
+        ? `Could not add context: ${generationError}`
+        : null;
     const initialModelSelection: ResearchModelSelection | undefined = selectedProviderId && selectedModel ? {
       provider: selectedProviderId,
       model: selectedModel.id,
@@ -964,6 +969,14 @@ export function ResearchSettingsForm({
               </div>
             </div>
         )}
+        postComposerContent={generationFeedback ? (
+          <div
+            className="new-research-session-feedback"
+            role={generationError ? 'alert' : 'status'}
+          >
+            {generationFeedback}
+          </div>
+        ) : null}
         onBackToMain={() => undefined}
         onInitialInstruction={startFromSessionComposer}
         onCancel={closeForm}

@@ -78,6 +78,7 @@ export const CommentaryView = memo(function CommentaryView({
   initialSuggestion,
   initialInstruction,
   preComposerContent,
+  postComposerContent,
   dangerModeEnabled = false,
   responseSuggestionsEnabled = true,
   onBackToMain,
@@ -116,6 +117,7 @@ export const CommentaryView = memo(function CommentaryView({
   initialSuggestion?: string;
   initialInstruction?: string;
   preComposerContent?: ReactNode;
+  postComposerContent?: ReactNode;
   dangerModeEnabled?: boolean;
   responseSuggestionsEnabled?: boolean;
   onBackToMain: () => void;
@@ -499,6 +501,7 @@ export const CommentaryView = memo(function CommentaryView({
           initialSuggestion={initialSuggestion}
           initialInstruction={initialInstruction}
           preComposerContent={preComposerContent}
+          postComposerContent={postComposerContent}
           responseSuggestionsEnabled={responseSuggestionsEnabled}
           shellApproval={shellApproval}
           shellApprovalBusy={shellApprovalBusy}
