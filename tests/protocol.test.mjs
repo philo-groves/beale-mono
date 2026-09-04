@@ -21,6 +21,8 @@ import {
   decodeBealeAppServerShutdownResult,
   decodeAppServerProtocolEnvelope,
   decodeAppServerSessionLaunchRequest,
+  decodeBealeAppServerSessionControlRequest,
+  decodeBealeAppServerSessionControlResult,
   decodeAppServerServerMessage,
   APP_SERVER_PROTOCOL_OPERATIONS,
   APP_SERVER_PROTOCOL_VERSION,
@@ -43,10 +45,10 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v19 persistence, continuation, and workspace-history contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v20 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 19);
+  assert.equal(descriptor.contractVersion, 20);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 12);
   assert.equal(descriptor.schemas.finding, 5);
@@ -83,6 +85,9 @@ test("protocol describe exposes a runtime-bound v19 persistence, continuation, a
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("history.undo_duplicate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("workspace.state"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("registry.state"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("research.tools.list"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("research.tools.read"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("research.tools.mutate"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-content-revise.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-triage-status.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-recording-replace.v1"));
@@ -104,6 +109,8 @@ test("protocol describe exposes a runtime-bound v19 persistence, continuation, a
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.http-control.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("research.tools.v1"));
   assert.equal(descriptor.transports.websocket.path, "/v1/session");
   assert.equal(descriptor.transports.appServer.path, "/v1/operations");
   assert.equal(descriptor.transports.appServer.authentication, "operator-bearer");
@@ -130,6 +137,43 @@ test("protocol argument and WebSocket DTO decoders share correlation and error s
     error: { code: "invalid_message", message: "Bad message.", retryable: false },
     message: "Bad message.",
   }).error, { code: "invalid_message", message: "Bad message.", retryable: false });
+});
+
+test("HTTP session control DTOs are bounded and correlated", () => {
+  assert.deepEqual(
+    decodeBealeAppServerSessionControlRequest({ type: "steer", instruction: "Inspect the alternate parser." }),
+    { type: "steer", instruction: "Inspect the alternate parser." },
+  );
+  assert.deepEqual(
+    decodeBealeAppServerSessionControlResult({
+      controlVersion: 1,
+      accepted: true,
+      sessionId: "session-1",
+      requestId: "request-1",
+      type: "steer",
+    }),
+    {
+      controlVersion: 1,
+      accepted: true,
+      sessionId: "session-1",
+      requestId: "request-1",
+      type: "steer",
+    },
+  );
+  assert.throws(
+    () => decodeBealeAppServerSessionControlRequest({ type: "steer", instruction: "" }),
+    /instruction/,
+  );
+  assert.throws(
+    () => decodeBealeAppServerSessionControlResult({
+      controlVersion: 1,
+      accepted: true,
+      sessionId: "session-1",
+      requestId: "",
+      type: "steer",
+    }),
+    /control response/,
+  );
 });
 
 test("the typed session launch carries an OpenAI Fast mode preference", () => {

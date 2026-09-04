@@ -23,6 +23,7 @@
 
 #### Added
 
+- Added the repository-owned `beale-codex` Codex plugin under `integrations/`, with a validated Beale research skill and approval-aware MCP bridge for canonical workspaces, sessions, channels, research tools, evidence, findings, runbooks, reports, and campaign state. The app-server contract advances to v20 with profile-scoped research-tool dispatch and authenticated HTTP session control.
 - Added GPT-6 Astra to the OpenAI Codex research-model catalog with its low-through-max reasoning levels and published context and output limits.
 - Desktop report packet rows now show the absolute `submission.zip` path in an in-app tooltip and use separate controls to replace the packet or reveal it in the host file explorer.
 - Desktop Finding and Lead details now show the stable claim identifier alongside their workspace, subject, and originating session scope.

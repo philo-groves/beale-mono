@@ -68,7 +68,7 @@ For iOS, the recommended deployment is a loopback listener behind Tailscale Serv
 - `GET /health` — liveness and compatibility probe; returns `ok`, the UTC control-contract timestamp, and the capability list. An older Desktop prompts for restart; a newer Desktop replaces an older app-server automatically.
 - `GET /v1/server` — authenticated, typed server descriptor with control/protocol versions, endpoints, capabilities, and payload/replay limits.
 - `GET /v1/providers` — authenticated, path-free model catalogs for providers connected in Desktop, including host Lead/subagent/reasoning defaults but no credentials or authentication metadata.
-- `POST /v1/operations` — execute an allowlisted canonical app-server operation inside the app-server host. Research clients can use `suggestion.generate` for profile-default workspace suggestions and `prompt.expand` for bounded model-assisted context expansion; the host supplies workspace storage, provider policy, and credentials. Campaign-track clients can use `investigation.list`, `investigation.get`, and `investigation.replay`; disabled-memory workspaces reject investigation and Dreaming operations.
+- `POST /v1/operations` — execute an allowlisted canonical app-server operation inside the app-server host. Research clients can use `suggestion.generate` for profile-default workspace suggestions and `prompt.expand` for bounded model-assisted context expansion; the host supplies workspace storage, provider policy, and credentials. Campaign-track clients can use `investigation.list`, `investigation.get`, and `investigation.replay`; disabled-memory workspaces reject investigation and Dreaming operations. Codex integrations use `research.tools.list`, `research.tools.read`, and `research.tools.mutate` to discover and invoke the same profile-scoped durable research tools as hosted agents; the host replaces client-supplied paths and profile policy with registered workspace values and enforces read-versus-mutating routing.
 - `POST /v1/sessions` — launch a session. Body:
 
   ```json
@@ -98,6 +98,7 @@ For iOS, the recommended deployment is a loopback listener behind Tailscale Serv
 - `GET /v1/sessions/<id>` — one typed live-process catalog entry, avoiding a full catalog poll.
 - `POST /v1/sessions/<id>/attachments` — mint an independent transport token for another Desktop or mobile client to join an active session. Terminal sessions return `410`.
 - `POST /v1/sessions/<id>/continuations` — continue a canonical blocked, completed, failed, or stopped session. The authenticated body supplies `workspaceId` and the new `instruction`; app-server appends a child attempt to the same session, preserves its original request and transcript, and returns a fresh session transport.
+- `POST /v1/sessions/<id>/control` — send an authenticated `steer`, `pause`, `resume`, or `stop` control without opening a WebSocket attachment. The app-server assigns the correlation id and routes the validated control through the same hosted worker boundary.
 - `DELETE /v1/sessions/<id>` — stop a running session (`202`) or remove a retained terminal record (`200`). Unknown ids return `404`.
 - `POST /v1/server/shutdown` — authenticated graceful process-host shutdown used by Desktop when replacing an older app-server.
 

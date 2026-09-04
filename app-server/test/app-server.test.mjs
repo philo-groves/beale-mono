@@ -30,6 +30,11 @@ import {
   AppServerWorkerDatabaseBroker,
   AppServerWorkerDatabaseCoordinator,
 } from "../dist/workerDatabaseBroker.js";
+import {
+  callAppServerResearchTool,
+  listAppServerResearchTools,
+} from "../dist/researchToolBridge.js";
+import { WorkspaceDatabase } from "../dist/workspaceDatabase.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const WebSocket = requireFromHere("ws");
@@ -185,6 +190,42 @@ test("continues a terminal session through the authenticated control plane", asy
     { recordedAttemptId: "attempt-continuation" },
     { spawned: true },
   ]);
+  upstream.complete();
+});
+
+test("steers an active session through authenticated HTTP control", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-http-control-"));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const server = await startAppServer({
+    hostService: testHostService(directory),
+    spawnSession: upstream.spawnSession,
+    operatorToken: "operator-secret",
+  });
+  servers.push(server);
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: "session-http-control" }));
+
+  const response = await fetch(`${server.url}/v1/sessions/session-http-control/control`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer operator-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ type: "steer", instruction: "Check the alternate parser path." }),
+  });
+
+  assert.equal(response.status, 202);
+  const result = await response.json();
+  assert.equal(result.accepted, true);
+  assert.equal(result.sessionId, "session-http-control");
+  assert.equal(result.type, "steer");
+  assert.match(result.requestId, /^[0-9a-f-]{36}$/u);
+  assert.deepEqual(upstream.controls, [{
+    schemaVersion: 1,
+    requestId: result.requestId,
+    type: "steer",
+    instruction: "Check the alternate parser path.",
+  }]);
   upstream.complete();
 });
 
@@ -383,6 +424,114 @@ test("routes campaign-track operations through registered workspace storage", as
     disabled.executeOperation({ operation: "investigation.replay", input: { workspaceId: "workspace-test" } }),
     /memory disabled/,
   );
+});
+
+test("routes Codex research tools through canonical workspace identity and storage", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-codex-tools-"));
+  temporaryDirectories.push(directory);
+  const calls = [];
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation, options) => {
+      calls.push({ operation, options });
+      return { status: "complete" };
+    },
+  });
+
+  await service.executeOperation({
+    operation: "research.tools.mutate",
+    input: {
+      workspaceId: "workspace-test",
+      workspaceRoot: "/client-controlled",
+      researchProfileId: "client-profile",
+      memoryBackend: "disabled",
+      sessionId: "session-codex",
+      toolName: "lead.create",
+      toolInput: { title: "Candidate" },
+      modelAuthor: { provider: "openai-codex", model: "gpt-6-astra" },
+    },
+  });
+
+  assert.equal(calls[0].operation, "research.tools.mutate");
+  assert.deepEqual(calls[0].options.input, {
+    workspaceId: "workspace-test",
+    workspaceName: "Test workspace",
+    workspaceRoot: directory,
+    researchProfileId: "security-research",
+    memoryBackend: "app-server",
+    sessionId: "session-codex",
+    toolName: "lead.create",
+    toolInput: { title: "Candidate" },
+    modelAuthor: { provider: "openai-codex", model: "gpt-6-astra" },
+  });
+  assert.equal(calls[0].options.storage.databasePath, join(directory, "memory.sqlite"));
+  await assert.rejects(
+    service.executeOperation({
+      operation: "research.tools.list",
+      profileId: "security-research",
+      input: { workspaceId: "unregistered", workspaceRoot: "/client-controlled" },
+    }),
+    /registered Beale workspace/,
+  );
+});
+
+test("exposes the in-Beale durable tool registry to Codex with enforced effect routing", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-codex-tool-bridge-"));
+  temporaryDirectories.push(directory);
+  const storage = {
+    databasePath: join(directory, "memory.sqlite"),
+    artifactDirectoryPath: join(directory, "artifacts"),
+  };
+  const database = new WorkspaceDatabase(storage.databasePath, storage.artifactDirectoryPath, {
+    workspacePath: directory,
+    workspaceId: "workspace-test",
+  });
+  database.initialize();
+  database.close();
+  const context = {
+    workspaceId: "workspace-test",
+    workspaceName: "Test workspace",
+    workspaceRoot: directory,
+    researchProfileId: "security-research",
+    memoryBackend: "app-server",
+    sessionId: "session-codex",
+    modelAuthor: { provider: "openai-codex", model: "gpt-6-astra" },
+  };
+
+  const catalog = await listAppServerResearchTools(context, storage);
+  const descriptors = new Map(catalog.tools.map((tool) => [tool.name, tool]));
+  assert.equal(descriptors.get("history.search").sideEffects, "read");
+  assert.equal(descriptors.get("lead.create").sideEffects, "write");
+  assert.equal(descriptors.get("runbook.run").sideEffects, "process");
+
+  await assert.rejects(
+    callAppServerResearchTool({
+      ...context,
+      toolName: "lead.create",
+      toolInput: { title: "Candidate", classification: "security.vulnerability", rating: "medium" },
+    }, storage, "read"),
+    /mutating research-tool operation/,
+  );
+
+  const created = await callAppServerResearchTool({
+    ...context,
+    toolName: "lead.create",
+    toolInput: {
+      title: "Parser boundary candidate",
+      classification: "security.vulnerability",
+      rating: "medium",
+      summary: "A bounded candidate awaiting direct observation.",
+    },
+  }, storage, "mutating");
+  assert.equal(created.result.status, "complete", JSON.stringify(created.result));
+
+  const listed = await callAppServerResearchTool({
+    ...context,
+    toolName: "lead.list",
+    toolInput: { query: "parser boundary" },
+  }, storage, "read");
+  assert.equal(listed.result.status, "complete");
+  assert.equal(listed.result.output.leads[0].title, "Parser boundary candidate");
 });
 
 test("owns research goal suggestion storage and provider routing at the app-server boundary", async () => {

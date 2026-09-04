@@ -306,7 +306,7 @@ final class AppServerContractTests: XCTestCase {
                 "version": "0.1.0",
                 "buildId": "build-current"
               },
-              "contractVersion": 19,
+              "contractVersion": 20,
               "schemas": {
                 "protocol": 1,
                 "session": 1,

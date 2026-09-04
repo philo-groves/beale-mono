@@ -64,6 +64,12 @@ import {
 } from '@beale/app-server-runtime/protocol';
 import { WorkspaceDatabase } from './workspaceDatabase.js';
 import { WorkspaceRegistry } from './workspaceRegistryStore.js';
+import {
+  callAppServerResearchTool,
+  listAppServerResearchTools,
+  type AppServerResearchToolCall,
+  type AppServerResearchToolContext
+} from './researchToolBridge.js';
 
 export interface AppServerProtocolStorage {
   databasePath: string;
@@ -95,6 +101,12 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
     return executeHostedUtilityOperation(
       operation as 'tools.list' | 'tools.config' | 'config.show' | 'config.set',
       options.args
+    );
+  }
+  if (operation.startsWith('research.tools.')) {
+    return researchToolOperation(
+      operation as 'research.tools.list' | 'research.tools.read' | 'research.tools.mutate',
+      options
     );
   }
   if (operation.startsWith('session.')) return sessionOperation(operation, options);
@@ -129,6 +141,23 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
     return knowledgeOperation(operation, options);
   }
   return harnessOperation(operation, options);
+}
+
+async function researchToolOperation(
+  operation: 'research.tools.list' | 'research.tools.read' | 'research.tools.mutate',
+  options: InvokeAppServerProtocolOptions
+): Promise<unknown> {
+  const storage = requiredStorage(options.storage);
+  const input = requiredRecord(options.input, `${operation} input`);
+  if (operation === 'research.tools.list') {
+    return listAppServerResearchTools(input as unknown as AppServerResearchToolContext, storage);
+  }
+  return callAppServerResearchTool(
+    input as unknown as AppServerResearchToolCall,
+    storage,
+    operation === 'research.tools.read' ? 'read' : 'mutating',
+    options.signal
+  );
 }
 
 function channelOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): unknown {

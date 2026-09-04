@@ -47,7 +47,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 19 as const;
+export const APP_SERVER_CONTRACT_VERSION = 20 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -55,7 +55,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-03T01:45:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-04T22:54:48.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
@@ -68,6 +68,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.continuation.v1",
   "session.startup-recovery.v1",
   "session.multi-client.v1",
+  "session.http-control.v1",
   "host.control.v1",
   "host.descriptor.v1",
   "host.provider-catalog.v1",
@@ -75,6 +76,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.commentary.v1",
   "memory.notifications.v3",
   "host.operations.v1",
+  "research.tools.v1",
   "source.clone-modes.v1",
   "maintenance.repository-consolidation.v1",
   "host.shutdown-guard.v1",
@@ -212,6 +214,34 @@ export interface BealeAppServerSessionStopResult {
   controlVersion: typeof BEALE_APP_SERVER_CONTROL_VERSION;
   stopped: boolean;
   sessionId: string;
+}
+
+export type BealeAppServerSessionControlRequest =
+  | { type: "steer"; instruction: string }
+  | { type: "pause" }
+  | { type: "resume" }
+  | { type: "stop" };
+
+export interface BealeAppServerSessionControlResult {
+  controlVersion: typeof BEALE_APP_SERVER_CONTROL_VERSION;
+  accepted: true;
+  sessionId: string;
+  requestId: string;
+  type: BealeAppServerSessionControlRequest["type"];
+}
+
+export function decodeBealeAppServerSessionControlRequest(
+  value: unknown,
+): BealeAppServerSessionControlRequest {
+  if (!isRecord(value)) throw new Error("Session control body must be a JSON object.");
+  if (value.type === "steer") {
+    requiredBoundedString(value, "instruction", 131_072);
+    return { type: "steer", instruction: value.instruction as string };
+  }
+  if (value.type === "pause" || value.type === "resume" || value.type === "stop") {
+    return { type: value.type };
+  }
+  throw new Error("Session control type must be steer, pause, resume, or stop.");
 }
 
 export interface BealeAppServerShutdownResult {
@@ -405,6 +435,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "suggestion.generate", "suggestion.select", "prompt.expand",
   "profile.resolve", "auth.list", "auth.status", "auth.verify", "auth.logout", "model.list",
   "tools.list", "tools.config", "config.show", "config.set",
+  "research.tools.list", "research.tools.read", "research.tools.mutate",
   "source.inspect", "source.materialize", "plugin.list", "plugin.add_filesystem",
   "plugin.add_repository", "plugin.set_enabled", "plugin.remove", "plugin.runtime",
   "maintenance.summary", "maintenance.run",
@@ -968,6 +999,16 @@ export function decodeBealeAppServerSessionStopResult(value: unknown): BealeAppS
     throw new Error("Invalid Beale app-server session stop response.");
   }
   return value as unknown as BealeAppServerSessionStopResult;
+}
+
+export function decodeBealeAppServerSessionControlResult(value: unknown): BealeAppServerSessionControlResult {
+  if (!isRecord(value) || value.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION
+    || value.accepted !== true || !nonEmptyString(value.sessionId)
+    || !validRequestId(value.requestId)
+    || (value.type !== "steer" && value.type !== "pause" && value.type !== "resume" && value.type !== "stop")) {
+    throw new Error("Invalid Beale app-server session control response.");
+  }
+  return value as unknown as BealeAppServerSessionControlResult;
 }
 
 export function decodeBealeAppServerShutdownResult(value: unknown): BealeAppServerShutdownResult {

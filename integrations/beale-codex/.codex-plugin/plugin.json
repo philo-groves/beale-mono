@@ -1,0 +1,23 @@
+{
+  "name": "beale-codex",
+  "version": "0.1.0",
+  "description": "Connect Codex to Beale's canonical research runtime and durable research state.",
+  "author": {
+    "name": "Beale"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Beale Codex",
+    "shortDescription": "Use Beale research from Codex.",
+    "longDescription": "Read and update Beale workspaces, sessions, channels, evidence, findings, runbooks, reports, and campaign state through the app-server while retaining Codex-native review and execution controls.",
+    "developerName": "Beale",
+    "category": "Developer Tools",
+    "capabilities": ["Research", "Read", "Write", "Sessions"],
+    "defaultPrompt": [
+      "Continue this workspace's Beale research.",
+      "Review Beale findings and verify the next claim.",
+      "Persist this Codex result back to Beale."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -22,6 +22,7 @@ import {
   APP_SERVER_SESSION_LAUNCH_VERSION,
   decodeAppServerClientMessage,
   decodeBealeAppServerSessionContinuationRequest,
+  decodeBealeAppServerSessionControlRequest,
   decodeAppServerSessionLaunchRequest,
   appServerServerHello,
   appServerSessionEvent,
@@ -33,6 +34,7 @@ import {
   type BealeAppServerSessionResult,
   type BealeAppServerSessionStartResult,
   type BealeAppServerSessionStopResult,
+  type BealeAppServerSessionControlResult,
   type BealeAppServerShutdownResult,
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
@@ -694,6 +696,40 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       return;
     }
     const sessionMatch = /^\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
+    const sessionControlMatch = /^\/v1\/sessions\/([^/]+)\/control$/.exec(url.pathname);
+    if (sessionControlMatch && request.method === 'POST') {
+      const sessionId = decodeURIComponent(sessionControlMatch[1] ?? '');
+      const runtime = sessions.get(sessionId);
+      if (!runtime) throw new HttpError(404, `Unknown session: ${sessionId}`);
+      if (isTerminal(runtime.state)) throw new HttpError(410, `Session ${sessionId} has already ended.`);
+      let control;
+      try {
+        control = decodeBealeAppServerSessionControlRequest(await readJsonBody(request));
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : 'Invalid session control request.');
+      }
+      const requestId = randomUUID();
+      const message = { schemaVersion: 1 as const, requestId, ...control };
+      if (control.type === 'stop') {
+        runtime.stopRequested = true;
+        void recordSessionControlState(runtime, 'stopped');
+      }
+      if (runtime.session) {
+        runtime.session.sendControl(message);
+      } else {
+        if (runtime.pendingControls.length >= 128) runtime.pendingControls.shift();
+        runtime.pendingControls.push(message);
+      }
+      const result: BealeAppServerSessionControlResult = {
+        controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+        accepted: true,
+        sessionId,
+        requestId,
+        type: control.type
+      };
+      sendJson(response, 202, result);
+      return;
+    }
     if (sessionMatch && request.method === 'GET') {
       const sessionId = decodeURIComponent(sessionMatch[1] ?? '');
       const session = sessionEntry(sessionId);

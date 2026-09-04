@@ -181,6 +181,9 @@ export class AppServerHostService {
     const workspace = workspaceIdentifier
       ? this.registry.resolveWorkspace(workspaceIdentifier)
       : null;
+    if (request.operation.startsWith('research.tools.') && !workspace) {
+      throw new Error('Codex research-tool operations require a registered Beale workspace.');
+    }
     if (workspace && request.profileId && request.profileId !== workspace.researchProfileId) {
       throw new Error(`Workspace ${workspace.workspaceId} uses research profile ${workspace.researchProfileId}, not ${request.profileId}.`);
     }
@@ -195,7 +198,9 @@ export class AppServerHostService {
       ? persistenceStorageFromInput(request.input)
       : storageProfileId ? this.registry.storageForProfile(storageProfileId) : null;
     const operationInput = workspace && storage
-      ? request.operation.startsWith('suggestion.')
+      ? request.operation.startsWith('research.tools.')
+        ? this.hostedResearchToolInput(request.input, workspace)
+        : request.operation.startsWith('suggestion.')
         ? this.hostedSuggestionInput(request.operation, request.input, workspace, storage)
         : request.operation === 'prompt.expand'
           ? this.hostedPromptExpansionInput(request.input, workspace, storage)
@@ -214,6 +219,35 @@ export class AppServerHostService {
       return { ...(result as Record<string, unknown>), nodes: [] };
     }
     return result;
+  }
+
+  private hostedResearchToolInput(
+    input: unknown,
+    workspace: AppServerHostWorkspace
+  ): Record<string, unknown> {
+    const requested = isRecord(input) ? input : {};
+    const toolInput = isRecord(requested.toolInput) ? requested.toolInput : {};
+    const modelAuthor = isRecord(requested.modelAuthor)
+      && nonEmpty(requested.modelAuthor.provider)
+      && nonEmpty(requested.modelAuthor.model)
+      ? {
+          provider: nonEmpty(requested.modelAuthor.provider)!,
+          model: nonEmpty(requested.modelAuthor.model)!
+        }
+      : undefined;
+    return {
+      workspaceId: workspace.workspaceId,
+      workspaceName: workspace.name,
+      workspaceRoot: workspace.workspacePath,
+      researchProfileId: workspace.researchProfileId,
+      memoryBackend: workspace.memoryBackend,
+      ...(nonEmpty(requested.sessionId) ? { sessionId: nonEmpty(requested.sessionId)! } : {}),
+      ...(nonEmpty(requested.investigationId) ? { investigationId: nonEmpty(requested.investigationId)! } : {}),
+      ...(nonEmpty(requested.objective) ? { objective: nonEmpty(requested.objective)! } : {}),
+      ...(nonEmpty(requested.toolName) ? { toolName: nonEmpty(requested.toolName)! } : {}),
+      ...(isRecord(requested.toolInput) ? { toolInput } : {}),
+      ...(modelAuthor ? { modelAuthor } : {})
+    };
   }
 
   private hostedSuggestionInput(

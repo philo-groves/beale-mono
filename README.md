@@ -10,6 +10,7 @@ This monorepo contains:
 - **Beale iOS** (`apps/ios`) — a basic native SwiftUI client for connecting to the app-server through tailnet-only Tailscale Serve HTTPS.
 - **Beale research runtime** (`packages/research-agent`, `packages/app-server-runtime`) — the research engine plus its shared protocol and app-server-hosted worker runtime.
 - **App Server** (`app-server`) — the standalone tray-resident app-server host and common control plane for Desktop and iOS.
+- **Integrations** (`integrations`) — first-party client integrations, including the local `beale-codex` Codex plugin.
 
 ---
 
@@ -29,6 +30,7 @@ The project is under heavy development. The agent is not ready for real use; exp
 | `apps/ios` | Native SwiftUI app-server client and Xcode project |
 | `packages/app-server-runtime` | Shared protocol, app-server session runtime, and optional app-server client |
 | `app-server` | `@beale/app-server` — standalone tray-resident app-server execution host and control plane |
+| `integrations/beale-codex` | Codex plugin with a Beale research skill and local stdio MCP server |
 | `packages/research-agent` | `@beale/research-agent` — workspace context, durable memory, tools, and the Pi-backed agent runtime |
 | `tests` | app-server test suite (`node:test`, runs against built packages) |
 | `examples` | Example research profiles |
@@ -61,6 +63,10 @@ Workspace memory is independently selectable in Desktop's Workspace Overview:
 Profiles define domain classifications such as `security.primitive`, `security.chain`, `mathematics.theorem`, and `mathematics.counterexample`; they do not create competing memory backends. Legacy v1/v2/shadow selections migrate to Enabled, and legacy claim-shaped memory rows migrate non-destructively into the claim ledger.
 
 During development, Desktop discovers and launches the workspace app-server. `BEALE_APP_SERVER_COMMAND` and related environment variables override this for packaged builds and custom setups.
+
+### Codex integration
+
+Install `integrations/beale-codex` as a local Codex plugin and start Beale or the app-server before using it. The plugin reads the private `~/.beale/app-server.json` discovery record internally, uses its loopback endpoint by default, and exposes path-free workspace/session controls plus the active research profile's durable tools. Codex-native filesystem, terminal, browser, computer-use, and approval behavior remains the execution boundary; research results written through the plugin immediately enter Beale's canonical app-server storage.
 
 ---
 

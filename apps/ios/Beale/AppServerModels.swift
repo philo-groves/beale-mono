@@ -58,7 +58,7 @@ enum BealeAppServerContract {
     static let controlVersion = 1
     static let sessionLaunchVersion = 2
     static let appServerProtocolVersion = 1
-    static let appServerContractVersion = 19
+    static let appServerContractVersion = 20
     static let memoryNotificationSchemaVersion = 3
     static let workspaceMemorySchemaVersion = 4
 

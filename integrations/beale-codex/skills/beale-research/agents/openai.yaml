@@ -1,0 +1,4 @@
+interface:
+  display_name: "Beale Research"
+  short_description: "Work with Beale research through Codex."
+  default_prompt: "Use Beale research context and persist durable research outcomes back to Beale."
