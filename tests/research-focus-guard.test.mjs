@@ -152,6 +152,114 @@ test("research focus guard requires balanced proof obligations before further br
   assert.equal(guard.exportState().convergencePending, false);
 });
 
+test("research focus guard converts sustained evidence activity into canonical progress", () => {
+  const guard = new ResearchFocusGuard({
+    durableProgressEnabled: true,
+    durableProgressActivityCalls: 2,
+    convergenceEnabled: false,
+  });
+  for (let turn = 1; turn <= 2; turn += 1) {
+    const callId = `evidence_${turn}`;
+    assert.equal(guard.beforeToolCall({
+      callId,
+      turn,
+      toolName: "repository_search",
+      input: { query: `candidate_${turn}` },
+      kind: "research",
+    }).block, false);
+    guard.afterToolCall({
+      callId,
+      status: "complete",
+      result: { matches: [{ path: `candidate_${turn}.c` }] },
+    });
+    const result = guard.finishTurn(turn, { toolOnly: true });
+    if (turn === 2) {
+      assert.equal(result.reason, "durable_progress_checkpoint");
+      assert.match(result.steeringMessage, /has not changed canonical research state/);
+      assert.match(result.steeringMessage, /Do not create or append a runbook merely to clear/);
+    }
+  }
+
+  for (const [callId, toolName, kind] of [
+    ["more_execution", "shell_run", "research"],
+    ["runbook_churn", "runbook_append", "research"],
+    ["premature_finish", "session_disposition", "control"],
+  ]) {
+    const decision = guard.beforeToolCall({ callId, turn: 3, toolName, input: {}, kind });
+    assert.equal(decision.block, true);
+    assert.match(decision.reason, /Durable progress checkpoint required/);
+  }
+
+  assert.equal(guard.beforeToolCall({
+    callId: "deduplicate_first",
+    turn: 3,
+    toolName: "history_search",
+    input: { query: "candidate" },
+    kind: "recall",
+  }).block, false);
+  assert.equal(guard.beforeToolCall({
+    callId: "persist_observation",
+    turn: 3,
+    toolName: "investigation_observe",
+    input: { kind: "source", outcome: "narrows", summary: "Candidate two lacks reachability." },
+    kind: "research",
+  }).block, false);
+  guard.afterToolCall({
+    callId: "persist_observation",
+    status: "complete",
+    result: { id: "observation_1" },
+  });
+
+  assert.equal(guard.exportState().activityCallsSinceDurableProgress, 0);
+  assert.equal(guard.exportState().durableProgressPending, false);
+  assert.equal(guard.beforeToolCall({
+    callId: "execution_resumed",
+    turn: 4,
+    toolName: "shell_run",
+    input: { utility: "node", args: ["probe.mjs"] },
+    kind: "research",
+  }).block, false);
+});
+
+test("research focus guard preserves a pending durable-progress checkpoint across resume", () => {
+  const objective = "Turn runtime observations into durable research state.";
+  const guard = new ResearchFocusGuard({
+    objective,
+    durableProgressEnabled: true,
+    durableProgressActivityCalls: 1,
+    convergenceEnabled: false,
+  });
+  assert.equal(guard.beforeToolCall({
+    callId: "runtime_observation",
+    turn: 1,
+    toolName: "shell_run",
+    input: { utility: "node", args: ["probe.mjs"] },
+    kind: "research",
+  }).block, false);
+  guard.afterToolCall({
+    callId: "runtime_observation",
+    status: "complete",
+    result: { exitCode: 0, stdout: "candidate reached" },
+  });
+
+  const restored = new ResearchFocusGuard({
+    objective,
+    durableProgressEnabled: true,
+    durableProgressActivityCalls: 1,
+    convergenceEnabled: false,
+    initialState: guard.exportState(),
+  });
+  const blocked = restored.beforeToolCall({
+    callId: "resume_execution",
+    turn: 2,
+    toolName: "shell_run",
+    input: { utility: "node", args: ["probe-next.mjs"] },
+    kind: "research",
+  });
+  assert.equal(blocked.block, true);
+  assert.match(blocked.reason, /Durable progress checkpoint required/);
+});
+
 test("research focus guard permits another recall when the underlying state changed", () => {
   const guard = new ResearchFocusGuard();
   const turnResults = [];

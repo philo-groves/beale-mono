@@ -602,6 +602,8 @@ export interface AppServerSessionLaunchContinuation {
 export interface AppServerSessionLaunchIntent {
   /** Beale's durable workspace id, never a host filesystem path. */
   workspaceId: string;
+  /** Optional existing campaign track that this session must continue. */
+  investigationId?: string;
   attemptId?: string;
   promptMarkdown: string;
   goal?: { objective?: string };
@@ -635,6 +637,7 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
   optionalBoundedString(value, "sessionId", 128);
   const launch = requiredRecord(value, "launch");
   requiredBoundedString(launch, "workspaceId", 256);
+  optionalBoundedString(launch, "investigationId", 256);
   optionalBoundedString(launch, "attemptId", 128);
   requiredBoundedString(launch, "promptMarkdown", 131_072);
   optionalBoundedString(launch, "shellSafetyMode", 64);

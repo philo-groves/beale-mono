@@ -448,6 +448,7 @@ export class AppServerHostService {
       launch: {
         workspaceRoot: workspace.workspacePath,
         workspaceDirectories: workspace.workspaceDirectories,
+        ...(request.launch.investigationId ? { investigationId: request.launch.investigationId } : {}),
         capturePath,
         attemptId,
         promptMarkdown: request.launch.promptMarkdown,
@@ -1521,6 +1522,7 @@ function restartLaunchDescriptor(
       },
       shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
       ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
+      ...(request.launch.investigationId ? { investigationId: request.launch.investigationId } : {}),
       researchProfileId: request.launch.researchProfileId?.trim() || resolved.profileId,
       ...(request.launch.researchProfileHash
         ? { researchProfileHash: request.launch.researchProfileHash }

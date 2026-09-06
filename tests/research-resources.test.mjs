@@ -18,13 +18,13 @@ test("resource discovery is non-authoring and first touch requires relevance Aut
   const reviews = [];
   const catalog = new ResearchResourceCatalog({
     databasePath,
-    workspaceId: "workspace_asb",
+    workspaceId: "workspace_example_campaign",
     explicitResources: [{
-      id: "asset_macos",
+      id: "asset_display_service",
       direction: "in_scope",
       kind: "service",
-      locator: "com.apple.WindowServer",
-      name: "WindowServer",
+      locator: "com.exampleco.DisplayService",
+      name: "DisplayService",
       source: "explicit_scope",
     }, {
       id: "asset_excluded",
@@ -37,9 +37,9 @@ test("resource discovery is non-authoring and first touch requires relevance Aut
   try {
     const tool = createResearchResourceTool({
       catalog,
-      campaignObjective: "Research macOS default components for an authorized Apple Security Bounty campaign.",
+      campaignObjective: "Research default components for an authorized ExampleCo campaign.",
       authorizationRecorded: true,
-      environmentFingerprint: "macos-26A1",
+      environmentFingerprint: "platform-build-example-001",
       authorizeScopeRelevance: async (request) => {
         reviews.push(request);
         return {
@@ -51,15 +51,15 @@ test("resource discovery is non-authoring and first touch requires relevance Aut
     });
     const registry = createResearchToolRegistry([tool]);
     const discovered = await registry.execute({
-      id: "discover_launchctl",
+      id: "discover_service_control",
       actionClass: "inspect",
       toolName: "resource.catalog",
       input: {
         operation: "discover",
         kind: "binary",
-        name: "launchctl",
-        locator: "/bin/launchctl",
-        rationale: "Default macOS binary that reaches launchd service-management interfaces.",
+        name: "svcctl",
+        locator: "/opt/example/bin/svcctl",
+        rationale: "Default ExampleOS binary that reaches service-management interfaces.",
       },
     });
     assert.equal(discovered.result.status, "complete");
@@ -70,7 +70,7 @@ test("resource discovery is non-authoring and first touch requires relevance Aut
 
     const resourceId = discovered.result.output.resource.id;
     const firstTouch = await registry.execute({
-      id: "touch_launchctl",
+      id: "touch_service_control",
       actionClass: "inspect",
       toolName: "resource.catalog",
       input: {
@@ -83,12 +83,12 @@ test("resource discovery is non-authoring and first touch requires relevance Aut
     assert.equal(firstTouch.result.output.firstTouch, true);
     assert.equal(firstTouch.result.output.authorizationChanged, false);
     assert.match(firstTouch.result.output.reminder.join(" "), /release notes/i);
-    assert.match(firstTouch.result.output.reminder.join(" "), /Apple Open Source/i);
+    assert.match(firstTouch.result.output.reminder.join(" "), /official source releases/i);
     assert.match(firstTouch.result.output.reminder.join(" "), /upstream/i);
     assert.equal(reviews.length, 1);
 
     const repeated = await registry.execute({
-      id: "touch_launchctl_again",
+      id: "touch_service_control_again",
       actionClass: "inspect",
       toolName: "resource.catalog",
       input: { operation: "touch", resourceId, purpose: "Continue the same bounded inspection." },
@@ -137,34 +137,35 @@ test("resource scope authorizer recognizes ambient platform dependencies without
     completeClaudeText: async (input) => {
       captured = input;
       return {
-        text: JSON.stringify({ decision: "relevant", reason: "Firecracker is the isolation boundary used by the sandbox." }),
+        text: JSON.stringify({ decision: "relevant", reason: "ExampleVM is the isolation boundary used by the sandbox." }),
         usage: { input: 10, output: 5 },
       };
     },
   });
   const decision = await authorize({
     resource: {
-      id: "resource_firecracker",
-      workspaceId: "workspace_vercel",
+      id: "resource_example_vm",
+      workspaceId: "workspace_example_sandbox",
       kind: "service",
-      name: "Firecracker microVM",
-      locator: "firecracker",
+      name: "ExampleVM runtime",
+      locator: "example-vm",
       source: "runtime_discovery",
       direction: null,
       scopeAssetId: null,
-      rationale: "Execution isolation boundary used by Vercel Sandbox.",
+      rationale: "Execution isolation boundary used by the ExampleCo sandbox.",
       reviewStatus: "unreviewed",
       reviewReason: null,
       discoveredAt: "2026-08-24T00:00:00Z",
       updatedAt: "2026-08-24T00:00:00Z",
     },
     purpose: "Inspect the sandbox escape boundary.",
-    campaignObjective: "Research Vercel Sandbox.",
+    campaignObjective: "Research the ExampleCo sandbox.",
     authorizationRecorded: true,
   });
   assert.equal(decision.decision, "relevant");
   assert.equal(decision.source, "auto_review");
-  assert.match(captured.systemPrompt, /Firecracker/);
+  assert.match(captured.systemPrompt, /default platform components and upstream or downstream sources/);
+  assert.match(captured.prompt, /ExampleVM/);
   assert.match(captured.systemPrompt, /does not.*grant authorization/i);
 });
 

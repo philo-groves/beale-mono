@@ -445,7 +445,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.12.0",
+  version: "1.13.0",
   name: "Security",
   description: "Authorized open-ended vulnerability discovery, high-upside longshot hunting, chaining, verification, and reporting.",
   agent: {
@@ -462,16 +462,16 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     ],
     memoryInstructions: [
       "Search claims, knowledge memories, and runbooks together with history.search early and as research crosses system boundaries. Favor security-sensitive code near sink-role flow endpoints, established findings, cited historical precedent, and relevant successful trajectories.",
-      "On the first Auto-Reviewed touch of each tracked resource or canonical repository revision, complete the emitted baseline: capture exact provenance and build identity; inspect advisories, vendor bulletins, release notes, security-content pages, fixed-version records, upstream and vendor source history or drops, and referenced fixes before treating a candidate as novel. For Apple components include Apple Open Source releases and upstream project history. Record dated no-match queries and deferrals as explicitly as matches.",
+      "On the first Auto-Reviewed touch of each tracked resource or canonical repository revision, complete the emitted baseline: capture exact provenance and build identity; inspect advisories, vendor bulletins, release notes, security-content pages, fixed-version records, upstream and vendor source history or drops, and referenced fixes before treating a candidate as novel. For vendor-maintained components include official source releases and upstream project history. Record dated no-match queries and deferrals as explicitly as matches.",
       "Before saving, use history.search to find an existing memory with the same underlying fact or root cause and refine it instead of creating a differently worded duplicate.",
       "When multiple leads or findings represent the same underlying claim, keep the strongest evidence-bearing record canonical and mark the weaker records as its duplicates. Preserve related primitives, variants, conditions, and chain components as distinct claims.",
       "Evidence is attached to knowledge or claim records, not stored as its own memory type. Record suspected results with lead.create; promote that same stable claim to a finding through finding.transition when direct evidence is obtained, and append same-maturity evidence by transitioning it to its current status. Classify isolated security results as security.primitive and composite paths as security.chain.",
     ],
     runbookInstructions: [
       "List existing workspace runbooks before creating one.",
-      "Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
-      "Keep runbooks healthy and reproducible: record prerequisites, exact bounded commands or code, an explicit supported language for every code cell, expected evidence, interpretation, and cleanup or reset steps.",
-      "All proofing must execute through runbook.run. Use shell.run only for non-proof setup, inspection, build, and debugging; Auto-Review denies proof commands outside a recorded runbook cell.",
+      "Use direct shell execution for bounded proof exploration, builds, debugging, and one-off experiments. Create or extend a runbook only after a useful multi-step procedure or successful proof sequence has stabilized enough to be reused.",
+      "For reproduction-grade evidence, consolidate the minimal clean-state sequence into the matching existing runbook, record prerequisites, expected evidence, interpretation, and cleanup, then execute it with runbook.run.",
+      "Do not create lifecycle wrapper runbooks or append one cell per exploratory tweak or failed attempt. Persist the resulting observation, claim evidence, or next action in canonical research state instead.",
     ],
     reportInstructions: [
       "List existing workspace reports before creating one.",
@@ -843,7 +843,7 @@ export const DEFAULT_MATHEMATICS_RESEARCH_PROFILE: ResearchProfile = {
     runbookInstructions: [
       "Create or extend a runbook for reproducible formalization builds, symbolic computations, exhaustive searches, literature queries, or repeated verification pipelines.",
       "Record exact commands, package or theorem-prover versions, parameters, seeds, precision, assumptions, decisive outputs, and interpretation.",
-      "Give every executable cell an explicit supported language plus bounded inputs and expected evidence. Execute formal proofing through runbook.run; Auto-Review denies proof commands issued directly through shell.run.",
+      "Use direct shell execution while exploring or debugging a proof. Once a formal or computational check stabilizes into a reusable verification pipeline, give every runbook code cell an explicit supported language plus bounded inputs and expected evidence, then execute it through runbook.run.",
     ],
     reportInstructions: [
       "List existing workspace reports before creating one.",

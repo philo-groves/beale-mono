@@ -22,7 +22,7 @@ export function createCollaborationSystemGuidance(
 
 function runtimeGuidance(config: ResearchCollaborationConfig): readonly string[] {
   return [
-    "For an explicit collaborator route, pass provider and model as separate fields with fork_turns set to none or a bounded number. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the parent route.",
+    "Parent transcript inheritance is opt-in. Omit fork_turns for a fresh child, or set it to a bounded number only when recent parent turns are necessary. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the complete parent route and history.",
     `Concurrency limit: ${config.maxConcurrentRooms * config.maxMembersPerRoom} active subagent turns. Channels themselves persist and do not consume active-turn capacity.`,
   ];
 }

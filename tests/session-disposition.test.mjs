@@ -113,4 +113,12 @@ test("session disposition rejects inconsistent external blockers and provides te
     externalStateRequired: false,
     recordedAt: fallback.recordedAt,
   });
+  const stopped = fallbackResearchFinalDisposition("stopped", "");
+  assert.deepEqual(stopped, {
+    outcome: "inconclusive",
+    summary: "The research session was stopped by the host before recording a structured final disposition.",
+    blockerDependencies: [],
+    externalStateRequired: false,
+    recordedAt: stopped.recordedAt,
+  });
 });

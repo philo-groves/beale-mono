@@ -23,7 +23,7 @@ export interface ResearchFocusToolOutcome {
 
 export interface ResearchFocusTurnResult {
   steeringMessage?: string;
-  reason?: "duplicate_recall" | "sustained_tool_only" | "convergence_checkpoint";
+  reason?: "duplicate_recall" | "sustained_tool_only" | "convergence_checkpoint" | "durable_progress_checkpoint";
   duplicateCallCount: number;
   consecutiveRecallOnlyTurns: number;
 }
@@ -38,6 +38,8 @@ export interface ResearchFocusGuardOptions {
   checkpointMaxChars?: number;
   convergenceExplorationCalls?: number;
   convergenceEnabled?: boolean;
+  durableProgressActivityCalls?: number;
+  durableProgressEnabled?: boolean;
   initialState?: ResearchFocusPersistedState;
 }
 
@@ -71,6 +73,8 @@ export interface ResearchFocusPersistedState {
   progressEntries: ProgressEntry[];
   explorationCallsSinceConvergence?: number;
   convergencePending?: boolean;
+  activityCallsSinceDurableProgress?: number;
+  durableProgressPending?: boolean;
   authoritativeUserSteering?: string[];
 }
 
@@ -81,6 +85,7 @@ const DEFAULT_STEERING_COOLDOWN_TURNS = 4;
 const DEFAULT_CHECKPOINT_ENTRIES = 8;
 const DEFAULT_CHECKPOINT_MAX_CHARS = 4_800;
 const DEFAULT_CONVERGENCE_EXPLORATION_CALLS = 50;
+const DEFAULT_DURABLE_PROGRESS_ACTIVITY_CALLS = 8;
 const MAX_AUTHORITATIVE_USER_STEERING_MESSAGES = 8;
 const MAX_AUTHORITATIVE_USER_STEERING_CHARS = 16_000;
 const MAX_AUTHORITATIVE_USER_STEERING_MESSAGE_CHARS = 8_000;
@@ -111,9 +116,14 @@ export class ResearchFocusGuard {
   private readonly checkpointMaxChars: number;
   private readonly convergenceExplorationCalls: number;
   private readonly convergenceEnabled: boolean;
+  private readonly durableProgressActivityCalls: number;
+  private readonly durableProgressEnabled: boolean;
   private explorationCallsSinceConvergence = 0;
   private convergencePending = false;
   private convergenceSteeringEmitted = false;
+  private activityCallsSinceDurableProgress = 0;
+  private durableProgressPending = false;
+  private durableProgressSteeringEmitted = false;
 
   public constructor(options: ResearchFocusGuardOptions = {}) {
     this.objective = conciseObjective(options.objective ?? "");
@@ -140,6 +150,11 @@ export class ResearchFocusGuard {
       DEFAULT_CONVERGENCE_EXPLORATION_CALLS,
     );
     this.convergenceEnabled = options.convergenceEnabled !== false;
+    this.durableProgressActivityCalls = positiveInteger(
+      options.durableProgressActivityCalls,
+      DEFAULT_DURABLE_PROGRESS_ACTIVITY_CALLS,
+    );
+    this.durableProgressEnabled = options.durableProgressEnabled === true;
     if (options.initialState && isResearchFocusPersistedState(options.initialState)) {
       this.restore(options.initialState);
     }
@@ -148,6 +163,25 @@ export class ResearchFocusGuard {
   public beforeToolCall(request: ResearchFocusToolRequest): { block: boolean; reason?: string } {
     const fingerprint = toolFingerprint(request.toolName, request.input);
     const turn = this.turn(request.turn);
+    if (
+      this.durableProgressEnabled
+      && this.durableProgressPending
+      && (
+        isSessionDispositionTool(request.toolName)
+        || (request.kind === "research" && !isDurableProgressTool(request.toolName))
+      )
+    ) {
+      const tracked = { ...request, fingerprint, blocked: true };
+      this.calls.set(request.callId, tracked);
+      turn.calls.push(tracked);
+      return {
+        block: true,
+        reason: [
+          `Durable progress checkpoint required after ${this.activityCallsSinceDurableProgress} evidence-producing activity calls without a canonical research update.`,
+          "Convert the useful result into an existing or new memory, claim, investigation question, experiment, observation, or next action before more execution or session disposition. Search first when needed and update the canonical record instead of duplicating it. A runbook edit alone does not satisfy this checkpoint.",
+        ].join(" "),
+      };
+    }
     if (this.convergenceEnabled && this.convergencePending && isSourceExplorationTool(request.toolName)) {
       const tracked = { ...request, fingerprint, blocked: true };
       this.calls.set(request.callId, tracked);
@@ -237,6 +271,22 @@ export class ResearchFocusGuard {
       || artifacts.length > 0;
     if (!madeProgress) return;
 
+    if (this.durableProgressEnabled && isDurableProgressTool(call.toolName)) {
+      this.activityCallsSinceDurableProgress = 0;
+      this.durableProgressPending = false;
+      this.durableProgressSteeringEmitted = false;
+    } else if (
+      this.durableProgressEnabled
+      && call.kind === "research"
+      && changedOutcome
+      && isEvidenceActivityTool(call.toolName)
+    ) {
+      this.activityCallsSinceDurableProgress += 1;
+      if (this.activityCallsSinceDurableProgress >= this.durableProgressActivityCalls) {
+        this.durableProgressPending = true;
+      }
+    }
+
     this.turn(call.turn).madeProgress = true;
     this.progressEpoch += 1;
     this.readCounts.clear();
@@ -306,7 +356,10 @@ export class ResearchFocusGuard {
       this.consecutiveRecallOnlyTurns = 0;
     }
 
-    const reason = this.convergenceEnabled && this.convergencePending
+    const reason = this.durableProgressEnabled && this.durableProgressPending
+      && !this.durableProgressSteeringEmitted
+      ? "durable_progress_checkpoint" as const
+      : this.convergenceEnabled && this.convergencePending
       && !this.convergenceSteeringEmitted
       ? "convergence_checkpoint" as const
       : turn.duplicateCallCount > 0
@@ -315,6 +368,7 @@ export class ResearchFocusGuard {
         ? "sustained_tool_only"
         : undefined;
     const cooldownSatisfied = reason === "convergence_checkpoint"
+      || reason === "durable_progress_checkpoint"
       || turnNumber - this.lastSteeringTurn >= this.steeringCooldownTurns;
     if (!reason || !cooldownSatisfied) {
       return {
@@ -325,6 +379,7 @@ export class ResearchFocusGuard {
 
     this.lastSteeringTurn = turnNumber;
     if (reason === "convergence_checkpoint") this.convergenceSteeringEmitted = true;
+    if (reason === "durable_progress_checkpoint") this.durableProgressSteeringEmitted = true;
     return {
       reason,
       duplicateCallCount: turn.duplicateCallCount,
@@ -360,6 +415,8 @@ export class ResearchFocusGuard {
       progressEntries: structuredClone(this.progressEntries.slice(-Math.max(this.checkpointEntries * 3, 24))),
       explorationCallsSinceConvergence: this.explorationCallsSinceConvergence,
       convergencePending: this.convergencePending,
+      activityCallsSinceDurableProgress: this.activityCallsSinceDurableProgress,
+      durableProgressPending: this.durableProgressPending,
       ...(this.authoritativeUserSteering.length > 0
         ? { authoritativeUserSteering: [...this.authoritativeUserSteering] }
         : {}),
@@ -375,12 +432,16 @@ export class ResearchFocusGuard {
       "",
       reason === "convergence_checkpoint"
         ? `Broad source exploration is paused after ${this.explorationCallsSinceConvergence} calls so the investigation converts breadth into the highest-value positive or contrary evidence step.`
+        : reason === "durable_progress_checkpoint"
+          ? `Execution is paused after ${this.activityCallsSinceDurableProgress} evidence-producing activity calls because the new work has not changed canonical research state.`
         : reason === "duplicate_recall"
         ? "The last turn repeated read-only calls whose state has not changed. Their existing results remain valid."
         : `The last ${this.consecutiveRecallOnlyTurns} tool-only turns produced no distinct target evidence.`,
       "",
       reason === "convergence_checkpoint"
         ? "Rank no more than three candidates. For each, state current evidence, the next positive proof obligation, and what result would genuinely contradict or narrow a necessary link. Prefer support-seeking work when it can advance attacker influence, reachability, dangerous behavior, reproducibility, composition, or impact. Record one investigation.next_action or investigation.experiment; do not retire a candidate merely because proof remains incomplete. Further broad source reads remain blocked until that checkpoint action succeeds."
+        : reason === "durable_progress_checkpoint"
+          ? "Convert the useful new facts, candidate, observation, negative result, or changed next step into canonical state now. Search for the matching memory, claim, or investigation record when needed, then revise it or create the missing record. Do not create or append a runbook merely to clear this checkpoint; runbooks are for stabilized reusable procedures."
         : "Resume the research itself. Choose one concrete next move:",
       ...(reason === "convergence_checkpoint" ? [] : [
         "1. inspect a new source path or execute an experiment that can positively establish or genuinely contradict a necessary claim;",
@@ -409,6 +470,8 @@ export class ResearchFocusGuard {
     this.progressEntries.push(...structuredClone(state.progressEntries.slice(-Math.max(this.checkpointEntries * 3, 24))));
     this.explorationCallsSinceConvergence = state.explorationCallsSinceConvergence ?? 0;
     this.convergencePending = state.convergencePending === true;
+    this.activityCallsSinceDurableProgress = state.activityCallsSinceDurableProgress ?? 0;
+    this.durableProgressPending = state.durableProgressPending === true;
     this.authoritativeUserSteering.push(...(state.authoritativeUserSteering ?? []));
   }
 
@@ -536,6 +599,37 @@ function isConvergenceResolutionTool(toolName: string): boolean {
     || normalized === "investigation_experiment";
 }
 
+function isDurableProgressTool(toolName: string): boolean {
+  const normalized = toolName.replaceAll(".", "_").toLowerCase();
+  return normalized === "memory_save"
+    || normalized === "memory_correct"
+    || normalized === "memory_link"
+    || normalized === "lead_create"
+    || normalized === "finding_revise"
+    || normalized === "finding_transition"
+    || normalized === "investigation_question"
+    || normalized === "investigation_experiment"
+    || normalized === "investigation_observe"
+    || normalized === "investigation_next_action"
+    || normalized === "investigation_review_claim"
+    || normalized === "investigation_review_consolidation"
+    || normalized === "resource_catalog"
+    || normalized === "report_create"
+    || normalized === "report_revise";
+}
+
+function isEvidenceActivityTool(toolName: string): boolean {
+  const normalized = toolName.replaceAll(".", "_").toLowerCase();
+  return normalized !== "runbook_create"
+    && normalized !== "runbook_append"
+    && normalized !== "history_mark_duplicate"
+    && normalized !== "history_undo_duplicate";
+}
+
+function isSessionDispositionTool(toolName: string): boolean {
+  return toolName.replaceAll(".", "_").toLowerCase() === "session_disposition";
+}
+
 function renderCheckpoint(
   objective: string,
   progressEpoch: number,
@@ -615,6 +709,11 @@ export function isResearchFocusPersistedState(value: unknown): value is Research
     && !nonNegativeInteger(value.explorationCallsSinceConvergence)
   ) return false;
   if (value.convergencePending !== undefined && typeof value.convergencePending !== "boolean") return false;
+  if (
+    value.activityCallsSinceDurableProgress !== undefined
+    && !nonNegativeInteger(value.activityCallsSinceDurableProgress)
+  ) return false;
+  if (value.durableProgressPending !== undefined && typeof value.durableProgressPending !== "boolean") return false;
   if (
     value.authoritativeUserSteering !== undefined
     && (

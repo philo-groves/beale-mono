@@ -189,60 +189,6 @@ test("research bootstrap automatically discovers workspace AGENTS guidance for m
   }
 });
 
-test("research bootstrap appends selected initial context without restoring campaign context", async () => {
-  const fixture = instructionFixture();
-  try {
-    const initialContext = {
-      schemaVersion: 1,
-      source: "model-preflight",
-      summary: "Resume the parser lead.",
-      rationale: "The selected evidence is directly tied to the request.",
-      resources: [],
-      repositoryRoots: [fixture],
-      paths: [join(fixture, "parser.c")],
-      research: {
-        memoryIds: ["memory_parser"],
-        claimIds: ["lead_parser"],
-        runbookIds: [],
-        reportIds: [],
-        trackIds: ["track_parser"],
-      },
-      keyFacts: [{ summary: "Length reaches the parser boundary.", references: ["memory_parser"] }],
-      openQuestions: ["Is the length attacker-controlled?"],
-      constraints: ["Use recorded scope."],
-      omitted: { resources: 4, repositories: 8, projectNotes: 20, tracks: 12 },
-    };
-    const modelWorkspaceContext = {
-      schemaVersion: 1,
-      authorization: null,
-      memory: null,
-      knownRepositories: [],
-      materializedSourcePaths: [],
-      projectNotes: ["Keep this invariant."],
-    };
-    const result = await runResearchAgent({
-      prompt: "Continue parser review.",
-      workspaceRoot: fixture,
-      modelWorkspaceContext,
-      initialContext,
-      executor: createDeterministicAgentExecutor(),
-    });
-
-    assert.equal(result.initialContext, initialContext);
-    assert.equal(result.modelWorkspaceContext, modelWorkspaceContext);
-    assert.equal(result.agentRun.modelInput.contextSections.some((section) => section.label === "campaign"), false);
-    assert.equal(
-      result.agentRun.modelInput.contextSections.find((section) => section.label === "selected_context")?.content,
-      initialContext,
-    );
-    const contextEvent = result.events.find((event) => event.kind === "context.compiled");
-    assert.equal(contextEvent.payload.initialContext, initialContext);
-    assert.ok(contextEvent.payload.contextMetrics.sections.initialContext > 0);
-  } finally {
-    rmSync(fixture, { recursive: true, force: true });
-  }
-});
-
 function instructionFixture() {
   return mkdtempSync(join(tmpdir(), "app-server-agents-md-"));
 }

@@ -10,9 +10,9 @@ if (command === 'clone') {
   const destination = args.at(-1);
   if (!destination) process.exit(2);
   mkdirSync(join(destination, '.git'), { recursive: true });
-  mkdirSync(join(destination, 'zuul-core', 'src'), { recursive: true });
-  writeFileSync(join(destination, 'README.md'), 'Netflix Zuul fixture checkout\n');
-  writeFileSync(join(destination, 'zuul-core', 'src', 'ProxyEndpoint.java'), 'class ProxyEndpoint { String authorizationBoundary = "zuul routing"; }\n');
+  mkdirSync(join(destination, 'parser-core', 'src'), { recursive: true });
+  writeFileSync(join(destination, 'README.md'), 'Example parser fixture checkout\n');
+  writeFileSync(join(destination, 'parser-core', 'src', 'ParserEndpoint.java'), 'class ParserEndpoint { String authorizationBoundary = "example routing"; }\n');
   process.exit(0);
 }
 

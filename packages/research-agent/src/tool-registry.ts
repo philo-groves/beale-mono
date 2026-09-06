@@ -4,6 +4,11 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { createResearchEventId, nowIso } from "./ids.js";
+import {
+  MAX_MCP_CALL_TIMEOUT_MS,
+  MCP_CALL_TIMEOUT_INPUT_KEY,
+  MIN_MCP_CALL_TIMEOUT_MS,
+} from "./mcp-tools.js";
 import type { ModelAuthor } from "./model-authorship.js";
 import {
   redactShellArguments,
@@ -735,8 +740,23 @@ function getRuntimeBudgetMs(
 ): number {
   return action.budget?.maxRuntimeMs
     ?? governance?.maxRuntimeMs
+    ?? getMcpCallRuntimeBudgetMs(action)
     ?? TOOL_RUNTIME_BUDGET_MS_BY_TOOL.get(action.toolName)
     ?? DEFAULT_TOOL_RUNTIME_BUDGET_MS;
+}
+
+function getMcpCallRuntimeBudgetMs(action: ResearchToolAction): number | undefined {
+  if (!action.toolName.startsWith("mcp.")) return undefined;
+  const requestedTimeout = action.input[MCP_CALL_TIMEOUT_INPUT_KEY];
+  if (
+    typeof requestedTimeout !== "number"
+    || !Number.isInteger(requestedTimeout)
+    || requestedTimeout < MIN_MCP_CALL_TIMEOUT_MS
+    || requestedTimeout > MAX_MCP_CALL_TIMEOUT_MS
+  ) {
+    return undefined;
+  }
+  return requestedTimeout + 1_000;
 }
 
 async function executeWithRuntimeBudget(

@@ -60,6 +60,11 @@ Preserve these invariants in docs and implementation:
 
 - Do not commit personal identifiers, real machine-local paths, device or account metadata, credentials, private endpoints, or real research targets and findings in code, tests, fixtures, examples, snapshots, or documentation.
 - Use clearly synthetic identities and scenarios, `example` domains, and RFC 5737 address ranges whenever representative data is required.
+- Never copy or paraphrase live Beale workspace content into this repository. This includes target or repository names, prompts, hypotheses, exploit chains, symbols, build identifiers, claim or investigation IDs, artifact paths, commands, outcomes, and session commentary.
+- The prohibition applies even when a detail is public, seems harmless, is used only as a mnemonic, or appears only in a test, variable name, fixture, snapshot, comment, or changelog entry. Model the required behavior with a synthetic equivalent such as `ExampleCo`, `example.test`, `github.com/example-org/example-repository`, `build-example-001`, or `investigation-example`.
+- Dedicated product integrations may contain the minimum public vendor or program identifiers required to implement that explicit integration. Do not use that exception for test convenience, research findings, current target state, or reproduction detail; use synthetic test inputs wherever the contract does not require the real identifier.
+- Changelog entries describe product behavior generically. Never include a live target, vulnerability hypothesis, proof strategy, target-specific symbol or build, research record ID, artifact location, or observed result.
+- Before completing any change, inspect the changed source, tests, fixtures, examples, snapshots, and documentation for real research material and machine-local data. Treat any unexplained match as a release blocker and replace it with a clearly synthetic fixture before running the final test gate.
 - Beale is the trusted host harness.
 - Target code, build scripts, generated PoCs, tests, fuzzing, debugging, and closed-source executables run with the user's chosen host privileges. Beale must not pretend to provide isolation it does not manage.
 - OpenAI OAuth credentials stay on the host.

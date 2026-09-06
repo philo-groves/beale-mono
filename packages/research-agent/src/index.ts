@@ -61,7 +61,6 @@ export * from "./claude-agent-executor.js";
 export * from "./zcode-agent-executor.js";
 export * from "./collaboration-config.js";
 export * from "./agent-instructions.js";
-export * from "./context-selection.js";
 export * from "./research-focus-guard.js";
 export * from "./system-prompt.js";
 export * from "./subagent-runtime.js";

@@ -47,7 +47,7 @@ export interface ResearchAgentFlowCapture {
   };
   agent: {
     id: string;
-    status: "complete" | "error";
+    status: "complete" | "error" | "stopped";
     executorName: string;
     startedAt: string;
     completedAt: string;

@@ -115,6 +115,7 @@ class StdioResearchMcpClient implements ConfiguredResearchMcpClient {
     serverName: string;
     toolName: string;
     arguments: Record<string, unknown>;
+    timeoutMs?: number;
     signal?: AbortSignal;
   }): Promise<unknown> {
     return this.requireServer(input.serverName).request(
@@ -124,6 +125,7 @@ class StdioResearchMcpClient implements ConfiguredResearchMcpClient {
         arguments: input.arguments,
       },
       input.signal,
+      input.timeoutMs,
     );
   }
 
@@ -206,10 +208,11 @@ class StdioMcpServerConnection {
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
+    timeoutMs: number = this.timeoutMs,
   ): Promise<unknown> {
     await this.ensureInitialized();
 
-    return this.sendRequest(method, params, signal);
+    return this.sendRequest(method, params, signal, timeoutMs);
   }
 
   async requestOptional(
@@ -288,6 +291,7 @@ class StdioMcpServerConnection {
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
+    timeoutMs: number = this.timeoutMs,
   ): Promise<unknown> {
     const child = this.process;
     if (!child) {
@@ -309,8 +313,8 @@ class StdioMcpServerConnection {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`MCP request ${method} exceeded timeout ${this.timeoutMs}ms.`));
-      }, this.timeoutMs);
+        reject(new Error(`MCP request ${method} exceeded timeout ${timeoutMs}ms.`));
+      }, timeoutMs);
       const onAbort = () => {
         this.pending.delete(id);
         clearTimeout(timeout);

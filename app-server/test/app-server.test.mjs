@@ -229,6 +229,40 @@ test("steers an active session through authenticated HTTP control", async () => 
   upstream.complete();
 });
 
+test("HTTP stop control terminates the hosted worker without waiting for cooperative completion", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-http-stop-"));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const server = await startAppServer({
+    hostService: testHostService(directory),
+    spawnSession: upstream.spawnSession,
+    operatorToken: "operator-secret",
+  });
+  servers.push(server);
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: "session-http-stop" }));
+
+  const response = await fetch(`${server.url}/v1/sessions/session-http-stop/control`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer operator-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ type: "stop" }),
+  });
+
+  assert.equal(response.status, 202);
+  const result = await response.json();
+  assert.equal(result.accepted, true);
+  assert.equal(result.type, "stop");
+  await waitFor(() => upstream.stopCalls() === 1);
+  await waitFor(() => server.listSessions()[0]?.state === "stopped");
+  assert.deepEqual(upstream.controls, [{
+    schemaVersion: 1,
+    requestId: result.requestId,
+    type: "stop",
+  }]);
+});
+
 test("publishes a path-free model catalog for connected providers with host defaults", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-providers-"));
   temporaryDirectories.push(directory);
@@ -1394,6 +1428,7 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
     },
   });
   const request = sessionLaunchRequest(directory, { sessionId: "session-fast-mode" });
+  request.launch.investigationId = "investigation-example";
   request.launch.provider = {
     id: "openai-codex",
     model: "gpt-5.6-sol",
@@ -1404,11 +1439,16 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
   const prepared = await service.prepareSession(request, "generated-session");
 
   assert.equal(prepared.launch.provider.fastMode, true);
+  assert.equal(prepared.launch.investigationId, "investigation-example");
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--fast-mode"));
   const createCall = calls.find((call) => call.operation === "session.create");
   assert.equal(
     createCall.options.input.metadata.appServerRestartLaunch.launch.provider.fastMode,
     true,
+  );
+  assert.equal(
+    createCall.options.input.metadata.appServerRestartLaunch.launch.investigationId,
+    "investigation-example",
   );
 
   await assert.rejects(
@@ -2075,6 +2115,7 @@ test("control-plane shutdown cannot interrupt an active research session", async
 test("expands typed session intent into app-server-owned runtime policy", () => {
   const request = sessionLaunchRequest("C:\\workspace", {
     sessionId: "session-compose",
+    investigationId: "investigation-example",
     researchProfile: {
       id: "security-research",
       hash: "a".repeat(64),
@@ -2086,6 +2127,7 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
     workspaceContextPath: "C:\\workspace\\workspace-context.json",
     researchProfileHash: request.launch.researchProfileHash,
     workflowId: request.launch.workflowId,
+    investigationId: request.launch.investigationId,
   });
   const args = appServerSessionArgs({
     ...launch,
@@ -2105,6 +2147,7 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
   ]);
   assert.equal(args[args.indexOf("--workspace-context") + 1], "C:\\workspace\\workspace-context.json");
   assert.equal(args[args.indexOf("--attempt-id") + 1], "attempt-test");
+  assert.equal(args[args.indexOf("--investigation-id") + 1], "investigation-example");
   assert.equal(args[args.indexOf("--memory-backend") + 1], "app-server");
   assert.ok(args.includes("--no-default-tool-config"));
   assert.ok(args.includes("--fast-mode"));
@@ -2785,10 +2828,11 @@ test("accepted pause and stop controls are persisted as intentional session stat
     control: { schemaVersion: 1, type: "stop", requestId: "stop-request" },
   }));
   await waitFor(() => states.includes("stopped"));
+  await waitFor(() => upstream.stopCalls() === 1);
+  await waitFor(() => server.listSessions()[0]?.state === "stopped");
 
   assert.equal(states.includes("paused"), true);
   assert.equal(states.includes("stopped"), true);
-  upstream.complete();
   await waitForSocketClose(socket);
   await upstream.close();
 });
@@ -2852,6 +2896,7 @@ async function createFakeAppServerSessionHost() {
   let sessionId = "";
   let exitResolved = false;
   let resolveExit;
+  let stopCalls = 0;
   const controls = [];
   const exit = new Promise((resolve) => { resolveExit = resolve; });
   const emit = (event) => {
@@ -2889,11 +2934,15 @@ async function createFakeAppServerSessionHost() {
         },
         stderrTail: () => "",
         waitExit: () => exit,
-        stop: () => finish(null),
+        stop: () => {
+          stopCalls += 1;
+          finish(null);
+        },
       };
     },
     sendEvent: emit,
     controls,
+    stopCalls: () => stopCalls,
     complete: () => finish(0),
     close: async () => {
       finish(null);
@@ -2933,6 +2982,7 @@ function sessionLaunchRequest(directory, options = {}) {
     sessionId: options.sessionId ?? "session-test",
     launch: {
       workspaceId: "workspace-test",
+      ...(options.investigationId ? { investigationId: options.investigationId } : {}),
       promptMarkdown: options.promptMarkdown ?? "Test the typed app-server launch contract.",
       provider: {
         id: "openai-codex",
@@ -2949,6 +2999,7 @@ function resolvedSessionLaunch(directory, options = {}) {
   return {
     workspaceRoot: directory,
     workspaceDirectories: [directory],
+    ...(options.investigationId ? { investigationId: options.investigationId } : {}),
     capturePath: options.capturePath ?? join(directory, "capture.json"),
     ...(options.workspaceContextPath ? { workspaceContextPath: options.workspaceContextPath } : {}),
     attemptId: "attempt-test",

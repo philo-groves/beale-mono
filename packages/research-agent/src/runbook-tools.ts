@@ -92,7 +92,7 @@ export function createRunbookTools(
     tool(
       "runbook.create",
       "runbook_create",
-      "Create a revisioned Jupyter-format research runbook for a reusable procedure, proof sequence, or environment-specific workflow. A healthy runbook records prerequisites and expected evidence in markdown, then uses bounded repeatable code cells with an explicit supported language.",
+      "Create a revisioned Jupyter-format research runbook only for a stabilized reusable procedure, reproduction sequence, or environment-specific workflow that is not already represented by an existing runbook. Explore and debug one-off commands directly before crystallizing them here. A healthy runbook records prerequisites and expected evidence in markdown, then uses bounded repeatable code cells with an explicit supported language.",
       "write",
       createParameters,
       (input, context) => {
@@ -107,7 +107,7 @@ export function createRunbookTools(
     tool(
       "runbook.append",
       "runbook_append",
-      "Append concise markdown or code cells to an existing runbook using its current revision. Put proof commands in explicitly typed code cells and execute them with runbook.run; Auto-Review denies proofing issued directly through shell.run.",
+      "Append concise markdown or code cells to an existing runbook using its current revision when the reusable procedure genuinely gained a new step or a stabilized repair. Do not append each exploratory tweak or failed attempt. Execute reproduction-grade proof cells with runbook.run.",
       "write",
       appendParameters,
       (input, context) => {

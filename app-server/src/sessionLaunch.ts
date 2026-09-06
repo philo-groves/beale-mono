@@ -38,6 +38,7 @@ export interface PreparedAppServerSessionLaunch {
 export interface ResolvedAppServerSessionLaunch {
   workspaceRoot: string;
   workspaceDirectories: readonly string[];
+  investigationId?: string;
   capturePath: string;
   workspaceContextPath?: string;
   attemptId: string;
@@ -147,6 +148,7 @@ export function appServerSessionArgs(
   if (launch.researchProfileId) args.push('--research-profile-id', launch.researchProfileId);
   if (launch.researchProfileHash) args.push('--research-profile-hash', launch.researchProfileHash);
   if (launch.workflowId) args.push('--workflow', launch.workflowId);
+  if (launch.investigationId) args.push('--investigation-id', launch.investigationId);
   args.push('--memory-backend', launch.memoryBackend);
 
   args.push(...additionalRuntimeArgs(environment));

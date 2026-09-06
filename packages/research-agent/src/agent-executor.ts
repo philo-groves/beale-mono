@@ -437,7 +437,7 @@ export function createPiAgentExecutor(
         && researchToolNames.has("memory_save")
         && researchToolNames.has("memory_link");
       const hasFindingTools = researchToolNames.has("finding_list")
-        && researchToolNames.has("finding_create")
+        && researchToolNames.has("lead_create")
         && researchToolNames.has("finding_transition");
       const hasRunbookTools = researchToolNames.has("runbook_list")
         && researchToolNames.has("runbook_create")
@@ -445,6 +445,11 @@ export function createPiAgentExecutor(
       const hasReportTools = researchToolNames.has("report_list")
         && researchToolNames.has("report_create")
         && researchToolNames.has("report_revise");
+      const hasDurableProgressTools = hasMemoryTools
+        || hasFindingTools
+        || hasReportTools
+        || researchToolNames.has("investigation_next_action")
+        || researchToolNames.has("resource_catalog");
       const hasSessionDispositionTool = researchToolNames.has("session_disposition");
 
       runSession = async (request) => {
@@ -481,6 +486,7 @@ export function createPiAgentExecutor(
           ...(initialResearchFocusState ? { initialState: initialResearchFocusState } : {}),
           convergenceEnabled: researchToolNames.has("investigation_next_action")
             || researchToolNames.has("investigation_experiment"),
+          durableProgressEnabled: hasDurableProgressTools,
         });
         const emitRuntimeEvent = async (payload: Record<string, unknown>): Promise<void> => {
           const captured = {
@@ -773,6 +779,7 @@ export function createPiAgentExecutor(
               hasTools: tools.length > 0,
               hasMemoryTools,
               hasFindingTools,
+              hasDurableProgressTools,
               hasRunbookTools,
               hasReportTools,
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
@@ -822,9 +829,14 @@ export function createPiAgentExecutor(
                 });
                 if (focusDecision.block) {
                   const convergenceBlocked = focusDecision.reason?.startsWith("Evidence checkpoint required") === true;
+                  const durableProgressBlocked = focusDecision.reason?.startsWith("Durable progress checkpoint required") === true;
                   await emitRuntimeEvent({
                     type: "research_loop_guard",
-                    action: convergenceBlocked ? "blocked_convergence" : "blocked_duplicate",
+                    action: durableProgressBlocked
+                      ? "blocked_durable_progress"
+                      : convergenceBlocked
+                        ? "blocked_convergence"
+                        : "blocked_duplicate",
                     turn: currentTurn,
                     toolName: toolCall.name,
                     reason: focusDecision.reason ?? "Repeated read-only tool call.",
@@ -960,7 +972,11 @@ export function createPiAgentExecutor(
               if (focusTurn.steeringMessage) {
                 await emitRuntimeEvent({
                   type: "research_loop_guard",
-                  action: focusTurn.reason === "convergence_checkpoint" ? "steered_convergence" : "steered_no_progress",
+                  action: focusTurn.reason === "durable_progress_checkpoint"
+                    ? "steered_durable_progress"
+                    : focusTurn.reason === "convergence_checkpoint"
+                      ? "steered_convergence"
+                      : "steered_no_progress",
                   reason: focusTurn.reason ?? "sustained_tool_only",
                   turn: currentTurn,
                   duplicateCallCount: focusTurn.duplicateCallCount,
@@ -1944,6 +1960,7 @@ function researchFocusToolKind(
   actionClasses: readonly string[] | undefined,
   collaborationToolNames: ReadonlySet<string>,
 ): ResearchFocusToolKind {
+  if (toolName === "wait_agent") return "research";
   if (RUNTIME_CONTROL_TOOL_NAMES.has(toolName) || collaborationToolNames.has(toolName)) {
     return "control";
   }

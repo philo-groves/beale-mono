@@ -142,10 +142,14 @@ export function createSessionDispositionTool(recorder: ResearchDispositionRecord
   };
 }
 
-export function fallbackResearchFinalDisposition(status: "complete" | "error", text: string): ResearchFinalDisposition {
+export function fallbackResearchFinalDisposition(status: "complete" | "error" | "stopped", text: string): ResearchFinalDisposition {
   return {
     outcome: status === "error" ? "failed" : "inconclusive",
-    summary: text.trim() || (status === "error" ? "The research session failed without a final response." : "The research session ended without a structured final disposition."),
+    summary: text.trim() || (status === "error"
+      ? "The research session failed without a final response."
+      : status === "stopped"
+        ? "The research session was stopped by the host before recording a structured final disposition."
+        : "The research session ended without a structured final disposition."),
     blockerDependencies: [],
     externalStateRequired: false,
     recordedAt: nowIso(),

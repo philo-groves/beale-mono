@@ -1241,13 +1241,6 @@ describe('renderer commentary projection', () => {
         recoveryKind: 'safety_guardrail',
         errorMessage: 'Provider safety guardrail.'
       }, { source: 'system' }),
-      displayEvent('preflight-steering', {
-        type: 'model_retry',
-        recoveryKind: 'safety_guardrail',
-        awaitingSteering: true,
-        contextPhase: 'initial_context_preflight',
-        errorMessage: 'Provider safety guardrail.'
-      }, { source: 'system' }),
       displayEvent('session-steering', {
         type: 'model_retry',
         recoveryKind: 'safety_guardrail',

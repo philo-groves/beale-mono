@@ -221,6 +221,41 @@ test("session store owns creation, lifecycle, capture import, and queries as one
   }
 });
 
+test("session capture import preserves an intentional host stop instead of recording failure", () => {
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
+  try {
+    const created = store.create({
+      id: "session_stopped",
+      workspaceId: "workspace_one",
+      attemptId: "attempt_stopped",
+      title: "Stopped session",
+      prompt: "Inspect the parser until stopped.",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    const capture = captureFixture();
+    capture.agent.status = "stopped";
+    capture.agent.outputText = "Model retry aborted.";
+    capture.agent.finalDisposition = {
+      outcome: "inconclusive",
+      summary: "Stopped by the host.",
+      externalStateRequired: false,
+      blockerDependencies: [],
+    };
+
+    const imported = store.importCapture(created.id, {
+      attemptId: "attempt_stopped",
+      capture,
+    });
+    assert.equal(imported.status, "stopped");
+    assert.equal(imported.attempts[0].status, "stopped");
+    assert.equal(imported.summary, "app-server stopped the research session at the host's request.");
+  } finally {
+    store.close();
+  }
+});
+
 test("capture import enforces the canonical session profile and workflow", () => {
   const store = new AppServerSessionStore({ databasePath: ":memory:" });
   const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);

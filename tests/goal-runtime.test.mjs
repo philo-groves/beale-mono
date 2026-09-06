@@ -71,46 +71,46 @@ test("research goal completion is inferred from an objective_achieved dispositio
 test("binding requests and steering require a consistent completion audit before goal mode stops", () => {
   const recorder = new ResearchDispositionRecorder();
   const runtime = new ResearchGoalRuntime({
-    objective: "Elevate a root-only executable into a kernel memory primitive.",
-    currentRequest: "Do not stop until a qualifying target flag is captured.",
+    objective: "Verify the complete synthetic parser correction.",
+    currentRequest: "Do not stop until the designated fixture marker is captured.",
     getDisposition: () => recorder.get(),
     resetDisposition: () => recorder.resetForGoalContinuation(),
   });
   runtime.noteAuthoritativeUserSteering([
-    "Continue. A kernel disclosure without the requested target flag is not completion.",
-    "Keep researching root-only executables; do not substitute a partial primitive for the requested capture.",
+    "Continue. A partial parser trace without the requested fixture marker is not completion.",
+    "Keep testing the example parser; do not substitute partial behavior for the requested capture.",
   ]);
 
   recorder.record(disposition({
     outcome: "objective_achieved",
-    summary: "A verified kernel heap disclosure primitive was produced.",
+    summary: "A partial parser trace was produced.",
   }));
   const [audit] = runtime.continueAfterRootResponse(
-    "The primitive is verified, but no target flag was captured.",
+    "The parser trace is verified, but no fixture marker was captured.",
   );
 
   assert.equal(runtime.snapshot().status, "active");
   assert.equal(runtime.snapshot().turnsUsed, 1);
   assert.equal(recorder.get(), null);
   assert.match(audit.content, /Goal completion audit required/);
-  assert.match(audit.content, /qualifying target flag/);
-  assert.match(audit.content, /kernel disclosure without the requested target flag/);
-  assert.match(audit.content, /do not substitute a partial primitive/);
-  assert.match(audit.content, /no target flag was captured/);
+  assert.match(audit.content, /designated fixture marker/);
+  assert.match(audit.content, /partial parser trace without the requested fixture marker/);
+  assert.match(audit.content, /do not substitute partial behavior/);
+  assert.match(audit.content, /no fixture marker was captured/);
 
   recorder.record(disposition({
     outcome: "objective_achieved",
-    summary: "The kernel primitive is still the strongest result.",
+    summary: "The partial parser trace is still the strongest result.",
   }));
   const [contradictionAudit] = runtime.continueAfterRootResponse(
-    "The audit confirms that no target flag was captured.",
+    "The audit confirms that no fixture marker was captured.",
   );
   assert.equal(runtime.snapshot().status, "active");
   assert.match(contradictionAudit.content, /Goal completion audit required/);
 
   recorder.record(disposition({
     outcome: "objective_partially_achieved",
-    summary: "The disclosure primitive is verified; target-flag capture remains open.",
+    summary: "The parser trace is verified; fixture-marker capture remains open.",
   }));
   const [continued] = runtime.continueAfterRootResponse();
   assert.equal(runtime.snapshot().status, "active");
@@ -118,14 +118,14 @@ test("binding requests and steering require a consistent completion audit before
 
   recorder.record(disposition({
     outcome: "objective_achieved",
-    summary: "The target flag was captured with verifier-backed evidence.",
+    summary: "The fixture marker was captured with verifier-backed evidence.",
   }));
-  assert.equal(runtime.continueAfterRootResponse("Captured the requested target flag.").length, 1);
+  assert.equal(runtime.continueAfterRootResponse("Captured the requested fixture marker.").length, 1);
   assert.equal(runtime.snapshot().status, "active");
 
   recorder.record(disposition({
     outcome: "objective_achieved",
-    summary: "The completion audit confirms the target-flag capture.",
+    summary: "The completion audit confirms the fixture-marker capture.",
   }));
   assert.deepEqual(runtime.continueAfterRootResponse("Audit confirmed the capture."), []);
   assert.equal(runtime.snapshot().status, "complete");
@@ -134,31 +134,31 @@ test("binding requests and steering require a consistent completion audit before
 test("completion audits accept resolved-requirement language without scheduling another audit", () => {
   for (const auditResponse of [
     "Audit passed: objective achieved. No binding requirements remain unresolved.",
-    "Objective achieved. The target flag is verified; no unresolved requirements remain.",
-    "Audit passed. The target flag is captured with no outstanding requirements.",
+    "Objective achieved. The fixture marker is verified; no unresolved requirements remain.",
+    "Audit passed. The fixture marker is captured with no outstanding requirements.",
     "Objective achieved; no binding requirements remain.",
     "Audit passed. No requirement remains unresolved.",
     "Objective achieved. No required work remains.",
   ]) {
     const recorder = new ResearchDispositionRecorder();
     const runtime = new ResearchGoalRuntime({
-      objective: "Establish deterministic kernel target-flag capture.",
-      currentRequest: "Do not stop until the target flag is captured and independently verified.",
+      objective: "Establish deterministic fixture-marker capture.",
+      currentRequest: "Do not stop until the fixture marker is captured and independently verified.",
       getDisposition: () => recorder.get(),
       resetDisposition: () => recorder.resetForGoalContinuation(),
     });
 
     recorder.record(disposition({
       outcome: "objective_achieved",
-      summary: "Deterministic, independently verified target-flag capture is established.",
+      summary: "Deterministic, independently verified fixture-marker capture is established.",
     }));
     assert.equal(runtime.continueAfterRootResponse(
-      "Objective achieved. The target flag is captured; no unresolved requirements remain.",
+      "Objective achieved. The fixture marker is captured; no unresolved requirements remain.",
     ).length, 1);
 
     recorder.record(disposition({
       outcome: "objective_achieved",
-      summary: "The completion audit confirms the target-flag capture.",
+      summary: "The completion audit confirms the fixture-marker capture.",
     }));
     assert.deepEqual(runtime.continueAfterRootResponse(auditResponse), []);
     assert.equal(runtime.snapshot().status, "complete");

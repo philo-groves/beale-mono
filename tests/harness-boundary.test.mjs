@@ -34,13 +34,13 @@ test("app-server owns auxiliary routes, sources, plugins, and retained maintenan
       kind: "repo",
       direction: "in_scope",
       sensitivity: "public",
-      value: "https://github.com/Netflix/zuul",
-      attributes: { clonedDirectory: join(root, "repositories", "zuul") },
+      value: "https://github.com/example-org/research-fixture",
+      attributes: { clonedDirectory: join(root, "repositories", "research-fixture") },
     }] };
-    assert.equal(normalizeSourceRepositoryUrl("git@github.com:Netflix/zuul.git"), "https://github.com/Netflix/zuul");
-    assert.deepEqual(extractSourceRepositoryUrls("Review github.com/Netflix/zuul."), ["https://github.com/Netflix/zuul"]);
-    assert.equal(sourceRepositoryCandidates(scope)[0].url, "https://github.com/Netflix/zuul");
-    assert.equal(sourceRepositoryCandidates(scope)[0].clonedDirectory, join(root, "repositories", "zuul"));
+    assert.equal(normalizeSourceRepositoryUrl("git@github.com:example-org/research-fixture.git"), "https://github.com/example-org/research-fixture");
+    assert.deepEqual(extractSourceRepositoryUrls("Review github.com/example-org/research-fixture."), ["https://github.com/example-org/research-fixture"]);
+    assert.equal(sourceRepositoryCandidates(scope)[0].url, "https://github.com/example-org/research-fixture");
+    assert.equal(sourceRepositoryCandidates(scope)[0].clonedDirectory, join(root, "repositories", "research-fixture"));
 
     const pluginRoot = join(root, "plugin");
     await mkdir(join(pluginRoot, "skills", "recon"), { recursive: true });
@@ -81,9 +81,9 @@ test("app-server owns auxiliary routes, sources, plugins, and retained maintenan
 
     const inspected = await invokeAppServerProtocol("source.inspect", {
       args: [],
-      input: { value: "git@github.com:Netflix/zuul.git" },
+      input: { value: "git@github.com:example-org/research-fixture.git" },
     });
-    assert.equal(inspected.normalizedUrl, "https://github.com/Netflix/zuul");
+    assert.equal(inspected.normalizedUrl, "https://github.com/example-org/research-fixture");
 
     await assert.rejects(
       invokeAppServerProtocol("provider.complete", {

@@ -1,30 +1,40 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   closeSync,
   createReadStream,
+  createWriteStream,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   statSync,
+  unlinkSync,
   writeFileSync
 } from 'node:fs';
 import net from 'node:net';
-import { basename, join, relative, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 const MAX_COMMAND_OUTPUT_BYTES = 512 * 1024;
 const MAX_CONSOLE_OUTPUT_BYTES = 128 * 1024;
 const MAX_LOG_BYTES = 128 * 1024;
+const MAX_TART_COPY_BYTES = 256 * 1024 * 1024;
+const DEFAULT_TART_COPY_BYTES = 64 * 1024 * 1024;
 const SIMULATOR_PATTERN = /(?:\bios simulator\b|\bsimulator\b|\bsimctl\b|\biphonesimulator\b)/iu;
 const PLUGIN_DATA = resolve(process.env.PLUGIN_DATA || join(tmpdir(), 'beale-apple-security-devices'));
 const RUNS_ROOT = join(PLUGIN_DATA, 'darwin-vm-runs');
 const TART_LOG_ROOT = join(PLUGIN_DATA, 'tart-logs');
 const deviceRefs = new Map();
 const activeDarwinRuns = new Map();
+const tartGuestTransports = new Map();
 const deviceRefSalt = randomUUID();
 let inputBuffer = '';
 
@@ -34,6 +44,7 @@ mkdirSync(TART_LOG_ROOT, { recursive: true, mode: 0o700 });
 
 const READ_ANNOTATION = toolAnnotation(['inspect'], 'read', ['apple-security-devices:observe'], 'never');
 const WRITE_ANNOTATION = toolAnnotation(['experiment'], 'write', ['apple-security-devices:mutate'], 'always');
+const TART_OPERATION_ANNOTATION = toolAnnotation(['experiment'], 'write', ['apple-security-devices:mutate'], 'never');
 
 const TOOLS = [
   {
@@ -50,31 +61,70 @@ const TOOLS = [
   },
   {
     name: 'tart_vm_ip',
-    description: 'Resolve the current IP address of a running Tart macOS virtual machine.',
+    description: 'Resolve the current IP address of one explicitly named running Tart macOS virtual machine. Concurrent guests do not affect name-bound resolution.',
     inputSchema: objectSchema({ vmName: stringField(128), waitSeconds: integerField(0, 60, 10) }, ['vmName']),
     annotations: READ_ANNOTATION
   },
   {
+    name: 'inspect_tart_vm',
+    description: 'Inspect one Tart VM and, when running, probe its guest agent plus fixed macOS build, architecture, and SIP baseline without SSH or an IP address.',
+    inputSchema: objectSchema({ vmName: stringField(128), timeoutSeconds: integerField(1, 30, 10) }, ['vmName']),
+    annotations: READ_ANNOTATION
+  },
+  {
     name: 'start_tart_vm',
-    description: 'Start an existing Tart macOS VM headlessly with graphics, audio, clipboard, disk sharing, and directory sharing disabled and host-only networking selected.',
-    inputSchema: objectSchema({ vmName: stringField(128) }, ['vmName']),
-    annotations: WRITE_ANNOTATION
+    description: 'Start one existing Tart macOS VM headlessly and wait for its guest agent. Concurrent name-bound guests are allowed by default; request exclusivity only when an experiment requires it.',
+    inputSchema: objectSchema({
+      vmName: stringField(128),
+      requireExclusive: { type: 'boolean', default: false },
+      networkMode: { type: 'string', enum: ['shared', 'host-only'], default: 'shared' },
+      waitSeconds: integerField(0, 90, 45)
+    }, ['vmName']),
+    annotations: TART_OPERATION_ANNOTATION
   },
   {
     name: 'stop_tart_vm',
     description: 'Stop a running Tart macOS VM.',
     inputSchema: objectSchema({ vmName: stringField(128), timeoutSeconds: integerField(1, 120, 30) }, ['vmName']),
-    annotations: WRITE_ANNOTATION
+    annotations: TART_OPERATION_ANNOTATION
   },
   {
     name: 'exec_tart_vm',
-    description: 'Execute one bounded argument-vector command through the Tart guest agent without invoking a host shell.',
+    description: 'Execute one bounded argument-vector command in a named Tart VM through Guest Agent or the configured private SSH fallback without invoking a host shell.',
     inputSchema: objectSchema({
       vmName: stringField(128),
       argv: { type: 'array', minItems: 1, maxItems: 128, items: stringField(4096) },
       timeoutSeconds: integerField(1, 300, 60)
     }, ['vmName', 'argv']),
-    annotations: WRITE_ANNOTATION
+    annotations: TART_OPERATION_ANNOTATION
+  },
+  {
+    name: 'copy_to_tart_vm',
+    description: 'Copy one bounded regular file from an absolute host path to an absolute path in a named running Tart VM. Uses Tart Guest Agent first and the configured private SSH transport only as fallback.',
+    inputSchema: objectSchema({
+      vmName: stringField(128),
+      localPath: stringField(4096),
+      guestPath: stringField(4096),
+      overwrite: { type: 'boolean', default: false },
+      preserveMode: { type: 'boolean', default: true },
+      maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
+      timeoutSeconds: integerField(1, 900, 120)
+    }, ['vmName', 'localPath', 'guestPath']),
+    annotations: TART_OPERATION_ANNOTATION
+  },
+  {
+    name: 'copy_from_tart_vm',
+    description: 'Copy one bounded regular file from an absolute path in a named running Tart VM to an absolute host path. Uses Tart Guest Agent first and the configured private SSH transport only as fallback.',
+    inputSchema: objectSchema({
+      vmName: stringField(128),
+      guestPath: stringField(4096),
+      localPath: stringField(4096),
+      overwrite: { type: 'boolean', default: false },
+      preserveMode: { type: 'boolean', default: true },
+      maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
+      timeoutSeconds: integerField(1, 900, 120)
+    }, ['vmName', 'guestPath', 'localPath']),
+    annotations: TART_OPERATION_ANNOTATION
   },
   {
     name: 'list_physical_iphones',
@@ -224,9 +274,12 @@ async function callTool(name, args) {
   if (name === 'environment_status') return environmentStatus();
   if (name === 'list_tart_vms') return listTartVms();
   if (name === 'tart_vm_ip') return tartVmIp(args);
+  if (name === 'inspect_tart_vm') return inspectTartVm(args);
   if (name === 'start_tart_vm') return startTartVm(args);
   if (name === 'stop_tart_vm') return stopTartVm(args);
   if (name === 'exec_tart_vm') return execTartVm(args);
+  if (name === 'copy_to_tart_vm') return copyToTartVm(args);
+  if (name === 'copy_from_tart_vm') return copyFromTartVm(args);
   if (name === 'list_physical_iphones') return listPhysicalIphones(args);
   if (name === 'describe_physical_iphone') return describePhysicalIphone(args);
   if (name === 'install_physical_iphone_app') return installPhysicalIphoneApp(args);
@@ -263,11 +316,17 @@ async function environmentStatus() {
 
 async function listTartVms() {
   assertDarwinHost('Tart');
+  return {
+    vms: await readTartVms(),
+    note: 'Tart guests are macOS research environments, not physical-iPhone substitutes.'
+  };
+}
+
+async function readTartVms() {
   const result = await runCommand(tartCommand(), ['list', '--format', 'json'], { timeoutMs: 15_000 });
   const parsed = parseJson(result.stdout, 'Tart list output');
   if (!Array.isArray(parsed)) throw new Error('Tart list output was not an array.');
-  return {
-    vms: parsed.slice(0, 200).flatMap((entry) => {
+  return parsed.slice(0, 200).flatMap((entry) => {
       if (!isRecord(entry)) return [];
       const name = firstString(entry, ['Name', 'name']);
       if (!name) return [];
@@ -279,42 +338,90 @@ async function listTartVms() {
         sizeGiB: firstNumber(entry, ['Size', 'size']),
         source: firstString(entry, ['Source', 'source'])
       }];
-    }),
-    note: 'Tart guests are macOS research environments, not physical-iPhone substitutes.'
-  };
+    });
 }
 
 async function tartVmIp(args) {
   assertDarwinHost('Tart');
   const vmName = safeVmName(args.vmName);
+  const vms = await readTartVms();
+  const vm = requireKnownTartVm(vms, vmName);
+  if (!vm.running) throw new Error(`Cannot resolve an IP address because Tart VM ${vmName} is not running.`);
   const waitSeconds = boundedInteger(args.waitSeconds, 0, 60, 10);
   const result = await runCommand(tartCommand(), ['ip', vmName, '--wait', String(waitSeconds)], {
     timeoutMs: (waitSeconds + 5) * 1000
   });
   const address = result.stdout.trim();
   if (!address || address.length > 128) throw new Error('Tart did not return a bounded VM address.');
-  return { vmName, address };
+  return {
+    vmName,
+    address,
+    concurrentRunningVms: vms.filter((candidate) => candidate.running && candidate.name !== vmName).map((candidate) => candidate.name)
+  };
+}
+
+async function inspectTartVm(args) {
+  assertDarwinHost('Tart');
+  const vmName = safeVmName(args.vmName);
+  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 30, 10);
+  const vms = await readTartVms();
+  const vm = requireKnownTartVm(vms, vmName);
+  return {
+    vm,
+    concurrentRunningVms: vms.filter((candidate) => candidate.running && candidate.name !== vmName).map((candidate) => candidate.name),
+    guest: vm.running ? await tartGuestBaseline(vmName, timeoutSeconds) : { ready: false, detail: 'VM is stopped.' },
+    recommendedTransport: 'Use exec_tart_vm and the Tart copy tools; the plugin selects Tart Guest Agent or its configured bounded SSH fallback without exposing connection details.'
+  };
 }
 
 async function startTartVm(args) {
   assertDarwinHost('Tart');
   const vmName = safeVmName(args.vmName);
+  const vms = await readTartVms();
+  const vm = requireKnownTartVm(vms, vmName);
+  const otherRunningVms = vms.filter((candidate) => candidate.running && candidate.name !== vmName).map((candidate) => candidate.name);
+  const waitSeconds = boundedInteger(args.waitSeconds, 0, 90, 45);
+  if (vm.running) {
+    return {
+      started: false,
+      alreadyRunning: true,
+      vmName,
+      guest: await waitForTartGuest(vmName, waitSeconds),
+      concurrentRunningVms: otherRunningVms
+    };
+  }
+  if (args.requireExclusive === true && otherRunningVms.length > 0) {
+    throw new Error(`Exclusive start requested for ${vmName}, but another Tart VM is running (${otherRunningVms.join(', ')}). Retry without requireExclusive or stop the other VM when isolation is required.`);
+  }
+  tartGuestTransports.delete(vmName);
+  const networkMode = tartNetworkMode(args.networkMode);
   const logPath = join(TART_LOG_ROOT, `${safeFilename(vmName)}-${Date.now()}.log`);
-  await spawnDetached(tartCommand(), [
+  const tartArgs = [
     'run', vmName,
     '--no-graphics',
     '--no-audio',
-    '--no-clipboard',
-    '--net-host'
-  ], { cwd: PLUGIN_DATA, logPath });
+    '--no-clipboard'
+  ];
+  if (networkMode === 'host-only') tartArgs.push('--net-host');
+  await spawnDetached(tartCommand(), tartArgs, { cwd: PLUGIN_DATA, logPath, startupGraceMs: 750 });
+  const guest = await waitForTartGuest(vmName, waitSeconds);
+  const runningAfterStart = waitSeconds === 0
+    ? true
+    : (await readTartVms()).find((candidate) => candidate.name === vmName)?.running === true;
+  if (!runningAfterStart) {
+    const diagnostic = firstLines(readTail(logPath, 4096), 4) || guest.detail;
+    throw new Error(`Tart VM ${vmName} exited during startup: ${diagnostic}`);
+  }
   return {
     started: true,
     vmName,
+    guest,
+    concurrentRunningVms: otherRunningVms,
     posture: {
       graphics: false,
       audio: false,
       clipboard: false,
-      network: 'host-only',
+      network: networkMode === 'host-only' ? 'host-only' : 'shared-nat',
       hostShares: false
     }
   };
@@ -327,6 +434,7 @@ async function stopTartVm(args) {
   await runCommand(tartCommand(), ['stop', vmName, '--timeout', String(timeoutSeconds)], {
     timeoutMs: (timeoutSeconds + 5) * 1000
   });
+  tartGuestTransports.delete(vmName);
   return { stopped: true, vmName };
 }
 
@@ -336,8 +444,330 @@ async function execTartVm(args) {
   const argv = safeArgv(args.argv);
   if (argv[0].startsWith('-')) throw new Error('The guest executable must not begin with a hyphen.');
   const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 300, 60);
-  const result = await runCommand(tartCommand(), ['exec', vmName, ...argv], { timeoutMs: timeoutSeconds * 1000 });
-  return commandResult(result);
+  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10));
+  const result = await runTartGuestCommand(vmName, argv, timeoutSeconds, transport);
+  return { ...commandResult(result), transport };
+}
+
+async function copyToTartVm(args) {
+  assertDarwinHost('Tart');
+  const vmName = safeVmName(args.vmName);
+  await requireRunningTartVm(vmName);
+  const localPath = canonicalFile(args.localPath, 'localPath');
+  const guestPath = safeGuestFilePath(args.guestPath, 'guestPath');
+  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 900, 120);
+  const maxBytes = boundedInteger(args.maxBytes, 1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES);
+  const localStat = statSync(localPath);
+  if (localStat.size > maxBytes) throw new Error(`localPath exceeds the ${maxBytes}-byte transfer limit.`);
+  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10));
+  const guestPathExists = await tartGuestPathExists(vmName, guestPath, timeoutSeconds, transport);
+  if (guestPathExists) {
+    if (args.overwrite !== true) throw new Error('guestPath already exists; set overwrite=true to replace it.');
+    await requireTartGuestRegularFile(vmName, guestPath, timeoutSeconds, transport, 'guestPath');
+  }
+  const temporaryPath = temporaryGuestPath(guestPath);
+  const expectedSha256 = await sha256File(localPath);
+  try {
+    const invocation = await tartGuestCommandInvocation(
+      vmName,
+      ['/bin/dd', `of=${temporaryPath}`, 'bs=1048576'],
+      timeoutSeconds,
+      transport,
+      true
+    );
+    await runCommandWithFileInput(invocation.command, invocation.args, localPath, {
+      timeoutMs: timeoutSeconds * 1000,
+      maxBytes
+    });
+    if (args.preserveMode !== false) {
+      await runTartGuestCommand(vmName, ['/bin/chmod', (localStat.mode & 0o777).toString(8), temporaryPath], timeoutSeconds, transport);
+    }
+    const staged = await tartGuestFileMetadata(vmName, temporaryPath, timeoutSeconds, transport);
+    if (staged.bytes !== localStat.size || staged.sha256 !== expectedSha256) {
+      throw new Error('Guest staging verification did not match the host source file.');
+    }
+    if (args.overwrite !== true && await tartGuestPathExists(vmName, guestPath, timeoutSeconds, transport)) {
+      throw new Error('guestPath appeared during transfer; refusing to overwrite it.');
+    }
+    await runTartGuestCommand(
+      vmName,
+      ['/bin/mv', args.overwrite === true ? '-f' : '-n', temporaryPath, guestPath],
+      timeoutSeconds,
+      transport
+    );
+    if (args.overwrite !== true && await tartGuestPathExists(vmName, temporaryPath, timeoutSeconds, transport)) {
+      throw new Error('guestPath appeared while committing the transfer; it was not overwritten.');
+    }
+    const installed = await tartGuestFileMetadata(vmName, guestPath, timeoutSeconds, transport);
+    if (installed.bytes !== localStat.size || installed.sha256 !== expectedSha256) {
+      throw new Error('Guest destination verification did not match the host source file.');
+    }
+    return {
+      copied: true,
+      direction: 'host-to-guest',
+      vmName,
+      localFile: basename(localPath),
+      guestPath,
+      bytes: installed.bytes,
+      sha256: installed.sha256,
+      mode: fileModeText(installed.mode),
+      transport
+    };
+  } catch (error) {
+    await removeTartGuestTemporaryFile(vmName, temporaryPath, timeoutSeconds, transport);
+    throw error;
+  }
+}
+
+async function copyFromTartVm(args) {
+  assertDarwinHost('Tart');
+  const vmName = safeVmName(args.vmName);
+  await requireRunningTartVm(vmName);
+  const guestPath = safeGuestFilePath(args.guestPath, 'guestPath');
+  const localPath = destinationFile(args.localPath, 'localPath');
+  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 900, 120);
+  const maxBytes = boundedInteger(args.maxBytes, 1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES);
+  if (existsSync(localPath) && args.overwrite !== true) {
+    throw new Error('localPath already exists; set overwrite=true to replace it.');
+  }
+  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10));
+  await requireTartGuestRegularFile(vmName, guestPath, timeoutSeconds, transport, 'guestPath');
+  const guest = await tartGuestFileMetadata(vmName, guestPath, timeoutSeconds, transport);
+  if (guest.bytes > maxBytes) throw new Error(`guestPath exceeds the ${maxBytes}-byte transfer limit.`);
+  const temporaryPath = join(dirname(localPath), `.${safeFilename(basename(localPath))}.beale-download-${randomUUID()}`);
+  try {
+    const invocation = await tartGuestCommandInvocation(vmName, ['/bin/cat', guestPath], timeoutSeconds, transport, false);
+    await runCommandToFile(invocation.command, invocation.args, temporaryPath, {
+      timeoutMs: timeoutSeconds * 1000,
+      maxBytes
+    });
+    const localStat = statSync(temporaryPath);
+    const localSha256 = await sha256File(temporaryPath);
+    if (localStat.size !== guest.bytes || localSha256 !== guest.sha256) {
+      throw new Error('Host staging verification did not match the guest source file.');
+    }
+    if (args.preserveMode !== false) chmodSync(temporaryPath, guest.mode & 0o777);
+    if (args.overwrite === true) renameSync(temporaryPath, localPath);
+    else {
+      linkSync(temporaryPath, localPath);
+      unlinkSync(temporaryPath);
+    }
+    return {
+      copied: true,
+      direction: 'guest-to-host',
+      vmName,
+      guestPath,
+      localFile: basename(localPath),
+      bytes: guest.bytes,
+      sha256: guest.sha256,
+      mode: args.preserveMode === false ? null : fileModeText(guest.mode),
+      transport
+    };
+  } catch (error) {
+    removeFileIfPresent(temporaryPath);
+    throw error;
+  }
+}
+
+async function requireRunningTartVm(vmName) {
+  const vm = requireKnownTartVm(await readTartVms(), vmName);
+  if (!vm.running) throw new Error(`Cannot transfer a file because Tart VM ${vmName} is not running.`);
+  return vm;
+}
+
+async function tartGuestPathExists(vmName, path, timeoutSeconds, transport) {
+  try {
+    await runTartGuestCommand(vmName, ['/bin/test', '-e', path], timeoutSeconds, transport);
+    return true;
+  } catch (error) {
+    if (error instanceof CommandError && error.result.code === 1) return false;
+    throw error;
+  }
+}
+
+async function requireTartGuestRegularFile(vmName, path, timeoutSeconds, transport, field) {
+  try {
+    await runTartGuestCommand(vmName, ['/bin/test', '-f', path], timeoutSeconds, transport);
+  } catch (error) {
+    if (error instanceof CommandError && error.result.code === 1) throw new Error(`${field} must identify a regular guest file.`);
+    throw error;
+  }
+}
+
+async function tartGuestFileMetadata(vmName, path, timeoutSeconds, transport) {
+  const sizeResult = await runTartGuestCommand(vmName, ['/usr/bin/stat', '-f', '%z', path], timeoutSeconds, transport);
+  const modeResult = await runTartGuestCommand(vmName, ['/usr/bin/stat', '-f', '%Lp', path], timeoutSeconds, transport);
+  const hashResult = await runTartGuestCommand(vmName, ['/usr/bin/shasum', '-a', '256', path], timeoutSeconds, transport);
+  const bytes = Number.parseInt(firstLine(sizeResult.stdout), 10);
+  const modeText = firstLine(modeResult.stdout);
+  const sha256 = firstLine(hashResult.stdout).split(/\s+/u)[0]?.toLowerCase() ?? '';
+  if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error('Guest file size was invalid.');
+  if (!/^[0-7]{3,4}$/u.test(modeText)) throw new Error('Guest file mode was invalid.');
+  if (!/^[0-9a-f]{64}$/u.test(sha256)) throw new Error('Guest file hash was invalid.');
+  return { bytes, mode: Number.parseInt(modeText, 8), sha256 };
+}
+
+async function removeTartGuestTemporaryFile(vmName, path, timeoutSeconds, transport) {
+  try {
+    await runTartGuestCommand(vmName, ['/bin/rm', '-f', path], Math.min(timeoutSeconds, 15), transport);
+  } catch {
+    // The destination is random, bounded, and reported only through the original transfer error.
+  }
+}
+
+async function waitForTartGuest(vmName, waitSeconds) {
+  if (waitSeconds === 0) return { ready: false, detail: 'Guest-agent readiness wait was disabled.' };
+  const deadline = Date.now() + waitSeconds * 1000;
+  let lastDetail = 'Tart guest agent did not become ready.';
+  while (Date.now() < deadline) {
+    const remainingSeconds = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+    const baseline = await tartGuestBaseline(vmName, Math.min(5, remainingSeconds));
+    if (baseline.ready) return baseline;
+    lastDetail = baseline.detail;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+  }
+  return { ready: false, detail: lastDetail };
+}
+
+async function tartGuestBaseline(vmName, timeoutSeconds) {
+  try {
+    const transport = await resolveTartGuestTransport(vmName, timeoutSeconds);
+    const productVersion = await runTartGuestProbe(vmName, ['/usr/bin/sw_vers', '-productVersion'], timeoutSeconds, false, transport);
+    const buildVersion = await runTartGuestProbe(vmName, ['/usr/bin/sw_vers', '-buildVersion'], timeoutSeconds, false, transport);
+    const architecture = await runTartGuestProbe(vmName, ['/usr/bin/uname', '-m'], timeoutSeconds, false, transport);
+    const sip = await runTartGuestProbe(vmName, ['/usr/bin/csrutil', 'status'], timeoutSeconds, true, transport);
+    return {
+      ready: true,
+      transport,
+      productVersion: firstLine(productVersion.stdout),
+      buildVersion: firstLine(buildVersion.stdout),
+      architecture: firstLine(architecture.stdout),
+      sip: firstLine(sip.stdout || sip.stderr) || 'unknown'
+    };
+  } catch (error) {
+    return { ready: false, detail: publicError(error) };
+  }
+}
+
+async function runTartGuestProbe(vmName, argv, timeoutSeconds, allowFailure = false, transport = 'guest-agent') {
+  try {
+    return await runTartGuestCommand(vmName, argv, timeoutSeconds, transport);
+  } catch (error) {
+    if (allowFailure && error instanceof CommandError) return error.result;
+    throw error;
+  }
+}
+
+async function resolveTartGuestTransport(vmName, timeoutSeconds) {
+  const cached = tartGuestTransports.get(vmName);
+  if (cached) return cached;
+  try {
+    await runCommand(tartCommand(), ['exec', vmName, '/usr/bin/true'], {
+      timeoutMs: Math.min(3, timeoutSeconds) * 1000
+    });
+    tartGuestTransports.set(vmName, 'guest-agent');
+    return 'guest-agent';
+  } catch (guestAgentError) {
+    try {
+      await runTartSshCommand(vmName, ['/usr/bin/true'], timeoutSeconds);
+      tartGuestTransports.set(vmName, 'ssh');
+      return 'ssh';
+    } catch (sshError) {
+      throw new Error(`Tart Guest Agent unavailable (${publicError(guestAgentError)}); configured SSH fallback unavailable (${publicError(sshError)}).`);
+    }
+  }
+}
+
+function runTartGuestCommand(vmName, argv, timeoutSeconds, transport) {
+  return transport === 'ssh'
+    ? runTartSshCommand(vmName, argv, timeoutSeconds)
+    : runCommand(tartCommand(), ['exec', vmName, ...argv], { timeoutMs: timeoutSeconds * 1000 });
+}
+
+async function runTartSshCommand(vmName, argv, timeoutSeconds) {
+  const invocation = await tartSshCommandInvocation(vmName, argv, timeoutSeconds);
+  return runCommand(invocation.command, invocation.args, { timeoutMs: timeoutSeconds * 1000 });
+}
+
+async function tartGuestCommandInvocation(vmName, argv, timeoutSeconds, transport, attachInput) {
+  if (transport === 'ssh') return tartSshCommandInvocation(vmName, argv, timeoutSeconds);
+  return {
+    command: tartCommand(),
+    args: ['exec', ...(attachInput ? ['-i'] : []), vmName, ...argv]
+  };
+}
+
+async function tartSshCommandInvocation(vmName, argv, timeoutSeconds) {
+  const ssh = tartSshConfig();
+  const addressResult = await runCommand(tartCommand(), ['ip', vmName, '--wait', String(Math.min(10, timeoutSeconds))], {
+    timeoutMs: (Math.min(10, timeoutSeconds) + 5) * 1000
+  });
+  const address = addressResult.stdout.trim();
+  if (!/^[0-9A-Fa-f:.]+$/u.test(address) || address.length > 128) throw new Error('Tart did not return a valid bounded VM address for SSH fallback.');
+  const connectTimeout = String(Math.max(1, Math.min(8, timeoutSeconds)));
+  const remoteCommand = argv.map(posixShellQuote).join(' ');
+  const sshArgs = [
+    '-o', 'BatchMode=yes',
+    '-o', 'IdentitiesOnly=yes',
+    '-o', 'StrictHostKeyChecking=yes',
+    '-o', `UserKnownHostsFile=${ssh.knownHosts}`,
+    '-o', `ConnectTimeout=${connectTimeout}`,
+    '-o', 'ConnectionAttempts=1',
+    '-i', ssh.identity,
+    `${ssh.user}@${address}`,
+    '--', remoteCommand
+  ];
+  return hostCommandInvocation(ssh.command, sshArgs);
+}
+
+function tartSshConfig() {
+  const identity = resolve(process.env.APPLE_SECURITY_SSH_IDENTITY || join(homedir(), '.ssh', 'id_ed25519'));
+  const knownHosts = resolve(process.env.APPLE_SECURITY_SSH_KNOWN_HOSTS || join(homedir(), '.ssh', 'tart_known_hosts'));
+  if (!existsSync(identity) || !statSync(identity).isFile()) throw new Error('SSH fallback identity is not configured.');
+  if (!existsSync(knownHosts) || !statSync(knownHosts).isFile()) throw new Error('SSH fallback known-hosts file is not configured.');
+  const user = process.env.APPLE_SECURITY_SSH_USER || 'admin';
+  if (!/^[A-Za-z_][A-Za-z0-9._-]{0,63}$/u.test(user)) throw new Error('SSH fallback user is invalid.');
+  return {
+    command: process.env.APPLE_SECURITY_SSH_COMMAND || '/usr/bin/ssh',
+    identity,
+    knownHosts,
+    user
+  };
+}
+
+function posixShellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function hostCommandInvocation(command, args) {
+  const runner = configuredHostCommandRunner();
+  return runner
+    ? { command: runner, args: ['run', '--', command, ...args] }
+    : { command, args };
+}
+
+function configuredHostCommandRunner() {
+  const override = process.env.APPLE_SECURITY_COMMAND_RUNNER;
+  if (override) return existingExecutable(override, 'APPLE_SECURITY_COMMAND_RUNNER');
+  const configPath = join(PLUGIN_DATA, 'host-config.json');
+  if (!existsSync(configPath)) return null;
+  const parsed = parseJson(readFileSync(configPath, 'utf8'), 'Apple security devices host config');
+  if (!isRecord(parsed) || typeof parsed.commandRunner !== 'string') {
+    throw new Error('Apple security devices host config must contain commandRunner.');
+  }
+  return existingExecutable(parsed.commandRunner, 'commandRunner');
+}
+
+function existingExecutable(value, field) {
+  const path = resolve(requiredString(value, field, 4096));
+  if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`${field} must identify an existing executable file.`);
+  return realpathSync(path);
+}
+
+function requireKnownTartVm(vms, vmName) {
+  const vm = vms.find((candidate) => candidate.name === vmName);
+  if (!vm) throw new Error(`Unknown Tart VM: ${vmName}. Call list_tart_vms and select an existing VM by exact name.`);
+  return vm;
 }
 
 async function listPhysicalIphones(args) {
@@ -812,6 +1242,141 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+function runCommandWithFileInput(command, args, inputPath, options = {}) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: { ...process.env, ...(options.env ?? {}) },
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    const input = createReadStream(inputPath);
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    let exceeded = false;
+    let streamError = null;
+    let settled = false;
+    let inputBytes = 0;
+    const maximum = options.maxBytes ?? DEFAULT_TART_COPY_BYTES;
+    const append = (existing, chunk) => {
+      const combined = Buffer.concat([existing, chunk]);
+      if (combined.length <= MAX_COMMAND_OUTPUT_BYTES) return combined;
+      exceeded = true;
+      return combined.subarray(combined.length - MAX_COMMAND_OUTPUT_BYTES);
+    };
+    const failStream = (error) => {
+      if (error?.code === 'EPIPE') return;
+      streamError = error;
+      child.kill('SIGKILL');
+    };
+    input.once('error', failStream);
+    child.stdin.once('error', failStream);
+    input.on('data', (chunk) => {
+      inputBytes += chunk.length;
+      if (inputBytes <= maximum || streamError) return;
+      streamError = new Error(`Transfer exceeded the ${maximum}-byte limit.`);
+      input.unpipe(child.stdin);
+      input.destroy();
+      child.stdin.destroy();
+      child.kill('SIGKILL');
+    });
+    input.pipe(child.stdin);
+    child.stdout.on('data', (chunk) => { stdout = append(stdout, Buffer.from(chunk)); });
+    child.stderr.on('data', (chunk) => { stderr = append(stderr, Buffer.from(chunk)); });
+    const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 30_000);
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      input.destroy();
+      rejectPromise(error);
+    });
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      input.destroy();
+      if (streamError) {
+        rejectPromise(streamError);
+        return;
+      }
+      const result = {
+        code: Number.isInteger(code) ? code : null,
+        signal: signal ?? null,
+        stdout: stdout.toString('utf8'),
+        stderr: stderr.toString('utf8'),
+        outputTruncated: exceeded
+      };
+      if (code === 0) resolvePromise(result);
+      else rejectPromise(new CommandError(command, result));
+    });
+  });
+}
+
+async function runCommandToFile(command, args, outputPath, options = {}) {
+  const child = spawn(command, args, {
+    cwd: options.cwd,
+    env: { ...process.env, ...(options.env ?? {}) },
+    shell: false,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let stderr = Buffer.alloc(0);
+  let stderrTruncated = false;
+  const appendStderr = (chunk) => {
+    const combined = Buffer.concat([stderr, Buffer.from(chunk)]);
+    if (combined.length <= MAX_COMMAND_OUTPUT_BYTES) stderr = combined;
+    else {
+      stderrTruncated = true;
+      stderr = combined.subarray(combined.length - MAX_COMMAND_OUTPUT_BYTES);
+    }
+  };
+  child.stderr.on('data', appendStderr);
+  let bytes = 0;
+  const maximum = options.maxBytes ?? DEFAULT_TART_COPY_BYTES;
+  const limiter = new Transform({
+    transform(chunk, _encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > maximum) callback(new Error(`Transfer exceeded the ${maximum}-byte limit.`));
+      else callback(null, chunk);
+    }
+  });
+  const outputPromise = pipeline(
+    child.stdout,
+    limiter,
+    createWriteStream(outputPath, { flags: 'wx', mode: 0o600 })
+  );
+  const closePromise = new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 30_000);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      resolvePromise({ code: Number.isInteger(code) ? code : null, signal: signal ?? null });
+    });
+  });
+  let result;
+  try {
+    [result] = await Promise.all([closePromise, outputPromise]);
+  } catch (error) {
+    child.kill('SIGKILL');
+    removeFileIfPresent(outputPath);
+    throw error;
+  }
+  const commandResultValue = {
+    ...result,
+    stdout: '',
+    stderr: stderr.toString('utf8'),
+    outputTruncated: stderrTruncated
+  };
+  if (result.code !== 0) {
+    removeFileIfPresent(outputPath);
+    throw new CommandError(command, commandResultValue);
+  }
+  return { ...commandResultValue, bytes };
+}
+
 function runCommandSync(command, args) {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
@@ -823,7 +1388,7 @@ function runCommandSync(command, args) {
   return result.stdout;
 }
 
-function spawnDetached(command, args, { cwd, logPath }) {
+function spawnDetached(command, args, { cwd, logPath, startupGraceMs = 0 }) {
   return new Promise((resolvePromise, rejectPromise) => {
     const logFd = openSync(logPath, 'a', 0o600);
     const child = spawn(command, args, {
@@ -840,11 +1405,22 @@ function spawnDetached(command, args, { cwd, logPath }) {
       settled = true;
       rejectPromise(error);
     });
-    child.once('spawn', () => {
+    child.once('exit', (code, signal) => {
       if (settled) return;
       settled = true;
-      child.unref();
-      resolvePromise(child);
+      const detail = firstLines(readTail(logPath, 4096), 4);
+      rejectPromise(new Error(`${basename(command)} exited during startup with ${code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`}${detail ? `: ${detail}` : ''}`));
+    });
+    child.once('spawn', () => {
+      if (settled) return;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        child.unref();
+        resolvePromise(child);
+      };
+      if (startupGraceMs > 0) setTimeout(finish, startupGraceMs);
+      else finish();
     });
   });
 }
@@ -909,6 +1485,51 @@ function canonicalDirectory(value, field) {
   return realpathSync(path);
 }
 
+function canonicalFile(value, field) {
+  const requested = requiredString(value, field, 4096);
+  if (!isAbsolute(requested)) throw new Error(`${field} must be an absolute host path.`);
+  const path = resolve(requested);
+  if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`${field} must identify an existing regular file.`);
+  return realpathSync(path);
+}
+
+function destinationFile(value, field) {
+  const requested = requiredString(value, field, 4096);
+  if (!isAbsolute(requested)) throw new Error(`${field} must be an absolute host path.`);
+  const path = resolve(requested);
+  const parent = dirname(path);
+  if (!existsSync(parent) || !statSync(parent).isDirectory()) throw new Error(`${field} parent directory must exist.`);
+  const canonicalParent = realpathSync(parent);
+  const destination = join(canonicalParent, basename(path));
+  if (existsSync(destination) && !statSync(destination).isFile()) throw new Error(`${field} must not identify a directory or special file.`);
+  return destination;
+}
+
+function safeGuestFilePath(value, field) {
+  const path = requiredString(value, field, 4096);
+  if (!path.startsWith('/') || path === '/' || path.endsWith('/')) throw new Error(`${field} must be an absolute guest file path.`);
+  if (/\r|\n/u.test(path)) throw new Error(`${field} must contain exactly one line.`);
+  return path;
+}
+
+function temporaryGuestPath(path) {
+  const temporary = join(dirname(path), `.${safeFilename(basename(path))}.beale-upload-${randomUUID()}`);
+  if (temporary.length > 4096) throw new Error('guestPath is too long for a bounded staging path.');
+  return temporary;
+}
+
+function removeFileIfPresent(path) {
+  try {
+    if (existsSync(path)) unlinkSync(path);
+  } catch {
+    // Only random staging files created by the current operation reach this cleanup path.
+  }
+}
+
+function fileModeText(mode) {
+  return (mode & 0o777).toString(8).padStart(3, '0');
+}
+
 function containedExistingFile(root, relativePath) {
   const candidate = resolve(root, relativePath);
   assertContained(root, candidate, relativePath);
@@ -956,6 +1577,12 @@ function safeVmName(value) {
   const name = requiredString(value, 'vmName', 128);
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(name)) throw new Error('vmName contains unsupported characters.');
   return name;
+}
+
+function tartNetworkMode(value) {
+  if (value === undefined || value === 'shared') return 'shared';
+  if (value === 'host-only') return 'host-only';
+  throw new Error('networkMode must be either shared or host-only.');
 }
 
 function safeArgv(value) {
@@ -1039,6 +1666,10 @@ function firstNumber(object, keys) {
 
 function firstLine(value) {
   return String(value ?? '').split(/\r?\n/u).find((line) => line.trim())?.trim() ?? '';
+}
+
+function firstLines(value, maximum) {
+  return String(value ?? '').split(/\r?\n/u).map((line) => line.trim()).filter(Boolean).slice(0, maximum).join(' | ');
 }
 
 function safeFilename(value) {

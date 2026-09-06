@@ -906,8 +906,20 @@ function assertRepositorySearchActive(state: RepositorySearchState): void {
 }
 
 function repositorySearchRootLabel(root: string): string {
+  return repositorySearchRootAliases(root)[0] ?? basename(root);
+}
+
+function repositorySearchRootAliases(root: string): string[] {
   const name = basename(root);
-  return name.toLowerCase() === "default" ? basename(dirname(root)) : name;
+  const checkoutLabel = name.toLowerCase() === "default" ? basename(dirname(root)) : name;
+  const materializedMatch = /^(?:github|gitlab|bitbucket)\.[^_]+_[^_]+_(.+)$/iu.exec(checkoutLabel);
+  const naturalLabel = materializedMatch?.[1]?.replace(/\.git$/iu, '').trim() ?? '';
+  return [...new Set([naturalLabel, checkoutLabel].filter(Boolean))];
+}
+
+function repositorySearchRootDisplayLabel(root: string): string {
+  const aliases = repositorySearchRootAliases(root);
+  return aliases.length > 1 ? `${aliases[0]} [${aliases[1]}]` : aliases[0] ?? basename(root);
 }
 
 function selectRepositorySearchRoots(
@@ -917,14 +929,14 @@ function selectRepositorySearchRoots(
   const normalizedRequest = requestedRoot.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
   const matches = roots.filter((root) => {
     const normalizedRoot = root.replaceAll("\\", "/").replace(/\/$/, "").toLowerCase();
-    const label = repositorySearchRootLabel(root).toLowerCase();
+    const labels = repositorySearchRootAliases(root).map((label) => label.toLowerCase());
     return normalizedRoot === normalizedRequest
-      || label === normalizedRequest
+      || labels.includes(normalizedRequest)
       || normalizedRoot.endsWith(`/${normalizedRequest}`);
   });
   if (matches.length === 1) return matches;
 
-  const labels = roots.map((root) => repositorySearchRootLabel(root)).join(", ");
+  const labels = roots.map((root) => repositorySearchRootDisplayLabel(root)).join(", ");
   if (matches.length > 1) {
     throw new Error(
       `repository.search root "${requestedRoot}" is ambiguous. Use an exact configured path. Available root labels: ${labels}`,

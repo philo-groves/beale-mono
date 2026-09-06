@@ -113,7 +113,7 @@ describe('workspace Dejunk', () => {
     mkdirSync(join(misplacedRepository, '.git'), { recursive: true });
     writeFileSync(join(misplacedRepository, '.git', 'config'), [
       '[remote "origin"]',
-      '\turl = git@github.com:Netflix/zuul.git'
+      '\turl = git@github.com:example-org/research-fixture.git'
     ].join('\n'));
     writeFileSync(join(misplacedRepository, 'README.md'), 'source');
 
@@ -126,7 +126,7 @@ describe('workspace Dejunk', () => {
     expect(result.repositoryRelocations).toHaveLength(1);
     expect(result.repositoryRelocations[0]).toMatchObject({
       fromPath: misplacedRepository,
-      repositoryUrl: 'https://github.com/Netflix/zuul'
+      repositoryUrl: 'https://github.com/example-org/research-fixture'
     });
     const destination = result.repositoryRelocations[0]?.toPath ?? '';
     expect(destination.startsWith(repositoryStore)).toBe(true);

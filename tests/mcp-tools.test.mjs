@@ -113,6 +113,12 @@ test("MCP discovery maps allowlisted tools and resources into executable researc
   assert.equal(searchDescriptor?.metadata.provider, "mcp");
   assert.equal(searchDescriptor?.metadata.serverName, "alpha");
   assert.equal(searchDescriptor?.requiredPermissions[0], "mcp:alpha:tool:search_docs");
+  assert.deepEqual(searchDescriptor?.inputSchema.properties.bealeTimeoutMs, {
+    type: "integer",
+    minimum: 1_000,
+    maximum: 1_800_000,
+    description: "Optional Beale execution timeout for this call in milliseconds. Use a larger value for slow operations such as VM startup or shutdown. The configured default is 30000ms.",
+  });
   assert.equal(resourceDescriptor?.actionClasses[0], "inspect");
 
   const toolResult = await registry.execute({
@@ -121,6 +127,7 @@ test("MCP discovery maps allowlisted tools and resources into executable researc
     toolName: "mcp.alpha.search_docs",
     input: {
       query: "parser",
+      bealeTimeoutMs: 45_000,
     },
   });
   assert.equal(toolResult.result.status, "complete");
@@ -134,6 +141,7 @@ test("MCP discovery maps allowlisted tools and resources into executable researc
     arguments: {
       query: "parser",
     },
+    timeoutMs: 45_000,
   });
 
   const resourceResult = await registry.execute({
@@ -367,6 +375,33 @@ test("MCP discovery denylist defaults to no servers and execution reports timeou
   assert.match(result.result.summary, /exceeded timeout/);
 });
 
+test("MCP calls reject invalid Beale timeout overrides before provider execution", async () => {
+  let called = false;
+  const discovery = await createMcpResearchTools({
+    allowedServers: ["alpha"],
+    client: {
+      async listTools() {
+        return [{ serverName: "alpha", name: "start_vm", inputSchema: { type: "object" } }];
+      },
+      async callTool() {
+        called = true;
+        return {};
+      },
+    },
+  });
+  const registry = createResearchToolRegistry(discovery.tools);
+  const result = await registry.execute({
+    id: "invalid_mcp_timeout",
+    actionClass: discovery.descriptors[0].actionClasses[0],
+    toolName: discovery.descriptors[0].name,
+    input: { bealeTimeoutMs: 1_800_001 },
+  });
+
+  assert.equal(result.result.status, "error");
+  assert.match(result.result.summary, /bealeTimeoutMs must be an integer/);
+  assert.equal(called, false);
+});
+
 test("configured stdio MCP client tolerates diagnostics and executes a live fixture server", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-live-mcp-"));
   const serverPath = join(root, "fixture-mcp.mjs");
@@ -419,6 +454,18 @@ test("configured stdio MCP client tolerates diagnostics and executes a live fixt
     assert.equal(discovery.resourceTemplates.length, 1);
     assert.equal(result.result.status, "complete");
     assert.equal(result.result.output.output.content[0].text, "echo:parser:resolved-runtime-value");
+
+    const slowResult = await registry.execute({
+      id: "slow_live_mcp_tool",
+      actionClass: "search",
+      toolName: "mcp.fixture.echo_search",
+      input: {
+        query: "slow",
+        bealeTimeoutMs: 1_500,
+      },
+    });
+    assert.equal(slowResult.result.status, "complete");
+    assert.equal(slowResult.result.output.output.content[0].text, "echo:slow:resolved-runtime-value");
   } finally {
     await client.close();
     if (previousFixtureValue === undefined) delete process.env.APP_SERVER_TEST_MCP_VALUE;
@@ -458,7 +505,9 @@ function handle(message) {
   }
   if (message.method === "tools/call") {
     process.stdout.write("2026-08-18T22:32:03.372Z WARN fixture diagnostic\\n");
-    send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + message.params.arguments.query + ":" + process.env.FIXTURE_RUNTIME_VALUE }] } });
+    const respond = () => send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + message.params.arguments.query + ":" + process.env.FIXTURE_RUNTIME_VALUE }] } });
+    if (message.params.arguments.query === "slow") setTimeout(respond, 1100);
+    else respond();
     return;
   }
   if (message.method === "resources/list") {

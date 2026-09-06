@@ -143,8 +143,7 @@ function modelSafetyPausePayload(
   if (
     stringValue(payload.type) !== 'model_retry' ||
     stringValue(payload.recoveryKind) !== 'safety_guardrail' ||
-    payload.awaitingSteering !== true ||
-    stringValue(payload.contextPhase) === 'initial_context_preflight'
+    payload.awaitingSteering !== true
   ) {
     return null;
   }

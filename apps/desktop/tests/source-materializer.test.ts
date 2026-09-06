@@ -132,7 +132,7 @@ describe('source materializer', () => {
   it('deepens an existing shallow checkout when deep mode is requested', () => {
     const workspace = tempDir();
     const repositoryStore = join(workspace, 'repositories');
-    const checkout = join(repositoryStore, 'github.com_Netflix_zuul', 'default');
+    const checkout = join(repositoryStore, 'github.com_example-org_research-fixture', 'default');
     mkdirSync(join(checkout, '.git'), { recursive: true });
     const stateFile = join(workspace, 'clone-state.txt');
     const argumentsFile = join(workspace, 'git-arguments.jsonl');
@@ -153,7 +153,7 @@ describe('source materializer', () => {
     process.env.BEALE_GIT_COMMAND = fakeGit;
     configureIsolatedAppServer(workspace);
     const candidate = sourceRepositoryCandidates(scopeWithAssets([
-      sourceAsset('repo_zuul', 'https://github.com/Netflix/zuul')
+      sourceAsset('repo_fixture', 'https://github.com/example-org/research-fixture')
     ]))[0];
 
     const materialized = materializeGitRepository(candidate, '', {
@@ -305,7 +305,7 @@ describe('source materializer', () => {
     mkdirSync(join(workspace, '.beale'), { recursive: true });
     const repositoryStore = join(workspace, 'beale-home', 'repositories');
     const refDigest = createHash('sha256').update('feature-ref').digest('hex').slice(0, 12);
-    const managedCheckout = join(repositoryStore, 'github.com_Netflix_zuul', `feature-ref-${refDigest}`);
+    const managedCheckout = join(repositoryStore, 'github.com_example-org_research-fixture', `feature-ref-${refDigest}`);
     mkdirSync(join(managedCheckout, '.git'), { recursive: true });
     const stateFile = join(workspace, 'git-head.txt');
     writeFileSync(stateFile, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
@@ -328,7 +328,7 @@ describe('source materializer', () => {
     chmodSync(fakeGit, 0o700);
     process.env.BEALE_GIT_COMMAND = fakeGit;
     configureIsolatedAppServer(workspace);
-    const scope = scopeWithAssets([sourceAsset('repo_zuul', 'https://github.com/Netflix/zuul')]);
+    const scope = scopeWithAssets([sourceAsset('repo_fixture', 'https://github.com/example-org/research-fixture')]);
     const candidate = sourceRepositoryCandidates(scope)[0];
 
     const materialized = materializeGitRepository(candidate, 'feature-ref', {
@@ -357,7 +357,7 @@ describe('source materializer', () => {
     chmodSync(fakeGit, 0o700);
     process.env.BEALE_GIT_COMMAND = fakeGit;
     configureIsolatedAppServer(join(repositoryStore, '..'));
-    const candidate = sourceRepositoryCandidates(scopeWithAssets([sourceAsset('repo_zuul', 'https://github.com/Netflix/zuul')]))[0];
+    const candidate = sourceRepositoryCandidates(scopeWithAssets([sourceAsset('repo_fixture', 'https://github.com/example-org/research-fixture')]))[0];
 
     const first = await materializeGitRepositoryAsync(candidate, '', {
       repositoryStoreDirectory: repositoryStore
@@ -369,7 +369,7 @@ describe('source materializer', () => {
     expect(first.cloned).toBe(true);
     expect(second.cloned).toBe(false);
     expect(second.localPath).toBe(first.localPath);
-    expect(first.localPath).toBe(join(repositoryStore, 'github.com_Netflix_zuul', 'default'));
+    expect(first.localPath).toBe(join(repositoryStore, 'github.com_example-org_research-fixture', 'default'));
   });
 });
 

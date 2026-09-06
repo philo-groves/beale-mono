@@ -490,7 +490,7 @@ export class SubagentManager {
       agentId,
       "create_channel",
       "Create research channel",
-      "Create a durable workspace research channel. First use channel_list and reuse a relevant existing channel when possible. Initial member assignments are optional and failures never block the channel.",
+      "Create a durable workspace research channel. First use channel_list and reuse a relevant existing channel when possible. Initial member assignments are optional and failures never block the channel. Channel membership roles are assigned automatically; Advanced mode still requires its bounded delegation role for each spawned member.",
       {
         type: "object",
         required: ["channel_name", "topic"],
@@ -507,11 +507,15 @@ export class SubagentManager {
           members: {
             type: "array", maxItems: this.maxMembersPerRoom,
             items: {
-              type: "object", required: ["task_name", "message", "role"], additionalProperties: false,
+              type: "object",
+              required: ["task_name", "message", ...(this.delegationRoles.size > 0 ? ["role"] : [])],
+              additionalProperties: false,
               properties: {
-                task_name: { type: "string" }, message: { type: "string" }, role: this.delegationRoles.size > 0
-                  ? { type: "string", enum: [...this.delegationRoles.keys()] }
-                  : { type: "string" },
+                task_name: { type: "string" },
+                message: { type: "string" },
+                ...(this.delegationRoles.size > 0 ? {
+                  role: { type: "string", enum: [...this.delegationRoles.keys()] },
+                } : {}),
                 provider: { type: "string" }, model: { type: "string" },
                 reasoning_effort: { type: "string", enum: [...REASONING_LEVELS] },
                 fork_turns: { type: "string", description: "Defaults to none; the channel transcript is inherited separately." },
@@ -546,16 +550,14 @@ export class SubagentManager {
   }
 
   private createJoinChannelTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "join_channel", "Join channel", "Join an existing research channel and inherit its prior transcript. Joining never waits for or requires another member.", {
+    return this.collaborationTool(agentId, "join_channel", "Join channel", "Join an existing research channel and inherit its prior transcript. Joining never waits for or requires another member. Beale retains the agent's Advanced delegation role or assigns the ordinary researcher membership role automatically.", {
       type: "object", required: ["channel_name"], additionalProperties: false, properties: {
         channel_name: { type: "string" },
-        role: { type: "string" },
         message_limit: { type: "number", minimum: 1, maximum: 2_000 },
       },
     }, async (_toolCallId, input) => this.joinChannel(
       agentId,
       requiredString(input.channel_name, "channel_name"),
-      optionalString(input.role),
       optionalNonNegativeInteger(input.message_limit),
     ));
   }
@@ -598,8 +600,8 @@ export class SubagentManager {
       "spawn_agent",
       "Spawn agent",
       roleIds.length > 0
-        ? "Spawn one bounded, role-specific subagent. Select the role that matches the assigned responsibility. Optionally attach it to an existing workspace research channel so it inherits prior channel research. The child shares the authorized workspace and tool policy. fork_turns accepts none, all, or a positive integer string."
-        : "Spawn one bounded subagent. Optionally attach it to an existing workspace research channel so it inherits prior channel research. The child shares the authorized workspace and tool policy. fork_turns accepts none, all, or a positive integer string.",
+        ? "Spawn one bounded, role-specific subagent. Select the role that matches the assigned responsibility. Optionally attach it to an existing workspace research channel so it inherits prior channel research. The child shares the authorized workspace and tool policy. Parent history is not inherited unless fork_turns is explicitly set to all or a positive integer string."
+        : "Spawn one bounded subagent. Optionally attach it to an existing workspace research channel so it inherits prior channel research. The child shares the authorized workspace and tool policy. Parent history is not inherited unless fork_turns is explicitly set to all or a positive integer string.",
       {
         type: "object",
         required: ["task_name", "message", ...(roleIds.length > 0 ? ["role"] : [])],
@@ -608,13 +610,13 @@ export class SubagentManager {
           task_name: { type: "string", description: "Lowercase letters, digits, and underscores." },
           message: { type: "string", description: "Concrete bounded task for the child." },
           provider: { type: "string", description: "Optional enabled collaborator provider ID. The route must support the requested Advanced role. An exact provider/model route is also accepted for compatibility. Omit to let app-server select a diverse compatible provider." },
-          fork_turns: { type: "string", description: "none, all, or a positive integer string. Defaults to all." },
+          fork_turns: { type: "string", description: "none, all, or a positive integer string. Defaults to none." },
           model: { type: "string", description: "Optional enabled model ID for partial or fresh inheritance. Pass the provider ID separately." },
           reasoning_effort: { type: "string", enum: [...REASONING_LEVELS] },
           channel_name: { type: "string", description: "Optional existing channel to join and inherit." },
-          role: roleIds.length > 0
-            ? { type: "string", enum: roleIds, description: "Required single Advanced designation; the selected collaborator route must list it as compatible." }
-            : { type: "string", description: "Channel role when channel_name is provided." },
+          ...(roleIds.length > 0 ? {
+            role: { type: "string", enum: roleIds, description: "Required single Advanced designation; the selected collaborator route must list it as compatible." },
+          } : {}),
         },
       },
       async (toolCallId, input) => this.spawn(agentId, toolCallId, input),
@@ -835,17 +837,16 @@ export class SubagentManager {
     return this.channelToolView(detail);
   }
 
-  private joinChannel(agentId: string, channelName: string, role?: string, requestedLimit?: number): Record<string, unknown> {
+  private joinChannel(agentId: string, channelName: string, requestedLimit?: number): Record<string, unknown> {
     const session = this.ensureSession(agentId);
     const context = this.requireChannelContext();
     const detail = context.store.get(context.workspaceId, channelName, requestedLimit && requestedLimit > 0 ? requestedLimit : 500);
     if (!detail) throw new Error(`Channel not found in workspace: ${channelName}`);
-    if (session.id !== "root" && this.delegationRoles.size > 0 && role && role.toLowerCase() !== session.role) {
-      throw new Error(`Agent ${session.path} must retain its ${session.role} delegation role when joining a channel.`);
-    }
-    this.assignChannel(session, detail.channel, session.id !== "root" && this.delegationRoles.size > 0
-      ? session.role ?? this.requireDelegationRole(role).id
-      : role ?? session.role ?? "researcher");
+    this.assignChannel(
+      session,
+      detail.channel,
+      session.role ?? (session.id === "root" ? "lead" : "researcher"),
+    );
     context.store.join(this.channelMemberInput(session));
     void this.emitChannelActivity(detail.channel, session, { type: "channel_joined" });
     return {
@@ -1063,11 +1064,11 @@ export class SubagentManager {
     }
 
     const message = requiredString(input.message, "message");
-    const forkTurns = normalizeForkTurns(optionalString(input.fork_turns) ?? "all");
+    const forkTurns = normalizeForkTurns(optionalString(input.fork_turns) ?? "none");
     const providerOverride = optionalString(input.provider);
     const modelOverride = optionalString(input.model);
     const reasoningOverride = optionalReasoning(input.reasoning_effort);
-    const requestedRole = optionalString(input.role);
+    const requestedRole = this.delegationRoles.size > 0 ? optionalString(input.role) : undefined;
     const delegationRole = this.delegationRoles.size > 0
       ? this.requireDelegationRole(requestedRole)
       : null;
@@ -1080,7 +1081,7 @@ export class SubagentManager {
     const roomName = requestedRoomName ? normalizeRoomName(requestedRoomName) : null;
     const roomMetadataProvided = optionalString(input.room_title) || optionalString(input.room_kind);
     if (!roomName && roomMetadataProvided) {
-      throw new Error("room_name is required when room_title, room_kind, or role is provided.");
+      throw new Error("room_name is required when room_title or room_kind is provided.");
     }
     const roomTitle = roomName ? optionalString(input.room_title) ?? titleFromRoomName(roomName) : null;
     const roomKind = roomName ? normalizeRoomKind(optionalString(input.room_kind)) : null;
@@ -1100,9 +1101,6 @@ export class SubagentManager {
       throw new Error(`Breakout room ${roomName} member limit reached (${this.maxMembersPerRoom}).`);
     }
     const requestedChannelName = optionalString(input.channel_name);
-    if (requestedRole && !delegationRole && !roomName && !requestedChannelName) {
-      throw new Error("channel_name is required when role is provided.");
-    }
     const channelDetail = requestedChannelName
       ? this.requireChannelContext().store.get(this.requireChannelContext().workspaceId, requestedChannelName, 500)
       : null;
@@ -1142,7 +1140,7 @@ export class SubagentManager {
     };
     this.sessions.set(id, child);
     if (child.channelName) {
-      child.role = requestedRole ?? "researcher";
+      child.role = delegationRole?.id ?? "researcher";
       this.requireChannelContext().store.join(this.channelMemberInput(child));
       void this.emitChannelActivity(channelDetail!.channel, child, { type: "channel_joined" });
     }

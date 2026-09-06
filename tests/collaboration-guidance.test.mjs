@@ -101,6 +101,7 @@ test("advanced collaboration guidance describes Simple controls with explicit de
   assert.match(lead, /Use Reviewer for independent review/);
   assert.match(lead, /Use Reporter only to write a submission report for a reviewed and approved finding/);
   assert.match(lead, /Roles clarify responsibility; they do not impose a phase gate/);
+  assert.match(lead, /Parent transcript inheritance is opt-in/);
   assert.match(lead, /fork_turns=all/);
   assert.match(worker, /delegation prompt names your Advanced role/);
   assert.doesNotMatch(lead, /delegate_batch|coordination_checkpoint|rolling, lead-owned evidence team/);

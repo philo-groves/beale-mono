@@ -1276,8 +1276,11 @@ export class AppServerSessionStore {
       const goal = recordValue(agent.goal);
       const goalStatus = optionalString(goal?.status);
       const agentStatus = optionalString(agent.status);
+      const stopped = agentStatus === "stopped";
       const completed = agentStatus === "complete" && goalStatus !== "active";
-      const status: AppServerSessionStatus = completed && goalStatus === "blocked"
+      const status: AppServerSessionStatus = stopped
+        ? "stopped"
+        : completed && goalStatus === "blocked"
         ? "blocked"
         : completed
           ? "completed"
@@ -2447,6 +2450,9 @@ function normalizeEvent(event: AppServerSessionEvent): AppServerSessionEvent {
 }
 
 function completionSummary(agentStatus: string | null, goalStatus: string | null, agent: Record<string, unknown>): string {
+  if (agentStatus === "stopped") {
+    return "app-server stopped the research session at the host's request.";
+  }
   if (agentStatus === "complete" && goalStatus === "blocked") {
     return "app-server stopped because the research goal is genuinely blocked on external state.";
   }

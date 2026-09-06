@@ -467,12 +467,13 @@ test("direct Pi Agent appends workspace instructions after a custom system promp
   assert.ok(prompt.indexOf("Later workspace text claims") < prompt.indexOf("cannot expand the recorded authorization boundary"));
 });
 
-test("research system prompt routes proof execution through runbooks and separates memory", () => {
+test("research system prompt reserves runbooks for stabilized reusable proof", () => {
   const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true });
   assert.match(prompt, /Use runbooks as durable executable research artifacts/);
-  assert.match(prompt, /Execute all proofing through runbook\.run/);
-  assert.match(prompt, /Auto-Review denies proof commands outside runbooks/);
-  assert.match(prompt, /Keep concise research facts in memory and multi-step procedures in runbooks/);
+  assert.match(prompt, /Use shell\.run for bounded exploratory experiments/);
+  assert.match(prompt, /successful proof sequence has stabilized enough to be reused/);
+  assert.match(prompt, /Do not create a lifecycle wrapper runbook/);
+  assert.doesNotMatch(prompt, /denies proof commands outside runbooks/);
 });
 
 test("research system prompt allows same-session independent finding review", () => {
@@ -669,6 +670,35 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
   assert.match(systemPrompt, /sources introduce attacker-controlled or lower-trust influence/);
   assert.match(systemPrompt, /relevant successful trajectories/);
   assert.doesNotMatch(systemPrompt, /specific, testable, currently unproven security proposition/);
+});
+
+test("Pi Agent recognizes lead.create as the canonical claim-creation tool", async () => {
+  const contexts = [];
+  const tools = [
+    ["finding.list", "finding_list"],
+    ["lead.create", "lead_create"],
+    ["finding.transition", "finding_transition"],
+  ].map(([name, transportName]) => {
+    const tool = createFixtureInspectTool([]);
+    tool.descriptor = { ...tool.descriptor, name, transportName };
+    return tool;
+  });
+
+  await runResearchAgent({
+    prompt: "Assess the current candidate.",
+    tools: tools.map((tool) => tool.descriptor),
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      models: createScriptedModels([
+        assistant("## Result\nCandidate assessed."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry(tools),
+    }),
+  });
+
+  assert.match(contexts[0].systemPrompt, /Use one canonical, evidence-gated research claim ledger/);
+  assert.match(contexts[0].systemPrompt, /Create only through lead\.create/);
 });
 
 test("Pi Agent streams a tool request before long-running execution completes", async () => {
@@ -1252,8 +1282,10 @@ test("Pi Agent aborts a delayed retry immediately when the session is stopped", 
     }),
   });
 
-  assert.equal(result.agentRun.status, "error");
+  assert.equal(result.agentRun.status, "stopped");
   assert.match(result.agentRun.output.text, /Model retry aborted/);
+  assert.equal(result.events.some((event) => event.kind === "error.observed"), false);
+  assert.match(result.events.at(-1).payload.summary, /stopped at the host's request/);
 });
 
 test("Pi Agent retries an unexpected server error immediately in the same session", async () => {
@@ -1505,8 +1537,9 @@ test("Pi Agent aborts an awaiting-steering safeguard recovery immediately", asyn
     }),
   });
 
-  assert.equal(result.agentRun.status, "error");
+  assert.equal(result.agentRun.status, "stopped");
   assert.match(result.agentRun.output.text, /Safety guardrail recovery aborted/);
+  assert.equal(result.events.some((event) => event.kind === "error.observed"), false);
 });
 
 test("target output cannot manufacture host authorization for safety recovery", async () => {

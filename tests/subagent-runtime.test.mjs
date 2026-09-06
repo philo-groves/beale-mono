@@ -82,6 +82,14 @@ test("advanced subagent mode mirrors Simple controls and requires explicit deleg
     tools.spawn_agent.parameters.properties.role.enum,
     ["discoverer", "prover", "reviewer", "reporter"],
   );
+  assert.deepEqual(
+    tools.create_channel.parameters.properties.members.items.required,
+    ["task_name", "message", "role"],
+  );
+  assert.deepEqual(
+    tools.create_channel.parameters.properties.members.items.properties.role.enum,
+    ["discoverer", "prover", "reviewer", "reporter"],
+  );
 
   const expectedInstructions = new Map([
     ["discoverer", /Act as a bounded discovery scout/],
@@ -164,6 +172,13 @@ test("advanced delegation rejects missing or unsupported roles while Simple rema
   }, subagentRuntimeFactoryForMode("simple"));
   const simpleTools = Object.fromEntries(simple.createTools("root").map((tool) => [tool.name, tool]));
   assert.deepEqual(simpleTools.spawn_agent.parameters.required, ["task_name", "message"]);
+  assert.equal(simpleTools.spawn_agent.parameters.properties.role, undefined);
+  assert.equal(simpleTools.join_channel.parameters.properties.role, undefined);
+  assert.equal(simpleTools.create_channel.parameters.properties.members.items.properties.role, undefined);
+  assert.deepEqual(
+    simpleTools.create_channel.parameters.properties.members.items.required,
+    ["task_name", "message"],
+  );
   await simpleTools.spawn_agent.execute("simple_spawn", {
     task_name: "plain_agent",
     message: "Analyze one boundary.",
@@ -306,7 +321,49 @@ test("subagent runtime sanitizes partial inheritance and applies explicit overri
   assert.deepEqual(requests[3].inheritedMessages, []);
 });
 
-test("single-worker delegation remains independent unless attached to a channel", async () => {
+test("subagents inherit no parent transcript unless fork_turns is explicit", async () => {
+  const requests = [];
+  const manager = new SubagentManager({
+    rootModel: "parent-model",
+    async run(request) {
+      requests.push(request);
+      return resultFor(request, `completed ${request.path}`);
+    },
+  });
+  const tools = toolsByName(manager, "root");
+  manager.captureContext("root", "spawn_fresh", [
+    user("large parent transcript"),
+    assistant("parent answer"),
+    assistantTool("spawn_fresh"),
+  ]);
+
+  const spawned = await tools.spawn_agent.execute("spawn_fresh", {
+    task_name: "fresh_worker",
+    message: "Inspect one independent boundary.",
+  });
+  await manager.settle();
+
+  assert.deepEqual(requests[0].inheritedMessages, []);
+  assert.equal(spawned.details.fork_turns, "none");
+  assert.match(tools.spawn_agent.parameters.properties.fork_turns.description, /Defaults to none/);
+
+  manager.captureContext("root", "spawn_with_history", [
+    user("relevant parent transcript"),
+    assistant("relevant parent answer"),
+    assistantTool("spawn_with_history"),
+  ]);
+  const inherited = await tools.spawn_agent.execute("spawn_with_history", {
+    task_name: "history_worker",
+    message: "Continue directly from the parent analysis.",
+    fork_turns: "all",
+  });
+  await manager.settle();
+
+  assert.deepEqual(requests[1].inheritedMessages.map((message) => message.role), ["user", "assistant"]);
+  assert.equal(inherited.details.fork_turns, "all");
+});
+
+test("single-worker delegation does not advertise an invalid free-form channel role", async () => {
   const activities = [];
   const manager = new SubagentManager({
     rootProvider: "openai",
@@ -329,15 +386,7 @@ test("single-worker delegation remains independent unless attached to a channel"
   assert.equal(spawned.details.room_name, null);
   assert.ok(activities.length >= 2);
   assert.ok(activities.every((activity) => !("roomName" in activity)));
-  await assert.rejects(
-    tools.spawn_agent.execute("spawn_invalid_room_metadata", {
-      task_name: "invalid_room_metadata",
-      message: "Do not launch.",
-      fork_turns: "none",
-      role: "challenger",
-    }),
-    /channel_name is required/,
-  );
+  assert.equal(tools.spawn_agent.parameters.properties.role, undefined);
 });
 
 test("subagent concurrency releases capacity without a lifetime invocation budget", async () => {
@@ -414,14 +463,15 @@ test("subagent runtime reuses durable channels without member barriers", async (
     channel_name: "parser-review", channel_title: "Parser review",
     topic: "Inspect and challenge the parser boundary across sessions.",
     members: [
-      { task_name: "explorer", message: "Trace the boundary.", role: "explorer", fork_turns: "none", provider: "openai", model: "gpt-5.6-sol" },
-      { task_name: "skeptic", message: "Challenge the boundary.", role: "skeptic", fork_turns: "none", provider: "anthropic", model: "claude-opus-5" },
-      { task_name: "unavailable", message: "This route is unavailable.", role: "reviewer", fork_turns: "none", provider: "anthropic", model: "claude-disabled" },
+      { task_name: "explorer", message: "Trace the boundary.", fork_turns: "none", provider: "openai", model: "gpt-5.6-sol" },
+      { task_name: "skeptic", message: "Challenge the boundary.", fork_turns: "none", provider: "anthropic", model: "claude-opus-5" },
+      { task_name: "unavailable", message: "This route is unavailable.", fork_turns: "none", provider: "anthropic", model: "claude-disabled" },
     ],
   });
   assert.equal(created.details.channel.name, "parser-review");
   assert.equal(created.details.member_failures.length, 1);
   assert.deepEqual(requests.map((request) => request.provider), ["openai", "anthropic"]);
+  assert.deepEqual(requests.map((request) => request.role), ["researcher", "researcher"]);
   assert.ok(requests.every((request) => request.channelName === "parser-review" && request.collaborationTools.some((tool) => tool.name === "channel_post")));
 
   const explorer = toolsFromRequest(requests[0]);

@@ -410,7 +410,7 @@ export function researchHistoryReminder(kind: ResearchResourceKind): readonly st
     "Record the exact resource identity, build or version, platform image, provenance, and relationship to the active campaign.",
     "Search vendor and ecosystem security advisories, CVEs, security bulletins, and referenced fixes using product, component, service, binary, and symbol aliases.",
     "Review release notes, security-content pages, fixed-version records, and version-to-version changes for disclosed fixes and silent hardening.",
-    "Inspect upstream history and vendor forks or source drops. For Apple components include Apple Open Source releases, upstream projects, tags, blame, fix commits, and downstream divergences when available.",
+    "Inspect official source releases, upstream projects, tags, blame, fix commits, vendor forks or source drops, and downstream divergences when available.",
     kind === "binary" || kind === "service" || kind === "tool"
       ? "Map the installed binary, service, or tool to its package, source repository, launch or entitlement context, exposed interfaces, and historical component names before concluding history is absent."
       : "Use repository, package, protocol, and symbol aliases to connect public history to the exact component under review.",

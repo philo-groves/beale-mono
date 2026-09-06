@@ -176,11 +176,12 @@ test("HTTP session control DTOs are bounded and correlated", () => {
   );
 });
 
-test("the typed session launch carries an OpenAI Fast mode preference", () => {
+test("the typed session launch carries track binding and an OpenAI Fast mode preference", () => {
   const request = {
     launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
     launch: {
       workspaceId: "workspace-example",
+      investigationId: "investigation-example",
       promptMarkdown: "Inspect the parser boundary.",
       provider: { id: "openai-codex", model: "gpt-5.6-sol", fastMode: true },
     },
@@ -192,6 +193,13 @@ test("the typed session launch carries an OpenAI Fast mode preference", () => {
       launch: { ...request.launch, provider: { ...request.launch.provider, fastMode: "yes" } },
     }),
     /fastMode must be a boolean/,
+  );
+  assert.throws(
+    () => decodeAppServerSessionLaunchRequest({
+      ...request,
+      launch: { ...request.launch, investigationId: "x".repeat(257) },
+    }),
+    /investigationId/,
   );
 });
 

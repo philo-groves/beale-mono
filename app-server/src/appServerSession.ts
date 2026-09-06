@@ -64,6 +64,8 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
   const pendingEvents: Record<string, unknown>[] = [];
   let resolvedCode: number | null = null;
   let failureMessage = '';
+  let stopRequested = false;
+  let forceStopTimeout: ReturnType<typeof setTimeout> | null = null;
   const exitPromise = new Promise<{ code: number | null; stderr: string }>((resolve) => {
     worker.on('message', (message: unknown) => {
       if (!message || typeof message !== 'object' || Array.isArray(message)) return;
@@ -82,6 +84,8 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
       }
     });
     worker.once('exit', (code) => {
+      if (forceStopTimeout) clearTimeout(forceStopTimeout);
+      forceStopTimeout = null;
       databaseBroker.close();
       resolve({ code: resolvedCode ?? code, stderr: failureMessage || stderr });
     });
@@ -97,9 +101,11 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
     stderrTail: () => stderr,
     waitExit: () => exitPromise,
     stop: () => {
+      if (stopRequested) return;
+      stopRequested = true;
       worker.postMessage({ type: 'stop' });
-      const timeout = setTimeout(() => void worker.terminate(), 3_000);
-      timeout.unref();
+      forceStopTimeout = setTimeout(() => void worker.terminate(), 3_000);
+      forceStopTimeout.unref();
     }
   };
   return new Promise((resolve, reject) => {

@@ -91,8 +91,8 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.doesNotMatch(securityPrompt, /- procedure \(Procedure\)/);
   assert.match(securityPrompt, /Discovery and categorization are non-authoring inventory actions/);
   assert.match(securityPrompt, /Auto-Reviewed first-touch path/);
-  assert.match(securityPrompt, /Firecracker.*Windows default binaries.*macOS or iOS default binaries/);
-  assert.match(securityPrompt, /Apple Open Source releases/);
+  assert.match(securityPrompt, /explicitly documented dependencies.*default platform components.*upstream or downstream source repositories/);
+  assert.match(securityPrompt, /vendor-maintained components include official source releases and upstream project history/);
   assert.match(securityPrompt, /does not expand authorization/);
   assert.match(securityPrompt, /stateful execution dependencies/);
   assert.match(securityPrompt, /lifecycle and ownership, address and route, listening service, host identity, then account and authentication/);
@@ -107,7 +107,7 @@ test("bundled profiles define domain-specific Longshot workflows", () => {
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
   const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
 
-  assert.equal(security.version, "1.12.0");
+  assert.equal(security.version, "1.13.0");
   assert.equal(mathematics.version, "1.6.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);

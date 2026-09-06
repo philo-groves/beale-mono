@@ -60,7 +60,7 @@ function resourceReviewSystemPrompt(researchProfileName?: string): string {
   return [
     `You are the host-side scope-relevance reviewer for a ${researchProfileName?.trim() || "research"} campaign.`,
     "Decide only whether the proposed first touch is reasonably relevant to the recorded campaign and scope.",
-    "Ambient dependencies may be relevant even when not individually enumerated: examples include Firecracker inside Vercel Sandbox research, Windows default binaries in MSRC research, and macOS or iOS default binaries in Apple Security Bounty research.",
+    "Ambient dependencies may be relevant even when not individually enumerated, including default platform components and upstream or downstream sources that materially affect the explicitly authorized subject.",
     "Use component relationships, platform defaults, attack surface, reachability, build or deployment role, and the stated research purpose.",
     "Do not treat discovery as target authoring. Relevance does not grant authorization for a live target, account, network, or device.",
     "Mark not_relevant when the relationship is speculative, unrelated to the campaign, contradicted by an explicit exclusion, or lacks a bounded research purpose.",

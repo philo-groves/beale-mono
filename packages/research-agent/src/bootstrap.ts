@@ -19,7 +19,6 @@ import {
 import { createId, createResearchEventId, nowIso } from "./ids.js";
 import { fallbackResearchFinalDisposition, type ResearchFinalDisposition } from "./session-disposition-tool.js";
 import type { CampaignModelContext } from "./knowledge-types.js";
-import type { ResearchInitialContextPacket } from "./context-selection.js";
 import {
   normalizeResearchProfile,
   resolveResearchProfile,
@@ -52,7 +51,6 @@ export interface RunResearchAgentInput {
   agentInstructions?: ResearchAgentInstructions;
   memoryContext?: readonly ResearchModelMemoryContextNode[];
   campaignContext?: CampaignModelContext;
-  initialContext?: ResearchInitialContextPacket;
   events?: readonly ResearchEvent[];
   tools?: readonly ResearchToolDescriptor[];
   skills?: readonly ResearchSkillDescriptor[];
@@ -85,7 +83,6 @@ export interface RunResearchAgentResult {
   modelWorkspaceContext: ResearchModelWorkspaceContext;
   memoryContext: readonly ResearchModelMemoryContextNode[];
   campaignContext?: CampaignModelContext;
-  initialContext?: ResearchInitialContextPacket;
   modelSelectedSkills: readonly ResearchModelSkillContext[];
   availableTools: readonly ResearchAvailableToolContext[];
   selectedSkills: readonly ResearchSelectedSkill[];
@@ -151,7 +148,6 @@ export async function runResearchAgent(
     workspace: modelWorkspaceContext,
     memory: memoryContext,
     campaign: input.campaignContext,
-    initialContext: input.initialContext,
     selectedSkills: modelSelectedSkills,
     researchProfile: {
       id: resolvedResearchProfile.profile.id,
@@ -171,7 +167,6 @@ export async function runResearchAgent(
       { label: "workspace", content: modelWorkspaceContext },
       { label: "memory", content: memoryContext },
       ...(input.campaignContext ? [{ label: "campaign", content: input.campaignContext }] : []),
-      ...(input.initialContext ? [{ label: "selected_context", content: input.initialContext }] : []),
       {
         label: "selected_skills",
         content: modelSelectedSkills,
@@ -202,7 +197,6 @@ export async function runResearchAgent(
       workspaceContext: modelWorkspaceContext,
       memoryContext,
       ...(input.campaignContext ? { campaignContext: input.campaignContext } : {}),
-      ...(input.initialContext ? { initialContext: input.initialContext } : {}),
       selectedSkills: modelSelectedSkills,
       availableTools,
       collaborationTools,
@@ -244,7 +238,7 @@ export async function runResearchAgent(
     const message = error instanceof Error ? error.message : String(error);
     agentRun = {
       id: createId("agent"),
-      status: "error",
+      status: input.signal?.aborted ? "stopped" : "error",
       executorName: input.executor.name,
       startedAt,
       completedAt: nowIso(),
@@ -260,7 +254,7 @@ export async function runResearchAgent(
     {
       id: createResearchEventId(),
       kind:
-        agentRun.status === "complete"
+        agentRun.status !== "error"
           ? "model.visible_note"
           : "error.observed",
       timestamp: agentRun.completedAt,
@@ -268,7 +262,9 @@ export async function runResearchAgent(
         summary:
           agentRun.status === "complete"
             ? "Research agent completed the user request."
-            : `Research agent failed: ${agentRun.output.text}`,
+            : agentRun.status === "stopped"
+              ? "Research agent stopped at the host's request."
+              : `Research agent failed: ${agentRun.output.text}`,
         agentRunId: agentRun.id,
       },
     },
@@ -287,7 +283,6 @@ export async function runResearchAgent(
     modelWorkspaceContext,
     memoryContext,
     ...(input.campaignContext ? { campaignContext: input.campaignContext } : {}),
-    ...(input.initialContext ? { initialContext: input.initialContext } : {}),
     availableTools,
     modelSelectedSkills,
     selectedSkills,
@@ -309,7 +304,6 @@ function compiledContextMetrics(input: {
   workspace: unknown;
   memory: readonly unknown[];
   campaign?: unknown;
-  initialContext?: unknown;
   selectedSkills: readonly unknown[];
   researchProfile: unknown;
   researchIntent: ResearchRunIntent | undefined;
@@ -322,7 +316,6 @@ function compiledContextMetrics(input: {
     workspace: serializedCharacters(input.workspace),
     memory: serializedCharacters(input.memory),
     campaign: serializedCharacters(input.campaign),
-    initialContext: serializedCharacters(input.initialContext),
     selectedSkills: serializedCharacters(input.selectedSkills),
     researchProfile: serializedCharacters(input.researchProfile),
     researchIntent: serializedCharacters(input.researchIntent),

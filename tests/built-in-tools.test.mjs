@@ -898,7 +898,7 @@ test("repository first touch is emitted once per canonical repository revision",
     assert.equal(first.result.output.repositoryFirstTouches[0].repository.shallow, false);
     assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /public CVEs/);
     assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /release notes/);
-    assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /Apple Open Source/);
+    assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /official source releases/);
 
     const second = await registry.execute({
       id: "second_touch_search",
@@ -1136,6 +1136,61 @@ test("repository search scopes configured roots and preserves bounded partial re
   } finally {
     await rm(workspace, { recursive: true, force: true });
     await rm(external, { recursive: true, force: true });
+  }
+});
+
+test("repository search accepts natural aliases for materialized repository roots", async () => {
+  const store = await mkdtemp(join(tmpdir(), "app-server-repo-search-aliases-"));
+  const parserRuntime = join(store, "github.com_example-org_parser-runtime", "default");
+  const queryEngine = join(store, "github.com_example-org_query-engine", "default");
+  const parserRuntimeFork = join(store, "github.com_demo-org_parser-runtime", "default");
+  await mkdir(parserRuntime, { recursive: true });
+  await mkdir(queryEngine, { recursive: true });
+  await mkdir(parserRuntimeFork, { recursive: true });
+  await writeFile(join(parserRuntime, "parser.c"), "int parser_runtime_marker = 1;\n");
+  await writeFile(join(queryEngine, "query.c"), "int query_engine_marker = 1;\n");
+  await writeFile(join(parserRuntimeFork, "fork.c"), "int fork_marker = 1;\n");
+  try {
+    const registry = createResearchToolRegistry([
+      createRepositorySearchTool({ roots: [parserRuntime, queryEngine] }),
+    ]);
+    const natural = await registry.execute({
+      id: "search_natural_alias",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "parser_runtime_marker", root: "parser-runtime" },
+    });
+    assert.equal(natural.result.status, "complete", natural.result.summary);
+    assert.equal(natural.result.output.matches.length, 1);
+    assert.equal(natural.result.output.matches[0].path, "parser.c");
+    assert.deepEqual(
+      natural.result.output.availableRoots.map((entry) => entry.label),
+      ["parser-runtime", "query-engine"],
+    );
+
+    const legacy = await registry.execute({
+      id: "search_materialized_alias",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "query_engine_marker", root: "github.com_example-org_query-engine" },
+    });
+    assert.equal(legacy.result.status, "complete");
+    assert.equal(legacy.result.output.matches[0].path, "query.c");
+
+    const ambiguous = await createResearchToolRegistry([
+      createRepositorySearchTool({ roots: [parserRuntime, parserRuntimeFork] }),
+    ]).execute({
+      id: "search_ambiguous_natural_alias",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "marker", root: "parser-runtime" },
+    });
+    assert.equal(ambiguous.result.status, "error");
+    assert.match(ambiguous.result.summary, /root "parser-runtime" is ambiguous/u);
+    assert.match(ambiguous.result.summary, /github\.com_example-org_parser-runtime/u);
+    assert.match(ambiguous.result.summary, /github\.com_demo-org_parser-runtime/u);
+  } finally {
+    await rm(store, { recursive: true, force: true });
   }
 });
 

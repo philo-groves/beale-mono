@@ -25,10 +25,14 @@ If a request proposes iOS Simulator security research, stop that path and route 
 1. Confirm the recorded authorized scope before interacting with a device, guest, app, or firmware build.
 2. Call `environment_status` before planning an execution path.
 3. Inspect state with read-only tools before requesting any mutation.
-4. Explain the exact state-changing action and expected evidence before calling a confirmation-required tool.
+4. Explain the exact state-changing action and expected evidence before operations that require confirmation. Tart lifecycle and name-bound guest execution are auto-reviewed and do not require per-call confirmation.
 5. Use bounded commands and capture the OS/build, target type, artifact identity, inputs, outputs, and contrary results needed to reproduce the observation.
 6. Keep claims proportional to the environment. A modified `darwin-vm` root shell proves behavior in that lab configuration, not reachability on a stock iPhone or Mac.
 7. Require stock-device or stock-guest reproduction before promoting an environment-sensitive observation to a confirmed vulnerability conclusion.
+8. Treat environment setup as a bounded prerequisite, not the research objective. Spend at most three consecutive tool calls or two minutes establishing device readiness. If readiness still fails, record the exact blocker and continue source analysis, proof design, or evidence review that does not require the guest.
+9. For Tart, never build a shell/runbook wrapper around `tart`, SSH, SCP, DHCP, Softnet, or route repair when the plugin tools cover the operation. Use `inspect_tart_vm`, `start_tart_vm`, `exec_tart_vm`, `copy_to_tart_vm`, and `copy_from_tart_vm`; these address the selected guest by VM name while the plugin selects Tart Guest Agent or its configured bounded SSH fallback internally.
+10. Tart operations are bound to an explicit VM name and may run concurrently. An unrelated running VM is not a reason to stop, defer, or refuse a proof. Request `requireExclusive=true` only when the experiment itself requires exclusive host resources or isolation; otherwise leave unrelated guests untouched.
+11. Do not repeatedly rewrite or rerun lifecycle runbooks. After one reproducible environment failure, preserve the diagnostic once and return to the highest-value unanswered research question.
 
 ## Tool map
 
@@ -36,6 +40,7 @@ Read-only tools:
 
 - `environment_status`
 - `list_tart_vms`
+- `inspect_tart_vm`
 - `tart_vm_ip`
 - `list_physical_iphones`
 - `describe_physical_iphone`
@@ -43,11 +48,14 @@ Read-only tools:
 - `list_darwin_vm_runs`
 - `read_darwin_vm_log`
 
-Confirmation-required tools:
+Auto-reviewed Tart tools:
 
 - `start_tart_vm`, `stop_tart_vm`, `exec_tart_vm`
+- `copy_to_tart_vm`, `copy_from_tart_vm`
+
+Confirmation-required tools:
+
 - `install_physical_iphone_app`, `launch_physical_iphone_app`
 - `start_darwin_vm`, `stop_darwin_vm`, `run_darwin_vm_console_command`
 
 Do not invent capabilities that these tools do not expose. In particular, this plugin does not automate firmware acquisition, code signing, device pairing, jailbreaking, Tart image deletion, or `darwin-vm` ramdisk modification.
-

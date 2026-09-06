@@ -20,7 +20,6 @@ export type ResearchToolSideEffect =
 
 export type ResearchEventKind =
   | "context.compiled"
-  | "context.selected"
   | "tool.requested"
   | "tool.observed"
   | "model.visible_note"
@@ -353,7 +352,7 @@ export interface ResearchAgentExecutor {
 
 export interface ResearchAgentRunResult {
   id: string;
-  status: "complete" | "error";
+  status: "complete" | "error" | "stopped";
   executorName: string;
   startedAt: string;
   completedAt: string;

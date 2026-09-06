@@ -113,7 +113,7 @@ function repositoryHistoryReminder(): readonly string[] {
     "Record the repository origin, HEAD, tags or release identity, upstream relationship, and whether history is shallow.",
     "Inspect path history, blame, security-relevant fix commits, upstream changes, vendor forks or source drops, and version-to-version differences before treating the snapshot as novel.",
     "Search public CVEs, advisories, vendor security bulletins, release notes, security-content pages, and referenced fixes with prior_art.search; use repository, component, service, binary, package, and symbol aliases.",
-    "For Apple components, include relevant Apple Open Source releases and upstream project history, then compare source drops or tags against the researched build when available.",
+    "For vendor-maintained components, include official source releases and upstream project history, then compare source drops or tags against the researched build when available.",
     "Record matches, likely variants, explicit no-match queries with dates, and deferred sources whose absence limits the novelty assessment.",
   ];
 }

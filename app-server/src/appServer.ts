@@ -711,10 +711,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       const requestId = randomUUID();
       const message = { schemaVersion: 1 as const, requestId, ...control };
       if (control.type === 'stop') {
-        runtime.stopRequested = true;
-        void recordSessionControlState(runtime, 'stopped');
-      }
-      if (runtime.session) {
+        requestRuntimeStop(runtime, message);
+      } else if (runtime.session) {
         runtime.session.sendControl(message);
       } else {
         if (runtime.pendingControls.length >= 128) runtime.pendingControls.shift();
@@ -1002,7 +1000,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (event.payload.eventType !== 'control.received' || event.payload.accepted !== true) return;
     const type = event.payload.type;
     if (type !== 'pause' && type !== 'resume' && type !== 'stop') return;
-    if (type === 'stop') runtime.stopRequested = true;
+    if (type === 'stop') {
+      if (runtime.stopRequested) return;
+      runtime.stopRequested = true;
+    }
     void recordSessionControlState(
       runtime,
       type === 'pause' ? 'paused' : type === 'resume' ? 'active' : 'stopped'
@@ -1177,14 +1178,31 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       notifyChange();
       return false;
     }
-    runtime.stopRequested = true;
-    void recordSessionControlState(runtime, 'stopped');
-    if (!runtime.session) {
-      finishRuntime(runtime, 'stopped', null, null);
-      return true;
-    }
-    runtime.session?.stop();
+    requestRuntimeStop(runtime);
     return true;
+  }
+
+  function requestRuntimeStop(
+    runtime: SessionRuntime,
+    control?: Record<string, unknown>
+  ): void {
+    if (!runtime.stopRequested) {
+      runtime.stopRequested = true;
+      void recordSessionControlState(runtime, 'stopped');
+    }
+    const session = runtime.session;
+    if (!session) {
+      finishRuntime(runtime, 'stopped', null, null);
+      return;
+    }
+    if (control) {
+      try {
+        session.sendControl(control);
+      } catch {
+        // The bounded stop fallback below remains authoritative if delivery races worker exit.
+      }
+    }
+    session.stop();
   }
 
   function listSessions(): SessionCatalogEntry[] {
@@ -1293,10 +1311,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     }
     const control = message.control as unknown as Record<string, unknown>;
     if (control.type === 'stop') {
-      runtime.stopRequested = true;
-      void recordSessionControlState(runtime, 'stopped');
-    }
-    if (runtime.session) {
+      requestRuntimeStop(runtime, control);
+    } else if (runtime.session) {
       runtime.session.sendControl(control);
     } else {
       if (runtime.pendingControls.length >= 128) runtime.pendingControls.shift();

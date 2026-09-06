@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import type { Readable } from "node:stream";
@@ -24,21 +24,12 @@ import {
   LEGACY_CLAIM_MEMORY_TYPES,
   buildCampaignGraph,
   createCampaignModelContext,
-  createFallbackResearchContextSelection,
-  createResearchContextPreflightIndex,
-  createResearchContextSelectionCatalog,
-  createResearchContextSelectionPrompt,
-  createResearchInitialContextPacket,
   createRunbookTools,
   createRunbookExecutor,
   createRunbookExecutionTool,
   createReportTools,
   compileMemoryModelContext,
-  selectMemoryModelContext,
-  discoverInstructionDirectoryHints,
   discoverResearchAgentInstructions,
-  parseResearchContextSelection,
-  projectSelectedModelWorkspaceContext,
   createPiAgentExecutor,
   extractCompatiblePiAgentResumableState,
   createClaudeAgentExecutor,
@@ -58,7 +49,6 @@ import {
   createResearchAgentFlowCapture,
   createResearchStorageLayout,
   createResearchToolRegistry,
-  createResearchEventId,
   createShellTool,
   createShellSafetyAuthorizer,
   createToolActionAuthorizer,
@@ -158,9 +148,6 @@ import type {
   RunbookExecutionUpdate,
   RunbookExecutionResult,
   ResearchWorkspaceContext,
-  ResearchAgentInstructions,
-  ResearchInitialContextPacket,
-  ResearchModelWorkspaceContext,
   ShellCommandAuthorizer,
   ToolActionAuthorizer,
   ShellReviewerSelection,
@@ -284,6 +271,7 @@ interface ParsedArgs {
   researchProfileId: string | undefined;
   researchProfileHash: string | undefined;
   workflowId: string | undefined;
+  investigationId: string | undefined;
   maxTokens: number | undefined;
   reasoning: ResearchModelEffort | undefined;
   executor: CliExecutorKind;
@@ -400,6 +388,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let researchProfileId: string | undefined;
   let researchProfileHash: string | undefined;
   let workflowId: string | undefined;
+  let investigationId: string | undefined;
   let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
@@ -656,6 +645,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--workflow") {
       workflowId = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--investigation-id") {
+      investigationId = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -740,6 +732,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     researchProfileId,
     researchProfileHash,
     workflowId,
+    investigationId,
     maxTokens,
     reasoning,
     executor,
@@ -1541,6 +1534,7 @@ function usage(): string {
     "  --research-profile-id <id> Require the stored research profile to match this id",
     "  --research-profile-hash <hash> Require the resolved profile to match this SHA-256 hash",
     "  --workflow <id>        Select a workflow from the resolved research profile",
+    "  --investigation-id <id> Continue one existing campaign track instead of creating a new track",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --profile-tool-family-ceiling <name> Let the active profile request this family within a host ceiling",
     "  --tool-config <path>   Runtime tool preference config (default: .beale/tools.json)",
@@ -2108,7 +2102,6 @@ export async function main(
       const agentInstructions = discoverResearchAgentInstructions({
         workingDirectory: runtimeConfig.workspaceContext.workspaceRoot,
       });
-      let initialContextSelection: PreparedInitialContextSelection | undefined;
       let agentExecutor: ResearchAgentExecutor;
       if (args.mock) {
         agentExecutor = createDeterministicAgentExecutor();
@@ -2121,21 +2114,7 @@ export async function main(
               workflow.id,
             )
           : undefined;
-        if (resumableState) {
-          effectivePrompt = args.prompt;
-        } else {
-          initialContextSelection = await runInitialContextPreflight({
-            args,
-            prompt: effectivePrompt!,
-            resolvedResearchProfile,
-            workflowId: workflow.id,
-            modelConfig: modelConfig!,
-            runtimeConfig,
-            agentInstructions,
-            liveEventSink,
-            ...(controlStream ? { signal: controlStream.signal } : {}),
-          });
-        }
+        if (resumableState) effectivePrompt = args.prompt;
         agentExecutor = createRealAgentExecutor(
           args,
           resolvedResearchProfile,
@@ -2160,28 +2139,17 @@ export async function main(
         controlStream?.signal,
       );
 
-      const inspectionState =
-        runtimeConfig.events.length > 0 || initialContextSelection
-          ? {
-              events: [
-                ...runtimeConfig.events,
-                ...(initialContextSelection?.events ?? []),
-              ],
-            }
-          : {};
+      const inspectionState = runtimeConfig.events.length > 0
+        ? { events: runtimeConfig.events }
+        : {};
 
       const result = await runResearchAgent({
         prompt: effectivePrompt,
         workspaceRoot: args.workspaceRoot,
         workspaceContext: runtimeConfig.workspaceContext,
-        ...(initialContextSelection
-          ? { modelWorkspaceContext: initialContextSelection.modelWorkspaceContext }
-          : {}),
         agentInstructions,
-        memoryContext: initialContextSelection?.memoryContext ?? runtimeConfig.memoryContext,
-        ...(initialContextSelection
-          ? { initialContext: initialContextSelection.packet }
-          : { campaignContext: createCampaignModelContext(runtimeConfig.campaignContext) }),
+        memoryContext: runtimeConfig.memoryContext,
+        campaignContext: createCampaignModelContext(runtimeConfig.campaignContext),
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
@@ -2330,316 +2298,6 @@ async function loadCompatibleResumeState(
   } catch {
     return undefined;
   }
-}
-
-interface PreparedInitialContextSelection {
-  packet: ResearchInitialContextPacket;
-  modelWorkspaceContext: ResearchModelWorkspaceContext;
-  memoryContext: readonly ResearchModelMemoryContextNode[];
-  events: readonly ResearchEvent[];
-}
-
-async function runInitialContextPreflight(input: {
-  args: ParsedArgs;
-  prompt: string;
-  resolvedResearchProfile: ResolvedResearchProfile;
-  workflowId: string;
-  modelConfig: ResolvedResearchModelConfig;
-  runtimeConfig: Awaited<ReturnType<typeof createRuntimeConfig>>;
-  agentInstructions: ResearchAgentInstructions;
-  liveEventSink?: ResearchLiveEventSink;
-  signal?: AbortSignal;
-}): Promise<PreparedInitialContextSelection> {
-  const inspectionRoots = await initialContextInspectionRoots(
-    input.runtimeConfig.workspaceContext,
-    input.agentInstructions,
-  );
-  const localInspection = createLocalInspectionTool({
-    allowedRoots: inspectionRoots,
-    maxBytes: 32_768,
-    maxEntries: 200,
-  });
-  const availableTools = input.runtimeConfig.toolRegistry?.listTools() ?? [];
-  const freshMemoryTools = availableTools.some((tool) => tool.descriptor.name.startsWith("memory."))
-    ? createMemoryGraphTools(input.runtimeConfig.memoryGraph).filter((tool) =>
-        tool.descriptor.sideEffects === "none" || tool.descriptor.sideEffects === "read",
-      )
-    : [];
-  const readTools = availableTools
-    .filter((tool) =>
-      !tool.descriptor.name.startsWith("memory.")
-      && isInitialContextReadTool(tool.descriptor),
-    );
-  const toolRegistry = createResearchToolRegistry([
-    ...freshMemoryTools,
-    ...readTools,
-    localInspection.executable,
-  ]);
-  const memoryIds = input.runtimeConfig.campaignContext.nodes.flatMap((node) =>
-    node.kind === "memory" && node.memoryNodeId ? [node.memoryNodeId] : [],
-  );
-  const catalog = createResearchContextSelectionCatalog({
-    workspaceContext: input.runtimeConfig.workspaceContext,
-    campaign: input.runtimeConfig.campaignContext,
-    memoryIds,
-    inspectionRoots,
-  });
-  const index = createResearchContextPreflightIndex({
-    workspaceContext: input.runtimeConfig.workspaceContext,
-    campaign: input.runtimeConfig.campaignContext,
-    agentInstructions: input.agentInstructions,
-  });
-  const governance: ResearchGovernancePolicy = {
-    allowedActionClasses: ["recall", "search", "inspect", "analyze", "respond"],
-    allowedSideEffects: ["none", "read"],
-    maxToolCalls: 36,
-  };
-  const preflightExecutor = createContextPreflightExecutor({
-    args: input.args,
-    resolvedResearchProfile: input.resolvedResearchProfile,
-    workflowId: input.workflowId,
-    modelConfig: input.modelConfig,
-    toolRegistry,
-  });
-  const preflightEventSink = contextPreflightEventSink(input.liveEventSink);
-  await emitInitialContextProgress(input.liveEventSink, "started", "Selecting relevant workspace and prior-research context.");
-
-  let selection: ReturnType<typeof createFallbackResearchContextSelection>;
-  let source: ResearchInitialContextPacket["source"] = "model-preflight";
-  let preflightEvents: readonly ResearchEvent[] = [];
-  let fallbackReason: string | undefined;
-  try {
-    const output = await preflightExecutor.execute({
-      modelInput: {
-        prompt: createResearchContextSelectionPrompt(input.prompt),
-        contextSections: [{ label: "workspace_and_research_index", content: index }],
-        toolBudget: { maxToolCalls: 36 },
-        ...(input.agentInstructions.content ? { agentInstructions: input.agentInstructions } : {}),
-      },
-      ...(input.runtimeConfig.workspaceContext.authorization
-        ? { authorization: input.runtimeConfig.workspaceContext.authorization }
-        : {}),
-      governance,
-      ...(preflightEventSink ? { eventSink: preflightEventSink } : {}),
-      ...(input.signal ? { signal: input.signal } : {}),
-    });
-    preflightEvents = output.toolEvents ?? [];
-    selection = parseResearchContextSelection(output.text, catalog);
-  } catch (error) {
-    if (input.signal?.aborted) throw error;
-    source = "deterministic-fallback";
-    fallbackReason = error instanceof Error && error.message.startsWith("Context preflight")
-      ? error.message
-      : "Context preflight execution failed.";
-    selection = createFallbackResearchContextSelection({
-      prompt: input.prompt,
-      workspaceContext: input.runtimeConfig.workspaceContext,
-      campaign: input.runtimeConfig.campaignContext,
-      memoryIds: input.runtimeConfig.memoryContext.map((node) => node.id),
-      inspectionRoots,
-    });
-  }
-
-  const packet = createResearchInitialContextPacket({
-    source,
-    selection,
-    workspaceContext: input.runtimeConfig.workspaceContext,
-    campaign: input.runtimeConfig.campaignContext,
-  });
-  const selectedMemoryNodes = selection.selectedMemoryIds.flatMap((id) => {
-    const node = input.runtimeConfig.memoryGraph.get(id);
-    return node ? [node] : [];
-  });
-  const memoryContext = selectedMemoryNodes.length > 0
-    ? selectMemoryModelContext({
-        nodes: selectedMemoryNodes,
-        edges: input.runtimeConfig.memoryGraph.listEdgesForNodes(selection.selectedMemoryIds),
-        prompt: input.prompt,
-        maxNodes: Math.min(12, selectedMemoryNodes.length),
-        maxCharacters: 12_000,
-        ...input.runtimeConfig.memoryGraph.getContext(),
-        profileMemory: input.runtimeConfig.memoryGraph.getProfileMemory(),
-      })
-    : [];
-  const selectedEvent: ResearchEvent = {
-    id: createResearchEventId(),
-    kind: "context.selected",
-    timestamp: new Date().toISOString(),
-    payload: {
-      source,
-      packet,
-      selectedCounts: {
-        resources: selection.selectedResourceIds.length,
-        repositories: selection.selectedRepositoryRoots.length,
-        memories: selection.selectedMemoryIds.length,
-        claims: selection.selectedClaimIds.length,
-        runbooks: selection.selectedRunbookIds.length,
-        reports: selection.selectedReportIds.length,
-        tracks: selection.selectedTrackIds.length,
-        paths: selection.selectedPaths.length,
-      },
-      ...(fallbackReason ? { fallbackReason: fallbackReason.slice(0, 1_000) } : {}),
-      summary: packet.summary,
-    },
-  };
-  if (input.liveEventSink) {
-    await input.liveEventSink({
-      schemaVersion: 1,
-      kind: "research.event",
-      timestamp: new Date().toISOString(),
-      payload: { event: selectedEvent, contextPhase: "initial_context_preflight" },
-    });
-  }
-  await emitInitialContextProgress(
-    input.liveEventSink,
-    "completed",
-    source === "model-preflight"
-      ? "Relevant startup context selected."
-      : "Using compact deterministic startup context after preflight fallback.",
-  );
-  return {
-    packet,
-    modelWorkspaceContext: projectSelectedModelWorkspaceContext(
-      input.runtimeConfig.workspaceContext,
-      selection,
-    ),
-    memoryContext,
-    events: [...preflightEvents, selectedEvent],
-  };
-}
-
-function isInitialContextReadTool(descriptor: ResearchToolDescriptor): boolean {
-  if (descriptor.sideEffects !== "none" && descriptor.sideEffects !== "read") return false;
-  return descriptor.name === "history.search"
-    || descriptor.name === "lead.list"
-    || descriptor.name === "finding.list"
-    || descriptor.name === "finding.completion_check"
-    || descriptor.name === "investigation.status"
-    || descriptor.name === "investigation.recall"
-    || descriptor.name === "runbook.list"
-    || descriptor.name === "runbook.get"
-    || descriptor.name === "report.list"
-    || descriptor.name === "report.get"
-    || descriptor.name === "repository.search"
-    || descriptor.name === "repository.history"
-    || descriptor.name === "storage.list"
-    || descriptor.name === "analysis.transform"
-    || descriptor.name.startsWith("code.");
-}
-
-function createContextPreflightExecutor(input: {
-  args: ParsedArgs;
-  resolvedResearchProfile: ResolvedResearchProfile;
-  workflowId: string;
-  modelConfig: ResolvedResearchModelConfig;
-  toolRegistry: ResearchToolRegistry;
-}): ResearchAgentExecutor {
-  const authenticationPreferences = readProviderAuthenticationPreferences();
-  if (input.modelConfig.provider === "anthropic") {
-    return createClaudeAgentExecutor({
-      model: input.modelConfig.model,
-      workspaceRoot: input.args.workspaceRoot,
-      ...(input.modelConfig.effort ? { reasoning: input.modelConfig.effort } : {}),
-      toolRegistry: input.toolRegistry,
-      researchProfile: input.resolvedResearchProfile.profile,
-      workflowId: input.workflowId,
-      authenticationPreferences,
-      subagents: false,
-    });
-  }
-  const authenticationRouter = new ProviderAuthenticationRouter(authenticationPreferences);
-  if (input.modelConfig.provider === "zai" && authenticationRouter.method("zai") === "subscription") {
-    return createZCodeAgentExecutor({
-      model: input.modelConfig.model,
-      workspaceRoot: input.args.workspaceRoot,
-      ...(input.modelConfig.effort ? { reasoning: input.modelConfig.effort } : {}),
-      toolRegistry: input.toolRegistry,
-      researchProfile: input.resolvedResearchProfile.profile,
-      workflowId: input.workflowId,
-      subagents: false,
-    });
-  }
-  return createPiAgentExecutor({
-    provider: input.modelConfig.provider,
-    model: input.modelConfig.model,
-    ...(input.args.fastMode ? { fastMode: true } : {}),
-    ...(input.modelConfig.effort ? { reasoning: input.modelConfig.effort } : {}),
-    toolRegistry: input.toolRegistry,
-    researchProfile: input.resolvedResearchProfile.profile,
-    workflowId: input.workflowId,
-    authenticationPreferences,
-    subagents: false,
-  });
-}
-
-async function initialContextInspectionRoots(
-  workspaceContext: ResearchWorkspaceContext,
-  agentInstructions: ResearchAgentInstructions,
-): Promise<string[]> {
-  const candidates = [
-    workspaceContext.workspaceRoot,
-    ...workspaceContext.knownRepositories.map((repository) => repository.rootPath),
-    ...workspaceContext.materializedSourcePaths,
-    ...discoverInstructionDirectoryHints(agentInstructions, workspaceContext.workspaceRoot),
-    ...(workspaceContext.resources ?? []).flatMap((resource) =>
-      resource.direction === "in_scope"
-      && isAbsolute(resource.locator)
-      && !/(?:credential|secret|token|private)/iu.test(resource.sensitivity ?? "")
-        ? [resource.locator]
-        : [],
-    ),
-  ];
-  const roots: string[] = [];
-  for (const candidate of candidates) {
-    try {
-      const path = resolve(candidate);
-      const metadata = await stat(path);
-      roots.push(metadata.isDirectory() ? path : dirname(path));
-    } catch {
-      // Configured assets may not be mounted for every session.
-    }
-  }
-  return [...new Set(roots)];
-}
-
-function contextPreflightEventSink(
-  sink: ResearchLiveEventSink | undefined,
-): ResearchLiveEventSink | undefined {
-  if (!sink) return undefined;
-  return async (event) => {
-    if (event.kind === "model.output") {
-      const messagePhase = typeof event.payload.messagePhase === "string"
-        ? event.payload.messagePhase
-        : undefined;
-      const text = typeof event.payload.text === "string" ? event.payload.text : "";
-      if (messagePhase !== "commentary"
-        && (messagePhase === "final_answer" || !text || /<context_selection>/iu.test(text))) {
-        return;
-      }
-    }
-    await sink({
-      ...event,
-      payload: { ...event.payload, contextPhase: "initial_context_preflight" },
-    });
-  };
-}
-
-async function emitInitialContextProgress(
-  sink: ResearchLiveEventSink | undefined,
-  status: "started" | "completed",
-  summary: string,
-): Promise<void> {
-  if (!sink) return;
-  await sink({
-    schemaVersion: 1,
-    kind: "tool.progress",
-    timestamp: new Date().toISOString(),
-    payload: {
-      phase: "initial_context_preflight",
-      status,
-      summary,
-    },
-  });
 }
 
 function createRealAgentExecutor(
@@ -3907,6 +3565,7 @@ async function prepareRuntimeConfigInputs(input: {
 async function createRuntimeConfig(args: {
   prompt?: string | undefined;
   sessionId?: string | undefined;
+  investigationId?: string | undefined;
   inspectRoots: string[];
   inspectPaths: string[];
   inspectAction: LocalInspectionAction;
@@ -4056,13 +3715,19 @@ async function createRuntimeConfig(args: {
       });
     }
     if (args.sessionId && args.prompt) {
-      const activeTrack = campaignTrackStore.ensureForSession({
-        sessionId: args.sessionId,
-        objective: args.prompt,
-        source: "runtime",
-        sourceRevision: workspaceContext.sourceRevision ?? null,
-        environmentFingerprint: workspaceContext.environmentFingerprint ?? null,
-      });
+      const activeTrack = args.investigationId
+        ? campaignTrackStore.detail(args.investigationId)
+        : campaignTrackStore.ensureForSession({
+            sessionId: args.sessionId,
+            objective: args.prompt,
+            source: "runtime",
+            sourceRevision: workspaceContext.sourceRevision ?? null,
+            environmentFingerprint: workspaceContext.environmentFingerprint ?? null,
+          });
+      if (!activeTrack) {
+        throw new Error(`Campaign track not found in this workspace: ${args.investigationId}`);
+      }
+      if (args.investigationId) campaignTrackStore.linkSession(activeTrack.id, args.sessionId);
       activeCampaignTrackId = activeTrack.id;
       const investigationTools = createCampaignTrackTools(campaignTrackStore, activeTrack.id);
       executableTools.push(...investigationTools);

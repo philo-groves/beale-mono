@@ -13,6 +13,9 @@ import type {
 import type { ToolActionAuthorizer } from "./tool-approval.js";
 
 const DEFAULT_MCP_TIMEOUT_MS = 30_000;
+export const MCP_CALL_TIMEOUT_INPUT_KEY = "bealeTimeoutMs";
+export const MIN_MCP_CALL_TIMEOUT_MS = 1_000;
+export const MAX_MCP_CALL_TIMEOUT_MS = 30 * 60_000;
 const MAX_MCP_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_MCP_CONTENT_ITEMS = 64;
 const MAX_MCP_MODEL_IMAGES = 4;
@@ -56,6 +59,7 @@ export interface ResearchMcpClient {
     serverName: string;
     toolName: string;
     arguments: Record<string, unknown>;
+    timeoutMs?: number;
     signal?: AbortSignal;
   }): Promise<unknown>;
   listResources?(): Promise<readonly ResearchMcpResourceDescription[]>;
@@ -171,6 +175,7 @@ function createMcpExecutableTool(
   timeoutMs: number,
   authorizeToolAction: ToolActionAuthorizer | undefined,
 ): ResearchExecutableTool {
+  const inputSchema = createMcpToolInputSchema(mcpTool.inputSchema, timeoutMs);
   const descriptor: ResearchToolDescriptor = {
     name: createMcpToolName(mcpTool.serverName, mcpTool.name),
     transportName: createMcpTransportName(mcpTool.serverName, mcpTool.name),
@@ -184,7 +189,7 @@ function createMcpExecutableTool(
       `mcp:${mcpTool.serverName}:tool:${mcpTool.name}`,
       ...(mcpTool.requiredPermissions ?? []),
     ])],
-    ...(mcpTool.inputSchema ? { inputSchema: mcpTool.inputSchema } : {}),
+    inputSchema,
     ...(mcpTool.outputSchema
       ? { outputSchema: createWrappedMcpOutputSchema(mcpTool.outputSchema) }
       : {}),
@@ -201,15 +206,11 @@ function createMcpExecutableTool(
 
   return {
     descriptor,
-    ...(mcpTool.inputSchema
-      ? {
-          parameters:
-            mcpTool.inputSchema as NonNullable<ResearchExecutableTool["parameters"]>,
-        }
-      : {}),
+    parameters: inputSchema as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action, context) {
       const startedAt = nowIso();
       try {
+        const call = prepareMcpToolCall(action.input, timeoutMs);
         if (requiresToolApproval(mcpTool)) {
           if (!authorizeToolAction) {
             return createMcpBlockedResult(
@@ -223,7 +224,7 @@ function createMcpExecutableTool(
             serverName: mcpTool.serverName,
             toolName: mcpTool.name,
             description: descriptor.description,
-            arguments: action.input,
+            arguments: call.arguments,
           }, context?.signal);
           if (approval.decision !== "approved") {
             return createMcpBlockedResult(action, startedAt, approval.reason);
@@ -233,10 +234,11 @@ function createMcpExecutableTool(
           client.callTool({
             serverName: mcpTool.serverName,
             toolName: mcpTool.name,
-            arguments: action.input,
+            arguments: call.arguments,
+            timeoutMs: call.timeoutMs,
             ...(context?.signal ? { signal: context.signal } : {}),
           }),
-          timeoutMs,
+          call.timeoutMs,
           descriptor.name,
         );
         const normalized = normalizeMcpOutput({
@@ -260,6 +262,58 @@ function createMcpExecutableTool(
         return createMcpErrorResult(action, startedAt, error);
       }
     },
+  };
+}
+
+function createMcpToolInputSchema(
+  providerSchema: unknown,
+  defaultTimeoutMs: number,
+): Record<string, unknown> {
+  const schema = isRecord(providerSchema)
+    ? providerSchema
+    : { type: "object", additionalProperties: true };
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  if (Object.hasOwn(properties, MCP_CALL_TIMEOUT_INPUT_KEY)) {
+    throw new Error(
+      `MCP tool input schema uses reserved Beale field ${MCP_CALL_TIMEOUT_INPUT_KEY}.`,
+    );
+  }
+  return {
+    ...schema,
+    type: "object",
+    properties: {
+      ...properties,
+      [MCP_CALL_TIMEOUT_INPUT_KEY]: {
+        type: "integer",
+        minimum: MIN_MCP_CALL_TIMEOUT_MS,
+        maximum: MAX_MCP_CALL_TIMEOUT_MS,
+        description: `Optional Beale execution timeout for this call in milliseconds. Use a larger value for slow operations such as VM startup or shutdown. The configured default is ${defaultTimeoutMs}ms.`,
+      },
+    },
+  };
+}
+
+function prepareMcpToolCall(
+  input: Record<string, unknown>,
+  defaultTimeoutMs: number,
+): { arguments: Record<string, unknown>; timeoutMs: number } {
+  const requestedTimeout = input[MCP_CALL_TIMEOUT_INPUT_KEY];
+  if (requestedTimeout !== undefined && (
+    !Number.isInteger(requestedTimeout)
+    || (requestedTimeout as number) < MIN_MCP_CALL_TIMEOUT_MS
+    || (requestedTimeout as number) > MAX_MCP_CALL_TIMEOUT_MS
+  )) {
+    throw new Error(
+      `${MCP_CALL_TIMEOUT_INPUT_KEY} must be an integer between ${MIN_MCP_CALL_TIMEOUT_MS} and ${MAX_MCP_CALL_TIMEOUT_MS}.`,
+    );
+  }
+  const providerArguments = { ...input };
+  delete providerArguments[MCP_CALL_TIMEOUT_INPUT_KEY];
+  return {
+    arguments: providerArguments,
+    timeoutMs: requestedTimeout === undefined
+      ? defaultTimeoutMs
+      : requestedTimeout as number,
   };
 }
 
