@@ -31,6 +31,7 @@ export interface ResolveStoredResearchWorkspaceBindingOptions {
 export interface StoredResearchWorkspaceBinding {
   schemaVersion: 1;
   source: "beale" | "deterministic";
+  researchKitId?: string;
   memoryContext: ResearchMemoryContext;
   authorization?: ResearchWorkspaceAuthorizationContext;
   resources: readonly ResearchWorkspaceResourceContext[];
@@ -71,6 +72,7 @@ export function resolveStoredResearchWorkspaceBinding(
     database = openResearchDatabase(databasePath, { readOnly: true });
     const workspace = readStoredWorkspace(database, workspaceRoot);
     if (!workspace) return fallback;
+    const researchKitId = readStoredResearchKitId(database, workspace.id);
     const scope = readActiveScope(database, workspace.id);
     const workspaceName = nonEmptyText(scope?.workspace_name)
       ?? (basename(workspaceRoot) || "Workspace");
@@ -105,6 +107,7 @@ export function resolveStoredResearchWorkspaceBinding(
     return {
       schemaVersion: 1,
       source: "beale",
+      ...(researchKitId ? { researchKitId } : {}),
       memoryContext,
       ...(authorization ? { authorization } : {}),
       resources,
@@ -426,6 +429,18 @@ function readStoredWorkspace(
     .get(workspaceRoot) as Record<string, unknown> | undefined;
   const id = nonEmptyText(row?.id);
   return id ? { id } : undefined;
+}
+
+function readStoredResearchKitId(
+  database: DatabaseSync,
+  workspaceId: string,
+): string | undefined {
+  const columns = tableColumns(database, "workspace_meta");
+  if (!columns.has("key") || !columns.has("value")) return undefined;
+  const row = database
+    .prepare("SELECT value FROM workspace_meta WHERE key = ?")
+    .get(`${workspaceId}:research_kit_id`) as Record<string, unknown> | undefined;
+  return nonEmptyText(row?.value);
 }
 
 function readResearchProfileSnapshot(

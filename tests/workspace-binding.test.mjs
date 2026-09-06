@@ -76,6 +76,11 @@ test("stored workspace binding prefers the Beale research subject and redacts cr
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE workspace_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE scope_versions (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
@@ -128,6 +133,9 @@ test("stored workspace binding prefers the Beale research subject and redacts cr
     database
       .prepare("INSERT INTO workspaces VALUES (?, ?, ?, ?)")
       .run("workspace_recorded", resolve(workspaceRoot), "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z");
+    database
+      .prepare("INSERT INTO workspace_meta VALUES (?, ?, ?)")
+      .run("workspace_recorded:research_kit_id", "apple-security-bounty", "2026-01-01T00:00:00Z");
     database
       .prepare("INSERT INTO scope_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
@@ -199,6 +207,7 @@ test("stored workspace binding prefers the Beale research subject and redacts cr
       externalSessionId: "claude-session-two",
     });
     assert.equal(binding.source, "beale");
+    assert.equal(binding.researchKitId, "apple-security-bounty");
     assert.deepEqual(binding.memoryContext, {
       sessionId: "claude-session-two",
       workspaceId: "workspace_recorded",

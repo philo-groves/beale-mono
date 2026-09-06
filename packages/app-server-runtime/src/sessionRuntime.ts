@@ -3542,6 +3542,7 @@ async function prepareRuntimeConfigInputs(input: {
       ],
       materializedSourcePaths: runtimeTools.sourcePaths,
       projectNotes: [...runtimeTools.projectNotes, ...storedBinding.projectNotes],
+      ...(storedBinding.researchKitId ? { researchKitId: storedBinding.researchKitId } : {}),
       ...(storedBinding.authorization ? { authorization: storedBinding.authorization } : {}),
       resources: storedBinding.resources,
       authorizedAssetIds: storedBinding.authorizedAssetIds,
@@ -3659,6 +3660,7 @@ async function createRuntimeConfig(args: {
   });
   const resourceToolOptions = {
     catalog: resourceCatalog,
+    ...(workspaceContext.researchKitId ? { researchKitId: workspaceContext.researchKitId } : {}),
     authorizeScopeRelevance: args.resourceScopeAuthorizer ?? (async () => ({
       decision: "not_relevant",
       source: "policy",
@@ -3672,6 +3674,7 @@ async function createRuntimeConfig(args: {
   toolDescriptors.push(resourceTool.descriptor);
   cleanupCallbacks.push(async () => resourceCatalog.close());
   const repositoryResearchSession = new RepositoryResearchSession({
+    ...(workspaceContext.researchKitId ? { researchKitId: workspaceContext.researchKitId } : {}),
     beforeFirstTouch: async (repository) => {
       const resource = resourceCatalog.discover({
         kind: "repository",

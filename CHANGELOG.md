@@ -6,6 +6,7 @@
 
 #### Fixed
 
+- Apple Security Bounty Research Kit workspaces now append Apple Open Source release and upstream-history checks to repository and resource first-touch guidance without applying Apple-specific instructions to other kits.
 - Repository-owned tests, fixtures, prompts, and documentation now use clearly synthetic research scenarios instead of target-derived examples.
 - Simple collaboration no longer advertises a free-form channel `role` that deterministically fails when supplied without `channel_name`; channel membership roles are assigned automatically, while Advanced delegation retains its required bounded role enum.
 - Intentional host stops now remain a first-class `stopped` agent and capture outcome. They produce neutral stop events and an inconclusive fallback disposition instead of transient research-failure events, summaries, or persisted failure state.
@@ -34,6 +35,7 @@
 
 #### Added
 
+- Added the managed `apple-target-flags` guidance plugin for public Apple Security Bounty Target Flag selection, evidence capture, and conservative primitive assessment.
 - Added the repository-owned `beale-codex` Codex plugin under `integrations/`, with a validated Beale research skill and approval-aware MCP bridge for canonical workspaces, sessions, channels, research tools, evidence, findings, runbooks, reports, and campaign state. The app-server contract advances to v20 with profile-scoped research-tool dispatch and authenticated HTTP session control.
 - Added GPT-6 Astra to the OpenAI Codex research-model catalog with its low-through-max reasoning levels and published context and output limits.
 - Desktop report packet rows now show the absolute `submission.zip` path in an in-app tooltip and use separate controls to replace the packet or reveal it in the host file explorer.

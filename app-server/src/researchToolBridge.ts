@@ -234,6 +234,7 @@ async function createResearchToolBridgeRuntime(
     close.unshift(() => resources.close());
     tools.push(createResearchResourceTool({
       catalog: resources,
+      ...(binding.researchKitId ? { researchKitId: binding.researchKitId } : {}),
       authorizationRecorded: binding.authorization?.recorded === true,
       ...(input.objective ? { campaignObjective: input.objective } : {}),
       authorizeScopeRelevance: async (request) => request.resource.direction === 'in_scope'

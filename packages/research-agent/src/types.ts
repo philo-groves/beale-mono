@@ -134,6 +134,7 @@ export interface ResearchAgentInstructions {
 export interface ResearchWorkspaceContext {
   schemaVersion: 1;
   workspaceRoot: string;
+  researchKitId?: string;
   memoryContext?: ResearchMemoryContext;
   authorization?: ResearchWorkspaceAuthorizationContext;
   knownRepositories: readonly ResearchWorkspaceRepositoryContext[];

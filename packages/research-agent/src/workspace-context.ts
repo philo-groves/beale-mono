@@ -11,6 +11,7 @@ import type {
 
 export interface CreateResearchWorkspaceContextInput {
   workspaceRoot: string;
+  researchKitId?: string;
   knownRepositories?: readonly WorkspaceRepositoryInput[];
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
@@ -34,6 +35,7 @@ export interface MergeResearchWorkspaceContextInput {
 export interface ResearchWorkspaceContextOverlay {
   schemaVersion?: 1;
   workspaceRoot?: string;
+  researchKitId?: string;
   knownRepositories?: readonly ResearchWorkspaceRepositoryContext[];
   materializedSourcePaths?: readonly string[];
   projectNotes?: readonly string[];
@@ -64,6 +66,7 @@ export function createResearchWorkspaceContext(
   return {
     schemaVersion: 1,
     workspaceRoot,
+    ...(normalizedString(input.researchKitId) ? { researchKitId: normalizedString(input.researchKitId)! } : {}),
     ...(input.authorization ? { authorization: input.authorization } : {}),
     ...(input.memoryContext ? { memoryContext: input.memoryContext } : {}),
     ...(normalizedString(input.sourceRevision) ? { sourceRevision: normalizedString(input.sourceRevision)! } : {}),
@@ -88,6 +91,7 @@ export function loadResearchWorkspaceContextFile(
 
   const workspaceRoot =
     typeof parsed.workspaceRoot === "string" ? resolve(parsed.workspaceRoot) : undefined;
+  const researchKitId = normalizedString(parsed.researchKitId);
   const knownRepositories = normalizeRepositoryInputs(
     [
       ...readArray(parsed.knownRepositories),
@@ -112,6 +116,7 @@ export function loadResearchWorkspaceContextFile(
   return {
     schemaVersion: 1,
     ...(workspaceRoot ? { workspaceRoot } : {}),
+    ...(researchKitId ? { researchKitId } : {}),
     ...(authorization ? { authorization } : {}),
     ...(memoryContext ? { memoryContext } : {}),
     ...(sourceRevision ? { sourceRevision } : {}),
@@ -135,6 +140,9 @@ export function mergeResearchWorkspaceContexts(
   return {
     ...input.base,
     ...(overlay.workspaceRoot ? { workspaceRoot: resolve(overlay.workspaceRoot) } : {}),
+    ...(overlay.researchKitId ?? input.base.researchKitId
+      ? { researchKitId: overlay.researchKitId ?? input.base.researchKitId! }
+      : {}),
     ...(overlay.authorization
       ? { authorization: overlay.authorization }
       : input.base.authorization

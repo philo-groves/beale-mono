@@ -899,6 +899,7 @@ test("repository first touch is emitted once per canonical repository revision",
     assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /public CVEs/);
     assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /release notes/);
     assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /official source releases/);
+    assert.doesNotMatch(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /Apple Open Source/);
 
     const second = await registry.execute({
       id: "second_touch_search",
@@ -907,6 +908,18 @@ test("repository first touch is emitted once per canonical repository revision",
       input: { query: "parser_boundary" },
     });
     assert.deepEqual(second.result.output.repositoryFirstTouches, []);
+
+    const appleSession = new RepositoryResearchSession({ researchKitId: "apple-security-bounty" });
+    const appleRegistry = createResearchToolRegistry([
+      createRepositorySearchTool({ root, researchSession: appleSession }),
+    ]);
+    const appleFirst = await appleRegistry.execute({
+      id: "apple_kit_first_touch_search",
+      actionClass: "search",
+      toolName: "repository.search",
+      input: { query: "parser_boundary" },
+    });
+    assert.match(appleFirst.result.output.repositoryFirstTouches[0].reminder.join(" "), /Apple Open Source releases/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

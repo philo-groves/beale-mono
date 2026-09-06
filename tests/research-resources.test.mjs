@@ -6,11 +6,22 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
+  APPLE_SECURITY_BOUNTY_RESEARCH_KIT_ID,
   createResearchResourceScopeAuthorizer,
   createResearchResourceTool,
   createResearchToolRegistry,
+  researchHistoryReminder,
   ResearchResourceCatalog,
 } from "../packages/research-agent/dist/index.js";
+
+test("Apple first-touch guidance is scoped to the Apple Security Bounty Research Kit", () => {
+  const generic = researchHistoryReminder("repository").join(" ");
+  const apple = researchHistoryReminder("repository", APPLE_SECURITY_BOUNTY_RESEARCH_KIT_ID).join(" ");
+
+  assert.doesNotMatch(generic, /Apple Open Source/);
+  assert.match(apple, /Apple Open Source releases/);
+  assert.match(apple, /upstream project history/);
+});
 
 test("resource discovery is non-authoring and first touch requires relevance Auto-Review", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-resources-"));

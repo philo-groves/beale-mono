@@ -38,6 +38,7 @@ export * from "./code-tools.js";
 export * from "./built-in-tools.js";
 export * from "./repository-research-tools.js";
 export * from "./research-resources.js";
+export * from "./research-kit-guidance.js";
 export * from "./resource-scope-review.js";
 export * from "./shell-tool.js";
 export * from "./shell-safety.js";

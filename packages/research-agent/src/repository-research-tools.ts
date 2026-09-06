@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { nowIso } from "./ids.js";
+import { researchKitFirstTouchGuidance } from "./research-kit-guidance.js";
 import type {
   ResearchExecutableTool,
   ResearchToolExecutionResult,
@@ -32,6 +33,7 @@ export interface RepositoryFirstTouchNotice {
 }
 
 export interface RepositoryResearchSessionOptions {
+  researchKitId?: string;
   beforeFirstTouch?: (repository: RepositoryIdentity) => Promise<{
     approved: boolean;
     firstTouch: boolean;
@@ -81,7 +83,7 @@ export class RepositoryResearchSession {
       return {
         firstTouch: true,
         repository,
-        reminder: repositoryHistoryReminder(),
+        reminder: repositoryHistoryReminder(this.options.researchKitId),
         ...(review.details ? { scopeReview: review.details } : {}),
       };
     }
@@ -89,7 +91,7 @@ export class RepositoryResearchSession {
     return {
       firstTouch: true,
       repository,
-      reminder: repositoryHistoryReminder(),
+      reminder: repositoryHistoryReminder(this.options.researchKitId),
     };
   }
 
@@ -108,12 +110,13 @@ export class RepositoryResearchSession {
   }
 }
 
-function repositoryHistoryReminder(): readonly string[] {
+function repositoryHistoryReminder(researchKitId?: string): readonly string[] {
   return [
     "Record the repository origin, HEAD, tags or release identity, upstream relationship, and whether history is shallow.",
     "Inspect path history, blame, security-relevant fix commits, upstream changes, vendor forks or source drops, and version-to-version differences before treating the snapshot as novel.",
     "Search public CVEs, advisories, vendor security bulletins, release notes, security-content pages, and referenced fixes with prior_art.search; use repository, component, service, binary, package, and symbol aliases.",
     "For vendor-maintained components, include official source releases and upstream project history, then compare source drops or tags against the researched build when available.",
+    ...researchKitFirstTouchGuidance(researchKitId),
     "Record matches, likely variants, explicit no-match queries with dates, and deferred sources whose absence limits the novelty assessment.",
   ];
 }

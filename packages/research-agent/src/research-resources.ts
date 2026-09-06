@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import { nowIso } from "./ids.js";
+import { researchKitFirstTouchGuidance } from "./research-kit-guidance.js";
 import type {
   ResearchExecutableTool,
   ResearchToolExecutionResult,
@@ -249,6 +250,7 @@ export class ResearchResourceCatalog {
 export interface ResearchResourceToolOptions {
   catalog: ResearchResourceCatalog;
   authorizeScopeRelevance: ResearchResourceScopeAuthorizer;
+  researchKitId?: string;
   campaignObjective?: string;
   authorizationRecorded: boolean;
   sourceRevision?: string;
@@ -382,7 +384,7 @@ export async function reviewResearchResourceFirstTouch(
     });
   }
   const touchedAt = options.catalog.recordTouch(resource.id, revisionKey);
-  const reminder = researchHistoryReminder(reviewed.kind);
+  const reminder = researchHistoryReminder(reviewed.kind, options.researchKitId);
   return touchOutcome("complete", `Auto-Review verified relevance and recorded first touch of ${resource.name}.`, {
     resource: reviewed,
     revisionKey,
@@ -405,12 +407,13 @@ function touchOutcome(
   return { status, summary, output, followUpActions };
 }
 
-export function researchHistoryReminder(kind: ResearchResourceKind): readonly string[] {
+export function researchHistoryReminder(kind: ResearchResourceKind, researchKitId?: string): readonly string[] {
   return [
     "Record the exact resource identity, build or version, platform image, provenance, and relationship to the active campaign.",
     "Search vendor and ecosystem security advisories, CVEs, security bulletins, and referenced fixes using product, component, service, binary, and symbol aliases.",
     "Review release notes, security-content pages, fixed-version records, and version-to-version changes for disclosed fixes and silent hardening.",
     "Inspect official source releases, upstream projects, tags, blame, fix commits, vendor forks or source drops, and downstream divergences when available.",
+    ...researchKitFirstTouchGuidance(researchKitId),
     kind === "binary" || kind === "service" || kind === "tool"
       ? "Map the installed binary, service, or tool to its package, source repository, launch or entitlement context, exposed interfaces, and historical component names before concluding history is absent."
       : "Use repository, package, protocol, and symbol aliases to connect public history to the exact component under review.",
