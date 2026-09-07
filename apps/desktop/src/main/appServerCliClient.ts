@@ -1025,6 +1025,14 @@ export function materializeAppServerSourceSync(
   ).result;
 }
 
+export function getAppServerDarwinVmSetup(input: Record<string, unknown>): import('@beale/app-server-runtime/protocol').DarwinVmSetupState {
+  return invokeWithJsonInput<import('@beale/app-server-runtime/protocol').DarwinVmSetupState>('plugin.darwin_vm.get', ['harness', 'plugin-darwin-vm-get'], input, null).result;
+}
+
+export function updateAppServerDarwinVmSetup(input: Record<string, unknown>): import('@beale/app-server-runtime/protocol').DarwinVmSetupState {
+  return invokeWithJsonInput<import('@beale/app-server-runtime/protocol').DarwinVmSetupState>('plugin.darwin_vm.update', ['harness', 'plugin-darwin-vm-update'], input, null).result;
+}
+
 export function listAppServerPlugins(input: Record<string, unknown>): AgentPluginRegistryState {
   return invokeWithJsonInput<AgentPluginRegistryState>('plugin.list', ['harness', 'plugin-list'], input, null).result;
 }

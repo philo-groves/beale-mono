@@ -232,6 +232,12 @@ const api: BealeApi = {
   getResearchProfiles(): Promise<ResolvedResearchProfile[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.getResearchProfiles);
   },
+  getDarwinVmSetup() {
+    return ipcRenderer.invoke(IPC_CHANNELS.getDarwinVmSetup);
+  },
+  updateDarwinVmSetup(update: import('@shared/types').DarwinVmSetupUpdate) {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateDarwinVmSetup, update);
+  },
   getAgentPlugins(): Promise<AgentPluginRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.getAgentPlugins);
   },

@@ -160,8 +160,8 @@ const TOOLS = [
   },
   {
     name: 'inspect_darwin_vm',
-    description: 'Inspect a prepared darwin-vm checkout for its built QEMU binary and required, optionally hashed firmware artifacts.',
-    inputSchema: objectSchema({ checkoutRoot: stringField(4096), hashArtifacts: { type: 'boolean', default: false } }, ['checkoutRoot']),
+    description: 'Inspect the configured Darwin VM checkout, or an explicit checkoutRoot, for its built QEMU and required, optionally hashed firmware artifacts.',
+    inputSchema: objectSchema({ checkoutRoot: stringField(4096), hashArtifacts: { type: 'boolean', default: false } }),
     annotations: READ_ANNOTATION
   },
   {
@@ -178,12 +178,12 @@ const TOOLS = [
   },
   {
     name: 'start_darwin_vm',
-    description: 'Start a prepared darwin-vm guest directly through its built QEMU binary with no emulated network device, host share, graphics, or QEMU monitor.',
+    description: 'Start the configured Darwin VM checkout (or explicit checkoutRoot) through built QEMU with no emulated network device, host share, graphics, or QEMU monitor.',
     inputSchema: objectSchema({
       checkoutRoot: stringField(4096),
       memoryMiB: integerField(2048, 32768, 8192),
       bootArguments: stringField(2048)
-    }, ['checkoutRoot']),
+    }),
     annotations: WRITE_ANNOTATION
   },
   {
@@ -306,10 +306,7 @@ async function environmentStatus() {
       available: process.platform === 'darwin' && coreDevice.available,
       detail: coreDevice.detail
     },
-    darwinVm: {
-      available: true,
-      detail: 'Provide a separately prepared checkout to inspect_darwin_vm.'
-    },
+    darwinVm: await darwinVmEnvironmentStatus(),
     iosSimulatorSupported: false
   };
 }
@@ -876,8 +873,20 @@ async function launchPhysicalIphoneApp(args) {
   };
 }
 
+async function darwinVmEnvironmentStatus() {
+  const configured = Boolean(process.env.BEALE_DARWIN_VM_CHECKOUT);
+  if (process.platform === 'win32') return { available: false, configured, detail: 'The Darwin VM launcher requires a macOS or Linux app-server host.' };
+  if (!configured) return { available: false, configured, detail: 'Use the session-start setup dialog or supply a prepared checkoutRoot to inspect_darwin_vm.' };
+  try {
+    const inspection = await inspectDarwinVm({});
+    return { available: inspection.ready, configured, errors: inspection.errors, detail: 'Artifact checks do not prove boot success or device/build compatibility.' };
+  } catch {
+    return { available: false, configured, detail: 'The saved checkout is unavailable. Reconfigure it or supply a prepared checkoutRoot to inspect_darwin_vm.' };
+  }
+}
+
 async function inspectDarwinVm(args) {
-  const checkoutRoot = canonicalDirectory(args.checkoutRoot, 'checkoutRoot');
+  const checkoutRoot = canonicalDirectory(args.checkoutRoot ?? process.env.BEALE_DARWIN_VM_CHECKOUT, 'checkoutRoot');
   const inspection = await inspectDarwinCheckout(checkoutRoot, args.hashArtifacts === true);
   return {
     ready: inspection.errors.length === 0,
@@ -906,7 +915,7 @@ function readDarwinVmLog(args) {
 }
 
 async function startDarwinVm(args) {
-  const checkoutRoot = canonicalDirectory(args.checkoutRoot, 'checkoutRoot');
+  const checkoutRoot = canonicalDirectory(args.checkoutRoot ?? process.env.BEALE_DARWIN_VM_CHECKOUT, 'checkoutRoot');
   const inspection = await inspectDarwinCheckout(checkoutRoot, false);
   if (inspection.errors.length) throw new Error(`darwin-vm checkout is not ready: ${inspection.errors.join(' ')}`);
   const memoryMiB = boundedInteger(args.memoryMiB, 2048, 32768, 8192);
@@ -1022,6 +1031,7 @@ async function inspectDarwinCheckout(checkoutRoot, hashArtifacts) {
       continue;
     }
     const stats = statSync(candidate);
+    if (required && stats.size === 0) errors.push(`Empty required artifact ${relativePath}.`);
     artifacts.push({
       name,
       present: true,

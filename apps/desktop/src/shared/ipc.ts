@@ -38,6 +38,8 @@ export const IPC_CHANNELS = {
   listTicketingTargets: 'beale:list-ticketing-targets',
   setTicketingTarget: 'beale:set-ticketing-target',
   getResearchProfiles: 'beale:get-research-profiles',
+  getDarwinVmSetup: 'beale:get-darwin-vm-setup',
+  updateDarwinVmSetup: 'beale:update-darwin-vm-setup',
   getAgentPlugins: 'beale:get-agent-plugins',
   addAgentPluginFromFilesystem: 'beale:add-agent-plugin-from-filesystem',
   addAgentPluginFromRepository: 'beale:add-agent-plugin-from-repository',

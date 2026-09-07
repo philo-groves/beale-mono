@@ -39,6 +39,8 @@
 
 #### Added
 
+- Added the optional `microsoft-security-devices` guidance plugin for Canary Hyper-V environment selection and per-session first-touch build freshness checks. Its local comparison utility warns about outdated builds, uncertain release coverage, and channel transitions without adding model-facing tools or managing VMs.
+- New Desktop research sessions offer guided Darwin VM setup when `apple-security-devices` is enabled, with per-session decline, persistent opt-out, and validation of a manually prepared checkout. Saved checkouts feed existing plugin tools; guidance distinguishes Darwin VM from Tart. Firmware preparation requires a Mac, and the current launcher requires a macOS or Linux app-server host.
 - Workspace resource rows now open detail views with inline editing and saved prior art; creation retains its dialog. Details include source coverage, archived document pages, refresh/retry, and discard/removal confirmation.
 - Added the managed `apple-target-flags` guidance plugin for public Apple Security Bounty Target Flag selection, evidence capture, and conservative primitive assessment.
 - Added the repository-owned `beale-codex` Codex plugin under `integrations/`, with a validated Beale research skill and approval-aware MCP bridge for canonical workspaces, sessions, channels, research tools, evidence, findings, runbooks, reports, and campaign state. The app-server contract advances to v20 with profile-scoped research-tool dispatch and authenticated HTTP session control.
@@ -1113,6 +1115,7 @@
 
 #### Added
 
+- Added canonical Darwin VM setup preferences and prepared-checkout validation in the Agent Plugin registry. The shared Desktop/app-server contract timestamp advances for the new operations.
 - Resource-linked prior-art searches and extracted source documents now persist in an additive SQLite table with retrieval, session/revision, and coverage metadata. Workspace sessions require a resource identity; Knowledge supports paginated offline recall through resource.catalog. Existing session traces are not backfilled.
 - Agent recall now uses one workspace-scoped `history.search` tool across canonical claims, knowledge memories, and runbooks, with multi-category and category-specific filters. The prior memory-only search is removed from new sessions while historical activity remains readable and counted.
 - Added reversible research-claim deduplication with optimistic revisions, audit transitions, canonical-only catalogs, and model tools that coalesce redundant claims during research. Protocol contract v14 advances memory-summary schema to v12, finding schema to v5, and the path-free mobile workspace-memory catalog to v4.

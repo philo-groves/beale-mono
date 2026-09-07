@@ -712,6 +712,8 @@ function registerIpc(): void {
     ticketingService.setTarget(providerId, target)
   );
   ipcMain.handle(IPC_CHANNELS.getResearchProfiles, () => workspaceService.getResearchProfiles());
+  ipcMain.handle(IPC_CHANNELS.getDarwinVmSetup, () => workspaceService.getDarwinVmSetup());
+  ipcMain.handle(IPC_CHANNELS.updateDarwinVmSetup, (_event, update: import('@shared/types').DarwinVmSetupUpdate) => workspaceService.updateDarwinVmSetup(update));
   ipcMain.handle(IPC_CHANNELS.getAgentPlugins, () => workspaceService.getAgentPlugins());
   ipcMain.handle(IPC_CHANNELS.addAgentPluginFromFilesystem, async () => {
     const result = await dialog.showOpenDialog({

@@ -11,7 +11,7 @@ Choose an environment by the security boundary the experiment must reproduce.
 
 Never use, recommend, or treat iOS Simulator as security-research evidence. Do not use `simctl`. Simulator results cannot establish physical-iPhone exploitability, mitigation behavior, entitlement enforcement, code-signing behavior, hardware-backed security behavior, or Apple Security Bounty impact.
 
-If a request proposes iOS Simulator security research, stop that path and route the experiment to an authorized physical iPhone. If no physical iPhone is available, say that realistic iOS validation is unavailable. Static source review and host-side unit testing may continue, but label them as non-device evidence.
+If a request proposes iOS Simulator security research, stop that path and route the experiment to an authorized physical iPhone. If no physical iPhone is available, stock iOS validation is unavailable. Darwin VM can still support low-level Darwin inspection without a device; label its results as modified-lab evidence. Static source review and host-side unit testing may also continue as non-device evidence.
 
 ## Select the environment
 
@@ -19,6 +19,12 @@ If a request proposes iOS Simulator security research, stop that path and route 
 - Use Tart for stock macOS behavior, SIP-on validation, application and service testing, regression matrices, and disposable macOS guests. Read [tart.md](references/tart.md).
 - Use `darwin-vm` for kernel debugging, custom kernel or trust-cache work, boot-path instrumentation, and minimal command-line Darwin experiments. Read [darwin-vm.md](references/darwin-vm.md).
 - Use more than one environment when a low-level hypothesis needs stock-device confirmation. Treat the physical iPhone or stock macOS guest as the final evidence boundary, as applicable.
+
+## Darwin VM versus Tart
+
+Use Darwin VM for a minimal, instrumentable Darwin command-line lab without a physical device. Use Tart for complete macOS app/service behavior and stock macOS checks; Darwin VM does not supply a GUI, full iOS services, or hardware fidelity.
+
+Desktop offers guided Darwin VM setup when starting a research session with this plugin enabled. Respect a declined setup: do not restart onboarding or acquire firmware during the session. A saved checkout is the default for `inspect_darwin_vm` and `start_darwin_vm`; omit `checkoutRoot` to use it, and inspect again because saved configuration is not boot evidence. If no checkout is configured, use an explicitly supplied prepared checkout or continue work that does not require a guest.
 
 ## Operating rules
 

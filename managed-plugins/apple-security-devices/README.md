@@ -17,6 +17,14 @@ iOS Simulator is excluded. It does not reproduce the physical iPhone security bo
 
 The plugin never downloads firmware, clones repositories, modifies ramdisks, creates Tart images, or pairs devices. Those setup actions remain operator-controlled.
 
+## Guided Darwin VM setup
+
+New Desktop research sessions offer a squircle setup dialog when this plugin is enabled and no valid checkout is saved. **Not now** continues the session; **Never ask again** persists across sessions on the same app-server; **Set up Darwin VM** opens preparation guidance and checkout validation. Closing the dialog cancels the launch. Firmware preparation remains manual and requires a Mac; the current plugin launcher requires a macOS or Linux app-server execution host.
+
+Validation checks nonempty required artifacts and a complete optional SPTM/TXM pair. It does not prove boot success, compatible firmware, or stock-device fidelity. A saved checkout becomes the default for the existing Darwin inspection and launch tools, without adding model-facing tools. The app-server stores preferences in its Agent Plugin registry directory; `BEALE_DARWIN_VM_CHECKOUT` supplies the checkout to the plugin process. Automated launches and continuations do not prompt.
+
+Use Darwin VM for low-level Darwin inspection without a physical device. Use Tart for a full macOS VM and application/service behavior. See [Darwin VM guidance](skills/apple-security-devices/references/darwin-vm.md).
+
 ## Import
 
 In Beale, open Plugins, choose **Add Agent Plugin**, and select this directory. Beale discovers the skill from `skills/apple-security-devices/SKILL.md` and starts the `devices` MCP server from `mcp.json`.

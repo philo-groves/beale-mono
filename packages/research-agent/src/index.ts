@@ -53,6 +53,7 @@ export * from "./session-store.js";
 export * from "./channels.js";
 export * from "./workspace-context.js";
 export * from "./workspace-binding.js";
+export * from "./darwin-vm-setup.js";
 export * from "./storage.js";
 export * from "./local-inspection.js";
 export * from "./tool-registry.js";

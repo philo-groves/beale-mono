@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { MANAGED_TOOL_PLUGIN_IDS } from '@beale/app-server-runtime/protocol';
 import type { AgentPluginRecord, AgentPluginRegistryState } from '@shared/types';
 import {
+  getAppServerDarwinVmSetup,
+  updateAppServerDarwinVmSetup,
   addAppServerPluginFromFilesystem,
   addAppServerPluginFromRepository,
   getAppServerPluginRuntime,
@@ -25,6 +27,14 @@ export class AgentPluginRegistry {
     private readonly registryDirectory: string,
     private readonly options: AgentPluginRegistryOptions = {}
   ) {}
+
+  public getDarwinVmSetup(): import('@beale/app-server-runtime/protocol').DarwinVmSetupState {
+    return getAppServerDarwinVmSetup(this.baseInput());
+  }
+
+  public updateDarwinVmSetup(update: import('@beale/app-server-runtime/protocol').DarwinVmSetupUpdate): import('@beale/app-server-runtime/protocol').DarwinVmSetupState {
+    return updateAppServerDarwinVmSetup({ ...this.baseInput(), update });
+  }
 
   public getState(): AgentPluginRegistryState {
     return listAppServerPlugins(this.baseInput());

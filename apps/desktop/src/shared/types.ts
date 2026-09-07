@@ -1,6 +1,8 @@
 import type { ResearchProfileId, ResearchProfileSnapshot, ResolvedResearchProfile } from './researchProfile';
 import type { ResearchKitId } from './researchKits';
 import type {
+  DarwinVmSetupState,
+  DarwinVmSetupUpdate,
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   CreateResearchChannelInput,
@@ -20,6 +22,8 @@ import type {
 export * from './researchProfile';
 export * from './researchKits';
 export type {
+  DarwinVmSetupState,
+  DarwinVmSetupUpdate,
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   ResourcePriorArtSummary,
@@ -2452,6 +2456,8 @@ export interface BealeApi {
   listTicketingTargets(providerId: TicketingProviderId): Promise<TicketingTarget[]>;
   setTicketingTarget(providerId: TicketingProviderId, target: TicketingTarget): Promise<TicketingSettings>;
   getResearchProfiles(): Promise<ResolvedResearchProfile[]>;
+  getDarwinVmSetup(): Promise<DarwinVmSetupState>;
+  updateDarwinVmSetup(update: DarwinVmSetupUpdate): Promise<DarwinVmSetupState>;
   getAgentPlugins(): Promise<AgentPluginRegistryState>;
   addAgentPluginFromFilesystem(): Promise<AgentPluginRegistryState>;
   addAgentPluginFromRepository(repositoryUrl: string): Promise<AgentPluginRegistryState>;

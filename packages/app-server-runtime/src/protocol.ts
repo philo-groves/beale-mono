@@ -13,6 +13,8 @@ import type {
 } from "@beale/research-agent";
 
 export type {
+  DarwinVmSetupState,
+  DarwinVmSetupUpdate,
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   ResourcePriorArtSummary,
@@ -70,7 +72,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-07T12:00:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-07T15:26:59.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
@@ -454,6 +456,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "tools.list", "tools.config", "config.show", "config.set",
   "research.tools.list", "research.tools.read", "research.tools.mutate",
   "source.inspect", "source.materialize", "plugin.list", "plugin.add_filesystem",
+  "plugin.darwin_vm.get", "plugin.darwin_vm.update",
   "plugin.add_repository", "plugin.set_enabled", "plugin.remove", "plugin.runtime",
   "maintenance.summary", "maintenance.run",
 ] as const;

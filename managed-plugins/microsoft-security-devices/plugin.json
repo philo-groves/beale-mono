@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "microsoft-security-devices",
+  "version": "0.1.0",
+  "description": "Prefer a Windows Insider Preview Canary Hyper-V guest for Windows validation. Check guest build freshness against current Microsoft release guidance on each session's first VM touch.",
+  "author": { "name": "Beale" },
+  "keywords": ["windows", "windows-insider", "canary", "hyper-v", "environment-readiness"]
+}
