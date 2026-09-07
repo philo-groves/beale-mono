@@ -26,6 +26,8 @@ Plugin toggles take effect on subsequent session launches and continuations, inc
 
 New native tools must be assigned in `packages/research-agent/src/managed-tool-plugins.ts` to a plugin or the explicit core list. Runtime assembly rejects unassigned host tools. Bundled manifests and the compact discovery catalog are checked together by boundary tests.
 
+The Claims plugin provides `claim.get` for either a lead or finding ID. Its default response includes the stored overview and the first 10 evidence, transition, and duplicate rows; focused `section` reads omit unrelated sections. Follow each collection's `nextOffset`, passing the returned `readRevision` as `expectedReadRevision`; restart if the claim or its duplicate relationships changed. The numeric `revision` remains the version used for edits. Evidence retains its durable reference, hash, source session, actor, and metadata; transitions retain reasons and evidence links. Retained duplicate IDs expose their canonical parent. Reads stay within the current workspace and do not change claim state. `lead.list` and `finding.list` are summary catalogs with continuation offsets; `history.search` remains the search entry point.
+
 ## Running
 
 The package ships two entry points over one server core:

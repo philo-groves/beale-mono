@@ -21,7 +21,7 @@ export const MANAGED_TOOL_PLUGINS = [
   {
     id: "beale-claims", name: "Claims",
     description: "Use for leads, findings, their evidence, and canonical claim revisions.",
-    tools: ["lead.list", "lead.create", "finding.list", "finding.revise", "finding.transition", "finding.completion_check"],
+    tools: ["claim.get", "lead.list", "lead.create", "finding.list", "finding.revise", "finding.transition", "finding.completion_check"],
   },
   {
     id: "beale-investigations", name: "Investigations",

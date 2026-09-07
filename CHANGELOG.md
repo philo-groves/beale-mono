@@ -1084,6 +1084,8 @@
 
 #### Changed
 
+- Agent claim recall now supports workspace-scoped `claim.get` for leads and findings, with evidence provenance, transition history, duplicate links, and revision-checked detail pagination in the Claims plugin. Lead and finding catalogs expose continuation offsets; search and recall guidance direct agents to record details instead of treating catalogs as complete records.
+
 - Session launches and continuations read the current managed-plugin selection, preserve explicit disablement, and reject native tools without declared plugin or core ownership.
 
 - Hosted research workers no longer open the app-server SQLite database. Research stores delegate synchronous SQL through a private worker-to-host mediator whose host-owned connections are restricted to the session's registered database, leaving the resident app-server process as the only database-writing entity.

@@ -78,25 +78,70 @@ export interface FindingToolDefaults {
   classifications?: readonly string[];
 }
 
+export const CLAIM_DETAIL_SECTIONS = ["all", "overview", "evidence", "transitions", "duplicates"] as const;
+export type ClaimDetailSection = typeof CLAIM_DETAIL_SECTIONS[number];
+
+export interface ClaimDetailReadInput {
+  id: string;
+  section?: ClaimDetailSection;
+  offset?: number;
+  limit?: number;
+  expectedReadRevision?: string;
+}
+
+export interface ClaimDetailPage<T> {
+  items: T[];
+  total: number;
+  offset: number;
+  limit: number;
+  nextOffset: number | null;
+}
+
+export interface ClaimDetailReadResult {
+  id: string;
+  revision: number;
+  /** Snapshot identity includes duplicate relationships that can change independently of the claim revision. */
+  readRevision: string;
+  projection: FindingSummary["projection"];
+  counts: { evidence: number; transitions: number; duplicates: number };
+  claim?: Omit<FindingSummary, "evidence" | "transitions" | "duplicateClaims">;
+  evidence?: ClaimDetailPage<FindingSummary["evidence"][number]>;
+  transitions?: ClaimDetailPage<FindingSummary["transitions"][number]>;
+  duplicates?: ClaimDetailPage<FindingSummary["duplicateClaims"][number]>;
+}
+
 export function createFindingTools(store: ResearchClaimStore, defaults: FindingToolDefaults = {}): ResearchExecutableTool[] {
   return [
-    findingTool("lead.list", "lead_list", "List proposed or refuted research leads when the full lead catalog or complete claim state is needed. Use history.search for normal workspace-history search. Leads and findings are views of one claim ledger, so a lead keeps the same ID when evidence promotes it to a finding.", "read", {
+    findingTool("claim.get", "claim_get", "Read one lead or finding by its stable claim ID, including evidence references, provenance, transition reasons, and duplicate relationships. Results page each collection; use section and nextOffset with expectedReadRevision to read more without repeating the overview.", "read", {
+      type: "object",
+      required: ["id"],
+      properties: {
+        id: { type: "string", description: "Claim ID from history.search, lead.list, or finding.list; also accepts a retained duplicate ID." },
+        section: { type: "string", enum: CLAIM_DETAIL_SECTIONS, description: "Defaults to all: overview plus the first page of each collection. Select one section for focused follow-up reads." },
+        offset: { type: "integer", minimum: 0, description: "Collection offset, default 0. Follow a section's nextOffset; offsets above zero require expectedReadRevision." },
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "Rows per collection, default 10. Reduce for large evidence metadata or transition reasons." },
+        expectedReadRevision: { type: "string", description: "readRevision returned by claim.get, covering the claim and its related duplicate rows. If it changed, restart at offset 0; numeric revision remains the version used for edits." },
+      },
+    }, (input) => readClaimDetail(store, input)),
+    findingTool("lead.list", "lead_list", "Browse a paged catalog of proposed or refuted leads; use history.search for search and claim.get for evidence, provenance, and transition history. Leads keep the same claim ID when promoted to findings.", "read", {
       type: "object",
       properties: {
         query: { type: "string" },
         statuses: { type: "array", items: { type: "string", enum: FINDING_STATUSES } },
         classifications: { type: "array", items: { type: "string" } },
         limit: { type: "number", minimum: 1, maximum: 100 },
+        offset: { type: "integer", minimum: 0, description: "Use nextOffset to continue this filtered catalog." },
         afterRevision: { type: "string" },
       },
     }, (input) => projectClaimCatalog(store.listLeads(), input, "leads")),
-    findingTool("finding.list", "finding_list", "List evidence-backed findings when the full finding catalog or complete claim state is needed. Use history.search for normal workspace-history search. Findings are promoted views of canonical research claims, not duplicate memory records.", "read", {
+    findingTool("finding.list", "finding_list", "Browse a paged catalog of evidence-backed findings; use history.search for search and claim.get for evidence, provenance, and transition history. Findings are promoted views of canonical claims.", "read", {
       type: "object",
       properties: {
         query: { type: "string" },
         statuses: { type: "array", items: { type: "string", enum: FINDING_STATUSES } },
         classifications: { type: "array", items: { type: "string" } },
         limit: { type: "number", minimum: 1, maximum: 100 },
+        offset: { type: "integer", minimum: 0, description: "Use nextOffset to continue this filtered catalog." },
         afterRevision: { type: "string" },
       },
     }, (input) => projectClaimCatalog(store.listFindings(), input, "findings")),
@@ -185,6 +230,48 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
   ];
 }
 
+function readClaimDetail(store: ResearchClaimStore, input: Record<string, unknown>): ClaimDetailReadResult {
+  const id = requiredString(input.id, "id");
+  const section = input.section ?? "all";
+  if (!CLAIM_DETAIL_SECTIONS.some((value) => value === section)) throw new Error("Unknown claim detail section.");
+  const offset = readPageInteger(input.offset, "offset", 0, 0);
+  const limit = readPageInteger(input.limit, "limit", 10, 1, 50);
+  const expectedReadRevision = input.expectedReadRevision === undefined
+    ? undefined : requiredString(input.expectedReadRevision, "expectedReadRevision");
+  if (offset > 0 && expectedReadRevision === undefined) throw new Error("Claim detail pagination requires expectedReadRevision; read offset 0 first.");
+  const finding = store.get(id);
+  if (!finding) throw new Error(`Research claim not found in this workspace: ${id}.`);
+  const readRevision = createHash("sha256").update(JSON.stringify(finding)).digest("hex").slice(0, 16);
+  if (expectedReadRevision !== undefined && expectedReadRevision !== readRevision) {
+    throw new Error("Research claim read revision changed. Restart at offset 0.");
+  }
+  const { evidence, transitions, duplicateClaims, ...claim } = finding;
+  return {
+    id: finding.id,
+    revision: finding.revision,
+    readRevision,
+    projection: finding.projection,
+    counts: { evidence: evidence.length, transitions: transitions.length, duplicates: duplicateClaims.length },
+    ...(section === "all" || section === "overview" ? { claim } : {}),
+    ...(section === "all" || section === "evidence" ? { evidence: claimDetailPage(evidence, offset, limit) } : {}),
+    ...(section === "all" || section === "transitions" ? { transitions: claimDetailPage(transitions, offset, limit) } : {}),
+    ...(section === "all" || section === "duplicates" ? { duplicates: claimDetailPage(duplicateClaims, offset, limit) } : {}),
+  };
+}
+
+function claimDetailPage<T>(items: readonly T[], offset: number, limit: number): ClaimDetailPage<T> {
+  const page = items.slice(offset, offset + limit);
+  return { items: page, total: items.length, offset, limit, nextOffset: offset + page.length < items.length ? offset + page.length : null };
+}
+
+function readPageInteger(value: unknown, name: string, fallback: number, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return value;
+}
+
 function projectClaimCatalog(findings: readonly FindingSummary[], input: Record<string, unknown>, key: "leads" | "findings"): Record<string, unknown> {
   const query = string(input.query)?.toLowerCase() ?? "";
   const requestedStatuses = new Set(Array.isArray(input.statuses)
@@ -196,26 +283,28 @@ function projectClaimCatalog(findings: readonly FindingSummary[], input: Record<
   const limit = typeof input.limit === "number" && Number.isFinite(input.limit)
     ? Math.max(1, Math.min(100, Math.floor(input.limit)))
     : 25;
+  const offset = readPageInteger(input.offset, "offset", 0, 0);
   const revision = createHash("sha256")
-    .update(JSON.stringify({ query, statuses: [...requestedStatuses].sort(), classifications: [...requestedClassifications].sort(), limit }))
+    .update(JSON.stringify({ query, statuses: [...requestedStatuses].sort(), classifications: [...requestedClassifications].sort(), limit, offset }))
     .update("\n")
     .update(findings.map((finding) => `${finding.id}:${finding.revision}:${finding.updatedAt}`).join("\n"))
     .digest("hex")
     .slice(0, 16);
-  if (string(input.afterRevision) === revision) {
-    return { revision, unchanged: true, total: findings.length, [key]: [] };
-  }
   const matches = findings
     .filter((finding) => requestedStatuses.size === 0 || requestedStatuses.has(finding.status))
     .filter((finding) => requestedClassifications.size === 0 || requestedClassifications.has(finding.classification))
     .filter((finding) => !query || `${finding.title}\n${finding.summary}\n${finding.impact}\n${finding.rating}`.toLowerCase().includes(query));
+  const page = claimDetailPage(matches, offset, limit);
+  const paging = { total: findings.length, matched: matches.length, offset, limit, nextOffset: page.nextOffset, truncated: page.nextOffset !== null };
+  if (string(input.afterRevision) === revision) {
+    return { revision, unchanged: true, ...paging, [key]: [] };
+  }
   return {
     revision,
     unchanged: false,
-    total: findings.length,
-    matched: matches.length,
-    truncated: matches.length > limit,
-    [key]: matches.slice(0, limit).map((finding) => ({
+    ...paging,
+    recall: "Use claim.get with a claim ID for evidence, provenance, transition history, and duplicate relationships.",
+    [key]: page.items.map((finding) => ({
       id: finding.id,
       projection: finding.projection,
       maturity: finding.maturity,

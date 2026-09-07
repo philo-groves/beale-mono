@@ -77,7 +77,7 @@ export function createWorkspaceHistorySearchTool(
   return tool(
     "history.search",
     "history_search",
-    "Search the current workspace's canonical claims, knowledge memories, and runbooks through one history index. Use the multi-value types filter to narrow categories. Results are compact typed cards; duplicates are excluded with the canonical claim catalog. Use the corresponding get or list tool only when more detail is needed, and search before repeating prior work.",
+    "Search the current workspace's canonical claims, knowledge memories, and runbooks through one history index. Results are compact typed cards; use claim.get, memory.get, or runbook.get for record details, and search before repeating prior work.",
     schema,
     (input) => searchWorkspaceHistory(options, input),
   );
@@ -282,7 +282,7 @@ function searchWorkspaceHistory(
   return {
     revision, unchanged: false, matched: candidates.length, truncated: candidates.length > limit,
     resultCount: results.length, counts, detail: "summary", results,
-    recall: "Use memory.get or runbook.get for full records. Use lead.list or finding.list for complete canonical claim state.",
+    recall: "Use claim.get for lead or finding evidence, provenance, and transition history; use memory.get or runbook.get for their full records.",
   };
 }
 
