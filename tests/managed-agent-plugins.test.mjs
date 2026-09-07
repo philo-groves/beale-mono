@@ -435,6 +435,7 @@ test('apple-security-devices copies files through the private host runner when G
   const directory = mkdtempSync(join(tmpdir(), 'beale-fake-tart-runner-copy-'));
   const fakeTart = join(directory, 'tart');
   const fakeSsh = join(directory, 'ssh');
+  const fakeScp = join(directory, 'scp');
   const fakeRunner = join(directory, 'runner');
   const runnerLog = join(directory, 'runner.log');
   const identity = join(directory, 'identity');
@@ -459,22 +460,32 @@ const command = process.argv.at(-1);
 const result = spawnSync('/bin/sh', ['-c', command], { stdio: 'inherit' });
 process.exit(result.status ?? 98);
 `);
+    writeFileSync(fakeScp, `#!/usr/bin/env node
+const { copyFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+const source = args.at(-2);
+const destination = args.at(-1);
+const separator = destination.indexOf(':');
+if (!source || separator < 0) process.exit(96);
+copyFileSync(source, destination.slice(separator + 1));
+`);
     writeFileSync(fakeRunner, `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
 appendFileSync(process.env.APPLE_SECURITY_TEST_RUNNER_LOG, JSON.stringify(args.slice(0, 3)) + '\\n');
-const result = spawnSync(args[2], args.slice(3), { stdio: 'inherit' });
+const result = spawnSync(args[2], args.slice(3), { stdio: ['ignore', 'inherit', 'inherit'] });
 process.exit(result.status ?? 97);
 `);
     writeFileSync(identity, 'test identity');
     writeFileSync(knownHosts, 'test known host');
     writeFileSync(source, Buffer.from([240, 159, 141, 142, 0, 10, 255]));
-    for (const executable of [fakeTart, fakeSsh, fakeRunner]) chmodSync(executable, 0o755);
+    for (const executable of [fakeTart, fakeSsh, fakeScp, fakeRunner]) chmodSync(executable, 0o755);
     const environment = {
       APPLE_SECURITY_TEST_PLATFORM: 'darwin',
       APPLE_SECURITY_TART_COMMAND: fakeTart,
       APPLE_SECURITY_SSH_COMMAND: fakeSsh,
+      APPLE_SECURITY_SCP_COMMAND: fakeScp,
       APPLE_SECURITY_COMMAND_RUNNER: fakeRunner,
       APPLE_SECURITY_TEST_RUNNER_LOG: runnerLog,
       APPLE_SECURITY_SSH_IDENTITY: identity,
@@ -504,7 +515,9 @@ process.exit(result.status ?? 97);
     assert.deepEqual(readFileSync(downloaded), readFileSync(source));
     const calls = readFileSync(runnerLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     assert.ok(calls.length >= 10);
-    for (const call of calls) assert.deepEqual(call, ['run', '--', fakeSsh]);
+    assert.ok(calls.some((call) => call[2] === fakeScp));
+    assert.ok(calls.some((call) => call[2] === fakeSsh));
+    for (const call of calls) assert.deepEqual(call.slice(0, 2), ['run', '--']);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

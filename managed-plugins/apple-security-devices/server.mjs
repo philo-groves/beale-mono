@@ -467,18 +467,40 @@ async function copyToTartVm(args) {
   }
   const temporaryPath = temporaryGuestPath(guestPath);
   const expectedSha256 = await sha256File(localPath);
+  let runnerUploadPath = null;
   try {
-    const invocation = await tartGuestCommandInvocation(
-      vmName,
-      ['/bin/dd', `of=${temporaryPath}`, 'bs=1048576'],
-      timeoutSeconds,
-      transport,
-      true
-    );
-    await runCommandWithFileInput(invocation.command, invocation.args, localPath, {
-      timeoutMs: timeoutSeconds * 1000,
-      maxBytes
-    });
+    const commandRunner = transport === 'ssh' ? configuredHostCommandRunner() : null;
+    if (commandRunner) {
+      runnerUploadPath = `/tmp/.beale-runner-upload-${randomUUID()}`;
+      const invocation = await tartScpUploadInvocation(
+        vmName,
+        localPath,
+        runnerUploadPath,
+        timeoutSeconds,
+        commandRunner
+      );
+      await runCommand(invocation.command, invocation.args, { timeoutMs: timeoutSeconds * 1000 });
+      await runTartGuestCommand(
+        vmName,
+        ['/bin/dd', `if=${runnerUploadPath}`, `of=${temporaryPath}`, 'bs=1048576'],
+        timeoutSeconds,
+        transport
+      );
+      await removeTartGuestTemporaryFile(vmName, runnerUploadPath, timeoutSeconds, transport);
+      runnerUploadPath = null;
+    } else {
+      const invocation = await tartGuestCommandInvocation(
+        vmName,
+        ['/bin/dd', `of=${temporaryPath}`, 'bs=1048576'],
+        timeoutSeconds,
+        transport,
+        true
+      );
+      await runCommandWithFileInput(invocation.command, invocation.args, localPath, {
+        timeoutMs: timeoutSeconds * 1000,
+        maxBytes
+      });
+    }
     if (args.preserveMode !== false) {
       await runTartGuestCommand(vmName, ['/bin/chmod', (localStat.mode & 0o777).toString(8), temporaryPath], timeoutSeconds, transport);
     }
@@ -514,6 +536,9 @@ async function copyToTartVm(args) {
       transport
     };
   } catch (error) {
+    if (runnerUploadPath) {
+      await removeTartGuestTemporaryFile(vmName, runnerUploadPath, timeoutSeconds, transport);
+    }
     await removeTartGuestTemporaryFile(vmName, temporaryPath, timeoutSeconds, transport);
     throw error;
   }
@@ -698,13 +723,7 @@ async function tartGuestCommandInvocation(vmName, argv, timeoutSeconds, transpor
 }
 
 async function tartSshCommandInvocation(vmName, argv, timeoutSeconds) {
-  const ssh = tartSshConfig();
-  const addressResult = await runCommand(tartCommand(), ['ip', vmName, '--wait', String(Math.min(10, timeoutSeconds))], {
-    timeoutMs: (Math.min(10, timeoutSeconds) + 5) * 1000
-  });
-  const address = addressResult.stdout.trim();
-  if (!/^[0-9A-Fa-f:.]+$/u.test(address) || address.length > 128) throw new Error('Tart did not return a valid bounded VM address for SSH fallback.');
-  const connectTimeout = String(Math.max(1, Math.min(8, timeoutSeconds)));
+  const { ssh, address, connectTimeout } = await tartSshEndpoint(vmName, timeoutSeconds);
   const remoteCommand = argv.map(posixShellQuote).join(' ');
   const sshArgs = [
     '-o', 'BatchMode=yes',
@@ -718,6 +737,34 @@ async function tartSshCommandInvocation(vmName, argv, timeoutSeconds) {
     '--', remoteCommand
   ];
   return hostCommandInvocation(ssh.command, sshArgs);
+}
+
+async function tartScpUploadInvocation(vmName, localPath, guestPath, timeoutSeconds, commandRunner) {
+  const { ssh, address, connectTimeout } = await tartSshEndpoint(vmName, timeoutSeconds);
+  const remoteHost = address.includes(':') ? `[${address}]` : address;
+  const scpArgs = [
+    '-o', 'BatchMode=yes',
+    '-o', 'IdentitiesOnly=yes',
+    '-o', 'StrictHostKeyChecking=yes',
+    '-o', `UserKnownHostsFile=${ssh.knownHosts}`,
+    '-o', `ConnectTimeout=${connectTimeout}`,
+    '-o', 'ConnectionAttempts=1',
+    '-i', ssh.identity,
+    '--', localPath, `${ssh.user}@${remoteHost}:${guestPath}`
+  ];
+  const command = process.env.APPLE_SECURITY_SCP_COMMAND || '/usr/bin/scp';
+  return hostCommandInvocation(command, scpArgs, commandRunner);
+}
+
+async function tartSshEndpoint(vmName, timeoutSeconds) {
+  const ssh = tartSshConfig();
+  const addressResult = await runCommand(tartCommand(), ['ip', vmName, '--wait', String(Math.min(10, timeoutSeconds))], {
+    timeoutMs: (Math.min(10, timeoutSeconds) + 5) * 1000
+  });
+  const address = addressResult.stdout.trim();
+  if (!/^[0-9A-Fa-f:.]+$/u.test(address) || address.length > 128) throw new Error('Tart did not return a valid bounded VM address for SSH fallback.');
+  const connectTimeout = String(Math.max(1, Math.min(8, timeoutSeconds)));
+  return { ssh, address, connectTimeout };
 }
 
 function tartSshConfig() {
@@ -739,8 +786,8 @@ function posixShellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function hostCommandInvocation(command, args) {
-  const runner = configuredHostCommandRunner();
+function hostCommandInvocation(command, args, configuredRunner) {
+  const runner = configuredRunner ?? configuredHostCommandRunner();
   return runner
     ? { command: runner, args: ['run', '--', command, ...args] }
     : { command, args };

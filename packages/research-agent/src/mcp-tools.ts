@@ -247,6 +247,20 @@ function createMcpExecutableTool(
           kind: "tool",
           output,
         });
+        if (isMcpErrorOutput(output)) {
+          const message = `MCP tool ${mcpTool.serverName}/${mcpTool.name} reported an error.`;
+          return {
+            action,
+            status: "error",
+            startedAt,
+            completedAt: nowIso(),
+            summary: message,
+            output: normalized.output,
+            ...(normalized.modelContent?.length ? { modelContent: normalized.modelContent } : {}),
+            followUpActions: ["Report the MCP tool failure before continuing."],
+            error: { message },
+          };
+        }
 
         return {
           action,
@@ -263,6 +277,10 @@ function createMcpExecutableTool(
       }
     },
   };
+}
+
+function isMcpErrorOutput(output: unknown): boolean {
+  return isRecord(output) && output.isError === true;
 }
 
 function createMcpToolInputSchema(

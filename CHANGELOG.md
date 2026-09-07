@@ -6,6 +6,7 @@
 
 #### Fixed
 
+- Apple security device host-to-guest Tart copies now use path-based transfer through private command runners, avoiding staging corruption when a runner does not relay stdin. MCP responses marked `isError` now become failed research-tool executions while preserving their bounded diagnostic output.
 - Apple Security Bounty Research Kit workspaces now append Apple Open Source release and upstream-history checks to repository and resource first-touch guidance without applying Apple-specific instructions to other kits.
 - Repository-owned tests, fixtures, prompts, and documentation now use clearly synthetic research scenarios instead of target-derived examples.
 - Simple collaboration no longer advertises a free-form channel `role` that deterministically fails when supplied without `channel_name`; channel membership roles are assigned automatically, while Advanced delegation retains its required bounded role enum.

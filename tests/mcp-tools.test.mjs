@@ -375,6 +375,39 @@ test("MCP discovery denylist defaults to no servers and execution reports timeou
   assert.match(result.result.summary, /exceeded timeout/);
 });
 
+test("MCP tool-level error results remain failed executions with bounded diagnostics", async () => {
+  const discovery = await createMcpResearchTools({
+    allowedServers: ["alpha"],
+    client: {
+      async listTools() {
+        return [{ serverName: "alpha", name: "copy_file" }];
+      },
+      async callTool() {
+        return {
+          isError: true,
+          content: [{ type: "text", text: "Guest staging verification failed." }],
+        };
+      },
+    },
+  });
+  const registry = createResearchToolRegistry(discovery.tools);
+  const execution = await registry.execute({
+    id: "mcp_reported_error",
+    actionClass: discovery.descriptors[0].actionClasses[0],
+    toolName: discovery.descriptors[0].name,
+    input: {},
+  });
+
+  assert.equal(execution.result.status, "error");
+  assert.equal(execution.events.at(-1).payload.status, "error");
+  assert.equal(execution.result.output.output.isError, true);
+  assert.equal(execution.result.modelContent[0].text, "Guest staging verification failed.");
+  const projection = projectModelToolResult(execution.result);
+  assert.equal(projection.isError, true);
+  assert.ok(projection.content.some((item) =>
+    item.type === "text" && item.text.includes("Guest staging verification failed.")));
+});
+
 test("MCP calls reject invalid Beale timeout overrides before provider execution", async () => {
   let called = false;
   const discovery = await createMcpResearchTools({
