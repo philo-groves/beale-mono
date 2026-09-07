@@ -585,7 +585,7 @@ test("Auto-Review retries one transient provider error before failing closed", a
   assert.doesNotMatch(JSON.stringify(denied), /secret-provider-detail/);
 });
 
-test("Auto-Review permits bounded proofing before it is stabilized into a runbook", async () => {
+test("Auto-Review requires proofing commands to originate from a runbook cell", async () => {
   let manualCalls = 0;
   const authorize = createShellSafetyAuthorizer({
     getMode: () => "auto_review",
@@ -604,9 +604,10 @@ test("Auto-Review permits bounded proofing before it is stabilized into a runboo
     ),
   });
 
-  const exploratory = await authorize({ ...BASE_REQUEST, utility: "python3", args: ["proof.py"] });
-  assert.equal(exploratory.decision, "approved");
-  assert.equal(exploratory.source, "small_model");
+  const denied = await authorize({ ...BASE_REQUEST, utility: "python3", args: ["proof.py"] });
+  assert.equal(denied.decision, "denied");
+  assert.equal(denied.source, "policy");
+  assert.match(denied.reason, /recorded runbook cell/);
   assert.equal(manualCalls, 0);
 
   const approved = await authorize({

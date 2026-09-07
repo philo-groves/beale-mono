@@ -168,7 +168,11 @@ export class ResearchFocusGuard {
       && this.durableProgressPending
       && (
         isSessionDispositionTool(request.toolName)
-        || (request.kind === "research" && !isDurableProgressTool(request.toolName))
+        || (
+          request.kind === "research"
+          && !isDurableProgressTool(request.toolName)
+          && !isOperationalSupportTool(request.toolName)
+        )
       )
     ) {
       const tracked = { ...request, fingerprint, blocked: true };
@@ -178,7 +182,7 @@ export class ResearchFocusGuard {
         block: true,
         reason: [
           `Durable progress checkpoint required after ${this.activityCallsSinceDurableProgress} evidence-producing activity calls without a canonical research update.`,
-          "Convert the useful result into an existing or new memory, claim, investigation question, experiment, observation, or next action before more execution or session disposition. Search first when needed and update the canonical record instead of duplicating it. A runbook edit alone does not satisfy this checkpoint.",
+          "Convert the useful result into an existing or new memory, claim, runbook, or report before more execution or session disposition. Search first when needed and update the canonical record instead of duplicating it. Investigation questions, experiments, observations, and next actions summarize history but do not satisfy this execution-progress checkpoint.",
         ].join(" "),
       };
     }
@@ -191,7 +195,7 @@ export class ResearchFocusGuard {
         block: true,
         reason: [
           `Evidence checkpoint required after ${this.explorationCallsSinceConvergence} source-exploration calls.`,
-          "Rank at most three candidates. For each, state the next positive proof obligation and the evidence that would genuinely contradict or narrow a necessary link. Record the highest-value investigation.next_action or investigation.experiment before resuming broad source exploration; do not retire a candidate merely because proof is incomplete.",
+          "Rank at most three candidates. For each, state the next positive proof obligation and the evidence that would genuinely contradict or narrow a necessary link. Record the highest-value proof path in an existing or new runbook before resuming broad source exploration. Do not use the investigation overview as the execution controller, and do not retire a candidate merely because proof is incomplete.",
         ].join(" "),
       };
     }
@@ -439,9 +443,9 @@ export class ResearchFocusGuard {
         : `The last ${this.consecutiveRecallOnlyTurns} tool-only turns produced no distinct target evidence.`,
       "",
       reason === "convergence_checkpoint"
-        ? "Rank no more than three candidates. For each, state current evidence, the next positive proof obligation, and what result would genuinely contradict or narrow a necessary link. Prefer support-seeking work when it can advance attacker influence, reachability, dangerous behavior, reproducibility, composition, or impact. Record one investigation.next_action or investigation.experiment; do not retire a candidate merely because proof remains incomplete. Further broad source reads remain blocked until that checkpoint action succeeds."
+        ? "Rank no more than three candidates. For each, state current evidence, the next positive proof obligation, and what result would genuinely contradict or narrow a necessary link. Prefer support-seeking work when it can advance attacker influence, reachability, dangerous behavior, reproducibility, composition, or impact. Put the highest-value executable proof path in the matching existing or new runbook; do not use investigation records as the live execution controller or retire a candidate merely because proof remains incomplete. Further broad source reads remain blocked until that runbook is created, extended, or executed."
         : reason === "durable_progress_checkpoint"
-          ? "Convert the useful new facts, candidate, observation, negative result, or changed next step into canonical state now. Search for the matching memory, claim, or investigation record when needed, then revise it or create the missing record. Do not create or append a runbook merely to clear this checkpoint; runbooks are for stabilized reusable procedures."
+          ? "Convert the useful new facts, candidate, observation, negative result, changed proof obligation, or reusable execution step into canonical state now. Search for the matching memory, claim, runbook, or report, then revise it or create the missing record. Investigation records may summarize that state for cross-session history, but they do not clear this execution-progress checkpoint."
         : "Resume the research itself. Choose one concrete next move:",
       ...(reason === "convergence_checkpoint" ? [] : [
         "1. inspect a new source path or execute an experiment that can positively establish or genuinely contradict a necessary claim;",
@@ -595,8 +599,9 @@ function isSourceExplorationTool(toolName: string): boolean {
 
 function isConvergenceResolutionTool(toolName: string): boolean {
   const normalized = toolName.replaceAll(".", "_").toLowerCase();
-  return normalized === "investigation_next_action"
-    || normalized === "investigation_experiment";
+  return normalized === "runbook_create"
+    || normalized === "runbook_append"
+    || normalized === "runbook_run";
 }
 
 function isDurableProgressTool(toolName: string): boolean {
@@ -607,23 +612,32 @@ function isDurableProgressTool(toolName: string): boolean {
     || normalized === "lead_create"
     || normalized === "finding_revise"
     || normalized === "finding_transition"
-    || normalized === "investigation_question"
-    || normalized === "investigation_experiment"
-    || normalized === "investigation_observe"
-    || normalized === "investigation_next_action"
-    || normalized === "investigation_review_claim"
-    || normalized === "investigation_review_consolidation"
-    || normalized === "resource_catalog"
+    || normalized === "runbook_create"
+    || normalized === "runbook_append"
+    || normalized === "runbook_run"
     || normalized === "report_create"
     || normalized === "report_revise";
 }
 
 function isEvidenceActivityTool(toolName: string): boolean {
   const normalized = toolName.replaceAll(".", "_").toLowerCase();
-  return normalized !== "runbook_create"
-    && normalized !== "runbook_append"
+  return !isOperationalSupportTool(toolName)
     && normalized !== "history_mark_duplicate"
     && normalized !== "history_undo_duplicate";
+}
+
+function isOperationalSupportTool(toolName: string): boolean {
+  const normalized = toolName.replaceAll(".", "_").toLowerCase();
+  return normalized.endsWith("_inspect_tart_vm")
+    || normalized.endsWith("_start_tart_vm")
+    || normalized.endsWith("_stop_tart_vm")
+    || normalized.endsWith("_copy_to_tart_vm")
+    || normalized.endsWith("_copy_from_tart_vm")
+    || normalized === "inspect_tart_vm"
+    || normalized === "start_tart_vm"
+    || normalized === "stop_tart_vm"
+    || normalized === "copy_to_tart_vm"
+    || normalized === "copy_from_tart_vm";
 }
 
 function isSessionDispositionTool(toolName: string): boolean {

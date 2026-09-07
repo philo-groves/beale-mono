@@ -522,6 +522,63 @@ test("subagent runtime reuses durable channels without member barriers", async (
   assert.equal(store.get("workspace_one", "parser-review").messages.at(-1).contentMarkdown, "later session result");
   store.close();
 });
+
+test("subagent channel inheritance stays bounded independently of parent history", async () => {
+  const store = new ResearchChannelStore({ databasePath: ":memory:" });
+  store.create({
+    workspaceId: "workspace_one",
+    name: "long-running-channel",
+    title: "Long running channel",
+    topic: "Preserve durable coordination without replaying the full transcript.",
+  });
+  for (let index = 0; index < 40; index += 1) {
+    store.append({
+      workspaceId: "workspace_one",
+      channel: "long-running-channel",
+      sessionId: "historical_session",
+      agentPath: "/historical",
+      contentMarkdown: `historical-marker-${index} ${"x".repeat(500)}`,
+    });
+  }
+  store.share({
+    workspaceId: "workspace_one",
+    channel: "long-running-channel",
+    sessionId: "historical_session",
+    agentPath: "/historical",
+    kind: "runbook",
+    resourceId: "runbook_current_proof",
+    title: "Current proof procedure",
+  });
+
+  const requests = [];
+  const manager = new SubagentManager({
+    rootProvider: "openai",
+    rootModel: "gpt-5.6-sol",
+    channelContext: { store, workspaceId: "workspace_one", sessionId: "current_session", attemptId: "attempt_one" },
+    async run(request) {
+      requests.push(request);
+      return resultFor(request, "bounded result");
+    },
+  });
+  const tools = toolsByName(manager, "root");
+  const spawned = await tools.spawn_agent.execute("bounded_channel_spawn", {
+    task_name: "bounded_channel",
+    message: "Continue from durable state.",
+    fork_turns: "none",
+    channel_name: "long-running-channel",
+  });
+  await manager.settle();
+
+  assert.equal(spawned.details.inherited_channel_messages, 16);
+  assert.equal(requests[0].inheritedMessages.length, 1);
+  const inherited = requests[0].inheritedMessages[0].content;
+  assert.match(inherited, /bounded recent transcript \(at most 16 messages\)/);
+  assert.match(inherited, /historical-marker-39/);
+  assert.doesNotMatch(inherited, /historical-marker-0\b/);
+  assert.match(inherited, /runbook_current_proof/);
+  assert.ok(inherited.length < 16_000);
+  store.close();
+});
 test("subagent runtime normalizes exact routes and validates same-provider models", async () => {
   const requests = [];
   const manager = new SubagentManager({

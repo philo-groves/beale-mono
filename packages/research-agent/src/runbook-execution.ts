@@ -238,7 +238,7 @@ export function createRunbookExecutionTool(
     descriptor: {
       name: "runbook.run",
       transportName: "runbook_run",
-      description: "Execute one code cell, an inclusive ordered cell range, or a complete stabilized runbook through the normal app-server shell safety boundary. Returns the durable runId required for reproduction-grade runbook_execution finding evidence. Use startCellId after repairing a late failure so already-successful cells are not repeated. Exploratory proof development may run directly through shell.run before it is consolidated here.",
+      description: "Execute one code cell, an inclusive ordered cell range, or a complete runbook through the normal app-server shell safety boundary. This is the required execution path for proof-of-concepts, vulnerability reproductions, exploit-path tests, verifiers, claim-confirming experiments, and evidence benchmarks. Returns the durable runId required for reproduction-grade runbook_execution finding evidence. Use startCellId after repairing a late failure so already-successful cells are not repeated.",
       actionClasses: ["experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],

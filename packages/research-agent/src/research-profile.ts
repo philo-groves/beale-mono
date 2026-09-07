@@ -445,7 +445,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.13.0",
+  version: "1.14.0",
   name: "Security",
   description: "Authorized open-ended vulnerability discovery, high-upside longshot hunting, chaining, verification, and reporting.",
   agent: {
@@ -468,10 +468,10 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       "Evidence is attached to knowledge or claim records, not stored as its own memory type. Record suspected results with lead.create; promote that same stable claim to a finding through finding.transition when direct evidence is obtained, and append same-maturity evidence by transitioning it to its current status. Classify isolated security results as security.primitive and composite paths as security.chain.",
     ],
     runbookInstructions: [
-      "List existing workspace runbooks before creating one.",
-      "Use direct shell execution for bounded proof exploration, builds, debugging, and one-off experiments. Create or extend a runbook only after a useful multi-step procedure or successful proof sequence has stabilized enough to be reused.",
-      "For reproduction-grade evidence, consolidate the minimal clean-state sequence into the matching existing runbook, record prerequisites, expected evidence, interpretation, and cleanup, then execute it with runbook.run.",
-      "Do not create lifecycle wrapper runbooks or append one cell per exploratory tweak or failed attempt. Persist the resulting observation, claim evidence, or next action in canonical research state instead.",
+      "Search and list existing workspace runbooks before beginning proof work. Reuse the matching runbook or create one before the first claim-confirming experiment, and keep that runbook as the human-visible execution path for the proof.",
+      "Use direct shell execution only for bounded source inspection, builds, and diagnostics that do not execute or validate a claim. Execute proof-of-concepts, vulnerability reproductions, exploit-path tests, verifiers, claim-confirming experiments, and evidence benchmarks through runbook.run; Auto-Review denies proofing outside a recorded runbook cell.",
+      "Keep iterative implementation in a stable candidate artifact and use a bounded runbook cell as its entry command. Rerun the same cell while the command remains valid; append only when the procedure, prerequisite, expected evidence, interpretation, or cleanup changes. Failed run output is the attempt history, so do not create lifecycle wrappers, duplicate runbooks, or one cell per tweak.",
+      "Use the successful runId emitted by runbook.run for reproduction-grade finding evidence. Store concise facts in memory and claims, while the investigation remains a cross-session overview rather than the live execution controller.",
     ],
     reportInstructions: [
       "List existing workspace reports before creating one.",

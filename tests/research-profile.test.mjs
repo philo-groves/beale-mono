@@ -82,6 +82,7 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   const securityPrompt = createResearchSystemPrompt({
     hasTools: true,
     hasMemoryTools: true,
+    hasRunbookTools: true,
     researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
   });
   assert.match(securityPrompt, /- flow-endpoint \(Flow Endpoint\)/);
@@ -99,6 +100,9 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.match(securityPrompt, /never substitute the host username for a guest account/);
   assert.match(securityPrompt, /do not elevate an entire VM manager merely to bypass an optional network backend/);
   assert.match(securityPrompt, /update its asset memory and reusable environment runbook/);
+  assert.match(securityPrompt, /create one before the first claim-confirming experiment/);
+  assert.match(securityPrompt, /Execute proof-of-concepts.*through runbook\.run/);
+  assert.match(securityPrompt, /investigation remains a cross-session overview rather than the live execution controller/);
 });
 
 test("bundled profiles define domain-specific Longshot workflows", () => {
@@ -107,7 +111,7 @@ test("bundled profiles define domain-specific Longshot workflows", () => {
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
   const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
 
-  assert.equal(security.version, "1.13.0");
+  assert.equal(security.version, "1.14.0");
   assert.equal(mathematics.version, "1.6.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);

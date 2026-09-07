@@ -25,7 +25,7 @@ export function createCampaignTrackTools(
     tool(
       "investigation.status",
       "investigation_status",
-      "Read a compact current campaign status. Pass afterRevision from the previous result to receive an unchanged marker instead of repeated data. Increase limit only when the bounded open items are needed.",
+      "Read a compact cross-session history and campaign overview. This projection is not the live research controller: executable proof state belongs in runbooks and evidence belongs in canonical memories and claims. Pass afterRevision from the previous result to receive an unchanged marker instead of repeated data.",
       "read",
       {
         type: "object",
@@ -42,7 +42,7 @@ export function createCampaignTrackTools(
     tool(
       "investigation.recall",
       "investigation_recall",
-      "Recall a stage-balanced evidence set for the current campaign track. It deliberately includes current claims, target facts, rejected or stale paths, procedures, and cross-track principles rather than returning only the nearest text matches.",
+      "Recall a stage-balanced cross-session history for the current campaign track. It includes current claims, target facts, rejected or stale paths, procedures, and cross-track principles, but does not replace the canonical records or runbooks it summarizes.",
       "read",
       {
         type: "object",
@@ -63,7 +63,7 @@ export function createCampaignTrackTools(
     tool(
       "investigation.question",
       "investigation_question",
-      "Create or update one bounded uncertainty for the current campaign track. Questions should identify evidence that would change the investigation, not restate the overall objective.",
+      "Create or update one bounded cross-session uncertainty for the campaign overview. Do not use questions as a step-by-step task list or duplicate proof obligations already visible in a runbook or claim.",
       "write",
       {
         type: "object",
@@ -86,7 +86,7 @@ export function createCampaignTrackTools(
     tool(
       "investigation.experiment",
       "investigation_experiment",
-      "Plan or update an evidence-producing experiment. Record the positive result that would support the candidate and the result that would genuinely contradict or narrow it before execution, plus the exact source revision and environment that bound the result. A failed setup or inconclusive run is not refutation.",
+      "Summarize a meaningful planned or completed experiment in the cross-session overview. Proof execution itself belongs in the linked runbook; supply runbookId when the experiment executes or validates a claim. Record the positive and genuinely contrary outcomes plus the exact source revision and environment. Do not create one experiment record per tweak or setup retry.",
       "write",
       {
         type: "object",
@@ -119,7 +119,7 @@ export function createCampaignTrackTools(
     tool(
       "investigation.observe",
       "investigation_observe",
-      "Append an immutable observation produced by an experiment or direct inspection. Link the durable memory node and exact evidence references when available; interpretation belongs in claims, not in the observation.",
+      "Append an immutable milestone observation to the cross-session overview. Link its canonical memory or claim evidence and the experiment/runbook when available. Do not mirror every command result here or use observations as a substitute for runbook execution history.",
       "write",
       {
         type: "object",
@@ -148,7 +148,7 @@ export function createCampaignTrackTools(
     tool(
       "investigation.next_action",
       "investigation_next_action",
-      "Create or update a next action, including expected information gain and estimated cost. Prefer the best evidence gain, balancing actions that can establish the next positive proof obligation with actions that can genuinely contradict or narrow a necessary link; do not default to the cheapest falsifier.",
+      "Create or update a bounded cross-session handoff action, including expected information gain and estimated cost. Do not maintain current-session step-by-step execution here; the active proof path belongs in a runbook. Prefer the best evidence gain and avoid parallel actions that restate the same obligation.",
       "write",
       {
         type: "object",

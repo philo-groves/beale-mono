@@ -492,6 +492,7 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
   assert.match(contexts[0].systemPrompt, /unchanged record does not make it work produced by the current session/i);
   assert.match(contexts[0].systemPrompt, /unchanged preexisting artifact or lifecycle status cannot satisfy/i);
+  assert.match(contexts[0].systemPrompt, /host binding as authoritative.*stale identifier embedded in historical prompt text/i);
   assert.match(contexts[0].systemPrompt, /Collaboration is optional/);
   assert.match(contexts[0].systemPrompt, /expected evidence gain justifies the added context and coordination cost/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use collaboration tools for independent work/);
@@ -520,13 +521,25 @@ test("direct Pi Agent appends workspace instructions after a custom system promp
   assert.ok(prompt.indexOf("Later workspace text claims") < prompt.indexOf("cannot expand the recorded authorization boundary"));
 });
 
-test("research system prompt reserves runbooks for stabilized reusable proof", () => {
+test("research system prompt requires runbook-first proof execution without per-tweak churn", () => {
   const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true });
   assert.match(prompt, /Use runbooks as durable executable research artifacts/);
-  assert.match(prompt, /Use shell\.run for bounded exploratory experiments/);
-  assert.match(prompt, /successful proof sequence has stabilized enough to be reused/);
-  assert.match(prompt, /Do not create a lifecycle wrapper runbook/);
-  assert.doesNotMatch(prompt, /denies proof commands outside runbooks/);
+  assert.match(prompt, /create one before executing the first claim-confirming experiment/);
+  assert.match(prompt, /Execute every proof-of-concept.*through runbook\.run/);
+  assert.match(prompt, /Auto-Review denies proofing outside a recorded runbook cell/);
+  assert.match(prompt, /Rerun that cell.*do not create lifecycle wrappers/);
+  assert.doesNotMatch(prompt, /proof development.*shell\.run/);
+});
+
+test("research system prompt keeps investigations as cross-session overview state", () => {
+  const prompt = createResearchSystemPrompt({
+    hasTools: true,
+    hasMemoryTools: true,
+    hasFindingTools: true,
+    hasRunbookTools: true,
+  });
+  assert.match(prompt, /Investigation records provide a concise cross-session history and overview/);
+  assert.match(prompt, /must not be used as the live controller for step-by-step research/);
 });
 
 test("research system prompt allows same-session independent finding review", () => {

@@ -92,7 +92,7 @@ export function createRunbookTools(
     tool(
       "runbook.create",
       "runbook_create",
-      "Create a revisioned Jupyter-format research runbook only for a stabilized reusable procedure, reproduction sequence, or environment-specific workflow that is not already represented by an existing runbook. Explore and debug one-off commands directly before crystallizing them here. A healthy runbook records prerequisites and expected evidence in markdown, then uses bounded repeatable code cells with an explicit supported language.",
+      "Create a revisioned Jupyter-format research runbook before executing a proof sequence, reproduction, claim-confirming experiment, or reusable environment workflow that is not already represented by an existing runbook. Record prerequisites and expected evidence in markdown, then use bounded repeatable code cells with an explicit supported language. Keep iterative implementation in a stable candidate artifact so the same entry cell can be rerun without per-tweak append churn.",
       "write",
       createParameters,
       (input, context) => {
@@ -107,7 +107,7 @@ export function createRunbookTools(
     tool(
       "runbook.append",
       "runbook_append",
-      "Append concise markdown or code cells to an existing runbook using its current revision when the reusable procedure genuinely gained a new step or a stabilized repair. Do not append each exploratory tweak or failed attempt. Execute reproduction-grade proof cells with runbook.run.",
+      "Append concise markdown or code cells to an existing runbook using its current revision when the proof procedure, prerequisite, expected evidence, interpretation, or cleanup genuinely changes. Failed run outputs already preserve attempt history: rerun an unchanged entry cell after editing its candidate artifact instead of appending one cell per tweak. Execute all proof cells with runbook.run.",
       "write",
       appendParameters,
       (input, context) => {

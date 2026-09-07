@@ -47,7 +47,8 @@ test("collaboration config preserves validated Advanced compatible roles", () =>
 
   assert.deepEqual(config.providers[0].roles, ["discoverer", "prover"]);
   assert.deepEqual(config.providers[1].roles, ["reviewer"]);
-  assert.match(createCollaborationSystemGuidance(config), /continuous discovery coverage with bounded Discoverer scouts/);
+  assert.match(createCollaborationSystemGuidance(config), /Use at most one Discoverer at a time/);
+  assert.match(createCollaborationSystemGuidance(config), /completed Discoverer is not a vacancy to refill/);
   assert.deepEqual(decodeResearchCollaborationConfig({
     ...BASE_CONFIG,
     providers: [{ ...BASE_CONFIG.providers[0], role: "reviewer" }],
@@ -88,6 +89,16 @@ test("discovery-specific collaboration guidance does not leak into other workflo
 
   assert.match(guidance, /makes collaboration available, not required/);
   assert.doesNotMatch(guidance, /Discovery may benefit/);
+});
+
+test("advanced collaboration defaults sequential work to bounded closure without lane coupling", () => {
+  const advanced = { ...BASE_CONFIG, subagentMode: "advanced" };
+  const chaining = createCollaborationSystemGuidance(advanced, "chaining");
+  const discovery = createCollaborationSystemGuidance(advanced, "discovery");
+
+  assert.match(chaining, /continue in the lead plus bounded Prover or Reviewer assignments/);
+  assert.match(discovery, /continue in the lead plus bounded Prover or Reviewer assignments/);
+  assert.doesNotMatch(chaining, /continuous discovery coverage/);
 });
 
 test("advanced collaboration guidance describes Simple controls with explicit delegation roles", () => {

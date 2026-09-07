@@ -452,9 +452,8 @@ export function createPiAgentExecutor(
         && researchToolNames.has("report_revise");
       const hasDurableProgressTools = hasMemoryTools
         || hasFindingTools
-        || hasReportTools
-        || researchToolNames.has("investigation_next_action")
-        || researchToolNames.has("resource_catalog");
+        || hasRunbookTools
+        || hasReportTools;
       const hasSessionDispositionTool = researchToolNames.has("session_disposition");
 
       runSession = async (request) => {
@@ -489,8 +488,7 @@ export function createPiAgentExecutor(
             ? goalRuntime?.snapshot().objective ?? input.modelInput.prompt
             : request.prompt,
           ...(initialResearchFocusState ? { initialState: initialResearchFocusState } : {}),
-          convergenceEnabled: researchToolNames.has("investigation_next_action")
-            || researchToolNames.has("investigation_experiment"),
+          convergenceEnabled: hasRunbookTools,
           durableProgressEnabled: hasDurableProgressTools,
         });
         const emitRuntimeEvent = async (payload: Record<string, unknown>): Promise<void> => {

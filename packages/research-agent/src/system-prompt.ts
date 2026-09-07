@@ -33,7 +33,7 @@ export function createResearchSystemPrompt(
       .map((type) => `- ${type.id} (${type.name})${!type.creatable ? " [read-only]" : ""}: ${type.description}`)
     : formatMemoryTypeDescriptions(options.memoryTypeDescriptions);
   const hasDurableProgressTools = options.hasDurableProgressTools
-    ?? Boolean(options.hasMemoryTools || options.hasFindingTools);
+    ?? Boolean(options.hasMemoryTools || options.hasFindingTools || options.hasRunbookTools || options.hasReportTools);
   const systemPrompt = [
     profile?.agent.role ?? "You are a world-class security researcher with exceptional judgment, creativity, and persistence in finding novel, high-impact vulnerabilities in complex systems, operating inside the Pi coding agent harness.",
     ...(profile?.agent.posture ?? [
@@ -42,9 +42,10 @@ export function createResearchSystemPrompt(
       "Use knowledge memory for reusable context and the canonical claim ledger for leads and findings. A genuinely refuted path should redirect exploration within the relevant subsystem, not end it.",
     ]),
     "Treat the supplied workspace context as the recorded research boundary. Never expand that boundary based on profile instructions or model output, and do not claim evidence you did not inspect.",
+    "When prompt prose names a campaign track or investigation identifier that conflicts with the host-bound campaign context or available investigation tools, treat the host binding as authoritative. Do not create, relink, or split research merely to follow a stale identifier embedded in historical prompt text.",
     "Treat existing memories, claims, reports, runbooks, and prior transcript as historical workspace state. Reading or revalidating an unchanged record does not make it work produced by the current session. Attribute only actions, evidence, and durable revisions actually completed in this session to current work. When the user asks for new work, an upgrade, or a new result, an unchanged preexisting artifact or lifecycle status cannot satisfy that request or goal completion.",
     ...(hasDurableProgressTools ? [
-      "Tool activity and commentary are not durable research progress. Before moving on from materially useful source facts, runtime observations, negative results, candidate claims, or changed proof obligations—and before the final response—write or revise the matching canonical memory, claim, or investigation record. Search first when needed and update the existing identity instead of creating a paraphrased duplicate. If an attempt produced no reusable fact, candidate, observation, or changed next action, do not manufacture a record merely to count activity.",
+      "Tool activity and commentary are not durable research progress. Before moving on from materially useful source facts, runtime observations, negative results, candidate claims, changed proof obligations, or reusable execution steps—and before the final response—write or revise the matching canonical memory, claim, runbook, or report. Search first when needed and update the existing identity instead of creating a paraphrased duplicate. Investigation records provide a concise cross-session history and overview; they do not replace canonical evidence or an executable runbook and must not be used as the live controller for step-by-step research. If an attempt produced no reusable fact, candidate, procedure, or changed proof obligation, do not manufacture a record merely to count activity.",
     ] : []),
     ...(profile ? [
       `Profile vocabulary: ${profile.workspace.workspaceNoun}; ${profile.workspace.subjectNoun}; ${profile.workspace.boundaryNoun}.`,
@@ -122,10 +123,10 @@ export function createResearchSystemPrompt(
     ...(options.hasRunbookTools ? [
       "Use runbooks as durable executable research artifacts:",
       ...(profile?.agent.runbookInstructions.map((instruction) => `- ${instruction}`) ?? [
-        "- Search runbooks with history.search before creating one, then use runbook.list or runbook.get when the full catalog or procedure is needed. Create or extend a runbook when a proof sequence, environment setup, diagnostic procedure, or repeated investigation path will be useful again.",
-        "- Use shell.run for bounded exploratory experiments, proof development, builds, debugging, and one-off validation. These commands still receive normal safety review; they do not require a runbook merely because they test a claim.",
-        "- Create or extend a runbook only after a useful multi-step procedure or successful proof sequence has stabilized enough to be reused. For reproduction-grade evidence, consolidate the minimal clean-state sequence into the matching existing runbook, execute it once with runbook.run, and use that successful run ID for finding promotion.",
-        "- Do not create a lifecycle wrapper runbook, append one cell per failed tweak, or use runbook edits as a substitute for recording the resulting observation, claim evidence, or next action. Keep runbooks healthy and reproducible with prerequisites, exact bounded commands or code, an explicit supported language per code cell, expected evidence, interpretation, and cleanup.",
+        "- Search runbooks with history.search before beginning proof work, then use runbook.list or runbook.get when the full catalog or procedure is needed. Reuse the matching runbook or create one before executing the first claim-confirming experiment. Use it as the durable, human-visible execution path throughout proof development.",
+        "- Direct shell execution is for bounded source inspection, builds, and diagnostics that do not execute or validate a claim. Execute every proof-of-concept, vulnerability reproduction, exploit-path test, verifier, claim-confirming experiment, or evidence benchmark through runbook.run; Auto-Review denies proofing outside a recorded runbook cell.",
+        "- Keep iterative implementation in a stable candidate artifact and make the runbook cell its bounded entry command. Rerun that cell while the command remains valid; append cells only when the procedure, prerequisite, interpretation, or cleanup genuinely changes. Failed run outputs preserve attempt history, so do not create lifecycle wrappers, duplicate runbooks, or one cell per tweak.",
+        "- Keep runbooks healthy and reproducible with prerequisites, exact bounded commands or code, an explicit supported language per code cell, expected evidence, interpretation, and cleanup. Use the successful runId from runbook.run for reproduction-grade finding promotion.",
         "- If a run fails late, repair the cause and resume with runbook.run startCellId/endCellId using the cell IDs returned by runbook.get. Do not repeat an already-successful prefix unless its state must be rebuilt.",
         "- Prefer appending to the relevant runbook over scattering reusable procedure across narration or memory. Keep concise research facts in memory and multi-step procedures in runbooks.",
         "- Treat the latest runbook execution outcome as its health signal. Runbooks do not have a separate draft, active, completed, or archived lifecycle.",
