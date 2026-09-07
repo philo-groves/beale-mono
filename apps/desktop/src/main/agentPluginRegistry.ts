@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { MANAGED_TOOL_PLUGIN_IDS } from '@beale/app-server-runtime/protocol';
 import type { AgentPluginRecord, AgentPluginRegistryState } from '@shared/types';
 import {
   addAppServerPluginFromFilesystem,
@@ -64,6 +65,10 @@ export class AgentPluginRegistry {
 
 function defaultBuiltinPlugins(): AppServerBuiltinPlugin[] {
   return [
+    ...MANAGED_TOOL_PLUGIN_IDS.map((id) => ({
+      id: `${id}-builtin`, path: defaultBuiltinPluginPath(id),
+      installedAt: '2026-08-14T00:00:00.000Z', enabledByDefault: true
+    })),
     {
       id: 'beale-introspection-builtin',
       path: defaultBuiltinPluginPath('beale-introspection'),

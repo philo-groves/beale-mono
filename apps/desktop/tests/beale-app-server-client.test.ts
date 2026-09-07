@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getAppServerMemorySummaryAsync } from '../src/main/appServerCliClient';
 import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
@@ -15,6 +16,7 @@ import {
   ensureBealeAppServerRunning,
   fetchExistingAppServerCanonicalResult,
   fetchAppServerSession,
+  invokeAppServerOperation,
   inspectAppServerCompatibility,
   probeAppServerHealth,
   probeAppServerCompatibility,
@@ -222,6 +224,147 @@ describe('beale app-server client', () => {
       '/v1/workspaces/workspace-1/sessions/session-1/update'
     )).resolves.toEqual({ revision: 7 });
     expect(canonicalRequests).toBe(2);
+  });
+
+  it('recovers existing-session reads through repeated resets, including a truncated response body', async () => {
+    const path = '/v1/workspaces/workspace-example/sessions/session-example/update?afterEventId=event-example';
+    let requests = 0;
+    await startStubServer((request, response) => {
+      expect(request.url).toBe(path);
+      expect(request.headers.authorization).toBe('Bearer operator-token');
+      requests += 1;
+      if (requests === 1) {
+        request.socket.destroy();
+      } else if (requests === 2) {
+        response.writeHead(200, { 'content-type': 'application/json', 'content-length': '1000' });
+        response.write('{"result":');
+        setTimeout(() => response.destroy(), 10);
+      } else {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION, workspace: { workspaceId: 'workspace-example' }, result: { revision: 7 } }));
+      }
+    });
+    const record = discoveryRecord({ url: serverUrl });
+    writeFileSync(process.env.BEALE_APP_SERVER_STATE_FILE!, JSON.stringify(record), 'utf8');
+    process.env.BEALE_APP_SERVER_COMMAND = 'definitely-not-a-real-beale-launcher';
+    await expect(fetchExistingAppServerCanonicalResult(record, path)).resolves.toEqual({ revision: 7 });
+    expect(requests).toBe(3);
+  });
+
+  it('bounds existing-session retries when the connection keeps resetting', async () => {
+    let requests = 0;
+    await startStubServer((request) => {
+      requests += 1;
+      request.socket.destroy();
+    });
+    const record = discoveryRecord({ url: serverUrl });
+    writeFileSync(process.env.BEALE_APP_SERVER_STATE_FILE!, JSON.stringify(record), 'utf8');
+    process.env.BEALE_APP_SERVER_COMMAND = 'definitely-not-a-real-beale-launcher';
+    await expect(fetchExistingAppServerCanonicalResult(record, '/v1/example')).rejects.toThrow('fetch failed');
+    expect(requests).toBe(3);
+  });
+
+  it('cancels existing-session retry waits without sending another request', async () => {
+    let requests = 0;
+    const controller = new AbortController();
+    await startStubServer((request) => {
+      requests += 1;
+      request.socket.destroy();
+      setTimeout(() => controller.abort(), 20);
+    });
+    const record = discoveryRecord({ url: serverUrl });
+    writeFileSync(process.env.BEALE_APP_SERVER_STATE_FILE!, JSON.stringify(record), 'utf8');
+    await expect(fetchExistingAppServerCanonicalResult(record, '/v1/example', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(requests).toBe(1);
+  });
+
+  it.each(['POST', 'DELETE'] as const)('does not replay an existing-session %s after a transport failure', async (method) => {
+    let requests = 0;
+    await startStubServer((request) => {
+      requests += 1;
+      request.socket.destroy();
+    });
+    const record = discoveryRecord({ url: serverUrl });
+    writeFileSync(process.env.BEALE_APP_SERVER_STATE_FILE!, JSON.stringify(record), 'utf8');
+    await expect(fetchExistingAppServerCanonicalResult(record, '/v1/example', { method })).rejects.toThrow();
+    expect(requests).toBe(1);
+  });
+
+  it.each([403, 500, 200])('does not retry an existing-session HTTP or invalid-payload failure (%s)', async (status) => {
+    let requests = 0;
+    await startStubServer((_request, response) => {
+      requests += 1;
+      response.writeHead(status, { 'content-type': 'application/json' }).end('{invalid');
+    });
+    const record = discoveryRecord({ url: serverUrl });
+    writeFileSync(process.env.BEALE_APP_SERVER_STATE_FILE!, JSON.stringify(record), 'utf8');
+    await expect(fetchExistingAppServerCanonicalResult(record, '/v1/example')).rejects.toThrow(status === 200 ? 'invalid canonical response' : `(${status})`);
+    expect(requests).toBe(1);
+  });
+
+  it('recovers the memory-summary POST used to enrich session updates without host lifecycle calls', async () => {
+    let reads = 0;
+    let lifecycleRequests = 0;
+    const bodies: unknown[] = [];
+    const summary = {
+      nodeCount: 0, edgeCount: 0, nodes: [], edges: [], runbooks: [], leads: [], findings: [],
+      campaign: {
+        nodes: [], edges: [], coverageGaps: [], contradictions: [], nextActions: [],
+        momentum: { state: 'empty', reason: 'Synthetic empty workspace.', supportingNodeIds: [] },
+        counts: { leads: 0, findings: 0, coverageGaps: 0 }
+      }
+    };
+    await startStubServer((request, response) => {
+      if (request.url === '/health') {
+        lifecycleRequests += 1;
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          ok: true, controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          contractTimestamp: BEALE_APP_SERVER_CONTRACT_TIMESTAMP, capabilities: BEALE_APP_SERVER_CAPABILITIES
+        }));
+        return;
+      }
+      let body = '';
+      request.on('data', (chunk: Buffer) => { body += chunk.toString('utf8'); });
+      request.on('end', () => {
+        bodies.push(JSON.parse(body));
+        reads += 1;
+        if (reads === 1) {
+          request.socket.destroy();
+        } else if (reads === 2) {
+          response.writeHead(200, { 'content-type': 'application/json', 'content-length': '1000' });
+          response.write('{"result":');
+          setTimeout(() => response.destroy(), 10);
+        } else {
+          response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+            controlVersion: BEALE_APP_SERVER_CONTROL_VERSION, result: summary
+          }));
+        }
+      });
+    });
+    const record = discoveryRecord({ url: serverUrl });
+    writeFileSync(process.env.BEALE_APP_SERVER_STATE_FILE!, JSON.stringify(record), 'utf8');
+    process.env.BEALE_APP_SERVER_COMMAND = 'definitely-not-a-real-beale-launcher';
+    await expect(getAppServerMemorySummaryAsync(
+      { workspaceId: 'workspace-example', subjectId: null, researchProfileId: 'security-research' },
+      { databasePath: join(temporaryDirectory, 'memory.sqlite'), artifactDirectoryPath: join(temporaryDirectory, 'artifacts') }
+    )).resolves.toEqual(summary);
+    expect(reads).toBe(3);
+    expect(lifecycleRequests).toBe(0);
+    expect(bodies[0]).toMatchObject({ operation: 'memory.summary', profileId: 'security-research', input: { workspaceId: 'workspace-example', subjectId: null } });
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[2]).toEqual(bodies[0]);
+  });
+
+  it('reports which read failed when memory-summary retries are exhausted', async () => {
+    let reads = 0;
+    await startStubServer((request) => { reads += 1; request.socket.destroy(); });
+    const record = discoveryRecord({ url: serverUrl });
+    writeFileSync(process.env.BEALE_APP_SERVER_STATE_FILE!, JSON.stringify(record), 'utf8');
+    process.env.BEALE_APP_SERVER_COMMAND = 'definitely-not-a-real-beale-launcher';
+    await expect(invokeAppServerOperation({ operation: 'memory.summary' })).rejects.toMatchObject({
+      name: 'AppServerReadTransportError', operation: 'memory.summary', attempts: 3
+    });
+    expect(reads).toBe(3);
   });
 
   it('uses the loopback discovery URL for Desktop health checks when a public URL is advertised', async () => {

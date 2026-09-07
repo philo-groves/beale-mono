@@ -78,4 +78,6 @@ export * from "./research-prompt-expansion.js";
 export * from "./research-profile.js";
 export * from "./harness.js";
 export * from "./types.js";
+export * from "./managed-tool-plugins.js";
+export * from "./file-mutation-tools.js";
 export type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";

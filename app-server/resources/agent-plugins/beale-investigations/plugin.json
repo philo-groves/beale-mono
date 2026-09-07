@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "beale-investigations",
+  "version": "0.1.0",
+  "description": "Use for investigation records, questions, observations, and configured experiments.",
+  "author": "Beale",
+  "license": "MIT",
+  "extensions": {
+    "beale": {
+      "hostToolPlugin": "beale-investigations"
+    }
+  }
+}

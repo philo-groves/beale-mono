@@ -7,6 +7,7 @@
 #### Fixed
 
 - Apple security device host-to-guest Tart copies now use path-based transfer through private command runners, avoiding staging corruption when a runner does not relay stdin. MCP responses marked `isError` now become failed research-tool executions while preserving their bounded diagnostic output.
+- Desktop session and memory-summary reads now retry transient connection resets up to twice, including response-body failures, within one request deadline without launching a replacement host. A failed optional memory refresh preserves the successful transcript update and previous memory catalog, waits before retrying, and logs the failed operation; primary session failures remain visible.
 - Apple Security Bounty Research Kit workspaces now append Apple Open Source release and upstream-history checks to repository and resource first-touch guidance without applying Apple-specific instructions to other kits.
 - Repository-owned tests, fixtures, prompts, and documentation now use clearly synthetic research scenarios instead of target-derived examples.
 - Simple collaboration no longer advertises a free-form channel `role` that deterministically fails when supplied without `channel_name`; channel membership roles are assigned automatically, while Advanced delegation retains its required bounded role enum.
@@ -87,6 +88,8 @@
 
 #### Changed
 
+- Grouped native tools into seven managed plugins enabled by default: Source, Provenance, Knowledge, Claims, Investigations, Runbooks, and Reporting. Each has compact usage guidance; file operations and shell execution remain core tools. Pi loads plugin schemas on demand, Claude uses native tool search, and ZCode retains its fixed tool-list behavior.
+- Added core candidate-file write and exact-text edit tools, with bounded output and hash checks for replacing existing files. File reads now return a content hash.
 - Desktop workspace and registry persistence now runs through allowlisted app-server operations. Beale retains synchronous compatibility facades and in-place database migration while no longer importing SQLite, issuing SQL, or owning database handles; the shared app-server contract advances to v16.
 - Agent Plugin stdio runtime materialization now expands standard plugin variables in arguments, provides reserved `PLUGIN_ROOT` and `PLUGIN_DATA` environment variables, and rejects plugin attempts to override them.
 - Desktop automation details now label the right summary sidenav Automation and show the configured Interval above a divider-separated run history.
@@ -1078,6 +1081,8 @@
 ### app-server
 
 #### Changed
+
+- Session launches and continuations read the current managed-plugin selection, preserve explicit disablement, and reject native tools without declared plugin or core ownership.
 
 - Hosted research workers no longer open the app-server SQLite database. Research stores delegate synchronous SQL through a private worker-to-host mediator whose host-owned connections are restricted to the session's registered database, leaving the resident app-server process as the only database-writing entity.
 - The app-server now owns the existing workspace-state and user-global registry stores, including migrations, settings, session indexing, artifacts, and project-structure persistence, behind versioned allowlisted operations.

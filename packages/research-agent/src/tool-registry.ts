@@ -4,6 +4,7 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { createResearchEventId, nowIso } from "./ids.js";
+import type { ManagedToolPluginOption } from "./managed-tool-plugins.js";
 import {
   MAX_MCP_CALL_TIMEOUT_MS,
   MCP_CALL_TIMEOUT_INPUT_KEY,
@@ -136,10 +137,12 @@ export interface ExecuteToolCallOptions extends ResearchToolExecutionContext {
 }
 
 export interface ResearchToolRegistryOptions {
+  managedPlugins?: readonly ManagedToolPluginOption[];
   validationHooks?: ReadonlyMap<string, ResearchToolValidationHook> | Record<string, ResearchToolValidationHook>;
 }
 
 export class ResearchToolRegistry {
+  readonly managedPlugins: readonly ManagedToolPluginOption[] | undefined;
   readonly #toolsByName = new Map<string, ResearchExecutableTool>();
   readonly #toolsByTransportName = new Map<string, ResearchExecutableTool>();
   readonly #validationHooks = new Map<string, ResearchToolValidationHook>();
@@ -148,6 +151,7 @@ export class ResearchToolRegistry {
     tools: readonly ResearchExecutableTool[] = [],
     options: ResearchToolRegistryOptions = {},
   ) {
+    this.managedPlugins = options.managedPlugins;
     for (const [name, hook] of readValidationHookEntries(options.validationHooks)) {
       this.#validationHooks.set(name, hook);
     }
@@ -167,6 +171,13 @@ export class ResearchToolRegistry {
 
   listTools(): ResearchExecutableTool[] {
     return [...this.#toolsByName.values()];
+  }
+
+  fork(additionalTools: readonly ResearchExecutableTool[] = []): ResearchToolRegistry {
+    return new ResearchToolRegistry([...this.listTools(), ...additionalTools], {
+      validationHooks: this.#validationHooks,
+      ...(this.managedPlugins ? { managedPlugins: this.managedPlugins } : {}),
+    });
   }
 
   toPiTools(): Tool[] {

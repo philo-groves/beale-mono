@@ -18,6 +18,8 @@ import {
   normalizeResearchProfile,
   researchProfileHash,
   runResearchAgent,
+  managedToolPluginOptions,
+  MANAGED_TOOL_PLUGIN_IDS,
 } from "../packages/research-agent/dist/index.js";
 import {
   convertResponsesMessages,
@@ -73,6 +75,57 @@ const COLLABORATION_TOOL_NAMES = [
 const WORKSPACE_AGENT_INSTRUCTIONS = agentInstructions(
   "Security workspace guidance: use the Tart VM with SIP enabled for target execution.",
 );
+
+test("Pi loads only requested plugin schemas on the next turn and preserves them across resume", async () => {
+  const calls = [];
+  const knowledge = createFixtureInspectTool(calls);
+  knowledge.descriptor.name = "memory.get";
+  knowledge.descriptor.transportName = "memory_get";
+  const source = createFixtureInspectTool([]);
+  source.descriptor.name = "repository.search";
+  source.descriptor.transportName = "repository_search";
+  const tools = [knowledge, source];
+  const options = managedToolPluginOptions(tools, MANAGED_TOOL_PLUGIN_IDS);
+  const registry = createResearchToolRegistry(tools, { managedPlugins: options });
+  const contexts = [];
+  const result = await runResearchAgent({
+    prompt: "Read the synthetic example record.",
+    agentInstructions: agentInstructions("Use only synthetic example data."),
+    tools: registry.listDescriptors(),
+    governance: { maxToolCalls: 1 },
+    executor: createPiAgentExecutor({
+      provider: "faux", model: "faux-model", subagents: false, toolRegistry: registry,
+      models: createScriptedModels([
+        assistant(toolCall("plugins_load", { plugins: ["beale-knowledge"] }, "load_example"), "toolUse"),
+        assistant(toolCall("memory_get", { path: "example.txt" }, "read_example"), "toolUse"),
+        assistant(toolCall("plugins_load", { plugins: ["beale-source"] }, "load_after_budget"), "toolUse"),
+        assistant("Example read complete."),
+      ], contexts),
+    }),
+  });
+  assert.equal(result.agentRun.status, "complete", result.response);
+  assert.deepEqual(contexts[0].toolNames, ["plugins_load"]);
+  assert.ok(contexts[1].toolNames.includes("memory_get"));
+  assert.equal(contexts[1].toolNames.includes("repository_search"), false);
+  assert.deepEqual(contexts[2].toolNames, ["plugins_load"]);
+  assert.deepEqual(contexts[3].toolNames, ["plugins_load"], "loading must not reactivate tools after budget exhaustion");
+  assert.deepEqual(calls, [{ path: "example.txt" }], "loading does not consume research tool budget");
+  const state = extractCompatiblePiAgentResumableState(result.agentRun.output.raw, "faux", "faux-model");
+  assert.deepEqual(state.loadedPluginIds, ["beale-knowledge", "beale-source"]);
+  const resumedContexts = [];
+  await runResearchAgent({
+    prompt: "Continue reading the example record.",
+    agentInstructions: agentInstructions("Use only synthetic example data."),
+    tools: registry.listDescriptors(),
+    executor: createPiAgentExecutor({
+      provider: "faux", model: "faux-model", subagents: false, resumableState: state,
+      toolRegistry: createResearchToolRegistry([knowledge], { managedPlugins: managedToolPluginOptions(tools, ["beale-knowledge"]) }),
+      models: createScriptedModels([assistant("Example continuation complete.")], resumedContexts),
+    }),
+  });
+  assert.ok(resumedContexts[0].toolNames.includes("memory_get"));
+  assert.equal(resumedContexts[0].toolNames.includes("repository_search"), false);
+});
 
 test("agent context compacts old bulky tool results while preserving the task and latest result", () => {
   const messages = [{ role: "user", content: "Primary research objective", timestamp: Date.now() }];

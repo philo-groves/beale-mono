@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+export { MANAGED_TOOL_PLUGINS, MANAGED_TOOL_PLUGIN_IDS } from "@beale/research-agent/managed-tool-plugins";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type {

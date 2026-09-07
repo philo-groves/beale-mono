@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { materializeGitRepositoryAsync, normalizeSourceRepositoryUrl } from './source-materializer.js';
+import { isManagedToolPluginId } from './managed-tool-plugins.js';
 
 export type AgentPluginSourceKind = 'filesystem' | 'repository' | 'builtin';
 export type AgentPluginStatus = 'ready' | 'invalid';
@@ -103,6 +104,7 @@ export interface AgentPluginRegistryOptions {
 }
 
 export interface AgentPluginAppServerRuntime {
+  managedPluginIds?: string[];
   runtimeDirectory: string;
   skillDirs: string[];
   selectedSkillIds: string[];
@@ -146,6 +148,8 @@ export class AgentPluginRegistry {
 
   public getAppServerRuntime(): AgentPluginAppServerRuntime {
     const state = this.getState();
+    const managedPlugins = state.plugins.filter((plugin) => plugin.source.kind === 'builtin'
+      && plugin.id === `${plugin.name}-builtin` && isManagedToolPluginId(plugin.name));
     const skillDirs: string[] = [];
     const selectedSkillIds: string[] = [];
     const mcpServers: Record<string, Record<string, unknown>> = {};
@@ -202,7 +206,12 @@ export class AgentPluginRegistry {
       }
     }
 
+    const managedPluginIds = managedPlugins.length > 0
+      ? managedPlugins.filter((plugin) => plugin.enabled && plugin.status === 'ready').map((plugin) => plugin.name)
+      : undefined;
+    if (managedPluginIds !== undefined) args.push('--managed-plugins', managedPluginIds.join(',') || 'none');
     return {
+      ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
       runtimeDirectory: this.runtimePath,
       skillDirs: dedupeSorted(skillDirs),
       selectedSkillIds: dedupeSorted(selectedSkillIds),

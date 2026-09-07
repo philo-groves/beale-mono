@@ -65,6 +65,7 @@ export interface ResolvedAppServerSessionLaunch {
   profileAware: boolean;
   memoryBackend: AppServerMemoryBackendId;
   pluginRuntime?: {
+    managedPluginIds?: readonly string[];
     skillDirectories?: readonly string[];
     selectedSkillIds?: readonly string[];
     mcpConfigPath?: string;
@@ -216,6 +217,7 @@ export function resolveAppServerCodexAuthFile(
 function appendPluginRuntimeArgs(args: string[], launch: ResolvedAppServerSessionLaunch): void {
   const runtime = launch.pluginRuntime;
   if (!runtime) return;
+  if (runtime.managedPluginIds !== undefined) args.push('--managed-plugins', runtime.managedPluginIds.join(',') || 'none');
   for (const path of runtime.skillDirectories ?? []) args.push('--skill-dir', path);
   for (const skillId of runtime.selectedSkillIds ?? []) args.push('--skill', skillId);
   if (runtime.mcpConfigPath) args.push('--mcp-config', runtime.mcpConfigPath);

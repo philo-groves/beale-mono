@@ -4,6 +4,28 @@ A standalone app-server execution host and client-neutral control plane. It runs
 
 The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Its bundled agent-plugin resources live under `app-server/resources/agent-plugins`.
 
+## Managed tool plugins
+
+Seven host-backed plugins are enabled by default and appear in Agent Plugins settings. Every session advertises each plugin with a short usage description, including disabled plugins and plugins whose tools are unavailable under the current profile or configuration.
+
+| Plugin | When to use |
+| --- | --- |
+| Source (`beale-source`) | Source search, code navigation, and structured text analysis. |
+| Provenance (`beale-provenance`) | Repository revision history, public advisory references, and source provenance. |
+| Knowledge (`beale-knowledge`) | Reusable memory, workspace history, artifacts, local inspection, and resource inventory. |
+| Claims (`beale-claims`) | Leads, findings, their evidence, and canonical claim revisions. |
+| Investigations (`beale-investigations`) | Investigation records, questions, observations, and configured experiments. |
+| Runbooks (`beale-runbooks`) | Reusable procedure documents, revisions, and recorded executions. |
+| Reporting (`beale-reporting`) | Report documents, revisions, and structured summaries of supported results. |
+
+`file.read`, `file.write`, `file.edit`, and `shell.run` remain core tools, alongside session and collaboration controls. Existing profile, configuration, and governance limits still apply. File writes create candidate files; replacing an existing file requires the SHA-256 `contentHash` returned by `file.read` as `expectedHash`. File edits require one exact literal match, preserve UTF-8 bytes outside that match, and accept an optional hash check. Both mutations have a 1 MiB ceiling and honor lower host byte budgets.
+
+Enabled plugins are available for discovery. Pi agents initially receive core tools and `plugins.load`; requesting plugin IDs adds only those tool schemas on the next turn. Loaded IDs are isolated per agent and retained in compatible continuation captures. Claude uses its SDK's native `ToolSearch` with deferred plugin tools and always-loaded core tools. ZCode currently uses a fixed MCP tool list, so its enabled tool schemas remain eager. External MCP plugins retain their existing loading behavior.
+
+Plugin toggles take effect on subsequent session launches and continuations, including Quick Chat. The app-server projects the current selection through `--managed-plugins <comma-separated IDs>`; `none` explicitly disables all seven. A settings-read failure stops the launch instead of silently restoring defaults. Loading a schema does not enable a disabled plugin or change host policy, canonical storage, or execution privileges.
+
+New native tools must be assigned in `packages/research-agent/src/managed-tool-plugins.ts` to a plugin or the explicit core list. Runtime assembly rejects unassigned host tools. Bundled manifests and the compact discovery catalog are checked together by boundary tests.
+
 ## Running
 
 The package ships two entry points over one server core:
