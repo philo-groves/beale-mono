@@ -8,6 +8,12 @@ import { createInterface } from "node:readline/promises";
 import { AppServerControlStream } from "./control-stream.js";
 import {
   runResearchAgent,
+  createFileMutationTools,
+  MANAGED_TOOL_PLUGIN_IDS,
+  managedToolPluginId,
+  managedToolPluginOptions,
+  assertManagedToolOwnership,
+  parseManagedToolPluginIds,
   createAnalysisTool,
   createCodeIntelligenceTools,
   createConfiguredResearchMcpClient,
@@ -183,6 +189,7 @@ type CliExecutorKind = "agent";
 type CliToolExecutionMode = "sequential" | "parallel";
 
 interface RuntimeToolConfig {
+  managedPluginIds?: readonly string[];
   toolFamilies: readonly ToolFamily[];
   disabledToolFamilies: readonly ToolFamily[];
   profileToolFamilyCeiling: readonly ToolFamily[];
@@ -416,6 +423,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
+  let managedPluginIds: string[] | undefined;
   let experimentConfigPath: string | undefined;
   let shellOptionsPath: string | undefined;
   const selectedSkillIds: string[] = [];
@@ -604,6 +612,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--mcp-config") {
       mcpConfigPath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--managed-plugins") {
+      managedPluginIds = parseManagedToolPluginIds(readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg === "--mcp-timeout-ms") {
       mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
       index += 1;
@@ -756,6 +767,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       profileMcpServerRestriction: [],
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
+      ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
       ...(shellOptionsPath ? { shellOptionsPath } : {}),
       selectedSkillIds,
@@ -1072,6 +1084,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const allowedMcpServers: string[] = [];
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
+  let managedPluginIds: string[] | undefined;
   let experimentConfigPath: string | undefined;
   let shellOptionsPath: string | undefined;
   const selectedSkillIds: string[] = [];
@@ -1162,6 +1175,9 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     } else if (arg === "--mcp-config") {
       mcpConfigPath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--managed-plugins") {
+      managedPluginIds = parseManagedToolPluginIds(readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg === "--mcp-timeout-ms") {
       mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
       index += 1;
@@ -1205,6 +1221,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       profileMcpServerRestriction: [],
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
+      ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
       ...(shellOptionsPath ? { shellOptionsPath } : {}),
       selectedSkillIds,
@@ -1554,6 +1571,7 @@ function usage(): string {
     "  --allow-mcp-server <s> Allow an MCP server name in runtime config",
     "  --mcp-config <path>    JSON MCP stdio server config",
     "  --mcp-timeout-ms <n>   MCP request timeout in milliseconds",
+    "  --managed-plugins <ids> Enabled managed plugin IDs (comma-separated, or none)",
     "  --experiment-config <p> JSON allowlisted experiment config",
     "  --skill-dir <path>     Load local skills from child directories containing SKILL.md",
     "  --skill <id>           Request a loaded skill by id",
@@ -3374,6 +3392,7 @@ function toolsUsage(): string {
     "  --allow-mcp-server <name>   Record an allowed MCP server name",
     "  --mcp-config <path>         JSON MCP stdio server config",
     "  --mcp-timeout-ms <n>        MCP request timeout in milliseconds",
+    "  --managed-plugins <ids>     Enabled managed plugin IDs (comma-separated, or none)",
     "  --experiment-config <path>  JSON allowlisted experiment config",
     "  --skill-dir <path>          Load local skills from child directories containing SKILL.md",
     "  --skill <id>                Request a loaded skill by id",
@@ -3971,6 +3990,9 @@ async function createRuntimeConfig(args: {
   }
 
   if (families.has("file-read")) {
+    const mutationTools = createFileMutationTools({ workspaceRoot, protectedPaths: [memoryGraph.databasePath] });
+    executableTools.push(...mutationTools);
+    toolDescriptors.push(...mutationTools.map((tool) => tool.descriptor));
     const tool = createStructuredFileReadTool({
       contextRoots: workspaceContextFileReadHints(workspaceContext),
       researchSession: repositoryResearchSession,
@@ -4042,18 +4064,26 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(tool.descriptor);
   }
 
+  assertManagedToolOwnership(executableTools);
   const modelToolCuration = curateRuntimeToolsForPrompt({
     prompt: args.prompt,
     executableTools,
     toolDescriptors,
   });
 
+  const enabledPluginIds = runtimeTools.managedPluginIds ?? MANAGED_TOOL_PLUGIN_IDS;
+  const managedPlugins = managedToolPluginOptions(modelToolCuration.executableTools, enabledPluginIds);
+  const enabledTools = modelToolCuration.executableTools.filter((tool) => {
+    const pluginId = managedToolPluginId(tool.descriptor.name);
+    return pluginId === undefined || enabledPluginIds.includes(pluginId);
+  });
+
   return {
     events,
-    tools: modelToolCuration.toolDescriptors,
+    tools: enabledTools.map((tool) => tool.descriptor),
     toolRegistry:
-      modelToolCuration.executableTools.length > 0
-        ? createResearchToolRegistry(modelToolCuration.executableTools)
+      enabledTools.length > 0
+        ? createResearchToolRegistry(enabledTools, { managedPlugins })
         : undefined,
     skills,
     governance,
@@ -4068,7 +4098,7 @@ async function createRuntimeConfig(args: {
       families,
       args: runtimeArgs,
       memoryBackend: memoryBackend.id,
-      tools: modelToolCuration.toolDescriptors,
+      tools: enabledTools.map((tool) => tool.descriptor),
       skills,
       governance,
       workspaceContext,
@@ -4219,6 +4249,8 @@ function mergeRuntimeToolConfig(
   cli: RuntimeToolConfig,
 ): RuntimeToolConfig {
   return {
+    ...(cli.managedPluginIds !== undefined ? { managedPluginIds: cli.managedPluginIds }
+      : persisted.managedPluginIds !== undefined ? { managedPluginIds: persisted.managedPluginIds } : {}),
     toolFamilies: uniqueRuntimeStrings([
       ...persisted.toolFamilies,
       ...cli.toolFamilies,

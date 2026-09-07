@@ -10,6 +10,7 @@ import {
 import { z, type ZodType } from "zod";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createId, nowIso } from "./ids.js";
+import { formatManagedToolPluginCatalog, managedToolPluginId } from "./managed-tool-plugins.js";
 import {
   ProviderAuthenticationRouter,
   type ProviderAuthenticationPreferences,
@@ -221,6 +222,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
     async execute(input) {
       const toolEvents: ResearchEvent[] = [];
       let toolCallCount = 0;
+      const managedPlugins = options.toolRegistry?.managedPlugins;
       const mcpTools = (options.toolRegistry?.listTools() ?? [])
         .filter((candidate) => candidate.parameters)
         .map((candidate) => tool(
@@ -249,6 +251,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               isError: projection.isError,
             };
           },
+          ...(managedPlugins ? [{ alwaysLoad: managedToolPluginId(candidate.descriptor.name) === undefined }] : []),
         ));
       const abortController = new AbortController();
       const abort = () => abortController.abort(input.signal?.reason);
@@ -290,9 +293,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
       const allMcpServer = createSdkMcpServer({
         name: mcpToolAccess.serverName,
         version: "1.0.0",
-        instructions: "These are app-server's governed research and durable channel tools. Use them for workspace-persistent research and bounded collaboration.",
+        instructions: "These are app-server's governed tools. Use ToolSearch to load deferred tools as needed.",
         tools: allMcpTools,
-        alwaysLoad: true,
+        alwaysLoad: !managedPlugins,
       });
 
       let sessionId = options.resumableState?.providerSessionId;
@@ -322,8 +325,8 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 model: options.model,
                 ...(options.resumableState ? { resume: options.resumableState.providerSessionId } : {}),
                 mcpServers: { [mcpToolAccess.serverName]: allMcpServer },
-                tools: [],
-                allowedTools: mcpToolAccess.allowedTools,
+                tools: managedPlugins ? ["ToolSearch"] : [],
+                allowedTools: [...(managedPlugins ? ["ToolSearch"] : []), ...mcpToolAccess.allowedTools],
                 permissionMode: "dontAsk",
                 settingSources: [],
                 systemPrompt: {
@@ -343,7 +346,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                       researchProfile: options.researchProfile,
                       workflowId: workflow.id,
                       ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
-                    }),
+                    }) + (managedPlugins ? `\n\nUse ToolSearch to load plugin tools as needed.\n${formatManagedToolPluginCatalog(managedPlugins)}` : ""),
                   ),
                 },
                 includePartialMessages: true,
@@ -351,7 +354,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 ...(effort ? { effort } : {}),
                 ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
                 ...(options.maxTokens ? { taskBudget: { total: options.maxTokens } } : {}),
-                env: authenticationRouter.claudeEnvironment(),
+                env: { ...authenticationRouter.claudeEnvironment(), ...(managedPlugins ? { ENABLE_TOOL_SEARCH: "true" } : {}) },
               },
             });
             for await (const message of stream) {
@@ -408,8 +411,8 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               model: options.model,
               resume: sessionId,
               mcpServers: { [mcpToolAccess.serverName]: allMcpServer },
-              tools: [],
-              allowedTools: mcpToolAccess.allowedTools,
+              tools: managedPlugins ? ["ToolSearch"] : [],
+              allowedTools: [...(managedPlugins ? ["ToolSearch"] : []), ...mcpToolAccess.allowedTools],
               permissionMode: "dontAsk",
               settingSources: [],
               systemPrompt: {
@@ -429,7 +432,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                     researchProfile: options.researchProfile,
                     workflowId: workflow.id,
                     ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
-                  }),
+                  }) + (managedPlugins ? `\n\nUse ToolSearch to load plugin tools as needed.\n${formatManagedToolPluginCatalog(managedPlugins)}` : ""),
                 ),
               },
               includePartialMessages: true,
@@ -437,7 +440,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               ...(effort ? { effort } : {}),
               ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
               ...(options.maxTokens ? { taskBudget: { total: options.maxTokens } } : {}),
-              env: authenticationRouter.claudeEnvironment(),
+              env: { ...authenticationRouter.claudeEnvironment(), ...(managedPlugins ? { ENABLE_TOOL_SEARCH: "true" } : {}) },
             },
           });
           for await (const message of stream) {
@@ -574,6 +577,7 @@ function agentToolAsSdkTool(candidate: AgentTool, signal: AbortSignal) {
       }).join("\n");
       return { content: [{ type: "text" as const, text: text || "{}" }] };
     },
+    { alwaysLoad: true },
   );
 }
 

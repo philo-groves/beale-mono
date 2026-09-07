@@ -5,6 +5,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   basename,
   dirname,
@@ -328,6 +329,7 @@ export function createStructuredFileReadTool(
           options.maxBytes ?? DEFAULT_MAX_BYTES,
         );
         const file = await readFile(target.path);
+        const contentHash = createHash("sha256").update(file).digest("hex");
         const slice = file.subarray(offset, offset + maxBytes);
         const text = slice.toString("utf8");
         const truncated = offset + maxBytes < file.length;
@@ -344,6 +346,7 @@ export function createStructuredFileReadTool(
             offset,
             bytesRead: slice.length,
             totalBytes: file.length,
+            contentHash,
             truncated,
             encoding: "utf8",
             containsNulByte: slice.includes(0),
@@ -355,6 +358,7 @@ export function createStructuredFileReadTool(
             offset,
             bytesRead: slice.length,
             totalBytes: file.length,
+            contentHash,
             truncated,
             encoding: "utf8",
             containsNulByte: slice.includes(0),

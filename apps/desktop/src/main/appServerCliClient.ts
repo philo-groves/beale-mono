@@ -335,6 +335,7 @@ export interface AppServerMaintenanceRunResult {
 }
 
 export interface AppServerAgentPluginRuntime {
+  managedPluginIds?: string[];
   runtimeDirectory: string;
   skillDirs: string[];
   selectedSkillIds: string[];

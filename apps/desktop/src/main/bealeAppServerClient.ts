@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as waitForRetry } from 'node:timers/promises';
 import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTROL_VERSION,
@@ -25,6 +26,7 @@ import { appServerRemoteAccessLaunchEnvironment } from './appServerRemoteAccess'
 const DEFAULT_HEALTH_TIMEOUT_MS = 2_000;
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
 const SESSION_REQUEST_TIMEOUT_MS = 35_000;
+const SESSION_READ_RETRY_DELAYS_MS = [100, 300] as const;
 const POLL_INTERVAL_MS = 250;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 5_000;
 const UNRESPONSIVE_APP_SERVER_GRACEFUL_TIMEOUT_MS = 1_500;
@@ -307,7 +309,11 @@ export async function fetchAppServerCanonicalResult<T>(
     const detail = await describeResponse(response);
     throw new Error(`The Beale app-server canonical request failed (${response.status}): ${detail}`);
   }
-  const payload: unknown = await response.json().catch(() => null);
+  const payload: unknown = await response.json().catch((error: unknown) => {
+    if (options.signal?.aborted
+      || ((options.method ?? 'GET') === 'GET' && isAppServerTransportFailure(error))) throw error;
+    return null;
+  });
   if (!isCanonicalResult(payload)) {
     throw new Error('The Beale app-server returned an invalid canonical response.');
   }
@@ -330,7 +336,7 @@ export async function fetchAppServerCanonicalResultWithRecovery<T>(
 
 /**
  * Reads an already-hosted session without entering app-server lifecycle
- * management. A transient socket failure may reattach to the current live
+ * management. Transient GET failures may reattach to the current live
  * discovery record, but it must never launch or replace the process that owns
  * the session being read.
  */
@@ -339,15 +345,41 @@ export async function fetchExistingAppServerCanonicalResult<T>(
   path: string,
   options: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {}
 ): Promise<T> {
-  try {
-    return await fetchAppServerCanonicalResult<T>(record, path, options);
-  } catch (error) {
-    if (options.signal?.aborted || !isAppServerTransportFailure(error)) throw error;
-    await delay(100);
-    options.signal?.throwIfAborted();
-    const current = readLiveBealeAppServerDiscovery();
-    if (!current) throw error;
-    return fetchAppServerCanonicalResult<T>(current, path, options);
+  if ((options.method ?? 'GET') !== 'GET') return fetchAppServerCanonicalResult<T>(record, path, options);
+  return retryExistingAppServerRead(record, 'session.read', options.signal, (current, signal) =>
+    fetchAppServerCanonicalResult<T>(current, path, { ...options, signal }));
+}
+
+export class AppServerReadTransportError extends Error {
+  constructor(readonly operation: 'session.read' | 'memory.summary', readonly attempts: number, cause: unknown) {
+    super(`The Beale app-server ${operation} read failed after ${attempts} attempt(s): fetch failed (${appServerTransportCode(cause) ?? 'connection failure'}).`, { cause });
+    this.name = 'AppServerReadTransportError';
+  }
+}
+
+async function retryExistingAppServerRead<T>(
+  record: BealeAppServerDiscovery,
+  operation: 'session.read' | 'memory.summary',
+  callerSignal: AbortSignal | undefined,
+  read: (current: BealeAppServerDiscovery, signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const deadline = AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
+  let current = record;
+  for (let attempt = 0; ; attempt += 1) {
+    signal.throwIfAborted();
+    try {
+      return await read(current, signal);
+    } catch (error) {
+      const retryDelay = SESSION_READ_RETRY_DELAYS_MS[attempt];
+      if (signal.aborted || !isAppServerTransportFailure(error)) throw error;
+      if (retryDelay === undefined) throw new AppServerReadTransportError(operation, attempt + 1, error);
+      await waitForRetry(retryDelay, undefined, { signal });
+      signal.throwIfAborted();
+      const live = readLiveBealeAppServerDiscovery();
+      if (!live) throw new AppServerReadTransportError(operation, attempt + 1, error);
+      current = live;
+    }
   }
 }
 
@@ -358,33 +390,51 @@ export async function invokeAppServerOperation<T>(request: {
   profileId?: string;
   signal?: AbortSignal;
 }): Promise<T> {
-  const server = await ensureBealeAppServerRunning();
-  const response = await fetch(`${appServerControlUrl(server)}${BEALE_APP_SERVER_OPERATIONS_PATH}`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${server.operatorToken}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      operation: request.operation,
-      ...(request.args ? { args: request.args } : {}),
-      ...(request.input !== undefined ? { input: request.input } : {}),
-      ...(request.profileId ? { profileId: request.profileId } : {})
-    }),
-    signal: request.signal ?? AbortSignal.timeout(5 * 60_000)
+  // Session enrichment uses POST for this idempotent read. Keep it on the
+  // existing host, and never apply its retry policy to mutating operations.
+  const existingHostRead = request.operation === 'memory.summary';
+  const server = existingHostRead ? readLiveBealeAppServerDiscovery() : await ensureBealeAppServerRunning();
+  if (!server) throw new Error('The Beale app-server hosting memory.summary is unavailable. Reads will not launch a replacement host.');
+  const body = JSON.stringify({
+    operation: request.operation,
+    ...(request.args ? { args: request.args } : {}),
+    ...(request.input !== undefined ? { input: request.input } : {}),
+    ...(request.profileId ? { profileId: request.profileId } : {})
   });
-  if (!response.ok) throw new Error(`app-server ${request.operation} failed: ${await describeResponse(response)}`);
-  const payload = await response.json() as { controlVersion?: unknown; result?: unknown };
-  if (payload.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION) throw new Error('The app-server returned an incompatible operation response.');
-  return payload.result as T;
+  const execute = async (current: BealeAppServerDiscovery, signal: AbortSignal): Promise<T> => {
+    const response = await fetch(`${appServerControlUrl(current)}${BEALE_APP_SERVER_OPERATIONS_PATH}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${current.operatorToken}`, 'content-type': 'application/json' },
+      body,
+      signal
+    });
+    if (!response.ok) throw new Error(`app-server ${request.operation} failed: ${await describeResponse(response)}`);
+    const payload = await response.json() as { controlVersion?: unknown; result?: unknown };
+    if (payload.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION) throw new Error('The app-server returned an incompatible operation response.');
+    return payload.result as T;
+  };
+  return existingHostRead
+    ? retryExistingAppServerRead(server, 'memory.summary', request.signal, execute)
+    : execute(server, request.signal ?? AbortSignal.timeout(5 * 60_000));
 }
 
 function isAppServerTransportFailure(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
-  if (!(error instanceof Error)) return false;
-  const cause = error.cause;
-  return cause instanceof Error && (
-    cause.message.includes('ECONNRESET')
-    || cause.message.includes('ECONNREFUSED')
-    || cause.message.includes('UND_ERR_SOCKET')
-  );
+  return appServerTransportCode(error) !== undefined
+    || (error instanceof TypeError && error.message === 'fetch failed');
+}
+
+function appServerTransportCode(error: unknown): string | undefined {
+  const transientCodes = ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET'];
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && typeof current === 'object' && current !== null; depth += 1) {
+    const failure = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (typeof failure.code === 'string' && transientCodes.includes(failure.code)) return failure.code;
+    const message = failure.message;
+    const code = typeof message === 'string' ? transientCodes.find((code) => message.includes(code)) : undefined;
+    if (code) return code;
+    current = failure.cause;
+  }
+  return undefined;
 }
 
 /**

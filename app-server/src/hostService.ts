@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   BEALE_APP_SERVER_CONTROL_VERSION,
+  MANAGED_TOOL_PLUGIN_IDS,
   APP_SERVER_SESSION_LAUNCH_VERSION,
   type BealeAppServerCanonicalResult,
   type BealeAppServerProviderCatalog,
@@ -68,6 +69,7 @@ interface AppServerSessionUpdateProjection {
 }
 
 interface AppServerPluginRuntimeProjection {
+  managedPluginIds?: unknown;
   skillDirs?: unknown;
   selectedSkillIds?: unknown;
   mcpConfigPath?: unknown;
@@ -112,7 +114,6 @@ export interface AppServerHostServiceOptions extends AppServerHostRegistryOption
 export class AppServerHostService {
   private readonly registry: AppServerHostRegistry;
   private readonly invokeProtocol: ProtocolInvoker;
-  private pluginRuntimePromise: Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> | null = null;
   private providerSemanticsPromise: Promise<{
     defaultSmallModels: Record<string, string>;
     sessionTitleEffort: string;
@@ -1000,8 +1001,7 @@ export class AppServerHostService {
   }
 
   private async resolvePluginRuntime(): Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> {
-    this.pluginRuntimePromise ??= this.loadPluginRuntime();
-    return this.pluginRuntimePromise;
+    return this.loadPluginRuntime();
   }
 
   private async loadPluginRuntime(): Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> {
@@ -1014,13 +1014,14 @@ export class AppServerHostService {
         }
       });
       return {
+        ...(Array.isArray(runtime.managedPluginIds) ? { managedPluginIds: stringArray(runtime.managedPluginIds) } : {}),
         skillDirectories: stringArray(runtime.skillDirs),
         selectedSkillIds: stringArray(runtime.selectedSkillIds),
         ...(nonEmpty(runtime.mcpConfigPath) ? { mcpConfigPath: nonEmpty(runtime.mcpConfigPath)! } : {}),
         allowedMcpServers: stringArray(runtime.allowedMcpServers)
       };
-    } catch {
-      return null;
+    } catch (error) {
+      throw new Error('Managed plugin settings could not be loaded for this session.', { cause: error });
     }
   }
 
@@ -1040,7 +1041,9 @@ export class AppServerHostService {
     if (!mcpConfigPath || !stringArray(runtime.allowedMcpServers).includes('beale-introspection.beale')) {
       throw new Error('Beale introspection plugin did not provide the Quick Chat tool runtime.');
     }
+    const managedPluginIds = (await this.resolvePluginRuntime())?.managedPluginIds;
     return {
+      ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
       skillDirectories: stringArray(runtime.skillDirs),
       selectedSkillIds: stringArray(runtime.selectedSkillIds),
       mcpConfigPath,
@@ -1435,6 +1438,7 @@ async function writePrivateJson(path: string, value: unknown): Promise<void> {
 
 function defaultBuiltinPlugins(): Array<{ id: string; path: string; installedAt: string; enabledByDefault?: boolean }> {
   return [
+    ...MANAGED_TOOL_PLUGIN_IDS.map((id) => builtinPlugin(`${id}-builtin`, id, false)),
     builtinPlugin('beale-introspection-builtin', 'beale-introspection', false),
     builtinPlugin('beale-terminator-builtin', 'beale-terminator', true)
   ].flatMap((plugin) => existsSync(plugin.path) ? [plugin] : []);

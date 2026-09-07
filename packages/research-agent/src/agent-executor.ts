@@ -29,6 +29,7 @@ import {
   type ProviderAuthenticationPreferences,
 } from "./auth-routing.js";
 import { createId, nowIso } from "./ids.js";
+import { ManagedToolPluginSession, isManagedToolPluginId } from "./managed-tool-plugins.js";
 import {
   createToolRequestedEvent,
   getToolTransportName,
@@ -127,9 +128,10 @@ const RECENT_TOOL_RESULTS_TO_KEEP = 8;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
 const MAX_TRANSIENT_MODEL_RETRIES = 4;
-const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition"]);
+const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition", "plugins_load"]);
 
 export interface PiAgentResumableState {
+  loadedPluginIds?: readonly string[];
   schemaVersion: 1 | 2 | 3;
   provider: string;
   model: string;
@@ -229,6 +231,8 @@ export function extractCompatiblePiAgentResumableState(
     api: state.api,
     ...(providerSessionId ? { providerSessionId } : {}),
     messages: state.messages,
+    ...(Array.isArray(state.loadedPluginIds) && state.loadedPluginIds.every(isManagedToolPluginId)
+      ? { loadedPluginIds: state.loadedPluginIds } : {}),
     ...(goal ? { goal } : {}),
     ...(researchFocus ? { researchFocus } : {}),
     ...(lastNativeCompactionFingerprint ? { lastNativeCompactionFingerprint } : {}),
@@ -345,6 +349,7 @@ export function createPiAgentExecutor(
         authoritativeContextMessages: AgentMessage[] | null;
         resumableCheckpoints: { local: string; native: string; contextWindowRetry: string };
         contextWindowRetryCheckpointed: boolean;
+        loadedPluginIds: readonly string[];
       }>;
       const collaboration = options.collaboration;
       const collaborationEnabled = collaboration?.mode !== "solo";
@@ -513,11 +518,17 @@ export function createPiAgentExecutor(
           toolCallCount += 1;
           return next;
         };
+        const pluginSession = options.toolRegistry?.managedPlugins
+          ? new ManagedToolPluginSession(options.toolRegistry.managedPlugins, request.root ? options.resumableState?.loadedPluginIds : [])
+          : undefined;
+        const agentToolRegistry = pluginSession
+          ? options.toolRegistry!.fork([pluginSession.createLoader()])
+          : options.toolRegistry;
         let getModelAuthor = () => ({ provider: sessionModel.provider, model: sessionModel.id });
         const researchTools = createAgentTools({
           agentId: request.id,
           getModelAuthor: () => getModelAuthor(),
-          toolRegistry: options.toolRegistry,
+          toolRegistry: agentToolRegistry,
           governance: input.governance,
           reserveToolCall,
           recordExecutionStart(action) {
@@ -550,6 +561,7 @@ export function createPiAgentExecutor(
           ...researchTools.filter((tool) => request.root || tool.name !== "session_disposition"),
           ...collaborationTools,
         ];
+        const visibleTools = () => tools.filter((tool) => !pluginSession || pluginSession.visible(tool.name));
         const providerSessionId = providerSessionIdForAgent(rootProviderSessionId, request.id, request.root === true);
         const activeModelSelection = (): { model: NonNullable<ReturnType<Models["getModel"]>>; reasoningEffort?: ModelThinkingLevel } => {
           const selection = request.root ? options.getModelSelection?.() : undefined;
@@ -792,7 +804,7 @@ export function createPiAgentExecutor(
               ...(agentInstructions ? { agentInstructions } : {}),
             }),
             messages: initialMessages,
-            ...(tools.length > 0 ? { tools } : {}),
+            ...(tools.length > 0 ? { tools: visibleTools() } : {}),
           },
           {
             model: sessionModel,
@@ -805,10 +817,10 @@ export function createPiAgentExecutor(
               if (subagents?.capturesContext(toolCall.name)) {
                 subagents?.captureContext(request.id, toolCall.id, hookContext.context.messages);
               }
-              const researchTool = options.toolRegistry?.find(toolCall.name);
+              const researchTool = agentToolRegistry?.find(toolCall.name);
               const runtimeControlTool = RUNTIME_CONTROL_TOOL_NAMES.has(toolCall.name);
               const preflight = researchTool
-                ? options.toolRegistry?.preflightToolCall(toolCall, {
+                ? agentToolRegistry?.preflightToolCall(toolCall, {
                     ...(!runtimeControlTool && input.governance ? { governance: input.governance } : {}),
                     toolCallCount: runtimeControlTool ? 0 : toolCallCount,
                     ...(signal ? { signal } : {}),
@@ -894,6 +906,12 @@ export function createPiAgentExecutor(
               }
             },
             prepareNextTurn: async ({ context, message, toolResults, newMessages }) => {
+              const toolBudgetExhausted = typeof input.modelInput.toolBudget.maxToolCalls === "number"
+                && toolCallCount >= input.modelInput.toolBudget.maxToolCalls;
+              const pluginTools = visibleTools().filter((tool) => !toolBudgetExhausted
+                || !researchToolNames.has(tool.name) || RUNTIME_CONTROL_TOOL_NAMES.has(tool.name));
+              const pluginToolsChanged = pluginSession !== undefined
+                && pluginTools.some((tool) => !context.tools?.some((active) => active.name === tool.name));
               const activeTurnModel = activeModelSelection().model;
               const retryContextMessages = pendingRetryContextMessages;
               pendingRetryContextMessages = null;
@@ -937,6 +955,7 @@ export function createPiAgentExecutor(
                 && !removeResearchTools
                 && !checkpoint
                 && !focusTurn.steeringMessage
+                && !pluginToolsChanged
               ) {
                 authoritativeContextMessages = context.messages;
                 newMessages.splice(0, newMessages.length);
@@ -1000,6 +1019,7 @@ export function createPiAgentExecutor(
                 context: {
                   ...context,
                   messages: nextMessages,
+                  ...(pluginToolsChanged ? { tools: pluginTools } : {}),
                   ...(removeResearchTools
                     ? {
                         tools: (context.tools ?? []).filter((tool) =>
@@ -1089,6 +1109,7 @@ export function createPiAgentExecutor(
           toolEvents,
           agentEvents,
           researchFocusState: researchFocus.exportState(),
+          loadedPluginIds: pluginSession?.snapshot() ?? [],
           lastNativeCompactionFingerprint,
           authoritativeContextMessages,
           resumableCheckpoints: {
@@ -1247,6 +1268,7 @@ export function createPiAgentExecutor(
             api: model.api,
             providerSessionId: rootProviderSessionId,
             messages: resumableMessages.messages,
+            ...(options.toolRegistry?.managedPlugins ? { loadedPluginIds: rootResult.loadedPluginIds } : {}),
             ...(goalRuntime ? { goal: goalRuntime.exportState() } : {}),
             researchFocus: rootResult.researchFocusState,
             researchProfileHash: profileHash,

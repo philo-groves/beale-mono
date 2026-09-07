@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createId, nowIso } from "./ids.js";
+import { formatManagedToolPluginCatalog } from "./managed-tool-plugins.js";
 import { createCollaborationSystemGuidance } from "./collaboration-guidance.js";
 import { researchProfileHash, researchProfileWorkflow, type ResearchProfile } from "./research-profile.js";
 import {
@@ -189,7 +190,10 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
         workflowId: workflow.id,
         ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
       });
-      const prompt = formatZCodePrompt(systemPrompt, input.modelInput);
+      // The ZCode bridge currently has a fixed tools/list surface. Preserve
+      // provider compatibility while still presenting every plugin option.
+      const pluginCatalog = options.toolRegistry?.managedPlugins;
+      const prompt = formatZCodePrompt([systemPrompt, ...(pluginCatalog ? [formatManagedToolPluginCatalog(pluginCatalog)] : [])].join("\n\n"), input.modelInput);
 
       try {
         let result = await runZCodeSession({

@@ -24,6 +24,7 @@ import {
   BEALE_APP_SERVER_CAPABILITIES,
   BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
   BEALE_APP_SERVER_CONTROL_VERSION,
+  MANAGED_TOOL_PLUGIN_IDS,
 } from "@beale/app-server-runtime/protocol";
 import { AppServerSessionStore } from "../../packages/research-agent/dist/index.js";
 import {
@@ -1468,6 +1469,8 @@ test("app-server owns built-in plugins and pins canonical session profile identi
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-host-policy-"));
   temporaryDirectories.push(directory);
   const calls = [];
+  let managedPluginIds = [...MANAGED_TOOL_PLUGIN_IDS];
+  let pluginReadFails = false;
   const registry = hostRegistryFixture(directory, { memoryBackend: "disabled" });
   registry.providerSettings = () => ({
     defaultProviderId: "xai",
@@ -1489,7 +1492,9 @@ test("app-server owns built-in plugins and pins canonical session profile identi
         };
       }
       if (operation === "plugin.runtime") {
+        if (pluginReadFails) throw new Error("Synthetic plugin settings read failure.");
         return {
+          managedPluginIds,
           skillDirs: [],
           selectedSkillIds: [],
           allowedMcpServers: ["beale-introspection.beale", "example.tools"],
@@ -1531,7 +1536,9 @@ test("app-server owns built-in plugins and pins canonical session profile identi
     },
   });
   const pluginCall = calls.find((call) => call.operation === "plugin.runtime");
-  assert.equal(pluginCall.options.input.builtinPlugins.length, 2);
+  assert.equal(pluginCall.options.input.builtinPlugins.length, MANAGED_TOOL_PLUGIN_IDS.length + 2);
+  assert.deepEqual(prepared.launch.pluginRuntime.managedPluginIds, MANAGED_TOOL_PLUGIN_IDS);
+  assert.ok(appServerSessionArgs(prepared.launch, {}).includes(MANAGED_TOOL_PLUGIN_IDS.join(',')));
   assert.ok(pluginCall.options.input.builtinPlugins.every((plugin) =>
     plugin.path.includes(join("app-server", "resources", "agent-plugins")) && existsSync(plugin.path)
   ));
@@ -1549,6 +1556,13 @@ test("app-server owns built-in plugins and pins canonical session profile identi
       researchProfileHash: hash,
     },
   });
+  managedPluginIds = [];
+  const next = await service.prepareSession({ ...sessionLaunchRequest(directory), sessionId: "session-plugin-disabled" }, "generated-disabled-session");
+  assert.deepEqual(next.launch.pluginRuntime.managedPluginIds, []);
+  const nextArgs = appServerSessionArgs(next.launch, {});
+  assert.equal(nextArgs[nextArgs.indexOf('--managed-plugins') + 1], 'none');
+  pluginReadFails = true;
+  await assert.rejects(service.prepareSession({ ...sessionLaunchRequest(directory), sessionId: "session-plugin-unavailable" }, "generated-unavailable-session"), /Managed plugin settings could not be loaded/);
 });
 
 test("prepares automatic recovery as a child attempt and pauses an interrupted active attempt", async () => {
@@ -1905,6 +1919,7 @@ test("quick-chat launches receive an isolated authenticated Beale introspection 
         return { defaultSmallModels: {}, sessionTitleEffort: "medium", shellReviewEffort: "medium" };
       }
       if (operation === "plugin.runtime") {
+        if (options.input.registryDirectory === directory) return { managedPluginIds: [] };
         return {
           skillDirs: [],
           selectedSkillIds: [],
@@ -1927,6 +1942,7 @@ test("quick-chat launches receive an isolated authenticated Beale introspection 
   const pluginCall = calls.find((call) => call.operation === "plugin.runtime");
 
   assert.equal(prepared.launch.pluginRuntime.allowedMcpServers[0], "beale-introspection.beale");
+  assert.deepEqual(prepared.launch.pluginRuntime.managedPluginIds, []);
   assert.deepEqual(prepared.launch.introspection, {
     url: "http://127.0.0.1:42123",
     token: "quick-chat-token",

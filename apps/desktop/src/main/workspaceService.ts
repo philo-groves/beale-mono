@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
+import { AppServerReadTransportError } from './bealeAppServerClient';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -692,6 +693,7 @@ export class WorkspaceService {
   private snapshotVersion = 0;
   private readonly workspaceDejunkSummaries = new Map<string, WorkspaceDejunkSummary>();
   private readonly runDetailMemoryRefreshedAt = new Map<string, number>();
+  private readonly runDetailMemoryRetryAfter = new Map<string, number>();
   private readonly runDetailEventCache = new Map<string, Map<string, TraceEventRecord>>();
   private readonly disposedRuntimeDatabases = new WeakSet<WorkspaceDatabase>();
   private readonly onboardingRepositoryJobs = new Map<string, WorkspaceOnboardingRepositoryJob>();
@@ -2221,6 +2223,7 @@ export class WorkspaceService {
     this.workspaceMemorySummaryErrors.delete(runtime.workspacePath);
     this.researchGoalSuggestionContexts.clear();
     this.runDetailMemoryRefreshedAt.clear();
+    this.runDetailMemoryRetryAfter.clear();
     this.snapshotCache.delete(runtime.workspacePath);
     this.scheduleWorkspaceMemorySummaryLoad(runtime);
     this.emitChange();
@@ -3548,6 +3551,7 @@ export class WorkspaceService {
       // paint wait for the substantially heavier session memory catalog. The
       // renderer immediately follows with an incremental enrichment read.
       this.runDetailMemoryRefreshedAt.delete(runId);
+      this.runDetailMemoryRetryAfter.delete(runId);
       void this.memorySummaryForRuntimeAsync(
         runtime,
         scope,
@@ -3567,6 +3571,7 @@ export class WorkspaceService {
       )
     );
     this.runDetailMemoryRefreshedAt.set(runId, Date.now());
+    this.runDetailMemoryRetryAfter.delete(runId);
     return projectRunDetailForRenderer(withMemory, projection);
   }
 
@@ -3607,16 +3612,27 @@ export class WorkspaceService {
     if (!this.runDetailMemoryRefreshDue(runId, update.run.status)) {
       return projectRunDetailForRenderer(update, projection, cursor);
     }
-    const withMemory = attachAppServerMemory(
-      update,
-      await this.memorySummaryForRuntimeAsync(
+    let memory: AppServerMemorySummary;
+    try {
+      memory = await this.memorySummaryForRuntimeAsync(
         runtime,
         runtime.db.getActiveScope(),
         runId,
         update.researchProfile ?? null
-      )
-    );
+      );
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (!(error instanceof AppServerReadTransportError) || error.operation !== 'memory.summary') throw error;
+      // Keep the successfully fetched transcript moving. Omitting memory here
+      // preserves the renderer's previous catalog until enrichment recovers.
+      this.runDetailMemoryRetryAfter.set(runId, Date.now() + ACTIVE_RUN_DETAIL_MEMORY_REFRESH_MS);
+      console.warn(`Session memory refresh deferred: ${error.message}`);
+      return projectRunDetailForRenderer(update, projection, cursor);
+    }
+    signal?.throwIfAborted();
+    const withMemory = attachAppServerMemory(update, memory);
     this.runDetailMemoryRefreshedAt.set(runId, Date.now());
+    this.runDetailMemoryRetryAfter.delete(runId);
     return projectRunDetailForRenderer(withMemory, projection, cursor);
   }
 
@@ -3677,6 +3693,7 @@ export class WorkspaceService {
   }
 
   private runDetailMemoryRefreshDue(runId: string, status: RunStatus): boolean {
+    if (Date.now() < (this.runDetailMemoryRetryAfter.get(runId) ?? 0)) return false;
     if (status !== 'active') return true;
     return Date.now() - (this.runDetailMemoryRefreshedAt.get(runId) ?? 0) >= ACTIVE_RUN_DETAIL_MEMORY_REFRESH_MS;
   }
