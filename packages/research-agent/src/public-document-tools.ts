@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { nowIso } from "./ids.js";
 import type { ResearchExecutableTool } from "./tool-registry.js";
+import type { ResourcePriorArtContext } from "./resource-prior-art.js";
 
 export interface PublicDocumentOptions {
   fetch?: typeof fetch;
@@ -23,6 +24,8 @@ export interface PublicDocument {
 }
 
 export interface PriorArtFetchInput {
+  resourceId?: string;
+  revision?: string;
   url: string;
   offset?: number;
   maxCharacters?: number;
@@ -31,6 +34,7 @@ export interface PriorArtFetchInput {
 }
 
 export interface PriorArtFetchResult extends PublicDocument {
+  savedHistoryId?: string;
   untrustedSourceContent: true;
   offset: number;
   totalCharacters: number;
@@ -159,9 +163,11 @@ function extractHtml(source: string, url: string): Pick<PublicDocument, "title" 
   return { title, text: text.join("").replace(/[\t ]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim(), links };
 }
 
-export function createPriorArtFetchTool(options: PublicDocumentOptions = {}): ResearchExecutableTool {
+export function createPriorArtFetchTool(options: PublicDocumentOptions & { history?: ResourcePriorArtContext } = {}): ResearchExecutableTool {
   const parameters = {
-    type: "object", required: ["url"], properties: {
+    type: "object", required: options.history ? ["url", "resourceId"] : ["url"], properties: {
+      resourceId: { type: "string", description: "Resource ID from resource.catalog. Required in workspace sessions; archives the full extracted document for later reading." },
+      revision: { type: "string", description: "Optional resource build, version, or commit." },
       url: { type: "string", description: "Public bulletin, release note, issue, mailing-list archive, advisory API record, or other source URL." },
       offset: { type: "integer", minimum: 0, description: "Text character offset, default 0." },
       maxCharacters: { type: "integer", minimum: 1, maximum: 12_000, description: "Text page size, default 8,000." },
@@ -176,6 +182,7 @@ export function createPriorArtFetchTool(options: PublicDocumentOptions = {}): Re
       const startedAt = nowIso();
       try {
         const input = action.input;
+        const resourceId = options.history?.store.requireResource(input.resourceId);
         if (typeof input.url !== "string") throw new Error("url is required.");
         const offset = pageInteger(input.offset, 0, 0);
         const linkOffset = pageInteger(input.linkOffset, 0, 0);
@@ -189,6 +196,7 @@ export function createPriorArtFetchTool(options: PublicDocumentOptions = {}): Re
           text: text.slice(offset, offset + size), offset, totalCharacters: text.length, nextOffset: offset + size < text.length ? offset + size : null,
           links: links.slice(linkOffset, linkOffset + 20), linkOffset, totalLinks: links.length, nextLinkOffset: linkOffset + 20 < links.length ? linkOffset + 20 : null,
         };
+        if (options.history && resourceId) output.savedHistoryId = options.history.store.save(resourceId, action.id, document, { sessionId: options.history.sessionId, ...(typeof input.revision === "string" ? { revision: input.revision } : {}) });
         return { action, startedAt, completedAt: nowIso(), status: "complete", summary: "Public history document read.", output, followUpActions: [] };
       } catch (error) {
         return { action, startedAt, completedAt: nowIso(), status: "error", summary: "Public history document read failed.", error: { message: error instanceof Error ? error.message : String(error) }, followUpActions: [] };

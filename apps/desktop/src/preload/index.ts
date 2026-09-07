@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type {
+  ResourcePriorArtPage,
+  ResourcePriorArtDetail,
   BealeApi,
   ComputerUsePermissionMode,
   ComputerUseSettings,
@@ -277,6 +279,12 @@ const api: BealeApi = {
   },
   cloneWorkspaceRepository(assetId: string, cloneMode: RepositoryCloneMode): Promise<WorkspaceSnapshot> {
     return ipcRenderer.invoke(IPC_CHANNELS.cloneWorkspaceRepository, assetId, cloneMode);
+  },
+  listResourcePriorArt(workspaceId: string, assetIds: string[], before?: number): Promise<ResourcePriorArtPage> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listResourcePriorArt, workspaceId, assetIds, before);
+  },
+  getResourcePriorArt(workspaceId: string, assetIds: string[], id: string, offset?: number): Promise<ResourcePriorArtDetail> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getResourcePriorArt, workspaceId, assetIds, id, offset);
   },
   skipWorkspaceOnboardingRepository(input: WorkspaceOnboardingSkipInput): Promise<WorkspaceOnboardingProgressUpdate | null> {
     return ipcRenderer.invoke(IPC_CHANNELS.skipWorkspaceOnboardingRepository, input);

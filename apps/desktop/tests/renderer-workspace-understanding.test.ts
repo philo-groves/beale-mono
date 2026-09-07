@@ -1121,7 +1121,7 @@ describe('workspace dashboard', () => {
     expect(html).toContain('>Last 2h ago</span>');
     expect(html).toContain('>Not cloned</span>');
     expect(html).toContain('>Clone</span>');
-    expect(html).toContain('title="Edit parser"');
+    expect(html).toContain('title="Open parser"');
     expect(workspaceResearchSurfaceKinds(workspaceResearchSurfaceItems([{
       id: 'asset_repo',
       scopeVersionId: 'scope_surface',

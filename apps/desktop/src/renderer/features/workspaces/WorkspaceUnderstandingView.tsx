@@ -33,6 +33,7 @@ import { errorMessage } from '../../lib/errors';
 import { renderTraceProseText } from '../traces/traceMarkup';
 import { WorkspaceDirectoriesField } from './WorkspaceDirectoriesWidget';
 import { CampaignBoardView, CampaignGraphView } from './CampaignGraphView';
+import { ResourcePriorArtView } from './ResourcePriorArtView';
 
 const WORKSPACE_ACTIVITY_DAY_COUNT = 365;
 const DAY_DURATION_MS = 24 * 60 * 60 * 1_000;
@@ -182,6 +183,7 @@ export function WorkspaceUnderstandingView({
   researchKitId = 'general',
   sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
   researchSubjectName = '',
+  workspaceId: workspaceIdInput = '',
   workspacePath = '',
   workspaceDirectories,
   memoryBackend = 'app-server',
@@ -223,6 +225,7 @@ export function WorkspaceUnderstandingView({
   researchKitId?: ResearchKitId;
   sessionHeatPreferences?: SessionHeatPreferences;
   researchSubjectName?: string;
+  workspaceId?: string;
   workspacePath?: string;
   workspaceDirectories?: readonly string[];
   memoryBackend?: WorkspaceMemoryBackendId;
@@ -250,6 +253,8 @@ export function WorkspaceUnderstandingView({
   nowMs?: number;
 }): JSX.Element {
   const [activeView, setActiveView] = useState<WorkspaceTopLevelView>(() => workspaceTopLevelView(initialView));
+  const [resourceEditState, setResourceEditState] = useState({ dirty: false, pending: false });
+  const [pendingResourceNavigation, setPendingResourceNavigation] = useState<WorkspaceTopLevelView | null>(null);
   const [activeCampaignView, setActiveCampaignView] = useState<WorkspaceCampaignView>(() => workspaceCampaignView(initialView));
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const researchKit = researchKitDefinition(researchKitId);
@@ -267,7 +272,7 @@ export function WorkspaceUnderstandingView({
   const timelineNowMs = nowMs ?? clockNowMs;
   const memoryTypes = researchProfile?.memory.types ?? [];
   const campaignActive = activeView === 'campaign';
-  const workspaceId = appServerMemory?.contextWorkspaceId ?? null;
+  const workspaceId = workspaceIdInput || appServerMemory?.contextWorkspaceId || '';
   const workspaceFindings = useMemo(
     () => campaignActive && activeCampaignView === 'claims'
       ? filterCampaignClaims(appServerMemory?.findings ?? [], {
@@ -321,7 +326,8 @@ export function WorkspaceUnderstandingView({
                 aria-controls={view === 'campaign' ? 'workspace-dashboard-campaign-subviews' : `workspace-dashboard-${view}-panel`}
                 aria-selected={selected}
                 className="research-side-view-tab-activate"
-                onClick={() => setActiveView(view)}
+                disabled={resourceEditState.pending}
+                onClick={() => activeView === 'resources' && view !== 'resources' && resourceEditState.dirty ? setPendingResourceNavigation(view) : setActiveView(view)}
                 role="tab"
                 type="button"
               >
@@ -377,6 +383,8 @@ export function WorkspaceUnderstandingView({
       /> : null}
 
       {activeView === 'resources' ? <WorkspaceResearchSurface
+        onEditStateChange={setResourceEditState}
+        workspaceId={workspaceId}
         activeScope={activeScope}
         hidden={false}
         appServerMemory={appServerMemory}
@@ -387,6 +395,11 @@ export function WorkspaceUnderstandingView({
         onCloneRepository={onCloneRepository}
         workspaceName={activeScope?.workspaceName || workspaceName}
       /> : null}
+
+      {pendingResourceNavigation ? <Modal title="Discard resource changes?" onClose={() => setPendingResourceNavigation(null)} footer={<>
+        <button className="secondary-button" onClick={() => setPendingResourceNavigation(null)} type="button">Keep editing</button>
+        <button className="primary-button" onClick={() => { setActiveView(pendingResourceNavigation); setPendingResourceNavigation(null); }} type="button">Discard changes</button>
+      </>}><p>Your unsaved resource edits will be discarded.</p></Modal> : null}
 
       {campaignActive && activeCampaignView === 'trail' ? <CampaignGraphView
         memory={appServerMemory}
@@ -1600,6 +1613,8 @@ export function workspaceResearchSurfaceKinds(items: readonly WorkspaceResearchS
 }
 
 function WorkspaceResearchSurface({
+  onEditStateChange,
+  workspaceId,
   activeScope,
   hidden,
   appServerMemory,
@@ -1610,6 +1625,8 @@ function WorkspaceResearchSurface({
   onCloneRepository,
   workspaceName
 }: {
+  onEditStateChange: (state: { dirty: boolean; pending: boolean }) => void;
+  workspaceId: string;
   activeScope: WorkspaceScopeVersion | null;
   hidden: boolean;
   appServerMemory: AppServerMemorySummary | null;
@@ -1630,7 +1647,9 @@ function WorkspaceResearchSurface({
   );
   const representedKinds = useMemo(() => workspaceResearchSurfaceKinds(items), [items]);
   const [activeKind, setActiveKind] = useState<ScopeAssetKind | null>(() => representedKinds[0] ?? null);
-  const [dialogState, setDialogState] = useState<{ kind: ScopeAssetKind; item: WorkspaceResearchSurfaceItem | null } | null>(null);
+  const [selectedResource, setSelectedResource] = useState<{ kind: ScopeAssetKind; value: string; direction: ScopeAssetInput['direction'] } | null>(null);
+  const selectedItem = selectedResource ? items.find((item) => item.asset.kind === selectedResource.kind && item.asset.value === selectedResource.value && item.asset.direction === selectedResource.direction) : null;
+  const [dialogState, setDialogState] = useState<ScopeAssetKind | null>(null);
   const [cloneDialogState, setCloneDialogState] = useState<{ item: WorkspaceResearchSurfaceItem; mode: RepositoryCloneMode } | null>(null);
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
   const [cloningAssetIds, setCloningAssetIds] = useState<Set<string>>(() => new Set());
@@ -1680,9 +1699,9 @@ function WorkspaceResearchSurface({
     };
   }, [kindPickerOpen]);
 
-  const openResourceDialog = (kind: ScopeAssetKind, item: WorkspaceResearchSurfaceItem | null = null): void => {
+  const openResourceDialog = (kind: ScopeAssetKind): void => {
     setKindPickerOpen(false);
-    setDialogState({ kind, item });
+    setDialogState(kind);
   };
   const cloneRepository = async (item: WorkspaceResearchSurfaceItem, cloneMode: RepositoryCloneMode): Promise<void> => {
     const assetId = item.repositoryCloneAssetId;
@@ -1705,6 +1724,26 @@ function WorkspaceResearchSurface({
       });
     }
   };
+
+  if (selectedItem) return (
+    <section key="resource-detail" className="workspace-dashboard-panel workspace-resource-detail" aria-label="Resource details" id="workspace-dashboard-resources-panel" role="tabpanel">
+      <WorkspaceResourceEditor
+        key={`editor:${selectedItem.asset.id}`}
+        presentation="page"
+        onEditStateChange={onEditStateChange}
+        initialAsset={selectedItem.asset}
+        initialClonedDirectory={selectedItem.repositoryLocalPath}
+        kind={selectedItem.asset.kind}
+        onClose={() => setSelectedResource(null)}
+        onRemove={() => onChangeResource(selectedItem.assetIds, null)}
+        onSubmit={async (asset) => {
+          await onChangeResource(selectedItem.assetIds, asset);
+          setSelectedResource({ kind: asset.kind, value: asset.value, direction: asset.direction });
+        }}
+      />
+      <ResourcePriorArtView key={`history:${selectedItem.asset.id}`} workspaceId={workspaceId} assetIds={selectedItem.assetIds} />
+    </section>
+  );
 
   return (
     <section
@@ -1782,8 +1821,8 @@ function WorkspaceResearchSurface({
               >
                 <button
                   className="workspace-surface-item-open"
-                  onClick={() => openResourceDialog(item.asset.kind, item)}
-                  title={`Edit ${item.label}`}
+                  onClick={() => setSelectedResource({ kind: item.asset.kind, value: item.asset.value, direction: item.asset.direction })}
+                  title={`Open ${item.label}`}
                   type="button"
                 >
                   <span className="workspace-surface-item-icon" aria-hidden="true">
@@ -1834,16 +1873,10 @@ function WorkspaceResearchSurface({
       )}
       {dialogState ? (
         <WorkspaceResourceDialog
-          initialClonedDirectory={dialogState.item?.repositoryLocalPath ?? null}
-          initialAsset={dialogState.item?.asset ?? null}
-          kind={dialogState.kind}
+          initialAsset={null}
+          kind={dialogState}
           onClose={() => setDialogState(null)}
-          onRemove={dialogState.item
-            ? () => onChangeResource(dialogState.item?.assetIds ?? [], null)
-            : undefined}
-          onSubmit={dialogState.item
-            ? (asset) => onChangeResource(dialogState.item?.assetIds ?? [], asset)
-            : onAddResource}
+          onSubmit={onAddResource}
         />
       ) : null}
       {cloneDialogState ? (
@@ -1901,7 +1934,13 @@ function WorkspaceResearchSurface({
   );
 }
 
-export function WorkspaceResourceDialog({
+export function WorkspaceResourceDialog(props: Omit<Parameters<typeof WorkspaceResourceEditor>[0], 'presentation'>): JSX.Element {
+  return <WorkspaceResourceEditor {...props} presentation="dialog" />;
+}
+
+export function WorkspaceResourceEditor({
+  onEditStateChange,
+  presentation = 'page',
   initialClonedDirectory,
   initialAsset,
   kind,
@@ -1909,6 +1948,8 @@ export function WorkspaceResourceDialog({
   onRemove,
   onSubmit
 }: {
+  onEditStateChange?: (state: { dirty: boolean; pending: boolean }) => void;
+  presentation?: 'dialog' | 'page';
   initialClonedDirectory?: string | null;
   initialAsset: ScopeAsset | null;
   kind: ScopeAssetKind;
@@ -1929,6 +1970,17 @@ export function WorkspaceResourceDialog({
   const [sensitivity, setSensitivity] = useState(initialAsset?.sensitivity ?? 'internal');
   const [pendingAction, setPendingAction] = useState<'save' | 'remove' | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const dirty = value !== (initialAsset?.value ?? '') || displayName !== initialDisplayName || clonedDirectory !== (initialClonedDirectory ?? (initialAsset ? repositoryClonedDirectory(initialAsset) : null) ?? '') || direction !== (initialAsset?.direction ?? 'in_scope') || sensitivity !== (initialAsset?.sensitivity ?? 'internal');
+  useEffect(() => { onEditStateChange?.({ dirty, pending: pendingAction !== null }); }, [dirty, pendingAction, onEditStateChange]);
+  useEffect(() => () => { onEditStateChange?.({ dirty: false, pending: false }); }, [onEditStateChange]);
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const preventUnload = (event: BeforeUnloadEvent): void => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [dirty]);
 
   const submit = async (): Promise<void> => {
     const trimmedValue = value.trim();
@@ -1947,14 +1999,16 @@ export function WorkspaceResourceDialog({
           ? initialAsset.attributes.repositoryUrl.trim()
           : initialAsset?.value.trim() ?? '';
         attributes.repositoryUrl = trimmedValue;
-        if (previousRepositoryUrl && previousRepositoryUrl.toLowerCase() !== trimmedValue.toLowerCase()) {
+        const referenceChanged = previousRepositoryUrl && previousRepositoryUrl.toLowerCase() !== trimmedValue.toLowerCase();
+        if (referenceChanged) {
           clearRepositoryCheckoutAttributes(attributes);
         }
-        if (clonedDirectory.trim()) attributes.clonedDirectory = clonedDirectory.trim();
+        const previousCheckout = initialClonedDirectory ?? (initialAsset ? repositoryClonedDirectory(initialAsset) : null) ?? '';
+        if (clonedDirectory.trim() && (!referenceChanged || clonedDirectory.trim() !== previousCheckout.trim())) attributes.clonedDirectory = clonedDirectory.trim();
         else clearRepositoryCheckoutAttributes(attributes);
       }
       await onSubmit({ direction, kind, value: trimmedValue, sensitivity, attributes });
-      onClose();
+      if (presentation === 'dialog') onClose();
     } catch (caught) {
       setSubmitError(errorMessage(caught));
     } finally {
@@ -1976,17 +2030,13 @@ export function WorkspaceResourceDialog({
     }
   };
 
-  return (
-    <Modal
-      className="start-run-dialog workspace-resource-dialog"
-      closeDisabled={pendingAction !== null}
-      footer={(
-        <>
+  const footer = (
+    <>
           {onRemove ? (
             <button
               className="workspace-resource-remove-button modal-footer-leading"
               disabled={pendingAction !== null}
-              onClick={() => void remove()}
+              onClick={() => setConfirmRemove(true)}
               type="button"
             >
               <Trash2 aria-hidden="true" size={15} />
@@ -1997,11 +2047,10 @@ export function WorkspaceResourceDialog({
             {pendingAction === 'save' ? (editing ? 'Saving…' : 'Adding…') : (editing ? 'Save changes' : 'Add resource')}
           </button>
         </>
-      )}
-      onClose={onClose}
-      title={`${editing ? 'Edit' : 'Add'} ${workspaceAssetKindLabel(kind)}`}
-    >
-      <form className="modal-form workspace-resource-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+  );
+  const form = (
+    <form className="modal-form workspace-resource-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+        <fieldset disabled={pendingAction !== null}>
         <label>
           Resource type
           <input disabled readOnly value={workspaceAssetKindLabel(kind)} />
@@ -2047,9 +2096,34 @@ export function WorkspaceResourceDialog({
             </select>
           </label>
         </div>
+        </fieldset>
         {submitError ? <p className="form-error" role="alert">{submitError}</p> : null}
       </form>
-    </Modal>
+  );
+  const removal = confirmRemove ? (
+    <div className="resource-detail-confirm" role="alert">
+      <p>Remove this resource from the workspace? Saved history and local files will remain.</p>
+      <button className="secondary-button" disabled={pendingAction !== null} onClick={() => setConfirmRemove(false)} type="button">Keep resource</button>
+      <button className="secondary-button" disabled={pendingAction !== null} onClick={() => void remove()} type="button">Confirm removal</button>
+    </div>
+  ) : null;
+  if (presentation === 'dialog') return <Modal className="start-run-dialog workspace-resource-dialog" closeDisabled={pendingAction !== null} footer={footer} onClose={onClose} title={`${editing ? 'Edit' : 'Add'} ${workspaceAssetKindLabel(kind)}`}>{form}{removal}</Modal>;
+  return (
+    <div className="workspace-resource-editor">
+      <header className="resource-detail-header">
+        <button className="secondary-button" disabled={pendingAction !== null} onClick={() => dirty ? setConfirmLeave(true) : onClose()} type="button">Back to resources</button>
+        <h2>{initialDisplayName || initialAsset?.value || workspaceAssetKindLabel(kind)}</h2>
+      </header>
+      {confirmLeave ? <div className="resource-detail-confirm" role="alert">
+        <p>Discard unsaved resource changes?</p>
+        <button className="secondary-button" onClick={() => setConfirmLeave(false)} type="button">Keep editing</button>
+        <button className="secondary-button" onClick={onClose} type="button">Discard changes</button>
+      </div> : null}
+      {form}
+      {value.trim() !== initialAsset?.value.trim() ? <p>Changing the reference opens history for the new resource. Existing history remains associated with the previous reference.</p> : null}
+      <div className="resource-detail-actions">{footer}</div>
+      {removal}
+    </div>
   );
 }
 

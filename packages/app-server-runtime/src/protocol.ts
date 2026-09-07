@@ -7,11 +7,15 @@ import type {
   ResearchChannelMessageKind,
   ResearchChannelSharedResourceKind,
   ResearchClaimRating,
+  ResearchResourceKind,
   ResearchGoalSuggestionInput,
   ResearchGoalSuggestionSelectionInput,
 } from "@beale/research-agent";
 
 export type {
+  ResourcePriorArtPage,
+  ResourcePriorArtDetail,
+  ResourcePriorArtSummary,
   ResearchChannelDetail,
   ResearchChannelMemberRecord,
   ResearchChannelMemberStatus,
@@ -31,6 +35,16 @@ export interface CreateResearchChannelInput {
   name: string;
   title?: string;
   topic: string;
+}
+
+export interface ResourcePriorArtListInput {
+  workspaceId: string;
+  resources: Array<{ kind: ResearchResourceKind; locator: string }>;
+  before?: number;
+}
+export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput, "before"> {
+  id: string;
+  offset?: number;
 }
 
 export interface PostResearchChannelMessageInput {
@@ -56,7 +70,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-04T22:54:48.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-07T12:00:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
@@ -99,6 +113,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "knowledge.report-packet-replace.v1",
   "knowledge.report-recording-replace.v1",
   "knowledge.report-list.v1",
+  "workspace.resource-prior-art.v1",
 ] as const;
 export const BEALE_APP_SERVER_SERVER_PATH = "/v1/server" as const;
 export const BEALE_APP_SERVER_SESSIONS_PATH = "/v1/sessions" as const;
@@ -425,6 +440,7 @@ export const APP_SERVER_TRANSPORT_PREFIX = APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX;
 export const APP_SERVER_TRANSPORT_PATH = APP_SERVER_PROTOCOL_WEBSOCKET_PATH;
 
 export const APP_SERVER_PROTOCOL_OPERATIONS = [
+  "resource.prior_art.list", "resource.prior_art.get",
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",

@@ -1,4 +1,6 @@
 export const IPC_CHANNELS = {
+  listResourcePriorArt: 'beale:list-resource-prior-art',
+  getResourcePriorArt: 'beale:get-resource-prior-art',
   selectWorkspace: 'beale:select-workspace',
   selectWorkspaceDirectory: 'beale:select-workspace-directory',
   getWorkspaceRegistry: 'beale:get-workspace-registry',

@@ -751,6 +751,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.cloneWorkspaceRepository, (_event, assetId: string, cloneMode: RepositoryCloneMode) =>
     workspaceService.cloneWorkspaceRepository(assetId, cloneMode)
   );
+  ipcMain.handle(IPC_CHANNELS.listResourcePriorArt, (_event, workspaceId: string, assetIds: string[], before?: number) => workspaceService.listResourcePriorArt(workspaceId, assetIds, before));
+  ipcMain.handle(IPC_CHANNELS.getResourcePriorArt, (_event, workspaceId: string, assetIds: string[], id: string, offset?: number) => workspaceService.getResourcePriorArt(workspaceId, assetIds, id, offset));
   ipcMain.handle(IPC_CHANNELS.skipWorkspaceOnboardingRepository, (_event, input: WorkspaceOnboardingSkipInput) => workspaceService.skipWorkspaceOnboardingRepository(input));
   ipcMain.handle(IPC_CHANNELS.openRegisteredWorkspace, (_event, registryWorkspaceId: string) =>
     timedMainIpc('openRegisteredWorkspace', { workspace: shortMetricId(registryWorkspaceId) }, () => workspaceService.openRegisteredWorkspace(registryWorkspaceId))

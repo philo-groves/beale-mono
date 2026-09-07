@@ -46,6 +46,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   sessionEndingSuggestionsEnabled = true,
   responseSuggestionsEnabled = true,
   researchSubjectName = '',
+  workspaceId = '',
   workspacePath = '',
   workspaceDirectories,
   workspaceMemoryBackend = 'app-server',
@@ -120,6 +121,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   sessionEndingSuggestionsEnabled?: boolean;
   responseSuggestionsEnabled?: boolean;
   researchSubjectName?: string;
+  workspaceId?: string;
   workspacePath?: string;
   workspaceDirectories?: readonly string[];
   workspaceMemoryBackend?: WorkspaceMemoryBackendId;
@@ -357,6 +359,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     >
       {viewState === 'new-research' ? newResearchContent : workspaceView ? (
         <WorkspaceUnderstandingView
+          workspaceId={workspaceId}
           key={workspacePath}
           busy={busy}
           activeScope={activeScope}

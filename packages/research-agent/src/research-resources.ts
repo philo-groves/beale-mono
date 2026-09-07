@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import { nowIso } from "./ids.js";
 import { researchKitFirstTouchGuidance } from "./research-kit-guidance.js";
+import { ResourcePriorArtStore } from "./resource-prior-art.js";
+import { projectSearchCards } from "./prior-art-tools.js";
 import type {
   ResearchExecutableTool,
   ResearchToolExecutionResult,
@@ -64,6 +66,7 @@ export interface ResearchResourceCatalogOptions {
  * not authoring target content, a claim, or an authorization grant.
  */
 export class ResearchResourceCatalog {
+  public readonly priorArt: ResourcePriorArtStore;
   readonly #database: DatabaseSync;
   readonly #workspaceId: string;
 
@@ -72,9 +75,11 @@ export class ResearchResourceCatalog {
     this.#workspaceId = requiredText(options.workspaceId, "workspaceId");
     this.#migrate();
     this.#replaceExplicitResources(options.explicitResources ?? []);
+    this.priorArt = new ResourcePriorArtStore(this.#database, this.#workspaceId);
   }
 
   public close(): void {
+    this.priorArt.close();
     this.#database.close();
   }
 
@@ -261,7 +266,13 @@ const RESOURCE_PARAMETERS = {
   type: "object",
   required: ["operation"],
   properties: {
-    operation: { type: "string", enum: ["list", "discover", "touch"] },
+    operation: { type: "string", enum: ["list", "discover", "touch", "history"] },
+    before: { type: "integer", minimum: 1, description: "nextBefore from a saved history page." },
+    historyId: { type: "string", description: "For history: read a saved search or archived document by its ID instead of listing summaries. No network request." },
+    offset: { type: "integer", minimum: 0, description: "nextOffset from a saved detail page." },
+    recordIndex: { type: "integer", minimum: 0, description: "For a saved search historyId: read a complete record as paged JSON, including deferred source fields. Zero-based index within that search observation." },
+    textOffset: { type: "integer", minimum: 0, description: "nextTextOffset from a complete saved record read." },
+    limit: { type: "integer", minimum: 1, maximum: 20 },
     kind: { type: "string", enum: ["domain", "repository", "binary", "service", "tool", "documentation", "other"] },
     name: { type: "string" },
     locator: { type: "string", description: "Stable path, service identifier, package/binary name, URL, or other canonical locator." },
@@ -277,7 +288,7 @@ export function createResearchResourceTool(options: ResearchResourceToolOptions)
     descriptor: {
       name: "resource.catalog",
       transportName: "resource_catalog",
-      description: "List explicitly scoped and ambient research resources; classify a discovered binary, service, tool, repository, domain, or documentation source without authoring target content; or request Auto-Review before recording its first research touch. Discovery never grants authorization and never triggers bug-history work by itself.",
+      description: "List explicitly scoped and ambient research resources; classify a discovered binary, service, tool, repository, domain, or documentation source without authoring target content; or request Auto-Review before recording its first research touch. Use history with resourceId to recall saved prior-art searches and document snapshots before repeating requests. Discovery never grants authorization and never triggers bug-history work by itself.",
       actionClasses: ["recall", "inspect"],
       sideEffects: "write",
       requiredPermissions: ["research-resource:inventory"],
@@ -290,7 +301,17 @@ export function createResearchResourceTool(options: ResearchResourceToolOptions)
     },
     parameters: RESOURCE_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action, context) {
-      const operation = requiredEnum(action.input.operation, "operation", ["list", "discover", "touch"] as const);
+      const operation = requiredEnum(action.input.operation, "operation", ["list", "discover", "touch", "history"] as const);
+      if (operation === "history") {
+        const resourceId = options.catalog.priorArt.requireResource(action.input.resourceId);
+        if (action.input.historyId !== undefined) {
+          if (action.input.recordIndex !== undefined) return complete(action, "Read complete saved prior-art record.", options.catalog.priorArt.readRecord([resourceId], requiredString(action.input.historyId, "historyId"), action.input.recordIndex as number, action.input.textOffset as number | undefined));
+          const detail = options.catalog.priorArt.get([resourceId], requiredString(action.input.historyId, "historyId"), action.input.offset as number | undefined);
+          const result = complete(action, "Read saved resource prior art.", detail);
+          return detail.kind === "search" ? { ...result, modelOutput: { ...detail, data: projectSearchCards(detail.data), fullRecordRecall: "Use this historyId with recordIndex (offset plus the card's position) and textOffset to read complete archived record JSON offline." } } : result;
+        }
+        return complete(action, "Listed saved resource prior art.", options.catalog.priorArt.list([resourceId], action.input.before as number | undefined, action.input.limit as number | undefined));
+      }
       if (operation === "list") {
         return complete(action, "Listed tracked research resources.", {
           resources: options.catalog.list(),
@@ -460,7 +481,7 @@ function decodeResource(row: Record<string, unknown>): TrackedResearchResource {
   };
 }
 
-function stableResourceId(workspaceId: string, kind: ResearchResourceKind, locator: string): string {
+export function stableResourceId(workspaceId: string, kind: ResearchResourceKind, locator: string): string {
   return `resource_${createHash("sha256").update(`${workspaceId}\n${kind}\n${normalizeLocator(locator)}`).digest("hex").slice(0, 32)}`;
 }
 

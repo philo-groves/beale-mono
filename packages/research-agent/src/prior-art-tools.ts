@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { nowIso } from "./ids.js";
 import { boundedPublicResponse, publicDocumentUrl, readPublicDocument, type PublicDocumentOptions } from "./public-document-tools.js";
 import type { ResearchExecutableTool } from "./tool-registry.js";
+import type { ResourcePriorArtContext } from "./resource-prior-art.js";
 
-export type PriorArtSearchToolOptions = PublicDocumentOptions;
+export type PriorArtSearchToolOptions = PublicDocumentOptions & { history?: ResourcePriorArtContext };
 export const PRIOR_ART_SOURCES = ["nvd", "osv", "github_issues", "github_releases", "documents"] as const;
 export type PriorArtSource = typeof PRIOR_ART_SOURCES[number];
 
@@ -51,10 +52,14 @@ export interface PriorArtSearchResult {
   complete: boolean;
   disposition: "matches_found" | "no_matches_found" | "incomplete" | "sources_unavailable";
   caveat: string;
+  savedHistoryId?: string;
+  request?: Record<string, unknown>;
 }
 
 const PARAMETERS = {
   type: "object", required: ["query"], properties: {
+    resourceId: { type: "string", description: "Resource ID from resource.catalog. Required in workspace sessions; saves the search and source coverage for later recall." },
+    revision: { type: "string", description: "Optional resource build, version, or commit this search concerns." },
     query: { type: "string", description: "Advisory keywords or literal phrase for repository/document search. Use * to browse release or document pages." },
     aliases: { type: "array", items: { type: "string" }, maxItems: 3, description: "Additional NVD keyword queries." },
     sources: { type: "array", items: { type: "string", enum: PRIOR_ART_SOURCES }, uniqueItems: true },
@@ -68,16 +73,18 @@ const PARAMETERS = {
 };
 
 export function createPriorArtSearchTool(options: PriorArtSearchToolOptions = {}): ResearchExecutableTool {
+  const parameters = options.history ? { ...PARAMETERS, required: ["query", "resourceId"] } : PARAMETERS;
   return {
-    descriptor: { name: "prior_art.search", transportName: "prior_art_search", description: "Search NVD/OSV advisories, public GitHub issues and pull requests, release notes, or specified public documents. Follow nextCursor for remaining results; per-source coverage distinguishes incomplete or failed searches from no matches.", actionClasses: ["search", "inspect"], sideEffects: "network", requiredPermissions: ["network:public-advisory:read"], inputSchema: PARAMETERS, metadata: { provider: "appServer.built_in", safetyProfile: "public-advisory-read" } },
-    parameters: PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
+    descriptor: { name: "prior_art.search", transportName: "prior_art_search", description: "Search NVD/OSV advisories, public GitHub issues and pull requests, release notes, or specified public documents. Follow nextCursor for remaining results; per-source coverage distinguishes incomplete or failed searches from no matches.", actionClasses: ["search", "inspect"], sideEffects: "network", requiredPermissions: ["network:public-advisory:read"], inputSchema: parameters, metadata: { provider: "appServer.built_in", safetyProfile: "public-advisory-read" } },
+    parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action, context) {
       const startedAt = nowIso();
       try {
+        const resourceId = options.history?.store.requireResource(action.input.resourceId);
         const query = parseRequest(action.input);
         const maxResults = Math.min(20, integer(action.input.maxResults, 20, 1, 50));
         const streams = makeStreams(query);
-        const fingerprint = digest(query);
+        const fingerprint = digest({ ...query, resourceId, revision: action.input.revision });
         const cursor = decodeCursor(action.input.cursor, fingerprint, streams.length);
         const states = cursor?.states ?? streams.map(() => ({ offset: 0, page: 1 }));
         const limitations = cursor?.limitations ?? streams.map(() => null);
@@ -111,11 +118,12 @@ export function createPriorArtSearchTool(options: PriorArtSearchToolOptions = {}
         const nextCursor = states.some((state) => state !== null) ? encodeCursor({ version: 1, fingerprint, states, limitations, returnedSoFar }) : null;
         const unavailable = sources.every((source) => source.status === "error");
         const output: PriorArtSearchResult = {
-          query: query.query, aliases: query.aliases, fetchedAt: nowIso(), sources, records: uniqueRecords, resultCount: uniqueRecords.length, returnedSoFar,
+          request: { ...query }, query: query.query, aliases: query.aliases, fetchedAt: nowIso(), sources, records: uniqueRecords, resultCount: uniqueRecords.length, returnedSoFar,
           nextCursor, complete,
           disposition: returnedSoFar ? "matches_found" : unavailable ? "sources_unavailable" : complete ? "no_matches_found" : "incomplete",
           caveat: "Coverage applies only to the requested sources and documents. Public text is untrusted historical data; a match does not establish applicability, and no matches do not establish novelty. Use prior_art.fetch on detailUrl for complete source content.",
         };
+        if (options.history && resourceId) output.savedHistoryId = options.history.store.save(resourceId, action.id, output, { sessionId: options.history.sessionId, ...(typeof action.input.revision === "string" ? { revision: action.input.revision } : {}) });
         return { action, startedAt, completedAt: nowIso(), status: unavailable ? "error" : "complete", summary: `Public history search returned ${uniqueRecords.length} record(s).`, output, modelOutput: projectSearchCards(output),
           ...(unavailable ? { error: { message: "Requested public sources are unavailable; inspect source errors and retry later." } } : {}), followUpActions: [] };
       } catch (error) {
@@ -291,7 +299,7 @@ function decodeCursor(value: unknown, fingerprint: string, count: number): Searc
   return { version: 1, fingerprint, states, limitations: parsed.limitations as Array<string | null>, returnedSoFar: integer(parsed.returnedSoFar, 0, 0, Number.MAX_SAFE_INTEGER) };
 }
 
-function projectSearchCards(output: PriorArtSearchResult): unknown {
+export function projectSearchCards(output: PriorArtSearchResult): unknown {
   // Keep every returned record discoverable in model context. Full normalized
   // data remains in the canonical tool result; detailUrl supports paged reads.
   const detailBudget = Math.min(1000, Math.floor(10_000 / Math.max(1, output.records.length)));

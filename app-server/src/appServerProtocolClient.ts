@@ -1,6 +1,8 @@
 import {
   AppServerSessionStore,
   ResearchChannelStore,
+  ResourcePriorArtStore,
+  stableResourceId,
   AgentPluginRegistry,
   BUNDLED_RESEARCH_PROFILE_IDS,
   CampaignTrackStore,
@@ -111,6 +113,24 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
   }
   if (operation.startsWith('session.')) return sessionOperation(operation, options);
   if (operation.startsWith('channel.')) return channelOperation(operation, options);
+  if (operation === 'resource.prior_art.list' || operation === 'resource.prior_art.get') {
+    const input = requiredRecord(options.input, 'resource prior art input');
+    const workspaceId = requiredText(input.workspaceId, 'workspaceId');
+    const resources = input.resources;
+    if (!Array.isArray(resources) || resources.length < 1 || resources.length > 100) throw new Error('Resource identities are required.');
+    const ids = resources.map((value: unknown) => {
+      const resource = requiredRecord(value, 'resource identity');
+      const kind = requiredText(resource.kind, 'kind');
+      if (!['domain', 'repository', 'binary', 'service', 'tool', 'documentation', 'other'].includes(kind)) throw new Error('Invalid resource kind.');
+      return stableResourceId(workspaceId, kind as Parameters<typeof stableResourceId>[1], requiredText(resource.locator, 'locator'));
+    });
+    const store = new ResourcePriorArtStore(requiredStorage(options.storage).databasePath, workspaceId);
+    try {
+      return operation === 'resource.prior_art.list'
+        ? store.list(ids, input.before as number | undefined)
+        : store.get(ids, requiredText(input.id, 'id'), input.offset as number | undefined);
+    } finally { store.close(); }
+  }
   if (operation === 'provider.complete') return completeAuxiliaryText(requiredRecord(options.input, 'completion input') as never);
   if (operation === 'provider.describe') return providerSemanticsDescriptor();
   if (operation === 'model_job.resolve') return resolveAuxiliaryModelRoute(requiredRecord(options.input, 'model job input') as never);

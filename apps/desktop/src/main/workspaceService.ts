@@ -8,7 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
-import { AppServerReadTransportError } from './bealeAppServerClient';
+import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
+import type { ResourcePriorArtPage, ResourcePriorArtDetail, ResourcePriorArtListInput } from '@beale/app-server-runtime/protocol';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -2228,6 +2229,29 @@ export class WorkspaceService {
     this.scheduleWorkspaceMemorySummaryLoad(runtime);
     this.emitChange();
     return this.requireSnapshot();
+  }
+
+  private resourcePriorArtInput(workspaceId: string, assetIds: string[]): Pick<ResourcePriorArtListInput, 'workspaceId' | 'resources'> {
+    const runtime = this.getForegroundRuntime();
+    if (!runtime || runtime.db.getWorkspaceId() !== workspaceId) throw new Error('The resource workspace is no longer open.');
+    if (!Array.isArray(assetIds) || !assetIds.length || assetIds.length > 100) throw new Error('Resource IDs are required.');
+    const scope = runtime.db.getActiveScope();
+    const resources = assetIds.flatMap((id) => {
+      const asset = scope.assets.find((item) => item.id === id);
+      if (!asset) throw new Error('The resource is no longer in the active scope.');
+      const kind: ResourcePriorArtListInput['resources'][number]['kind'] = asset.kind === 'repo' ? 'repository' : asset.kind;
+      const checkout = repositoryClonedDirectory(asset);
+      return [...new Set([asset.value, ...(checkout ? [checkout] : [])])].map((locator) => ({ kind, locator: locator.slice(0, 1000) }));
+    });
+    return { workspaceId, resources };
+  }
+
+  public listResourcePriorArt(workspaceId: string, assetIds: string[], before?: number): Promise<ResourcePriorArtPage> {
+    return invokeAppServerOperation({ operation: 'resource.prior_art.list', input: { ...this.resourcePriorArtInput(workspaceId, assetIds), before }, signal: AbortSignal.timeout(15_000) });
+  }
+
+  public getResourcePriorArt(workspaceId: string, assetIds: string[], id: string, offset?: number): Promise<ResourcePriorArtDetail> {
+    return invokeAppServerOperation({ operation: 'resource.prior_art.get', input: { ...this.resourcePriorArtInput(workspaceId, assetIds), id, offset }, signal: AbortSignal.timeout(15_000) });
   }
 
   public cloneWorkspaceRepository(assetId: string, cloneMode: RepositoryCloneMode = 'deep'): Promise<WorkspaceSnapshot> {

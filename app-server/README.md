@@ -30,6 +30,10 @@ The Claims plugin provides `claim.get` for either a lead or finding ID. Its defa
 
 ## Public history reads
 
+Workspace sessions require a `resourceId` from `resource.catalog` (or an active scope asset ID) for `prior_art.search` and `prior_art.fetch`. Searches persist each result page, query parameters, coverage failures, and continuation state; document reads archive the complete extracted text and links, with the original response hash and retrieval metadata. The app-server owns this workspace-scoped SQLite history. Existing session traces are not automatically imported.
+
+Use `resource.catalog` with `operation: "history"` and `resourceId` to list compact saved observations; supply `historyId` and optional `offset` to read an archived observation offline. Search detail pages contain five records; document pages contain 8,000 characters and 20 links. For complete archived advisory fields deferred from model cards, supply `historyId`, `recordIndex`, and optional `textOffset` to read 8,000-character JSON pages. Source refresh still uses the Provenance tools and creates a new observation. Desktop resource rows open an inline editor and the saved-history view; Refresh saved history reloads storage without contacting public sources.
+
 The Provenance plugin includes `prior_art.search`, `prior_art.fetch`, `repository.history`, and `repository.fetch_history`.
 
 - `prior_art.search` supports NVD keyword queries, OSV package/version or commit lookups, public GitHub issue/PR search and releases for an explicit `owner/repository`, and literal searches of supplied document URLs. Supplying a repository or document URLs includes those sources by default; an explicit `sources` list narrows coverage. Document search covers only the supplied pages, not an entire website or the open web.

@@ -2592,6 +2592,7 @@ export function App(): JSX.Element {
                 onDelete={deleteSelectedResearchChannel}
               />
             ) : snapshot ? <MainSessionWorkspace
+              workspaceId={snapshot.workspace.workspaceId}
               detail={renderedRunDetail}
               sessionSetupPending={sessionSetupPending}
               events={mainSessionTraceEvents}

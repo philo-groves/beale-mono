@@ -1,6 +1,8 @@
 import type { ResearchProfileId, ResearchProfileSnapshot, ResolvedResearchProfile } from './researchProfile';
 import type { ResearchKitId } from './researchKits';
 import type {
+  ResourcePriorArtPage,
+  ResourcePriorArtDetail,
   CreateResearchChannelInput,
   PostResearchChannelMessageInput,
   ResearchChannelDetail,
@@ -18,6 +20,9 @@ import type {
 export * from './researchProfile';
 export * from './researchKits';
 export type {
+  ResourcePriorArtPage,
+  ResourcePriorArtDetail,
+  ResourcePriorArtSummary,
   CreateResearchChannelInput,
   PostResearchChannelMessageInput,
   ResearchChannelDetail,
@@ -2463,6 +2468,8 @@ export interface BealeApi {
   updateWorkspaceDirectories(directories: string[]): Promise<WorkspaceSnapshot>;
   updateWorkspaceMemoryBackend(memoryBackend: WorkspaceMemoryBackendId): Promise<WorkspaceSnapshot>;
   cloneWorkspaceRepository(assetId: string, cloneMode: RepositoryCloneMode): Promise<WorkspaceSnapshot>;
+  listResourcePriorArt(workspaceId: string, assetIds: string[], before?: number): Promise<ResourcePriorArtPage>;
+  getResourcePriorArt(workspaceId: string, assetIds: string[], id: string, offset?: number): Promise<ResourcePriorArtDetail>;
   skipWorkspaceOnboardingRepository(input: WorkspaceOnboardingSkipInput): Promise<WorkspaceOnboardingProgressUpdate | null>;
   onWorkspaceOnboardingUpdate(listener: (update: WorkspaceOnboardingProgressUpdate) => void): () => void;
   openRegisteredWorkspace(registryWorkspaceId: string): Promise<WorkspaceSnapshot>;

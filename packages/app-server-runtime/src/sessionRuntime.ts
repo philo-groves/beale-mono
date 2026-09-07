@@ -3986,8 +3986,9 @@ async function createRuntimeConfig(args: {
       researchSession: repositoryResearchSession,
       ...(runtimeTools.toolMaxBytes ? { maxBytes: runtimeTools.toolMaxBytes } : {}),
     });
-    const priorArtTool = createPriorArtSearchTool();
-    const priorArtFetchTool = createPriorArtFetchTool();
+    const history = { store: resourceCatalog.priorArt, sessionId: workspaceContext.memoryContext?.sessionId };
+    const priorArtTool = createPriorArtSearchTool({ history });
+    const priorArtFetchTool = createPriorArtFetchTool({ history });
     const fetchHistoryTool = createRepositoryFetchHistoryTool({ roots: repositorySearchRootsFromWorkspaceContext(workspaceContext), researchSession: repositoryResearchSession });
     executableTools.push(historyTool, priorArtTool, priorArtFetchTool, fetchHistoryTool);
     toolDescriptors.push(historyTool.descriptor, priorArtTool.descriptor, priorArtFetchTool.descriptor, fetchHistoryTool.descriptor);

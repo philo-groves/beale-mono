@@ -39,6 +39,7 @@
 
 #### Added
 
+- Workspace resource rows now open detail views with inline editing and saved prior art; creation retains its dialog. Details include source coverage, archived document pages, refresh/retry, and discard/removal confirmation.
 - Added the managed `apple-target-flags` guidance plugin for public Apple Security Bounty Target Flag selection, evidence capture, and conservative primitive assessment.
 - Added the repository-owned `beale-codex` Codex plugin under `integrations/`, with a validated Beale research skill and approval-aware MCP bridge for canonical workspaces, sessions, channels, research tools, evidence, findings, runbooks, reports, and campaign state. The app-server contract advances to v20 with profile-scoped research-tool dispatch and authenticated HTTP session control.
 - Added GPT-6 Astra to the OpenAI Codex research-model catalog with its low-through-max reasoning levels and published context and output limits.
@@ -1112,6 +1113,7 @@
 
 #### Added
 
+- Resource-linked prior-art searches and extracted source documents now persist in an additive SQLite table with retrieval, session/revision, and coverage metadata. Workspace sessions require a resource identity; Knowledge supports paginated offline recall through resource.catalog. Existing session traces are not backfilled.
 - Agent recall now uses one workspace-scoped `history.search` tool across canonical claims, knowledge memories, and runbooks, with multi-category and category-specific filters. The prior memory-only search is removed from new sessions while historical activity remains readable and counted.
 - Added reversible research-claim deduplication with optimistic revisions, audit transitions, canonical-only catalogs, and model tools that coalesce redundant claims during research. Protocol contract v14 advances memory-summary schema to v12, finding schema to v5, and the path-free mobile workspace-memory catalog to v4.
 - Added a durable research-resource catalog that distinguishes operator-listed scope resources from ambient campaign dependencies such as sandbox runtimes and platform-default binaries or services. Discovery and categorization are non-authoring inventory operations; Auto-Review must verify campaign relevance before first touch, and relevance never expands live-target authorization.

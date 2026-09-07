@@ -108,7 +108,7 @@ const MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL = new Map<string, number>([
   ["repository.history", 24_000],
   ["prior_art.search", 32_000],
   ["prior_art.fetch", 24_000],
-  ["resource.catalog", 12_000],
+  ["resource.catalog", 24_000],
   ["file.read", 24_000],
   ["shell.run", 24_000],
 ]);
