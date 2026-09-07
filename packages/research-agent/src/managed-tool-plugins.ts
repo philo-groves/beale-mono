@@ -11,7 +11,7 @@ export const MANAGED_TOOL_PLUGINS = [
   {
     id: "beale-provenance", name: "Provenance",
     description: "Use for repository revision history, public advisory references, and source provenance.",
-    tools: ["repository.history", "prior_art.search"],
+    tools: ["repository.history", "repository.fetch_history", "prior_art.search", "prior_art.fetch"],
   },
   {
     id: "beale-knowledge", name: "Knowledge",

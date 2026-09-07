@@ -46,7 +46,9 @@ import {
   extractCompatibleZCodeAgentResumableState,
   createRepositorySearchTool,
   createRepositoryHistoryTool,
+  createRepositoryFetchHistoryTool,
   createPriorArtSearchTool,
+  createPriorArtFetchTool,
   RepositoryResearchSession,
   ResearchResourceCatalog,
   createResearchResourceTool,
@@ -3985,8 +3987,10 @@ async function createRuntimeConfig(args: {
       ...(runtimeTools.toolMaxBytes ? { maxBytes: runtimeTools.toolMaxBytes } : {}),
     });
     const priorArtTool = createPriorArtSearchTool();
-    executableTools.push(historyTool, priorArtTool);
-    toolDescriptors.push(historyTool.descriptor, priorArtTool.descriptor);
+    const priorArtFetchTool = createPriorArtFetchTool();
+    const fetchHistoryTool = createRepositoryFetchHistoryTool({ roots: repositorySearchRootsFromWorkspaceContext(workspaceContext), researchSession: repositoryResearchSession });
+    executableTools.push(historyTool, priorArtTool, priorArtFetchTool, fetchHistoryTool);
+    toolDescriptors.push(historyTool.descriptor, priorArtTool.descriptor, priorArtFetchTool.descriptor, fetchHistoryTool.descriptor);
   }
 
   if (families.has("file-read")) {

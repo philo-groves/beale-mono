@@ -896,7 +896,9 @@ test("repository first touch is emitted once per canonical repository revision",
     assert.equal(first.result.output.repositoryFirstTouches.length, 1);
     assert.equal(first.result.output.repositoryFirstTouches[0].repository.root, await realpath(root));
     assert.equal(first.result.output.repositoryFirstTouches[0].repository.shallow, false);
-    assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /public CVEs/);
+    assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /NVD\/OSV records/);
+    assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /prior_art.fetch/);
+    assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /repository.fetch_history/);
     assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /release notes/);
     assert.match(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /official source releases/);
     assert.doesNotMatch(first.result.output.repositoryFirstTouches[0].reminder.join(" "), /Apple Open Source/);
@@ -1647,7 +1649,9 @@ test("default built-in family assembles configured tool surfaces", async () => {
       "code.references",
       "experiment.run",
       "file.read",
+      "prior_art.fetch",
       "prior_art.search",
+      "repository.fetch_history",
       "repository.history",
       "repository.search",
       "synthesis.compose",
@@ -1662,7 +1666,9 @@ test("default built-in family assembles configured tool surfaces", async () => {
       "code_references",
       "experiment_run",
       "file_read",
+      "prior_art_fetch",
       "prior_art_search",
+      "repository_fetch_history",
       "repository_history",
       "repository_search",
       "synthesis_compose",

@@ -28,11 +28,15 @@ test("runtime assembly honors managed plugin selection while retaining core tool
     const names = (capture) => capture.tools.map((tool) => tool.name);
     for (const name of CORE_TOOL_NAMES) assert.ok(names(disabled).includes(name), name);
     assert.ok(names(enabled).includes("repository.search"));
+    assert.ok(names(enabled).includes("prior_art.fetch"));
+    assert.ok(names(enabled).includes("repository.fetch_history"));
     assert.ok(names(enabled).includes("memory.get"));
     assert.ok(names(enabled).includes("claim.get"));
     assert.ok(names(knowledge).includes("memory.get"));
     assert.equal(names(knowledge).includes("claim.get"), false);
     assert.equal(names(knowledge).includes("repository.search"), false);
+    assert.equal(names(knowledge).includes("prior_art.fetch"), false);
+    assert.equal(names(knowledge).includes("repository.fetch_history"), false);
     assert.ok(names(disabled).every((name) => CORE_TOOL_NAMES.includes(name)));
   } finally {
     await rm(directory, { recursive: true, force: true });

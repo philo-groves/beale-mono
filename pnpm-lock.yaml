@@ -154,6 +154,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.80.10
         version: 0.80.10(patch_hash=00a66a73b1d4874ce0795c8517c2e2f40ebe1ec54b28555c0b4894f59edc85f3)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+      parse5:
+        specifier: 7.3.0
+        version: 7.3.0
       tree-sitter-wasm:
         specifier: 1.1.1
         version: 1.1.1

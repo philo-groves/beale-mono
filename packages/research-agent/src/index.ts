@@ -36,6 +36,8 @@ export * from "./config.js";
 export * from "./tool-config.js";
 export * from "./code-tools.js";
 export * from "./built-in-tools.js";
+export * from "./prior-art-tools.js";
+export * from "./public-document-tools.js";
 export * from "./repository-research-tools.js";
 export * from "./research-resources.js";
 export * from "./research-kit-guidance.js";

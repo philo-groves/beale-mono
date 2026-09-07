@@ -1084,6 +1084,7 @@
 
 #### Changed
 
+- Public history recall now supports paginated NVD/OSV, public GitHub issues/PRs and releases, and supplied document pages, retaining structured advisory applicability and explicit partial/error coverage. Provenance adds bounded `prior_art.fetch` with content-hash-checked pages and an explicit `repository.fetch_history` operation that preserves worktree files while fetching or deepening named remote history. Model search cards defer large details to source URLs; first-touch guidance now states actual source coverage.
 - Agent claim recall now supports workspace-scoped `claim.get` for leads and findings, with evidence provenance, transition history, duplicate links, and revision-checked detail pagination in the Claims plugin. Lead and finding catalogs expose continuation offsets; search and recall guidance direct agents to record details instead of treating catalogs as complete records.
 
 - Session launches and continuations read the current managed-plugin selection, preserve explicit disablement, and reject native tools without declared plugin or core ownership.

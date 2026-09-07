@@ -51,6 +51,7 @@
     "@anthropic-ai/sdk": "0.93.0",
     "@earendil-works/pi-agent-core": "0.80.10",
     "@earendil-works/pi-ai": "0.80.10",
+    "parse5": "7.3.0",
     "tree-sitter-wasm": "1.1.1",
     "web-tree-sitter": "0.26.9",
     "zod": "4.4.3"

@@ -16,6 +16,7 @@ import {
   sep,
 } from "node:path";
 import { nowIso } from "./ids.js";
+import { createPriorArtFetchTool } from "./public-document-tools.js";
 import {
   getResearchStorageManifestPath,
   listResearchStorageArtifacts,
@@ -31,6 +32,7 @@ import {
 import {
   createPriorArtSearchTool,
   createRepositoryHistoryTool,
+  createRepositoryFetchHistoryTool,
   RepositoryResearchSession,
   type PriorArtSearchToolOptions,
 } from "./repository-research-tools.js";
@@ -598,6 +600,8 @@ export function createDefaultBuiltInToolFamily(
             ...(options.repositorySearch.maxFileBytes ? { maxBytes: options.repositorySearch.maxFileBytes } : {}),
           }),
           createPriorArtSearchTool(options.priorArt),
+          createPriorArtFetchTool(options.priorArt),
+          createRepositoryFetchHistoryTool({ roots: [...(options.repositorySearch.root ? [options.repositorySearch.root] : []), ...(options.repositorySearch.roots ?? [])], researchSession }),
         ]
       : []),
     ...(options.fileRead ? [createStructuredFileReadTool({ ...options.fileRead, researchSession })] : []),

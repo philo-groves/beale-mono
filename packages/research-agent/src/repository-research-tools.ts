@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -9,13 +10,11 @@ import type {
   ResearchToolExecutionResult,
 } from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
+export { createPriorArtSearchTool, type PriorArtSearchToolOptions } from "./prior-art-tools.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_HISTORY_RESULTS = 20;
 const DEFAULT_HISTORY_MAX_BYTES = 32_000;
-const DEFAULT_PRIOR_ART_RESULTS = 20;
-const DEFAULT_PRIOR_ART_TIMEOUT_MS = 20_000;
-const PRIOR_ART_SOURCES = ["nvd", "osv"] as const;
 
 export interface RepositoryIdentity {
   root: string;
@@ -49,6 +48,13 @@ export class RepositoryResearchSession {
   readonly #headChecks = new Map<string, { checkedAt: number; identity: RepositoryIdentity }>();
 
   public constructor(private readonly options: RepositoryResearchSessionOptions = {}) {}
+
+  public invalidate(root: string): void {
+    const index = this.#identities.findIndex((identity) => identity.root === root);
+    if (index >= 0) this.#identities.splice(index, 1);
+    this.#headChecks.delete(root);
+    this.#lookups.clear();
+  }
 
   public async identify(path: string): Promise<RepositoryIdentity | null> {
     const absolutePath = resolve(path);
@@ -114,10 +120,11 @@ function repositoryHistoryReminder(researchKitId?: string): readonly string[] {
   return [
     "Record the repository origin, HEAD, tags or release identity, upstream relationship, and whether history is shallow.",
     "Inspect path history, blame, security-relevant fix commits, upstream changes, vendor forks or source drops, and version-to-version differences before treating the snapshot as novel.",
-    "Search public CVEs, advisories, vendor security bulletins, release notes, security-content pages, and referenced fixes with prior_art.search; use repository, component, service, binary, package, and symbol aliases.",
+    "Use prior_art.search for NVD/OSV records, public GitHub issue and release history, and specific document URLs. Read vendor bulletins, release notes, security-content pages, and mailing-list archive links with prior_art.fetch; these tools do not search the entire web or crawl sites.",
     "For vendor-maintained components, include official source releases and upstream project history, then compare source drops or tags against the researched build when available.",
+    "When local history is incomplete, repository.fetch_history can explicitly fetch a named configured remote or deepen a shallow clone without checking out files. Record any remote or branch not fetched as a coverage limit.",
     ...researchKitFirstTouchGuidance(researchKitId),
-    "Record matches, likely variants, explicit no-match queries with dates, and deferred sources whose absence limits the novelty assessment.",
+    "Follow returned continuation cursors and record searched sources, dates, incomplete coverage, errors, and deferred sources separately from completed no-match queries.",
   ];
 }
 
@@ -202,99 +209,65 @@ export function createRepositoryHistoryTool(
   };
 }
 
-export interface PriorArtSearchToolOptions {
-  fetch?: typeof fetch;
-  timeoutMs?: number;
+export interface RepositoryFetchHistoryInput {
+  root?: string;
+  remote: string;
+  ref?: string;
+  deepen?: number;
+  unshallow?: boolean;
 }
 
-const PRIOR_ART_SEARCH_PARAMETERS = {
-  type: "object",
-  required: ["query"],
-  properties: {
-    query: { type: "string", description: "Component, repository, protocol, symbol, bug class, or advisory identifier." },
-    aliases: { type: "array", items: { type: "string" }, maxItems: 3 },
-    sources: { type: "array", items: { type: "string", enum: PRIOR_ART_SOURCES } },
-    package: {
-      type: "object",
-      required: ["name", "ecosystem"],
-      properties: { name: { type: "string" }, ecosystem: { type: "string" }, version: { type: "string" } },
+export function createRepositoryFetchHistoryTool(options: RepositoryHistoryToolOptions = {}): ResearchExecutableTool {
+  const session = options.researchSession ?? new RepositoryResearchSession();
+  const parameters = {
+    type: "object", required: ["remote"], properties: {
+      root: { type: "string" },
+      remote: { type: "string", description: "Existing configured remote name; never an arbitrary URL or new remote." },
+      ref: { type: "string", description: "Optional branch, tag, or commit to fetch. Ref mappings and force prefixes are not accepted." },
+      deepen: { type: "integer", minimum: 1, maximum: 100_000, description: "Additional history depth for a shallow clone; mutually exclusive with unshallow." },
+      unshallow: { type: "boolean", description: "Fetch the available full history for a shallow clone." },
     },
-    commit: { type: "string", description: "Git commit hash for OSV commit lookup." },
-    maxResults: { type: "number", minimum: 1, maximum: 50 },
-  },
-};
-
-export function createPriorArtSearchTool(
-  options: PriorArtSearchToolOptions = {},
-): ResearchExecutableTool {
-  const request = options.fetch ?? globalThis.fetch;
+  };
   return {
-    descriptor: {
-      name: "prior_art.search",
-      transportName: "prior_art_search",
-      description: "Search public vulnerability records through NVD keyword search and structured OSV package or commit lookup. Results are research leads with source URLs, not proof that the current revision is affected.",
-      actionClasses: ["search", "inspect"],
-      sideEffects: "network",
-      requiredPermissions: ["network:public-advisory:read"],
-      inputSchema: PRIOR_ART_SEARCH_PARAMETERS,
-      metadata: { provider: "appServer.built_in", safetyProfile: "public-advisory-read" },
-    },
-    parameters: PRIOR_ART_SEARCH_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
+    descriptor: { name: "repository.fetch_history", transportName: "repository_fetch_history", description: "Explicitly fetch history from a named configured remote, optionally deepening or unshallowing the clone. Updates Git objects and remote-tracking metadata without checkout, merge, reset, submodule recursion, or changing worktree files.", actionClasses: ["inspect"], sideEffects: "network", requiredPermissions: ["filesystem:write", "network:repository:read"], inputSchema: parameters },
+    parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
     async execute(action, context) {
       return completeOrError(action, async () => {
-        if (!request) throw new Error("prior_art.search requires the host fetch runtime.");
-        const query = requiredString(action.input.query, "query");
-        const aliases = stringArray(action.input.aliases).slice(0, 3);
-        const packageQuery = optionalRecord(action.input.package);
-        const commit = optionalString(action.input.commit);
-        const requestedSources = stringArray(action.input.sources);
-        const sources = requestedSources.length > 0
-          ? requestedSources.map((source) => requiredEnum(source, "sources[]", PRIOR_ART_SOURCES))
-          : ["nvd" as const, ...(packageQuery || commit ? ["osv" as const] : [])];
-        const maxResults = boundedInteger(action.input.maxResults, DEFAULT_PRIOR_ART_RESULTS, 1, 50);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_PRIOR_ART_TIMEOUT_MS);
-        const abort = () => controller.abort();
-        context?.signal?.addEventListener("abort", abort, { once: true });
+        context?.signal?.throwIfAborted();
+        const root = await resolveHistoryRepository(options.roots ?? [], optionalString(action.input.root), session);
+        const before = await inspectRepository(root);
+        if (!before) throw new Error("A Git worktree is required.");
+        const remote = requiredString(action.input.remote, "remote");
+        if (!before.remotes.some((candidate) => candidate.name === remote)) throw new Error("remote must name an existing configured repository remote.");
+        const ref = optionalString(action.input.ref);
+        if (ref && (ref.startsWith("-") || /[:*?\[\]\\\s~^+]/.test(ref) || ref.includes("..") || ref.includes("@{"))) throw new Error("ref must be one branch, tag, or commit without ref mappings or force prefixes.");
+        const deepen = action.input.deepen;
+        if (deepen !== undefined && (typeof deepen !== "number" || !Number.isSafeInteger(deepen) || deepen < 1 || deepen > 100_000)) throw new Error("deepen must be an integer between 1 and 100000.");
+        const unshallow = action.input.unshallow === true;
+        if (deepen !== undefined && unshallow) throw new Error("Choose deepen or unshallow, not both.");
+        if ((deepen !== undefined || unshallow) && !before.shallow) throw new Error("This repository is not shallow; omit deepen and unshallow.");
+        const refspec = ref ? `${ref}:refs/beale/history/${createHash("sha256").update(`${remote}\n${ref}`).digest("hex").slice(0, 24)}`
+          : `refs/heads/*:refs/remotes/${remote}/*`;
+        const args = ["fetch", "--no-recurse-submodules", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance", "--refmap=",
+          ...(typeof deepen === "number" ? [`--deepen=${deepen}`] : []), ...(unshallow ? ["--unshallow"] : []), "--", remote, refspec];
         try {
-          const searches: Promise<PriorArtSourceResult>[] = [];
-          if (sources.includes("nvd")) {
-            searches.push(searchNvd(request, [query, ...aliases], maxResults, controller.signal));
-          }
-          if (sources.includes("osv")) {
-            if (!packageQuery && !commit) {
-              searches.push(Promise.resolve({ source: "osv", records: [], error: "OSV requires package or commit input; keyword-only OSV search was skipped." }));
-            } else {
-              searches.push(searchOsv(request, packageQuery, commit, maxResults, controller.signal));
-            }
-          }
-          const sourceResults = await Promise.all(searches);
-          const records = dedupePriorArt(sourceResults.flatMap((source) => source.records)).slice(0, maxResults);
-          if (records.length === 0 && sourceResults.every((source) => source.error)) {
-            throw new Error(sourceResults.map((source) => `${source.source}: ${source.error}`).join("; "));
-          }
-          const output = {
-            query,
-            aliases,
-            sources: sourceResults.map((source) => ({
-              source: source.source,
-              resultCount: source.records.length,
-              ...(source.error ? { error: source.error } : {}),
-            })),
-            resultCount: records.length,
-            records,
-            disposition: records.length > 0 ? "matches_found" : "no_matches_found",
-            caveat: "Public records are prior-art leads. Verify applicability against the inspected source revision, product version, reachability, and fix history.",
-          };
-          return result(action, `Prior-art search found ${records.length} normalized record(s).`, output, [
-            records.length > 0
-              ? "Compare referenced fixes and affected versions with the inspected repository before asserting novelty or applicability."
-              : "Record the no-match query and date on any promoted candidate; absence from these sources does not establish novelty.",
-          ]);
+          await runGit(root, args, context?.signal);
+        } catch {
+          context?.signal?.throwIfAborted();
+          // Git diagnostics may echo credential-bearing remote configuration.
+          throw new Error("Git history fetch failed or timed out. Check the named remote's availability and authentication on the host.");
         } finally {
-          clearTimeout(timeout);
-          context?.signal?.removeEventListener("abort", abort);
+          // Fetch may change the shallow boundary without changing HEAD, even on a partial failure.
+          session.invalidate(root);
         }
+        const after = await inspectRepository(root);
+        if (!after) throw new Error("Repository identity became unavailable after fetching history.");
+        return result(action, "Repository history fetched.", {
+          remote, ref, before: { head: before.head, shallow: before.shallow }, after: { head: after.head, shallow: after.shallow },
+          fetchedRef: ref ? refspec.slice(refspec.indexOf(":") + 1) : `refs/remotes/${remote}/*`,
+          scope: ref ? "requested_ref" : "remote_branches",
+          caveat: "Coverage is limited to the named remote and requested refs; other upstream branches or source drops may remain absent.",
+        }, []);
       });
     },
   };
@@ -412,12 +385,13 @@ async function inspectRepository(start: string): Promise<RepositoryIdentity | nu
   return { root: resolve(root), head, branch, shallow: shallow === "true", remotes };
 }
 
-async function runGit(root: string, args: readonly string[]): Promise<string> {
+async function runGit(root: string, args: readonly string[], signal?: AbortSignal): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-c", `safe.directory=${root}`, "-C", root, ...args], {
     encoding: "utf8",
     maxBuffer: 2 * 1024 * 1024,
     timeout: 30_000,
     windowsHide: true,
+    ...(signal ? { signal } : {}),
   });
   return stdout.trim();
 }
@@ -429,152 +403,6 @@ async function tryRunGit(root: string, args: readonly string[]): Promise<string 
   } catch {
     return null;
   }
-}
-
-interface PriorArtRecord {
-  id: string;
-  aliases: string[];
-  source: "nvd" | "osv";
-  summary: string;
-  published: string | null;
-  modified: string | null;
-  affected: string[];
-  references: string[];
-  url: string;
-}
-
-interface PriorArtSourceResult {
-  source: "nvd" | "osv";
-  records: PriorArtRecord[];
-  error?: string;
-}
-
-async function searchNvd(
-  request: typeof fetch,
-  terms: readonly string[],
-  maxResults: number,
-  signal: AbortSignal,
-): Promise<PriorArtSourceResult> {
-  try {
-    const responses = await Promise.all(uniqueStrings(terms).slice(0, 4).map(async (term) => {
-      const url = new URL("https://services.nvd.nist.gov/rest/json/cves/2.0");
-      url.searchParams.set("keywordSearch", term);
-      url.searchParams.set("resultsPerPage", String(Math.min(maxResults, 50)));
-      const response = await request(url, { headers: { Accept: "application/json", "User-Agent": "app-server prior-art research" }, signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.json() as unknown;
-    }));
-    const records = responses.flatMap(normalizeNvdResponse);
-    return { source: "nvd", records: dedupePriorArt(records).slice(0, maxResults) };
-  } catch (error) {
-    return { source: "nvd", records: [], error: errorMessage(error) };
-  }
-}
-
-async function searchOsv(
-  request: typeof fetch,
-  packageQuery: Record<string, unknown> | null,
-  commit: string | null,
-  maxResults: number,
-  signal: AbortSignal,
-): Promise<PriorArtSourceResult> {
-  try {
-    const body = commit
-      ? { commit }
-      : {
-          package: {
-            name: requiredString(packageQuery?.name, "package.name"),
-            ecosystem: requiredString(packageQuery?.ecosystem, "package.ecosystem"),
-          },
-          ...(optionalString(packageQuery?.version) ? { version: optionalString(packageQuery?.version)! } : {}),
-        };
-    const response = await request("https://api.osv.dev/v1/query", {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "app-server prior-art research" },
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return { source: "osv", records: normalizeOsvResponse(await response.json() as unknown).slice(0, maxResults) };
-  } catch (error) {
-    return { source: "osv", records: [], error: errorMessage(error) };
-  }
-}
-
-function normalizeNvdResponse(value: unknown): PriorArtRecord[] {
-  const record = optionalRecord(value);
-  const vulnerabilities = Array.isArray(record?.vulnerabilities) ? record.vulnerabilities : [];
-  return vulnerabilities.flatMap((entry) => {
-    const cve = optionalRecord(optionalRecord(entry)?.cve);
-    const id = optionalString(cve?.id);
-    if (!id) return [];
-    const descriptions = Array.isArray(cve?.descriptions) ? cve.descriptions : [];
-    const description = descriptions.map(optionalRecord).find((item) => item?.lang === "en") ?? optionalRecord(descriptions[0]);
-    const references = Array.isArray(cve?.references) ? cve.references.flatMap((item) => optionalString(optionalRecord(item)?.url) ?? []) : [];
-    const configurations = Array.isArray(cve?.configurations) ? cve.configurations : [];
-    const affected = configurations.flatMap((configuration) => extractNvdCriteria(configuration)).slice(0, 20);
-    return [{
-      id,
-      aliases: [],
-      source: "nvd" as const,
-      summary: optionalString(description?.value) ?? "",
-      published: optionalString(cve?.published),
-      modified: optionalString(cve?.lastModified),
-      affected,
-      references: uniqueStrings(references).slice(0, 12),
-      url: `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(id)}`,
-    }];
-  });
-}
-
-function extractNvdCriteria(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap(extractNvdCriteria);
-  const record = optionalRecord(value);
-  if (!record) return [];
-  return [
-    ...(optionalString(record.criteria) ? [optionalString(record.criteria)!] : []),
-    ...Object.values(record).flatMap(extractNvdCriteria),
-  ];
-}
-
-function normalizeOsvResponse(value: unknown): PriorArtRecord[] {
-  const record = optionalRecord(value);
-  const vulnerabilities = Array.isArray(record?.vulns) ? record.vulns : [];
-  return vulnerabilities.flatMap((entry) => {
-    const item = optionalRecord(entry);
-    const id = optionalString(item?.id);
-    if (!id) return [];
-    const affected = Array.isArray(item?.affected) ? item.affected.flatMap((candidate) => {
-      const packageRecord = optionalRecord(optionalRecord(candidate)?.package);
-      const name = optionalString(packageRecord?.name);
-      const ecosystem = optionalString(packageRecord?.ecosystem);
-      return name ? [`${ecosystem ? `${ecosystem}:` : ""}${name}`] : [];
-    }) : [];
-    const references = Array.isArray(item?.references)
-      ? item.references.flatMap((candidate) => optionalString(optionalRecord(candidate)?.url) ?? [])
-      : [];
-    return [{
-      id,
-      aliases: stringArray(item?.aliases),
-      source: "osv" as const,
-      summary: optionalString(item?.summary) ?? optionalString(item?.details) ?? "",
-      published: optionalString(item?.published),
-      modified: optionalString(item?.modified),
-      affected: uniqueStrings(affected),
-      references: uniqueStrings(references).slice(0, 12),
-      url: `https://osv.dev/vulnerability/${encodeURIComponent(id)}`,
-    }];
-  });
-}
-
-function dedupePriorArt(records: readonly PriorArtRecord[]): PriorArtRecord[] {
-  const seen = new Set<string>();
-  return records.filter((record) => {
-    const identities = [record.id, ...record.aliases].map((value) => value.toLowerCase());
-    if (identities.some((identity) => seen.has(identity))) return false;
-    identities.forEach((identity) => seen.add(identity));
-    return true;
-  });
 }
 
 function parseCommits(value: string): Array<{ hash: string; shortHash: string; committedAt: string; author: string; subject: string }> {
@@ -627,14 +455,6 @@ function uniquePaths(values: readonly string[]): string[] {
   return [...new Set(values.filter(Boolean).map((value) => resolve(value)))];
 }
 
-function uniqueStrings(values: readonly string[]): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? uniqueStrings(value.flatMap((item) => typeof item === "string" ? [item] : [])) : [];
-}
-
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -643,10 +463,6 @@ function requiredString(value: unknown, field: string): string {
   const result = optionalString(value);
   if (!result) throw new Error(`${field} must be a non-empty string.`);
   return result;
-}
-
-function optionalRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function requiredEnum<const T extends readonly string[]>(value: unknown, field: string, allowed: T): T[number] {
