@@ -195,7 +195,7 @@ export class ResearchFocusGuard {
         block: true,
         reason: [
           `Evidence checkpoint required after ${this.explorationCallsSinceConvergence} source-exploration calls.`,
-          "Rank at most three candidates. For each, state the next positive proof obligation and the evidence that would genuinely contradict or narrow a necessary link. Record the highest-value proof path in an existing or new runbook before resuming broad source exploration. Do not use the investigation overview as the execution controller, and do not retire a candidate merely because proof is incomplete.",
+          "Rank at most three candidates. For each, state the next positive proof obligation and the evidence that would genuinely contradict or narrow a necessary link. Record the highest-value proof phase in an existing or new cohesive runbook before resuming broad source exploration; if the path already has distinct independently executable phases, keep them in separate medium-sized runbooks rather than one giant controller. Do not use the investigation overview as the execution controller, and do not retire a candidate merely because proof is incomplete.",
         ].join(" "),
       };
     }
@@ -443,7 +443,7 @@ export class ResearchFocusGuard {
         : `The last ${this.consecutiveRecallOnlyTurns} tool-only turns produced no distinct target evidence.`,
       "",
       reason === "convergence_checkpoint"
-        ? "Rank no more than three candidates. For each, state current evidence, the next positive proof obligation, and what result would genuinely contradict or narrow a necessary link. Prefer support-seeking work when it can advance attacker influence, reachability, dangerous behavior, reproducibility, composition, or impact. Put the highest-value executable proof path in the matching existing or new runbook; do not use investigation records as the live execution controller or retire a candidate merely because proof remains incomplete. Further broad source reads remain blocked until that runbook is created, extended, or executed."
+        ? "Rank no more than three candidates. For each, state current evidence, the next positive proof obligation, and what result would genuinely contradict or narrow a necessary link. Prefer support-seeking work when it can advance attacker influence, reachability, dangerous behavior, reproducibility, composition, or impact. Put the highest-value executable proof phase in the matching existing or new cohesive runbook. Distinct independently executable phases belong in separate medium-sized runbooks, not one giant controller. Do not use investigation records as the live execution controller or retire a candidate merely because proof remains incomplete. Further broad source reads remain blocked until the relevant runbook is created, extended, or executed."
         : reason === "durable_progress_checkpoint"
           ? "Convert the useful new facts, candidate, observation, negative result, changed proof obligation, or reusable execution step into canonical state now. Search for the matching memory, claim, runbook, or report, then revise it or create the missing record. Investigation records may summarize that state for cross-session history, but they do not clear this execution-progress checkpoint."
         : "Resume the research itself. Choose one concrete next move:",

@@ -1,7 +1,11 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { DarwinVmSetupDialog, shouldOfferDarwinVmSetup } from '../src/renderer/features/sessions/DarwinVmSetupDialog';
+import {
+  DarwinVmSetupDialog,
+  loadOptionalDarwinVmSetup,
+  shouldOfferDarwinVmSetup
+} from '../src/renderer/features/sessions/DarwinVmSetupDialog';
 import type { DarwinVmSetupState } from '@shared/types';
 
 const state: DarwinVmSetupState = {
@@ -15,6 +19,13 @@ describe('Darwin VM session onboarding', () => {
     expect(shouldOfferDarwinVmSetup({ ...state, neverPrompt: true })).toBe(false);
     expect(shouldOfferDarwinVmSetup({ ...state, prepared: true })).toBe(false);
     expect(shouldOfferDarwinVmSetup({ ...state, checkoutRoot: '/example/missing', errors: ['Missing artifact.'] })).toBe(true);
+  });
+
+  it('does not block research startup when optional setup discovery is unavailable', async () => {
+    await expect(loadOptionalDarwinVmSetup(async () => state)).resolves.toEqual(state);
+    await expect(loadOptionalDarwinVmSetup(async () => {
+      throw new Error('Unsupported app-server client command: harness plugin-darwin-vm-get');
+    })).resolves.toBeNull();
   });
 
   it('renders all three choices, setup boundaries, squircle class, and retryable errors', () => {

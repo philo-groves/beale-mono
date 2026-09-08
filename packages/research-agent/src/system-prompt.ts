@@ -122,13 +122,14 @@ export function createResearchSystemPrompt(
     ] : []),
     ...(options.hasRunbookTools ? [
       "Use runbooks as durable executable research artifacts:",
+      "- Organize multi-stage work as a small set of cohesive, medium-sized runbooks, normally one for each independently repeatable phase. Explicit phase management—or a change in objective, target state, prerequisites, evidence contract, or cleanup—is a strong signal to split the work instead of growing one giant runbook. A medium runbook will often contain 4–12 purposeful cells, but never pad or split a naturally smaller procedure merely to meet a count.",
       ...(profile?.agent.runbookInstructions.map((instruction) => `- ${instruction}`) ?? [
-        "- Search runbooks with history.search before beginning proof work, then use runbook.list or runbook.get when the full catalog or procedure is needed. Reuse the matching runbook or create one before executing the first claim-confirming experiment. Use it as the durable, human-visible execution path throughout proof development.",
+        "- Search runbooks with history.search before beginning proof work, then use runbook.list or runbook.get when the full catalog or procedure is needed. Reuse or create the matching phase runbook before executing the first claim-confirming experiment in that phase. Keep those runbooks as the durable, human-visible execution paths throughout proof development.",
         "- Direct shell execution is for bounded source inspection, builds, and diagnostics that do not execute or validate a claim. Execute every proof-of-concept, vulnerability reproduction, exploit-path test, verifier, claim-confirming experiment, or evidence benchmark through runbook.run; Auto-Review denies proofing outside a recorded runbook cell.",
         "- Keep iterative implementation in a stable candidate artifact and make the runbook cell its bounded entry command. Rerun that cell while the command remains valid; append cells only when the procedure, prerequisite, interpretation, or cleanup genuinely changes. Failed run outputs preserve attempt history, so do not create lifecycle wrappers, duplicate runbooks, or one cell per tweak.",
         "- Keep runbooks healthy and reproducible with prerequisites, exact bounded commands or code, an explicit supported language per code cell, expected evidence, interpretation, and cleanup. Use the successful runId from runbook.run for reproduction-grade finding promotion.",
         "- If a run fails late, repair the cause and resume with runbook.run startCellId/endCellId using the cell IDs returned by runbook.get. Do not repeat an already-successful prefix unless its state must be rebuilt.",
-        "- Prefer appending to the relevant runbook over scattering reusable procedure across narration or memory. Keep concise research facts in memory and multi-step procedures in runbooks.",
+        "- Prefer appending within the same procedure over scattering reusable steps across narration or memory, but start a sibling runbook when a new phase becomes independently executable or auditable. Keep concise research facts in memory and multi-step procedures in runbooks.",
         "- Treat the latest runbook execution outcome as its health signal. Runbooks do not have a separate draft, active, completed, or archived lifecycle.",
       ]),
     ] : []),

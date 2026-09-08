@@ -113,6 +113,7 @@ test("research focus guard converts broad exploration into a runbook proof path"
       assert.equal(turnResult.reason, "convergence_checkpoint");
       assert.match(turnResult.steeringMessage, /next positive proof obligation/);
       assert.match(turnResult.steeringMessage, /genuinely contradict or narrow/);
+      assert.match(turnResult.steeringMessage, /separate medium-sized runbooks, not one giant controller/);
       assert.doesNotMatch(turnResult.steeringMessage, /one falsifier for each|retire or stale weak paths/);
     }
   }
@@ -126,6 +127,7 @@ test("research focus guard converts broad exploration into a runbook proof path"
   });
   assert.equal(blocked.block, true);
   assert.match(blocked.reason, /Evidence checkpoint required/);
+  assert.match(blocked.reason, /separate medium-sized runbooks rather than one giant controller/);
   assert.match(blocked.reason, /do not retire a candidate merely because proof is incomplete/i);
 
   assert.equal(guard.beforeToolCall({

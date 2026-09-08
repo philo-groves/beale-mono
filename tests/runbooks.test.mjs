@@ -32,6 +32,9 @@ test("runbook tools expose bounded artifact operations", async () => {
     assert.equal("statuses" in descriptors.find((tool) => tool.name === "runbook.list").inputSchema.properties, false);
     assert.equal("status" in descriptors.find((tool) => tool.name === "runbook.create").inputSchema.properties, false);
     assert.equal("status" in descriptors.find((tool) => tool.name === "runbook.append").inputSchema.properties, false);
+    assert.match(descriptors.find((tool) => tool.name === "runbook.create").description, /medium-sized runbooks over one giant runbook/);
+    assert.match(descriptors.find((tool) => tool.name === "runbook.create").description, /4–12 purposeful cells.*never pad/);
+    assert.match(descriptors.find((tool) => tool.name === "runbook.append").description, /Start a sibling runbook.*independently repeatable phase/);
     const created = await registry.execute({
       id: "create_runbook",
       actionClass: "synthesize",

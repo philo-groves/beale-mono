@@ -28,6 +28,44 @@ const MAX_CONSOLE_OUTPUT_BYTES = 128 * 1024;
 const MAX_LOG_BYTES = 128 * 1024;
 const MAX_TART_COPY_BYTES = 256 * 1024 * 1024;
 const DEFAULT_TART_COPY_BYTES = 64 * 1024 * 1024;
+const TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD = 96;
+const TART_GUEST_EXEC_HELPER_PATH = '/tmp/.beale-tart-exec-v3';
+const TART_GUEST_EXEC_HELPER_SOURCE = String.raw`
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+static long descriptor_limit(void) {
+  long limit = sysconf(_SC_OPEN_MAX);
+  if (limit < 0 || limit > 1048576) return 1048576;
+  return limit;
+}
+
+static int descriptor_count(void) {
+  int count = 0;
+  long limit = descriptor_limit();
+  for (int fd = 0; fd < limit; fd++) {
+    errno = 0;
+    if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) count++;
+  }
+  return count;
+}
+
+int main(int argc, char **argv) {
+  if (argc == 2 && strcmp(argv[1], "--beale-probe") == 0) {
+    printf("%d\n", descriptor_count());
+    return 0;
+  }
+  if (argc < 2) return 64;
+  long limit = descriptor_limit();
+  for (int fd = (int)limit - 1; fd >= 3; fd--) close(fd);
+  execvp(argv[1], &argv[1]);
+  fprintf(stderr, "beale-tart-exec: execvp failed: %s\n", strerror(errno));
+  return 127;
+}
+`.trimStart();
 const SIMULATOR_PATTERN = /(?:\bios simulator\b|\bsimulator\b|\bsimctl\b|\biphonesimulator\b)/iu;
 const PLUGIN_DATA = resolve(process.env.PLUGIN_DATA || join(tmpdir(), 'beale-apple-security-devices'));
 const RUNS_ROOT = join(PLUGIN_DATA, 'darwin-vm-runs');
@@ -35,7 +73,10 @@ const TART_LOG_ROOT = join(PLUGIN_DATA, 'tart-logs');
 const deviceRefs = new Map();
 const activeDarwinRuns = new Map();
 const tartGuestTransports = new Map();
+const tartGuestExecHelpers = new Map();
+const tartVmOperationTails = new Map();
 const deviceRefSalt = randomUUID();
+let tartHostExecHelperPromise = null;
 let inputBuffer = '';
 
 mkdirSync(PLUGIN_DATA, { recursive: true, mode: 0o700 });
@@ -90,7 +131,7 @@ const TOOLS = [
   },
   {
     name: 'exec_tart_vm',
-    description: 'Execute one bounded argument-vector command in a named Tart VM through Guest Agent or the configured private SSH fallback without invoking a host shell.',
+    description: 'Execute one bounded argument-vector command in a named Tart VM through a native descriptor-sanitizing Guest Agent child or the configured private SSH fallback without invoking a host shell. Recycles Guest Agent descriptor pressure before running the requested command.',
     inputSchema: objectSchema({
       vmName: stringField(128),
       argv: { type: 'array', minItems: 1, maxItems: 128, items: stringField(4096) },
@@ -100,7 +141,7 @@ const TOOLS = [
   },
   {
     name: 'copy_to_tart_vm',
-    description: 'Copy one bounded regular file from an absolute host path to an absolute path in a named running Tart VM. Uses Tart Guest Agent first and the configured private SSH transport only as fallback.',
+    description: 'Copy one bounded regular file from an absolute host path to an absolute path in a named running Tart VM. Uses native descriptor-sanitized Tart Guest Agent children first and the configured private SSH transport only as fallback.',
     inputSchema: objectSchema({
       vmName: stringField(128),
       localPath: stringField(4096),
@@ -114,7 +155,7 @@ const TOOLS = [
   },
   {
     name: 'copy_from_tart_vm',
-    description: 'Copy one bounded regular file from an absolute path in a named running Tart VM to an absolute host path. Uses Tart Guest Agent first and the configured private SSH transport only as fallback.',
+    description: 'Copy one bounded regular file from an absolute path in a named running Tart VM to an absolute host path. Uses native descriptor-sanitized Tart Guest Agent children first and the configured private SSH transport only as fallback.',
     inputSchema: objectSchema({
       vmName: stringField(128),
       guestPath: stringField(4096),
@@ -271,6 +312,14 @@ async function dispatch(message) {
 }
 
 async function callTool(name, args) {
+  if (['inspect_tart_vm', 'start_tart_vm', 'stop_tart_vm', 'exec_tart_vm', 'copy_to_tart_vm', 'copy_from_tart_vm'].includes(name)) {
+    const vmName = safeVmName(args.vmName);
+    return withTartVmOperation(vmName, () => callToolUnlocked(name, args));
+  }
+  return callToolUnlocked(name, args);
+}
+
+async function callToolUnlocked(name, args) {
   if (name === 'environment_status') return environmentStatus();
   if (name === 'list_tart_vms') return listTartVms();
   if (name === 'tart_vm_ip') return tartVmIp(args);
@@ -293,15 +342,33 @@ async function callTool(name, args) {
   throw new Error(`Unsupported Apple security devices tool: ${name}`);
 }
 
+async function withTartVmOperation(vmName, operation) {
+  const previous = tartVmOperationTails.get(vmName) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  tartVmOperationTails.set(vmName, current);
+  try {
+    return await current;
+  } finally {
+    if (tartVmOperationTails.get(vmName) === current) tartVmOperationTails.delete(vmName);
+  }
+}
+
 async function environmentStatus() {
   const tart = await commandAvailability(tartCommand(), ['--version']);
+  const transportPolicy = configuredTartTransportPolicy();
+  const hostConfig = readAppleSecurityHostConfig();
   const developerDir = findDeveloperDir();
   const coreDevice = developerDir
     ? await commandAvailability(xcrunCommand(), ['devicectl', '--version'], { DEVELOPER_DIR: developerDir })
     : { available: false, detail: 'Xcode developer directory not found.' };
   return {
     hostPlatform: process.platform,
-    tart,
+    tart: {
+      ...tart,
+      transportPolicy,
+      hostCommandRunnerConfigured: transportPolicy === 'guest-agent-or-ssh'
+        && Boolean(process.env.APPLE_SECURITY_COMMAND_RUNNER || hostConfig.commandRunner)
+    },
     physicalIphone: {
       available: process.platform === 'darwin' && coreDevice.available,
       detail: coreDevice.detail
@@ -367,7 +434,9 @@ async function inspectTartVm(args) {
     vm,
     concurrentRunningVms: vms.filter((candidate) => candidate.running && candidate.name !== vmName).map((candidate) => candidate.name),
     guest: vm.running ? await tartGuestBaseline(vmName, timeoutSeconds) : { ready: false, detail: 'VM is stopped.' },
-    recommendedTransport: 'Use exec_tart_vm and the Tart copy tools; the plugin selects Tart Guest Agent or its configured bounded SSH fallback without exposing connection details.'
+    recommendedTransport: configuredTartTransportPolicy() === 'guest-agent-only'
+      ? 'Use exec_tart_vm and the Tart copy tools. This host requires Tart Guest Agent and will not fall back to SSH or a host command runner.'
+      : 'Use exec_tart_vm and the Tart copy tools; the plugin selects Tart Guest Agent or its configured bounded SSH fallback without exposing connection details.'
   };
 }
 
@@ -391,6 +460,7 @@ async function startTartVm(args) {
     throw new Error(`Exclusive start requested for ${vmName}, but another Tart VM is running (${otherRunningVms.join(', ')}). Retry without requireExclusive or stop the other VM when isolation is required.`);
   }
   tartGuestTransports.delete(vmName);
+  tartGuestExecHelpers.delete(vmName);
   const networkMode = tartNetworkMode(args.networkMode);
   const logPath = join(TART_LOG_ROOT, `${safeFilename(vmName)}-${Date.now()}.log`);
   const tartArgs = [
@@ -432,6 +502,7 @@ async function stopTartVm(args) {
     timeoutMs: (timeoutSeconds + 5) * 1000
   });
   tartGuestTransports.delete(vmName);
+  tartGuestExecHelpers.delete(vmName);
   return { stopped: true, vmName };
 }
 
@@ -681,15 +752,22 @@ async function runTartGuestProbe(vmName, argv, timeoutSeconds, allowFailure = fa
 }
 
 async function resolveTartGuestTransport(vmName, timeoutSeconds) {
+  const transportPolicy = configuredTartTransportPolicy();
   const cached = tartGuestTransports.get(vmName);
-  if (cached) return cached;
+  if (cached === 'ssh' && transportPolicy !== 'guest-agent-only') return cached;
+  if (cached === 'ssh') tartGuestTransports.delete(vmName);
   try {
-    await runCommand(tartCommand(), ['exec', vmName, '/usr/bin/true'], {
-      timeoutMs: Math.min(3, timeoutSeconds) * 1000
-    });
+    await prepareTartGuestAgent(vmName, timeoutSeconds);
     tartGuestTransports.set(vmName, 'guest-agent');
     return 'guest-agent';
   } catch (guestAgentError) {
+    if (isTartGuestDescriptorExhaustion(guestAgentError)) {
+      tartGuestTransports.delete(vmName);
+      throw tartGuestDescriptorExhaustionError();
+    }
+    if (transportPolicy === 'guest-agent-only') {
+      throw new Error(`Tart Guest Agent is required by the configured transport policy, but execution preparation failed (${publicError(guestAgentError)}). Prepare the VM clone source with Guest Agent RPC support; SSH and host command runners are disabled.`);
+    }
     try {
       await runTartSshCommand(vmName, ['/usr/bin/true'], timeoutSeconds);
       tartGuestTransports.set(vmName, 'ssh');
@@ -700,10 +778,165 @@ async function resolveTartGuestTransport(vmName, timeoutSeconds) {
   }
 }
 
-function runTartGuestCommand(vmName, argv, timeoutSeconds, transport) {
-  return transport === 'ssh'
-    ? runTartSshCommand(vmName, argv, timeoutSeconds)
-    : runCommand(tartCommand(), ['exec', vmName, ...argv], { timeoutMs: timeoutSeconds * 1000 });
+async function prepareTartGuestAgent(vmName, timeoutSeconds) {
+  let helperPath = tartGuestExecHelpers.get(vmName);
+  let descriptorCount = null;
+  if (helperPath) {
+    try {
+      descriptorCount = await probeTartGuestDescriptors(vmName, timeoutSeconds, helperPath);
+    } catch (error) {
+      tartGuestExecHelpers.delete(vmName);
+      helperPath = null;
+      if (isTartGuestDescriptorExhaustion(error)) throw error;
+    }
+  }
+  if (!helperPath) {
+    descriptorCount = await probeTartGuestDescriptors(vmName, timeoutSeconds, null);
+    if (descriptorCount >= TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD) {
+      await recycleTartGuestAgent(vmName, timeoutSeconds, null);
+    }
+    helperPath = await installTartGuestExecHelper(vmName, timeoutSeconds);
+    descriptorCount = await probeTartGuestDescriptors(vmName, timeoutSeconds, helperPath);
+  }
+  if (descriptorCount >= TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD) {
+    await recycleTartGuestAgent(vmName, timeoutSeconds, helperPath);
+    descriptorCount = await probeTartGuestDescriptors(vmName, timeoutSeconds, helperPath);
+  }
+  if (descriptorCount >= TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD) {
+    throw tartGuestDescriptorExhaustionError();
+  }
+}
+
+async function installTartGuestExecHelper(vmName, timeoutSeconds) {
+  const temporaryPath = `${TART_GUEST_EXEC_HELPER_PATH}-${randomUUID()}`;
+  try {
+    const hostHelperPath = await prepareTartHostExecHelper();
+    await runCommandWithFileInput(
+      tartCommand(),
+      ['exec', '-i', vmName, '/bin/dd', `of=${temporaryPath}`, 'bs=65536'],
+      hostHelperPath,
+      { timeoutMs: Math.max(10, Math.min(timeoutSeconds, 60)) * 1000, maxBytes: 1024 * 1024 }
+    );
+    await runCommand(tartCommand(), ['exec', vmName, '/bin/chmod', '0700', temporaryPath], {
+      timeoutMs: Math.max(3, Math.min(timeoutSeconds, 15)) * 1000
+    });
+    await runCommand(tartCommand(), ['exec', vmName, '/bin/mv', '-f', temporaryPath, TART_GUEST_EXEC_HELPER_PATH], {
+      timeoutMs: Math.max(3, Math.min(timeoutSeconds, 15)) * 1000
+    });
+    tartGuestExecHelpers.set(vmName, TART_GUEST_EXEC_HELPER_PATH);
+    return TART_GUEST_EXEC_HELPER_PATH;
+  } catch (error) {
+    tartGuestExecHelpers.delete(vmName);
+    throw new Error(`Unable to install the native Tart guest exec helper: ${publicError(error)}`);
+  }
+}
+
+async function prepareTartHostExecHelper() {
+  if (tartHostExecHelperPromise) return tartHostExecHelperPromise;
+  tartHostExecHelperPromise = (async () => {
+    const testHelper = process.env.APPLE_SECURITY_TEST_PLATFORM === 'darwin'
+      ? process.env.APPLE_SECURITY_TEST_TART_EXEC_HELPER
+      : null;
+    if (testHelper) return existingExecutable(testHelper, 'APPLE_SECURITY_TEST_TART_EXEC_HELPER');
+    if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+      throw new Error('The native Tart guest exec helper requires an Apple Silicon macOS host.');
+    }
+    const sourceHash = createHash('sha256').update(TART_GUEST_EXEC_HELPER_SOURCE).digest('hex').slice(0, 16);
+    const helperPath = join(PLUGIN_DATA, `tart-guest-exec-${sourceHash}`);
+    if (existsSync(helperPath) && statSync(helperPath).isFile()) return helperPath;
+    const temporaryPath = join(PLUGIN_DATA, `.tart-guest-exec-${randomUUID()}`);
+    try {
+      await runCommandWithBufferInput(
+        '/usr/bin/clang',
+        ['-Os', '-std=c11', '-arch', 'arm64', '-mmacosx-version-min=13.0', '-x', 'c', '-o', temporaryPath, '-'],
+        Buffer.from(TART_GUEST_EXEC_HELPER_SOURCE, 'utf8'),
+        { timeoutMs: 60_000 }
+      );
+      chmodSync(temporaryPath, 0o700);
+      renameSync(temporaryPath, helperPath);
+      return helperPath;
+    } catch (error) {
+      removeFileIfPresent(temporaryPath);
+      throw new Error(`Unable to build the native Tart guest exec helper on the Beale host: ${publicError(error)}`);
+    }
+  })();
+  try {
+    return await tartHostExecHelperPromise;
+  } catch (error) {
+    tartHostExecHelperPromise = null;
+    throw error;
+  }
+}
+
+async function probeTartGuestDescriptors(vmName, timeoutSeconds, helperPath) {
+  const argv = helperPath
+    ? [helperPath, '--beale-probe']
+    : ['/bin/ls', '-1', '/dev/fd'];
+  const result = await runCommand(tartCommand(), ['exec', vmName, ...argv], {
+    timeoutMs: Math.max(2, Math.min(timeoutSeconds, 10)) * 1000
+  });
+  if (helperPath) {
+    const count = Number.parseInt(firstLine(result.stdout), 10);
+    if (!Number.isSafeInteger(count) || count < 3) throw new Error('Tart guest exec helper returned an invalid descriptor count.');
+    return count;
+  }
+  const descriptors = result.stdout.split(/\r?\n/u).filter((line) => /^\d+$/u.test(line));
+  if (descriptors.length < 3) throw new Error('Tart Guest Agent descriptor probe returned an invalid result.');
+  return descriptors.length;
+}
+
+async function recycleTartGuestAgent(vmName, timeoutSeconds, helperPath) {
+  const prefix = helperPath ? [helperPath] : [];
+  const services = await runCommand(
+    tartCommand(),
+    ['exec', vmName, ...prefix, '/bin/launchctl', 'print', 'system'],
+    { timeoutMs: Math.max(3, Math.min(timeoutSeconds, 15)) * 1000 }
+  );
+  const label = services.stdout.split(/\r?\n/u).flatMap((line) => {
+    const match = line.match(/^\s*[1-9]\d*\s+\S+\s+(org\.cirruslabs\.tart-guest(?:-agent|-rpc-[A-Za-z0-9._-]+))\s*$/u);
+    return match ? [match[1]] : [];
+  })[0];
+  if (!label) {
+    throw new Error('Tart Guest Agent descriptor pressure was detected, but its active launchd service could not be identified safely. Stop and restart the disposable VM before another guest operation.');
+  }
+  try {
+    await runCommand(
+      tartCommand(),
+      ['exec', vmName, ...prefix, '/usr/bin/sudo', '-n', '/bin/launchctl', 'kill', 'SIGTERM', `system/${label}`],
+      { timeoutMs: 2_000 }
+    );
+  } catch {
+    // Killing the service also severs the RPC that requested the restart.
+  }
+  tartGuestTransports.delete(vmName);
+  const deadline = Date.now() + Math.max(3, Math.min(timeoutSeconds, 15)) * 1000;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const count = await probeTartGuestDescriptors(vmName, 3, helperPath);
+      if (count < TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD) {
+        tartGuestTransports.set(vmName, 'guest-agent');
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+  }
+  throw new Error(`Tart Guest Agent did not recover after descriptor-pressure recycling${lastError ? ` (${publicError(lastError)})` : ''}. Stop and restart the disposable VM before another guest operation.`);
+}
+
+async function runTartGuestCommand(vmName, argv, timeoutSeconds, transport) {
+  const invocation = await tartGuestCommandInvocation(vmName, argv, timeoutSeconds, transport, false);
+  try {
+    return await runCommand(invocation.command, invocation.args, { timeoutMs: timeoutSeconds * 1000 });
+  } catch (error) {
+    if (transport === 'guest-agent' && isTartGuestDescriptorExhaustion(error)) {
+      tartGuestTransports.delete(vmName);
+      throw tartGuestDescriptorExhaustionError();
+    }
+    throw error;
+  }
 }
 
 async function runTartSshCommand(vmName, argv, timeoutSeconds) {
@@ -713,9 +946,17 @@ async function runTartSshCommand(vmName, argv, timeoutSeconds) {
 
 async function tartGuestCommandInvocation(vmName, argv, timeoutSeconds, transport, attachInput) {
   if (transport === 'ssh') return tartSshCommandInvocation(vmName, argv, timeoutSeconds);
+  const helperPath = tartGuestExecHelpers.get(vmName);
+  if (!helperPath) throw new Error('The native Tart guest exec helper is not prepared.');
   return {
     command: tartCommand(),
-    args: ['exec', ...(attachInput ? ['-i'] : []), vmName, ...argv]
+    args: [
+      'exec',
+      ...(attachInput ? ['-i'] : []),
+      vmName,
+      helperPath,
+      ...argv
+    ]
   };
 }
 
@@ -783,6 +1024,19 @@ function posixShellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function isTartGuestDescriptorExhaustion(error) {
+  const detail = error instanceof CommandError
+    ? `${error.result.stderr}\n${error.result.stdout}`
+    : error instanceof Error ? error.message : String(error);
+  return /(?:too many open files|unable to create pipe|cannot duplicate fd)/iu.test(
+    detail
+  );
+}
+
+function tartGuestDescriptorExhaustionError() {
+  return new Error('Tart Guest Agent descriptor exhaustion was detected and safe recycling could not be completed. The requested command was not replayed; stop and restart the disposable VM before another guest operation.');
+}
+
 function hostCommandInvocation(command, args, configuredRunner) {
   const runner = configuredRunner ?? configuredHostCommandRunner();
   return runner
@@ -793,13 +1047,33 @@ function hostCommandInvocation(command, args, configuredRunner) {
 function configuredHostCommandRunner() {
   const override = process.env.APPLE_SECURITY_COMMAND_RUNNER;
   if (override) return existingExecutable(override, 'APPLE_SECURITY_COMMAND_RUNNER');
-  const configPath = join(PLUGIN_DATA, 'host-config.json');
-  if (!existsSync(configPath)) return null;
-  const parsed = parseJson(readFileSync(configPath, 'utf8'), 'Apple security devices host config');
-  if (!isRecord(parsed) || typeof parsed.commandRunner !== 'string') {
-    throw new Error('Apple security devices host config must contain commandRunner.');
+  const configured = readAppleSecurityHostConfig();
+  return typeof configured.commandRunner === 'string'
+    ? existingExecutable(configured.commandRunner, 'commandRunner')
+    : null;
+}
+
+function configuredTartTransportPolicy() {
+  const override = process.env.APPLE_SECURITY_TART_TRANSPORT_POLICY;
+  const configured = override || readAppleSecurityHostConfig().tartTransportPolicy || 'guest-agent-or-ssh';
+  if (configured !== 'guest-agent-only' && configured !== 'guest-agent-or-ssh') {
+    throw new Error('Tart transport policy must be guest-agent-only or guest-agent-or-ssh.');
   }
-  return existingExecutable(parsed.commandRunner, 'commandRunner');
+  return configured;
+}
+
+function readAppleSecurityHostConfig() {
+  const configPath = join(PLUGIN_DATA, 'host-config.json');
+  if (!existsSync(configPath)) return {};
+  const parsed = parseJson(readFileSync(configPath, 'utf8'), 'Apple security devices host config');
+  if (!isRecord(parsed)) throw new Error('Apple security devices host config must be an object.');
+  if (parsed.commandRunner !== undefined && typeof parsed.commandRunner !== 'string') {
+    throw new Error('Apple security devices host config commandRunner must be a string.');
+  }
+  if (parsed.tartTransportPolicy !== undefined && typeof parsed.tartTransportPolicy !== 'string') {
+    throw new Error('Apple security devices host config tartTransportPolicy must be a string.');
+  }
+  return parsed;
 }
 
 function existingExecutable(value, field) {
@@ -1286,6 +1560,59 @@ function runCommand(command, args, options = {}) {
     });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
+      const result = {
+        code: Number.isInteger(code) ? code : null,
+        signal: signal ?? null,
+        stdout: stdout.toString('utf8'),
+        stderr: stderr.toString('utf8'),
+        outputTruncated: exceeded
+      };
+      if (code === 0) resolvePromise(result);
+      else rejectPromise(new CommandError(command, result));
+    });
+  });
+}
+
+function runCommandWithBufferInput(command, args, input, options = {}) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: { ...process.env, ...(options.env ?? {}) },
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    let exceeded = false;
+    let settled = false;
+    let inputError = null;
+    const append = (existing, chunk) => {
+      const combined = Buffer.concat([existing, chunk]);
+      if (combined.length <= MAX_COMMAND_OUTPUT_BYTES) return combined;
+      exceeded = true;
+      return combined.subarray(combined.length - MAX_COMMAND_OUTPUT_BYTES);
+    };
+    child.stdout.on('data', (chunk) => { stdout = append(stdout, Buffer.from(chunk)); });
+    child.stderr.on('data', (chunk) => { stderr = append(stderr, Buffer.from(chunk)); });
+    child.stdin.once('error', (error) => {
+      if (error?.code !== 'EPIPE') inputError = error;
+    });
+    child.stdin.end(input);
+    const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 30_000);
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (inputError) {
+        rejectPromise(inputError);
+        return;
+      }
       const result = {
         code: Number.isInteger(code) ? code : null,
         signal: signal ?? null,

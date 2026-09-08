@@ -143,7 +143,7 @@ test('apple-security-devices reports capabilities without claiming iOS Simulator
   assert.equal(status.iosSimulatorSupported, false);
   assert.equal(typeof status.tart.available, 'boolean');
   assert.equal(typeof status.physicalIphone.available, 'boolean');
-  assert.equal(status.darwinVm.available, true);
+  assert.equal(typeof status.darwinVm.available, 'boolean');
 });
 
 test('apple-security-devices allows name-bound Tart concurrency by default but supports explicit exclusivity', () => {
@@ -340,6 +340,255 @@ process.stdout.write('fallback-ok');
   }
 });
 
+test('apple-security-devices guest-agent-only policy never opens SSH or a host command runner', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-fake-tart-guest-agent-only-'));
+  const fakeTart = join(directory, 'tart');
+  const fakeSsh = join(directory, 'ssh');
+  const fakeRunner = join(directory, 'runner');
+  const invocationLog = join(directory, 'invocations.log');
+  const identity = join(directory, 'identity');
+  const knownHosts = join(directory, 'known-hosts');
+  try {
+    writeFileSync(fakeTart, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'exec') {
+  process.stderr.write('Tart Guest Agent is unavailable');
+  process.exit(1);
+}
+process.exit(99);
+`);
+    const unexpectedTransport = `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+appendFileSync(process.env.APPLE_SECURITY_TEST_INVOCATION_LOG, process.argv[1] + '\\n');
+process.exit(97);
+`;
+    writeFileSync(fakeSsh, unexpectedTransport);
+    writeFileSync(fakeRunner, unexpectedTransport);
+    writeFileSync(identity, 'test identity');
+    writeFileSync(knownHosts, 'test known host');
+    writeFileSync(join(directory, 'host-config.json'), JSON.stringify({
+      tartTransportPolicy: 'guest-agent-only',
+      commandRunner: fakeRunner
+    }));
+    for (const executable of [fakeTart, fakeSsh, fakeRunner]) chmodSync(executable, 0o755);
+    const messages = runServer([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/true'], timeoutSeconds: 10 } }
+      }
+    ], {
+      APPLE_SECURITY_TEST_PLATFORM: 'darwin',
+      APPLE_SECURITY_TART_COMMAND: fakeTart,
+      APPLE_SECURITY_SSH_COMMAND: fakeSsh,
+      APPLE_SECURITY_SSH_IDENTITY: identity,
+      APPLE_SECURITY_SSH_KNOWN_HOSTS: knownHosts,
+      APPLE_SECURITY_TEST_INVOCATION_LOG: invocationLog,
+      PLUGIN_DATA: directory
+    });
+    assert.equal(messages[1].result.isError, true);
+    assert.match(messages[1].result.content[0].text, /Guest Agent is required by the configured transport policy/u);
+    assert.match(messages[1].result.content[0].text, /SSH and host command runners are disabled/u);
+    assert.throws(() => readFileSync(invocationLog, 'utf8'), /ENOENT/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('apple-security-devices uses a native helper before exec argv', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-fake-tart-fd-sanitizer-'));
+  const fakeTart = join(directory, 'tart');
+  const invocationLog = join(directory, 'invocations.log');
+  try {
+    writeFileSync(fakeTart, `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] !== 'exec') process.exit(99);
+appendFileSync(process.env.APPLE_SECURITY_TEST_INVOCATION_LOG, JSON.stringify(args) + '\\n');
+const attachInput = args[1] === '-i';
+const commandIndex = attachInput ? 3 : 2;
+const command = args[commandIndex];
+const commandArgs = args.slice(commandIndex + 1);
+if (command === '/bin/ls' && commandArgs.at(-1) === '/dev/fd') {
+  process.stdout.write('0\\n1\\n2\\n3\\n4\\n5\\n');
+  process.exit(0);
+}
+if (command === '/bin/dd' && commandArgs.some((item) => item.startsWith('of=/tmp/.beale-tart-exec-'))) {
+  process.stdin.resume();
+  process.stdin.on('end', () => process.exit(0));
+  return;
+}
+if (command === '/bin/chmod' && commandArgs.at(-1).startsWith('/tmp/.beale-tart-exec-')) process.exit(0);
+if (command === '/bin/mv' && commandArgs.at(-1) === '/tmp/.beale-tart-exec-v3') process.exit(0);
+if (command.startsWith('/tmp/.beale-tart-exec-') && commandArgs[0] === '--beale-probe') {
+  process.stdout.write('6\\n');
+  process.exit(0);
+}
+if (command.startsWith('/tmp/.beale-tart-exec-')) {
+  process.stdout.write('sanitized-ok');
+  process.exit(0);
+}
+process.stderr.write('unexpected fake Tart exec');
+process.exit(98);
+`);
+    chmodSync(fakeTart, 0o755);
+    const messages = runServer([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/printf', '%s', 'safe value'], timeoutSeconds: 10 } }
+      }
+    ], {
+      APPLE_SECURITY_TEST_PLATFORM: 'darwin',
+      APPLE_SECURITY_TART_COMMAND: fakeTart,
+      APPLE_SECURITY_TEST_TART_EXEC_HELPER: fakeTart,
+      APPLE_SECURITY_TEST_INVOCATION_LOG: invocationLog
+    });
+    assert.equal(messages[1].result.isError, undefined, messages[1].result.content[0].text);
+    const result = JSON.parse(messages[1].result.content[0].text);
+    assert.equal(result.transport, 'guest-agent');
+    assert.equal(result.stdout, 'sanitized-ok');
+    const calls = readFileSync(invocationLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(calls[0], ['exec', 'selected-vm', '/bin/ls', '-1', '/dev/fd']);
+    assert.equal(calls[1][0], 'exec');
+    assert.equal(calls[1][1], '-i');
+    assert.equal(calls[1][3], '/bin/dd');
+    assert.equal(calls[2][2], '/bin/chmod');
+    assert.equal(calls[3][2], '/bin/mv');
+    assert.equal(calls[4][2], '/tmp/.beale-tart-exec-v3');
+    assert.equal(calls[4][3], '--beale-probe');
+    assert.deepEqual(calls[5].slice(3), [
+      '/usr/bin/printf',
+      '%s',
+      'safe value'
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('apple-security-devices recycles Guest Agent descriptor pressure before running requested argv', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-fake-tart-fd-recovery-'));
+  const fakeTart = join(directory, 'tart');
+  const statePath = join(directory, 'state');
+  const invocationLog = join(directory, 'invocations.log');
+  try {
+    writeFileSync(fakeTart, `#!/usr/bin/env node
+const { appendFileSync, existsSync, writeFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+appendFileSync(process.env.APPLE_SECURITY_TEST_INVOCATION_LOG, JSON.stringify(args) + '\\n');
+if (args[0] !== 'exec') process.exit(99);
+const attachInput = args[1] === '-i';
+const commandIndex = attachInput ? 3 : 2;
+const command = args[commandIndex];
+const commandArgs = args.slice(commandIndex + 1);
+if (command === '/bin/ls' && commandArgs.at(-1) === '/dev/fd') {
+  const count = existsSync(process.env.APPLE_SECURITY_TEST_STATE) ? 6 : 120;
+  process.stdout.write(Array.from({ length: count }, (_, index) => String(index)).join('\\n') + '\\n');
+  process.exit(0);
+}
+if (command === '/bin/launchctl' && commandArgs[0] === 'print') {
+  process.stdout.write('  321      -  org.cirruslabs.tart-guest-rpc-example\\n');
+  process.exit(0);
+}
+if (command === '/usr/bin/sudo' && commandArgs.includes('SIGTERM')) {
+  writeFileSync(process.env.APPLE_SECURITY_TEST_STATE, 'recycled');
+  process.exit(1);
+}
+if (command === '/bin/dd' && commandArgs.some((item) => item.startsWith('of=/tmp/.beale-tart-exec-'))) {
+  process.stdin.resume();
+  process.stdin.on('end', () => process.exit(0));
+  return;
+}
+if (command === '/bin/chmod' && commandArgs.at(-1).startsWith('/tmp/.beale-tart-exec-')) process.exit(0);
+if (command === '/bin/mv' && commandArgs.at(-1) === '/tmp/.beale-tart-exec-v3') process.exit(0);
+if (command.startsWith('/tmp/.beale-tart-exec-') && commandArgs[0] === '--beale-probe') {
+  process.stdout.write('6\\n');
+  process.exit(0);
+}
+if (command.startsWith('/tmp/.beale-tart-exec-') && commandArgs[0] === '/usr/bin/printf') {
+  process.stdout.write('recovered-ok');
+  process.exit(0);
+}
+process.stderr.write('unexpected fake Tart exec');
+process.exit(98);
+`);
+    chmodSync(fakeTart, 0o755);
+    const messages = runServer([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/printf', 'recovered-ok'], timeoutSeconds: 10 } }
+      }
+    ], {
+      APPLE_SECURITY_TEST_PLATFORM: 'darwin',
+      APPLE_SECURITY_TART_COMMAND: fakeTart,
+      APPLE_SECURITY_TEST_TART_EXEC_HELPER: fakeTart,
+      APPLE_SECURITY_TEST_INVOCATION_LOG: invocationLog,
+      APPLE_SECURITY_TEST_STATE: statePath
+    });
+    assert.equal(messages[1].result.isError, undefined, messages[1].result.content[0].text);
+    const result = JSON.parse(messages[1].result.content[0].text);
+    assert.equal(result.stdout, 'recovered-ok');
+    const calls = readFileSync(invocationLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const recycleIndex = calls.findIndex((call) => call.includes('SIGTERM'));
+    const requestedCalls = calls.filter((call) => call.includes('/usr/bin/printf'));
+    assert.ok(recycleIndex > 0);
+    assert.equal(requestedCalls.length, 1);
+    assert.ok(calls.indexOf(requestedCalls[0]) > recycleIndex);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('apple-security-devices stops on Guest Agent descriptor exhaustion without opening fallback transport', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-fake-tart-fd-exhaustion-'));
+  const fakeTart = join(directory, 'tart');
+  const fakeSsh = join(directory, 'ssh');
+  const fakeRunner = join(directory, 'runner');
+  const invocationLog = join(directory, 'fallback.log');
+  const identity = join(directory, 'identity');
+  const knownHosts = join(directory, 'known-hosts');
+  try {
+    writeFileSync(fakeTart, `#!/usr/bin/env node
+process.stderr.write('sudo: unable to create pipe: Too many open files');
+process.exit(1);
+`);
+    const unexpectedFallback = `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+appendFileSync(process.env.APPLE_SECURITY_TEST_INVOCATION_LOG, 'fallback opened\\n');
+process.exit(97);
+`;
+    writeFileSync(fakeSsh, unexpectedFallback);
+    writeFileSync(fakeRunner, unexpectedFallback);
+    writeFileSync(identity, 'test identity');
+    writeFileSync(knownHosts, 'test known host');
+    for (const executable of [fakeTart, fakeSsh, fakeRunner]) chmodSync(executable, 0o755);
+    const messages = runServer([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/true'], timeoutSeconds: 10 } }
+      }
+    ], {
+      APPLE_SECURITY_TEST_PLATFORM: 'darwin',
+      APPLE_SECURITY_TART_COMMAND: fakeTart,
+      APPLE_SECURITY_SSH_COMMAND: fakeSsh,
+      APPLE_SECURITY_COMMAND_RUNNER: fakeRunner,
+      APPLE_SECURITY_SSH_IDENTITY: identity,
+      APPLE_SECURITY_SSH_KNOWN_HOSTS: knownHosts,
+      APPLE_SECURITY_TEST_INVOCATION_LOG: invocationLog
+    });
+    assert.equal(messages[1].result.isError, true);
+    assert.match(messages[1].result.content[0].text, /descriptor exhaustion was detected/u);
+    assert.match(messages[1].result.content[0].text, /requested command was not replayed/u);
+    assert.match(messages[1].result.content[0].text, /stop and restart/u);
+    assert.throws(() => readFileSync(invocationLog, 'utf8'), /ENOENT/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('apple-security-devices copies bounded files through the Tart Guest Agent in both directions', () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-fake-tart-copy-'));
   const fakeTart = join(directory, 'tart');
@@ -361,13 +610,31 @@ if (args[0] !== 'exec') {
 }
 const attachInput = args[1] === '-i';
 const commandIndex = attachInput ? 3 : 2;
-const command = args[commandIndex];
-const commandArgs = args.slice(commandIndex + 1);
-if (command === '/usr/bin/true') process.exit(0);
+let command = args[commandIndex];
+let commandArgs = args.slice(commandIndex + 1);
+if (command === '/bin/ls' && commandArgs.at(-1) === '/dev/fd') {
+  process.stdout.write('0\\n1\\n2\\n3\\n4\\n5\\n');
+  process.exit(0);
+}
+if (command === '/bin/chmod' && commandArgs.at(-1).startsWith('/tmp/.beale-tart-exec-')) process.exit(0);
+if (command === '/bin/mv' && commandArgs.at(-1) === '/tmp/.beale-tart-exec-v3') process.exit(0);
+if (command.startsWith('/tmp/.beale-tart-exec-') && commandArgs[0] === '--beale-probe') {
+  process.stdout.write('6\\n');
+  process.exit(0);
+}
+if (command.startsWith('/tmp/.beale-tart-exec-')) {
+  command = commandArgs[0];
+  commandArgs = commandArgs.slice(1);
+}
 if (command === '/bin/test' && commandArgs[0] === '-e') process.exit(existsSync(commandArgs[1]) ? 0 : 1);
 if (command === '/bin/test' && commandArgs[0] === '-f') process.exit(existsSync(commandArgs[1]) && statSync(commandArgs[1]).isFile() ? 0 : 1);
 if (command === '/bin/dd') {
   const output = commandArgs.find((item) => item.startsWith('of='))?.slice(3);
+  if (output.startsWith('/tmp/.beale-tart-exec-')) {
+    process.stdin.resume();
+    process.stdin.on('end', () => process.exit(0));
+    return;
+  }
   const chunks = [];
   process.stdin.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
   process.stdin.on('end', () => { writeFileSync(output, Buffer.concat(chunks)); process.exit(0); });
@@ -399,7 +666,8 @@ process.exit(98);
       }
     ], {
       APPLE_SECURITY_TEST_PLATFORM: 'darwin',
-      APPLE_SECURITY_TART_COMMAND: fakeTart
+      APPLE_SECURITY_TART_COMMAND: fakeTart,
+      APPLE_SECURITY_TEST_TART_EXEC_HELPER: fakeTart
     });
     const downloadMessages = runServer([
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
@@ -409,7 +677,8 @@ process.exit(98);
       }
     ], {
       APPLE_SECURITY_TEST_PLATFORM: 'darwin',
-      APPLE_SECURITY_TART_COMMAND: fakeTart
+      APPLE_SECURITY_TART_COMMAND: fakeTart,
+      APPLE_SECURITY_TEST_TART_EXEC_HELPER: fakeTart
     });
     assert.equal(uploadMessages[1].result.isError, undefined, uploadMessages[1].result.content[0].text);
     assert.equal(downloadMessages[1].result.isError, undefined, downloadMessages[1].result.content[0].text);

@@ -276,6 +276,23 @@ const SESSION_TITLE_STOP_WORDS = new Set([
   "boundaries", "boundary", "behavior", "behaviour", "current", "latest", "session", "support",
 ]);
 
+const CAMPAIGN_TRACK_ID_PATTERN = /\binvestigation_[a-f0-9]{24}\b/giu;
+
+export function campaignTrackBindingFromPrompt(prompt: string): string | null {
+  const explicitLine = prompt.match(
+    /^\s*(?:investigation(?:\s+id)?|campaign\s+track(?:\s+id)?|track\s+binding)\s*:\s*`?(investigation_[a-f0-9]{24})`?\s*$/imu,
+  );
+  if (explicitLine?.[1]) return explicitLine[1].toLowerCase();
+
+  const mandatoryMarker = /\bTRACK BINDING IS MANDATORY\b/iu.exec(prompt);
+  if (!mandatoryMarker) return null;
+  const ids = [...new Set(
+    [...prompt.slice(0, mandatoryMarker.index).matchAll(CAMPAIGN_TRACK_ID_PATTERN)]
+      .map((match) => match[0].toLowerCase()),
+  )];
+  return ids.length === 1 ? ids[0]! : null;
+}
+
 export class CampaignTrackStore {
   public readonly databasePath: string;
   private readonly database: DatabaseSync;

@@ -40,7 +40,7 @@ export function createRunbookTools(
     required: ["title", "purpose"],
     properties: {
       title: { type: "string" },
-      purpose: { type: "string", description: "The reusable research procedure, proof objective, or decision this runbook preserves." },
+      purpose: { type: "string", description: "The cohesive reusable procedure, independently repeatable proof phase, or decision this runbook preserves." },
       cells: { type: "array", maxItems: 20, items: cellParameters },
     },
   };
@@ -92,7 +92,7 @@ export function createRunbookTools(
     tool(
       "runbook.create",
       "runbook_create",
-      "Create a revisioned Jupyter-format research runbook before executing a proof sequence, reproduction, claim-confirming experiment, or reusable environment workflow that is not already represented by an existing runbook. Record prerequisites and expected evidence in markdown, then use bounded repeatable code cells with an explicit supported language. Keep iterative implementation in a stable candidate artifact so the same entry cell can be rerun without per-tweak append churn.",
+      "Create a revisioned Jupyter-format research runbook before executing a proof sequence, reproduction, claim-confirming experiment, or reusable environment workflow that is not already represented by an existing runbook. Prefer a small set of cohesive, medium-sized runbooks over one giant runbook: an independently repeatable phase, or a change in objective, target state, prerequisites, evidence contract, or cleanup, should normally have its own runbook. Medium runbooks often contain 4–12 purposeful cells, but never pad or split a naturally smaller procedure to meet a count. Record prerequisites and expected evidence in markdown, then use bounded repeatable code cells with an explicit supported language. Keep iterative implementation in a stable candidate artifact so the same entry cell can be rerun without per-tweak append churn.",
       "write",
       createParameters,
       (input, context) => {
@@ -107,7 +107,7 @@ export function createRunbookTools(
     tool(
       "runbook.append",
       "runbook_append",
-      "Append concise markdown or code cells to an existing runbook using its current revision when the proof procedure, prerequisite, expected evidence, interpretation, or cleanup genuinely changes. Failed run outputs already preserve attempt history: rerun an unchanged entry cell after editing its candidate artifact instead of appending one cell per tweak. Execute all proof cells with runbook.run.",
+      "Append concise markdown or code cells to an existing runbook using its current revision when the same cohesive proof procedure genuinely changes. Start a sibling runbook instead when the work becomes a new independently repeatable phase or changes objective, target state, prerequisites, evidence contract, or cleanup. Failed run outputs already preserve attempt history: rerun an unchanged entry cell after editing its candidate artifact instead of appending one cell per tweak. Execute all proof cells with runbook.run.",
       "write",
       appendParameters,
       (input, context) => {

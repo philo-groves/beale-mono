@@ -219,7 +219,7 @@ function profileIdFromInput(input: unknown): string | null {
   return typeof profileId === 'string' && profileId.trim() ? profileId.trim() : null;
 }
 
-function operationForArguments(argv: readonly string[]): AppServerProtocolOperation | null {
+export function operationForArguments(argv: readonly string[]): AppServerProtocolOperation | null {
   const [group, command] = argv;
   if (group === 'protocol' && command === 'describe') return 'protocol.describe';
   if (group === 'complete') return 'provider.complete';
@@ -240,7 +240,9 @@ function operationForArguments(argv: readonly string[]): AppServerProtocolOperat
       model_job_resolve: 'model_job.resolve', provider_describe: 'provider.describe', source_inspect: 'source.inspect',
       source_materialize: 'source.materialize', plugin_list: 'plugin.list', plugin_add_filesystem: 'plugin.add_filesystem',
       plugin_add_repository: 'plugin.add_repository', plugin_set_enabled: 'plugin.set_enabled', plugin_remove: 'plugin.remove',
-      plugin_runtime: 'plugin.runtime', maintenance_summary: 'maintenance.summary', maintenance_run: 'maintenance.run'
+      plugin_runtime: 'plugin.runtime', plugin_darwin_vm_get: 'plugin.darwin_vm.get',
+      plugin_darwin_vm_update: 'plugin.darwin_vm.update', maintenance_summary: 'maintenance.summary',
+      maintenance_run: 'maintenance.run'
     };
     return normalized ? mapping[normalized] ?? null : null;
   }

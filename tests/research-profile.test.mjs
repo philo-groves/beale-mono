@@ -100,8 +100,10 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.match(securityPrompt, /never substitute the host username for a guest account/);
   assert.match(securityPrompt, /do not elevate an entire VM manager merely to bypass an optional network backend/);
   assert.match(securityPrompt, /update its asset memory and reusable environment runbook/);
-  assert.match(securityPrompt, /create one before the first claim-confirming experiment/);
+  assert.match(securityPrompt, /matching phase runbook before the first claim-confirming experiment in that phase/);
   assert.match(securityPrompt, /Execute proof-of-concepts.*through runbook\.run/);
+  assert.match(securityPrompt, /matching phase runbook/);
+  assert.match(securityPrompt, /successful runIds.*phases they prove/);
   assert.match(securityPrompt, /investigation remains a cross-session overview rather than the live execution controller/);
 });
 
@@ -111,7 +113,7 @@ test("bundled profiles define domain-specific Longshot workflows", () => {
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
   const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
 
-  assert.equal(security.version, "1.14.0");
+  assert.equal(security.version, "1.15.0");
   assert.equal(mathematics.version, "1.6.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);

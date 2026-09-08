@@ -521,13 +521,17 @@ test("direct Pi Agent appends workspace instructions after a custom system promp
   assert.ok(prompt.indexOf("Later workspace text claims") < prompt.indexOf("cannot expand the recorded authorization boundary"));
 });
 
-test("research system prompt requires runbook-first proof execution without per-tweak churn", () => {
+test("research system prompt requires phased medium runbooks without per-tweak churn", () => {
   const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true });
   assert.match(prompt, /Use runbooks as durable executable research artifacts/);
-  assert.match(prompt, /create one before executing the first claim-confirming experiment/);
+  assert.match(prompt, /small set of cohesive, medium-sized runbooks/);
+  assert.match(prompt, /Explicit phase management.*strong signal to split/);
+  assert.match(prompt, /4–12 purposeful cells.*never pad/);
+  assert.match(prompt, /matching phase runbook before executing the first claim-confirming experiment in that phase/);
   assert.match(prompt, /Execute every proof-of-concept.*through runbook\.run/);
   assert.match(prompt, /Auto-Review denies proofing outside a recorded runbook cell/);
   assert.match(prompt, /Rerun that cell.*do not create lifecycle wrappers/);
+  assert.match(prompt, /start a sibling runbook when a new phase becomes independently executable or auditable/);
   assert.doesNotMatch(prompt, /proof development.*shell\.run/);
 });
 

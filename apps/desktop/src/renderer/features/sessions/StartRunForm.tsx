@@ -46,7 +46,7 @@ import {
 import type { ResearchGoalSeed } from './SessionNextSteps';
 import { CommentaryView } from '../commentary/CommentaryView';
 import { SessionNextStepsWidget } from './SessionNextSteps';
-import { DarwinVmSetupDialog, shouldOfferDarwinVmSetup } from './DarwinVmSetupDialog';
+import { DarwinVmSetupDialog, loadOptionalDarwinVmSetup, shouldOfferDarwinVmSetup } from './DarwinVmSetupDialog';
 
 const PROMPT_STREAM_RENDER_INTERVAL_MS = 90;
 const MAX_RENDERED_GOAL_SUGGESTIONS = 12;
@@ -232,8 +232,8 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
     preparingRun.current = true;
     setDarwinSetupBusy(true);
     try {
-      const state = await window.beale.getDarwinVmSetup();
-      if (shouldOfferDarwinVmSetup(state)) {
+      const state = await loadOptionalDarwinVmSetup(() => window.beale.getDarwinVmSetup());
+      if (state && shouldOfferDarwinVmSetup(state)) {
         setDarwinSetup({ input, state });
         setDarwinSetupError(null);
       } else {

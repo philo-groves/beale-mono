@@ -5,6 +5,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { invokeAppServerProtocol } from '../dist/appServerProtocolClient.js';
+import { operationForArguments } from '../../packages/app-server-runtime/dist/app-server-client.js';
+
+test('compatibility client maps Darwin VM setup commands to protocol operations', () => {
+  assert.equal(operationForArguments(['harness', 'plugin-darwin-vm-get']), 'plugin.darwin_vm.get');
+  assert.equal(operationForArguments(['harness', 'plugin-darwin-vm-update']), 'plugin.darwin_vm.update');
+});
 
 test('canonical Darwin setup operations preserve opt-out and reject malformed updates', async (t) => {
   const registryDirectory = mkdtempSync(join(tmpdir(), 'beale-darwin-protocol-test-'));

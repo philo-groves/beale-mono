@@ -67,6 +67,7 @@ import {
   createMcpResearchTools,
   MemoryGraphStore,
   CampaignTrackStore,
+  campaignTrackBindingFromPrompt,
   campaignExperimentProjection,
   campaignObservationProjection,
   campaignQuestionProjection,
@@ -3739,8 +3740,10 @@ async function createRuntimeConfig(args: {
       });
     }
     if (args.sessionId && args.prompt) {
-      const activeTrack = args.investigationId
-        ? campaignTrackStore.detail(args.investigationId)
+      const requestedInvestigationId = args.investigationId
+        ?? campaignTrackBindingFromPrompt(args.prompt);
+      const activeTrack = requestedInvestigationId
+        ? campaignTrackStore.detail(requestedInvestigationId)
         : campaignTrackStore.ensureForSession({
             sessionId: args.sessionId,
             objective: args.prompt,
@@ -3749,9 +3752,9 @@ async function createRuntimeConfig(args: {
             environmentFingerprint: workspaceContext.environmentFingerprint ?? null,
           });
       if (!activeTrack) {
-        throw new Error(`Campaign track not found in this workspace: ${args.investigationId}`);
+        throw new Error(`Campaign track not found in this workspace: ${requestedInvestigationId}`);
       }
-      if (args.investigationId) campaignTrackStore.linkSession(activeTrack.id, args.sessionId);
+      if (requestedInvestigationId) campaignTrackStore.linkSession(activeTrack.id, args.sessionId);
       activeCampaignTrackId = activeTrack.id;
       const investigationTools = createCampaignTrackTools(campaignTrackStore, activeTrack.id);
       executableTools.push(...investigationTools);

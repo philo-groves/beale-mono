@@ -8,6 +8,16 @@ export function shouldOfferDarwinVmSetup(state: DarwinVmSetupState): boolean {
   return state.enabled && !state.neverPrompt && !state.prepared;
 }
 
+export async function loadOptionalDarwinVmSetup(
+  load: () => Promise<DarwinVmSetupState>
+): Promise<DarwinVmSetupState | null> {
+  try {
+    return await load();
+  } catch {
+    return null;
+  }
+}
+
 export function DarwinVmSetupDialog({ state, busy, error, onCancel, onContinue }: {
   state: DarwinVmSetupState;
   busy: boolean;
