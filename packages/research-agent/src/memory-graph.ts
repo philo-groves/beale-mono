@@ -1586,6 +1586,31 @@ export class MemoryGraphStore {
           `);
         },
       },
+      {
+        version: 18,
+        name: "immutable_runbook_execution_provenance",
+        up(database) {
+          for (const [column, definition] of [
+            ["content_revision", "INTEGER"], ["content_hash", "TEXT"], ["snapshot_json", "TEXT"],
+            ["selected_cell_ids_json", "TEXT"], ["required_cell_ids_json", "TEXT"],
+            ["source_revision", "TEXT"], ["environment_fingerprint", "TEXT"],
+            ["session_id", "TEXT"], ["actor_id", "TEXT"],
+            ["full_run", "INTEGER NOT NULL DEFAULT 0"],
+          ] as const) {
+            if (!tableHasColumn(database, "app_server_runbook_executions", column)) {
+              database.exec(`ALTER TABLE app_server_runbook_executions ADD COLUMN ${column} ${definition};`);
+            }
+          }
+          database.exec(`CREATE TABLE IF NOT EXISTS app_server_runbook_cell_executions (
+            run_id TEXT NOT NULL REFERENCES app_server_runbook_executions(run_id) ON DELETE CASCADE,
+            cell_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('succeeded','failed','blocked')),
+            exit_code INTEGER,
+            result_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, cell_id)
+          );`);
+        },
+      },
     ]);
   }
 

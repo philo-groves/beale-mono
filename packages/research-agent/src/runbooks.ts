@@ -90,6 +90,14 @@ export interface RunbookExecutionSelection {
   endCellId?: string;
 }
 
+export interface RunbookExecutionProvenance {
+  expectedContentRevision?: number;
+  sourceRevision?: string;
+  environmentFingerprint?: string;
+  /** Supplied by the host tool context, never by model arguments. */
+  actorId?: string;
+}
+
 export interface RunbookRecord {
   id: string;
   workspaceId: string;
@@ -146,6 +154,22 @@ interface RunbookRow {
   duplicate_marked_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface RunbookExecutionRow {
+  status: "running" | "succeeded" | "failed" | "blocked";
+  snapshot_json: string | null;
+  content_revision: number | null;
+  content_hash: string | null;
+  source_revision: string | null;
+  environment_fingerprint: string | null;
+  session_id: string | null;
+  actor_id: string | null;
+  full_run: number;
+  started_at: string;
+  completed_at: string | null;
+  selected_cell_ids_json: string | null;
+  required_cell_ids_json: string | null;
 }
 
 interface NotebookCell {
@@ -543,15 +567,62 @@ export class RunbookStore {
     return selected.map(({ id: selectedId, source, language, executor }) => ({ id: selectedId, source, language, executor }));
   }
 
+  public getExecution(id: string, runId: string, options: { offset?: number; limit?: number } = {}) {
+    const offset = Math.max(0, Math.floor(options.offset ?? 0));
+    const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 12)));
+    const row = this.database.prepare(`SELECT * FROM app_server_runbook_executions
+      WHERE runbook_id = ? AND run_id = ? AND workspace_id = ?`).get(id, runId, this.context.workspaceId) as RunbookExecutionRow | undefined;
+    if (!row) throw new Error(`Runbook execution not found in this workspace: ${runId}`);
+    const snapshot: unknown = typeof row.snapshot_json === "string" ? JSON.parse(row.snapshot_json) : null;
+    const plan = isRecord(snapshot) && Array.isArray(snapshot.cells) ? snapshot.cells.filter(isRecord) : [];
+    const cells = plan.slice(offset, offset + limit).map((cell) => {
+      const recorded = this.database.prepare(`SELECT result_json FROM app_server_runbook_cell_executions
+        WHERE run_id = ? AND cell_id = ?`).get(runId, requiredText(cell.id, "cell.id", 200)) as { result_json: string } | undefined;
+      const result: unknown = recorded ? JSON.parse(recorded.result_json) : null;
+      return {
+        id: requiredText(cell.id, "cell.id", 200), source: typeof cell.source === "string" ? cell.source : "",
+        language: typeof cell.language === "string" ? cell.language : null,
+        executor: validateCellExecutor(cell.executor, "cell.executor"),
+        result: isRecord(result) ? result : null,
+      };
+    });
+    return {
+      runbookId: id, runId, status: row.status,
+      snapshotAvailable: isRecord(snapshot),
+      contentRevision: row.content_revision ?? null, contentHash: row.content_hash ?? null,
+      sourceRevision: row.source_revision ?? null, environmentFingerprint: row.environment_fingerprint ?? null,
+      sessionId: row.session_id ?? null, actorId: row.actor_id ?? null,
+      fullRun: row.full_run === 1, startedAt: row.started_at, completedAt: row.completed_at,
+      selectedCellIds: typeof row.selected_cell_ids_json === "string" ? JSON.parse(row.selected_cell_ids_json) as string[] : [],
+      requiredCellIds: typeof row.required_cell_ids_json === "string" ? JSON.parse(row.required_cell_ids_json) as string[] : [],
+      cells, totalCells: plan.length, offset, limit, nextOffset: offset + cells.length < plan.length ? offset + cells.length : null,
+    };
+  }
+
   public beginExecution(
     id: string,
     runId: string,
     cellIds: readonly string[],
     proofTarget: RunbookProofTarget,
     deviceOs?: string,
+    provenance: RunbookExecutionProvenance = {},
   ): void {
     const startedAt = new Date().toISOString();
-    this.updateNotebook(id, (notebook) => {
+    let snapshotJson = "";
+    let requiredCellIds: string[] = [];
+    let contentRevision = 0;
+    this.updateNotebook(id, (notebook, row) => {
+      contentRevision = row.content_revision;
+      if (provenance.expectedContentRevision !== undefined && provenance.expectedContentRevision !== contentRevision) {
+        throw new Error("Runbook content changed before execution; read the current runbook and retry.");
+      }
+      const plan = this.executionPlan(id);
+      requiredCellIds = plan.map((cell) => cell.id);
+      if (cellIds.length === 0 || new Set(cellIds).size !== cellIds.length
+        || cellIds.some((cellId) => !requiredCellIds.includes(cellId))) {
+        throw new Error("Runbook execution selection must contain unique active code cells.");
+      }
+      snapshotJson = JSON.stringify({ contentRevision, enabledFeatures: notebookEnabledFeatures(notebook), cells: plan });
       notebook.metadata.beale.latestRun = {
         runId,
         status: "running",
@@ -568,8 +639,10 @@ export class RunbookStore {
     }, () => {
       this.database.prepare(`INSERT INTO app_server_runbook_executions (
         run_id, runbook_id, workspace_id, status, proof_target, device_os,
-        started_at, completed_at, duration_ms, error, selected_cell_count, completed_cell_count
-      ) VALUES (?, ?, ?, 'running', ?, ?, ?, NULL, NULL, NULL, ?, 0)`).run(
+        started_at, completed_at, duration_ms, error, selected_cell_count, completed_cell_count,
+        content_revision, content_hash, snapshot_json, selected_cell_ids_json, required_cell_ids_json,
+        source_revision, environment_fingerprint, session_id, actor_id, full_run
+      ) VALUES (?, ?, ?, 'running', ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         runId,
         id,
         this.context.workspaceId,
@@ -577,6 +650,16 @@ export class RunbookStore {
         deviceOs ?? null,
         startedAt,
         cellIds.length,
+        contentRevision,
+        `sha256:${createHash("sha256").update(snapshotJson).digest("hex")}`,
+        snapshotJson,
+        JSON.stringify(cellIds),
+        JSON.stringify(requiredCellIds),
+        provenance.sourceRevision?.trim() || null,
+        provenance.environmentFingerprint?.trim() || null,
+        this.context.sessionId ?? null,
+        provenance.actorId?.trim() || null,
+        JSON.stringify(cellIds) === JSON.stringify(requiredCellIds) ? 1 : 0,
       );
     });
   }
@@ -638,6 +721,16 @@ export class RunbookStore {
         cell.outputs.push({ output_type: "error", ename: input.status, evalue: input.error, traceback: [input.error] });
       }
     }, () => {
+      const selected = this.database.prepare(`SELECT 1 FROM app_server_runbook_executions run,
+          json_each(run.selected_cell_ids_json) cell
+        WHERE run.run_id = ? AND run.runbook_id = ? AND run.workspace_id = ?
+          AND run.status = 'running' AND cell.value = ?`).get(input.runId, input.id, this.context.workspaceId, input.cellId);
+      if (!selected) throw new Error("Cell is not part of the active runbook execution.");
+      this.database.prepare(`INSERT INTO app_server_runbook_cell_executions
+        (run_id, cell_id, status, exit_code, result_json) VALUES (?, ?, ?, ?, ?)`).run(
+        input.runId, input.cellId, input.status, input.exitCode ?? null,
+        JSON.stringify({ ...input, stdout: input.stdout?.slice(0, 64_000), stderr: input.stderr?.slice(0, 64_000) }),
+      );
       const result = this.database.prepare(`UPDATE app_server_runbook_executions
         SET completed_cell_count = completed_cell_count + 1
         WHERE run_id = ? AND runbook_id = ? AND workspace_id = ? AND status = 'running'`).run(
@@ -702,6 +795,14 @@ export class RunbookStore {
         ...(input.deviceOs ? { deviceOs: input.deviceOs } : {}),
       };
     }, () => {
+      if (input.status === "succeeded") {
+        const incomplete = this.database.prepare(`SELECT 1 FROM app_server_runbook_executions run,
+            json_each(run.selected_cell_ids_json) selected
+          LEFT JOIN app_server_runbook_cell_executions cell
+            ON cell.run_id = run.run_id AND cell.cell_id = selected.value
+          WHERE run.run_id = ? AND (cell.status IS NULL OR cell.status <> 'succeeded') LIMIT 1`).get(input.runId);
+        if (incomplete) throw new Error("Successful runbook execution requires a successful recorded result for every selected cell.");
+      }
       const result = this.database.prepare(`UPDATE app_server_runbook_executions SET
         status = ?, completed_at = ?, duration_ms = ?, error = ?
         WHERE run_id = ? AND runbook_id = ? AND workspace_id = ? AND status = 'running'`).run(
@@ -721,7 +822,7 @@ export class RunbookStore {
 
   private updateNotebook(
     id: string,
-    mutate: (notebook: RunbookNotebook) => void,
+    mutate: (notebook: RunbookNotebook, row: RunbookRow) => void,
     persistExecution?: () => void,
   ): void {
     this.database.exec("BEGIN IMMEDIATE");
@@ -730,7 +831,8 @@ export class RunbookStore {
       if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
       this.requireCanonical(row);
       const notebook = this.readNotebook(row);
-      mutate(notebook);
+      mutate(notebook, row);
+      persistExecution?.();
       delete notebook.metadata.beale.status;
       const revision = row.revision + 1;
       const updatedAt = new Date().toISOString();
@@ -747,7 +849,6 @@ export class RunbookStore {
          WHERE id = ? AND workspace_id = ? AND revision = ?`,
       ).run(entry.contentHash, entry.sizeBytes, revision, updatedAt, id, this.context.workspaceId, row.revision);
       if (Number(result.changes) !== 1) throw new Error(`Runbook revision conflict while recording execution state: ${id}`);
-      persistExecution?.();
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -836,8 +937,10 @@ export class RunbookStore {
         started_at?: unknown;
       } | undefined;
     const latestSuccessful = this.database.prepare(`SELECT run_id
-      FROM app_server_runbook_executions
-      WHERE runbook_id = ? AND workspace_id = ? AND status = 'succeeded'
+      FROM app_server_runbook_executions run
+      WHERE runbook_id = ? AND workspace_id = ? AND status = 'succeeded' AND full_run = 1
+        AND content_revision = (SELECT content_revision FROM app_server_runbooks WHERE id = run.runbook_id)
+        AND selected_cell_count = completed_cell_count
       ORDER BY completed_at DESC, started_at DESC, run_id DESC LIMIT 1`).get(runbookId, this.context.workspaceId) as {
         run_id?: unknown;
       } | undefined;

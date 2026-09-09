@@ -3,10 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import { AppServerWorkerDatabaseBroker } from "../app-server/dist/workerDatabaseBroker.js";
+import { createWorkerResearchDatabaseFactory } from "../app-server/dist/workerDatabaseClient.js";
 import {
   FindingStore, MemoryGraphStore, ManagedToolPluginSession, MANAGED_TOOL_PLUGIN_IDS,
   createFindingTools, createResearchToolRegistry, createWorkspaceHistorySearchTool,
   managedToolPluginId, managedToolPluginOptions, projectModelToolResult,
+  installResearchDatabaseFactory,
 } from "../packages/research-agent/dist/index.js";
 
 async function fixture(t) {
@@ -30,7 +34,7 @@ async function fixture(t) {
     title: "Example record formatting", summary: "Example formatting assessment.",
     classification: "general.result", rating: "informational", ...overrides,
   }, { provider: "example-provider", model: "example-model" }, "agent-example");
-  return { workspaceRoot, context, store, registry, create, execute, read };
+  return { workspaceRoot, context, graph, store, registry, create, execute, read };
 }
 
 test("claim.get retrieves persisted evidence and audit context for the same ID before and after promotion", async (t) => {
@@ -187,4 +191,83 @@ test("claim.get stays in Claims with read-only permissions and validates page in
     { id: claim.id, offset: -1 }, { id: claim.id, offset: 0.5 }, { id: claim.id, section: "unknown" }]) {
     assert.notEqual((await execute("claim.get", input)).status, "complete");
   }
+});
+
+test("claim reads stay scoped and page in SQL across the worker's response limit", async (t) => {
+  const { graph, create } = await fixture(t);
+  const selected = create({ title: "Selected example claim" });
+  const large = create({ title: "Large example claim" });
+  const unrelated = create({ title: "Unrelated example claim" });
+  const database = new DatabaseSync(graph.databasePath);
+  const metadata = JSON.stringify({ example: "x".repeat(32_768) });
+  database.prepare("UPDATE app_server_research_claims SET workspace_id = ? WHERE id = ?").run("workspace-other-example", unrelated.id);
+  const insert = database.prepare(`INSERT INTO app_server_claim_evidence
+    (id, claim_id, kind, summary, independent, metadata_json, created_at) VALUES (?, ?, 'code', 'Example observation', 0, ?, ?)`);
+  database.exec("BEGIN");
+  for (const claim of [unrelated, large]) {
+    for (let index = 0; index < 550; index++) insert.run(`evidence-${claim.id}-${String(index).padStart(4, "0")}`, claim.id, metadata, "2026-01-01T00:00:00Z");
+  }
+  database.exec("COMMIT");
+  database.close();
+  const broker = new AppServerWorkerDatabaseBroker(graph.databasePath);
+  const requests = [];
+  const restore = installResearchDatabaseFactory(createWorkerResearchDatabaseFactory((message) => {
+    requests.push(message.request);
+    broker.handle(message);
+  }));
+  let store;
+  try { store = new FindingStore(graph); } finally { restore(); }
+  try {
+    assert.equal(store.get(selected.id).evidence.length, 0, "unrelated evidence must never cross the broker");
+    requests.length = 0;
+    const overview = store.readDetail(large.id, "overview", 0, 10);
+    assert.equal(overview.counts.evidence, 550);
+    assert.equal(overview.evidence, undefined);
+    assert.equal(requests.some((request) => request.operation === "all" && /FROM app_server_claim_evidence WHERE claim_id = \?/.test(request.sql ?? "")), false);
+    requests.length = 0;
+    const first = store.readDetail(large.id, "evidence", 0, 7);
+    assert.equal(first.evidence.items.length, 7);
+    assert.equal(first.evidence.total, 550);
+    assert.equal(first.evidence.nextOffset, 7);
+    assert.equal(first.evidence.items[0].metadata.example.length, 32_768);
+    const next = store.readDetail(large.id, "evidence", 7, 7, first.readRevision);
+    assert.equal(new Set([...first.evidence.items, ...next.evidence.items].map((item) => item.id)).size, 14);
+    for (const request of requests.filter((request) => request.operation === "all" && /FROM app_server_claim_evidence WHERE claim_id = \?/.test(request.sql ?? ""))) {
+      assert.match(request.sql, /WHERE claim_id = \?.*LIMIT \? OFFSET \?/s);
+      assert.equal(request.parameters[0], large.id);
+      assert.equal(request.parameters.at(-2), 7);
+    }
+    requests.length = 0;
+    const catalog = store.readCatalog({ projection: "lead", query: "selected", statuses: [], classifications: [], offset: 0, limit: 1 });
+    assert.equal(catalog.total, 2);
+    assert.equal(catalog.matched, 1);
+    assert.equal(catalog.findings[0].id, selected.id);
+    const evidenceReads = requests.filter((request) => request.operation === "all" && /FROM app_server_claim_evidence WHERE claim_id = \?/.test(request.sql ?? ""));
+    assert.ok(evidenceReads.every((request) => request.parameters[0] === selected.id));
+    assert.ok(evidenceReads.every((request) => !/SELECT \*/.test(request.sql)));
+  } finally { store.close(); broker.close(); }
+});
+
+test("compact catalogs preserve summary and normalized metadata control witnesses", async (t) => {
+  const { create, store } = await fixture(t);
+  const claim = create({ evidence: [
+    { kind: "code", referenceId: "src/example.ts:1", summary: "Example Positive Control succeeds." },
+    { kind: "command", referenceId: "command-example", summary: "Example non-triggering case.", metadata: { control: "\tNEGATIVE " } },
+  ] });
+  const catalog = store.readCatalog({ projection: "lead", query: "", statuses: [], classifications: [], offset: 0, limit: 10 });
+  const compact = catalog.findings.find((item) => item.id === claim.id);
+  assert.ok(compact.evidence.some((item) => item.metadata.control === "positive"));
+  assert.ok(compact.evidence.some((item) => item.metadata.control === "negative"));
+  assert.ok(compact.evidence.every((item) => item.summary === ""));
+});
+
+test("catalog projection preserves historical stale findings without a prior status", async (t) => {
+  const { create, graph, store } = await fixture(t);
+  const claim = create();
+  const database = new DatabaseSync(graph.databasePath);
+  try { database.prepare("UPDATE app_server_research_claims SET status = 'stale', stale_from_status = NULL WHERE id = ?").run(claim.id); }
+  finally { database.close(); }
+  const catalog = store.readCatalog({ projection: "finding", query: "", statuses: [], classifications: [], offset: 0, limit: 10 });
+  assert.equal(catalog.findings[0].id, claim.id);
+  assert.equal(catalog.findings[0].projection, store.get(claim.id).projection);
 });

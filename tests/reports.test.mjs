@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { recordRunbookExecution } from "./fixtures/record-runbook-execution.mjs";
 
 import {
   createReportTools,
@@ -219,24 +220,23 @@ test("security report creation accepts a composite finding reviewed in the same 
       impact: "The callback discloses the victim authorization result.",
       classification: "security.chain",
       componentClaimIds: [component.id],
+      sourceRevision: "git:example-component:one",
+      environmentFingerprint: "environment:example-component:one",
       evidence: [{ kind: "command", referenceId: "redirect-chain-verifier", summary: "The complete callback path was observed." }],
-    });
+    }, undefined, "agent_author_example");
     chain = claims.transition(chain.id, {
       expectedRevision: chain.revision,
       toStatus: "observed",
       reason: "The complete callback path was directly observed.",
-    });
+    }, undefined, "agent_author_example");
     const runbook = runbooks.create({
       title: "Reproduce redirect callback chain",
       purpose: "Replay the complete redirect and callback path.",
       cells: [{ kind: "code", language: "sh", source: "./redirect-verifier", features: ["runtime"] }],
     }).runbook;
     const runId = "redirect_chain_run";
-    const startedAt = new Date().toISOString();
-    runbooks.beginExecution(runbook.id, runId, runbooks.executionPlan(runbook.id).map((cell) => cell.id), "localhost");
-    runbooks.completeExecution({
-      id: runbook.id, runId, status: "succeeded", startedAt,
-      completedAt: new Date().toISOString(), durationMs: 1, proofTarget: "localhost",
+    recordRunbookExecution(runbooks, runbook.id, runId, {
+      sourceRevision: chain.sourceRevision, environmentFingerprint: chain.environmentFingerprint, actorId: "agent_author_example",
     });
     chain = claims.transition(chain.id, {
       expectedRevision: chain.revision,
@@ -244,16 +244,16 @@ test("security report creation accepts a composite finding reviewed in the same 
       reason: "The reusable proof completed on a clean target.",
       reproductionRunbookId: runbook.id,
       evidence: [{ kind: "runbook_execution", referenceId: runId, summary: "Clean reproduction succeeded." }],
-    });
+    }, undefined, "agent_author_example");
     chain = claims.transition(chain.id, {
       expectedRevision: chain.revision,
       toStatus: "verified",
       reason: "A distinct reviewer reproduced and challenged the complete chain in the same session.",
       evidence: [{
-        kind: "independent_verification", referenceId: "independent-redirect-review",
+        kind: "independent_verification", referenceId: runId,
         summary: "Independent replay held.", sessionId: "run_security", independent: true,
       }],
-    });
+    }, undefined, "agent_reviewer_example");
     const missingPacket = await registry.execute({
       id: "confirmed_chain_without_packet",
       actionClass: "synthesize",
@@ -262,6 +262,18 @@ test("security report creation accepts a composite finding reviewed in the same 
     });
     assert.equal(missingPacket.result.status, "blocked");
     assert.match(JSON.stringify(missingPacket.result), /submissionPacketPath/);
+    chain = claims.revise(chain.id, { expectedRevision: chain.revision, summary: "Updated example conclusion requiring review.", reason: "Example clarification." },
+      undefined, "agent_author_example");
+    const invalidated = await registry.execute({
+      id: "invalidated_report_example", actionClass: "synthesize", toolName: "report.create",
+      input: { title: "Example report", summary: "Example result.", content: "# Example report", sourceFindingId: chain.id, submissionPacketPath: packetPath },
+    });
+    assert.equal(invalidated.result.status, "error");
+    assert.match(invalidated.result.error.message, /current validated reproduction and independent review/);
+    assert.equal(store.list().length, 0, "invalid evidence must be rejected before creating report artifacts");
+    chain = claims.transition(chain.id, { expectedRevision: chain.revision, toStatus: "verified", reason: "Reviewed the updated example conclusion.", evidence: [
+      { kind: "independent_verification", referenceId: runId, summary: "Example renewed review.", independent: true },
+    ] }, undefined, "agent_reviewer_example");
     const created = await registry.execute({
       id: "confirmed_chain_report",
       actionClass: "synthesize",

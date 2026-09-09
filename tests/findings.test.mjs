@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { recordRunbookExecution } from "./fixtures/record-runbook-execution.mjs";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -245,7 +246,7 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
       toStatus: "observed",
       reason: "Directly observed in the parser implementation.",
       evidence: [{ kind: "code", referenceId: "src/parser.ts:42", contentHash: "sha256:code", summary: "State is retained on the error path." }],
-    });
+    }, undefined, "agent_origin");
     assert.equal(finding.id, findingId);
     assert.equal(finding.projection, "finding");
     assert.equal(findings.listLeads().length, 0);
@@ -315,16 +316,8 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
       expectedRevision: finding.revision, toStatus: "reproduced", reason: "Unbacked reproduction", reproductionRunbookId: runbook.id,
       evidence: [{ kind: "runbook_execution", referenceId: runId, summary: "Unverified claim", metadata: { status: "succeeded" } }],
     }), /successful runbook execution/);
-    const startedAt = new Date().toISOString();
-    runbooks.beginExecution(runbook.id, runId, runbooks.executionPlan(runbook.id).map((cell) => cell.id), "localhost");
-    runbooks.completeExecution({
-      id: runbook.id,
-      runId,
-      status: "succeeded",
-      startedAt,
-      completedAt: new Date().toISOString(),
-      durationMs: 1,
-      proofTarget: "localhost",
+    recordRunbookExecution(runbooks, runbook.id, runId, {
+      sourceRevision: finding.sourceRevision, environmentFingerprint: finding.environmentFingerprint, actorId: "agent_origin",
     });
     const exposedRunId = runbooks.get(runbook.id).execution.latestSuccessfulRunId;
     assert.equal(exposedRunId, runId);
@@ -334,7 +327,7 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
       reason: "The reusable runbook succeeded.",
       reproductionRunbookId: runbook.id,
       evidence: [{ kind: "runbook_execution", referenceId: exposedRunId, summary: "Clean-state execution succeeded." }],
-    });
+    }, undefined, "agent_origin");
     assert.throws(() => findings.transition(findingId, {
       expectedRevision: finding.revision,
       toStatus: "verified",
@@ -356,8 +349,8 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
       expectedRevision: finding.revision,
       toStatus: "verified",
       reason: "A distinct reviewer challenged the result and its assumptions in the originating session.",
-      evidence: [{ kind: "independent_verification", referenceId: "verification_run_two", summary: "Same-session independent review held.", independent: true }],
-    });
+      evidence: [{ kind: "independent_verification", referenceId: "runbook_run_one", summary: "Same-session independent review held.", independent: true }],
+    }, undefined, "agent_reviewer_example");
     assert.equal(finding.status, "verified");
     assert.equal(finding.evidence.at(-1).sessionId, "session_origin");
     const verifiedChecklist = verifierFindings.completionChecklist(findingId, "verified");
@@ -563,7 +556,7 @@ test("claim schema initializes before a workspace has any knowledge-memory table
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_server_research_claims").get().count, 0);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'security_tracking_json'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'rating'").get().count, 1);
-      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 6);
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 7);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'session_id'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'app_server_findings'").get().count, 0);
     } finally {

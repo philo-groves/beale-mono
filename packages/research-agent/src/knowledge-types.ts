@@ -127,6 +127,10 @@ export interface FindingEvidenceSummary {
   sessionId: string | null;
   actorId: string | null;
   independent: boolean;
+  /** Host-resolved execution/reviewer provenance; absent on other evidence kinds. */
+  validated?: boolean;
+  /** Claim content reviewed by the host-attributed reviewer. */
+  claimBindingHash?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
 }

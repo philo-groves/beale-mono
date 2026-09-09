@@ -26,6 +26,7 @@ const GET_PARAMETERS = {
   required: ["id"],
   properties: {
     id: { type: "string" },
+    runId: { type: "string", description: "Read this immutable execution snapshot and recorded cell results instead of the current notebook. Use the runId referenced by a claim when reviewing evidence." },
     offset: { type: "number" },
     limit: { type: "number" },
   },
@@ -124,11 +125,14 @@ export function createRunbookTools(
     tool(
       "runbook.get",
       "runbook_get",
-      "Read a bounded page of one workspace runbook, including enabled feature toggles, cell feature tags, active state, host or Tart VM cell executors, recorded results, and execution.latestSuccessfulRunId for finding promotion.",
+      "Read a bounded page of one workspace runbook, including feature toggles, cell executors, and recorded results. Supply runId to review an immutable execution snapshot and its results. execution.latestSuccessfulRunId identifies a full successful run of the current content; claim promotion additionally requires matching source/environment provenance.",
       "read",
       GET_PARAMETERS,
       (input) => ({
-        output: store.get(requiredText(input.id, "id"), {
+        output: text(input.runId) ? store.getExecution(requiredText(input.id, "id"), requiredText(input.runId, "runId"), {
+          ...(typeof input.offset === "number" ? { offset: input.offset } : {}),
+          limit: typeof input.limit === "number" ? input.limit : 12,
+        }) : store.get(requiredText(input.id, "id"), {
           ...(typeof input.offset === "number" ? { offset: input.offset } : {}),
           limit: typeof input.limit === "number" ? input.limit : 12,
         }),

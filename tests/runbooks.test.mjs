@@ -86,7 +86,9 @@ test("runbook tools expose bounded artifact operations", async () => {
   }
 });
 
-test("runbook execution stages host-built executables into Tart VMs and records guest evidence", async () => {
+test("runbook execution stages host-built executables into Tart VMs and records guest evidence", {
+  skip: process.platform === "win32" ? "Tart executable staging requires POSIX permission bits." : false,
+}, async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-tart-vm-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
   const store = new RunbookStore(
@@ -172,7 +174,7 @@ test("runbook execution stages host-built executables into Tart VMs and records 
     assert.match(wrongTarget.error, /requires proofTarget vm/);
     const result = await execute({ runbookId: created.runbook.id, proofTarget: "vm" });
 
-    assert.equal(result.status, "succeeded");
+    assert.equal(result.status, "succeeded", result.error);
     assert.deepEqual(calls.map((call) => call.operation), ["copy", "inspect", "exec", "cleanup"]);
     assert.equal(calls[0].input.vmName, "example-vm");
     assert.match(calls[0].input.localPath, /runbook-packages/);

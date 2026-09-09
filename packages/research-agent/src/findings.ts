@@ -148,6 +148,21 @@ export interface CandidateCompletionChecklist {
   items: CandidateCompletionChecklistItem[];
 }
 
+export interface ClaimCollectionPage { offset: number; limit: number }
+export interface ClaimReadOptions {
+  evidence?: ClaimCollectionPage;
+  transitions?: ClaimCollectionPage;
+  duplicates?: ClaimCollectionPage;
+  compactEvidence?: boolean;
+}
+
+export interface ClaimCatalogReadInput extends ClaimCollectionPage {
+  projection: "lead" | "finding";
+  query: string;
+  statuses: readonly FindingStatus[];
+  classifications: readonly string[];
+}
+
 export class ResearchClaimStore {
   private readonly database: DatabaseSync;
 
@@ -233,22 +248,33 @@ export class ResearchClaimStore {
     if (current.workspaceId !== context.workspaceId) throw new Error("Finding is outside the active workspace.");
     const now = new Date().toISOString();
     const newEvidence = normalizeEvidenceInputs(input.evidence ?? [], context.sessionId ?? null, actorId ?? null);
-    const accumulated = [...current.evidence, ...newEvidence.map((item, index) => ({
-      id: `pending_${index}`,
-      ...item,
-      createdAt: now,
-    }))];
-    validateTransitionEvidence(this.database, current, input, accumulated);
+    const effective = {
+      ...current,
+      sourceRevision: input.sourceRevision === undefined || input.toStatus === "stale" ? current.sourceRevision : nullableText(input.sourceRevision),
+      environmentFingerprint: input.environmentFingerprint === undefined || input.toStatus === "stale" ? current.environmentFingerprint : nullableText(input.environmentFingerprint),
+      reproductionRunbookId: input.reproductionRunbookId === undefined ? current.reproductionRunbookId : nullableText(input.reproductionRunbookId),
+    };
     const classification = claimClassification(input.classification ?? current.classification);
     const componentClaimIds = input.componentClaimIds === undefined
       ? current.componentClaimIds
       : uniqueStrings(input.componentClaimIds);
+    const reviewed = { ...effective, classification, componentClaimIds };
+    if (newEvidence.some((item) => item.independent) && claimVerificationHash(reviewed) !== claimVerificationHash(current)) {
+      throw new Error("Independent review must address the existing claim content; record content changes separately before review.");
+    }
+    for (const item of newEvidence) {
+      if (item.independent) item.claimBindingHash = claimVerificationHash(reviewed);
+    }
+    const accumulated = [...current.evidence, ...newEvidence.map((item, index) => ({
+      id: `pending_${index}`, ...item, createdAt: now,
+    }))];
     this.validateComponents(id, componentClaimIds);
     validateCompositeClaim(classification, input.toStatus, componentClaimIds);
 
     const nextRevision = current.revision + 1;
     this.database.exec("BEGIN IMMEDIATE");
     try {
+      validateTransitionEvidence(this.database, reviewed, input, accumulated);
       const evidenceIds = this.insertEvidence(id, newEvidence, now);
       const staleFromStatus = input.toStatus === "stale"
         ? (current.status === "stale" ? current.staleFromStatus : current.status)
@@ -291,6 +317,92 @@ export class ResearchClaimStore {
     const context = this.memoryGraph.getContext();
     const rows = readFindings(this.database, context.workspaceId, id);
     return rows[0] ?? null;
+  }
+
+  /** Fetch only requested collections within a consistent database snapshot. */
+  public readDetail(id: string, section: string, offset: number, limit: number, expectedReadRevision?: string) {
+    this.database.exec("BEGIN");
+    try {
+      const workspaceId = this.memoryGraph.getContext().workspaceId;
+      const countsRow = this.database.prepare(`SELECT
+          (SELECT COUNT(*) FROM app_server_claim_evidence WHERE claim_id = claim.id) AS evidence,
+          (SELECT COUNT(*) FROM app_server_claim_transitions WHERE claim_id = claim.id) AS transitions,
+          (SELECT COUNT(*) FROM app_server_research_claims WHERE duplicate_of_claim_id = claim.id AND workspace_id = claim.workspace_id) AS duplicates
+        FROM app_server_research_claims claim WHERE id = ? AND workspace_id = ?`).get(id, workspaceId) as SqlRow | undefined;
+      if (!countsRow) throw new Error(`Research claim not found in this workspace: ${id}.`);
+      const page = { offset, limit };
+      const empty = { offset: 0, limit: 0 };
+      const finding = readFindings(this.database, workspaceId, id, {
+        evidence: section === "all" || section === "evidence" ? page : empty,
+        transitions: section === "all" || section === "transitions" ? page : empty,
+        duplicates: section === "all" || section === "duplicates" ? page : empty,
+      })[0]!;
+      const digest = createHash("sha256").update(`${finding.id}:${finding.revision}`);
+      for (const row of pagedRows(this.database, `SELECT id, revision FROM app_server_research_claims
+        WHERE workspace_id = ? AND duplicate_of_claim_id = ? ORDER BY id`, [workspaceId, id])) digest.update(JSON.stringify(row));
+      if (finding.reproductionRunbookId && tableExists(this.database, "app_server_runbooks")) {
+        digest.update(JSON.stringify(this.database.prepare("SELECT revision FROM app_server_runbooks WHERE id = ? AND workspace_id = ?")
+          .get(finding.reproductionRunbookId, workspaceId) ?? null));
+      }
+      const readRevision = digest.digest("hex").slice(0, 16);
+      if (expectedReadRevision !== undefined && expectedReadRevision !== readRevision) {
+        throw new Error("Research claim read revision changed. Restart at offset 0.");
+      }
+      const counts = { evidence: requiredSqlNumber(countsRow.evidence), transitions: requiredSqlNumber(countsRow.transitions), duplicates: requiredSqlNumber(countsRow.duplicates) };
+      const { evidence, transitions, duplicateClaims, ...claim } = finding;
+      const collection = <T>(items: T[], total: number) => ({ items, total, offset, limit, nextOffset: offset + items.length < total ? offset + items.length : null });
+      const result = {
+        id: finding.id, revision: finding.revision, readRevision, projection: finding.projection, counts,
+        ...(section === "all" || section === "overview" ? { claim } : {}),
+        ...(section === "all" || section === "evidence" ? { evidence: collection(evidence, counts.evidence) } : {}),
+        ...(section === "all" || section === "transitions" ? { transitions: collection(transitions, counts.transitions) } : {}),
+        ...(section === "all" || section === "duplicates" ? { duplicates: collection(duplicateClaims, counts.duplicates) } : {}),
+      };
+      this.database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  public readCatalog(input: ClaimCatalogReadInput) {
+    this.database.exec("BEGIN");
+    try {
+      const workspaceId = this.memoryGraph.getContext().workspaceId;
+      const effectiveStatus = "CASE WHEN status = 'stale' THEN COALESCE(stale_from_status, 'observed') ELSE status END";
+      const lead = `(${effectiveStatus} = 'hypothesis' OR (${effectiveStatus} = 'rejected'
+        AND NOT EXISTS (SELECT 1 FROM app_server_claim_evidence WHERE claim_id = claim.id)))`;
+      const base = `workspace_id = ? AND duplicate_of_claim_id IS NULL AND ${input.projection === "lead" ? lead : `NOT ${lead}`}`;
+      const clauses = [base];
+      const parameters: Array<string | number> = [workspaceId];
+      if (input.query) {
+        clauses.push("instr(lower(title || char(10) || summary || char(10) || impact || char(10) || rating), ?) > 0");
+        parameters.push(input.query);
+      }
+      for (const [column, values] of [["status", input.statuses], ["classification", input.classifications]] as const) {
+        if (values.length) { clauses.push(`${column} IN (${values.map(() => "?").join(",")})`); parameters.push(...values); }
+      }
+      const total = requiredSqlNumber((this.database.prepare(`SELECT COUNT(*) AS count FROM app_server_research_claims claim WHERE ${base}`).get(workspaceId) as SqlRow).count);
+      const matched = requiredSqlNumber((this.database.prepare(`SELECT COUNT(*) AS count FROM app_server_research_claims claim WHERE ${clauses.join(" AND ")}`).get(...parameters) as SqlRow).count);
+      const digest = createHash("sha256").update(stableJson(input));
+      for (const row of pagedRows(this.database, "SELECT id, revision FROM app_server_research_claims WHERE workspace_id = ? ORDER BY id", [workspaceId])) digest.update(JSON.stringify(row));
+      if (tableExists(this.database, "app_server_runbooks")) {
+        for (const row of pagedRows(this.database, "SELECT id, revision FROM app_server_runbooks WHERE workspace_id = ? ORDER BY id", [workspaceId])) digest.update(JSON.stringify(row));
+      }
+      const ids = pagedRows(this.database, `SELECT id FROM app_server_research_claims claim WHERE ${clauses.join(" AND ")} ORDER BY updated_at DESC, id`, parameters, input);
+      const findings = [...ids].flatMap((row) => readFindings(this.database, workspaceId, requiredSqlText(row.id), { compactEvidence: true }));
+      const evidenceCounts = Object.fromEntries(findings.map((finding) => [finding.id, requiredSqlNumber(
+        (this.database.prepare("SELECT COUNT(*) AS count FROM app_server_claim_evidence WHERE claim_id = ?").get(finding.id) as SqlRow).count,
+      )]));
+      const result = { findings, evidenceCounts, total, matched, revision: digest.digest("hex").slice(0, 16), offset: input.offset, limit: input.limit,
+        nextOffset: input.offset + findings.length < matched ? input.offset + findings.length : null };
+      this.database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   public markDuplicate(
@@ -484,12 +596,12 @@ export class ResearchClaimStore {
   private insertEvidence(findingId: string, evidence: readonly NormalizedFindingEvidence[], now: string): string[] {
     const insert = this.database.prepare(`INSERT INTO app_server_claim_evidence (
       id, claim_id, kind, reference_id, content_hash, summary, session_id,
-      actor_id, independent, metadata_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      actor_id, independent, metadata_json, created_at, claim_binding_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     return evidence.map((item) => {
       const id = `claim_evidence_${randomUUID()}`;
       insert.run(id, findingId, item.kind, item.referenceId, item.contentHash, item.summary,
-        item.sessionId, item.actorId, item.independent ? 1 : 0, stableJson(item.metadata), now);
+        item.sessionId, item.actorId, item.independent ? 1 : 0, stableJson(item.metadata), now, item.claimBindingHash ?? null);
       return id;
     });
   }
@@ -564,6 +676,7 @@ interface NormalizedFindingEvidence {
   sessionId: string | null;
   actorId: string | null;
   independent: boolean;
+  claimBindingHash?: string;
   metadata: Record<string, unknown>;
 }
 
@@ -838,31 +951,41 @@ export function initializeFindingSchema(database: DatabaseSync): void {
       db.exec(`CREATE INDEX IF NOT EXISTS app_server_research_claims_duplicate_parent_idx
         ON app_server_research_claims(workspace_id, duplicate_of_claim_id, duplicate_marked_at);`);
     },
+  }, {
+    version: 7,
+    name: "independent_review_claim_binding",
+    up(db) {
+      if (!tableHasColumn(db, "app_server_claim_evidence", "claim_binding_hash")) {
+        db.exec("ALTER TABLE app_server_claim_evidence ADD COLUMN claim_binding_hash TEXT;");
+      }
+    },
   }]);
 }
 
-export function readFindings(database: DatabaseSync, workspaceId: string, findingId?: string): FindingSummary[] {
+export function readFindings(database: DatabaseSync, workspaceId: string, findingId?: string, options: ClaimReadOptions = {}): FindingSummary[] {
   if (!tableExists(database, "app_server_research_claims")) return [];
-  const rows = database.prepare(`SELECT * FROM app_server_research_claims
+  const rows = [...pagedRows(database, `SELECT *,
+      (SELECT COUNT(*) FROM app_server_claim_evidence WHERE claim_id = claim.id) AS evidence_count
+    FROM app_server_research_claims claim
     WHERE workspace_id = ?${findingId ? " AND id = ?" : ""}
-    ORDER BY updated_at DESC, id`).all(...(findingId ? [workspaceId, findingId] : [workspaceId])) as SqlRow[];
-  const evidence = groupedEvidence(database, new Set(rows.map((row) => requiredSqlText(row.id))));
-  const transitions = groupedTransitions(database, new Set(rows.map((row) => requiredSqlText(row.id))));
+    ORDER BY updated_at DESC, id`, findingId ? [workspaceId, findingId] : [workspaceId])];
+  const evidence = groupedEvidence(database, new Set(rows.map((row) => requiredSqlText(row.id))), options.evidence, options.compactEvidence);
+  const transitions = groupedTransitions(database, new Set(rows.map((row) => requiredSqlText(row.id))), options.transitions, options.compactEvidence);
   const authors = groupedAuthors(database, new Set(rows.map((row) => requiredSqlText(row.id))));
   const components = groupedComponents(database, new Set(rows.map((row) => requiredSqlText(row.id))));
-  const duplicates = groupedDuplicateClaims(database, workspaceId, new Set(rows.map((row) => requiredSqlText(row.id))));
+  const duplicates = groupedDuplicateClaims(database, workspaceId, new Set(rows.map((row) => requiredSqlText(row.id))), options.duplicates);
   return rows.map((row) => {
     const id = requiredSqlText(row.id);
     const status = findingStatus(row.status);
     const staleFromStatus = row.stale_from_status === null ? null : findingStatus(row.stale_from_status);
     const classification = claimClassification(row.classification);
-    return {
+    const claim: FindingSummary = {
     id,
     workspaceId: requiredSqlText(row.workspace_id),
     subjectId: requiredSqlText(row.subject_id),
     memoryNodeId: optionalSqlText(row.legacy_memory_node_id),
     originSessionId: optionalSqlText(row.origin_session_id),
-    ...claimProjection(status, staleFromStatus, (evidence.get(id) ?? []).length),
+    ...claimProjection(status, staleFromStatus, requiredSqlNumber(row.evidence_count)),
     rating: researchClaimRating(row.rating),
     classification,
     componentClaimIds: components.get(id) ?? [],
@@ -888,7 +1011,15 @@ export function readFindings(database: DatabaseSync, workspaceId: string, findin
     createdAt: requiredSqlText(row.created_at),
     updatedAt: requiredSqlText(row.updated_at),
     revision: requiredSqlNumber(row.revision),
-  }; });
+    };
+    for (const item of claim.evidence) {
+      if (item.kind === "runbook_execution") item.validated = validReproductionEvidence(database, claim, item);
+      else if (item.independent && ["independent_verification", "human_review", "proof"].includes(item.kind)) {
+        item.validated = validIndependentEvidence(database, claim, item);
+      }
+    }
+    return claim;
+  });
 }
 
 export function refreshFindingStaleness(input: {
@@ -1125,18 +1256,16 @@ function validateTransitionEvidence(
     DIRECT_OBSERVATION_KINDS.has(item.kind) && Boolean(item.referenceId || item.contentHash))) {
     throw new Error("Observed findings require direct code, artifact, command, URL, calculation, proof, or publication evidence.");
   }
-  if (input.toStatus === "reproduced") {
+  if (["reproduced", "verified", "report_ready", "disclosed"].includes(input.toStatus)) {
     const runbookId = nullableText(input.reproductionRunbookId) ?? current.reproductionRunbookId;
-    const execution = evidence.find((item) => item.kind === "runbook_execution" && item.referenceId
-      && successfulRunbookExecutionExists(database, current.workspaceId, runbookId, item.referenceId));
+    const execution = evidence.find((item) => validReproductionEvidence(database, current, item));
     if (!runbookId || !execution) {
-      throw new Error("Reproduced findings require a successful runbook execution and reproductionRunbookId.");
+      throw new Error("Reproduced findings require a successful runbook execution of every active cell at the current content revision, matching sourceRevision and environmentFingerprint, and reproductionRunbookId.");
     }
   }
-  if (input.toStatus === "verified") {
-    const verification = evidence.find((item) => ["independent_verification", "human_review", "proof"].includes(item.kind) && item.independent);
-    if (!verification || !verification.referenceId) {
-      throw new Error("Verified findings require durable evidence from an independent reviewer.");
+  if (["verified", "report_ready", "disclosed"].includes(input.toStatus)) {
+    if (!evidence.some((item) => validIndependentEvidence(database, current, item))) {
+      throw new Error("Verified findings require an independent reviewer with host-recorded actor/session identity and a reference to a qualifying successful runbook execution.");
     }
   }
   if (input.toStatus === "report_ready") {
@@ -1163,11 +1292,11 @@ export function candidateCompletionChecklist(
   const hasDirectEvidence = claim.evidence.some((evidence) =>
     DIRECT_OBSERVATION_KINDS.has(evidence.kind) && Boolean(evidence.referenceId || evidence.contentHash));
   const hasReproduction = Boolean(claim.reproductionRunbookId)
-    && claim.evidence.some((evidence) => evidence.kind === "runbook_execution" && Boolean(evidence.referenceId));
+    && claim.evidence.some((evidence) => evidence.kind === "runbook_execution" && evidence.validated === true);
   const hasIndependentVerification = claim.evidence.some((evidence) =>
     evidence.independent
     && ["independent_verification", "human_review", "proof"].includes(evidence.kind)
-    && Boolean(evidence.referenceId));
+    && evidence.validated === true);
   const hasPositiveControl = claim.evidence.some((evidence) => evidenceControl(evidence) === "positive");
   const hasNegativeControl = claim.evidence.some((evidence) => evidenceControl(evidence) === "negative");
   const priorArtReferences = tracking?.externalReferences.filter((reference) =>
@@ -1231,6 +1360,14 @@ function evidenceControl(evidence: FindingEvidenceSummary): "positive" | "negati
   return null;
 }
 
+// Preserve the detail checklist's metadata and summary fallbacks without loading observation bodies.
+const EVIDENCE_CONTROL_SQL = `CASE
+  WHEN lower(trim(json_extract(metadata_json, '$.control'), char(9) || char(10) || char(13) || ' ')) IN ('positive','negative')
+    THEN lower(trim(json_extract(metadata_json, '$.control'), char(9) || char(10) || char(13) || ' '))
+  WHEN instr(lower(summary), 'positive control') > 0 THEN 'positive'
+  WHEN instr(lower(summary), 'negative control') > 0 THEN 'negative'
+  ELSE NULL END`;
+
 function stalenessReasons(finding: FindingSummary, sourceRevision: string | null, environmentFingerprint: string | null): string[] {
   const reasons: string[] = [];
   if (comparableIdentityChanged(finding.sourceRevision, sourceRevision, "source")) {
@@ -1284,20 +1421,28 @@ function normalizeEvidenceInputs(items: readonly FindingEvidenceInput[], default
     referenceId: nullableText(item.referenceId),
     contentHash: nullableText(item.contentHash),
     summary: requiredText(item.summary, "Finding evidence summary"),
-    sessionId: item.sessionId === undefined ? defaultSessionId : nullableText(item.sessionId),
-    actorId: item.actorId === undefined ? defaultActorId : nullableText(item.actorId),
+    sessionId: item.independent || item.sessionId === undefined ? defaultSessionId : nullableText(item.sessionId),
+    actorId: item.independent || item.actorId === undefined ? defaultActorId : nullableText(item.actorId),
     independent: item.independent === true,
     metadata: isRecord(item.metadata) ? item.metadata : {},
   }));
 }
 
-function groupedEvidence(database: DatabaseSync, findingIds: ReadonlySet<string>): Map<string, FindingEvidenceSummary[]> {
+function groupedEvidence(database: DatabaseSync, findingIds: ReadonlySet<string>, page?: ClaimCollectionPage, compact = false): Map<string, FindingEvidenceSummary[]> {
   const grouped = new Map<string, FindingEvidenceSummary[]>();
   if (findingIds.size === 0 || !tableExists(database, "app_server_claim_evidence")) return grouped;
-  for (const row of database.prepare("SELECT * FROM app_server_claim_evidence ORDER BY created_at, id").all() as SqlRow[]) {
+  const columns = compact
+    ? `id, claim_id, kind, reference_id, content_hash, '' AS summary, session_id, actor_id, independent,
+      ${tableHasColumn(database, "app_server_claim_evidence", "claim_binding_hash") ? "claim_binding_hash" : "NULL AS claim_binding_hash"},
+      json_object('control', ${EVIDENCE_CONTROL_SQL}) AS metadata_json, created_at`
+    : "*";
+  const rows = compact ? [...findingIds].flatMap((id) => [...compactEvidenceRows(database, id, columns)])
+    : scopedClaimRows(database, "app_server_claim_evidence", findingIds, columns, "created_at, id", page);
+  for (const row of rows) {
     const findingId = requiredSqlText(row.claim_id);
     if (!findingIds.has(findingId)) continue;
-    grouped.set(findingId, [...(grouped.get(findingId) ?? []), {
+    const items = grouped.get(findingId) ?? [];
+    items.push({
       id: requiredSqlText(row.id),
       kind: findingEvidenceKind(row.kind),
       referenceId: optionalSqlText(row.reference_id),
@@ -1306,20 +1451,43 @@ function groupedEvidence(database: DatabaseSync, findingIds: ReadonlySet<string>
       sessionId: optionalSqlText(row.session_id),
       actorId: optionalSqlText(row.actor_id),
       independent: row.independent === 1,
+      ...(typeof row.claim_binding_hash === "string" ? { claimBindingHash: row.claim_binding_hash } : {}),
       metadata: parseJsonObject(row.metadata_json),
       createdAt: requiredSqlText(row.created_at),
-    }]);
+    });
+    grouped.set(findingId, items);
   }
   return grouped;
 }
 
-function groupedTransitions(database: DatabaseSync, findingIds: ReadonlySet<string>): Map<string, FindingTransitionSummary[]> {
+/** Catalog checklists need witnesses, not every observation's body or metadata. */
+function* compactEvidenceRows(database: DatabaseSync, claimId: string, columns: string): Generator<SqlRow> {
+  const seen = new Set<string>();
+  const conditions = [
+    `kind IN ('code','artifact','command','url','calculation','proof','publication')
+      AND (NULLIF(reference_id, '') IS NOT NULL OR NULLIF(content_hash, '') IS NOT NULL)`,
+    `(${EVIDENCE_CONTROL_SQL}) = 'positive'`,
+    `(${EVIDENCE_CONTROL_SQL}) = 'negative'`,
+  ];
+  for (const condition of conditions) {
+    const row = database.prepare(`SELECT ${columns} FROM app_server_claim_evidence WHERE claim_id = ? AND (${condition}) ORDER BY created_at, id LIMIT 1`).get(claimId) as SqlRow | undefined;
+    if (row && !seen.has(requiredSqlText(row.id))) { seen.add(requiredSqlText(row.id)); yield row; }
+  }
+  for (const row of pagedRows(database, `SELECT ${columns} FROM app_server_claim_evidence WHERE claim_id = ?
+    AND (kind = 'runbook_execution' OR independent = 1) ORDER BY created_at, id`, [claimId])) {
+    if (!seen.has(requiredSqlText(row.id))) { seen.add(requiredSqlText(row.id)); yield row; }
+  }
+}
+
+function groupedTransitions(database: DatabaseSync, findingIds: ReadonlySet<string>, page?: ClaimCollectionPage, latestOnly = false): Map<string, FindingTransitionSummary[]> {
   const grouped = new Map<string, FindingTransitionSummary[]>();
   if (findingIds.size === 0 || !tableExists(database, "app_server_claim_transitions")) return grouped;
-  for (const row of database.prepare("SELECT * FROM app_server_claim_transitions ORDER BY claim_id, claim_revision").all() as SqlRow[]) {
+  for (const row of scopedClaimRows(database, "app_server_claim_transitions", findingIds, "*",
+    latestOnly ? "claim_revision DESC" : "claim_revision", latestOnly ? { offset: 0, limit: 1 } : page)) {
     const findingId = requiredSqlText(row.claim_id);
     if (!findingIds.has(findingId)) continue;
-    grouped.set(findingId, [...(grouped.get(findingId) ?? []), {
+    const items = grouped.get(findingId) ?? [];
+    items.push({
       id: requiredSqlText(row.id),
       revision: requiredSqlNumber(row.claim_revision),
       fromStatus: row.from_status === null ? null : findingStatus(row.from_status),
@@ -1329,7 +1497,8 @@ function groupedTransitions(database: DatabaseSync, findingIds: ReadonlySet<stri
       actorId: optionalSqlText(row.actor_id),
       evidenceIds: parseJsonStringArray(row.evidence_ids_json),
       createdAt: requiredSqlText(row.created_at),
-    }]);
+    });
+    grouped.set(findingId, items);
   }
   return grouped;
 }
@@ -1337,8 +1506,7 @@ function groupedTransitions(database: DatabaseSync, findingIds: ReadonlySet<stri
 function groupedAuthors(database: DatabaseSync, findingIds: ReadonlySet<string>): Map<string, ModelAuthorSummary[]> {
   const grouped = new Map<string, ModelAuthorSummary[]>();
   if (findingIds.size === 0 || !tableExists(database, "app_server_claim_authorship")) return grouped;
-  for (const row of database.prepare(`SELECT claim_id, provider, model
-    FROM app_server_claim_authorship ORDER BY claim_id, revision, provider, model`).all() as SqlRow[]) {
+  for (const row of scopedClaimRows(database, "app_server_claim_authorship", findingIds, "claim_id, provider, model", "revision, provider, model")) {
     const findingId = requiredSqlText(row.claim_id);
     if (!findingIds.has(findingId)) continue;
     const author = { provider: requiredSqlText(row.provider), model: requiredSqlText(row.model) };
@@ -1353,9 +1521,7 @@ function groupedAuthors(database: DatabaseSync, findingIds: ReadonlySet<string>)
 function groupedComponents(database: DatabaseSync, claimIds: ReadonlySet<string>): Map<string, string[]> {
   const grouped = new Map<string, string[]>();
   if (claimIds.size === 0 || !tableExists(database, "app_server_claim_components")) return grouped;
-  for (const row of database.prepare(
-    "SELECT claim_id, component_claim_id FROM app_server_claim_components ORDER BY claim_id, position",
-  ).all() as SqlRow[]) {
+  for (const row of scopedClaimRows(database, "app_server_claim_components", claimIds, "claim_id, component_claim_id", "position")) {
     const claimId = requiredSqlText(row.claim_id);
     if (!claimIds.has(claimId)) continue;
     grouped.set(claimId, [...(grouped.get(claimId) ?? []), requiredSqlText(row.component_claim_id)]);
@@ -1367,16 +1533,17 @@ function groupedDuplicateClaims(
   database: DatabaseSync,
   workspaceId: string,
   parentClaimIds: ReadonlySet<string>,
+  page?: ClaimCollectionPage,
 ): Map<string, ResearchClaimDuplicateSummary[]> {
   const grouped = new Map<string, ResearchClaimDuplicateSummary[]>();
   if (parentClaimIds.size === 0 || !tableHasColumn(database, "app_server_research_claims", "duplicate_of_claim_id")) {
     return grouped;
   }
-  const rows = database.prepare(`SELECT claim.*,
+  const rows = [...parentClaimIds].flatMap((parentId) => [...pagedRows(database, `SELECT claim.*,
       (SELECT COUNT(*) FROM app_server_claim_evidence evidence WHERE evidence.claim_id = claim.id) AS evidence_count
     FROM app_server_research_claims claim
-    WHERE claim.workspace_id = ? AND claim.duplicate_of_claim_id IS NOT NULL
-    ORDER BY claim.duplicate_marked_at DESC, claim.id`).all(workspaceId) as SqlRow[];
+    WHERE claim.workspace_id = ? AND claim.duplicate_of_claim_id = ?
+    ORDER BY claim.duplicate_marked_at DESC, claim.id`, [workspaceId, parentId], page)]);
   for (const row of rows) {
     const parentClaimId = requiredSqlText(row.duplicate_of_claim_id);
     if (!parentClaimIds.has(parentClaimId)) continue;
@@ -1884,17 +2051,75 @@ function workspaceResourceExists(database: DatabaseSync, table: "app_server_runb
     && Boolean(database.prepare(`SELECT 1 FROM ${table} WHERE id = ? AND workspace_id = ?`).get(id, workspaceId));
 }
 
+function validReproductionEvidence(database: DatabaseSync, claim: FindingSummary, evidence: FindingEvidenceSummary): boolean {
+  return evidence.kind === "runbook_execution" && Boolean(evidence.referenceId)
+    && successfulRunbookExecutionExists(database, claim, evidence.referenceId!);
+}
+
+function validIndependentEvidence(database: DatabaseSync, claim: FindingSummary, evidence: FindingEvidenceSummary): boolean {
+  if (!evidence.independent || !["independent_verification", "human_review", "proof"].includes(evidence.kind)
+    || !evidence.actorId || !evidence.sessionId || !evidence.referenceId
+    || evidence.claimBindingHash !== claimVerificationHash(claim)
+    || !successfulRunbookExecutionExists(database, claim, evidence.referenceId)) return false;
+  const authors = database.prepare(`SELECT actor_id, session_id FROM app_server_claim_transitions
+    WHERE claim_id = ? AND (claim_revision = 1
+      OR (from_status IS NOT to_status AND to_status IN ('observed','reproduced'))
+      OR (from_status IS to_status AND json_array_length(evidence_ids_json) = 0))
+    ORDER BY claim_revision`).all(claim.id) as SqlRow[];
+  if (authors.length === 0) return false;
+  return authors.every((author) => {
+    if (typeof author.session_id === "string" && author.session_id !== evidence.sessionId) return true;
+    return typeof author.actor_id === "string" && author.actor_id !== evidence.actorId;
+  });
+}
+
+function claimVerificationHash(claim: FindingSummary): string {
+  return `sha256:${createHash("sha256").update(stableJson({
+    id: claim.id, title: claim.title, summary: claim.summary, impact: claim.impact,
+    classification: claim.classification, componentClaimIds: claim.componentClaimIds,
+    sourceRevision: claim.sourceRevision, environmentFingerprint: claim.environmentFingerprint,
+    reproductionRunbookId: claim.reproductionRunbookId,
+  })).digest("hex")}`;
+}
+
 function successfulRunbookExecutionExists(
   database: DatabaseSync,
-  workspaceId: string,
-  runbookId: string | null,
+  claim: FindingSummary,
   runId: string,
 ): boolean {
-  return Boolean(runbookId)
+  return Boolean(claim.reproductionRunbookId && claim.sourceRevision && claim.environmentFingerprint)
     && tableExists(database, "app_server_runbook_executions")
-    && Boolean(database.prepare(`SELECT 1 FROM app_server_runbook_executions
-      WHERE workspace_id = ? AND runbook_id = ? AND run_id = ? AND status = 'succeeded'`)
-      .get(workspaceId, runbookId, runId));
+    && tableHasColumn(database, "app_server_runbook_executions", "full_run")
+    && Boolean(database.prepare(`SELECT 1 FROM app_server_runbook_executions run
+      JOIN app_server_runbooks book ON book.id = run.runbook_id AND book.workspace_id = run.workspace_id
+      WHERE run.workspace_id = ? AND run.runbook_id = ? AND run.run_id = ? AND run.status = 'succeeded'
+        AND book.duplicate_of_runbook_id IS NULL AND run.full_run = 1
+        AND run.content_revision = book.content_revision AND run.content_hash IS NOT NULL
+        AND run.selected_cell_count > 0 AND run.selected_cell_count = run.completed_cell_count
+        AND run.source_revision = ? AND run.environment_fingerprint = ?
+        AND NOT EXISTS (SELECT 1 FROM json_each(run.required_cell_ids_json) required
+          LEFT JOIN app_server_runbook_cell_executions cell ON cell.run_id = run.run_id AND cell.cell_id = required.value
+          WHERE cell.status IS NULL OR cell.status <> 'succeeded' OR cell.exit_code IS NULL OR cell.exit_code <> 0)`)
+      .get(claim.workspaceId, claim.reproductionRunbookId, runId, claim.sourceRevision, claim.environmentFingerprint));
+}
+
+/** Bound each broker response even when the caller needs the complete collection. */
+function* pagedRows(database: DatabaseSync, sql: string, parameters: readonly (string | number)[], page?: ClaimCollectionPage): Generator<SqlRow> {
+  let offset = page?.offset ?? 0;
+  let remaining = page?.limit ?? Number.MAX_SAFE_INTEGER;
+  const statement = database.prepare(`${sql} LIMIT ? OFFSET ?`);
+  while (remaining > 0) {
+    const limit = Math.min(32, remaining);
+    const rows = statement.all(...parameters, limit, offset) as SqlRow[];
+    yield* rows;
+    if (rows.length < limit) break;
+    offset += rows.length;
+    remaining -= rows.length;
+  }
+}
+
+function* scopedClaimRows(database: DatabaseSync, table: string, ids: ReadonlySet<string>, columns: string, order: string, page?: ClaimCollectionPage): Generator<SqlRow> {
+  for (const id of ids) yield* pagedRows(database, `SELECT ${columns} FROM ${table} WHERE claim_id = ? ORDER BY ${order}`, [id], page);
 }
 
 type SqlRow = Record<string, unknown>;

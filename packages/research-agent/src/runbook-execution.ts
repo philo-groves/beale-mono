@@ -20,6 +20,10 @@ export interface RunbookExecutionRequest {
   signal?: AbortSignal;
   proofTarget: RunbookProofTarget;
   deviceOs?: string;
+  sourceRevision?: string;
+  environmentFingerprint?: string;
+  /** Host execution identity; not part of the model input schema. */
+  actorId?: string;
 }
 
 export interface RunbookExecutionUpdate {
@@ -81,14 +85,24 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
     const startedAt = new Date().toISOString();
     const startedMs = Date.now();
     activeRunbooks.add(runbookId);
-    options.store.beginExecution(runbookId, runId, cells.map((cell) => cell.id), proofTarget, deviceOs);
-    await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: null, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
     let finalStatus: "succeeded" | "failed" | "blocked" = "succeeded";
     let finalError: string | undefined;
     let completedCount = 0;
     let completedAt = startedAt;
     let durationMs = 0;
     try {
+      options.store.beginExecution(runbookId, runId, cells.map((cell) => cell.id), proofTarget, deviceOs, {
+        expectedContentRevision: runbook.contentRevision,
+        ...(request.sourceRevision ? { sourceRevision: request.sourceRevision } : {}),
+        ...(request.environmentFingerprint ? { environmentFingerprint: request.environmentFingerprint } : {}),
+        ...(request.actorId ? { actorId: request.actorId } : {}),
+      });
+    } catch (error) {
+      activeRunbooks.delete(runbookId);
+      throw error;
+    }
+    try {
+      await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: null, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
       for (const cell of cells) {
         const signal = request.signal ?? options.signal;
         throwIfAborted(signal);
@@ -245,6 +259,8 @@ export function createRunbookExecutionTool(
       endCellId: { type: "string", description: "Optional inclusive last code cell ID from runbook.get. Omit to continue through the final code cell." },
       proofTarget: { type: "string", enum: [...RUNBOOK_PROOF_TARGETS], description: "Where this proof executes: localhost, device, vm, web, or other." },
       deviceOs: { type: "string", description: "Required when proofTarget is device, for example iOS 27.0 or Android 17." },
+      sourceRevision: { type: "string", description: "Exact inspected source/build identity. Required for finding reproduction evidence; must match the claim's sourceRevision." },
+      environmentFingerprint: { type: "string", description: "Exact execution environment identity. Required for finding reproduction evidence; must match the claim's environmentFingerprint." },
     },
   };
   return {
@@ -274,6 +290,9 @@ export function createRunbookExecutionTool(
             ? { endCellId: action.input.endCellId.trim() }
             : {}),
           ...(context?.signal ? { signal: context.signal } : {}),
+          ...(context?.agentId ? { actorId: context.agentId } : {}),
+          ...(action.input.sourceRevision !== undefined ? { sourceRevision: requiredText(action.input.sourceRevision, "sourceRevision") } : {}),
+          ...(action.input.environmentFingerprint !== undefined ? { environmentFingerprint: requiredText(action.input.environmentFingerprint, "environmentFingerprint") } : {}),
           proofTarget: parseProofTarget(action.input.proofTarget),
           ...(typeof action.input.deviceOs === "string" && action.input.deviceOs.trim()
             ? { deviceOs: action.input.deviceOs.trim() }

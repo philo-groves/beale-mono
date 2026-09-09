@@ -683,6 +683,8 @@ export interface AppServerFindingEvidenceSummary {
   sessionId: string | null;
   actorId: string | null;
   independent: boolean;
+  validated?: boolean;
+  claimBindingHash?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
 }

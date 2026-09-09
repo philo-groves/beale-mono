@@ -1,5 +1,5 @@
 import { nowIso } from "./ids.js";
-import { requireCanonicalClaim, type ResearchClaimStore } from "./findings.js";
+import { candidateCompletionChecklist, requireCanonicalClaim, type ResearchClaimStore } from "./findings.js";
 import type { FindingSummary } from "./knowledge-types.js";
 import { REPORT_STATUSES, ReportStore, type ReportStatus } from "./reports.js";
 import type { ResearchExecutableTool, ResearchToolExecutionContext, ResearchToolExecutionResult } from "./tool-registry.js";
@@ -96,6 +96,10 @@ function requireReportableSecurityFinding(
   }
   if (finding.status !== "verified") {
     throw new Error("Security reports require a verified composite finding that has passed independent review.");
+  }
+  const evidenceChecks = candidateCompletionChecklist(finding, "verified");
+  if (evidenceChecks.missingRequired.some((key) => key === "reproduction" || key === "independent_verification")) {
+    throw new Error("Security reports require current validated reproduction and independent review evidence before creating report artifacts.");
   }
   if (!text(finding.impact) || finding.componentClaimIds.length === 0 || finding.evidence.length === 0) {
     throw new Error("Security reports require impact, component findings, and proof evidence on the verified composite finding.");

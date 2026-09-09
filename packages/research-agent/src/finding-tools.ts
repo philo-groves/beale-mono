@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { nowIso } from "./ids.js";
 import {
   candidateCompletionChecklist,
@@ -19,10 +18,10 @@ const EVIDENCE_SCHEMA = {
   required: ["kind", "summary"],
   properties: {
     kind: { type: "string", enum: EVIDENCE_KINDS },
-    referenceId: { type: "string", description: "Durable evidence identity. For runbook_execution use runId from runbook.run output or execution.latestSuccessfulRunId from runbook.get; for report use the exact reportId; for disclosure use the exact disclosureReference." },
+    referenceId: { type: "string", description: "Durable evidence identity. For runbook_execution, or verification/human_review/proof with independent=true, use a successful full runId from runbook.run with matching sourceRevision and environmentFingerprint. Inspect that snapshot with runbook.get id/runId. Independent review requires a host-attributed reviewer who did not author the claim; the review is bound to the current claim content. For report use reportId; for disclosure use disclosureReference." },
     contentHash: { type: "string" },
     summary: { type: "string" },
-    independent: { type: "boolean" },
+    independent: { type: "boolean", description: "Request independent-review validation. The host checks reviewer identity, claim content, and the referenced execution; this flag alone does not establish independence." },
     metadata: { type: "object" },
   },
 };
@@ -133,7 +132,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
         offset: { type: "integer", minimum: 0, description: "Use nextOffset to continue this filtered catalog." },
         afterRevision: { type: "string" },
       },
-    }, (input) => projectClaimCatalog(store.listLeads(), input, "leads")),
+    }, (input) => projectClaimCatalog(store, input, "leads")),
     findingTool("finding.list", "finding_list", "Browse a paged catalog of evidence-backed findings; use history.search for search and claim.get for evidence, provenance, and transition history. Findings are promoted views of canonical claims.", "read", {
       type: "object",
       properties: {
@@ -144,7 +143,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
         offset: { type: "integer", minimum: 0, description: "Use nextOffset to continue this filtered catalog." },
         afterRevision: { type: "string" },
       },
-    }, (input) => projectClaimCatalog(store.listFindings(), input, "findings")),
+    }, (input) => projectClaimCatalog(store, input, "findings")),
     findingTool("finding.completion_check", "finding_completion_check", "Evaluate a security candidate against the evidence-backed completion checklist for observed, reproduced, verified, or report-ready work. This is read-only and reports every required or recommended gap.", "read", {
       type: "object",
       required: ["id"],
@@ -233,35 +232,13 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
 function readClaimDetail(store: ResearchClaimStore, input: Record<string, unknown>): ClaimDetailReadResult {
   const id = requiredString(input.id, "id");
   const section = input.section ?? "all";
-  if (!CLAIM_DETAIL_SECTIONS.some((value) => value === section)) throw new Error("Unknown claim detail section.");
+  if (typeof section !== "string" || !CLAIM_DETAIL_SECTIONS.some((value) => value === section)) throw new Error("Unknown claim detail section.");
   const offset = readPageInteger(input.offset, "offset", 0, 0);
   const limit = readPageInteger(input.limit, "limit", 10, 1, 50);
   const expectedReadRevision = input.expectedReadRevision === undefined
     ? undefined : requiredString(input.expectedReadRevision, "expectedReadRevision");
   if (offset > 0 && expectedReadRevision === undefined) throw new Error("Claim detail pagination requires expectedReadRevision; read offset 0 first.");
-  const finding = store.get(id);
-  if (!finding) throw new Error(`Research claim not found in this workspace: ${id}.`);
-  const readRevision = createHash("sha256").update(JSON.stringify(finding)).digest("hex").slice(0, 16);
-  if (expectedReadRevision !== undefined && expectedReadRevision !== readRevision) {
-    throw new Error("Research claim read revision changed. Restart at offset 0.");
-  }
-  const { evidence, transitions, duplicateClaims, ...claim } = finding;
-  return {
-    id: finding.id,
-    revision: finding.revision,
-    readRevision,
-    projection: finding.projection,
-    counts: { evidence: evidence.length, transitions: transitions.length, duplicates: duplicateClaims.length },
-    ...(section === "all" || section === "overview" ? { claim } : {}),
-    ...(section === "all" || section === "evidence" ? { evidence: claimDetailPage(evidence, offset, limit) } : {}),
-    ...(section === "all" || section === "transitions" ? { transitions: claimDetailPage(transitions, offset, limit) } : {}),
-    ...(section === "all" || section === "duplicates" ? { duplicates: claimDetailPage(duplicateClaims, offset, limit) } : {}),
-  };
-}
-
-function claimDetailPage<T>(items: readonly T[], offset: number, limit: number): ClaimDetailPage<T> {
-  const page = items.slice(offset, offset + limit);
-  return { items: page, total: items.length, offset, limit, nextOffset: offset + page.length < items.length ? offset + page.length : null };
+  return store.readDetail(id, section, offset, limit, expectedReadRevision);
 }
 
 function readPageInteger(value: unknown, name: string, fallback: number, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number {
@@ -272,7 +249,7 @@ function readPageInteger(value: unknown, name: string, fallback: number, minimum
   return value;
 }
 
-function projectClaimCatalog(findings: readonly FindingSummary[], input: Record<string, unknown>, key: "leads" | "findings"): Record<string, unknown> {
+function projectClaimCatalog(store: ResearchClaimStore, input: Record<string, unknown>, key: "leads" | "findings"): Record<string, unknown> {
   const query = string(input.query)?.toLowerCase() ?? "";
   const requestedStatuses = new Set(Array.isArray(input.statuses)
     ? input.statuses.flatMap((status) => typeof status === "string" && FINDING_STATUSES.includes(status as FindingStatus) ? [status] : [])
@@ -284,18 +261,10 @@ function projectClaimCatalog(findings: readonly FindingSummary[], input: Record<
     ? Math.max(1, Math.min(100, Math.floor(input.limit)))
     : 25;
   const offset = readPageInteger(input.offset, "offset", 0, 0);
-  const revision = createHash("sha256")
-    .update(JSON.stringify({ query, statuses: [...requestedStatuses].sort(), classifications: [...requestedClassifications].sort(), limit, offset }))
-    .update("\n")
-    .update(findings.map((finding) => `${finding.id}:${finding.revision}:${finding.updatedAt}`).join("\n"))
-    .digest("hex")
-    .slice(0, 16);
-  const matches = findings
-    .filter((finding) => requestedStatuses.size === 0 || requestedStatuses.has(finding.status))
-    .filter((finding) => requestedClassifications.size === 0 || requestedClassifications.has(finding.classification))
-    .filter((finding) => !query || `${finding.title}\n${finding.summary}\n${finding.impact}\n${finding.rating}`.toLowerCase().includes(query));
-  const page = claimDetailPage(matches, offset, limit);
-  const paging = { total: findings.length, matched: matches.length, offset, limit, nextOffset: page.nextOffset, truncated: page.nextOffset !== null };
+  const catalog = store.readCatalog({ projection: key === "leads" ? "lead" : "finding", query,
+    statuses: [...requestedStatuses].sort() as FindingStatus[], classifications: [...requestedClassifications].sort(), offset, limit });
+  const { revision, findings, total, matched, nextOffset } = catalog;
+  const paging = { total, matched, offset, limit, nextOffset, truncated: nextOffset !== null };
   if (string(input.afterRevision) === revision) {
     return { revision, unchanged: true, ...paging, [key]: [] };
   }
@@ -304,7 +273,7 @@ function projectClaimCatalog(findings: readonly FindingSummary[], input: Record<
     unchanged: false,
     ...paging,
     recall: "Use claim.get with a claim ID for evidence, provenance, transition history, and duplicate relationships.",
-    [key]: page.items.map((finding) => ({
+    [key]: findings.map((finding) => ({
       id: finding.id,
       projection: finding.projection,
       maturity: finding.maturity,
@@ -325,9 +294,9 @@ function projectClaimCatalog(findings: readonly FindingSummary[], input: Record<
       reproductionRunbookId: finding.reproductionRunbookId,
       reportId: finding.reportId,
       staleReason: finding.staleReason,
-      evidenceCount: finding.evidence.length,
+      evidenceCount: catalog.evidenceCounts[finding.id] ?? 0,
       duplicateCount: finding.duplicateClaims.length,
-      independentEvidenceCount: finding.evidence.filter((evidence) => evidence.independent).length,
+      independentEvidenceCount: finding.evidence.filter((evidence) => evidence.independent && evidence.validated).length,
       latestTransition: finding.transitions.at(-1) ?? null,
       completion: (() => {
         const checklist = candidateCompletionChecklist(finding, "verified");

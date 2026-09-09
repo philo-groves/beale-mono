@@ -1097,6 +1097,12 @@
 
 ### app-server
 
+#### Fixed
+
+- Claim verification now resolves the referenced execution, checks host-recorded reviewer identity against claim authorship, and binds the review to the claim content. Completion checks expose invalidated evidence instead of accepting self-declared independence.
+- Reproduction evidence now requires a complete successful run of the current notebook revision with matching source and environment identities. Execution snapshots and per-cell results are retained independently of later notebook edits and can be read with `runbook.get` and `runId`. Additive migrations preserve historical runs and reviews; records without the new provenance require renewed evidence before further promotion.
+- Claim detail and catalog reads now filter and paginate in SQLite, bound worker responses, and avoid transporting unrelated workspace evidence or full observation metadata for catalog rows.
+
 #### Changed
 
 - Public history recall now supports paginated NVD/OSV, public GitHub issues/PRs and releases, and supplied document pages, retaining structured advisory applicability and explicit partial/error coverage. Provenance adds bounded `prior_art.fetch` with content-hash-checked pages and an explicit `repository.fetch_history` operation that preserves worktree files while fetching or deepening named remote history. Model search cards defer large details to source URLs; first-touch guidance now states actual source coverage.
