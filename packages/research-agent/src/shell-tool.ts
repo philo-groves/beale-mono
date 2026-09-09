@@ -52,6 +52,7 @@ export interface AppServerShellOptions {
 
 export interface ShellToolOptions {
   workspaceRoot: string;
+  defaultWorkingDirectory?: string;
   shellOptionsPath?: string;
   maxOutputBytes?: number;
   protectedDirectories?: readonly string[];
@@ -191,7 +192,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         const invocation = resolveShellInvocation({
           requested,
           requestedRuntime: readShellRuntime(action.input.runtime),
-          requestedCwd: action.input.cwd,
+          requestedCwd: action.input.cwd ?? options.defaultWorkingDirectory,
           workspaceRoot,
           platform,
           wslSupport,

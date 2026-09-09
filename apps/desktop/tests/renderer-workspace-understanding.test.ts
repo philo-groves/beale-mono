@@ -6,7 +6,7 @@ import { isLiveResearchRunStatus } from '../src/shared/types';
 import type { AppServerMemorySummary, RunRow, ScopeAsset, SessionRunActivity } from '../src/shared/types';
 import { MainSessionWorkspace } from '../src/renderer/features/sessions/MainSessionWorkspace';
 import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollbarActivation';
-import { promoteWorkspaceDirectory, WorkspaceDirectoriesField } from '../src/renderer/features/workspaces/WorkspaceDirectoriesWidget';
+import { WorkspaceDirectoriesField } from '../src/renderer/features/workspaces/WorkspaceDirectoriesWidget';
 import {
   memoryCountSinceLastDream,
   memoryDreamHeat,
@@ -496,19 +496,11 @@ describe('workspace dashboard', () => {
     expect(html).toContain('class="settings-form-squircle" aria-labelledby="workspace-overview-heading"');
     expect(html).toContain('class="settings-form-control-row workspace-overview-control-row workspace-directories-field"');
     expect(html).not.toContain('class="workspace-directories-widget"');
-    expect(html).toContain('<strong>Workspace Directories</strong>');
-    expect(html).toContain('Local directories included in this workspace.');
-    expect(html).toContain('aria-label="Workspace directories"');
+    expect(html).toContain('<strong>Research Directory</strong>');
+    expect(html).toContain('One dedicated directory with local Git history.');
     expect(html).toContain('title="/workspaces/parser"');
-    expect(html).toContain('title="C:\\Users\\alice\\shared"');
-    expect(html).toContain('class="workspace-directories-input-path">~/shared</span>');
-    expect(html).toContain('aria-label="Primary directory"');
-    expect(html).toContain('title="Primary directory"');
-    expect(html).not.toContain('Make workspace directory primary');
-    expect(html).not.toContain('title="Make primary directory"');
-    expect(html).toContain('aria-label="Remove workspace directory C:\\Users\\alice\\shared"');
-    expect(html).not.toContain('>Primary</small>');
-    expect(html).toContain('aria-label="Add workspace directory"');
+    expect(html).not.toContain('Add workspace directory');
+    expect(html).not.toContain('Remove workspace directory');
     expect(html).not.toContain('aria-label="Working Directory"');
     expect(html).toMatch(/aria-label="Research Profile"[^>]*disabled=""[^>]*value="Security"/u);
     expect(html).toMatch(/aria-label="Research Kit"[^>]*disabled=""[^>]*value="Apple Security Bounty"/u);
@@ -521,8 +513,8 @@ describe('workspace dashboard', () => {
     expect(html.indexOf('aria-label="Research Profile"')).toBeLessThan(html.indexOf('aria-label="Research Kit"'));
     expect(html.indexOf('aria-label="Research Kit"')).toBeLessThan(html.indexOf('aria-label="Research Subject"'));
     expect(html.indexOf('aria-label="Research Subject"')).toBeLessThan(html.indexOf('aria-label="Workspace Name"'));
-    expect(html.indexOf('aria-label="Workspace Name"')).toBeLessThan(html.indexOf('aria-label="Workspace directories"'));
-    expect(html.indexOf('aria-label="Workspace directories"')).toBeLessThan(html.indexOf('aria-label="Workspace Guidance"'));
+    expect(html.indexOf('aria-label="Workspace Name"')).toBeLessThan(html.indexOf('<strong>Research Directory</strong>'));
+    expect(html.indexOf('<strong>Research Directory</strong>')).toBeLessThan(html.indexOf('aria-label="Workspace Guidance"'));
     expect(html).toContain('<strong>Workspace Guidance</strong>');
     expect(html).toContain('aria-label="Workspace Guidance"');
     expect(html).toContain('class="workspace-guidance-preview"');
@@ -708,7 +700,7 @@ describe('workspace dashboard', () => {
       onRemove: () => undefined
     }));
 
-    expect(html).toContain('class="workspace-directories-input-area is-empty"');
+    expect(html).toContain('No directory selected');
     expect(html).toContain('aria-label="Choose workspace directory"');
     expect(html).not.toContain('aria-label="Add workspace directory"');
     expect(html).not.toContain('workspace-directories-input-row');
@@ -743,13 +735,6 @@ describe('workspace dashboard', () => {
     expect(html).toContain('class="main-trace-markdown"');
     expect(html).toContain('<h1>Authorized targets</h1>');
     expect(html).toContain('Use <strong>staging</strong> only.');
-  });
-
-  it('promotes a workspace directory without dropping the storage root', () => {
-    expect(promoteWorkspaceDirectory(
-      ['/workspaces/parser', 'C:\\Users\\alice\\shared'],
-      'C:\\Users\\alice\\shared\\'
-    )).toEqual(['C:\\Users\\alice\\shared', '/workspaces/parser']);
   });
 
   it('preserves non-editable authorization and resource data when saving workspace Settings', () => {

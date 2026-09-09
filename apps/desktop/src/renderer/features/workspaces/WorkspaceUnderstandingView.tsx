@@ -1307,10 +1307,13 @@ function WorkspaceUtilitiesPanel({
               <span className="settings-form-control-copy">
                 <strong>Dejunk</strong>
                 {dejunkStatus ? <WorkspaceCleaningStatus label={dejunkStatus} /> : (
-                  <small>{workspaceDejunk?.newFileCountCapped ? `${newFileCount.toLocaleString()}+` : newFileCount.toLocaleString()} New {newFileCount === 1 ? 'File' : 'Files'}</small>
+                  <small>{workspaceDejunk?.project
+                    ? `${workspaceDejunk.project.partial ? 'At least ' : ''}${workspaceDejunk.project.fileCount.toLocaleString()} files · ${(workspaceDejunk.project.totalBytes / 1048576).toFixed(1)} MiB · ${workspaceDejunk.project.unclassifiedFileCount} unclassified`
+                    : `${workspaceDejunk?.newFileCountCapped ? `${newFileCount.toLocaleString()}+` : newFileCount.toLocaleString()} New ${newFileCount === 1 ? 'File' : 'Files'}`}</small>
                 )}
               </span>
               <button className="workspace-cleaning-action" disabled={dejunkDisabled} onClick={onRunWorkspaceDejunk} type="button">Dejunk Now</button>
+              {workspaceDejunk?.project?.checkpoint?.status === 'failed' ? <p role="alert">Git checkpoint failed: {workspaceDejunk.project.checkpoint.error} Working files were preserved.</p> : null}
             </div>
             <div className="settings-form-control-row workspace-cleaning-row">
               <span className="settings-form-control-copy">
@@ -1453,7 +1456,7 @@ export function WorkspaceHousekeepingPanel({
           data-new-file-count={newFileCount}
           disabled={dejunkDisabled}
           onClick={onRunWorkspaceDejunk}
-          title={activeSession ? 'Dejunk is unavailable while a research session is active' : 'Organize loose research files and remove large reclaimable artifacts'}
+          title={activeSession ? 'Dejunk is unavailable while a research session is active' : workspaceDejunk?.project ? 'Checkpoint research and quarantine disposable scratch/cache files' : 'Organize loose research files and remove large reclaimable artifacts'}
           type="button"
         >
           <span className="workspace-housekeeping-card-count">
@@ -1465,6 +1468,7 @@ export function WorkspaceHousekeepingPanel({
             <Sparkles aria-hidden="true" size={18} />
             {workspaceDejunkInProgress ? 'Dejunking…' : dejunkLoading ? 'Loading…' : 'Dejunk'}
           </span>
+          {workspaceDejunk?.project?.checkpoint?.status === 'failed' ? <span role="alert">Git checkpoint failed. Working files are preserved; see workspace maintenance for details.</span> : null}
         </button>
         <button
           className="workspace-dream-card workspace-housekeeping-card"

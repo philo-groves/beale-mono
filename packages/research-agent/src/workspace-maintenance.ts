@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { normalizeSourceRepositoryUrl, sourceRepositoryCheckoutPath } from './source-materializer.js';
 import { PRE_BEALE_DATA_DIRECTORY_NAME } from './legacy-compatibility.js';
+import { checkpointWorkspace, getWorkspaceProjectHealth, quarantineWorkspaceDisposable, readWorkspaceProject, type WorkspaceProjectHealth } from './workspace-project.js';
 export interface WorkspaceDejunkRunSummary {
   status: 'completed' | 'failed';
   startedAt: string;
@@ -24,6 +25,7 @@ export interface WorkspaceDejunkRunSummary {
 }
 
 export interface WorkspaceDejunkSummary {
+  project?: WorkspaceProjectHealth;
   available: boolean;
   newFileCount: number;
   newFileCountCapped: boolean;
@@ -134,12 +136,14 @@ export function getWorkspaceDejunkSummary(workspacePath: string): WorkspaceDejun
     return cached.summary;
   }
   const counted = countNewWorkspaceFiles(root, Date.parse(state.baselineAt));
+  const project = getWorkspaceProjectHealth(root);
   const summary: WorkspaceDejunkSummary = {
     available: true,
     newFileCount: counted.count,
     newFileCountCapped: counted.capped,
     baselineAt: state.baselineAt,
-    lastRun: state.lastRun
+    lastRun: state.lastRun,
+    ...(project ? { project } : {})
   };
   summaryCache.set(root, { cachedAt: Date.now(), baselineAt: state.baselineAt, summary });
   return summary;
@@ -153,10 +157,16 @@ export function runWorkspaceDejunk(workspacePath: string): WorkspaceDejunkSummar
   let deletedPathCount = 0;
   let reclaimedBytes = 0;
   try {
-    movedFileCount = organizeLooseResearch(root);
-    const deleted = deleteLargeReclaimableTrees(root);
-    deletedPathCount = deleted.pathCount;
-    reclaimedBytes = deleted.reclaimedBytes;
+    if (readWorkspaceProject(root)) {
+      const checkpoint = checkpointWorkspace(root, 'Before workspace housekeeping');
+      if (checkpoint.status === 'failed') throw new Error(checkpoint.error);
+      movedFileCount = quarantineWorkspaceDisposable(root);
+    } else {
+      movedFileCount = organizeLooseResearch(root);
+      const deleted = deleteLargeReclaimableTrees(root);
+      deletedPathCount = deleted.pathCount;
+      reclaimedBytes = deleted.reclaimedBytes;
+    }
     const completedAt = new Date().toISOString();
     writeState(root, {
       version: STATE_VERSION,
@@ -281,7 +291,7 @@ function writeState(workspacePath: string, state: WorkspaceDejunkState): void {
 }
 
 function countNewWorkspaceFiles(workspacePath: string, baselineMs: number): { count: number; capped: boolean } {
-  if (existsSync(join(workspacePath, '.git'))) return { count: 0, capped: false };
+  if (existsSync(join(workspacePath, '.git')) && !readWorkspaceProject(workspacePath)) return { count: 0, capped: false };
   let count = 0;
   const stack = [workspacePath];
   while (stack.length > 0 && count < NEW_FILE_COUNT_LIMIT) {
@@ -552,7 +562,7 @@ function consolidateWorkspaceRepositories(
 }
 
 function findWorkspaceGitRepositories(workspacePath: string, configuredPaths: string[]): string[] {
-  if (existsSync(join(workspacePath, '.git'))) return [];
+  if (existsSync(join(workspacePath, '.git')) && !readWorkspaceProject(workspacePath)) return [];
   const repositories = new Set(
     configuredPaths.filter((path) => isWorkspaceChild(workspacePath, path) && existsSync(join(path, '.git')))
   );

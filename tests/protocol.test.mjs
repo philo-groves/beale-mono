@@ -21,6 +21,7 @@ import {
   decodeBealeAppServerShutdownResult,
   decodeAppServerProtocolEnvelope,
   decodeAppServerSessionLaunchRequest,
+  decodeWorkspaceProjectRequest,
   decodeBealeAppServerSessionControlRequest,
   decodeBealeAppServerSessionControlResult,
   decodeAppServerServerMessage,
@@ -32,6 +33,12 @@ import {
   appServerProtocolSuccess,
   parseAppServerProtocolArguments,
 } from "../packages/app-server-runtime/dist/protocol.js";
+
+test('research workspace operations require explicit revisions for canonical imports', () => {
+  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'checkpoint' }), { workspaceId: 'workspace-example', action: 'checkpoint' });
+  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 }), { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 });
+  for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
+});
 
 test("protocol envelopes are versioned, correlated, and strictly decoded", () => {
   const success = appServerProtocolSuccess("protocol.describe", { available: true }, "request-1");
@@ -48,7 +55,7 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
 test("protocol describe exposes a runtime-bound v20 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 20);
+  assert.equal(descriptor.contractVersion, 21);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 12);
   assert.equal(descriptor.schemas.finding, 5);

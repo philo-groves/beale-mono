@@ -110,7 +110,6 @@ export function appServerSessionArgs(
     'agent',
     '--attempt-id',
     launch.attemptId,
-    ...launch.workspaceDirectories.flatMap((directory) => ['--repo-root', directory]),
     '-p',
     launch.promptMarkdown
   ];

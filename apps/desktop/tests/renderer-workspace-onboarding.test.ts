@@ -39,7 +39,7 @@ describe('renderer workspace onboarding view model', () => {
     expect(input.workspaceDirectories).toEqual(['/bounty/example']);
   });
 
-  it('opens without a directory and supports ordered directory additions and removals', () => {
+  it('opens without a directory and replaces the single research directory', () => {
     const empty = emptyWorkspaceOnboardingForm();
     expect(empty.workspaceDirectories).toEqual([]);
     expect(empty.workspacePath).toBe('');
@@ -51,8 +51,8 @@ describe('renderer workspace onboarding view model', () => {
       workspaceName: 'Parser'
     });
     const multiDirectory = addDirectoryToOnboardingForm(primary, '/workspaces/protocol');
-    expect(multiDirectory.workspacePath).toBe('/workspaces/parser');
-    expect(multiDirectory.workspaceDirectories).toEqual(['/workspaces/parser', '/workspaces/protocol']);
+    expect(multiDirectory.workspacePath).toBe('/workspaces/protocol');
+    expect(multiDirectory.workspaceDirectories).toEqual(['/workspaces/protocol']);
     expect(multiDirectory.workspaceName).toBe('Parser');
 
     const promoted = removeDirectoryFromOnboardingForm(multiDirectory, '/workspaces/parser');

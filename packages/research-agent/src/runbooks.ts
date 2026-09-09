@@ -374,7 +374,7 @@ export class RunbookStore {
     id: string;
     expectedRevision: number;
     cells: RunbookCellInput[];
-  }, author?: ModelAuthor): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
+  }, author?: ModelAuthor, replaceCells = false): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
     const id = requiredText(input.id, "id", 200);
     if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("expectedRevision must be a positive integer.");
     if (!Array.isArray(input.cells) || input.cells.length === 0) throw new Error("cells must contain at least one cell.");
@@ -395,7 +395,7 @@ export class RunbookStore {
       const updatedAt = new Date().toISOString();
       const notebook: RunbookNotebook = {
         ...current,
-        cells: [...current.cells, ...cells.map(inputToNotebookCell)],
+        cells: [...(replaceCells ? [] : current.cells), ...cells.map(inputToNotebookCell)],
         metadata: {
           beale: {
             ...current.metadata.beale,

@@ -8,6 +8,9 @@ import { createInterface } from "node:readline/promises";
 import { AppServerControlStream } from "./control-stream.js";
 import {
   runResearchAgent,
+  assertWorkspaceChild,
+  readWorkspaceProject,
+  WORKSPACE_INSTRUCTIONS,
   createFileMutationTools,
   MANAGED_TOOL_PLUGIN_IDS,
   managedToolPluginId,
@@ -3563,7 +3566,7 @@ async function prepareRuntimeConfigInputs(input: {
         })),
       ],
       materializedSourcePaths: runtimeTools.sourcePaths,
-      projectNotes: [...runtimeTools.projectNotes, ...storedBinding.projectNotes],
+      projectNotes: [...runtimeTools.projectNotes, ...storedBinding.projectNotes, ...(readWorkspaceProject(input.workspaceRoot) ? [WORKSPACE_INSTRUCTIONS] : [])],
       ...(storedBinding.researchKitId ? { researchKitId: storedBinding.researchKitId } : {}),
       ...(storedBinding.authorization ? { authorization: storedBinding.authorization } : {}),
       resources: storedBinding.resources,
@@ -3959,8 +3962,17 @@ async function createRuntimeConfig(args: {
   }
 
   if (families.has("shell")) {
+    const project = readWorkspaceProject(workspaceRoot);
+    const scratchId = workspaceContext.memoryContext?.sessionId ?? 'interactive';
+    if (project && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u.test(scratchId)) throw new Error('Invalid session scratch identity.');
+    const scratch = project ? resolve(workspaceRoot, 'scratch', scratchId) : undefined;
+    if (scratch) {
+      assertWorkspaceChild(workspaceRoot, scratch);
+      await mkdir(scratch, { recursive: true });
+    }
     const tool = createShellTool({
       workspaceRoot,
+      ...(scratch ? { defaultWorkingDirectory: scratch } : {}),
       ...(args.shellAuthorizer ? { authorize: args.shellAuthorizer } : {}),
       ...(runtimeTools.shellOptionsPath
         ? { shellOptionsPath: runtimeTools.shellOptionsPath }
@@ -3998,7 +4010,7 @@ async function createRuntimeConfig(args: {
   }
 
   if (families.has("file-read")) {
-    const mutationTools = createFileMutationTools({ workspaceRoot, protectedPaths: [memoryGraph.databasePath] });
+    const mutationTools = createFileMutationTools({ workspaceRoot, protectedPaths: [memoryGraph.databasePath, storageLayout.artifactDirectoryPath] });
     executableTools.push(...mutationTools);
     toolDescriptors.push(...mutationTools.map((tool) => tool.descriptor));
     const tool = createStructuredFileReadTool({

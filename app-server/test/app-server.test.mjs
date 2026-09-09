@@ -44,6 +44,43 @@ const servers = [];
 const temporaryDirectories = [];
 const originalMockMode = process.env.BEALE_APP_SERVER_MOCK;
 
+test('research checkpoints are host-owned and a pending milestone does not delay Stop', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-lifecycle-example-'));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const hostService = testHostService(directory);
+  const reasons = [];
+  let releaseMilestone;
+  hostService.checkpointSession = async (_workspaceId, _sessionId, reason) => {
+    reasons.push(reason);
+    if (reason === 'Research milestone') await new Promise((resolve) => { releaseMilestone = resolve; });
+    return { status: 'unchanged', reason };
+  };
+  const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
+  servers.push(server);
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example' }));
+  assert.deepEqual(reasons, ['Before research session']);
+  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'finding.transition', status: 'complete' } });
+  await waitFor(() => Boolean(releaseMilestone));
+  server.stopSession('session-checkpoint-example');
+  assert.equal(upstream.stopCalls(), 1);
+  releaseMilestone();
+  await waitFor(() => server.listSessions()[0]?.state === 'stopped');
+  assert.deepEqual(reasons, ['Before research session', 'Research milestone', 'Research stopped; preserve incomplete work']);
+});
+
+test('a failed pre-session checkpoint prevents worker launch without discarding files', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-failure-example-'));
+  temporaryDirectories.push(directory);
+  const hostService = testHostService(directory);
+  hostService.checkpointSession = async () => ({ status: 'failed', reason: 'Before research session', error: 'Resolve the example staged edit.' });
+  let spawned = false;
+  const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: async () => { spawned = true; throw new Error('Must not launch'); } });
+  servers.push(server);
+  await assert.rejects(server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-failed-example' })), /Resolve the example staged edit/);
+  assert.equal(spawned, false);
+});
+
 test("creates a versioned app-server pairing payload without altering credentials", () => {
   const payload = new URL(createAppServerPairingPayload(
     "https://beale.example.ts.net",
@@ -1072,7 +1109,7 @@ test("resolves workspace identity and host policy from the shared Beale registry
   assert.equal(registry.resolveWorkspace("workspace-quick-chats").name, "Quick Chats");
   assert.equal(registry.resolveWorkspace("workspace-test").workspacePath, workspacePath);
   assert.equal(registry.resolveWorkspace("workspace-test").memoryBackend, "disabled");
-  assert.equal(registry.resolveWorkspace("registry-workspace-test").workspaceDirectories.length, 2);
+  assert.equal(registry.resolveWorkspace("registry-workspace-test").workspaceDirectories.length, 1);
   assert.deepEqual(registry.providerSettings(), {
     defaultProviderId: "openai-codex",
     modelDefaults: {

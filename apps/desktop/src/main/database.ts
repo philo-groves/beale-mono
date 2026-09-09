@@ -84,6 +84,7 @@ type UpsertBreakoutRoomInput = import('../../../../app-server/src/workspaceDatab
 type UpsertBreakoutRoomMemberInput = import('../../../../app-server/src/workspaceDatabase').UpsertBreakoutRoomMemberInput;
 
 export interface WorkspaceDatabase {
+  initializeResearchProject(): void;
   initialize(): void;
   checkpoint(): void;
   close(): void;

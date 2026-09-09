@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -15,10 +15,12 @@ import {
   type BealeWorkspaceMemoryNode,
   type BealeAppServerWorkspaceList,
   decodeAppServerSessionLaunchRequest,
+  decodeWorkspaceProjectRequest,
   type AppServerProtocolOperation,
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
-import { getProviderModelCatalog } from '@beale/app-server-runtime/runtime-services';
+import { getProviderModelCatalog, readWorkspaceProject, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
+import { runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
   type AppServerHostRegistryOptions,
@@ -112,6 +114,8 @@ export interface AppServerHostServiceOptions extends AppServerHostRegistryOption
 }
 
 export class AppServerHostService {
+  private readonly workspaceWriters = new Map<string, string>();
+  private readonly workspaceExclusiveOperations = new Set<string>();
   private readonly registry: AppServerHostRegistry;
   private readonly invokeProtocol: ProtocolInvoker;
   private providerSemanticsPromise: Promise<{
@@ -178,6 +182,15 @@ export class AppServerHostService {
     profileId?: string;
     signal?: AbortSignal;
   }): Promise<unknown> {
+    if (request.operation === 'maintenance.run' && isRecord(request.input)) {
+      const path = nonEmpty(request.input.workspacePath);
+      if (!path) throw new Error('workspacePath is required.');
+      const key = workspaceOperationKey(path);
+      if (this.workspaceExclusiveOperations.has(key) || [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error('Housekeeping is unavailable while research or another workspace operation is active, including workers stopping or checkpointing.');
+      this.workspaceExclusiveOperations.add(key);
+      try { return await runWorkspaceMaintenance(request.input); }
+      finally { this.workspaceExclusiveOperations.delete(key); }
+    }
     const workspaceIdentifier = workspaceIdentifierFromInput(request.input);
     const workspace = workspaceIdentifier
       ? this.registry.resolveWorkspace(workspaceIdentifier)
@@ -195,6 +208,24 @@ export class AppServerHostService {
       throw new Error(`Workspace ${workspace.workspaceId} has memory disabled.`);
     }
     const storageProfileId = workspace?.researchProfileId ?? request.profileId;
+    if (request.operation === 'workspace.project') {
+      const input = decodeWorkspaceProjectRequest(request.input);
+      if (!workspace) throw new Error('A registered workspace is required.');
+      const project = readWorkspaceProject(workspace.workspacePath);
+      if (input.action === 'status') {
+        const statusPath = join(workspace.workspacePath, '.git', 'beale', 'checkpoint.json');
+        return { project, checkpoint: existsSync(statusPath) ? JSON.parse(readFileSync(statusPath, 'utf8')) as unknown : null };
+      }
+      if (!project) throw new Error('This reference workspace does not use the research project layout. Create a new workspace.');
+      const key = workspaceOperationKey(workspace.workspacePath);
+      if (this.workspaceExclusiveOperations.has(key)) throw new Error('Another workspace operation is in progress.');
+      if (input.action === 'import' && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error('Stop workspace research before importing canonical file edits.');
+      const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+      if (input.action === 'import') this.workspaceExclusiveOperations.add(key);
+      try { return await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
+        input.action === 'import' ? 'Import research file edit' : 'Operator research checkpoint', input.action === 'import' ? input : undefined);
+      } finally { if (input.action === 'import') this.workspaceExclusiveOperations.delete(key); }
+    }
     const storage = request.operation === 'workspace.state'
       ? persistenceStorageFromInput(request.input)
       : storageProfileId ? this.registry.storageForProfile(storageProfileId) : null;
@@ -213,6 +244,13 @@ export class AppServerHostService {
       ...(storage ? { storage } : {}),
       ...(request.signal ? { signal: request.signal } : {})
     });
+    const researchMutation = request.operation === 'research.tools.mutate'
+      || ['claim.mark_duplicate', 'claim.undo_duplicate', 'history.mark_duplicate', 'history.undo_duplicate', 'dreaming.apply', 'dreaming.restore', 'report.revise_content', 'report.update_triage_status', 'report.replace_packet', 'report.replace_recording'].includes(request.operation)
+      || request.operation === 'workspace.state' && isRecord(request.input) && ['saveScope', 'setResearchSubject', 'addWorkspaceRules', 'addWorkspaceRule'].includes(String(request.input.action));
+    if (workspace && storage && researchMutation && readWorkspaceProject(workspace.workspacePath)) {
+      // Canonical persistence already succeeded. A Git failure is reported separately and never rolls it back.
+      await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage }, 'Canonical research updated');
+    }
     if (workspace?.memoryBackend !== 'disabled') return result;
     if (request.operation === 'memory.summary') return withoutWorkspaceMemory(result);
     if (request.operation === 'memory.notification_feed'
@@ -377,7 +415,9 @@ export class AppServerHostService {
         defaults.smallModel ? [[id, defaults.smallModel] as const] : []
       )))
     };
-    const runDirectory = join(workspace.workspacePath, '.beale', 'app-server-runs');
+    const runDirectory = readWorkspaceProject(workspace.workspacePath)
+      ? join(workspace.workspacePath, 'traces', sessionId, 'outputs')
+      : join(workspace.workspacePath, '.beale', 'app-server-runs');
     const continuation = request.launch.continuation;
     const fileStem = continuation ? `${sessionId}.${attemptId}` : sessionId;
     const capturePath = join(runDirectory, `${fileStem}.capture.json`);
@@ -448,7 +488,7 @@ export class AppServerHostService {
       attemptId,
       launch: {
         workspaceRoot: workspace.workspacePath,
-        workspaceDirectories: workspace.workspaceDirectories,
+        workspaceDirectories: [workspace.workspacePath],
         ...(request.launch.investigationId ? { investigationId: request.launch.investigationId } : {}),
         capturePath,
         attemptId,
@@ -498,6 +538,36 @@ export class AppServerHostService {
         storage
       }
     };
+  }
+
+  public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false): Promise<WorkspaceCheckpointResult> {
+    const workspace = this.requireWorkspace(workspaceIdentifier);
+    if (!readWorkspaceProject(workspace.workspacePath)) return { status: 'unmanaged', reason };
+    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    const result = await runWorkspaceCheckpoint({
+      workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId,
+      databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
+      sessionId,
+    }, reason, undefined, cleanupScratch ? sessionId : undefined);
+    if (result.status === 'committed' || result.status === 'failed') {
+      await this.invokeProtocol('session.append_event', {
+        args: ['session', 'append-event', '--session-id', sessionId], storage,
+        input: {
+          id: `checkpoint-${randomUUID()}`, kind: 'agent.event', timestamp: new Date().toISOString(),
+          payload: { eventType: 'workspace.checkpoint', ...result },
+        },
+      });
+    }
+    return result;
+  }
+
+  public setWorkspaceSessionActive(workspaceIdentifier: string, sessionId: string, active: boolean): void {
+    if (active) {
+      const root = this.requireWorkspace(workspaceIdentifier).workspacePath;
+      if (this.workspaceExclusiveOperations.has(workspaceOperationKey(root))) throw new Error('Wait for workspace import or housekeeping to finish before starting research.');
+      this.workspaceWriters.set(sessionId, root);
+    }
+    else this.workspaceWriters.delete(sessionId);
   }
 
   public async prepareSessionRecovery(input: {

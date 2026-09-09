@@ -38,7 +38,7 @@ Do not use legacy branding in new docs or code. Use `Beale`.
 - Do not add speculative planning, roadmap, or architecture documents unless explicitly requested.
 - Keep terminology consistent:
   - Product name: `Beale`
-  - Workspace metadata directory: `.beale/`
+  - Research workspace: one directory with `workspace.json`, `AGENTS.md`, top-level research categories, and local Git history; `.beale/` retains compatibility/runtime metadata only
   - Global database: `~/.beale/memory.sqlite` (app-server-owned and shared with Beale; records retain workspace ownership)
   - Workspace registry: user-global metadata for known Beale workspaces
   - Authorized scope: the recorded authorization boundary within a workspace

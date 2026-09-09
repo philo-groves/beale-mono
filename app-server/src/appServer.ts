@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { installPreBealeEnvironmentAliases } from '@beale/research-agent/legacy-compatibility';
+import { WORKSPACE_CHECKPOINT_INTERVAL_MS } from '@beale/app-server-runtime/runtime-services';
 import { installUndiciTypeOfServiceCompatibility } from '@beale/app-server-runtime/node-network-compatibility';
 import {
   BEALE_APP_SERVER_CAPABILITIES,
@@ -163,6 +164,9 @@ interface SessionRuntime {
   currentAttemptWasInitial: boolean;
   recoveryCount: number;
   recoveryTimer: NodeJS.Timeout | null;
+  checkpointTimer: NodeJS.Timeout | null;
+  checkpointPending: Promise<void> | null;
+  checkpointReason: string | null;
   introspectionToken: string | null;
 }
 
@@ -893,6 +897,9 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       currentAttemptWasInitial: false,
       recoveryCount: 0,
       recoveryTimer: null,
+      checkpointTimer: null,
+      checkpointPending: null,
+      checkpointReason: null,
       introspectionToken: request.launch.introspection?.runtimeMode === 'standard'
         && request.launch.introspection.url === `${localUrl}/v1/introspection`
         ? request.launch.introspection.token
@@ -968,15 +975,61 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
   }
 
+  async function checkpointRuntime(runtime: SessionRuntime, reason: string, required = false, cleanupScratch = false): Promise<void> {
+    runtime.checkpointReason = reason;
+    if (runtime.checkpointPending) return runtime.checkpointPending;
+    const operation = (async () => {
+      while (runtime.checkpointReason) {
+        const nextReason = runtime.checkpointReason;
+        runtime.checkpointReason = null;
+        try {
+          const result = await hostService.checkpointSession?.(runtime.request.launch.workspaceId, runtime.sessionId, nextReason, cleanupScratch);
+          if (result?.status === 'failed') throw new Error(result.error ?? 'Workspace checkpoint failed.');
+        } catch (error) {
+          const message = `Workspace checkpoint failed; working files were preserved. ${error instanceof Error ? error.message : String(error)}`;
+          runtime.diagnostic = boundedDiagnostic(message);
+          const event = { schemaVersion: 1, kind: 'model.output', timestamp: new Date().toISOString(), payload: {
+            phase: 'completed', messagePhase: 'commentary', text: message, agentPath: '/root',
+            responseId: `checkpoint-${randomUUID()}`, itemId: 'text:0',
+          } };
+          deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
+          notifyChange();
+          if (required) throw error;
+        }
+      }
+    })();
+    runtime.checkpointPending = operation;
+    try { await operation; } finally { if (runtime.checkpointPending === operation) runtime.checkpointPending = null; }
+  }
+
   async function launchPreparedSession(
     runtime: SessionRuntime,
     prepared: PreparedAppServerSession,
     attemptWasInitial = false
   ): Promise<void> {
     const { args, env } = prepareAppServerSessionLaunch(prepared.launch);
-    const session = await spawnSession({ sessionId: runtime.sessionId, args, env });
+    hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, true);
+    try { await checkpointRuntime(runtime, 'Before research session', true); }
+    catch (error) {
+      hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
+      throw error;
+    }
+    if (runtime.stopRequested || sessions.get(runtime.sessionId) !== runtime) {
+      hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
+      return;
+    }
+    let session: AppServerSession;
+    try { session = await spawnSession({ sessionId: runtime.sessionId, args, env }); }
+    catch (error) {
+      hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
+      throw error;
+    }
     if (runtime.stopRequested || sessions.get(runtime.sessionId) !== runtime) {
       session.stop();
+      void session.waitExit().then(async () => {
+        await checkpointRuntime(runtime, 'Research stopped during startup');
+        hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
+      });
       return;
     }
     runtime.session = session;
@@ -986,7 +1039,22 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime.unsubscribeSessionEvents = session.onEvent((event) => {
       observeSessionControlState(runtime, event);
       deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
+      if (isRecord(event.payload) && !runtime.stopRequested) {
+        const payload = event.payload;
+        const toolName = typeof payload.toolName === 'string' ? payload.toolName : '';
+        if ((event.kind === 'tool.observed' && payload.status === 'complete' || payload.type === 'tool_execution_end' || payload.eventType === 'tool_execution_end') && payload.isError !== true
+          && /^(?:claim|finding|memory|runbook|report)[._]/u.test(toolName)
+          && /(?:create|revise|transition|save|correct|append|configure|run|execute)/u.test(toolName)) {
+          void checkpointRuntime(runtime, 'Research milestone');
+        }
+        if (payload.eventType === 'runbook.execution' && ['succeeded', 'failed', 'cancelled'].includes(String(payload.status))) void checkpointRuntime(runtime, 'Runbook execution finished');
+      }
     });
+    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
+    runtime.checkpointTimer = setInterval(() => {
+      if (!runtime.stopRequested) void checkpointRuntime(runtime, 'Periodic research checkpoint');
+    }, WORKSPACE_CHECKPOINT_INTERVAL_MS);
+    runtime.checkpointTimer.unref();
     runtime.state = 'running';
     runtime.endedAt = null;
     runtime.exitCode = null;
@@ -1055,6 +1123,12 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       capturePath: prepared.launch.capturePath,
       stopRequested: runtime.stopRequested
     });
+    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
+    runtime.checkpointTimer = null;
+    if (runtime.checkpointPending) await runtime.checkpointPending;
+    await checkpointRuntime(runtime, runtime.stopRequested ? 'Research stopped; preserve incomplete work' : 'Research worker exited', false,
+      runtime.stopRequested || completion.succeeded || !completion.recoverable || runtime.recoveryCount >= maxRecoveryAttempts);
+    hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
     if (sessions.get(runtime.sessionId) !== runtime) return;
     if (runtime.stopRequested) {
       finishRuntime(runtime, 'stopped', result.code, null);
@@ -1140,6 +1214,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (runtime.recoveryTimer) clearTimeout(runtime.recoveryTimer);
     runtime.recoveryTimer = null;
     runtime.endedAt = new Date().toISOString();
+    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
+    runtime.checkpointTimer = null;
     runtime.exitCode = exitCode;
     runtime.state = state;
     runtime.diagnostic = state === 'failed' ? boundedDiagnostic(diagnostic ?? '') : null;
@@ -1188,6 +1264,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime: SessionRuntime,
     control?: Record<string, unknown>
   ): void {
+    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
+    runtime.checkpointTimer = null;
     if (!runtime.stopRequested) {
       runtime.stopRequested = true;
       void recordSessionControlState(runtime, 'stopped');

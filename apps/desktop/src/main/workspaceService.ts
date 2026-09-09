@@ -4513,7 +4513,7 @@ export class WorkspaceService {
       return this.requireSnapshot();
     }
 
-    const runtime = this.createRuntime(workspacePath, bealeDir, artifactRoot, requestedProfileId, requestedResearchKitId);
+    const runtime = this.createRuntime(workspacePath, bealeDir, artifactRoot, requestedProfileId, requestedResearchKitId, create);
     this.setForegroundRuntime(runtime);
     this.getWorkspaceRegistry();
     this.scheduleWorkspaceMemorySummaryLoad(runtime);
@@ -4566,7 +4566,8 @@ export class WorkspaceService {
     bealeDir: string,
     artifactRoot: string,
     requestedProfileId?: ResearchProfileId,
-    requestedResearchKitId?: ResearchKitId
+    requestedResearchKitId?: ResearchKitId,
+    createProject = false
   ): WorkspaceRuntime {
     const registry = this.getWorkspaceRegistry();
     const registryWorkspace = registry.getWorkspaceByPath(workspacePath);
@@ -4585,6 +4586,7 @@ export class WorkspaceService {
       researchKitId: requestedResearchKitId ?? registryWorkspace?.researchKitId ?? 'general'
     });
     db.initialize();
+    if (createProject) db.initializeResearchProject();
     migrateWorkspaceDescription(workspacePath, db.getActiveScope().descriptionMarkdown);
     const openedAt = new Date().toISOString();
     try {
@@ -8133,6 +8135,7 @@ function normalizedWorkspaceDirectories(primaryPath: string, directories: readon
     seen.add(key);
     normalized.push(resolvedDirectory);
   }
+  if (normalized.length !== 1) throw new Error('A Beale workspace has exactly one research directory. Configure source repositories separately.');
   return normalized;
 }
 

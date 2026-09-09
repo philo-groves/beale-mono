@@ -4,6 +4,22 @@ A standalone app-server execution host and client-neutral control plane. It runs
 
 The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Its bundled agent-plugin resources live under `app-server/resources/agent-plugins`.
 
+## Workspace change management
+
+The host owns local Git checkpoints for the single-directory research layout described in the root README. Checkpoints serialize per workspace and use a separate Git index, preserving manual staging. Git and snapshot publication run in a dedicated worker so Stop remains responsive. Filesystem publication has a recovery journal; failed checkpoints leave working files intact. Both Desktop and remote clients use the same canonical operations and host lifecycle.
+
+Contract version 21 advertises `workspace.research-project.v1`. The `workspace.project` operation accepts these inputs through the normal canonical operation endpoint:
+
+```json
+{"workspaceId":"workspace-example","action":"status"}
+{"workspaceId":"workspace-example","action":"checkpoint"}
+{"workspaceId":"workspace-example","action":"import","path":"claims/claim-example.json","expectedRevision":1}
+```
+
+`status` returns the layout and latest checkpoint result. `checkpoint` publishes canonical research and commits eligible changes. `import` accepts one supported edited file, checks its published revision and immutable fields, applies the existing canonical validators, and checkpoints the result. An import result can report `imported: true` with a failed Git checkpoint: the validated canonical update remains saved. Workspace imports and housekeeping cannot run while a host research worker is active or stopping. Full JSONL traces and raw evidence stay out of Git; retained evidence manifests remain hash-checked dependencies.
+
+Workspace creation installs a local pre-commit hook using the host's Node/Electron runtime; it configures no remote. Reinstalling the guard preserves an existing non-Beale hook by reporting an integration error. The workspace's Git metadata contains publication, checkpoint, recovery, and quarantine journals; these are not model-facing database exports.
+
 ## Managed tool plugins
 
 Seven host-backed plugins are enabled by default and appear in Agent Plugins settings. Every session advertises each plugin with a short usage description, including disabled plugins and plugins whose tools are unavailable under the current profile or configuration.

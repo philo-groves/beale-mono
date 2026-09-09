@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, open, realpath, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { assertWorkspaceChild, atomicWorkspaceWrite, isPublishedWorkspacePath, preserveWorkspaceFile, readWorkspaceProject, workspacePathProblem } from "./workspace-project.js";
 import { nowIso } from "./ids.js";
 import type { ResearchExecutableTool } from "./tool-registry.js";
 
@@ -40,6 +41,19 @@ export function createFileMutationTools(options: {
           const input = action.input;
           if (typeof input.path !== "string" || !input.path.trim()) throw new Error("path must be a nonempty string.");
           const path = resolve(options.workspaceRoot, input.path);
+          let managedPath: string | undefined;
+          if (readWorkspaceProject(options.workspaceRoot)) {
+            const child = relative(resolve(options.workspaceRoot), path);
+            if (!isAbsolute(child) && child !== ".." && !child.startsWith("../") && !child.startsWith("..\\")) {
+              managedPath = assertWorkspaceChild(options.workspaceRoot, path);
+              const category = managedPath.split("/")[0];
+              if (category !== "scratch" && category !== "cache") {
+                const problem = workspacePathProblem(managedPath);
+                if (problem) throw new Error(problem);
+                if (["claims", "memories", "evidence"].includes(category!) || managedPath === "references/research-index.json" || managedPath === "workspace.json" || isPublishedWorkspacePath(options.workspaceRoot, managedPath)) throw new Error("Canonical research records and evidence must be changed through validated research operations.");
+              }
+            }
+          }
           const canonical = await realpath(path).catch((error: NodeJS.ErrnoException) => {
             if (error.code !== "ENOENT") throw error;
             return path;
@@ -47,7 +61,8 @@ export function createFileMutationTools(options: {
           for (const protectedPath of options.protectedPaths ?? []) {
             const protectedCanonical = await realpath(protectedPath).catch(() => resolve(protectedPath));
             const normalize = (value: string) => process.platform === "win32" ? value.toLowerCase() : value;
-            if (normalize(canonical) === normalize(protectedCanonical)) throw new Error("This file is host-managed and cannot be changed through file tools.");
+            const protectedChild = relative(normalize(protectedCanonical), normalize(canonical));
+            if (!protectedChild || (!isAbsolute(protectedChild) && protectedChild !== '..' && !protectedChild.startsWith('../') && !protectedChild.startsWith('..\\'))) throw new Error("This file is host-managed and cannot be changed through file tools.");
           }
           const existing = await readBoundedFile(path).catch((error: NodeJS.ErrnoException) => {
             if (error.code !== "ENOENT") throw error;
@@ -73,7 +88,10 @@ export function createFileMutationTools(options: {
           const maxBytes = typeof input.maxBytes === "number" ? Math.min(input.maxBytes, MAX_FILE_BYTES) : MAX_FILE_BYTES;
           if (bytes.length > maxBytes) throw new Error("Content exceeds the bounded writing limit.");
           await mkdir(dirname(path), { recursive: true });
-          await writeFile(path, bytes, { flag: existing ? "w" : "wx" });
+          if (managedPath && existing) {
+            preserveWorkspaceFile(options.workspaceRoot, path);
+            atomicWorkspaceWrite(options.workspaceRoot, managedPath, bytes);
+          } else await writeFile(path, bytes, { flag: existing ? "w" : "wx" });
           return { action, status: "complete", startedAt, completedAt: nowIso(), summary: `File ${operation} completed.`, output: { path, bytesWritten: bytes.length, contentHash: digest(bytes), candidate: true }, followUpActions: [] };
         } catch (error) {
           return { action, status: "error", startedAt, completedAt: nowIso(), summary: `File ${operation} failed.`, error: { message: error instanceof Error ? error.message : String(error) }, followUpActions: [] };

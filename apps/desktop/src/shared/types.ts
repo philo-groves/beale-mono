@@ -272,6 +272,7 @@ export interface WorkspaceDejunkRunSummary {
 }
 
 export interface WorkspaceDejunkSummary {
+  project?: import('@beale/app-server-runtime/protocol').WorkspaceProjectHealth;
   available: boolean;
   /** True while the dashboard is loading the filesystem-backed summary off the initial workspace-open path. */
   loading?: boolean;

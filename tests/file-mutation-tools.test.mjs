@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createFileMutationTools, createResearchToolRegistry, createStructuredFileReadTool } from "../packages/research-agent/dist/index.js";
+import { createFileMutationTools, createResearchToolRegistry, createStructuredFileReadTool, initializeWorkspaceProject } from "../packages/research-agent/dist/index.js";
 
 test("core file tools preserve exact bytes and reject stale, ambiguous, and protected writes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "beale-file-tools-"));
@@ -39,4 +39,25 @@ test("core file tools preserve exact bytes and reject stale, ambiguous, and prot
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('managed file tools enforce categories, retain overwritten bytes, and protect artifact descendants', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'beale-managed-files-'));
+  try {
+    const root = join(directory, 'workspace');
+    initializeWorkspaceProject(root, 'workspace-example');
+    const artifacts = join(directory, 'artifacts');
+    await mkdir(artifacts);
+    await writeFile(join(artifacts, 'example.txt'), 'canonical artifact');
+    const registry = createResearchToolRegistry(createFileMutationTools({ workspaceRoot: root, protectedPaths: [artifacts] }));
+    const call = async (name, input) => (await registry.execute({ id: 'file-example', toolName: name, actionClass: 'synthesize', input })).result;
+    assert.equal((await call('file.write', { path: 'loose.py', content: 'example' })).status, 'error');
+    assert.equal((await call('file.write', { path: 'claims/example.json', content: '{}' })).status, 'error');
+    assert.equal((await call('file.edit', { path: join(artifacts, 'example.txt'), oldText: 'canonical', newText: 'changed' })).status, 'error');
+    const created = await call('file.write', { path: 'investigations/example.txt', content: 'original' });
+    assert.equal(created.status, 'complete');
+    assert.equal((await call('file.write', { path: 'investigations/example.txt', content: 'replacement', expectedHash: created.output.contentHash })).status, 'complete');
+    assert.equal(await readFile(join(root, '.git', 'beale', 'recovery', created.output.contentHash), 'utf8'), 'original');
+    assert.equal((await call('file.write', { path: 'scratch/example.txt', content: 'disposable' })).status, 'complete');
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

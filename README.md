@@ -70,6 +70,20 @@ Install `integrations/beale-codex` as a local Codex plugin and start Beale or th
 
 ---
 
+## Research workspaces
+
+New Beale workspaces use one dedicated research directory. Git must be available on the app-server host. Creation initializes local history with no remote; remote configuration and synchronization remain operator-controlled. Existing workspaces can be opened as reference material without automatic layout conversion.
+
+The root holds `AGENTS.md`, `README.md`, `.gitignore`, and `workspace.json`. Research lives in `investigations/`, `runbooks/`, `reports/`, `evidence/`, `references/`, `memories/`, `claims/`, and `traces/`. Keep candidate code and fixtures with their investigation, and reusable procedures with their runbook. Source repositories stay in the user-global repository store. `scratch/` holds disposable session work and `cache/` holds rebuildable resources; both are excluded from Git. Compatibility/runtime files under `.beale/` also remain untracked.
+
+App-server retains canonical SQLite storage and publishes workspace-scoped claims, memory Markdown, notebooks, reports, scope records, evidence manifests, and session summaries. Raw evidence is copied into `evidence/raw/` with verified hashes; full event exports are paged JSONL files under `traces/<session-id>/`. Raw data is excluded from Git, so copying only Git history does not transfer raw evidence or the live database. Exported workspace files do not automatically restore live sessions or replace the canonical database.
+
+App-server checkpoints eligible changes before session launch, at research milestones, every ten minutes during a session, after worker exit, and after canonical client edits. Git/export work runs off the control-plane event loop. A pre-session checkpoint failure prevents launch; later failures preserve research and appear in checkpoint status and session diagnostics. Manual staged changes are preserved for the operator to commit or unstage. Checkpoints never push, stash, reset the working tree, or rewrite history.
+
+The managed pre-commit hook validates staged layout, size limits, credential/database exclusions, canonical publication hashes, and retained evidence. These checks are product integrity controls, not OS isolation. Managed file overwrites retain recovery copies. New-workspace Dejunk checkpoints first and quarantines scratch/cache content under `.git/beale/quarantine/`, with a move journal; it does not delete research by filename heuristics. Terminal session cleanup quarantines that session's scratch after a successful checkpoint. Quarantine retains disk space until the operator removes it.
+
+Canonical files are generated views. Use research tools for normal changes, or the app-server `workspace.project` operation for explicit revision-checked imports. Imports support claim prose, memory prose, report content, and existing runbook cell sources; evidence, ownership, execution results, and claim status cannot be forged through file edits. Runbook source imports create a new content revision. Git checkout alone never rewinds canonical state.
+
 ## Development
 
 Requirements: Node.js >= 22.19.0 and pnpm 11 (see `packageManager` in `package.json`).

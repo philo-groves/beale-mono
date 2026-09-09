@@ -343,7 +343,7 @@ describe('research profile persistence', () => {
     service.close();
   });
 
-  it('persists ordered workspace directories while preserving a primary single-directory root', () => {
+  it('persists a single research directory and rejects adding another root', () => {
     const root = tempDirectory();
     const primary = join(root, 'primary');
     const secondary = join(root, 'secondary');
@@ -359,38 +359,27 @@ describe('research profile persistence', () => {
     const service = new WorkspaceService(() => undefined, options);
     const created = service.createScopedWorkspace({
       workspacePath: primary,
-      workspaceDirectories: [primary, secondary],
-      workspaceName: 'Multi Root',
-      researchSubjectName: 'Multi Root',
-      scopeOwner: 'Multi Root',
+      workspaceDirectories: [primary],
+      workspaceName: 'Example Research',
+      researchSubjectName: 'Example Research',
+      scopeOwner: 'Example Research',
       descriptionMarkdown: '',
       rules: [],
       expiresAt: null,
       assets: []
     });
     expect(created.workspace.workspacePath).toBe(resolve(primary));
-    expect(created.workspace.workspaceDirectories).toEqual([resolve(primary), resolve(secondary)]);
+    expect(created.workspace.workspaceDirectories).toEqual([resolve(primary)]);
     const registryWorkspaceId = service.getWorkspaceRegistryState().workspaces[0]?.id;
     expect(registryWorkspaceId).toBeTruthy();
     service.close();
 
     const reopened = new WorkspaceService(() => undefined, options);
     const snapshot = reopened.openRegisteredWorkspace(registryWorkspaceId as string);
-    expect(snapshot.workspace.workspaceDirectories).toEqual([resolve(primary), resolve(secondary)]);
-    expect(reopened.updateWorkspaceDirectories([secondary, primary]).workspace.workspaceDirectories).toEqual([
-      resolve(secondary),
-      resolve(primary)
-    ]);
+    expect(snapshot.workspace.workspaceDirectories).toEqual([resolve(primary)]);
+    expect(() => reopened.updateWorkspaceDirectories([secondary, primary])).toThrow('exactly one research directory');
+    expect(reopened.updateWorkspaceDirectories([primary]).workspace.workspaceDirectories).toEqual([resolve(primary)]);
     reopened.close();
-
-    const promotedReopened = new WorkspaceService(() => undefined, options);
-    expect(promotedReopened.openRegisteredWorkspace(registryWorkspaceId as string).workspace.workspaceDirectories).toEqual([
-      resolve(secondary),
-      resolve(primary)
-    ]);
-    expect(promotedReopened.updateWorkspaceDirectories([primary]).workspace.workspaceDirectories).toEqual([resolve(primary)]);
-    expect(() => promotedReopened.updateWorkspaceDirectories([])).toThrow('At least one workspace directory is required.');
-    promotedReopened.close();
   }, 10_000);
 
   it('reports a stable missing-primary-directory error for moved registered workspaces', () => {
@@ -435,7 +424,6 @@ describe('research profile persistence', () => {
     const artifactRoot = join(root, 'global', 'artifacts');
     const markerPath = join(workspacePath, 'keep.txt');
     mkdirSync(workspacePath, { recursive: true });
-    writeFileSync(markerPath, 'keep');
     const options: WorkspaceServiceOptions = {
       workspaceRegistryDirectory: join(root, 'registry'),
       appServerDatabasePath: databasePath,
@@ -461,6 +449,7 @@ describe('research profile persistence', () => {
         attributes: { displayName: 'Retained Resource' }
       }]
     });
+    writeFileSync(markerPath, 'keep');
     const registryEntry = service.getWorkspaceRegistryState().workspaces[0];
 
     expect(registryEntry).toBeTruthy();

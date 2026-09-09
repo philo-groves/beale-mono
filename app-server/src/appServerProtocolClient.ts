@@ -25,6 +25,7 @@ import {
   expandStoredResearchPrompt,
   generateStoredResearchGoalSuggestions,
   getWorkspaceDejunkSummary,
+  readWorkspaceProject,
   materializeGitRepositoryAsync,
   migrateWorkspaceResearchClaims,
   normalizeSourceRepositoryUrl,
@@ -65,6 +66,7 @@ import {
   type AppServerProtocolOperation
 } from '@beale/app-server-runtime/protocol';
 import { WorkspaceDatabase } from './workspaceDatabase.js';
+import { initializeWorkspaceProjectAsync } from './workspaceCheckpoints.js';
 import { WorkspaceRegistry } from './workspaceRegistryStore.js';
 import {
   callAppServerResearchTool,
@@ -623,7 +625,7 @@ function workspaceStateOperation(options: InvokeAppServerProtocolOptions): unkno
   const storage = requiredStorage(options.storage);
   const input = requiredRecord(options.input, 'workspace state input');
   const workspacePath = requiredText(input.workspacePath, 'workspacePath');
-  const workspaceId = optionalText(input.workspaceId) ?? undefined;
+  const workspaceId = optionalText(input.workspaceId) ?? readWorkspaceProject(workspacePath)?.workspaceId;
   const researchKitId = optionalText(input.researchKitId) ?? undefined;
   const artifactRoot = requiredText(input.artifactRoot, 'artifactRoot');
   const database = new WorkspaceDatabase(storage.databasePath, artifactRoot, {
@@ -634,6 +636,9 @@ function workspaceStateOperation(options: InvokeAppServerProtocolOptions): unkno
   try {
     database.initialize();
     const action = requiredText(input.action, 'action');
+    if (action === 'initializeResearchProject') {
+      return initializeWorkspaceProjectAsync(workspacePath, database.getWorkspaceId());
+    }
     if (action === 'initialize') {
       return {
         workspaceId: database.getWorkspaceId(),

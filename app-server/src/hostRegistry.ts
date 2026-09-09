@@ -217,11 +217,7 @@ function projectWorkspaceSummary(row: SqlRow): BealeAppServerWorkspaceSummary {
 }
 
 function workspaceDirectories(value: unknown, workspacePath: string): string[] {
-  const parsed = parseJson(value);
-  const paths = Array.isArray(parsed)
-    ? parsed.flatMap((entry) => typeof entry === 'string' && entry.trim() ? [resolve(entry)] : [])
-    : [];
-  return [...new Set([workspacePath, ...paths])];
+  return [workspacePath];
 }
 
 function authenticationPreferenceRecord(value: unknown): Record<string, AppServerProviderAuthenticationMethod> {

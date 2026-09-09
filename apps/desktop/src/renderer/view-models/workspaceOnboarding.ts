@@ -112,7 +112,7 @@ export interface OnboardingRepositoryCandidate {
 const SOURCE_REPOSITORY_RE = /\b(?:https?:\/\/)?(?:github\.com|gitlab\.com)\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+(?:\.git)?(?:[/?#][^\s<>)\]]*)?/gi;
 
 export function onboardingFormFromDefaults(defaults: WorkspaceOnboardingDefaults): WorkspaceOnboardingFormState {
-  const workspaceDirectories = uniqueWorkspaceDirectories(defaults.workspaceDirectories ?? [defaults.workspacePath]);
+  const workspaceDirectories = uniqueWorkspaceDirectories([defaults.workspacePath]);
   return {
     researchKitId: 'general',
     researchProfileId: 'security-research',
@@ -163,7 +163,7 @@ export function addDirectoryToOnboardingForm(
   path: string,
   defaults: WorkspaceOnboardingDefaults | null = null
 ): WorkspaceOnboardingFormState {
-  const workspaceDirectories = uniqueWorkspaceDirectories([...form.workspaceDirectories, path]);
+  const workspaceDirectories = uniqueWorkspaceDirectories([path]);
   const firstDirectory = form.workspaceDirectories.length === 0;
   return {
     ...form,

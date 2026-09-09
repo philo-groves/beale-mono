@@ -84,4 +84,7 @@ export * from "./harness.js";
 export * from "./types.js";
 export * from "./managed-tool-plugins.js";
 export * from "./file-mutation-tools.js";
+export * from "./workspace-project.js";
+export * from "./workspace-publication.js";
+export * from "./workspace-import.js";
 export type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";

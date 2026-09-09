@@ -181,8 +181,9 @@ describe('renderer dialog surfaces', () => {
       onSubmit: () => undefined
     }));
     expect(securityHtml).toContain('aria-label="Research Kit"');
-    expect(securityHtml).toContain('aria-label="Workspace directories"');
-    expect(securityHtml).toContain('aria-label="Add workspace directory"');
+    expect(securityHtml).toContain('Research Directory');
+    expect(securityHtml).toContain('aria-label="Choose workspace directory"');
+    expect(securityHtml).not.toContain('aria-label="Add workspace directory"');
     expect(emptyHtml).toContain('aria-label="Choose workspace directory"');
     expect(securityHtml).toContain('class="workspace-dashboard workspace-creation"');
     expect(securityHtml).toContain('aria-label="New Workspace views"');

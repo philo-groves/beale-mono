@@ -338,6 +338,7 @@ export class WorkspaceRegistry {
   public setWorkspaceDirectories(registryWorkspaceId: string, directories: readonly string[]): WorkspaceRegistryEntry {
     const workspace = this.getWorkspace(registryWorkspaceId);
     if (!workspace) throw new Error(`Workspace registry entry not found: ${registryWorkspaceId}`);
+    if (directories.length !== 1 || resolve(directories[0]!) !== resolve(workspace.workspacePath)) throw new Error('A Beale workspace has exactly one research directory. Configure source repositories separately.');
     const normalized = normalizeWorkspaceDirectories(workspace.workspacePath, directories);
     for (const directory of normalized) {
       const owner = this.getWorkspaceByDirectory(directory);
@@ -1154,17 +1155,7 @@ function parseStringArray(value: unknown): string[] {
 }
 
 function normalizeWorkspaceDirectories(primaryPath: string, directories: readonly string[] | undefined): string[] {
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-  for (const directory of [...(directories ?? []), primaryPath]) {
-    if (!directory.trim()) continue;
-    const resolvedDirectory = resolve(directory);
-    const key = process.platform === 'win32' ? resolvedDirectory.toLowerCase() : resolvedDirectory;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    normalized.push(resolvedDirectory);
-  }
-  return normalized;
+  return [resolve(primaryPath)];
 }
 
 function rowOrUndefined(value: unknown): SqlRow | undefined {

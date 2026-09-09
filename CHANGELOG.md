@@ -4,6 +4,10 @@
 
 ### Beale
 
+#### Changed
+
+- New workspaces use one research directory with visible category folders and local Git history; source repositories remain external. Workspace maintenance shows file/byte totals and checkpoint failures, and quarantines disposable files instead of deleting research by naming heuristics.
+
 #### Fixed
 
 - Manual Stop now addresses the app-server session even when Desktop is detached, waits for an in-flight launch to register, and surfaces host rejection before recording a stopped run. Failed stop requests remain retryable.
@@ -1097,6 +1101,11 @@
 - Added MIT licensing metadata and a root `LICENSE`.
 
 ### app-server
+
+#### Added
+
+- Host-owned Git checkpoints at creation, session boundaries, research milestones, periodic intervals, and canonical client edits. Staged-content guards protect layout, canonical exports, evidence, credentials, and size limits while preserving manual staging and failed-checkpoint work.
+- Workspace-scoped research snapshots, raw evidence retention, JSONL trace exports, recoverable file publication, and explicit revision-checked file imports. Contract version 21 adds `workspace.project` and `workspace.research-project.v1`; rebuild both clients and host.
 
 #### Fixed
 
