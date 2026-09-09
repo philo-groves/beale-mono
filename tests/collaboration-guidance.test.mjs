@@ -30,7 +30,7 @@ test("collaboration config always uses the fixed team posture and balanced limit
   assert.equal(config.mode, "always");
   assert.equal(config.intensity, "balanced");
   assert.equal(config.subagentMode, "simple");
-  assert.equal(config.maxConcurrentRooms, 2);
+  assert.equal(config.maxConcurrentRooms, 4);
   assert.equal(config.maxMembersPerRoom, 3);
   assert.equal(config.providers.length, 2);
 });

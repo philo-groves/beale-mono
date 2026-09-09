@@ -111,6 +111,9 @@ test("protocol describe exposes a runtime-bound v20 persistence, continuation, C
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.http-control.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("research.tools.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("runbook.delegated-cell-runtime.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("runbook.host-cell-runtime.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("tart.guest-helper-repair.v1"));
   assert.equal(descriptor.transports.websocket.path, "/v1/session");
   assert.equal(descriptor.transports.appServer.path, "/v1/operations");
   assert.equal(descriptor.transports.appServer.authentication, "operator-bearer");

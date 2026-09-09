@@ -1179,6 +1179,7 @@ function blockedAuthorizationResult(
   message: string,
   authorization?: ShellAuthorizationDecision,
 ): ResearchToolExecutionResult {
+  const reviewInfrastructureFailure = authorization?.reviewFailure !== undefined;
   return {
     action,
     status: "blocked",
@@ -1186,9 +1187,14 @@ function blockedAuthorizationResult(
     completedAt: nowIso(),
     summary: message,
     ...(authorization ? { output: { authorization } } : {}),
-    followUpActions: [
-      "Narrow the command or ask the researcher to select an appropriate shell safety mode.",
-    ],
+    followUpActions: reviewInfrastructureFailure
+      ? [
+          "Do not retry this shell command while Auto-Review infrastructure is unavailable.",
+          "Continue with non-shell tools, or report the reviewer failure and wait for recovery or a researcher-selected safety-mode change.",
+        ]
+      : [
+          "Narrow the command or ask the researcher to select an appropriate shell safety mode.",
+        ],
     error: { message },
   };
 }

@@ -38,12 +38,16 @@ const document: AppServerRunbookDocument = {
   nbformatMinor: 5,
   language: 'typescript',
   revision: 4,
+  enabledFeatures: ['setup', 'runtime', 'cleanup'],
   latestRun: null,
   cells: [
     {
       id: 'markdown',
       type: 'markdown',
       source: '# Procedure\n\n- Build fixture\n- Run verifier',
+      features: ['setup'],
+      active: true,
+      executor: { kind: 'host', timeoutSeconds: 300 },
       language: null,
       executionCount: null,
       latestRun: null,
@@ -53,6 +57,9 @@ const document: AppServerRunbookDocument = {
       id: 'code',
       type: 'code',
       source: 'const verified: boolean = true;',
+      features: ['runtime'],
+      active: true,
+      executor: { kind: 'host', timeoutSeconds: 180 },
       language: 'typescript',
       executionCount: 3,
       latestRun: {
@@ -64,7 +71,8 @@ const document: AppServerRunbookDocument = {
         exitCode: 0,
         error: null,
         proofTarget: 'device',
-        deviceOs: 'iOS 27.0'
+        deviceOs: 'iOS 27.0',
+        evidence: null
       },
       outputs: [
         { kind: 'stream', text: 'verified\n', streamName: 'stdout', mimeType: 'text/plain' },
@@ -75,6 +83,9 @@ const document: AppServerRunbookDocument = {
       id: 'raw',
       type: 'raw',
       source: 'Keep this note visible.',
+      features: ['cleanup'],
+      active: true,
+      executor: { kind: 'host', timeoutSeconds: 300 },
       language: null,
       executionCount: null,
       latestRun: null,

@@ -26,7 +26,8 @@ const RUNBOOK_TOOL_LABELS: Readonly<Record<string, string>> = {
   'runbook.list': 'Runbook List',
   'runbook.get': 'Runbook Get',
   'runbook.create': 'Runbook Creation',
-  'runbook.append': 'Runbook Update'
+  'runbook.append': 'Runbook Update',
+  'runbook.configure': 'Runbook Features'
 };
 
 const TRACE_SUMMARY_VERBS = new Set([
@@ -180,6 +181,13 @@ export function appServerToolTraceSubtext(event: TraceEventRecord, detail: RunDe
     return [title, revision ? `Update ${revision}` : null].filter((value): value is string => Boolean(value)).join(' · ');
   }
   if (toolName === 'runbook.append') {
+    const result = tracePayloadRecord(payload, 'result');
+    const id = stringRecordValue(inputs, 'id');
+    const title = result ? stringRecordValue(result, 'title') : null;
+    const revision = result ? numberRecordValue(result, 'revision') : numberRecordValue(inputs, 'expectedRevision');
+    return [title ?? id, revision ? `Update ${revision}` : null].filter((value): value is string => Boolean(value)).join(' · ');
+  }
+  if (toolName === 'runbook.configure') {
     const result = tracePayloadRecord(payload, 'result');
     const id = stringRecordValue(inputs, 'id');
     const title = result ? stringRecordValue(result, 'title') : null;

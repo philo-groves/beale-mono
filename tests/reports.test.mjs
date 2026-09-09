@@ -229,7 +229,7 @@ test("security report creation accepts a composite finding reviewed in the same 
     const runbook = runbooks.create({
       title: "Reproduce redirect callback chain",
       purpose: "Replay the complete redirect and callback path.",
-      cells: [{ kind: "code", language: "sh", source: "./redirect-verifier" }],
+      cells: [{ kind: "code", language: "sh", source: "./redirect-verifier", features: ["runtime"] }],
     }).runbook;
     const runId = "redirect_chain_run";
     const startedAt = new Date().toISOString();

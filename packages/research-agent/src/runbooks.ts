@@ -15,6 +15,22 @@ import { readPreBealeRecord } from "./legacy-compatibility.js";
 
 export type RunbookCellKind = "markdown" | "code";
 export type RunbookExecutionStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "skipped";
+export type RunbookCellExecutor =
+  | { kind: "host"; timeoutSeconds: number }
+  | {
+      kind: "tart-vm";
+      vmName: string;
+      artifactId?: string;
+      workspacePath?: string;
+      runAs: "guest" | "root";
+      argv: string[];
+      timeoutSeconds: number;
+      retainOnFailure: boolean;
+    };
+export const RUNBOOK_DEFAULT_FEATURES = ["setup", "runtime", "cleanup"] as const;
+export const RUNBOOK_DEFAULT_TIMEOUT_SECONDS = 300;
+export const RUNBOOK_MAX_TIMEOUT_SECONDS = 1_800;
+export const MAX_RUNBOOK_MUTATION_CELLS = 100;
 export const RUNBOOK_PROOF_TARGETS = ["localhost", "device", "vm", "web", "other"] as const;
 export type RunbookProofTarget = (typeof RUNBOOK_PROOF_TARGETS)[number];
 
@@ -28,17 +44,21 @@ export interface RunbookExecutionState {
   error?: string;
   proofTarget: RunbookProofTarget;
   deviceOs?: string;
+  evidence?: Record<string, string | number | boolean | null>;
 }
 
 export interface RunbookExecutionPlanCell {
   id: string;
   source: string;
   language: string | null;
+  executor: RunbookCellExecutor;
 }
 
 export interface RunbookCellInput {
   kind: RunbookCellKind;
   source: string;
+  features: string[];
+  executor?: RunbookCellExecutor;
   language?: string;
   summary?: string;
   stdout?: string;
@@ -49,6 +69,7 @@ export interface RunbookCellInput {
 export interface RunbookCellRecord extends RunbookCellInput {
   id: string;
   index: number;
+  active: boolean;
 }
 
 export interface RunbookExecutionMetrics {
@@ -79,6 +100,7 @@ export interface RunbookRecord {
   title: string;
   purpose: string;
   artifactId: string;
+  enabledFeatures: string[];
   cellCount: number;
   revision: number;
   contentRevision: number;
@@ -185,7 +207,7 @@ export class RunbookStore {
       offset,
       totalCells: notebook.cells.length,
       cells: notebook.cells.slice(offset, offset + limit).map((cell, index) =>
-        notebookCellToRecord(cell, offset + index)),
+        notebookCellToRecord(cell, offset + index, notebookEnabledFeatures(notebook))),
     };
   }
 
@@ -256,11 +278,15 @@ export class RunbookStore {
     title: string;
     purpose: string;
     cells?: RunbookCellInput[];
+    enabledFeatures?: string[];
   }, author?: ModelAuthor): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
     const title = requiredText(input.title, "title", 240);
     const purpose = requiredText(input.purpose, "purpose", 4_000);
     const cells = (input.cells ?? []).map(validateCell);
-    if (cells.length > 20) throw new Error("A runbook can be created with at most 20 cells.");
+    if (cells.length > MAX_RUNBOOK_MUTATION_CELLS) throw new Error(`A runbook can be created with at most ${MAX_RUNBOOK_MUTATION_CELLS} cells.`);
+    const enabledFeatures = input.enabledFeatures === undefined
+      ? [...RUNBOOK_DEFAULT_FEATURES]
+      : validateFeatures(input.enabledFeatures, "enabledFeatures", false);
 
     const id = `runbook_${randomUUID()}`;
     const artifactId = id;
@@ -276,6 +302,7 @@ export class RunbookStore {
       createdAt: now,
       updatedAt: now,
       cells,
+      enabledFeatures,
     });
 
     this.database.exec("BEGIN IMMEDIATE");
@@ -327,7 +354,7 @@ export class RunbookStore {
     const id = requiredText(input.id, "id", 200);
     if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("expectedRevision must be a positive integer.");
     if (!Array.isArray(input.cells) || input.cells.length === 0) throw new Error("cells must contain at least one cell.");
-    if (input.cells.length > 20) throw new Error("At most 20 cells can be appended at once.");
+    if (input.cells.length > MAX_RUNBOOK_MUTATION_CELLS) throw new Error(`At most ${MAX_RUNBOOK_MUTATION_CELLS} cells can be appended at once.`);
     const cells = input.cells.map(validateCell);
     this.database.exec("BEGIN IMMEDIATE");
     try {
@@ -348,7 +375,7 @@ export class RunbookStore {
         metadata: {
           beale: {
             ...current.metadata.beale,
-            schemaVersion: 2,
+            schemaVersion: 3,
             revision,
             contentRevision,
             updatedAt,
@@ -384,6 +411,87 @@ export class RunbookStore {
     }
   }
 
+  public configure(input: {
+    id: string;
+    expectedRevision: number;
+    enabledFeatures: string[];
+    cellFeatures?: Array<{ cellId: string; features: string[] }>;
+    cellExecutors?: Array<{ cellId: string; executor: RunbookCellExecutor }>;
+  }, author?: ModelAuthor): { runbook: RunbookRecord; artifactRef: ResearchArtifactRef } {
+    const id = requiredText(input.id, "id", 200);
+    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new Error("expectedRevision must be a positive integer.");
+    const enabledFeatures = validateFeatures(input.enabledFeatures, "enabledFeatures", false);
+    const changes = (input.cellFeatures ?? []).map((change, index) => {
+      if (!isRecord(change)) throw new Error(`cellFeatures[${index}] must be an object.`);
+      return {
+        cellId: requiredText(change.cellId, `cellFeatures[${index}].cellId`, 200),
+        features: validateCellFeatures(change.features, `cellFeatures[${index}].features`),
+      };
+    });
+    if (new Set(changes.map((change) => change.cellId)).size !== changes.length) throw new Error("cellFeatures cannot update the same cell more than once.");
+    const executorChanges = (input.cellExecutors ?? []).map((change, index) => {
+      if (!isRecord(change)) throw new Error(`cellExecutors[${index}] must be an object.`);
+      return {
+        cellId: requiredText(change.cellId, `cellExecutors[${index}].cellId`, 200),
+        executor: validateCellExecutor(change.executor, `cellExecutors[${index}].executor`),
+      };
+    });
+    if (new Set(executorChanges.map((change) => change.cellId)).size !== executorChanges.length) throw new Error("cellExecutors cannot update the same cell more than once.");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.readRow(id);
+      if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
+      this.requireCanonical(row);
+      if (row.revision !== input.expectedRevision) {
+        throw new Error(`Runbook revision conflict for ${id}: expected ${input.expectedRevision}, found ${row.revision}.`);
+      }
+      const notebook = this.readNotebook(row);
+      for (const change of changes) {
+        const cellIndex = notebook.cells.findIndex((cell, index) => notebookCellId(cell, index) === change.cellId);
+        if (cellIndex < 0) throw new Error(`Runbook cell not found: ${change.cellId}`);
+        const cell = notebook.cells[cellIndex]!;
+        const beale = isRecord(cell.metadata.beale) ? cell.metadata.beale : {};
+        cell.metadata.beale = { ...beale, features: change.features };
+      }
+      for (const change of executorChanges) {
+        const cellIndex = notebook.cells.findIndex((cell, index) => notebookCellId(cell, index) === change.cellId);
+        if (cellIndex < 0) throw new Error(`Runbook cell not found: ${change.cellId}`);
+        const cell = notebook.cells[cellIndex]!;
+        if (cell.cell_type !== "code") throw new Error(`Only code cells can select an executor: ${change.cellId}`);
+        const beale = isRecord(cell.metadata.beale) ? cell.metadata.beale : {};
+        cell.metadata.beale = { ...beale, executor: change.executor };
+      }
+      const revision = row.revision + 1;
+      const contentRevision = row.content_revision + 1;
+      const updatedAt = new Date().toISOString();
+      notebook.metadata.beale = {
+        ...notebook.metadata.beale,
+        schemaVersion: 3,
+        enabledFeatures,
+        revision,
+        contentRevision,
+        updatedAt,
+      };
+      const entry = this.writeAndRegister(id, row.artifact_id, row.relative_path, row.title, notebook);
+      const result = this.database.prepare(`UPDATE app_server_runbooks
+        SET content_hash = ?, size_bytes = ?, revision = ?, content_revision = ?, updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND revision = ?`).run(
+        entry.contentHash, entry.sizeBytes, revision, contentRevision, updatedAt,
+        id, this.context.workspaceId, input.expectedRevision,
+      );
+      if (Number(result.changes) !== 1) throw new Error(`Runbook revision conflict for ${id}.`);
+      this.recordRevision(id, revision, updatedAt);
+      recordModelAuthorship(this.database, "runbook", id, revision, author, updatedAt);
+      this.database.exec("COMMIT");
+      const updated = this.readRow(id);
+      if (!updated) throw new Error(`Runbook disappeared after feature configuration: ${id}`);
+      return { runbook: this.toRecord(updated, notebook.cells.length), artifactRef: artifactRef(entry, row.title) };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   public executionPlan(id: string, selection: RunbookExecutionSelection = {}): RunbookExecutionPlanCell[] {
     const row = this.readRow(requiredText(id, "id", 200));
     if (!row) throw new Error(`Runbook not found in this workspace: ${id}`);
@@ -395,6 +503,7 @@ export class RunbookStore {
       throw new Error("cellId cannot be combined with startCellId or endCellId.");
     }
     const notebook = this.readNotebook(row);
+    const enabledFeatures = notebookEnabledFeatures(notebook);
     const executableCells = notebook.cells
       .map((cell, index) => ({ cell, id: notebookCellId(cell, index) }))
       .filter(({ cell }) => cell.cell_type === "code")
@@ -409,13 +518,16 @@ export class RunbookStore {
             : typeof vscode.languageId === "string"
               ? vscode.languageId
               : null,
+          executor: notebookCellExecutor(cell),
+          active: cellIsActive(cell, enabledFeatures),
         };
       });
     if (executableCells.length === 0) throw new Error("Runbook has no executable code cells.");
     if (cellId) {
       const cell = executableCells.find((candidate) => candidate.id === cellId);
       if (!cell) throw new Error(`Code cell not found in runbook ${id}: ${cellId}`);
-      return [cell];
+      if (!cell.active) throw new Error(`Code cell is deactivated by runbook feature toggles: ${cellId}`);
+      return [{ id: cell.id, source: cell.source, language: cell.language, executor: cell.executor }];
     }
     const startIndex = startCellId
       ? executableCells.findIndex((candidate) => candidate.id === startCellId)
@@ -426,7 +538,9 @@ export class RunbookStore {
     if (startCellId && startIndex < 0) throw new Error(`Start code cell not found in runbook ${id}: ${startCellId}`);
     if (endCellId && endIndex < 0) throw new Error(`End code cell not found in runbook ${id}: ${endCellId}`);
     if (startIndex > endIndex) throw new Error("startCellId must precede or equal endCellId in runbook order.");
-    return executableCells.slice(startIndex, endIndex + 1);
+    const selected = executableCells.slice(startIndex, endIndex + 1).filter((cell) => cell.active);
+    if (selected.length === 0) throw new Error("No active code cells remain in the selected runbook range.");
+    return selected.map(({ id: selectedId, source, language, executor }) => ({ id: selectedId, source, language, executor }));
   }
 
   public beginExecution(
@@ -495,6 +609,7 @@ export class RunbookStore {
     error?: string;
     proofTarget: RunbookProofTarget;
     deviceOs?: string;
+    evidence?: Record<string, string | number | boolean | null>;
   }): void {
     this.updateNotebook(input.id, (notebook) => {
       const cell = requireNotebookCell(notebook, input.cellId);
@@ -508,6 +623,7 @@ export class RunbookStore {
         ...(input.error ? { error: input.error.slice(0, 2_000) } : {}),
         proofTarget: input.proofTarget,
         ...(input.deviceOs ? { deviceOs: input.deviceOs } : {}),
+        ...(input.evidence ? { evidence: input.evidence } : {}),
       });
       const appServer = isRecord(cell.metadata.beale) ? cell.metadata.beale : {};
       cell.metadata.beale = {
@@ -620,7 +736,7 @@ export class RunbookStore {
       const updatedAt = new Date().toISOString();
       notebook.metadata.beale = {
         ...notebook.metadata.beale,
-        schemaVersion: 2,
+        schemaVersion: 3,
         revision,
         updatedAt,
       };
@@ -674,6 +790,7 @@ export class RunbookStore {
       title: row.title,
       purpose: row.purpose,
       artifactId: row.artifact_id,
+      enabledFeatures: notebookEnabledFeatures(this.readNotebook(row)),
       cellCount: knownCellCount ?? this.readNotebook(row).cells.length,
       revision: row.revision,
       contentRevision: row.content_revision,
@@ -796,15 +913,16 @@ function createNotebook(input: {
   createdAt: string;
   updatedAt: string;
   cells: RunbookCellInput[];
+  enabledFeatures: string[];
 }): RunbookNotebook {
   return {
     cells: [
-      inputToNotebookCell({ kind: "markdown", source: `# ${input.title}\n\n${input.purpose}`, summary: "Runbook purpose" }),
+      inputToNotebookCell({ kind: "markdown", source: `# ${input.title}\n\n${input.purpose}`, summary: "Runbook purpose", features: [...RUNBOOK_DEFAULT_FEATURES] }),
       ...input.cells.map(inputToNotebookCell),
     ],
     metadata: {
       beale: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         artifactFamily: "runbook",
         runbookId: input.id,
         workspaceId: input.context.workspaceId,
@@ -816,6 +934,7 @@ function createNotebook(input: {
         contentRevision: input.contentRevision,
         createdAt: input.createdAt,
         updatedAt: input.updatedAt,
+        enabledFeatures: input.enabledFeatures,
       },
     },
     nbformat: 4,
@@ -827,6 +946,8 @@ function inputToNotebookCell(cell: RunbookCellInput): NotebookCell {
   const metadata: Record<string, unknown> = {
     beale: {
       ...(cell.language ? { language: cell.language } : {}),
+      features: cell.features,
+      ...(cell.executor ? { executor: cell.executor } : {}),
       ...(cell.summary ? { summary: cell.summary } : {}),
       recordedAt: new Date().toISOString(),
       ...(cell.exitCode !== undefined ? { exitCode: cell.exitCode } : {}),
@@ -856,7 +977,7 @@ function setCellExecution(cell: NotebookCell, execution: RunbookExecutionState):
   cell.metadata.beale = { ...appServer, latestRun: execution };
 }
 
-function notebookCellToRecord(cell: NotebookCell, index: number): RunbookCellRecord {
+function notebookCellToRecord(cell: NotebookCell, index: number, enabledFeatures: readonly string[]): RunbookCellRecord {
   const appServer = isRecord(cell.metadata?.beale) ? cell.metadata.beale : {};
   const outputs = Array.isArray(cell.outputs) ? cell.outputs : [];
   return {
@@ -864,6 +985,9 @@ function notebookCellToRecord(cell: NotebookCell, index: number): RunbookCellRec
     index,
     kind: cell.cell_type,
     source: cell.source.join(""),
+    features: cellFeatures(cell),
+    active: cellIsActive(cell, enabledFeatures),
+    executor: notebookCellExecutor(cell),
     ...(typeof appServer.language === "string" ? { language: appServer.language } : {}),
     ...(typeof appServer.summary === "string" ? { summary: appServer.summary } : {}),
     ...(typeof appServer.exitCode === "number" ? { exitCode: appServer.exitCode } : {}),
@@ -884,6 +1008,9 @@ function validateCell(value: RunbookCellInput): RunbookCellInput {
   if (!isRecord(value)) throw new Error("Each runbook cell must be an object.");
   if (value.kind !== "markdown" && value.kind !== "code") throw new Error("Runbook cell kind must be markdown or code.");
   const source = requiredText(value.source, "cell source", 64_000);
+  const features = validateCellFeatures(value.features, "cell features");
+  const executor = value.executor === undefined ? undefined : validateCellExecutor(value.executor, "cell executor");
+  if (value.kind === "markdown" && executor) throw new Error("Markdown cells cannot select an executor.");
   const language = optionalText(value.language, "cell language", 40);
   const summary = optionalText(value.summary, "cell summary", 500);
   const stdout = optionalText(value.stdout, "cell stdout", 64_000, true);
@@ -892,12 +1019,90 @@ function validateCell(value: RunbookCellInput): RunbookCellInput {
   return {
     kind: value.kind,
     source,
+    features,
+    ...(executor ? { executor } : {}),
     ...(language ? { language } : {}),
     ...(summary ? { summary } : {}),
     ...(stdout !== undefined ? { stdout } : {}),
     ...(stderr !== undefined ? { stderr } : {}),
     ...(value.exitCode !== undefined ? { exitCode: value.exitCode } : {}),
   };
+}
+
+function notebookCellExecutor(cell: NotebookCell): RunbookCellExecutor {
+  const beale = isRecord(cell.metadata.beale) ? cell.metadata.beale : {};
+  return beale.executor === undefined
+    ? { kind: "host", timeoutSeconds: RUNBOOK_DEFAULT_TIMEOUT_SECONDS }
+    : validateCellExecutor(beale.executor, "cell executor");
+}
+
+function validateCellExecutor(value: unknown, field: string): RunbookCellExecutor {
+  if (!isRecord(value)) throw new Error(`${field} must be an object.`);
+  if (value.kind === "host") {
+    const timeoutSeconds = value.timeoutSeconds === undefined
+      ? RUNBOOK_DEFAULT_TIMEOUT_SECONDS
+      : value.timeoutSeconds;
+    if (typeof timeoutSeconds !== "number" || !Number.isSafeInteger(timeoutSeconds)
+      || timeoutSeconds < 1 || timeoutSeconds > RUNBOOK_MAX_TIMEOUT_SECONDS) {
+      throw new Error(`${field}.timeoutSeconds must be an integer from 1 to ${RUNBOOK_MAX_TIMEOUT_SECONDS}.`);
+    }
+    return { kind: "host", timeoutSeconds };
+  }
+  if (value.kind !== "tart-vm") throw new Error(`${field}.kind must be host or tart-vm.`);
+  const artifactId = optionalText(value.artifactId, `${field}.artifactId`, 240);
+  const workspacePath = optionalText(value.workspacePath, `${field}.workspacePath`, 4_096);
+  if (Boolean(artifactId) === Boolean(workspacePath)) throw new Error(`${field} requires exactly one of artifactId or workspacePath.`);
+  if (!Array.isArray(value.argv) || value.argv.length > 128 || value.argv.some((argument) => typeof argument !== "string" || argument.length > 4_096 || argument.includes("\0"))) {
+    throw new Error(`${field}.argv must be an array of at most 128 bounded strings.`);
+  }
+  const timeoutSeconds = value.timeoutSeconds === undefined ? RUNBOOK_DEFAULT_TIMEOUT_SECONDS : value.timeoutSeconds;
+  if (typeof timeoutSeconds !== "number" || !Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > RUNBOOK_MAX_TIMEOUT_SECONDS) throw new Error(`${field}.timeoutSeconds must be an integer from 1 to ${RUNBOOK_MAX_TIMEOUT_SECONDS}.`);
+  const runAs = value.runAs === undefined ? "guest" : value.runAs;
+  if (runAs !== "guest" && runAs !== "root") throw new Error(`${field}.runAs must be guest or root.`);
+  return {
+    kind: "tart-vm",
+    vmName: requiredText(value.vmName, `${field}.vmName`, 128),
+    ...(artifactId ? { artifactId } : {}),
+    ...(workspacePath ? { workspacePath } : {}),
+    runAs,
+    argv: [...value.argv],
+    timeoutSeconds,
+    retainOnFailure: value.retainOnFailure === true,
+  };
+}
+
+function notebookEnabledFeatures(notebook: RunbookNotebook): string[] {
+  return Array.isArray(notebook.metadata.beale.enabledFeatures)
+    ? validateFeatures(notebook.metadata.beale.enabledFeatures, "runbook enabledFeatures", false)
+    : [...RUNBOOK_DEFAULT_FEATURES];
+}
+
+function cellFeatures(cell: NotebookCell): string[] {
+  const beale = isRecord(cell.metadata.beale) ? cell.metadata.beale : {};
+  return Array.isArray(beale.features)
+    ? validateCellFeatures(beale.features, "cell features")
+    : [...RUNBOOK_DEFAULT_FEATURES];
+}
+
+function cellIsActive(cell: NotebookCell, enabledFeatures: readonly string[]): boolean {
+  const enabled = new Set(enabledFeatures);
+  return cellFeatures(cell).some((feature) => enabled.has(feature));
+}
+
+function validateCellFeatures(value: unknown, field: string): string[] {
+  const features = validateFeatures(value, field, true);
+  if (!features.some((feature) => (RUNBOOK_DEFAULT_FEATURES as readonly string[]).includes(feature))) {
+    throw new Error(`${field} must include setup, runtime, or cleanup.`);
+  }
+  return features;
+}
+
+function validateFeatures(value: unknown, field: string, requireNonEmpty: boolean): string[] {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array of text tags.`);
+  if (value.length > 32) throw new Error(`${field} can contain at most 32 tags.`);
+  const features = [...new Set(value.map((feature, index) => requiredText(feature, `${field}[${index}]`, 64).toLowerCase()))];
+  if (requireNonEmpty && features.length === 0) throw new Error(`${field} must contain at least one tag.`);
+  return features;
 }
 
 function artifactRef(entry: ResearchStorageArtifactManifestEntry, title: string): ResearchArtifactRef {

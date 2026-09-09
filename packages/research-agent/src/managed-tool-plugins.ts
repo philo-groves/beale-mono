@@ -31,7 +31,7 @@ export const MANAGED_TOOL_PLUGINS = [
   {
     id: "beale-runbooks", name: "Runbooks",
     description: "Use for reusable procedure documents, their revisions, and recorded executions.",
-    tools: ["runbook.list", "runbook.get", "runbook.create", "runbook.append", "runbook.run"],
+    tools: ["runbook.list", "runbook.get", "runbook.create", "runbook.append", "runbook.configure", "runbook.run"],
   },
   {
     id: "beale-reporting", name: "Reporting",

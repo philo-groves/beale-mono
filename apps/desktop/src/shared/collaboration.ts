@@ -14,7 +14,7 @@ export const DEFAULT_RESEARCH_COLLABORATION = Object.freeze({
   providers: [],
   independentFirstPass: false,
   peerChallengeRounds: 0,
-  maxConcurrentRooms: 2,
+  maxConcurrentRooms: 4,
   maxMembersPerRoom: 3
 } satisfies ResearchCollaborationPreferences);
 

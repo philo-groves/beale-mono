@@ -134,6 +134,7 @@ export interface CreateShellSafetyAuthorizerOptions {
 }
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 30_000;
+const AUTO_REVIEW_FAILURE_COOLDOWN_MS = 60_000;
 const DEFAULT_MAX_REVIEW_INPUT_BYTES = 64 * 1024;
 const MAX_REVIEW_OUTPUT_TOKENS = 1_024;
 const MAX_REVIEW_ATTEMPTS = 2;
@@ -380,6 +381,11 @@ export function createShellSafetyAuthorizer(
 ): ShellCommandAuthorizer {
   const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
   const models = options.models ?? createAuthenticatedModels({ authContext: authenticationRouter.authContext() });
+  let recentReviewFailure: {
+    reviewerKey: string;
+    failure: ShellReviewFailureAudit;
+    expiresAt: number;
+  } | null = null;
   return async (request, signal) => {
     const mode = options.getMode();
     const approvalRequestId = createId("shell_approval");
@@ -475,6 +481,22 @@ export function createShellSafetyAuthorizer(
       });
     }
 
+    const reviewerKey = `${reviewer.provider}\u0000${reviewer.model}\u0000${reviewer.reasoningEffort}`;
+    if (
+      recentReviewFailure
+      && recentReviewFailure.reviewerKey === reviewerKey
+      && recentReviewFailure.expiresAt > Date.now()
+    ) {
+      return resolveDecision({
+        decision: "denied",
+        source: "small_model",
+        reviewer,
+        reviewFailure: recentReviewFailure.failure,
+        reason: `${shellReviewFailureReason(recentReviewFailure.failure)} A new reviewer request was suppressed during the temporary outage cooldown.`,
+      });
+    }
+    recentReviewFailure = null;
+
     try {
       const review = await reviewShellCommand({
         request,
@@ -499,6 +521,7 @@ export function createShellSafetyAuthorizer(
           ...(review.usage ? { usage: review.usage } : {}),
         });
       }
+      recentReviewFailure = null;
       if (review.decision === "denied" && review.reviewCompleted) {
         const reviewReason = boundedReason(review.reason);
         const pendingRequest: PendingShellAuthorizationRequest = {
@@ -553,6 +576,11 @@ export function createShellSafetyAuthorizer(
       });
     } catch (error) {
       const reviewFailure = shellReviewFailureAudit(error);
+      recentReviewFailure = {
+        reviewerKey,
+        failure: reviewFailure,
+        expiresAt: Date.now() + AUTO_REVIEW_FAILURE_COOLDOWN_MS,
+      };
       return resolveDecision({
         decision: "denied",
         source: "small_model",
@@ -923,7 +951,7 @@ function shellReviewFailureReason(failure: ShellReviewFailureAudit): string {
     invalid_schema: "the reviewer response did not match the required schema",
   };
   const attempts = `${failure.attempts} ${failure.attempts === 1 ? "attempt" : "attempts"}`;
-  return `Auto-Review failed closed because ${detail[failure.category]} after ${attempts}.`;
+  return `Auto-Review infrastructure failed closed because ${detail[failure.category]} after ${attempts}; this is not a safety judgment on the command.`;
 }
 
 export function createShellAuditCommand(

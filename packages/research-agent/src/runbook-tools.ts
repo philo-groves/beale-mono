@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import { nowIso } from "./ids.js";
 import {
+  MAX_RUNBOOK_MUTATION_CELLS,
+  RUNBOOK_DEFAULT_TIMEOUT_SECONDS,
+  RUNBOOK_MAX_TIMEOUT_SECONDS,
+  RUNBOOK_DEFAULT_FEATURES,
   RunbookStore,
   type RunbookCellInput,
+  type RunbookCellExecutor,
 } from "./runbooks.js";
 import type { ResearchExecutableTool, ResearchToolExecutionContext, ResearchToolExecutionResult } from "./tool-registry.js";
 import type { ResearchArtifactRef, ResearchToolAction } from "./types.js";
@@ -26,6 +31,12 @@ const GET_PARAMETERS = {
   },
 };
 
+const FEATURE_PARAMETERS = {
+  type: "array",
+  maxItems: 32,
+  items: { type: "string", maxLength: 64 },
+};
+
 export interface RunbookToolOptions {
   platform?: NodeJS.Platform;
 }
@@ -40,8 +51,9 @@ export function createRunbookTools(
     required: ["title", "purpose"],
     properties: {
       title: { type: "string" },
-      purpose: { type: "string", description: "The cohesive reusable procedure, independently repeatable proof phase, or decision this runbook preserves." },
-      cells: { type: "array", maxItems: 20, items: cellParameters },
+      purpose: { type: "string", description: "The cohesive reusable workflow, proof objective, or decision this runbook preserves." },
+      enabledFeatures: { ...FEATURE_PARAMETERS, description: "Enabled feature text tags. Defaults to setup, runtime, and cleanup." },
+      cells: { type: "array", maxItems: MAX_RUNBOOK_MUTATION_CELLS, items: cellParameters },
     },
   };
   const appendParameters = {
@@ -50,7 +62,40 @@ export function createRunbookTools(
     properties: {
       id: { type: "string" },
       expectedRevision: { type: "number" },
-      cells: { type: "array", minItems: 1, maxItems: 20, items: cellParameters },
+      cells: { type: "array", minItems: 1, maxItems: MAX_RUNBOOK_MUTATION_CELLS, items: cellParameters },
+    },
+  };
+  const configureParameters = {
+    type: "object",
+    required: ["id", "expectedRevision", "enabledFeatures"],
+    properties: {
+      id: { type: "string" },
+      expectedRevision: { type: "number" },
+      enabledFeatures: { ...FEATURE_PARAMETERS, description: "Complete list of enabled runbook feature tags. An empty list deactivates every cell." },
+      cellFeatures: {
+        type: "array",
+        maxItems: MAX_RUNBOOK_MUTATION_CELLS,
+        items: {
+          type: "object",
+          required: ["cellId", "features"],
+          properties: {
+            cellId: { type: "string" },
+            features: { ...FEATURE_PARAMETERS, minItems: 1, description: "Cell tags; must include setup, runtime, or cleanup." },
+          },
+        },
+      },
+      cellExecutors: {
+        type: "array",
+        maxItems: MAX_RUNBOOK_MUTATION_CELLS,
+        items: {
+          type: "object",
+          required: ["cellId", "executor"],
+          properties: {
+            cellId: { type: "string" },
+            executor: createCellExecutorParameters(),
+          },
+        },
+      },
     },
   };
   return [
@@ -79,7 +124,7 @@ export function createRunbookTools(
     tool(
       "runbook.get",
       "runbook_get",
-      "Read a bounded page of one workspace runbook, including recorded code cells, results, and execution.latestSuccessfulRunId for finding promotion.",
+      "Read a bounded page of one workspace runbook, including enabled feature toggles, cell feature tags, active state, host or Tart VM cell executors, recorded results, and execution.latestSuccessfulRunId for finding promotion.",
       "read",
       GET_PARAMETERS,
       (input) => ({
@@ -92,13 +137,14 @@ export function createRunbookTools(
     tool(
       "runbook.create",
       "runbook_create",
-      "Create a revisioned Jupyter-format research runbook before executing a proof sequence, reproduction, claim-confirming experiment, or reusable environment workflow that is not already represented by an existing runbook. Prefer a small set of cohesive, medium-sized runbooks over one giant runbook: an independently repeatable phase, or a change in objective, target state, prerequisites, evidence contract, or cleanup, should normally have its own runbook. Medium runbooks often contain 4–12 purposeful cells, but never pad or split a naturally smaller procedure to meet a count. Record prerequisites and expected evidence in markdown, then use bounded repeatable code cells with an explicit supported language. Keep iterative implementation in a stable candidate artifact so the same entry cell can be rerun without per-tweak append churn.",
+      "Create a revisioned Jupyter-format research runbook only when the workflow is not already represented. Keep setup, runtime, and cleanup in one cohesive runbook and label every cell with at least one of those default phase features; add narrower text tags when useful. Split only for a genuinely unrelated objective, target, or authorization boundary, not for phase changes, prerequisites, target state, review, or cleanup. Record prerequisites and expected evidence in markdown, then use repeatable code cells. Host cells require an explicit supported language and accept executor.timeoutSeconds for bounded long-running collectors instead of inheriting the shell default. A tart-vm cell references a host-built executable by workspacePath or artifactId; runbook.run materializes, stages, executes, records, and cleans it without a guest-side rewrite. Keep iterative implementation in a stable candidate artifact so the same entry cell can be rerun without per-tweak append churn.",
       "write",
       createParameters,
       (input, context) => {
         const created = store.create({
           title: requiredText(input.title, "title"),
           purpose: requiredText(input.purpose, "purpose"),
+          ...(Array.isArray(input.enabledFeatures) ? { enabledFeatures: parseFeatures(input.enabledFeatures, "enabledFeatures", false) } : {}),
           ...(Array.isArray(input.cells) ? { cells: input.cells.map(parseCell) } : {}),
         }, context?.modelAuthor);
         return { output: created.runbook, artifactRefs: [created.artifactRef] };
@@ -107,7 +153,7 @@ export function createRunbookTools(
     tool(
       "runbook.append",
       "runbook_append",
-      "Append concise markdown or code cells to an existing runbook using its current revision when the same cohesive proof procedure genuinely changes. Start a sibling runbook instead when the work becomes a new independently repeatable phase or changes objective, target state, prerequisites, evidence contract, or cleanup. Failed run outputs already preserve attempt history: rerun an unchanged entry cell after editing its candidate artifact instead of appending one cell per tweak. Execute all proof cells with runbook.run.",
+      "Append concise markdown or code cells to the existing cohesive workflow using its current revision. Use setup, runtime, and cleanup feature tags to keep phases, prerequisites, target states, review steps, and cleanup in that runbook. Start another runbook only for a genuinely unrelated objective, target, or authorization boundary. Failed outputs already preserve attempt history: rerun an unchanged entry cell after editing its candidate artifact instead of appending one cell per tweak.",
       "write",
       appendParameters,
       (input, context) => {
@@ -119,6 +165,39 @@ export function createRunbookTools(
         return { output: appended.runbook, artifactRefs: [appended.artifactRef] };
       },
     ),
+    tool(
+      "runbook.configure",
+      "runbook_configure",
+      "Manage a runbook's enabled feature text tags, optionally relabel cells, and retarget code cells between host and Tart VM execution. A cell runs when at least one of its tags is enabled. Every cell must retain a setup, runtime, or cleanup phase tag; custom tags can be added for narrower activation. Tart VM execution references an existing host artifact or workspace-relative executable instead of duplicating the runbook as guest code, and runAs selects the Guest Agent service identity or passwordless root execution.",
+      "write",
+      configureParameters,
+      (input, context) => {
+        const configured = store.configure({
+          id: requiredText(input.id, "id"),
+          expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"),
+          enabledFeatures: parseFeatures(input.enabledFeatures, "enabledFeatures", false),
+          ...(Array.isArray(input.cellFeatures) ? {
+            cellFeatures: input.cellFeatures.map((value, index) => {
+              const change = requiredRecord(value, `cellFeatures[${index}]`);
+              return {
+                cellId: requiredText(change.cellId, `cellFeatures[${index}].cellId`),
+                features: parseFeatures(change.features, `cellFeatures[${index}].features`, true),
+              };
+            }),
+          } : {}),
+          ...(Array.isArray(input.cellExecutors) ? {
+            cellExecutors: input.cellExecutors.map((value, index) => {
+              const change = requiredRecord(value, `cellExecutors[${index}]`);
+              return {
+                cellId: requiredText(change.cellId, `cellExecutors[${index}].cellId`),
+                executor: parseCellExecutor(change.executor, `cellExecutors[${index}].executor`),
+              };
+            }),
+          } : {}),
+        }, context?.modelAuthor);
+        return { output: configured.runbook, artifactRefs: [configured.artifactRef] };
+      },
+    ),
   ];
 }
 
@@ -128,11 +207,13 @@ function createCellParameters(platform: NodeJS.Platform): Record<string, unknown
     : "sh, bash, zsh, python, python3, javascript, node, ruby, and perl";
   return {
     type: "object",
-    required: ["kind", "source"],
+    required: ["kind", "source", "features"],
     properties: {
       kind: { type: "string", enum: ["markdown", "code"] },
-      source: { type: "string", description: "Markdown prose or the exact executable code/command sequence." },
-      language: { type: "string", description: `Required for executable code cells. Supported runners: ${supportedRunners}.` },
+      source: { type: "string", description: "Markdown prose, the exact host code/command sequence, or a concise Tart VM entry description when executor.kind is tart-vm." },
+      features: { ...FEATURE_PARAMETERS, minItems: 1, description: `Feature tags controlling activation. Include at least one phase tag: ${RUNBOOK_DEFAULT_FEATURES.join(", ")}.` },
+      executor: createCellExecutorParameters(),
+      language: { type: "string", description: `Required for host code cells and ignored by tart-vm cells. Supported host runners: ${supportedRunners}.` },
       summary: { type: "string", description: "Concise purpose, expected evidence, or interpretation of this cell." },
       stdout: { type: "string", description: "Bounded observed stdout when preserving a meaningful execution result." },
       stderr: { type: "string", description: "Bounded observed stderr when preserving a meaningful execution result." },
@@ -197,12 +278,78 @@ function parseCell(value: unknown): RunbookCellInput {
   return {
     kind,
     source: requiredText(input.source, "cell source", true),
+    features: parseFeatures(input.features, "cell features", true),
+    ...(input.executor === undefined ? {} : { executor: parseCellExecutor(input.executor, "cell executor") }),
     ...(text(input.language) ? { language: text(input.language)! } : {}),
     ...(text(input.summary) ? { summary: text(input.summary)! } : {}),
     ...(typeof input.stdout === "string" ? { stdout: input.stdout } : {}),
     ...(typeof input.stderr === "string" ? { stderr: input.stderr } : {}),
     ...(typeof input.exitCode === "number" ? { exitCode: input.exitCode } : {}),
   };
+}
+
+function createCellExecutorParameters(): Record<string, unknown> {
+  return {
+    type: "object",
+    required: ["kind"],
+    properties: {
+      kind: { type: "string", enum: ["host", "tart-vm"] },
+      vmName: { type: "string", description: "Named running Tart VM. Required for tart-vm." },
+      artifactId: { type: "string", description: "Durable host artifact containing the guest executable. Mutually exclusive with workspacePath." },
+      workspacePath: { type: "string", description: "Workspace-relative host build output to materialize and stage. Mutually exclusive with artifactId." },
+      runAs: { type: "string", enum: ["guest", "root"], default: "guest", description: "Execute as the Guest Agent service identity or through passwordless sudo as root." },
+      argv: { type: "array", maxItems: 128, items: { type: "string" }, description: "Arguments passed after the staged guest executable." },
+      timeoutSeconds: {
+        type: "integer",
+        minimum: 1,
+        maximum: RUNBOOK_MAX_TIMEOUT_SECONDS,
+        default: RUNBOOK_DEFAULT_TIMEOUT_SECONDS,
+        description: "Cell execution timeout. Defaults to 300 seconds and may be raised to 1800 seconds for a bounded long-running proof or collector.",
+      },
+      retainOnFailure: { type: "boolean", default: false, description: "Keep the staged executable only after a failed run for bounded debugging." },
+    },
+  };
+}
+
+function parseCellExecutor(value: unknown, field: string): RunbookCellExecutor {
+  const executor = requiredRecord(value, field);
+  const kind = requiredText(executor.kind, `${field}.kind`);
+  if (kind === "host") {
+    const timeoutSeconds = executor.timeoutSeconds === undefined
+      ? RUNBOOK_DEFAULT_TIMEOUT_SECONDS
+      : requiredInteger(executor.timeoutSeconds, `${field}.timeoutSeconds`);
+    if (timeoutSeconds < 1 || timeoutSeconds > RUNBOOK_MAX_TIMEOUT_SECONDS) {
+      throw new Error(`${field}.timeoutSeconds must be an integer from 1 to ${RUNBOOK_MAX_TIMEOUT_SECONDS}.`);
+    }
+    return { kind: "host", timeoutSeconds };
+  }
+  if (kind !== "tart-vm") throw new Error(`${field}.kind must be host or tart-vm.`);
+  const artifactId = text(executor.artifactId);
+  const workspacePath = text(executor.workspacePath);
+  if (Boolean(artifactId) === Boolean(workspacePath)) throw new Error(`${field} requires exactly one of artifactId or workspacePath.`);
+  const argv = executor.argv === undefined ? [] : requiredArray(executor.argv, `${field}.argv`);
+  if (!argv.every((argument) => typeof argument === "string")) throw new Error(`${field}.argv must contain strings.`);
+  const runAs = executor.runAs === undefined ? "guest" : requiredText(executor.runAs, `${field}.runAs`);
+  if (runAs !== "guest" && runAs !== "root") throw new Error(`${field}.runAs must be guest or root.`);
+  return {
+    kind: "tart-vm",
+    vmName: requiredText(executor.vmName, `${field}.vmName`),
+    ...(artifactId ? { artifactId } : {}),
+    ...(workspacePath ? { workspacePath } : {}),
+    runAs,
+    argv: argv as string[],
+    timeoutSeconds: executor.timeoutSeconds === undefined ? RUNBOOK_DEFAULT_TIMEOUT_SECONDS : requiredInteger(executor.timeoutSeconds, `${field}.timeoutSeconds`),
+    retainOnFailure: executor.retainOnFailure === true,
+  };
+}
+
+function parseFeatures(value: unknown, field: string, requirePhase: boolean): string[] {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array of text tags.`);
+  const features = [...new Set(value.map((feature, index) => requiredText(feature, `${field}[${index}]`).toLowerCase()))];
+  if (requirePhase && !features.some((feature) => (RUNBOOK_DEFAULT_FEATURES as readonly string[]).includes(feature))) {
+    throw new Error(`${field} must include setup, runtime, or cleanup.`);
+  }
+  return features;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

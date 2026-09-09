@@ -100,9 +100,9 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.match(securityPrompt, /never substitute the host username for a guest account/);
   assert.match(securityPrompt, /do not elevate an entire VM manager merely to bypass an optional network backend/);
   assert.match(securityPrompt, /update its asset memory and reusable environment runbook/);
-  assert.match(securityPrompt, /matching phase runbook before the first claim-confirming experiment in that phase/);
+  assert.match(securityPrompt, /matching workflow runbook before the first claim-confirming experiment/);
   assert.match(securityPrompt, /Execute proof-of-concepts.*through runbook\.run/);
-  assert.match(securityPrompt, /matching phase runbook/);
+  assert.match(securityPrompt, /setup, runtime, and cleanup.*feature tags/);
   assert.match(securityPrompt, /successful runIds.*phases they prove/);
   assert.match(securityPrompt, /investigation remains a cross-session overview rather than the live execution controller/);
 });

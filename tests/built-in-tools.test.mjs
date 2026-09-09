@@ -27,6 +27,7 @@ import {
   modelToolResultDetails,
   projectModelToolResult,
   registerResearchStorageArtifact,
+  resolveResearchToolRuntimeBudgetMs,
   resolveWindowsPowerShellExecutable,
   translateWindowsPathsInCommand,
   windowsPathToWsl,
@@ -592,6 +593,28 @@ test("shell tool blocks denied commands before spawn and keeps hard guards ahead
     assert.equal(requests[0].cwd, root);
     assert.equal(requests[0].stdin, "token=secret-value");
 
+    const unavailableReviewRegistry = createResearchToolRegistry([
+      createShellTool({
+        workspaceRoot: root,
+        authorize: async (request) => ({
+          ...approvedAuthorization(request),
+          mode: "auto_review",
+          decision: "denied",
+          source: "small_model",
+          reason: "Auto-Review infrastructure timed out; this is not a safety judgment on the command.",
+          reviewFailure: { category: "timeout", phase: "request", attempts: 1 },
+        }),
+      }),
+    ]);
+    const unavailableReview = await unavailableReviewRegistry.execute({
+      id: "shell_reviewer_unavailable",
+      actionClass: "inspect",
+      toolName: "shell.run",
+      input: { utility: "true" },
+    });
+    assert.equal(unavailableReview.result.status, "blocked");
+    assert.match(unavailableReview.result.followUpActions.join(" "), /Do not retry.*Auto-Review infrastructure/);
+
     const hardGuarded = await registry.execute({
       id: "shell_guard_before_authorizer",
       actionClass: "experiment",
@@ -786,6 +809,45 @@ test("tool runtime budget aborts a pending approval before any later spawn", asy
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("runbook execution delegates runtime limits to its cell executors", async () => {
+  const action = {
+    id: "runbook_runtime_fixture",
+    actionClass: "experiment",
+    toolName: "runbook.run",
+    input: { id: "runbook-example", proofTarget: "vm" },
+  };
+  assert.equal(resolveResearchToolRuntimeBudgetMs(action, undefined), 0);
+  assert.equal(
+    resolveResearchToolRuntimeBudgetMs({ ...action, budget: { maxRuntimeMs: 45_000 } }, undefined),
+    45_000,
+  );
+  assert.equal(resolveResearchToolRuntimeBudgetMs(action, { maxRuntimeMs: 60_000 }), 0);
+  const registry = createResearchToolRegistry([{
+    descriptor: {
+      name: "runbook.run",
+      description: "Synthetic runbook executor.",
+      actionClasses: ["experiment"],
+      sideEffects: "none",
+      requiredPermissions: [],
+      inputSchema: { type: "object" },
+    },
+    async execute(executedAction) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
+      const completedAt = new Date().toISOString();
+      return {
+        action: executedAction,
+        status: "complete",
+        startedAt: completedAt,
+        completedAt,
+        summary: "Synthetic runbook completed.",
+        followUpActions: [],
+      };
+    },
+  }]);
+  const executed = await registry.execute(action, { governance: { maxRuntimeMs: 5 } });
+  assert.equal(executed.result.status, "complete");
 });
 
 test("repository search finds bounded local source matches", async () => {

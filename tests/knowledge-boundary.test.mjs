@@ -294,7 +294,7 @@ test("app-server owns memory summaries, documents, artifact resolution, and Drea
     const runbook = runbooks.create({
       title: "Parser proof",
       purpose: "Preserve the bounded reproduction.",
-      cells: [{ kind: "code", language: "sh", source: "./proof.sh", stdout: "confirmed\n" }],
+      cells: [{ kind: "code", language: "sh", source: "./proof.sh", stdout: "confirmed\n", features: ["runtime"] }],
     }).runbook;
     const report = reports.create({
       title: "Parser result",

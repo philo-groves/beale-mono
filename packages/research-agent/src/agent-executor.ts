@@ -693,6 +693,7 @@ export function createPiAgentExecutor(
               researchFocus.compactionCheckpoint("context_window_retry", currentTurn),
               active,
               researchFocus.currentAuthoritativeUserSteering(),
+              agentInstructions?.content,
             );
             contextWindowRetryCheckpointed = true;
             return {
@@ -761,11 +762,13 @@ export function createPiAgentExecutor(
               researchFocus.compactionCheckpoint(inheritedCheckpointReason, currentTurn),
               initialActiveModel,
               researchFocus.currentAuthoritativeUserSteering(),
+              agentInstructions?.content,
             )
           : retainLatestResearchCheckpoint(
               compactedInheritedMessages,
               initialActiveModel,
               researchFocus.currentAuthoritativeUserSteering(),
+              agentInstructions?.content,
             );
         if (inheritedNativeCompactionFingerprint) {
           lastNativeCompactionFingerprint = inheritedNativeCompactionFingerprint;
@@ -1007,6 +1010,7 @@ export function createPiAgentExecutor(
                       checkpoint,
                       activeTurnModel,
                       researchFocus.currentAuthoritativeUserSteering(),
+                      agentInstructions?.content,
                     )
                   : compactedMessages),
                 ...(focusTurn.steeringMessage ? [userAgentMessage(focusTurn.steeringMessage)] : []),
@@ -1223,6 +1227,7 @@ export function createPiAgentExecutor(
             : rootResult.resumableCheckpoints.local,
           model,
           rootResult.researchFocusState.authoritativeUserSteering ?? [],
+          agentInstructions?.content,
         );
       } else if (rootResult.contextWindowRetryCheckpointed) {
         resumableMessages.messages = replaceResearchCheckpoint(
@@ -1230,6 +1235,7 @@ export function createPiAgentExecutor(
           rootResult.resumableCheckpoints.contextWindowRetry,
           model,
           rootResult.researchFocusState.authoritativeUserSteering ?? [],
+          agentInstructions?.content,
         );
       } else if (rootResult.lastNativeCompactionFingerprint) {
         resumableMessages.messages = replaceResearchCheckpoint(
@@ -1237,12 +1243,14 @@ export function createPiAgentExecutor(
           rootResult.resumableCheckpoints.native,
           model,
           rootResult.researchFocusState.authoritativeUserSteering ?? [],
+          agentInstructions?.content,
         );
       } else {
         resumableMessages.messages = retainLatestResearchCheckpoint(
           resumableMessages.messages,
           model,
           rootResult.researchFocusState.authoritativeUserSteering ?? [],
+          agentInstructions?.content,
         );
       }
 
@@ -2044,6 +2052,8 @@ const RESEARCH_CHECKPOINT_HOST_MODEL = "research-checkpoint-v1";
 const RESEARCH_CHECKPOINT_NOTICE_PREFIX = "[[APP_SERVER_HOST_RESEARCH_CHECKPOINT_NOTICE_V1:";
 const AUTHORITATIVE_STEERING_REMINDER_PREFIX = "[[APP_SERVER_HOST_AUTHORITATIVE_STEERING_V1]]\n";
 const AUTHORITATIVE_STEERING_REMINDER_SUFFIX = "\n[[/APP_SERVER_HOST_AUTHORITATIVE_STEERING_V1]]";
+const WORKSPACE_INSTRUCTIONS_REMINDER_PREFIX = "[[APP_SERVER_HOST_WORKSPACE_INSTRUCTIONS_V1]]\n";
+const WORKSPACE_INSTRUCTIONS_REMINDER_SUFFIX = "\n[[/APP_SERVER_HOST_WORKSPACE_INSTRUCTIONS_V1]]";
 
 interface ValidResearchCheckpoint {
   checkpoint: string;
@@ -2056,8 +2066,11 @@ function replaceResearchCheckpoint(
   checkpoint: string,
   _model: { api: string; provider: string; id: string },
   authoritativeUserSteering: readonly string[] = [],
+  workspaceInstructions?: string,
 ): AgentMessage[] {
-  const cleaned = removeAuthoritativeSteeringReminders(removeResearchCheckpoints(messages));
+  const cleaned = removeWorkspaceInstructionReminders(
+    removeAuthoritativeSteeringReminders(removeResearchCheckpoints(messages)),
+  );
   const checkpointContent = researchCheckpointContent(checkpoint);
   const checkpointHash = researchCheckpointHash(checkpoint);
   return [
@@ -2085,6 +2098,9 @@ function replaceResearchCheckpoint(
       content: researchCheckpointNotice(checkpointHash),
       timestamp: Date.now(),
     } as AgentMessage,
+    ...(workspaceInstructions?.trim()
+      ? [userAgentMessage(workspaceInstructionsReminder(workspaceInstructions))]
+      : []),
     ...(authoritativeUserSteering.length > 0
       ? [userAgentMessage(authoritativeSteeringReminder(authoritativeUserSteering))]
       : []),
@@ -2095,15 +2111,44 @@ function retainLatestResearchCheckpoint(
   messages: readonly AgentMessage[],
   model: { api: string; provider: string; id: string },
   authoritativeUserSteering: readonly string[] = [],
+  workspaceInstructions?: string,
 ): AgentMessage[] {
   const latest = validResearchCheckpoints(messages).at(-1);
   if (latest) {
-    return replaceResearchCheckpoint(messages, latest.checkpoint, model, authoritativeUserSteering);
+    return replaceResearchCheckpoint(
+      messages,
+      latest.checkpoint,
+      model,
+      authoritativeUserSteering,
+      workspaceInstructions,
+    );
   }
-  const cleaned = removeAuthoritativeSteeringReminders(messages);
+  const cleaned = removeWorkspaceInstructionReminders(removeAuthoritativeSteeringReminders(messages));
   return authoritativeUserSteering.length > 0
     ? [...cleaned, userAgentMessage(authoritativeSteeringReminder(authoritativeUserSteering))]
     : cleaned;
+}
+
+function workspaceInstructionsReminder(instructions: string): string {
+  return [
+    WORKSPACE_INSTRUCTIONS_REMINDER_PREFIX.trimEnd(),
+    "The host reasserts the current AGENTS.md content after context compaction. These are durable workspace instructions for this run, not historical research data. Apply them before selecting infrastructure, VM identities, or execution posture; do not substitute stale VM references from earlier messages or memory.",
+    "",
+    "<agents_md>",
+    instructions.trim(),
+    "</agents_md>",
+    WORKSPACE_INSTRUCTIONS_REMINDER_SUFFIX.trimStart(),
+  ].join("\n");
+}
+
+function removeWorkspaceInstructionReminders(messages: readonly AgentMessage[]): AgentMessage[] {
+  return messages.filter((message) => !(
+    isRecord(message)
+    && message.role === "user"
+    && typeof message.content === "string"
+    && message.content.startsWith(WORKSPACE_INSTRUCTIONS_REMINDER_PREFIX)
+    && message.content.endsWith(WORKSPACE_INSTRUCTIONS_REMINDER_SUFFIX)
+  ));
 }
 
 function authoritativeSteeringReminder(messages: readonly string[]): string {

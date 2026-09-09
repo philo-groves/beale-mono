@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   chmodSync,
   closeSync,
@@ -26,9 +27,10 @@ import { pipeline } from 'node:stream/promises';
 const MAX_COMMAND_OUTPUT_BYTES = 512 * 1024;
 const MAX_CONSOLE_OUTPUT_BYTES = 128 * 1024;
 const MAX_LOG_BYTES = 128 * 1024;
-const MAX_TART_COPY_BYTES = 256 * 1024 * 1024;
-const DEFAULT_TART_COPY_BYTES = 64 * 1024 * 1024;
+const MAX_TART_COPY_BYTES = 4 * 1024 * 1024 * 1024;
+const DEFAULT_TART_COPY_BYTES = MAX_TART_COPY_BYTES;
 const TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD = 96;
+const TART_GUEST_DESCRIPTOR_PROBE_INTERVAL = 12;
 const TART_GUEST_EXEC_HELPER_PATH = '/tmp/.beale-tart-exec-v3';
 const TART_GUEST_EXEC_HELPER_SOURCE = String.raw`
 #include <errno.h>
@@ -74,7 +76,11 @@ const deviceRefs = new Map();
 const activeDarwinRuns = new Map();
 const tartGuestTransports = new Map();
 const tartGuestExecHelpers = new Map();
+const tartGuestOperationsSinceDescriptorProbe = new Map();
+const tartGuestRestartRequired = new Map();
 const tartVmOperationTails = new Map();
+const activeRequestControllers = new Map();
+const requestSignalStorage = new AsyncLocalStorage();
 const deviceRefSalt = randomUUID();
 let tartHostExecHelperPromise = null;
 let inputBuffer = '';
@@ -141,7 +147,7 @@ const TOOLS = [
   },
   {
     name: 'copy_to_tart_vm',
-    description: 'Copy one bounded regular file from an absolute host path to an absolute path in a named running Tart VM. Uses native descriptor-sanitized Tart Guest Agent children first and the configured private SSH transport only as fallback.',
+    description: 'Stream one regular file from an absolute host path to an absolute path in a named running Tart VM. Transfers up to 4 GiB by default; maxBytes may impose a tighter per-call bound.',
     inputSchema: objectSchema({
       vmName: stringField(128),
       localPath: stringField(4096),
@@ -149,13 +155,13 @@ const TOOLS = [
       overwrite: { type: 'boolean', default: false },
       preserveMode: { type: 'boolean', default: true },
       maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
-      timeoutSeconds: integerField(1, 900, 120)
+      timeoutSeconds: integerField(1, 3600, 900)
     }, ['vmName', 'localPath', 'guestPath']),
     annotations: TART_OPERATION_ANNOTATION
   },
   {
     name: 'copy_from_tart_vm',
-    description: 'Copy one bounded regular file from an absolute path in a named running Tart VM to an absolute host path. Uses native descriptor-sanitized Tart Guest Agent children first and the configured private SSH transport only as fallback.',
+    description: 'Stream one regular file from an absolute path in a named running Tart VM to an absolute host path. Transfers up to 4 GiB by default; maxBytes may impose a tighter per-call bound.',
     inputSchema: objectSchema({
       vmName: stringField(128),
       guestPath: stringField(4096),
@@ -163,7 +169,7 @@ const TOOLS = [
       overwrite: { type: 'boolean', default: false },
       preserveMode: { type: 'boolean', default: true },
       maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
-      timeoutSeconds: integerField(1, 900, 120)
+      timeoutSeconds: integerField(1, 3600, 900)
     }, ['vmName', 'guestPath', 'localPath']),
     annotations: TART_OPERATION_ANNOTATION
   },
@@ -270,6 +276,15 @@ function handleMessage(body) {
     sendError(null, -32700, 'Invalid JSON-RPC payload.');
     return;
   }
+  if (message.method === 'notifications/cancelled') {
+    const requestId = message.params?.requestId;
+    if (typeof requestId === 'number' || typeof requestId === 'string') {
+      activeRequestControllers.get(requestId)?.abort(
+        new Error(typeof message.params?.reason === 'string' ? message.params.reason : 'MCP request cancelled.')
+      );
+    }
+    return;
+  }
   if (message.method?.startsWith('notifications/')) return;
   Promise.resolve(dispatch(message)).catch((error) => sendError(message.id ?? null, -32603, publicError(error)));
 }
@@ -303,11 +318,19 @@ async function dispatch(message) {
     sendToolError(id, `Unknown Apple security devices tool: ${name}`);
     return;
   }
+  const controller = new AbortController();
+  activeRequestControllers.set(id, controller);
   try {
     assertNoSimulator(args);
-    sendResult(id, textResult(await callTool(name, args)));
+    const result = await requestSignalStorage.run(
+      controller.signal,
+      () => callTool(name, args)
+    );
+    if (!controller.signal.aborted) sendResult(id, textResult(result));
   } catch (error) {
-    sendToolError(id, publicError(error, args));
+    if (!controller.signal.aborted) sendToolError(id, publicError(error, args));
+  } finally {
+    if (activeRequestControllers.get(id) === controller) activeRequestControllers.delete(id);
   }
 }
 
@@ -344,7 +367,11 @@ async function callToolUnlocked(name, args) {
 
 async function withTartVmOperation(vmName, operation) {
   const previous = tartVmOperationTails.get(vmName) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(operation);
+  const current = previous.catch(() => undefined).then(() => {
+    const signal = requestSignalStorage.getStore();
+    if (signal?.aborted) throw signal.reason ?? new Error('MCP request cancelled.');
+    return operation();
+  });
   tartVmOperationTails.set(vmName, current);
   try {
     return await current;
@@ -461,6 +488,8 @@ async function startTartVm(args) {
   }
   tartGuestTransports.delete(vmName);
   tartGuestExecHelpers.delete(vmName);
+  tartGuestOperationsSinceDescriptorProbe.delete(vmName);
+  tartGuestRestartRequired.delete(vmName);
   const networkMode = tartNetworkMode(args.networkMode);
   const logPath = join(TART_LOG_ROOT, `${safeFilename(vmName)}-${Date.now()}.log`);
   const tartArgs = [
@@ -503,6 +532,8 @@ async function stopTartVm(args) {
   });
   tartGuestTransports.delete(vmName);
   tartGuestExecHelpers.delete(vmName);
+  tartGuestOperationsSinceDescriptorProbe.delete(vmName);
+  tartGuestRestartRequired.delete(vmName);
   return { stopped: true, vmName };
 }
 
@@ -523,7 +554,7 @@ async function copyToTartVm(args) {
   await requireRunningTartVm(vmName);
   const localPath = canonicalFile(args.localPath, 'localPath');
   const guestPath = safeGuestFilePath(args.guestPath, 'guestPath');
-  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 900, 120);
+  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 3600, 900);
   const maxBytes = boundedInteger(args.maxBytes, 1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES);
   const localStat = statSync(localPath);
   if (localStat.size > maxBytes) throw new Error(`localPath exceeds the ${maxBytes}-byte transfer limit.`);
@@ -618,7 +649,7 @@ async function copyFromTartVm(args) {
   await requireRunningTartVm(vmName);
   const guestPath = safeGuestFilePath(args.guestPath, 'guestPath');
   const localPath = destinationFile(args.localPath, 'localPath');
-  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 900, 120);
+  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 3600, 900);
   const maxBytes = boundedInteger(args.maxBytes, 1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES);
   if (existsSync(localPath) && args.overwrite !== true) {
     throw new Error('localPath already exists; set overwrite=true to replace it.');
@@ -716,6 +747,7 @@ async function waitForTartGuest(vmName, waitSeconds) {
     const remainingSeconds = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
     const baseline = await tartGuestBaseline(vmName, Math.min(5, remainingSeconds));
     if (baseline.ready) return baseline;
+    if (baseline.restartRequired) return baseline;
     lastDetail = baseline.detail;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
   }
@@ -738,7 +770,11 @@ async function tartGuestBaseline(vmName, timeoutSeconds) {
       sip: firstLine(sip.stdout || sip.stderr) || 'unknown'
     };
   } catch (error) {
-    return { ready: false, detail: publicError(error) };
+    return {
+      ready: false,
+      detail: publicError(error),
+      ...(error instanceof TartGuestRestartRequiredError ? { restartRequired: true } : {})
+    };
   }
 }
 
@@ -752,6 +788,8 @@ async function runTartGuestProbe(vmName, argv, timeoutSeconds, allowFailure = fa
 }
 
 async function resolveTartGuestTransport(vmName, timeoutSeconds) {
+  const restartRequired = tartGuestRestartRequired.get(vmName);
+  if (restartRequired) throw new TartGuestRestartRequiredError(restartRequired);
   const transportPolicy = configuredTartTransportPolicy();
   const cached = tartGuestTransports.get(vmName);
   if (cached === 'ssh' && transportPolicy !== 'guest-agent-only') return cached;
@@ -763,7 +801,9 @@ async function resolveTartGuestTransport(vmName, timeoutSeconds) {
   } catch (guestAgentError) {
     if (isTartGuestDescriptorExhaustion(guestAgentError)) {
       tartGuestTransports.delete(vmName);
-      throw tartGuestDescriptorExhaustionError();
+      const error = tartGuestDescriptorExhaustionError();
+      tartGuestRestartRequired.set(vmName, error.message);
+      throw error;
     }
     if (transportPolicy === 'guest-agent-only') {
       throw new Error(`Tart Guest Agent is required by the configured transport policy, but execution preparation failed (${publicError(guestAgentError)}). Prepare the VM clone source with Guest Agent RPC support; SSH and host command runners are disabled.`);
@@ -781,6 +821,9 @@ async function resolveTartGuestTransport(vmName, timeoutSeconds) {
 async function prepareTartGuestAgent(vmName, timeoutSeconds) {
   let helperPath = tartGuestExecHelpers.get(vmName);
   let descriptorCount = null;
+  const operationsSinceProbe = tartGuestOperationsSinceDescriptorProbe.get(vmName)
+    ?? TART_GUEST_DESCRIPTOR_PROBE_INTERVAL;
+  if (helperPath && operationsSinceProbe < TART_GUEST_DESCRIPTOR_PROBE_INTERVAL) return;
   if (helperPath) {
     try {
       descriptorCount = await probeTartGuestDescriptors(vmName, timeoutSeconds, helperPath);
@@ -805,6 +848,7 @@ async function prepareTartGuestAgent(vmName, timeoutSeconds) {
   if (descriptorCount >= TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD) {
     throw tartGuestDescriptorExhaustionError();
   }
+  tartGuestOperationsSinceDescriptorProbe.set(vmName, 0);
 }
 
 async function installTartGuestExecHelper(vmName, timeoutSeconds) {
@@ -916,6 +960,7 @@ async function recycleTartGuestAgent(vmName, timeoutSeconds, helperPath) {
       const count = await probeTartGuestDescriptors(vmName, 3, helperPath);
       if (count < TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD) {
         tartGuestTransports.set(vmName, 'guest-agent');
+        tartGuestOperationsSinceDescriptorProbe.set(vmName, 0);
         return;
       }
     } catch (error) {
@@ -927,16 +972,32 @@ async function recycleTartGuestAgent(vmName, timeoutSeconds, helperPath) {
 }
 
 async function runTartGuestCommand(vmName, argv, timeoutSeconds, transport) {
-  const invocation = await tartGuestCommandInvocation(vmName, argv, timeoutSeconds, transport, false);
-  try {
-    return await runCommand(invocation.command, invocation.args, { timeoutMs: timeoutSeconds * 1000 });
-  } catch (error) {
-    if (transport === 'guest-agent' && isTartGuestDescriptorExhaustion(error)) {
-      tartGuestTransports.delete(vmName);
-      throw tartGuestDescriptorExhaustionError();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const invocation = await tartGuestCommandInvocation(vmName, argv, timeoutSeconds, transport, false);
+    try {
+      const result = await runCommand(invocation.command, invocation.args, { timeoutMs: timeoutSeconds * 1000 });
+      noteTartGuestOperation(vmName);
+      return result;
+    } catch (error) {
+      noteTartGuestOperation(vmName);
+      if (transport === 'guest-agent' && attempt === 0 && isMissingTartGuestExecHelper(error)) {
+        const signal = requestSignalStorage.getStore();
+        if (signal?.aborted) throw signal.reason ?? error;
+        tartGuestExecHelpers.delete(vmName);
+        tartGuestOperationsSinceDescriptorProbe.delete(vmName);
+        await prepareTartGuestAgent(vmName, timeoutSeconds);
+        continue;
+      }
+      if (transport === 'guest-agent' && isTartGuestDescriptorExhaustion(error)) {
+        tartGuestTransports.delete(vmName);
+        const restartRequired = tartGuestDescriptorExhaustionError();
+        tartGuestRestartRequired.set(vmName, restartRequired.message);
+        throw restartRequired;
+      }
+      throw error;
     }
-    throw error;
   }
+  throw new Error('Tart guest command did not complete.');
 }
 
 async function runTartSshCommand(vmName, argv, timeoutSeconds) {
@@ -1028,13 +1089,30 @@ function isTartGuestDescriptorExhaustion(error) {
   const detail = error instanceof CommandError
     ? `${error.result.stderr}\n${error.result.stdout}`
     : error instanceof Error ? error.message : String(error);
-  return /(?:too many open files|unable to create pipe|cannot duplicate fd)/iu.test(
+  return /(?:too many open files|unable to create pipe|cannot duplicate fd|descriptor exhaustion|descriptor-pressure recycling|did not recover after descriptor)/iu.test(
     detail
   );
 }
 
+function isMissingTartGuestExecHelper(error) {
+  const detail = error instanceof CommandError
+    ? `${error.result.stderr}\n${error.result.stdout}`
+    : error instanceof Error ? error.message : String(error);
+  return detail.includes(TART_GUEST_EXEC_HELPER_PATH)
+    && /(?:no such file or directory|fork\/exec.*unknown \(2\)|\benoent\b)/iu.test(detail);
+}
+
 function tartGuestDescriptorExhaustionError() {
-  return new Error('Tart Guest Agent descriptor exhaustion was detected and safe recycling could not be completed. The requested command was not replayed; stop and restart the disposable VM before another guest operation.');
+  return new TartGuestRestartRequiredError('Tart Guest Agent descriptor exhaustion was detected and safe recycling could not be completed. The requested command was not replayed. Guest execution is now latched off for this VM; stop and restart the disposable VM once before another guest operation.');
+}
+
+class TartGuestRestartRequiredError extends Error {}
+
+function noteTartGuestOperation(vmName) {
+  tartGuestOperationsSinceDescriptorProbe.set(
+    vmName,
+    (tartGuestOperationsSinceDescriptorProbe.get(vmName) ?? 0) + 1
+  );
 }
 
 function hostCommandInvocation(command, args, configuredRunner) {
@@ -1553,13 +1631,16 @@ function runCommand(command, args, options = {}) {
     };
     child.stdout.on('data', (chunk) => { stdout = append(stdout, Buffer.from(chunk)); });
     child.stderr.on('data', (chunk) => { stderr = append(stderr, Buffer.from(chunk)); });
+    const removeAbortListener = stopChildWhenRequestAborts(child, options);
     const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 30_000);
     child.once('error', (error) => {
       clearTimeout(timer);
+      removeAbortListener();
       rejectPromise(error);
     });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
+      removeAbortListener();
       const result = {
         code: Number.isInteger(code) ? code : null,
         signal: signal ?? null,
@@ -1598,17 +1679,20 @@ function runCommandWithBufferInput(command, args, input, options = {}) {
       if (error?.code !== 'EPIPE') inputError = error;
     });
     child.stdin.end(input);
+    const removeAbortListener = stopChildWhenRequestAborts(child, options);
     const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 30_000);
     child.once('error', (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      removeAbortListener();
       rejectPromise(error);
     });
     child.once('close', (code, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      removeAbortListener();
       if (inputError) {
         rejectPromise(inputError);
         return;
@@ -1667,11 +1751,13 @@ function runCommandWithFileInput(command, args, inputPath, options = {}) {
     input.pipe(child.stdin);
     child.stdout.on('data', (chunk) => { stdout = append(stdout, Buffer.from(chunk)); });
     child.stderr.on('data', (chunk) => { stderr = append(stderr, Buffer.from(chunk)); });
+    const removeAbortListener = stopChildWhenRequestAborts(child, options);
     const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 30_000);
     child.once('error', (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      removeAbortListener();
       input.destroy();
       rejectPromise(error);
     });
@@ -1679,6 +1765,7 @@ function runCommandWithFileInput(command, args, inputPath, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      removeAbortListener();
       input.destroy();
       if (streamError) {
         rejectPromise(streamError);
@@ -1729,14 +1816,17 @@ async function runCommandToFile(command, args, outputPath, options = {}) {
     limiter,
     createWriteStream(outputPath, { flags: 'wx', mode: 0o600 })
   );
+  const removeAbortListener = stopChildWhenRequestAborts(child, options);
   const closePromise = new Promise((resolvePromise, rejectPromise) => {
     const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 30_000);
     child.once('error', (error) => {
       clearTimeout(timer);
+      removeAbortListener();
       rejectPromise(error);
     });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
+      removeAbortListener();
       resolvePromise({ code: Number.isInteger(code) ? code : null, signal: signal ?? null });
     });
   });
@@ -1759,6 +1849,15 @@ async function runCommandToFile(command, args, outputPath, options = {}) {
     throw new CommandError(command, commandResultValue);
   }
   return { ...commandResultValue, bytes };
+}
+
+function stopChildWhenRequestAborts(child, options) {
+  const signal = options.signal ?? requestSignalStorage.getStore();
+  if (!signal) return () => {};
+  const stop = () => child.kill('SIGKILL');
+  if (signal.aborted) stop();
+  else signal.addEventListener('abort', stop, { once: true });
+  return () => signal.removeEventListener('abort', stop);
 }
 
 function runCommandSync(command, args) {

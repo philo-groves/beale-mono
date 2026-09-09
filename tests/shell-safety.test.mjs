@@ -694,6 +694,7 @@ test("Auto-Review fails closed with sanitized diagnostics for missing, malformed
   assert.equal(oversizedDecision.decision, "denied");
   assert.match(oversizedDecision.reason, /exceeds the review limit/);
 
+  let timeoutCalls = 0;
   const timedOut = createShellSafetyAuthorizer({
     getMode: () => "auto_review",
     getReviewerSelection: () => reviewer,
@@ -704,6 +705,7 @@ test("Auto-Review fails closed with sanitized diagnostics for missing, malformed
         return { provider: reviewer.provider, id: reviewer.model };
       },
       async completeSimple(_model, _context, options) {
+        timeoutCalls += 1;
         await new Promise((resolve) => options.signal.addEventListener("abort", resolve, { once: true }));
         return {
           role: "assistant",
@@ -721,6 +723,12 @@ test("Auto-Review fails closed with sanitized diagnostics for missing, malformed
   const timedOutDecision = await timedOut(BASE_REQUEST);
   assert.equal(timedOutDecision.decision, "denied");
   assert.equal(timedOutDecision.reviewFailure?.category, "timeout");
+  assert.match(timedOutDecision.reason, /not a safety judgment/);
+  const suppressedDecision = await timedOut({ ...BASE_REQUEST, actionId: "action-2" });
+  assert.equal(suppressedDecision.decision, "denied");
+  assert.equal(suppressedDecision.reviewFailure?.category, "timeout");
+  assert.match(suppressedDecision.reason, /suppressed during the temporary outage cooldown/);
+  assert.equal(timeoutCalls, 1);
 });
 
 test("Auto-Review classifies provider failures without retaining provider error text", async () => {

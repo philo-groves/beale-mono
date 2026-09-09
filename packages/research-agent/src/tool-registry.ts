@@ -242,7 +242,7 @@ export class ResearchToolRegistry {
         ...(signal ? { signal } : {}),
       },
       ),
-      getRuntimeBudgetMs(normalizedAction, options.governance),
+      resolveResearchToolRuntimeBudgetMs(normalizedAction, options.governance),
       normalizedAction,
       options.signal,
     );
@@ -746,12 +746,17 @@ function applyBudgetDefaults(
   };
 }
 
-function getRuntimeBudgetMs(
+export function resolveResearchToolRuntimeBudgetMs(
   action: ResearchToolAction,
   governance: ResearchGovernancePolicy | undefined,
 ): number {
-  return action.budget?.maxRuntimeMs
-    ?? governance?.maxRuntimeMs
+  const actionBudget = action.budget?.maxRuntimeMs;
+  if (actionBudget !== undefined) return actionBudget;
+  // A runbook is a container of independently bounded cells. Applying the
+  // general per-tool governance deadline to the container can abandon a cell
+  // before its declared executor timeout and leave external work in flight.
+  if (action.toolName === "runbook.run") return 0;
+  return governance?.maxRuntimeMs
     ?? getMcpCallRuntimeBudgetMs(action)
     ?? TOOL_RUNTIME_BUDGET_MS_BY_TOOL.get(action.toolName)
     ?? DEFAULT_TOOL_RUNTIME_BUDGET_MS;

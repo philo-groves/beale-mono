@@ -72,7 +72,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-07T15:26:59.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-09T07:40:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.typed-launch.v2",
@@ -116,6 +116,9 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "knowledge.report-recording-replace.v1",
   "knowledge.report-list.v1",
   "workspace.resource-prior-art.v1",
+  "runbook.delegated-cell-runtime.v1",
+  "runbook.host-cell-runtime.v1",
+  "tart.guest-helper-repair.v1",
 ] as const;
 export const BEALE_APP_SERVER_SERVER_PATH = "/v1/server" as const;
 export const BEALE_APP_SERVER_SESSIONS_PATH = "/v1/sessions" as const;

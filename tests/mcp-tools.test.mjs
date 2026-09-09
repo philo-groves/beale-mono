@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -505,6 +505,91 @@ test("configured stdio MCP client tolerates diagnostics and executes a live fixt
     else process.env.APP_SERVER_TEST_MCP_VALUE = previousFixtureValue;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("configured stdio MCP client notifies the server when a request times out", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-mcp-cancel-"));
+  const serverPath = join(root, "fixture-mcp.mjs");
+  const cancellationPath = join(root, "cancelled.txt");
+  await writeFile(serverPath, `
+import { writeFileSync } from "node:fs";
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index >= 0) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (line) handle(JSON.parse(line));
+    index = buffer.indexOf("\\n");
+  }
+});
+function send(message) { process.stdout.write(JSON.stringify(message) + "\\n"); }
+function handle(message) {
+  if (message.method === "initialize") {
+    send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "0.1" } } });
+  } else if (message.method === "tools/call") {
+    // Remain pending until the client cancels the request.
+  } else if (message.method === "notifications/cancelled") {
+    writeFileSync(process.env.CANCELLATION_PATH, String(message.params.requestId));
+  }
+}
+`, "utf8");
+  const client = createConfiguredResearchMcpClient({
+    allowedServers: ["fixture"],
+    timeoutMs: 50,
+    servers: [{
+      name: "fixture",
+      command: process.execPath,
+      args: [serverPath],
+      env: { CANCELLATION_PATH: cancellationPath },
+    }],
+  });
+  try {
+    await assert.rejects(
+      client.callTool({ serverName: "fixture", toolName: "pending", arguments: {}, timeoutMs: 50 }),
+      /exceeded timeout 50ms/,
+    );
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+    assert.match(await readFile(cancellationPath, "utf8"), /^\d+$/u);
+  } finally {
+    await client.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("MCP wrapper aborts its client call when the capability deadline expires", async () => {
+  let callSignal;
+  const client = {
+    async listTools() {
+      return [{ serverName: "fixture", name: "pending", inputSchema: { type: "object" } }];
+    },
+    async callTool(input) {
+      callSignal = input.signal;
+      return new Promise((_, reject) => input.signal.addEventListener(
+        "abort",
+        () => reject(input.signal.reason),
+        { once: true },
+      ));
+    },
+    async listResources() { return []; },
+    async listResourceTemplates() { return []; },
+  };
+  const discovery = await createMcpResearchTools({
+    client,
+    allowedServers: ["fixture"],
+    timeoutMs: 10,
+  });
+  const registry = createResearchToolRegistry(discovery.tools);
+  const result = await registry.execute({
+    id: "mcp_wrapper_timeout",
+    actionClass: "analyze",
+    toolName: "mcp.fixture.pending",
+    input: {},
+  });
+  assert.equal(result.result.status, "error");
+  assert.equal(callSignal.aborted, true);
 });
 
 function createFixtureMcpServerSource() {

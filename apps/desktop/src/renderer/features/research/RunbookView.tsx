@@ -63,10 +63,10 @@ export const RunbookView = memo(function RunbookView({
   const executionRunning = document?.latestRun?.status === 'running' || document?.latestRun?.status === 'queued';
   const executableCellOptions = useMemo(() => document?.cells
     .map((cell, index) => ({ cell, index }))
-    .filter(({ cell }) => cell.type === 'code') ?? [], [document?.cells]);
+    .filter(({ cell }) => cell.type === 'code' && cell.active) ?? [], [document?.cells]);
   const executableCells = useMemo(() => executableCellOptions.map(({ cell }) => cell), [executableCellOptions]);
   const unhealthyCells = useMemo(
-    () => executableCells.filter((cell) => !isSupportedRunbookLanguage(cell.language)),
+    () => executableCells.filter((cell) => !isExecutableRunbookCell(cell)),
     [executableCells]
   );
   const rangeStartIndex = rangeStartCellId
@@ -78,8 +78,10 @@ export const RunbookView = memo(function RunbookView({
   const rangeValid = executableCells.length > 0 && rangeStartIndex >= 0
     && rangeEndIndex >= 0 && rangeStartIndex <= rangeEndIndex;
   const selectedRangeCells = rangeValid ? executableCells.slice(rangeStartIndex, rangeEndIndex + 1) : [];
-  const selectedRangeHealthy = selectedRangeCells.every((cell) => isSupportedRunbookLanguage(cell.language));
-  const targetValid = proofTarget !== 'device' || deviceOs.trim().length > 0;
+  const selectedRangeHealthy = selectedRangeCells.every(isExecutableRunbookCell);
+  const selectedRangeRequiresVm = selectedRangeCells.some((cell) => cell.executor.kind === 'tart-vm');
+  const targetValid = (!selectedRangeRequiresVm || proofTarget === 'vm')
+    && (proofTarget !== 'device' || deviceOs.trim().length > 0);
   const canRun = executionAvailable && Boolean(onRun) && rangeValid && selectedRangeHealthy
     && targetValid && !executionRunning && requestedCellId === undefined;
   const updateKey = useMemo(
@@ -126,6 +128,10 @@ export const RunbookView = memo(function RunbookView({
   useEffect(() => {
     if (proofTarget === 'device' && !deviceOs.trim() && connectedDeviceOs) setDeviceOs(connectedDeviceOs);
   }, [connectedDeviceOs, deviceOs, proofTarget]);
+
+  useEffect(() => {
+    if (selectedRangeRequiresVm && proofTarget !== 'vm') setProofTarget('vm');
+  }, [proofTarget, selectedRangeRequiresVm]);
 
   useEffect(() => {
     setRangeStartCellId('');
@@ -274,6 +280,7 @@ export const RunbookView = memo(function RunbookView({
             <span>{runbook.execution.completedRunCount} completed {runbook.execution.completedRunCount === 1 ? 'run' : 'runs'}</span>
             <span>{runbook.execution.executedCellCount} {runbook.execution.executedCellCount === 1 ? 'cell' : 'cells'} executed</span>
             <span>Latest run {runbookExecutionStatus(runbook).label}</span>
+            {document ? <span>Features {document.enabledFeatures.length > 0 ? document.enabledFeatures.join(', ') : 'none'}</span> : null}
             {document?.language ? <span>{document.language}</span> : null}
             {document?.latestRun ? <RunStatus now={now} state={document.latestRun} /> : null}
           </div>
@@ -372,6 +379,9 @@ export function runbookViewUpdateKey(
     cell.latestRun?.runId ?? '',
     cell.latestRun?.status ?? '',
     cell.latestRun?.durationMs ?? '',
+    cell.active ? 'active' : 'inactive',
+    cell.executor.kind === 'host' ? 'host' : `tart-vm:${cell.executor.vmName}:${cell.executor.runAs}`,
+    cell.features.join(','),
     cell.outputs.length,
     cell.outputs.at(-1)?.text.length ?? 0
   ].join(':')).join('|') ?? '';
@@ -389,12 +399,12 @@ interface RunbookCellViewProps {
 }
 
 const RunbookCellView = memo(function RunbookCellView({ cell, index, executionAvailable, executionRunning, now, requested, onRun }: RunbookCellViewProps): JSX.Element {
-  const supported = isSupportedRunbookLanguage(cell.language);
+  const supported = isExecutableRunbookCell(cell);
   const running = cell.latestRun?.status === 'running' || requested;
   return (
-    <article className={`runbook-cell runbook-cell-${cell.type}`}>
+    <article className={`runbook-cell runbook-cell-${cell.type}${cell.active ? '' : ' is-inactive'}`}>
       <header className="runbook-cell-header">
-        <span>{cell.type === 'code' ? cell.language ?? 'Code' : traceLabel(cell.type)}</span>
+        <span>{cell.type === 'code' ? cell.language ?? 'Code' : traceLabel(cell.type)} · {cell.features.join(', ')}{cell.type === 'code' ? ` · ${cell.executor.kind === 'host' ? 'Host' : `Tart VM ${cell.executor.vmName} · ${cell.executor.runAs}`}` : ''}{cell.active ? '' : ' · Inactive'}</span>
         <span className="runbook-cell-header-actions">
           {cell.latestRun ? <RunStatus now={now} state={cell.latestRun} compact /> : null}
           <span>Cell {index + 1}{cell.executionCount === null ? '' : ` · [${cell.executionCount}]`}</span>
@@ -402,8 +412,8 @@ const RunbookCellView = memo(function RunbookCellView({ cell, index, executionAv
             <button
               type="button"
               className="runbook-cell-run-button"
-              disabled={!executionAvailable || executionRunning || !supported || !onRun}
-              title={!supported ? 'Add a supported language before running this cell.' : 'Run this cell'}
+              disabled={!cell.active || !executionAvailable || executionRunning || !supported || !onRun}
+              title={!cell.active ? 'This cell is deactivated by its feature tags.' : !supported ? 'Add a supported language before running this cell.' : 'Run this cell'}
               aria-label={`Run cell ${index + 1}`}
               onClick={() => void onRun?.(cell.id)}
             >
@@ -470,6 +480,9 @@ function appServerRunbookCellsEqual(previous: AppServerRunbookCell, next: AppSer
   if (previous.id !== next.id
     || previous.type !== next.type
     || previous.source !== next.source
+    || previous.active !== next.active
+    || previous.features.join('\u0000') !== next.features.join('\u0000')
+    || runbookCellExecutorKey(previous) !== runbookCellExecutorKey(next)
     || previous.language !== next.language
     || previous.executionCount !== next.executionCount
     || runbookRunStatusKey(previous.latestRun) !== runbookRunStatusKey(next.latestRun)
@@ -482,6 +495,13 @@ function appServerRunbookCellsEqual(previous: AppServerRunbookCell, next: AppSer
       && output.streamName === candidate.streamName
       && output.mimeType === candidate.mimeType;
   });
+}
+
+function runbookCellExecutorKey(cell: AppServerRunbookCell): string {
+  return cell.executor.kind === 'host'
+    ? `host:${cell.executor.timeoutSeconds}`
+    : [cell.executor.kind, cell.executor.vmName, cell.executor.runAs, cell.executor.artifactId ?? '', cell.executor.workspacePath ?? '',
+      cell.executor.argv.join('\u0000'), cell.executor.timeoutSeconds, cell.executor.retainOnFailure].join(':');
 }
 
 function runbookRunStatusKey(state: AppServerRunbookCell['latestRun']): string {
@@ -520,6 +540,10 @@ export function isSupportedRunbookLanguage(language: string | null): boolean {
   if (!language) return false;
   return ['shell', 'sh', 'posix-shell', 'bash', 'zsh', 'python', 'python3', 'py', 'javascript', 'js', 'node', 'ruby', 'perl', 'powershell', 'pwsh']
     .includes(language.trim().toLowerCase());
+}
+
+function isExecutableRunbookCell(cell: AppServerRunbookCell): boolean {
+  return cell.executor.kind === 'tart-vm' || isSupportedRunbookLanguage(cell.language);
 }
 
 function formatDuration(durationMs: number): string {

@@ -448,6 +448,7 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'history.undo_duplicate': { singular: 'Restoring a Workspace History Record', plural: (count) => `Restoring ${count} Workspace History Records` },
   'repository.search': { singular: 'Searching the Repository', plural: (count) => `Running ${count} Repository Searches` },
   'runbook.append': { singular: 'Updating a Runbook', plural: (count) => `Updating ${count} Runbooks` },
+  'runbook.configure': { singular: 'Configuring a Runbook', plural: (count) => `Configuring ${count} Runbooks` },
   'runbook.create': { singular: 'Creating a Runbook', plural: (count) => `Creating ${count} Runbooks` },
   'runbook.get': { singular: 'Reading a Runbook', plural: (count) => `Reading ${count} Runbooks` },
   'runbook.list': { singular: 'Checking Runbooks', plural: (count) => `Checking Runbooks ${count} Times` },
@@ -523,6 +524,7 @@ const STRUCTURED_SINGULAR_TOOL_NAMES = new Set([
   'memory.get',
   'memory.save',
   'runbook.append',
+  'runbook.configure',
   'runbook.create',
   'runbook.get',
   'runbook.list',
@@ -577,6 +579,9 @@ function commentaryRunbookCallLabel(
   }
   if (toolName === 'runbook.append') {
     return title ? `Revising runbook in ${title}` : 'Revising a runbook';
+  }
+  if (toolName === 'runbook.configure') {
+    return title ? `Configuring features in ${title}` : 'Configuring runbook features';
   }
   if (toolName === 'runbook.create') {
     return title ? `Creating runbook in ${title}` : 'Creating a runbook';

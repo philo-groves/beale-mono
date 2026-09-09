@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -23,18 +24,25 @@ test("runbook tools expose bounded artifact operations", async () => {
   const store = new RunbookStore(
     getDefaultMemoryDatabasePath(workspaceRoot),
     layout,
-    { sessionId: "run_tools", workspaceId: "workspace_tools", workspaceName: "Tools" },
+    { sessionId: "run_tools", workspaceId: `workspace_tools_${randomUUID()}`, workspaceName: "Tools" },
   );
   const registry = createResearchToolRegistry(createRunbookTools(store));
   try {
     const descriptors = registry.listDescriptors();
-    assert.deepEqual(descriptors.map((tool) => tool.name), ["runbook.list", "runbook.get", "runbook.create", "runbook.append"]);
+    assert.deepEqual(descriptors.map((tool) => tool.name), ["runbook.list", "runbook.get", "runbook.create", "runbook.append", "runbook.configure"]);
     assert.equal("statuses" in descriptors.find((tool) => tool.name === "runbook.list").inputSchema.properties, false);
     assert.equal("status" in descriptors.find((tool) => tool.name === "runbook.create").inputSchema.properties, false);
     assert.equal("status" in descriptors.find((tool) => tool.name === "runbook.append").inputSchema.properties, false);
-    assert.match(descriptors.find((tool) => tool.name === "runbook.create").description, /medium-sized runbooks over one giant runbook/);
-    assert.match(descriptors.find((tool) => tool.name === "runbook.create").description, /4–12 purposeful cells.*never pad/);
-    assert.match(descriptors.find((tool) => tool.name === "runbook.append").description, /Start a sibling runbook.*independently repeatable phase/);
+    assert.match(descriptors.find((tool) => tool.name === "runbook.create").description, /setup, runtime, and cleanup in one cohesive runbook/);
+    assert.doesNotMatch(descriptors.find((tool) => tool.name === "runbook.create").description, /4–12|medium-sized/);
+    assert.match(descriptors.find((tool) => tool.name === "runbook.append").description, /only for a genuinely unrelated objective/);
+    assert.equal(descriptors.find((tool) => tool.name === "runbook.create").inputSchema.properties.cells.maxItems, 100);
+    const executorSchema = descriptors.find((tool) => tool.name === "runbook.create").inputSchema.properties.cells.items.properties.executor;
+    assert.deepEqual(executorSchema.properties.runAs.enum, ["guest", "root"]);
+    assert.equal(executorSchema.properties.runAs.default, "guest");
+    assert.equal(executorSchema.properties.timeoutSeconds.default, 300);
+    assert.equal(executorSchema.properties.timeoutSeconds.maximum, 1800);
+    assert.ok(descriptors.find((tool) => tool.name === "runbook.configure").inputSchema.properties.cellExecutors);
     const created = await registry.execute({
       id: "create_runbook",
       actionClass: "synthesize",
@@ -43,6 +51,23 @@ test("runbook tools expose bounded artifact operations", async () => {
     });
     assert.equal(created.result.status, "complete");
     assert.equal(created.result.artifactRefs[0].kind, "runbook");
+    assert.deepEqual(created.result.output.enabledFeatures, ["setup", "runtime", "cleanup"]);
+    const appended = await registry.execute({
+      id: "append_large_workflow",
+      actionClass: "synthesize",
+      toolName: "runbook.append",
+      input: {
+        id: created.result.output.id,
+        expectedRevision: created.result.output.revision,
+        cells: Array.from({ length: 21 }, (_, index) => ({
+          kind: "markdown",
+          source: `Workflow step ${index + 1}`,
+          features: [index === 0 ? "setup" : index === 20 ? "cleanup" : "runtime"],
+        })),
+      },
+    });
+    assert.equal(appended.result.status, "complete");
+    assert.equal(appended.result.output.cellCount, 22);
 
     const listed = await registry.execute({ id: "list_runbooks", actionClass: "recall", toolName: "runbook.list", input: {} });
     assert.equal(listed.result.output.total, 1);
@@ -55,6 +80,122 @@ test("runbook tools expose bounded artifact operations", async () => {
     });
     assert.equal(unchanged.result.output.unchanged, true);
     assert.deepEqual(unchanged.result.output.runbooks, []);
+  } finally {
+    store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runbook execution stages host-built executables into Tart VMs and records guest evidence", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-tart-vm-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const store = new RunbookStore(
+    getDefaultMemoryDatabasePath(workspaceRoot),
+    layout,
+    { sessionId: "session_tart_vm", workspaceId: "workspace_tart_vm", workspaceName: "Tart VM" },
+  );
+  const executablePath = join(workspaceRoot, "guest-probe");
+  await writeFile(executablePath, "#!/bin/sh\nprintf 'guest proof passed\\n'\n", "utf8");
+  await chmod(executablePath, 0o755);
+  const calls = [];
+  const tool = (name, execute) => ({
+    descriptor: { name, description: "fixture", actionClasses: ["experiment"], sideEffects: "process", requiredPermissions: [] },
+    execute,
+  });
+  const complete = (action, modelOutput) => ({
+    action,
+    status: "complete",
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    summary: "complete",
+    modelContent: modelOutput === undefined ? [] : [{ type: "text", text: JSON.stringify(modelOutput) }],
+    followUpActions: [],
+  });
+  const copyTool = tool("mcp.apple-security-devices.devices.copy_to_tart_vm", async (action) => {
+    calls.push({ operation: "copy", input: action.input });
+    return complete(action);
+  });
+  const inspectTool = tool("mcp.apple-security-devices.devices.inspect_tart_vm", async (action) => {
+    calls.push({ operation: "inspect", input: action.input });
+    return complete(action);
+  });
+  const execTool = tool("mcp.apple-security-devices.devices.exec_tart_vm", async (action) => {
+    const cleanup = action.input.argv[0] === "/bin/rm";
+    calls.push({ operation: cleanup ? "cleanup" : "exec", input: action.input });
+    return complete(action, cleanup ? {} : {
+      stdout: "guest proof passed\n",
+      stderr: "",
+      exitCode: 0,
+      transport: "tart-exec",
+    });
+  });
+  const shellTool = tool("shell.run", async () => {
+    throw new Error("Tart VM cells must not execute through the host shell.");
+  });
+  try {
+    const created = store.create({
+      title: "Guest proof sequence",
+      purpose: "Build on the host and execute the packaged verifier in an isolated guest.",
+      cells: [{
+        kind: "code",
+        language: "sh",
+        source: "Execute the host-built guest probe.",
+        features: ["runtime"],
+      }],
+    });
+    const codeCellId = store.get(created.runbook.id).cells.find((cell) => cell.kind === "code").id;
+    store.configure({
+      id: created.runbook.id,
+      expectedRevision: created.runbook.revision,
+      enabledFeatures: ["setup", "runtime", "cleanup"],
+      cellExecutors: [{
+        cellId: codeCellId,
+        executor: {
+          kind: "tart-vm",
+          vmName: "example-vm",
+          workspacePath: "guest-probe",
+          runAs: "root",
+          argv: ["--verify"],
+          timeoutSeconds: 45,
+          retainOnFailure: false,
+        },
+      }],
+    });
+    const execute = createRunbookExecutor({
+      store,
+      shellTool,
+      tartVm: { workspaceRoot, storageLayout: layout, inspectTool, copyTool, execTool },
+    });
+
+    const wrongTarget = await execute({ runbookId: created.runbook.id, proofTarget: "localhost" });
+    assert.equal(wrongTarget.status, "failed");
+    assert.match(wrongTarget.error, /requires proofTarget vm/);
+    const result = await execute({ runbookId: created.runbook.id, proofTarget: "vm" });
+
+    assert.equal(result.status, "succeeded");
+    assert.deepEqual(calls.map((call) => call.operation), ["copy", "inspect", "exec", "cleanup"]);
+    assert.equal(calls[0].input.vmName, "example-vm");
+    assert.match(calls[0].input.localPath, /runbook-packages/);
+    assert.equal(calls[0].input.preserveMode, true);
+    assert.deepEqual(calls[2].input.argv.slice(0, 3), ["/usr/bin/sudo", "--", calls[2].input.argv[2]]);
+    assert.match(calls[2].input.argv[2], /^\/tmp\/\.beale-runbook-/);
+    assert.deepEqual(calls[2].input.argv.slice(3), ["--verify"]);
+    assert.equal(calls[2].input.timeoutSeconds, 45);
+    assert.deepEqual(calls[3].input.argv.slice(0, 2), ["/bin/rm", "-f"]);
+    assert.equal(calls[3].input.argv[2], calls[2].input.argv[2]);
+    assert.equal(listResearchStorageArtifacts(layout, { kind: "runbook-guest-executable" }).length, 1);
+
+    const artifact = listResearchStorageArtifacts(layout, { kind: "runbook" })
+      .find((candidate) => candidate.id === created.runbook.artifactId);
+    const notebook = JSON.parse(await readFile(artifact.path, "utf8"));
+    const codeCell = notebook.cells[1];
+    assert.equal(codeCell.metadata.beale.executor.kind, "tart-vm");
+    assert.equal(codeCell.metadata.beale.executor.runAs, "root");
+    assert.equal(codeCell.metadata.beale.latestRun.evidence.runAs, "root");
+    assert.equal(codeCell.metadata.beale.latestRun.evidence.vmName, "example-vm");
+    assert.equal(codeCell.metadata.beale.latestRun.evidence.transport, "tart-exec");
+    assert.equal(codeCell.metadata.beale.latestRun.evidence.cleaned, true);
+    assert.equal(codeCell.outputs[0].text.join(""), "guest proof passed\n");
   } finally {
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });
@@ -96,7 +237,7 @@ test("migrations 13 and 14 separate execution revisions and remove lifecycle sta
     const appended = store.append({
       id: created.runbook.id,
       expectedRevision: 1,
-      cells: [{ kind: "markdown", source: "Content update" }],
+      cells: [{ kind: "markdown", source: "Content update", features: ["runtime"] }],
     }, { provider: "openai", model: "gpt-5.6" });
     store.close();
 
@@ -149,7 +290,7 @@ test("runbook execution records cell status, output, and duration through the sh
     layout,
     { sessionId: "session_exec", workspaceId: "workspace_exec", workspaceName: "Execution" },
   );
-  const contexts = [];
+  const calls = [];
   const updates = [];
   const shellTool = {
     descriptor: {
@@ -160,7 +301,7 @@ test("runbook execution records cell status, output, and duration through the sh
       requiredPermissions: ["process:spawn"],
     },
     async execute(action, context) {
-      contexts.push(context.runbookContext);
+      calls.push({ input: action.input, context: context.runbookContext });
       return {
         action,
         status: "complete",
@@ -176,7 +317,13 @@ test("runbook execution records cell status, output, and duration through the sh
     const created = store.create({
       title: "Proof sequence",
       purpose: "Run one bounded and repeatable proof command.",
-      cells: [{ kind: "code", language: "sh", source: "printf 'proof passed\\n'" }],
+      cells: [{
+        kind: "code",
+        language: "sh",
+        source: "printf 'proof passed\\n'",
+        features: ["runtime"],
+        executor: { kind: "host", timeoutSeconds: 180 },
+      }],
     });
     const execute = createRunbookExecutor({
       store,
@@ -195,20 +342,24 @@ test("runbook execution records cell status, output, and duration through the sh
       input: { id: created.runbook.id, proofTarget: "device", deviceOs: "iOS 27.0" },
     });
 
-    assert.equal(contexts.length, 1);
-    assert.equal(contexts[0].runbookId, created.runbook.id);
-    assert.match(contexts[0].runId, /^runbook_run_/);
-    assert.match(contexts[0].cellId, /^cell-/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].input.timeoutMs, 180_000);
+    assert.equal(calls[0].context.runbookId, created.runbook.id);
+    assert.match(calls[0].context.runId, /^runbook_run_/);
+    assert.match(calls[0].context.cellId, /^cell-/);
     assert.equal(updates.at(-1).status, "succeeded");
     assert.equal(executionResult.status, "complete");
     assert.equal(executionResult.output.status, "succeeded");
     assert.equal(executionResult.output.title, "Proof sequence");
-    assert.equal(executionResult.output.runId, contexts[0].runId);
-    assert.match(executionResult.summary, new RegExp(contexts[0].runId));
+    assert.equal(executionResult.output.runId, calls[0].context.runId);
+    assert.match(executionResult.summary, new RegExp(calls[0].context.runId));
 
-    const artifact = listResearchStorageArtifacts(layout, { kind: "runbook" })[0];
+    const artifact = listResearchStorageArtifacts(layout, { kind: "runbook" })
+      .find((candidate) => candidate.id === created.runbook.artifactId);
+    assert.ok(artifact);
     const notebook = JSON.parse(await readFile(artifact.path, "utf8"));
     const codeCell = notebook.cells[1];
+    assert.equal(codeCell.metadata.beale.executor.timeoutSeconds, 180);
     assert.equal(codeCell.execution_count, 1);
     assert.equal(codeCell.outputs[0].text.join(""), "proof passed\n");
     assert.equal(codeCell.metadata.beale.latestRun.status, "succeeded");
@@ -226,8 +377,8 @@ test("runbook execution records cell status, output, and duration through the sh
     assert.equal(executed.execution.completedRunCount, 1);
     assert.equal(executed.execution.executedCellCount, 1);
     assert.equal(executed.execution.latest.status, "succeeded");
-    assert.equal(executed.execution.latest.runId, contexts[0].runId);
-    assert.equal(executed.execution.latestSuccessfulRunId, contexts[0].runId);
+    assert.equal(executed.execution.latest.runId, calls[0].context.runId);
+    assert.equal(executed.execution.latestSuccessfulRunId, calls[0].context.runId);
 
     const database = new DatabaseSync(getDefaultMemoryDatabasePath(workspaceRoot), { readOnly: true });
     try {
@@ -255,10 +406,10 @@ test("runbook execution plans support inclusive cell ranges and resume-from-here
       title: "Resume sequence",
       purpose: "Prove that a repaired late step can resume without repeating the prefix.",
       cells: [
-        { kind: "code", language: "sh", source: "printf 'one\\n'" },
-        { kind: "markdown", source: "Inspect the first result." },
-        { kind: "code", language: "sh", source: "printf 'two\\n'" },
-        { kind: "code", language: "sh", source: "printf 'three\\n'" },
+        { kind: "code", language: "sh", source: "printf 'one\\n'", features: ["setup"] },
+        { kind: "markdown", source: "Inspect the first result.", features: ["runtime"] },
+        { kind: "code", language: "sh", source: "printf 'two\\n'", features: ["runtime"] },
+        { kind: "code", language: "sh", source: "printf 'three\\n'", features: ["cleanup"] },
       ],
     });
     const codeCells = store.get(created.runbook.id).cells.filter((cell) => cell.kind === "code");
@@ -282,6 +433,52 @@ test("runbook execution plans support inclusive cell ranges and resume-from-here
     assert.throws(
       () => store.executionPlan(created.runbook.id, { cellId: codeCells[0].id, startCellId: codeCells[1].id }),
       /cannot be combined/,
+    );
+  } finally {
+    store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runbook feature toggles deactivate unmatched cells and preserve phase labels", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-features-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const store = new RunbookStore(
+    getDefaultMemoryDatabasePath(workspaceRoot),
+    layout,
+    { sessionId: "session_features", workspaceId: "workspace_features", workspaceName: "Features" },
+  );
+  try {
+    const created = store.create({
+      title: "Feature-selected workflow",
+      purpose: "Keep setup, proof, and teardown in one executable workflow.",
+      cells: [
+        { kind: "code", language: "sh", source: "printf 'setup\\n'", features: ["setup"] },
+        { kind: "code", language: "sh", source: "printf 'proof\\n'", features: ["runtime", "variant-a"] },
+        { kind: "code", language: "sh", source: "printf 'cleanup\\n'", features: ["cleanup"] },
+      ],
+    });
+    const page = store.get(created.runbook.id);
+    const codeCells = page.cells.filter((cell) => cell.kind === "code");
+    const configured = store.configure({
+      id: created.runbook.id,
+      expectedRevision: created.runbook.revision,
+      enabledFeatures: ["variant-a"],
+      cellFeatures: [{ cellId: codeCells[1].id, features: ["runtime", "variant-a"] }],
+    });
+
+    assert.deepEqual(configured.runbook.enabledFeatures, ["variant-a"]);
+    assert.deepEqual(store.executionPlan(created.runbook.id).map((cell) => cell.id), [codeCells[1].id]);
+    assert.equal(store.get(created.runbook.id).cells.find((cell) => cell.id === codeCells[0].id).active, false);
+    assert.throws(() => store.executionPlan(created.runbook.id, { cellId: codeCells[0].id }), /deactivated/);
+    assert.throws(
+      () => store.configure({
+        id: created.runbook.id,
+        expectedRevision: configured.runbook.revision,
+        enabledFeatures: ["runtime"],
+        cellFeatures: [{ cellId: codeCells[1].id, features: ["variant-b"] }],
+      }),
+      /must include setup, runtime, or cleanup/,
     );
   } finally {
     store.close();

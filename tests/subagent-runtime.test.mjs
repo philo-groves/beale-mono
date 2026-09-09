@@ -664,6 +664,7 @@ test("collaboration config decoder allows distinct models per provider and rejec
     intensity: "balanced",
     independentFirstPass: false,
     peerChallengeRounds: 0,
+    maxConcurrentRooms: 4,
   };
   assert.deepEqual(decodeResearchCollaborationConfig(valid), channelConfig);
   assert.deepEqual(

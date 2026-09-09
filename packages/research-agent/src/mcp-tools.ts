@@ -230,16 +230,21 @@ function createMcpExecutableTool(
             return createMcpBlockedResult(action, startedAt, approval.reason);
           }
         }
+        const timeoutController = new AbortController();
+        const signal = context?.signal
+          ? AbortSignal.any([context.signal, timeoutController.signal])
+          : timeoutController.signal;
         const output = await withMcpTimeout(
           client.callTool({
             serverName: mcpTool.serverName,
             toolName: mcpTool.name,
             arguments: call.arguments,
             timeoutMs: call.timeoutMs,
-            ...(context?.signal ? { signal: context.signal } : {}),
+            signal,
           }),
           call.timeoutMs,
           descriptor.name,
+          timeoutController,
         );
         const normalized = normalizeMcpOutput({
           serverName: mcpTool.serverName,
@@ -630,6 +635,7 @@ async function withMcpTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
   capabilityName: string,
+  timeoutController?: AbortController,
 ): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -637,12 +643,16 @@ async function withMcpTimeout<T>(
       operation,
       new Promise<T>((_, reject) => {
         timeout = setTimeout(
-          () =>
+          () => {
+            timeoutController?.abort(
+              new Error(`MCP capability ${capabilityName} exceeded timeout ${timeoutMs}ms.`),
+            );
             reject(
               new Error(
                 `MCP capability ${capabilityName} exceeded timeout ${timeoutMs}ms.`,
               ),
-            ),
+            );
+          },
           timeoutMs,
         );
       }),

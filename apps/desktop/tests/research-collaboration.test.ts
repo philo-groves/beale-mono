@@ -34,7 +34,7 @@ describe('research collaboration normalization', () => {
     });
     expect(collaboration).not.toHaveProperty('maxActiveInvocations');
     expect(collaboration).not.toHaveProperty('maxTotalInvocations');
-    expect(collaboration).toMatchObject({ maxConcurrentRooms: 2, maxMembersPerRoom: 3 });
+    expect(collaboration).toMatchObject({ maxConcurrentRooms: 4, maxMembersPerRoom: 3 });
   });
 
   it('requires cybersecurity acknowledgement only for the security profile', () => {

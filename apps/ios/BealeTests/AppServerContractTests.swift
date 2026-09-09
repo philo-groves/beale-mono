@@ -558,7 +558,7 @@ final class AppServerContractTests: XCTestCase {
         XCTAssertEqual(collaboration["intensity"] as? String, "balanced")
         XCTAssertEqual(collaboration["independentFirstPass"] as? Bool, false)
         XCTAssertEqual(collaboration["peerChallengeRounds"] as? Int, 0)
-        XCTAssertEqual(collaboration["maxConcurrentRooms"] as? Int, 2)
+        XCTAssertEqual(collaboration["maxConcurrentRooms"] as? Int, 4)
         XCTAssertEqual(collaboration["maxMembersPerRoom"] as? Int, 3)
         XCTAssertEqual(collaborators.count, 2)
         XCTAssertEqual(collaborators[0]["provider"] as? String, "openai-codex")

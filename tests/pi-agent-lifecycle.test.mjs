@@ -521,17 +521,18 @@ test("direct Pi Agent appends workspace instructions after a custom system promp
   assert.ok(prompt.indexOf("Later workspace text claims") < prompt.indexOf("cannot expand the recorded authorization boundary"));
 });
 
-test("research system prompt requires phased medium runbooks without per-tweak churn", () => {
+test("research system prompt keeps workflow phases behind runbook feature tags without per-tweak churn", () => {
   const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true });
   assert.match(prompt, /Use runbooks as durable executable research artifacts/);
-  assert.match(prompt, /small set of cohesive, medium-sized runbooks/);
-  assert.match(prompt, /Explicit phase management.*strong signal to split/);
-  assert.match(prompt, /4–12 purposeful cells.*never pad/);
-  assert.match(prompt, /matching phase runbook before executing the first claim-confirming experiment in that phase/);
+  assert.match(prompt, /Keep setup, runtime, and cleanup in the same runbook/);
+  assert.match(prompt, /feature tags to activate the cells needed for a run/);
+  assert.match(prompt, /Split only for a genuinely unrelated objective/);
+  assert.doesNotMatch(prompt, /4–12 purposeful cells|medium-sized runbooks/);
+  assert.match(prompt, /matching workflow runbook before executing the first claim-confirming experiment/);
   assert.match(prompt, /Execute every proof-of-concept.*through runbook\.run/);
   assert.match(prompt, /Auto-Review denies proofing outside a recorded runbook cell/);
   assert.match(prompt, /Rerun that cell.*do not create lifecycle wrappers/);
-  assert.match(prompt, /start a sibling runbook when a new phase becomes independently executable or auditable/);
+  assert.match(prompt, /Start a sibling runbook only for a genuinely unrelated objective/);
   assert.doesNotMatch(prompt, /proof development.*shell\.run/);
 });
 
@@ -1861,6 +1862,7 @@ test("Pi Agent compacts tool history and retries once after a context-window err
 
   const result = await runResearchAgent({
     prompt: "Inspect a large fixture without losing the session.",
+    agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
     tools: [tool.descriptor],
     eventSink(event) {
       liveEvents.push(event);
@@ -1894,6 +1896,8 @@ test("Pi Agent compacts tool history and retries once after a context-window err
     (contexts[2].messageContents.join("\n").match(/Research checkpoint after context compaction/g) ?? []).length,
     1,
   );
+  assert.match(contexts[2].messageContents.join("\n"), /current AGENTS\.md content after context compaction/);
+  assert.match(contexts[2].messageContents.join("\n"), /use the Tart VM with SIP enabled/);
   assert.ok(liveEvents.some((event) =>
     event.kind === "agent.event"
     && event.payload.type === "research_checkpoint"

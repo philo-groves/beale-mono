@@ -163,7 +163,7 @@ test("workspace history duplicate tools coalesce and restore memories and runboo
     assert.deepEqual(runbooks.list({ limit: 20 }).map((runbook) => runbook.id), [parentRunbook.id]);
     assert.equal(runbooks.get(parentRunbook.id).duplicateRunbooks[0].id, duplicateRunbook.id);
     assert.throws(() => memory.correct(duplicateMemory.id, 2, { summary: "Hidden edit" }), /canonical memory/);
-    assert.throws(() => runbooks.append({ id: duplicateRunbook.id, expectedRevision: 2, cells: [{ kind: "markdown", source: "Hidden edit" }] }), /canonical runbook/);
+    assert.throws(() => runbooks.append({ id: duplicateRunbook.id, expectedRevision: 2, cells: [{ kind: "markdown", source: "Hidden edit", features: ["runtime"] }] }), /canonical runbook/);
 
     for (const item of [
       { type: "memory", id: duplicateMemory.id },

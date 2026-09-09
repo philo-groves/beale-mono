@@ -31,7 +31,7 @@ export function decodeResearchCollaborationConfig(value: unknown): ResearchColla
     providers,
     independentFirstPass: false,
     peerChallengeRounds: 0,
-    maxConcurrentRooms: 2,
+    maxConcurrentRooms: 4,
     maxMembersPerRoom: 3,
   };
 }

@@ -530,7 +530,7 @@ struct AppServerSessionLaunchRequest: Encodable, Sendable {
         let providers: [AppServerSessionCollaborator]
         let independentFirstPass = false
         let peerChallengeRounds = 0
-        let maxConcurrentRooms = 2
+        let maxConcurrentRooms = 4
         let maxMembersPerRoom = 3
     }
 

@@ -313,11 +313,20 @@ class StdioMcpServerConnection {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
+        signal?.removeEventListener("abort", onAbort);
+        this.sendNotification("notifications/cancelled", {
+          requestId: id,
+          reason: `MCP request ${method} exceeded timeout ${timeoutMs}ms.`,
+        });
         reject(new Error(`MCP request ${method} exceeded timeout ${timeoutMs}ms.`));
       }, timeoutMs);
       const onAbort = () => {
         this.pending.delete(id);
         clearTimeout(timeout);
+        this.sendNotification("notifications/cancelled", {
+          requestId: id,
+          reason: `MCP request aborted: ${method}`,
+        });
         reject(new Error(`MCP request aborted: ${method}`));
       };
       signal?.addEventListener("abort", onAbort, { once: true });

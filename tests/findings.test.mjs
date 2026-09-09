@@ -308,7 +308,7 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
     const runbook = runbooks.create({
       title: "Reproduce parser state retention",
       purpose: "Replay the two-request sequence on a clean target.",
-      cells: [{ kind: "code", language: "sh", source: "./reproduce.sh" }],
+      cells: [{ kind: "code", language: "sh", source: "./reproduce.sh", features: ["runtime"] }],
     }).runbook;
     const runId = "runbook_run_one";
     assert.throws(() => findings.transition(findingId, {

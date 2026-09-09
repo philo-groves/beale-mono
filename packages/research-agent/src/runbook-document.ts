@@ -1,4 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
+import {
+  RUNBOOK_DEFAULT_TIMEOUT_SECONDS,
+} from "./runbooks.js";
 import type {
   RunbookCell,
   RunbookDocument,
@@ -7,8 +10,9 @@ import type {
 } from './knowledge-types.js';
 import { readPreBealeRecord } from './legacy-compatibility.js';
 
-const MAX_RUNBOOK_BYTES = 8 * 1024 * 1024;
+const MAX_RUNBOOK_BYTES = 32 * 1024 * 1024;
 const MAX_RUNBOOK_CELLS = 1_000;
+const DEFAULT_RUNBOOK_FEATURES = ['setup', 'runtime', 'cleanup'];
 
 export function readAppServerRunbook(path: string, runbookId: string): RunbookDocument {
   if (statSync(path).size > MAX_RUNBOOK_BYTES) {
@@ -28,6 +32,7 @@ export function parseAppServerRunbook(source: string, runbookId: string): Runboo
   const notebookLanguage =
     optionalString(optionalRecord(metadata?.language_info)?.name) ??
     optionalString(optionalRecord(metadata?.kernelspec)?.language);
+  const enabledFeatures = textTags(appServerMetadata?.enabledFeatures, DEFAULT_RUNBOOK_FEATURES);
 
   return {
     runbookId,
@@ -35,12 +40,13 @@ export function parseAppServerRunbook(source: string, runbookId: string): Runboo
     nbformatMinor: optionalInteger(notebook.nbformat_minor) ?? 0,
     language: notebookLanguage,
     revision: optionalInteger(appServerMetadata?.revision),
+    enabledFeatures,
     latestRun: parseExecutionSummary(appServerMetadata?.latestRun),
-    cells: notebook.cells.map((cell, index) => parseCell(cell, index, notebookLanguage))
+    cells: notebook.cells.map((cell, index) => parseCell(cell, index, notebookLanguage, enabledFeatures))
   };
 }
 
-function parseCell(value: unknown, index: number, notebookLanguage: string | null): RunbookCell {
+function parseCell(value: unknown, index: number, notebookLanguage: string | null, enabledFeatures: readonly string[]): RunbookCell {
   const cell = requiredRecord(value, `runbook cell ${index + 1}`);
   const cellType = cell.cell_type;
   if (cellType !== 'markdown' && cellType !== 'code' && cellType !== 'raw') {
@@ -54,11 +60,15 @@ function parseCell(value: unknown, index: number, notebookLanguage: string | nul
     optionalString(appServerMetadata?.language) ??
     optionalString(vscodeMetadata?.languageId) ??
     (cellType === 'code' ? notebookLanguage : null);
+  const features = textTags(appServerMetadata?.features, DEFAULT_RUNBOOK_FEATURES);
 
   return {
     id: optionalString(cell.id) ?? `cell-${index + 1}`,
     type: cellType,
     source: sourceText(cell.source),
+    features,
+    active: features.some((feature) => enabledFeatures.includes(feature)),
+    executor: parseCellExecutor(appServerMetadata?.executor),
     language,
     executionCount: optionalInteger(cell.execution_count),
     latestRun: parseExecutionSummary(appServerMetadata?.latestRun),
@@ -66,6 +76,31 @@ function parseCell(value: unknown, index: number, notebookLanguage: string | nul
       ? cell.outputs.map((output) => parseOutput(output)).filter((output): output is RunbookOutput => output !== null)
       : []
   };
+}
+
+function parseCellExecutor(value: unknown): RunbookCell["executor"] {
+  const executor = optionalRecord(value);
+  if (!executor || executor.kind !== "tart-vm") {
+    return {
+      kind: "host",
+      timeoutSeconds: optionalInteger(executor?.timeoutSeconds) ?? RUNBOOK_DEFAULT_TIMEOUT_SECONDS,
+    };
+  }
+  return {
+    kind: "tart-vm",
+    vmName: optionalString(executor.vmName) ?? "",
+    artifactId: optionalString(executor.artifactId),
+    workspacePath: optionalString(executor.workspacePath),
+    runAs: executor.runAs === "root" ? "root" : "guest",
+    argv: Array.isArray(executor.argv) ? executor.argv.filter((item): item is string => typeof item === "string") : [],
+    timeoutSeconds: optionalInteger(executor.timeoutSeconds) ?? RUNBOOK_DEFAULT_TIMEOUT_SECONDS,
+    retainOnFailure: executor.retainOnFailure === true,
+  };
+}
+
+function textTags(value: unknown, fallback: readonly string[]): string[] {
+  if (!Array.isArray(value)) return [...fallback];
+  return [...new Set(value.filter((tag): tag is string => typeof tag === 'string' && Boolean(tag.trim())).map((tag) => tag.trim().toLowerCase()))];
 }
 
 function parseExecutionSummary(value: unknown): RunbookCell["latestRun"] {
@@ -86,7 +121,17 @@ function parseExecutionSummary(value: unknown): RunbookCell["latestRun"] {
     error: optionalString(execution.error),
     proofTarget,
     deviceOs: optionalString(execution.deviceOs),
+    evidence: scalarRecord(execution.evidence),
   };
+}
+
+function scalarRecord(value: unknown): Record<string, string | number | boolean | null> | null {
+  const record = optionalRecord(value);
+  if (!record) return null;
+  return Object.fromEntries(Object.entries(record).filter((entry): entry is [string, string | number | boolean | null] => {
+    const item = entry[1];
+    return typeof item === "string" || typeof item === "number" || typeof item === "boolean" || item === null;
+  }));
 }
 
 function isRunbookExecutionStatus(value: unknown): value is RunbookExecutionSummary["status"] {

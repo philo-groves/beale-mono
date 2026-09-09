@@ -622,12 +622,29 @@ export interface RunbookExecutionSummary {
   error: string | null;
   proofTarget: "localhost" | "device" | "vm" | "web" | "other";
   deviceOs: string | null;
+  evidence: Record<string, string | number | boolean | null> | null;
 }
+
+export type RunbookCellExecutor =
+  | { kind: "host"; timeoutSeconds: number }
+  | {
+      kind: "tart-vm";
+      vmName: string;
+      artifactId: string | null;
+      workspacePath: string | null;
+      runAs: "guest" | "root";
+      argv: string[];
+      timeoutSeconds: number;
+      retainOnFailure: boolean;
+    };
 
 export interface RunbookCell {
   id: string;
   type: "markdown" | "code" | "raw";
   source: string;
+  features: string[];
+  active: boolean;
+  executor: RunbookCellExecutor;
   language: string | null;
   executionCount: number | null;
   outputs: RunbookOutput[];
@@ -640,6 +657,7 @@ export interface RunbookDocument {
   nbformatMinor: number;
   language: string | null;
   revision: number | null;
+  enabledFeatures: string[];
   latestRun: RunbookExecutionSummary | null;
   cells: RunbookCell[];
 }

@@ -4059,10 +4059,20 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(tool.descriptor);
   }
 
+  const tartVmRunbookTools = resolveTartVmRunbookTools(executableTools);
   const executeRunbook = runbookStore && shellTool
     ? createRunbookExecutor({
         store: runbookStore,
         shellTool,
+        ...(tartVmRunbookTools
+          ? {
+              tartVm: {
+                workspaceRoot,
+                storageLayout,
+                ...tartVmRunbookTools,
+              },
+            }
+          : {}),
         ...(args.runbookExecutionUpdateSink ? { onUpdate: args.runbookExecutionUpdateSink } : {}),
       })
     : undefined;
@@ -4122,6 +4132,21 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   };
+}
+
+function resolveTartVmRunbookTools(tools: readonly ResearchExecutableTool[]): {
+  inspectTool: ResearchExecutableTool;
+  copyTool: ResearchExecutableTool;
+  execTool: ResearchExecutableTool;
+} | undefined {
+  const find = (toolName: string) => tools.find((tool) =>
+    tool.descriptor.metadata?.provider === "mcp"
+    && tool.descriptor.metadata.serverName === "apple-security-devices.devices"
+    && tool.descriptor.metadata.toolName === toolName);
+  const inspectTool = find("inspect_tart_vm");
+  const copyTool = find("copy_to_tart_vm");
+  const execTool = find("exec_tart_vm");
+  return inspectTool && copyTool && execTool ? { inspectTool, copyTool, execTool } : undefined;
 }
 
 function curateRuntimeToolsForPrompt(input: {

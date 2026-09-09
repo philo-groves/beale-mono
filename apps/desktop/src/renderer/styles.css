@@ -7743,6 +7743,10 @@ button.subagent-catalog-item:hover:not(:disabled),
   contain-intrinsic-size: auto 240px;
 }
 
+.runbook-cell.is-inactive {
+  opacity: 0.56;
+}
+
 .runbook-cell-header {
   min-height: 32px;
   display: flex;

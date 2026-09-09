@@ -15,7 +15,7 @@ Seven host-backed plugins are enabled by default and appear in Agent Plugins set
 | Knowledge (`beale-knowledge`) | Reusable memory, workspace history, artifacts, local inspection, and resource inventory. |
 | Claims (`beale-claims`) | Leads, findings, their evidence, and canonical claim revisions. |
 | Investigations (`beale-investigations`) | Investigation records, questions, observations, and configured experiments. |
-| Runbooks (`beale-runbooks`) | Reusable procedure documents, revisions, and recorded executions. |
+| Runbooks (`beale-runbooks`) | Reusable procedure documents, feature-selected host or Tart VM cells, per-cell timeouts, explicit guest/root Tart execution, revisions, and recorded executions. |
 | Reporting (`beale-reporting`) | Report documents, revisions, and structured summaries of supported results. |
 
 `file.read`, `file.write`, `file.edit`, and `shell.run` remain core tools, alongside session and collaboration controls. Existing profile, configuration, and governance limits still apply. File writes create candidate files; replacing an existing file requires the SHA-256 `contentHash` returned by `file.read` as `expectedHash`. File edits require one exact literal match, preserve UTF-8 bytes outside that match, and accept an optional hash check. Both mutations have a 1 MiB ceiling and honor lower host byte budgets.
