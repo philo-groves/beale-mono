@@ -15,6 +15,7 @@ import {
   getAppServerRunDetailUpdateForClient
 } from '../src/main/appServerSessionBoundary';
 import { WorkspaceService } from '../src/main/workspaceService';
+import { fetchAppServerSession, readBealeAppServerDiscovery } from '../src/main/bealeAppServerClient';
 import { resolvedTestResearchProfile } from './researchProfileFixture';
 
 const createdDirectories: string[] = [];
@@ -1090,13 +1091,19 @@ describe('app-server session persistence boundary', () => {
       const runId = started.runs[0]?.run.id;
       expect(runId).toBeTruthy();
 
-      expect(() => service.steerRun({ type: 'stop', runId: runId!, note: '' })).not.toThrow();
+      await service.steerRunForClient({ type: 'stop', runId: runId!, note: '' });
       await waitFor(() => service.getRunDetail(runId!).run.status === 'stopped');
       expect(service.getRunDetail(runId!)).toMatchObject({
         run: { status: 'stopped' },
         attempts: [expect.objectContaining({ status: 'stopped' })]
       });
-      const historyBeforeContinuation = service.getRunDetail(runId!).transcriptMessages.map((message) => message.id);
+      const host = readBealeAppServerDiscovery();
+      expect(host).not.toBeNull();
+      await waitFor(async () => (await fetchAppServerSession(host!, runId!))?.state === 'stopped');
+      await waitFor(() => !runtime!.appServerEngine.hasActiveRuns());
+      // Generated terminal placeholders are replaced on continuation; durable messages must survive.
+      const historyBeforeContinuation = service.getRunDetail(runId!).transcriptMessages
+        .filter((message) => !message.id.startsWith('transcript_final_')).map((message) => message.id);
       await waitFor(() => service.getCachedWorkspaceRegistryState().researchSessions
         .some((session) => session.runId === runId && session.status === 'stopped'));
 
@@ -1133,7 +1140,7 @@ describe('app-server session persistence boundary', () => {
         ]
       });
 
-      expect(() => service.steerRun({ type: 'stop', runId: runId!, note: '' })).not.toThrow();
+      await service.steerRunForClient({ type: 'stop', runId: runId!, note: '' });
       await waitFor(() => service.getRunDetail(runId!).run.status === 'stopped');
     } finally {
       service.close();
@@ -1566,10 +1573,10 @@ function setEnvironment(name: string, value: string): void {
   process.env[name] = value;
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
   }
   throw new Error('Timed out waiting for canonical app-server session completion.');

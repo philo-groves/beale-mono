@@ -6,6 +6,7 @@
 
 #### Fixed
 
+- Manual Stop now addresses the app-server session even when Desktop is detached, waits for an in-flight launch to register, and surfaces host rejection before recording a stopped run. Failed stop requests remain retryable.
 - Host runbook cells now retain and enforce their declared timeout up to 30 minutes instead of discarding it and falling back to the shell's two-minute default. Runbook execution defaults cells to five minutes, and Tart Guest Agent transport repairs a cached native helper removed by an external VM reset before retrying an invocation that never reached the requested guest command.
 - Runbook execution now delegates runtime limits to its bounded cell executors instead of imposing a fixed two-minute outer deadline, including when general tool governance defines that default. The app-server compatibility contract advertises this behavior so an older still-running host cannot be mistaken for the rebuilt runtime. Timed-out or cancelled MCP requests notify managed servers, terminate their active host child, and release serialized Tart VM operations instead of leaving later Guest Agent calls queued behind abandoned work.
 - Auto-Review infrastructure failures now identify themselves to agents as reviewer outages rather than command safety judgments, suppress repeated reviewer calls briefly after a timeout or provider failure, and direct the session away from retry churn until review recovers or the researcher changes safety mode.
@@ -1099,6 +1100,7 @@
 
 #### Fixed
 
+- Accepted worker stop acknowledgements now arm bounded worker termination; late pause/resume acknowledgements cannot overwrite a manual stop or enable automatic recovery.
 - Claim verification now resolves the referenced execution, checks host-recorded reviewer identity against claim authorship, and binds the review to the claim content. Completion checks expose invalidated evidence instead of accepting self-declared independence.
 - Reproduction evidence now requires a complete successful run of the current notebook revision with matching source and environment identities. Execution snapshots and per-cell results are retained independently of later notebook edits and can be read with `runbook.get` and `runId`. Additive migrations preserve historical runs and reviews; records without the new provenance require renewed evidence before further promotion.
 - Claim detail and catalog reads now filter and paginate in SQLite, bound worker responses, and avoid transporting unrelated workspace evidence or full observation metadata for catalog rows.

@@ -61,6 +61,8 @@ export interface AppServerRunHandle {
 }
 
 interface ActiveAppServerRun {
+  launchReady?: Promise<void>;
+  stopPending?: Promise<void>;
   context: CreatedRunContext;
   rootTurnOffset: number;
   paused: boolean;
@@ -515,10 +517,11 @@ export class AppServerRunEngine {
       resolveCompletion = resolve;
     });
 
-    void this.startAppServerRun({
+    active.launchReady = this.startAppServerRun({
       active,
       request: launchRequest
-    }).catch((startError: unknown) => {
+    });
+    void active.launchReady.catch((startError: unknown) => {
       this.clearTimeLimit(active);
       this.clearForceStopTimer(active);
       this.settleTransportReadiness(active, false);
@@ -674,10 +677,31 @@ export class AppServerRunEngine {
     })();
   }
 
-  public stop(runId: string): void {
+  public stop(runId: string): Promise<void> {
     const active = this.activeRuns.get(runId);
-    if (!active) return;
-    this.stopActiveRun(active, 'user');
+    if (active?.stopPending) return active.stopPending;
+    const stopping = this.requestUserStop(runId, active);
+    if (active) {
+      active.stopPending = stopping;
+      const settled = (): void => { if (active.stopPending === stopping) delete active.stopPending; };
+      void stopping.then(settled, settled);
+    }
+    return stopping;
+  }
+
+  private async requestUserStop(runId: string, active?: ActiveAppServerRun): Promise<void> {
+    // The host owns the session even when Desktop is detached or still attaching.
+    // A launch must finish registering its session before DELETE can find it.
+    // Local setup can fail after the host accepted the launch; still stop by session ID.
+    if (active?.launchReady) await active.launchReady.catch(() => undefined);
+    const record = active?.appServerRecord ?? await ensureBealeAppServerRunning();
+    await stopAppServerSession(record, active?.appServerSessionId ?? runId);
+    if (active) {
+      active.stopped = true;
+      active.stopReason = 'user';
+      this.clearTimeLimit(active);
+      this.clearForceStopTimer(active);
+    }
   }
 
   public hasRun(runId: string): boolean {
@@ -1317,7 +1341,7 @@ export class AppServerRunEngine {
   }
 
   private launchQueuedContinuation(active: ActiveAppServerRun): void {
-    if (this.disposed || active.stopped || active.queuedContinuations.size === 0) return;
+    if (this.disposed || active.stopped || active.stopPending || active.queuedContinuations.size === 0) return;
     const queued = [...active.queuedContinuations.values()]
       .filter((control): control is PendingAppServerControl & { instruction: string } => Boolean(control.instruction?.trim()));
     active.queuedContinuations.clear();

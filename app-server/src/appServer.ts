@@ -1000,13 +1000,15 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (event.payload.eventType !== 'control.received' || event.payload.accepted !== true) return;
     const type = event.payload.type;
     if (type !== 'pause' && type !== 'resume' && type !== 'stop') return;
+    if (runtime.stopRequested) return;
     if (type === 'stop') {
-      if (runtime.stopRequested) return;
-      runtime.stopRequested = true;
+      // An accepted worker-side stop must arm the same forced-exit fallback as HTTP/WS stop.
+      requestRuntimeStop(runtime);
+      return;
     }
     void recordSessionControlState(
       runtime,
-      type === 'pause' ? 'paused' : type === 'resume' ? 'active' : 'stopped'
+      type === 'pause' ? 'paused' : 'active'
     );
   }
 

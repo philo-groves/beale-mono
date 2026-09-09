@@ -3801,8 +3801,8 @@ export class WorkspaceService {
     };
   }
 
-  public steerRun(action: SteeringAction): WorkspaceSnapshot {
-    return this.applySteeringAction(action, false) as WorkspaceSnapshot;
+  public steerRun(action: SteeringAction): WorkspaceSnapshot | Promise<WorkspaceSnapshot> {
+    return this.applySteeringAction(action, false);
   }
 
   public async steerRunForClient(action: SteeringAction): Promise<WorkspaceSnapshot> {
@@ -3889,18 +3889,24 @@ export class WorkspaceService {
         break;
       }
       case 'stop': {
-        runtime.appServerEngine.stop(action.runId);
-        if (attempt) db.updateAttemptState(attempt.id, 'stopped', 'Stopped by user steering.');
-        db.updateRunStatus(action.runId, 'stopped', 'Stopped by user steering.');
-        db.appendTraceEvent({
-          runId: action.runId,
-          attemptId: attempt?.id ?? null,
-          type: 'user_note',
-          source: 'user',
-          summary: 'Run stopped by user.',
-          payload: { note: action.note ?? '' }
+        return runtime.appServerEngine.stop(action.runId).then(() => {
+          if (attempt) db.updateAttemptState(attempt.id, 'stopped', 'Stopped by user steering.');
+          db.updateRunStatus(action.runId, 'stopped', 'Stopped by user steering.');
+          db.appendTraceEvent({
+            runId: action.runId,
+            attemptId: attempt?.id ?? null,
+            type: 'user_note',
+            source: 'user',
+            summary: 'Run stopped by user.',
+            payload: { note: action.note ?? '' }
+          });
+          if (runtime.workspacePath === this.workspacePath) {
+            this.emitChange();
+            return this.requireSnapshot();
+          }
+          this.emitRuntimeChange(runtime.workspacePath, { workspaceRegistryChanged: true });
+          return this.snapshotForRuntime(runtime);
         });
-        break;
       }
       case 'steer': {
         const instruction = action.instruction.trim();

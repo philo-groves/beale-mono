@@ -264,6 +264,27 @@ test("HTTP stop control terminates the hosted worker without waiting for coopera
   }]);
 });
 
+test("an accepted worker stop arms termination and cannot be undone by a late resume acknowledgement", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-stop-ack-example-"));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const hostService = testHostService(directory);
+  const states = [];
+  hostService.recordSessionControlState = async (input) => { states.push(input.state); };
+  const server = await startAppServer({ hostService, spawnSession: upstream.spawnSession });
+  servers.push(server);
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: "session-stop-ack-example" }));
+  const acknowledge = (type) => upstream.sendEvent({
+    schemaVersion: 1, kind: "agent.event", timestamp: new Date().toISOString(),
+    payload: { eventType: "control.received", type, accepted: true, requestId: `request-${type}-example` },
+  });
+  acknowledge("stop");
+  acknowledge("resume");
+  assert.equal(upstream.stopCalls(), 1);
+  assert.deepEqual(states, ["stopped"]);
+  await waitFor(() => server.listSessions()[0]?.state === "stopped");
+});
+
 test("publishes a path-free model catalog for connected providers with host defaults", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-providers-"));
   temporaryDirectories.push(directory);
