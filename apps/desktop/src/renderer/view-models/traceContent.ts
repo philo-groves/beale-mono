@@ -195,6 +195,9 @@ export function appServerToolTraceSubtext(event: TraceEventRecord, detail: RunDe
     return [title ?? id, revision ? `Update ${revision}` : null].filter((value): value is string => Boolean(value)).join(' · ');
   }
   if (toolName === 'file.read') return appServerToolEventKind(event) === 'tool.requested' ? stringRecordValue(inputs, 'path') ?? '' : '';
+  if (toolName === 'workspace.search') return appServerToolEventKind(event) === 'tool.requested'
+    ? [stringRecordValue(inputs, 'query'), stringRecordValue(inputs, 'path')].filter(Boolean).join(' · ')
+    : '';
   if (toolName === 'spawn_agent') {
     const result = tracePayloadRecord(payload, 'result');
     const taskName = (result ? stringRecordValue(result, 'task_name') : null) ?? stringRecordValue(inputs, 'task_name');

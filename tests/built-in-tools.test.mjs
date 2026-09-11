@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import test from "node:test";
@@ -22,6 +22,7 @@ import {
   createToolResultMessage,
   createStorageListTool,
   createStructuredFileReadTool,
+  createWorkspaceSearchTool,
   createSynthesisTool,
   ensureResearchStorageLayout,
   modelToolResultDetails,
@@ -1396,6 +1397,79 @@ test("structured file read supports ranges and annotates paths outside context r
       recursive: true,
       force: true,
     });
+  }
+});
+
+test("workspace search finds paths and content outside configured repositories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-workspace-search-"));
+  await mkdir(join(root, "notes"));
+  const olderPath = join(root, "notes", "proof-plan.txt");
+  const newerPath = join(root, "notes", "latest-plan.txt");
+  await writeFile(olderPath, "Synthetic continuity marker\n");
+  await writeFile(newerPath, "Synthetic continuity marker\n");
+  await utimes(olderPath, new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-01T00:00:00.000Z"));
+  await utimes(newerPath, new Date("2026-01-02T00:00:00.000Z"), new Date("2026-01-02T00:00:00.000Z"));
+  await mkdir(join(root, ".beale"));
+  await writeFile(join(root, ".beale", "private.txt"), "Synthetic continuity marker\n");
+  await mkdir(join(root, "scratch"));
+  await mkdir(join(root, "evidence", "raw"), { recursive: true });
+  await mkdir(join(root, "investigations"));
+  await writeFile(join(root, "scratch", "temporary.txt"), "Synthetic continuity marker\n");
+  await writeFile(join(root, "evidence", "raw", "capture.txt"), "Synthetic continuity marker\n");
+  await writeFile(join(root, "investigations", "current.md"), "Synthetic current investigation\n");
+  try {
+    const registry = createResearchToolRegistry([createWorkspaceSearchTool({ workspaceRoot: root })]);
+    const result = await registry.execute({
+      id: "workspace_search_1",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "continuity marker", mode: "both" },
+    });
+    assert.equal(result.result.status, "complete");
+    assert.deepEqual(result.result.output.matches.map((match) => match.path), [
+      "notes/latest-plan.txt",
+      "notes/proof-plan.txt",
+    ]);
+    assert.ok(result.result.output.matches[0].modifiedAt > result.result.output.matches[1].modifiedAt);
+    const names = await registry.execute({
+      id: "workspace_search_2",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "proof-plan", mode: "name" },
+    });
+    assert.equal(names.result.output.matches[0].matchKind, "name");
+    const filtered = await registry.execute({
+      id: "workspace_search_3",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "current", mode: "content", categories: ["investigations"], extensions: [".md"] },
+    });
+    assert.deepEqual(filtered.result.output.matches.map((match) => match.path), ["investigations/current.md"]);
+    const hiddenByDefault = await registry.execute({
+      id: "workspace_search_4",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "continuity marker" },
+    });
+    assert.equal(hiddenByDefault.result.output.matches.some((match) => match.path.startsWith("scratch/") || match.path.startsWith("evidence/raw/")), false);
+    const rawAndTemporary = await registry.execute({
+      id: "workspace_search_5",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "continuity marker", includeRaw: true, includeTemporary: true, maxResults: 2 },
+    });
+    assert.equal(rawAndTemporary.result.output.matches.length, 2);
+    assert.equal(rawAndTemporary.result.output.nextOffset, 2);
+    const nextPage = await registry.execute({
+      id: "workspace_search_6",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "continuity marker", includeRaw: true, includeTemporary: true, offset: rawAndTemporary.result.output.nextOffset, maxResults: 2 },
+    });
+    assert.equal(nextPage.result.output.matches.length, 2);
+    assert.equal(new Set([...rawAndTemporary.result.output.matches, ...nextPage.result.output.matches].map((match) => match.path)).size, 4);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

@@ -69,6 +69,36 @@ test("runbook tools expose bounded artifact operations", async () => {
     assert.equal(appended.result.status, "complete");
     assert.equal(appended.result.output.cellCount, 22);
 
+    const firstPage = store.get(created.result.output.id, { limit: 5 });
+    assert.equal(firstPage.cells.length, 5);
+    assert.equal(firstPage.nextOffset, 5);
+    assert.equal(firstPage.previousOffset, null);
+    const secondPage = store.get(created.result.output.id, { offset: firstPage.nextOffset, limit: 5 });
+    assert.equal(secondPage.offset, 5);
+    assert.equal(secondPage.previousOffset, 0);
+    const range = store.get(created.result.output.id, {
+      startCellId: firstPage.cells[1].id,
+      endCellId: firstPage.cells[3].id,
+      limit: 10,
+    });
+    assert.deepEqual(range.cells.map((cell) => cell.id), firstPage.cells.slice(1, 4).map((cell) => cell.id));
+    const truncatedRange = store.get(created.result.output.id, {
+      startCellId: firstPage.cells[1].id,
+      endCellId: firstPage.cells[3].id,
+      limit: 2,
+    });
+    assert.deepEqual(truncatedRange.cells.map((cell) => cell.id), firstPage.cells.slice(1, 3).map((cell) => cell.id));
+    assert.equal(truncatedRange.nextOffset, null);
+    assert.equal(truncatedRange.previousOffset, null);
+    assert.equal(truncatedRange.nextCellId, firstPage.cells[3].id);
+    const rangeTail = store.get(created.result.output.id, {
+      startCellId: truncatedRange.nextCellId,
+      endCellId: firstPage.cells[3].id,
+      limit: 2,
+    });
+    assert.deepEqual(rangeTail.cells.map((cell) => cell.id), [firstPage.cells[3].id]);
+    assert.equal(rangeTail.nextCellId, null);
+
     const listed = await registry.execute({ id: "list_runbooks", actionClass: "recall", toolName: "runbook.list", input: {} });
     assert.equal(listed.result.output.total, 1);
     assert.equal(listed.result.output.runbooks[0].id, created.result.output.id);

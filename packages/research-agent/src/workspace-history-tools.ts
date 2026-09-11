@@ -54,6 +54,7 @@ export function createWorkspaceHistorySearchTool(
     type: "object",
     properties: {
       query: { type: "string", description: "Text to find across titles, summaries, classifications, statuses, and reusable procedure descriptions." },
+      scope: { type: "string", enum: ["workspace", "subject"], description: "Defaults to workspace. Subject adds compact, read-only references from other workspaces that share the active Subject; it never enables cross-workspace mutation." },
       types: {
         type: "array",
         uniqueItems: true,
@@ -77,7 +78,7 @@ export function createWorkspaceHistorySearchTool(
   return tool(
     "history.search",
     "history_search",
-    "Search the current workspace's canonical claims, knowledge memories, and runbooks through one history index. Results are compact typed cards; use claim.get, memory.get, or runbook.get for record details, and search before repeating prior work.",
+    "Search the current workspace's canonical claims, knowledge memories, and runbooks as compact typed cards through one history index. Scope defaults to the current workspace; scope=subject also returns compact read-only references from other workspaces sharing the active Subject. Files remain workspace-local, so use workspace.search only for the current workspace.",
     schema,
     (input) => searchWorkspaceHistory(options, input),
   );
@@ -161,6 +162,9 @@ function searchWorkspaceHistory(
   input: Record<string, unknown>,
 ): Record<string, unknown> {
   const query = text(input.query)?.toLowerCase() ?? "";
+  const scope = input.scope === "subject" ? "subject" : "workspace";
+  const currentContext = options.memoryStore?.getContext() ?? options.runbookStore?.getContext();
+  const currentWorkspaceId = currentContext?.workspaceId;
   const requestedTypes = historyTypes(input.types);
   const selectedTypes = new Set<WorkspaceHistoryType>(requestedTypes.length
     ? requestedTypes
@@ -174,7 +178,7 @@ function searchWorkspaceHistory(
   if (selectedTypes.has("memories") && options.memoryStore) {
     const nodes = options.memoryStore.search({
       ...(query ? { query } : {}),
-      scope: "workspace",
+      scope,
       ...(strings(input.memoryTypes).length ? { types: strings(input.memoryTypes) as MemoryNodeType[] } : {}),
       ...(strings(input.memoryStatuses).length ? { statuses: strings(input.memoryStatuses) as MemoryNodeStatus[] } : {}),
       ...(strings(input.assetIds).length ? { assetIds: strings(input.assetIds) } : {}),
@@ -201,6 +205,8 @@ function searchWorkspaceHistory(
             ...(evidence.path ? { path: evidence.path } : {}),
           })) } : {}),
           relationshipCount: relationshipCounts.get(node.id) ?? 0,
+          workspaces: node.workspaces,
+          readOnlyReference: scope === "subject" && !node.workspaces.some((workspace) => workspace.id === currentWorkspaceId),
           updatedAt: node.updatedAt, revision: node.revision,
         },
       });
@@ -210,7 +216,7 @@ function searchWorkspaceHistory(
   if (selectedTypes.has("claims") && options.claimStore) {
     const statuses = new Set(strings(input.claimStatuses));
     const classifications = new Set(strings(input.claimClassifications));
-    for (const claim of options.claimStore.list()) {
+    for (const claim of scope === "subject" ? options.claimStore.listSubjectReferences() : options.claimStore.list()) {
       if (statuses.size && !statuses.has(claim.status)) continue;
       if (classifications.size && !classifications.has(claim.classification)) continue;
       const searchText = `${claim.id}\n${claim.projection}\n${claim.maturity}\n${claim.status}\n${claim.rating}\n${claim.classification}\n${claim.title}\n${claim.summary}\n${claim.impact}\n${claim.componentClaimIds.join(" ")}\n${claim.evidence.map((evidence) => `${evidence.kind} ${evidence.referenceId ?? ""} ${evidence.summary}`).join("\n")}`;
@@ -235,6 +241,8 @@ function searchWorkspaceHistory(
           })) } : {}),
           sourceRevision: claim.sourceRevision, environmentFingerprint: claim.environmentFingerprint,
           reproductionRunbookId: claim.reproductionRunbookId, reportId: claim.reportId,
+          workspaceId: claim.workspaceId,
+          readOnlyReference: scope === "subject" && claim.workspaceId !== currentWorkspaceId,
           updatedAt: claim.updatedAt, revision: claim.revision,
         },
       });
@@ -242,7 +250,9 @@ function searchWorkspaceHistory(
   }
 
   if (selectedTypes.has("runbooks") && options.runbookStore) {
-    for (const runbook of options.runbookStore.list({ limit: 200 })) {
+    for (const runbook of scope === "subject"
+      ? options.runbookStore.listSubjectReferences({ limit: 200 })
+      : options.runbookStore.list({ limit: 200 })) {
       const searchText = `${runbook.id}\n${runbook.title}\n${runbook.purpose}`;
       if (query && !matchesQuery(searchText, query)) continue;
       candidates.push({
@@ -256,6 +266,9 @@ function searchWorkspaceHistory(
           purpose: truncateText(runbook.purpose), cellCount: runbook.cellCount,
           contentRevision: runbook.contentRevision, execution: runbook.execution,
           duplicateCount: runbook.duplicateRunbooks.length,
+          workspaceId: runbook.workspaceId,
+          workspaceName: runbook.workspaceName,
+          readOnlyReference: scope === "subject" && runbook.workspaceId !== currentWorkspaceId,
           updatedAt: runbook.updatedAt, revision: runbook.revision,
         },
       });
@@ -267,7 +280,7 @@ function searchWorkspaceHistory(
     || right.updatedAt.localeCompare(left.updatedAt)
     || left.key.localeCompare(right.key));
   const revision = createHash("sha256")
-    .update(JSON.stringify({ query, types: [...selectedTypes].sort(), limit,
+    .update(JSON.stringify({ query, scope, types: [...selectedTypes].sort(), limit,
       memoryTypes: strings(input.memoryTypes).sort(), memoryStatuses: strings(input.memoryStatuses).sort(),
       claimStatuses: strings(input.claimStatuses).sort(), claimClassifications: strings(input.claimClassifications).sort(),
       assetIds: strings(input.assetIds).sort(), tags: strings(input.tags).sort() }))
@@ -275,14 +288,22 @@ function searchWorkspaceHistory(
     .update(candidates.map((candidate) => `${candidate.key}:${candidate.revision}:${candidate.updatedAt}`).join("\n"))
     .digest("hex").slice(0, 16);
   const counts = Object.fromEntries(WORKSPACE_HISTORY_TYPES.map((type) => [type, candidates.filter((candidate) => candidate.type === type).length]));
+  const scopeContext = {
+    scope,
+    workspaceId: currentWorkspaceId ?? null,
+    subject: currentContext ? { id: currentContext.subjectId, name: currentContext.subjectName } : null,
+    crossWorkspaceResultsReadOnly: scope === "subject",
+  };
   if (text(input.afterRevision) === revision) {
-    return { revision, unchanged: true, matched: candidates.length, resultCount: 0, counts, results: [] };
+    return { ...scopeContext, revision, unchanged: true, matched: candidates.length, resultCount: 0, counts, results: [] };
   }
   const results = candidates.slice(0, limit).map((candidate) => candidate.summary);
   return {
-    revision, unchanged: false, matched: candidates.length, truncated: candidates.length > limit,
+    ...scopeContext, revision, unchanged: false, matched: candidates.length, truncated: candidates.length > limit,
     resultCount: results.length, counts, detail: "summary", results,
-    recall: "Use claim.get for lead or finding evidence, provenance, and transition history; use memory.get or runbook.get for their full records.",
+    recall: scope === "subject"
+      ? "Same-Subject results from another workspace are read-only reference cards. Open that workspace for full claim/runbook artifacts; memory.get can read a same-Subject memory directly."
+      : "Use claim.get for lead or finding evidence, provenance, and transition history; use memory.get or runbook.get for their full records.",
   };
 }
 

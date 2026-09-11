@@ -447,6 +447,7 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'history.mark_duplicate': { singular: 'Coalescing a Workspace History Duplicate', plural: (count) => `Coalescing ${count} Workspace History Duplicates` },
   'history.undo_duplicate': { singular: 'Restoring a Workspace History Record', plural: (count) => `Restoring ${count} Workspace History Records` },
   'repository.search': { singular: 'Searching the Repository', plural: (count) => `Running ${count} Repository Searches` },
+  'workspace.search': { singular: 'Searching the Workspace', plural: (count) => `Running ${count} Workspace Searches` },
   'runbook.append': { singular: 'Updating a Runbook', plural: (count) => `Updating ${count} Runbooks` },
   'runbook.configure': { singular: 'Configuring a Runbook', plural: (count) => `Configuring ${count} Runbooks` },
   'runbook.create': { singular: 'Creating a Runbook', plural: (count) => `Creating ${count} Runbooks` },

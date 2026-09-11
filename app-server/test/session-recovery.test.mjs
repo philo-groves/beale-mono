@@ -84,10 +84,13 @@ test('does not recover explicit stops, policy failures, credentials, or invalid 
 test('builds a self-contained fallback without discarding the original task', () => {
   const prompt = longSessionRecoveryFallbackPrompt(
     'Continue reviewing the kernel parser.',
-    'Provider stream ended unexpectedly.'
+    'Provider stream ended unexpectedly.',
+    ['commentary: narrowed the synthetic parser branch', 'runbook.get: complete']
   );
   assert.match(prompt, /Continue the same research task/u);
   assert.match(prompt, /Continue reviewing the kernel parser/u);
   assert.match(prompt, /Provider stream ended unexpectedly/u);
   assert.match(prompt, /canonical session history/u);
+  assert.match(prompt, /narrowed the synthetic parser branch/u);
+  assert.match(prompt, /runbook\.get: complete/u);
 });

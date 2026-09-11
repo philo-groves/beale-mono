@@ -108,6 +108,43 @@ test("workspace history search unifies canonical claims, memories, and runbooks 
     });
     assert.equal(unchanged.result.output.unchanged, true);
     assert.deepEqual(unchanged.result.output.results, []);
+
+    const referenceContext = {
+      sessionId: "session_reference",
+      workspaceId: "workspace_reference",
+      workspaceName: "Reference workspace",
+      subjectId: context.subjectId,
+      subjectName: context.subjectName,
+    };
+    const referenceMemory = new MemoryGraphStore({ workspaceRoot, databasePath: memory.databasePath, context: referenceContext });
+    const referenceClaims = new ResearchClaimStore(referenceMemory);
+    const referenceRunbooks = new RunbookStore(
+      memory.databasePath,
+      ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot })),
+      referenceContext,
+    );
+    try {
+      referenceMemory.save({ type: "invariant", title: "Reference-only parser note", summary: "Prior workspace parser research." });
+      referenceClaims.create({ title: "Reference-only parser claim", classification: "security.primitive", rating: "medium" });
+      referenceRunbooks.create({ title: "Reference-only parser runbook", purpose: "Preserve the prior workspace procedure." });
+      const subjectSearch = await registry.execute({
+        id: "history_subject",
+        actionClass: "recall",
+        toolName: "history.search",
+        input: { query: "reference-only parser", scope: "subject", limit: 20 },
+      });
+      assert.equal(subjectSearch.result.output.scope, "subject");
+      assert.deepEqual(subjectSearch.result.output.subject, { id: context.subjectId, name: context.subjectName });
+      assert.equal(subjectSearch.result.output.crossWorkspaceResultsReadOnly, true);
+      const referenceResults = subjectSearch.result.output.results.filter((result) => result.readOnlyReference === true);
+      assert.deepEqual(new Set(referenceResults.map((result) => result.type)), new Set(["claim", "memory", "runbook"]));
+      assert.equal(referenceResults.every((result) => result.workspaceId === referenceContext.workspaceId
+        || result.workspaces?.some((workspace) => workspace.id === referenceContext.workspaceId)), true);
+    } finally {
+      referenceRunbooks.close();
+      referenceClaims.close();
+      referenceMemory.close();
+    }
   } finally {
     runbooks.close();
     claims.close();

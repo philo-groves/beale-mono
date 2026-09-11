@@ -131,6 +131,10 @@ export interface RunbookDuplicateSummary {
 
 export interface RunbookPage extends RunbookRecord {
   offset: number;
+  limit: number;
+  nextOffset: number | null;
+  nextCellId: string | null;
+  previousOffset: number | null;
   totalCells: number;
   cells: RunbookCellRecord[];
 }
@@ -209,6 +213,10 @@ export class RunbookStore {
     this.database.close();
   }
 
+  public getContext(): MemoryContext {
+    return { ...this.context };
+  }
+
   public list(options: { query?: string; limit?: number } = {}): RunbookRecord[] {
     const query = options.query?.trim().toLowerCase() ?? "";
     const limit = clampInteger(options.limit ?? 50, 1, 200);
@@ -220,18 +228,50 @@ export class RunbookStore {
       .map((row) => this.toRecord(row));
   }
 
-  public get(id: string, options: { offset?: number; limit?: number } = {}): RunbookPage | null {
+  /** Read-only catalog references from every workspace attached to the active Subject. */
+  public listSubjectReferences(options: { query?: string; limit?: number } = {}): RunbookRecord[] {
+    const query = options.query?.trim().toLowerCase() ?? "";
+    const limit = clampInteger(options.limit ?? 50, 1, 200);
+    return (this.database.prepare(`SELECT * FROM app_server_runbooks
+      WHERE subject_id = ? AND duplicate_of_runbook_id IS NULL
+      ORDER BY updated_at DESC, id`).all(this.context.subjectId ?? `subject_workspace:${this.context.workspaceId}`) as unknown as RunbookRow[])
+      .filter((row) => !query || `${row.title}\n${row.purpose}`.toLowerCase().includes(query))
+      .slice(0, limit)
+      .map((row) => this.toRecord(row));
+  }
+
+  public get(id: string, options: {
+    offset?: number;
+    limit?: number;
+    startCellId?: string;
+    endCellId?: string;
+  } = {}): RunbookPage | null {
     const row = this.readRow(id);
     if (!row) return null;
     const notebook = this.readNotebook(row);
-    const offset = clampInteger(options.offset ?? 0, 0, notebook.cells.length);
     const limit = clampInteger(options.limit ?? 40, 1, 100);
+    if (options.offset !== undefined && (options.startCellId || options.endCellId)) {
+      throw new Error("offset cannot be combined with startCellId or endCellId.");
+    }
+    const records = notebook.cells.map((cell, index) =>
+      notebookCellToRecord(cell, index, notebookEnabledFeatures(notebook)));
+    const range = cellRange(records, options.startCellId, options.endCellId, id);
+    const ranged = Boolean(options.startCellId || options.endCellId);
+    const offset = ranged
+      ? range.start
+      : clampInteger(options.offset ?? 0, 0, notebook.cells.length);
+    const end = ranged
+      ? Math.min(range.end + 1, offset + limit)
+      : Math.min(notebook.cells.length, offset + limit);
     return {
       ...this.toRecord(row, notebook.cells.length),
       offset,
+      limit,
+      nextOffset: !ranged && end < notebook.cells.length ? end : null,
+      nextCellId: ranged && end < range.end + 1 ? records[end]?.id ?? null : null,
+      previousOffset: !ranged && offset > 0 ? Math.max(0, offset - limit) : null,
       totalCells: notebook.cells.length,
-      cells: notebook.cells.slice(offset, offset + limit).map((cell, index) =>
-        notebookCellToRecord(cell, offset + index, notebookEnabledFeatures(notebook))),
+      cells: records.slice(offset, end),
     };
   }
 
@@ -567,15 +607,31 @@ export class RunbookStore {
     return selected.map(({ id: selectedId, source, language, executor }) => ({ id: selectedId, source, language, executor }));
   }
 
-  public getExecution(id: string, runId: string, options: { offset?: number; limit?: number } = {}) {
-    const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  public getExecution(id: string, runId: string, options: {
+    offset?: number;
+    limit?: number;
+    startCellId?: string;
+    endCellId?: string;
+  } = {}) {
     const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 12)));
+    if (options.offset !== undefined && (options.startCellId || options.endCellId)) {
+      throw new Error("offset cannot be combined with startCellId or endCellId.");
+    }
     const row = this.database.prepare(`SELECT * FROM app_server_runbook_executions
       WHERE runbook_id = ? AND run_id = ? AND workspace_id = ?`).get(id, runId, this.context.workspaceId) as RunbookExecutionRow | undefined;
     if (!row) throw new Error(`Runbook execution not found in this workspace: ${runId}`);
     const snapshot: unknown = typeof row.snapshot_json === "string" ? JSON.parse(row.snapshot_json) : null;
     const plan = isRecord(snapshot) && Array.isArray(snapshot.cells) ? snapshot.cells.filter(isRecord) : [];
-    const cells = plan.slice(offset, offset + limit).map((cell) => {
+    const identifiedPlan: Array<Record<string, unknown> & { id: string }> = plan
+      .map((cell) => ({ ...cell, id: requiredText(cell.id, "cell.id", 200) }));
+    const range = cellRange(identifiedPlan, options.startCellId, options.endCellId, id);
+    const ranged = Boolean(options.startCellId || options.endCellId);
+    const offset = ranged
+      ? range.start
+      : Math.max(0, Math.min(plan.length, Math.floor(options.offset ?? 0)));
+    const rangeEnd = ranged ? range.end + 1 : plan.length;
+    const end = Math.min(rangeEnd, offset + limit);
+    const cells = identifiedPlan.slice(offset, end).map((cell) => {
       const recorded = this.database.prepare(`SELECT result_json FROM app_server_runbook_cell_executions
         WHERE run_id = ? AND cell_id = ?`).get(runId, requiredText(cell.id, "cell.id", 200)) as { result_json: string } | undefined;
       const result: unknown = recorded ? JSON.parse(recorded.result_json) : null;
@@ -595,7 +651,10 @@ export class RunbookStore {
       fullRun: row.full_run === 1, startedAt: row.started_at, completedAt: row.completed_at,
       selectedCellIds: typeof row.selected_cell_ids_json === "string" ? JSON.parse(row.selected_cell_ids_json) as string[] : [],
       requiredCellIds: typeof row.required_cell_ids_json === "string" ? JSON.parse(row.required_cell_ids_json) as string[] : [],
-      cells, totalCells: plan.length, offset, limit, nextOffset: offset + cells.length < plan.length ? offset + cells.length : null,
+      cells, totalCells: plan.length, offset, limit,
+      nextOffset: !ranged && end < rangeEnd ? end : null,
+      nextCellId: ranged && end < rangeEnd ? identifiedPlan[end]?.id ?? null : null,
+      previousOffset: !ranged && offset > 0 ? Math.max(0, offset - limit) : null,
     };
   }
 
@@ -878,7 +937,7 @@ export class RunbookStore {
     const duplicates = this.database.prepare(`SELECT id, title, purpose, revision, duplicate_marked_at
       FROM app_server_runbooks
       WHERE workspace_id = ? AND duplicate_of_runbook_id = ?
-      ORDER BY duplicate_marked_at, id`).all(this.context.workspaceId, row.id) as Array<{
+      ORDER BY duplicate_marked_at, id`).all(row.workspace_id, row.id) as Array<{
         id: string; title: string; purpose: string; revision: number; duplicate_marked_at: string;
       }>;
     return {
@@ -904,7 +963,7 @@ export class RunbookStore {
         revision: duplicate.revision,
         markedAt: duplicate.duplicate_marked_at,
       })),
-      execution: this.readExecutionMetrics(row.id),
+      execution: this.readExecutionMetrics(row.id, row.workspace_id),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       authors: modelAuthorsForResource(this.database, "runbook", row.id),
@@ -917,13 +976,13 @@ export class RunbookStore {
     }
   }
 
-  private readExecutionMetrics(runbookId: string): RunbookExecutionMetrics {
+  private readExecutionMetrics(runbookId: string, workspaceId = this.context.workspaceId): RunbookExecutionMetrics {
     const totals = this.database.prepare(`SELECT
       COUNT(*) AS run_count,
       SUM(CASE WHEN status <> 'running' THEN 1 ELSE 0 END) AS completed_run_count,
       COALESCE(SUM(completed_cell_count), 0) AS executed_cell_count
       FROM app_server_runbook_executions
-      WHERE runbook_id = ? AND workspace_id = ?`).get(runbookId, this.context.workspaceId) as {
+      WHERE runbook_id = ? AND workspace_id = ?`).get(runbookId, workspaceId) as {
         run_count?: unknown;
         completed_run_count?: unknown;
         executed_cell_count?: unknown;
@@ -931,7 +990,7 @@ export class RunbookStore {
     const latest = this.database.prepare(`SELECT run_id, status, started_at
       FROM app_server_runbook_executions
       WHERE runbook_id = ? AND workspace_id = ?
-      ORDER BY started_at DESC, run_id DESC LIMIT 1`).get(runbookId, this.context.workspaceId) as {
+      ORDER BY started_at DESC, run_id DESC LIMIT 1`).get(runbookId, workspaceId) as {
         run_id?: unknown;
         status?: unknown;
         started_at?: unknown;
@@ -941,7 +1000,7 @@ export class RunbookStore {
       WHERE runbook_id = ? AND workspace_id = ? AND status = 'succeeded' AND full_run = 1
         AND content_revision = (SELECT content_revision FROM app_server_runbooks WHERE id = run.runbook_id)
         AND selected_cell_count = completed_cell_count
-      ORDER BY completed_at DESC, started_at DESC, run_id DESC LIMIT 1`).get(runbookId, this.context.workspaceId) as {
+      ORDER BY completed_at DESC, started_at DESC, run_id DESC LIMIT 1`).get(runbookId, workspaceId) as {
         run_id?: unknown;
       } | undefined;
     return {
@@ -1244,6 +1303,20 @@ function safeSegment(value: string): string {
 function clampInteger(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
   return Math.max(minimum, Math.min(maximum, Math.floor(value)));
+}
+
+function cellRange<T extends { id: string }>(
+  cells: readonly T[],
+  startCellId: string | undefined,
+  endCellId: string | undefined,
+  runbookId: string,
+): { start: number; end: number } {
+  const start = startCellId ? cells.findIndex((cell) => cell.id === startCellId) : 0;
+  const end = endCellId ? cells.findIndex((cell) => cell.id === endCellId) : cells.length - 1;
+  if (startCellId && start < 0) throw new Error(`Start cell not found in runbook ${runbookId}: ${startCellId}`);
+  if (endCellId && end < 0) throw new Error(`End cell not found in runbook ${runbookId}: ${endCellId}`);
+  if (start > end && cells.length > 0) throw new Error("startCellId must precede or equal endCellId in runbook order.");
+  return { start: Math.max(0, start), end: Math.max(-1, end) };
 }
 
 function numberOrZero(value: unknown): number {

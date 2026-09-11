@@ -27,8 +27,10 @@ const GET_PARAMETERS = {
   properties: {
     id: { type: "string" },
     runId: { type: "string", description: "Read this immutable execution snapshot and recorded cell results instead of the current notebook. Use the runId referenced by a claim when reviewing evidence." },
-    offset: { type: "number" },
-    limit: { type: "number" },
+    offset: { type: "number", description: "Zero-based cell offset for pagination. Do not combine with cell range fields." },
+    limit: { type: "number", description: "Maximum cells to return. Use nextOffset from the response to continue." },
+    startCellId: { type: "string", description: "Read beginning at this cell, inclusive." },
+    endCellId: { type: "string", description: "Read through this cell, inclusive." },
   },
 };
 
@@ -125,15 +127,19 @@ export function createRunbookTools(
     tool(
       "runbook.get",
       "runbook_get",
-      "Read a bounded page of one workspace runbook, including feature toggles, cell executors, and recorded results. Supply runId to review an immutable execution snapshot and its results. execution.latestSuccessfulRunId identifies a full successful run of the current content; claim promotion additionally requires matching source/environment provenance.",
+      "Read a bounded page or inclusive cell range from one workspace runbook, including feature toggles, cell executors, and recorded results. Follow nextOffset for ordinary pagination. For a range that exceeds limit, reuse endCellId and continue from nextCellId. Supply runId to review an immutable execution snapshot and its results. execution.latestSuccessfulRunId identifies a full successful run of the current content; claim promotion additionally requires matching source/environment provenance.",
       "read",
       GET_PARAMETERS,
       (input) => ({
         output: text(input.runId) ? store.getExecution(requiredText(input.id, "id"), requiredText(input.runId, "runId"), {
           ...(typeof input.offset === "number" ? { offset: input.offset } : {}),
+          ...(text(input.startCellId) ? { startCellId: text(input.startCellId)! } : {}),
+          ...(text(input.endCellId) ? { endCellId: text(input.endCellId)! } : {}),
           limit: typeof input.limit === "number" ? input.limit : 12,
         }) : store.get(requiredText(input.id, "id"), {
           ...(typeof input.offset === "number" ? { offset: input.offset } : {}),
+          ...(text(input.startCellId) ? { startCellId: text(input.startCellId)! } : {}),
+          ...(text(input.endCellId) ? { endCellId: text(input.endCellId)! } : {}),
           limit: typeof input.limit === "number" ? input.limit : 12,
         }),
       }),

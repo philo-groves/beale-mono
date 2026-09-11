@@ -36,7 +36,7 @@ import {
   type ResolvedAppServerSessionLaunch
 } from './sessionLaunch.js';
 import { longSessionRecoveryFallbackPrompt } from './sessionRecovery.js';
-import type { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
+import { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
 
 type ProtocolInvoker = <T>(
   operation: AppServerProtocolOperation,
@@ -118,6 +118,7 @@ export class AppServerHostService {
   private readonly workspaceExclusiveOperations = new Set<string>();
   private readonly registry: AppServerHostRegistry;
   private readonly invokeProtocol: ProtocolInvoker;
+  private readonly databaseCoordinator: AppServerWorkerDatabaseCoordinator;
   private providerSemanticsPromise: Promise<{
     defaultSmallModels: Record<string, string>;
     sessionTitleEffort: string;
@@ -126,15 +127,14 @@ export class AppServerHostService {
 
   public constructor(options: AppServerHostServiceOptions = {}) {
     this.registry = options.registry ?? new AppServerHostRegistry(options);
+    this.databaseCoordinator = options.databaseCoordinator ?? new AppServerWorkerDatabaseCoordinator();
     const invokeProtocol = options.invokeProtocol ?? invokeAppServerProtocol;
-    this.invokeProtocol = options.databaseCoordinator
-      ? (operation, invokeOptions) => invokeOptions.storage
-        ? options.databaseCoordinator!.runWhenAvailable(
+    this.invokeProtocol = (operation, invokeOptions) => invokeOptions.storage
+        ? this.databaseCoordinator.runWhenAvailable(
             invokeOptions.storage.databasePath,
             () => invokeProtocol(operation, invokeOptions)
           )
-        : invokeProtocol(operation, invokeOptions)
-      : invokeProtocol;
+        : invokeProtocol(operation, invokeOptions);
   }
 
   public listWorkspaces(): BealeAppServerWorkspaceList {
@@ -223,7 +223,7 @@ export class AppServerHostService {
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
       if (input.action === 'import') this.workspaceExclusiveOperations.add(key);
       try { return await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
-        input.action === 'import' ? 'Import research file edit' : 'Operator research checkpoint', input.action === 'import' ? input : undefined);
+        input.action === 'import' ? 'Import research file edit' : 'Operator research checkpoint', input.action === 'import' ? input : undefined, undefined, this.databaseCoordinator);
       } finally { if (input.action === 'import') this.workspaceExclusiveOperations.delete(key); }
     }
     const storage = request.operation === 'workspace.state'
@@ -253,7 +253,7 @@ export class AppServerHostService {
       await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage,
         ...(nonEmpty(mutation.sessionId) ? { sessionId: nonEmpty(mutation.sessionId)! } : {}),
         ...(nonEmpty(mutation.investigationId) ? { investigationId: nonEmpty(mutation.investigationId)! } : {}),
-      }, 'Canonical research updated');
+      }, 'Canonical research updated', undefined, undefined, this.databaseCoordinator);
     }
     if (workspace?.memoryBackend !== 'disabled') return result;
     if (request.operation === 'memory.summary') return withoutWorkspaceMemory(result);
@@ -553,7 +553,7 @@ export class AppServerHostService {
       databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
       sessionId,
       ...(investigationId ? { investigationId } : {}),
-    }, reason, undefined, cleanupScratch ? sessionId : undefined);
+    }, reason, undefined, cleanupScratch ? sessionId : undefined, this.databaseCoordinator);
     if (result.status === 'committed' || result.status === 'failed') {
       await this.invokeProtocol('session.append_event', {
         args: ['session', 'append-event', '--session-id', sessionId], storage,

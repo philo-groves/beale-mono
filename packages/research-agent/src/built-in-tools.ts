@@ -4,6 +4,7 @@ import {
   realpath,
   stat,
 } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -57,6 +58,10 @@ const REPOSITORY_SEARCH_IGNORED_DIRECTORIES = new Set([
   PRE_BEALE_DATA_DIRECTORY_NAME,
   "node_modules",
 ]);
+const WORKSPACE_SEARCH_CATEGORIES = [
+  "investigations", "runbooks", "reports", "evidence", "references",
+  "memories", "claims", "traces", "scratch", "cache",
+] as const;
 const REPOSITORY_SEARCH_PARAMETERS = {
   type: "object",
   required: ["query"],
@@ -67,6 +72,22 @@ const REPOSITORY_SEARCH_PARAMETERS = {
       description:
         "Optional configured root path or unique root label. Use this to scope searches in multi-repository workspaces.",
     },
+    maxResults: { type: "number" },
+  },
+};
+const WORKSPACE_SEARCH_PARAMETERS = {
+  type: "object",
+  required: ["query"],
+  properties: {
+    query: { type: "string" },
+    path: { type: "string", description: "Optional workspace-relative file or directory to search." },
+    mode: { type: "string", enum: ["name", "content", "both"], description: "Search file names, text content, or both. Defaults to both." },
+    categories: { type: "array", uniqueItems: true, items: { type: "string", enum: WORKSPACE_SEARCH_CATEGORIES }, description: "Optional top-level research categories. Use this instead of broad path guessing when the artifact class is known." },
+    extensions: { type: "array", uniqueItems: true, items: { type: "string" }, description: "Optional case-insensitive file extensions, with or without a leading dot (for example md, json, ipynb)." },
+    modifiedAfter: { type: "string", description: "Optional ISO-8601 lower bound for file modification time." },
+    includeRaw: { type: "boolean", description: "Include retained raw evidence and raw trace events/outputs. Defaults to false." },
+    includeTemporary: { type: "boolean", description: "Include disposable scratch and cache files. Defaults to false." },
+    offset: { type: "integer", minimum: 0, description: "Result offset for newest-first pagination. Follow nextOffset from the prior response." },
     maxResults: { type: "number" },
   },
 };
@@ -129,6 +150,13 @@ export interface BuiltInStructuredFileReadToolOptions {
   contextRoots?: readonly string[];
   maxBytes?: number;
   researchSession?: RepositoryResearchSession;
+}
+
+export interface BuiltInWorkspaceSearchToolOptions {
+  workspaceRoot: string;
+  maxResults?: number;
+  maxFileBytes?: number;
+  maxVisitedFiles?: number;
 }
 
 export interface BuiltInExperimentToolOptions {
@@ -371,6 +399,82 @@ export function createStructuredFileReadTool(
           followUpActions: firstTouch
             ? ["Complete the repository-first-touch provenance, advisory, release-note, upstream, and vendor-source history baseline before broad exploration."]
             : [],
+        });
+      });
+    },
+  };
+}
+
+export function createWorkspaceSearchTool(
+  options: BuiltInWorkspaceSearchToolOptions,
+): ResearchExecutableTool {
+  const descriptor = createDescriptor({
+    name: "workspace.search",
+    transportName: "workspace_search",
+    description:
+      "Search file names and bounded text content in the current Beale workspace, returning matches newest-first. Durable research is searched by default; raw evidence, trace streams, scratch, and cache require explicit inclusion. Use history.search with scope=subject for read-only canonical research from another workspace sharing this Subject; use repository.search for configured source repositories.",
+    actionClasses: ["search", "inspect"],
+    sideEffects: "read",
+    requiredPermissions: ["filesystem:read"],
+    inputSchema: WORKSPACE_SEARCH_PARAMETERS,
+    artifactLocations: [resolve(options.workspaceRoot)],
+    metadata: {
+      provider: "appServer.built_in",
+      safetyProfile: "workspace-filesystem-read",
+      defaultBudget: {
+        maxToolCalls: 1,
+        maxFiles: options.maxResults ?? DEFAULT_MAX_RESULTS,
+        maxBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
+      },
+    },
+  });
+  return {
+    descriptor,
+    parameters: WORKSPACE_SEARCH_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
+    async execute(action, context) {
+      const startedAt = nowIso();
+      return completeOrError(action, startedAt, async () => {
+        const query = readRequiredString(action.input, "query");
+        const mode = action.input.mode === "name" || action.input.mode === "content"
+          ? action.input.mode
+          : "both";
+        const maxResults = Math.min(100, readPositiveInteger(
+          action.input.maxResults,
+          options.maxResults ?? DEFAULT_MAX_RESULTS,
+        ));
+        const offset = readNonNegativeInteger(action.input.offset, 0);
+        const categories = readStringArray(action.input.categories, "categories");
+        const extensions = readStringArray(action.input.extensions, "extensions")
+          .map((extension) => extension.trim().toLowerCase().replace(/^\./u, ""))
+          .filter(Boolean);
+        const modifiedAfter = readOptionalDate(action.input.modifiedAfter, "modifiedAfter");
+        const root = await realpath(resolve(options.workspaceRoot));
+        const requestedPath = typeof action.input.path === "string" && action.input.path.trim()
+          ? action.input.path.trim()
+          : ".";
+        if (isAbsolute(requestedPath)) throw new Error("workspace.search path must be workspace-relative.");
+        const target = await realpath(resolve(root, requestedPath));
+        const relativeTarget = relative(root, target);
+        if (relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`)) {
+          throw new Error("workspace.search path resolves outside the current workspace.");
+        }
+        const search = await searchWorkspace(target, root, query, {
+          mode,
+          categories: new Set(categories),
+          extensions: new Set(extensions),
+          includeRaw: action.input.includeRaw === true,
+          includeTemporary: action.input.includeTemporary === true,
+          ...(modifiedAfter ? { modifiedAfterMs: modifiedAfter.getTime() } : {}),
+          offset,
+          maxResults,
+          maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
+          maxVisitedFiles: options.maxVisitedFiles ?? DEFAULT_REPOSITORY_SEARCH_MAX_VISITED_FILES,
+          ...(context?.signal ? { signal: context.signal } : {}),
+        });
+        return completeResult(action, startedAt, {
+          summary: `Workspace search returned ${search.matches.length} match(es) for: ${query}`,
+          output: { workspaceRoot: root, requestedPath, query, mode, ...search },
+          modelOutput: { query, mode, ...search },
         });
       });
     },
@@ -996,6 +1100,144 @@ function portableRelativePath(root: string, path: string): string {
   return relativePath.split(sep).join("/");
 }
 
+async function searchWorkspace(
+  target: string,
+  workspaceRoot: string,
+  query: string,
+  options: {
+    mode: "name" | "content" | "both";
+    categories: ReadonlySet<string>;
+    extensions: ReadonlySet<string>;
+    includeRaw: boolean;
+    includeTemporary: boolean;
+    modifiedAfterMs?: number;
+    offset: number;
+    maxResults: number;
+    maxFileBytes: number;
+    maxVisitedFiles: number;
+    signal?: AbortSignal;
+  },
+): Promise<{
+  matches: Array<{
+  path: string;
+  matchKind: "name" | "content";
+  modifiedAt: string;
+  line?: number;
+  preview: string;
+  }>;
+  nextOffset: number | null;
+  visitedFiles: number;
+  partial: boolean;
+}> {
+  const matches: Array<{
+    path: string;
+    matchKind: "name" | "content";
+    modifiedAt: string;
+    line?: number;
+    preview: string;
+  }> = [];
+  const needle = query.toLowerCase();
+  const pending: string[] = [];
+  const files: Array<{ absolutePath: string; path: string; size: number; modifiedAt: string; modifiedAtMs: number }> = [];
+  const targetStat = await stat(target);
+  if (targetStat.isFile()) pending.push(target);
+  else if (targetStat.isDirectory()) pending.push(target);
+  let visitedFiles = 0;
+  let partial = false;
+  while (pending.length > 0) {
+    if (options.signal?.aborted) throw new Error("Workspace search was interrupted.");
+    const current = pending.pop()!;
+    const currentStat = await stat(current).catch(() => undefined);
+    if (!currentStat) continue;
+    if (currentStat.isDirectory()) {
+      const directory = await opendir(current);
+      const entries: Dirent[] = [];
+      for await (const entry of directory) {
+        entries.push(entry);
+      }
+      entries.sort((left, right) => right.name.localeCompare(left.name));
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory() && REPOSITORY_SEARCH_IGNORED_DIRECTORIES.has(entry.name)) continue;
+        pending.push(join(current, entry.name));
+      }
+      continue;
+    }
+    if (!currentStat.isFile()) continue;
+    visitedFiles += 1;
+    if (visitedFiles > options.maxVisitedFiles) { partial = true; break; }
+    if (options.modifiedAfterMs !== undefined && currentStat.mtimeMs < options.modifiedAfterMs) continue;
+    const path = portableRelativePath(workspaceRoot, current);
+    if (!workspaceSearchPathIncluded(path, options)) continue;
+    files.push({
+      absolutePath: current,
+      path,
+      size: currentStat.size,
+      modifiedAt: currentStat.mtime.toISOString(),
+      modifiedAtMs: currentStat.mtimeMs,
+    });
+  }
+  files.sort((left, right) => right.modifiedAtMs - left.modifiedAtMs || left.path.localeCompare(right.path));
+  let skippedMatches = 0;
+  let hasMore = false;
+  const addMatch = (match: (typeof matches)[number]): boolean => {
+    if (skippedMatches < options.offset) {
+      skippedMatches += 1;
+      return false;
+    }
+    if (matches.length >= options.maxResults) {
+      hasMore = true;
+      return true;
+    }
+    matches.push(match);
+    return false;
+  };
+  for (const file of files) {
+    if (options.signal?.aborted) throw new Error("Workspace search was interrupted.");
+    const { absolutePath, path, size, modifiedAt } = file;
+    if ((options.mode === "name" || options.mode === "both") && path.toLowerCase().includes(needle)) {
+      if (addMatch({ path, matchKind: "name", modifiedAt, preview: basename(absolutePath) })) break;
+    }
+    if (options.mode === "name" || size > options.maxFileBytes) continue;
+    const content = await readFile(absolutePath, "utf8").catch(() => undefined);
+    if (content === undefined || content.includes("\0")) continue;
+    const lines = content.split(/\r?\n/u);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      if (!line.toLowerCase().includes(needle)) continue;
+      if (addMatch({ path, matchKind: "content", modifiedAt, line: index + 1, preview: line.trim().slice(0, 240) })) break;
+    }
+    if (hasMore) break;
+  }
+  return {
+    matches,
+    nextOffset: hasMore ? options.offset + matches.length : null,
+    visitedFiles,
+    partial,
+  };
+}
+
+function workspaceSearchPathIncluded(
+  path: string,
+  options: {
+    categories: ReadonlySet<string>;
+    extensions: ReadonlySet<string>;
+    includeRaw: boolean;
+    includeTemporary: boolean;
+  },
+): boolean {
+  const [category] = path.split("/");
+  if (options.categories.size > 0 && !options.categories.has(category ?? "")) return false;
+  if (!options.includeTemporary && (category === "scratch" || category === "cache")) return false;
+  if (!options.includeRaw && (path.startsWith("evidence/raw/")
+    || /^traces\/.*(?:\/outputs\/|events.*\.jsonl$)/u.test(path))) return false;
+  if (options.extensions.size > 0) {
+    const extension = basename(path).includes(".") ? basename(path).split(".").at(-1)?.toLowerCase() ?? "" : "";
+    if (!options.extensions.has(extension)) return false;
+  }
+  return true;
+}
+
 function uniqueResolvedPaths(paths: readonly string[]): string[] {
   const seen = new Set<string>();
   const resolved: string[] = [];
@@ -1097,6 +1339,22 @@ function readNonNegativeInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : fallback;
+}
+
+function readStringArray(value: unknown, key: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    throw new Error(`${key} must be an array of non-empty strings.`);
+  }
+  return [...new Set(value.map((entry) => entry.trim()))];
+}
+
+function readOptionalDate(value: unknown, key: string): Date | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be an ISO-8601 timestamp.`);
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error(`${key} must be an ISO-8601 timestamp.`);
+  return date;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

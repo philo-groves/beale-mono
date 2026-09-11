@@ -1,6 +1,11 @@
 import { Worker } from 'node:worker_threads';
 import { resolve as resolvePath } from 'node:path';
 import type { WorkspaceCheckpointResult, WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
+import {
+  AppServerWorkerDatabaseBroker,
+  type AppServerWorkerDatabaseCoordinator
+} from './workerDatabaseBroker.js';
+import type { WorkerDatabaseRequestMessage } from './workerDatabaseClient.js';
 
 const queues = new Map<string, Promise<WorkspaceCheckpointResult>>();
 export const workspaceOperationKey = (root: string): string => process.platform === 'win32' ? resolvePath(root).toLowerCase() : resolvePath(root);
@@ -28,17 +33,33 @@ function runWorkspaceSetupWorker(workerData: unknown): Promise<unknown> {
 }
 
 /** Git and export I/O must never block delivery of stop controls on the host event loop. */
-export function runWorkspaceCheckpoint(options: WorkspacePublicationOptions, reason: string, edit?: { path: string; expectedRevision: number }, cleanupSession?: string): Promise<WorkspaceCheckpointResult> {
+export function runWorkspaceCheckpoint(
+  options: WorkspacePublicationOptions,
+  reason: string,
+  edit?: { path: string; expectedRevision: number },
+  cleanupSession?: string,
+  databaseCoordinator?: AppServerWorkerDatabaseCoordinator
+): Promise<WorkspaceCheckpointResult> {
   const key = workspaceOperationKey(options.workspaceRoot);
   const previous = queues.get(key) ?? Promise.resolve();
   const operation = previous.catch(() => undefined).then(() => new Promise<WorkspaceCheckpointResult>((resolve) => {
     let worker: Worker;
     try { worker = new Worker(new URL('./workspaceCheckpointWorker.js', import.meta.url), { workerData: { options, reason, edit, cleanupSession } }); }
     catch (error) { resolve({ status: 'failed', reason, error: error instanceof Error ? error.message : String(error) }); return; }
+    const databaseBroker = new AppServerWorkerDatabaseBroker(options.databasePath, databaseCoordinator);
     let result: WorkspaceCheckpointResult | undefined;
-    worker.once('message', (message: WorkspaceCheckpointResult) => { result = message; });
+    worker.on('message', (message: WorkspaceCheckpointResult | WorkerDatabaseRequestMessage) => {
+      if (message && typeof message === 'object' && 'type' in message && message.type === 'database.request') {
+        databaseBroker.handle(message);
+      } else {
+        result = message as WorkspaceCheckpointResult;
+      }
+    });
     worker.once('error', (error) => { result = { status: 'failed', reason, error: error.message }; });
-    worker.once('exit', (code) => resolve(result ?? { status: 'failed', reason, error: `Checkpoint worker exited with code ${code}; working files were preserved.` }));
+    worker.once('exit', (code) => {
+      databaseBroker.close();
+      resolve(result ?? { status: 'failed', reason, error: `Checkpoint worker exited with code ${code}; working files were preserved.` });
+    });
   }));
   queues.set(key, operation);
   const clear = () => { if (queues.get(key) === operation) queues.delete(key); };

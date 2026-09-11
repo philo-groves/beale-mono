@@ -1,5 +1,6 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import { checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, quarantineWorkspaceDisposable, resolveStoredResearchProfile, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
+import { checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, installResearchDatabaseFactory, quarantineWorkspaceDisposable, resolveStoredResearchProfile, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
+import { createWorkerResearchDatabaseFactory } from './workerDatabaseClient.js';
 
 if ('initializeInput' in workerData) {
   try { parentPort?.postMessage({ result: initializeWorkspaceProject(workerData.initializeInput.workspaceRoot, workerData.initializeInput.workspaceId) }); }
@@ -11,6 +12,9 @@ if ('initializeInput' in workerData) {
   } catch (error) { parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) }); }
 } else {
 const input = workerData as { options: WorkspacePublicationOptions; reason: string; edit?: { path: string; expectedRevision: number }; cleanupSession?: string };
+if (!parentPort) throw new Error('The workspace checkpoint worker requires a parent port.');
+const checkpointPort = parentPort;
+installResearchDatabaseFactory(createWorkerResearchDatabaseFactory((message) => checkpointPort.postMessage(message)));
 try {
   if (input.edit) importWorkspaceResearchFile(input.options, input.edit.path, input.edit.expectedRevision, await resolveStoredResearchProfile(input.options));
   const result = checkpointWorkspaceResearch(input.options, input.reason);

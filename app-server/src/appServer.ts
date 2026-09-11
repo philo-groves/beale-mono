@@ -168,6 +168,7 @@ interface SessionRuntime {
   checkpointPending: Promise<void> | null;
   checkpointReason: string | null;
   introspectionToken: string | null;
+  readonly recentActivity: string[];
 }
 
 interface ResidentIntrospectionBinding {
@@ -903,7 +904,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       introspectionToken: request.launch.introspection?.runtimeMode === 'standard'
         && request.launch.introspection.url === `${localUrl}/v1/introspection`
         ? request.launch.introspection.token
-        : null
+        : null,
+      recentActivity: []
     };
   }
 
@@ -1038,6 +1040,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime.handshakeFrame ??= Buffer.from(JSON.stringify(appServerServerHello(runtime.sessionId, '0.1.0')));
     runtime.unsubscribeSessionEvents = session.onEvent((event) => {
       observeSessionControlState(runtime, event);
+      const recoveryActivity = recoveryActivityFromEvent(event);
+      if (recoveryActivity) {
+        runtime.recentActivity.push(recoveryActivity);
+        if (runtime.recentActivity.length > 20) runtime.recentActivity.splice(0, runtime.recentActivity.length - 20);
+      }
       deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
       if (isRecord(event.payload) && !runtime.stopRequested) {
         const payload = event.payload;
@@ -1163,7 +1170,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       if (sessions.get(runtime.sessionId) === runtime) finishRuntime(runtime, 'stopped', null, null);
       return;
     }
-    const fallbackPrompt = longSessionRecoveryFallbackPrompt(runtime.request.launch.promptMarkdown, diagnostic);
+    const fallbackPrompt = longSessionRecoveryFallbackPrompt(
+      runtime.request.launch.promptMarkdown,
+      diagnostic,
+      runtime.recentActivity,
+    );
     try {
       const recoveryInput = {
         request: runtime.request,
@@ -1501,6 +1512,25 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
 function boundedDiagnostic(value: string): string | null {
   const normalized = value.trim();
   return normalized ? normalized.slice(-MAX_ERROR_DETAIL_CHARS) : null;
+}
+
+function recoveryActivityFromEvent(event: Record<string, unknown>): string | null {
+  if (!isRecord(event.payload)) return null;
+  const payload = event.payload;
+  if (event.kind === 'model.output' && payload.phase === 'completed' && typeof payload.text === 'string') {
+    const text = payload.text.replace(/\s+/gu, ' ').trim();
+    return text ? `commentary: ${text.slice(0, 600)}` : null;
+  }
+  if (event.kind === 'tool.requested' || event.kind === 'tool.observed'
+    || payload.type === 'tool_execution_end' || payload.eventType === 'tool_execution_end') {
+    const toolName = typeof payload.toolName === 'string' ? payload.toolName : 'tool';
+    const status = typeof payload.status === 'string' ? payload.status : event.kind;
+    const summary = typeof payload.summary === 'string'
+      ? ` — ${payload.summary.replace(/\s+/gu, ' ').trim().slice(0, 400)}`
+      : '';
+    return `${toolName}: ${status}${summary}`;
+  }
+  return null;
 }
 
 function boundedRecoveryAttempts(value: number | undefined): number {

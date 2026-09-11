@@ -6,7 +6,7 @@ export const MANAGED_TOOL_PLUGINS = [
   {
     id: "beale-source", name: "Source",
     description: "Use for source search, code navigation, and structured text analysis.",
-    tools: ["repository.search", "code.detect", "code.outline", "code.query", "code.node_context", "code.references", "code.call_candidates", "analysis.transform"],
+    tools: ["repository.search", "workspace.search", "code.detect", "code.outline", "code.query", "code.node_context", "code.references", "code.call_candidates", "analysis.transform"],
   },
   {
     id: "beale-provenance", name: "Provenance",

@@ -284,6 +284,13 @@ export function campaignTrackBindingFromPrompt(prompt: string): string | null {
   );
   if (explicitLine?.[1]) return explicitLine[1].toLowerCase();
 
+  const naturalBinding = prompt.match(
+    /\b(?:resume|continue|use|rebind(?:\s+to)?|canonical|active)\b[^\n]{0,120}\b(?:investigation|campaign\s+track|track)\b[^\n]{0,80}`?(investigation_[a-f0-9]{24})`?/iu,
+  ) ?? prompt.match(
+    /\b(?:investigation|campaign\s+track|track)\b[^\n]{0,80}`?(investigation_[a-f0-9]{24})`?[^\n]{0,120}\b(?:resume|continue|canonical|active)\b/iu,
+  );
+  if (naturalBinding?.[1]) return naturalBinding[1].toLowerCase();
+
   const mandatoryMarker = /\bTRACK BINDING IS MANDATORY\b/iu.exec(prompt);
   if (!mandatoryMarker) return null;
   const ids = [...new Set(
@@ -569,15 +576,26 @@ export class CampaignTrackStore {
     }
     const candidates = input.allowSimilarMatch ? this.list({ includeArchived: false }) : [];
     const signature = researchSignature(`${sessionTitle} ${input.objective}`);
+    const referenceCounts = this.promptReferenceCounts(input.objective);
     const closest = candidates
       .map((candidate) => ({
         candidate,
+        references: referenceCounts.get(candidate.id) ?? 0,
         score: signatureSimilarity(signature, researchSignature(`${candidate.title} ${candidate.objective}`)),
         overlap: intersectionSize(signature, researchSignature(`${candidate.title} ${candidate.objective}`)),
       }))
-      .sort((left, right) => right.score - left.score || right.overlap - left.overlap || right.candidate.updatedAt.localeCompare(left.candidate.updatedAt))[0];
+      .sort((left, right) => right.references - left.references || right.score - left.score || right.overlap - left.overlap || right.candidate.updatedAt.localeCompare(left.candidate.updatedAt))[0];
+    const activeCandidates = candidates.filter((candidate) => candidate.status === "active");
+    const uniqueContinuation = activeCandidates.length === 1
+      && /\b(?:continue|resume|finish|complete|pick\s+up|where\s+we\s+left)\b/iu.test(input.objective)
+      ? activeCandidates[0]!
+      : null;
     const track = explicitContinuation
-      ?? (closest && closest.score >= 0.62 && closest.overlap >= 3 ? closest.candidate : null)
+      ?? (closest && (
+        closest.references > 0
+        || (closest.score >= 0.62 && closest.overlap >= 3)
+      ) ? closest.candidate : null)
+      ?? uniqueContinuation
       ?? this.create({
           title: sessionTitle,
           objective: input.objective,
@@ -589,6 +607,33 @@ export class CampaignTrackStore {
         });
     this.linkSession(track.id, input.sessionId);
     return this.get(track.id) ?? track;
+  }
+
+  private promptReferenceCounts(prompt: string): Map<string, number> {
+    const counts = new Map<string, number>();
+    const references = [...new Set(
+      [...prompt.matchAll(/\b[a-z][a-z0-9]*_[a-z0-9]{8,}\b/giu)]
+        .map((match) => match[0].toLowerCase()),
+    )].slice(0, 128);
+    if (references.length === 0) return counts;
+    const resourceLookup = this.database.prepare(`
+      SELECT investigation_id FROM campaign_track_resources
+      WHERE resource_id = ?
+    `);
+    const sessionLookup = this.database.prepare(`
+      SELECT investigation_id FROM campaign_track_sessions
+      WHERE session_id = ?
+    `);
+    for (const reference of references) {
+      const rows = [
+        ...(resourceLookup.all(reference) as Array<{ investigation_id: string }>),
+        ...(sessionLookup.all(reference) as Array<{ investigation_id: string }>),
+      ];
+      for (const row of rows) {
+        counts.set(row.investigation_id, (counts.get(row.investigation_id) ?? 0) + 1);
+      }
+    }
+    return counts;
   }
 
   public create(input: CreateCampaignTrackInput): CampaignTrackRecord {
@@ -732,6 +777,11 @@ export class CampaignTrackStore {
       `).run(investigationId, resourceId);
     }
     this.touch(investigationId);
+  }
+
+  public linkedResourceIds(investigationId: string, kind: CampaignTrackResourceKind): string[] {
+    this.requireTrack(investigationId);
+    return this.resourceIds(investigationId, kind);
   }
 
   public upsertQuestion(input: {

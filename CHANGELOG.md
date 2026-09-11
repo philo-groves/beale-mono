@@ -6,10 +6,13 @@
 
 #### Changed
 
+- OpenAI Responses research sessions now preserve replayable encrypted reasoning and use provider-native compaction before the local context-window fallback. Existing host checkpoints suppress repeated rolling truncation.
 - New workspaces use one research directory with visible category folders and local Git history; source repositories remain external. Workspace maintenance shows file/byte totals and checkpoint failures, and quarantines disposable files instead of deleting research by naming heuristics.
 
 #### Fixed
 
+- Research sessions now resume campaign investigations automatically from explicit continuation language, referenced durable resources or sessions, semantic objective overlap, or an unambiguous active continuation. Compaction and transient recovery rehydrate the current objective, canonical workspace path, active investigation, recent durable records, updated runbooks, and bounded visible activity before work continues. Normal recovery uses a compact anchor; a compaction leaving fewer than 2,000 estimated tokens receives the expanded snapshot.
+- Workspace checkpoint workers now broker every SQLite operation through the resident app-server and its transaction coordinator instead of opening the canonical database directly.
 - Manual Stop now addresses the app-server session even when Desktop is detached, waits for an in-flight launch to register, and surfaces host rejection before recording a stopped run. Failed stop requests remain retryable.
 - Host runbook cells now retain and enforce their declared timeout up to 30 minutes instead of discarding it and falling back to the shell's two-minute default. Runbook execution defaults cells to five minutes, and Tart Guest Agent transport repairs a cached native helper removed by an external VM reset before retrying an invocation that never reached the requested guest command.
 - Runbook execution now delegates runtime limits to its bounded cell executors instead of imposing a fixed two-minute outer deadline, including when general tool governance defines that default. The app-server compatibility contract advertises this behavior so an older still-running host cannot be mistaken for the rebuilt runtime. Timed-out or cancelled MCP requests notify managed servers, terminate their active host child, and release serialized Tart VM operations instead of leaving later Guest Agent calls queued behind abandoned work.
@@ -55,6 +58,7 @@
 
 #### Added
 
+- Runbook reads now return forward/back pagination cursors and accept inclusive start/end cell identifiers for current notebooks and immutable execution snapshots. A dedicated `workspace.search` tool finds current-workspace files by name or bounded text content, ordered newest-first, with category, extension, modification-time, raw/temporary, and paging filters. `history.search` can separately return explicitly read-only canonical references from workspaces sharing the active Subject.
 - Research runbooks now keep setup, runtime, and cleanup in one cohesive workflow using agent-managed feature tags. Only cells matching an enabled tag execute, every new cell requires a default phase tag, mutation batches support up to 100 cells, and guidance no longer treats phase changes or a target cell count as reasons to spawn sibling runbooks. Code cells can select host or Tart VM execution; Tart cells reference a host-built workspace executable or durable artifact that app-server materializes, streams, invokes as the guest service identity or through passwordless sudo, records, and cleans without a guest-side rewrite.
 - Added the optional `microsoft-security-devices` guidance plugin for Canary Hyper-V environment selection and per-session first-touch build freshness checks. Its local comparison utility warns about outdated builds, uncertain release coverage, and channel transitions without adding model-facing tools or managing VMs.
 - New Desktop research sessions offer guided Darwin VM setup when `apple-security-devices` is enabled, with per-session decline, persistent opt-out, and validation of a manually prepared checkout. Saved checkouts feed existing plugin tools; guidance distinguishes Darwin VM from Tart. Firmware preparation requires a Mac, and the current launcher requires a macOS or Linux app-server host.

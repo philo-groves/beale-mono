@@ -48,6 +48,7 @@ import {
   extractCompatibleClaudeAgentResumableState,
   extractCompatibleZCodeAgentResumableState,
   createRepositorySearchTool,
+  createWorkspaceSearchTool,
   createRepositoryHistoryTool,
   createRepositoryFetchHistoryTool,
   createPriorArtSearchTool,
@@ -2174,6 +2175,7 @@ export async function main(
         agentInstructions,
         memoryContext: runtimeConfig.memoryContext,
         campaignContext: createCampaignModelContext(runtimeConfig.campaignContext),
+        continuityContext: runtimeConfig.continuityContext,
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
@@ -3614,6 +3616,7 @@ async function createRuntimeConfig(args: {
   workspaceContext: ResearchWorkspaceContext;
   memoryContext: readonly ResearchModelMemoryContextNode[];
   campaignContext: CampaignGraphSummary;
+  continuityContext: Record<string, unknown>;
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
@@ -3721,6 +3724,7 @@ async function createRuntimeConfig(args: {
   });
   let campaignTrackStore: CampaignTrackStore | undefined;
   let activeCampaignTrackId: string | null = null;
+  let activeCampaignResources: Partial<Record<"memory" | "finding" | "runbook", readonly string[]>> = {};
   const memoryTools = memoryActive
     ? createMemoryGraphTools(memoryGraph)
     : [];
@@ -3751,6 +3755,7 @@ async function createRuntimeConfig(args: {
             sessionId: args.sessionId,
             objective: args.prompt,
             source: "runtime",
+            allowSimilarMatch: true,
             sourceRevision: workspaceContext.sourceRevision ?? null,
             environmentFingerprint: workspaceContext.environmentFingerprint ?? null,
           });
@@ -3759,6 +3764,11 @@ async function createRuntimeConfig(args: {
       }
       if (requestedInvestigationId) campaignTrackStore.linkSession(activeTrack.id, args.sessionId);
       activeCampaignTrackId = activeTrack.id;
+      activeCampaignResources = {
+        memory: campaignTrackStore.linkedResourceIds(activeTrack.id, "memory"),
+        finding: campaignTrackStore.linkedResourceIds(activeTrack.id, "finding"),
+        runbook: campaignTrackStore.linkedResourceIds(activeTrack.id, "runbook"),
+      };
       const investigationTools = createCampaignTrackTools(campaignTrackStore, activeTrack.id);
       executableTools.push(...investigationTools);
       toolDescriptors.push(...investigationTools.map((tool) => tool.descriptor));
@@ -4022,6 +4032,13 @@ async function createRuntimeConfig(args: {
     });
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
+    const workspaceSearchTool = createWorkspaceSearchTool({
+      workspaceRoot,
+      ...(runtimeTools.toolMaxBytes ? { maxFileBytes: runtimeTools.toolMaxBytes } : {}),
+      ...(runtimeTools.toolMaxFiles ? { maxResults: runtimeTools.toolMaxFiles } : {}),
+    });
+    executableTools.push(workspaceSearchTool);
+    toolDescriptors.push(workspaceSearchTool.descriptor);
   }
 
   if (families.has("code")) {
@@ -4120,6 +4137,13 @@ async function createRuntimeConfig(args: {
     workspaceContext,
     memoryContext,
     campaignContext,
+    continuityContext: createSessionContinuityContext(
+      resolve(workspaceRoot),
+      args.prompt ?? "",
+      memoryContext,
+      campaignContext,
+      activeCampaignResources,
+    ),
     runtimeTools,
     dispositionRecorder,
     memoryGraph,
@@ -4143,6 +4167,56 @@ async function createRuntimeConfig(args: {
           },
         }
       : {}),
+  };
+}
+
+function createSessionContinuityContext(
+  workspacePath: string,
+  objective: string,
+  memories: readonly ResearchModelMemoryContextNode[],
+  campaign: CampaignGraphSummary,
+  linkedResources: Partial<Record<"memory" | "finding" | "runbook", readonly string[]>>,
+): Record<string, unknown> {
+  const activeInvestigation = campaign.activeTrackId
+    ? campaign.tracks?.find((track) => track.id === campaign.activeTrackId) ?? null
+    : null;
+  const newestNodes = (kind: "lead" | "finding" | "runbook") => {
+    const resourceKind = kind === "runbook" ? "runbook" : "finding";
+    const linkedIds = new Set(linkedResources[resourceKind] ?? []);
+    const candidates = campaign.nodes.filter((node) => node.kind === kind);
+    const scoped = activeInvestigation
+      ? candidates.filter((node) => linkedIds.has(node.claimId ?? node.id.replace(/^[^:]+:/u, "")))
+      : candidates;
+    return scoped
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 12)
+    .map((node) => ({
+      id: node.claimId ?? node.id.replace(/^[^:]+:/u, ""),
+      title: node.label,
+      status: node.status,
+      updatedAt: node.updatedAt,
+    }));
+  };
+  return {
+    schemaVersion: 1,
+    workspacePath,
+    objective: objective.trim(),
+    activeInvestigation,
+    recentMemories: [...memories]
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, 12)
+      .map((memory) => ({
+        id: memory.id,
+        type: memory.type,
+        title: memory.title,
+        summary: memory.summary.slice(0, 1_000),
+        status: memory.status,
+        updatedAt: memory.updatedAt,
+        revision: memory.revision,
+      })),
+    recentLeads: newestNodes("lead"),
+    recentFindings: newestNodes("finding"),
+    updatedRunbooks: newestNodes("runbook"),
   };
 }
 

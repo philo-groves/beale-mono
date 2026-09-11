@@ -51,6 +51,7 @@ export interface RunResearchAgentInput {
   agentInstructions?: ResearchAgentInstructions;
   memoryContext?: readonly ResearchModelMemoryContextNode[];
   campaignContext?: CampaignModelContext;
+  continuityContext?: unknown;
   events?: readonly ResearchEvent[];
   tools?: readonly ResearchToolDescriptor[];
   skills?: readonly ResearchSkillDescriptor[];
@@ -167,6 +168,7 @@ export async function runResearchAgent(
       { label: "workspace", content: modelWorkspaceContext },
       { label: "memory", content: memoryContext },
       ...(input.campaignContext ? [{ label: "campaign", content: input.campaignContext }] : []),
+      ...(input.continuityContext ? [{ label: "continuity", content: input.continuityContext }] : []),
       {
         label: "selected_skills",
         content: modelSelectedSkills,

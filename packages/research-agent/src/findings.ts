@@ -550,6 +550,17 @@ export class ResearchClaimStore {
       .filter((claim) => claim.duplicateOfClaimId === null);
   }
 
+  /** Read-only catalog references from every workspace attached to the active Subject. */
+  public listSubjectReferences(): FindingSummary[] {
+    const context = this.memoryGraph.getContext();
+    const workspaceIds = this.database.prepare(`SELECT DISTINCT workspace_id
+      FROM app_server_research_claims WHERE subject_id = ? ORDER BY workspace_id`).all(context.subjectId) as Array<{ workspace_id?: unknown }>;
+    return workspaceIds.flatMap((row) => typeof row.workspace_id === "string"
+      ? readFindings(this.database, row.workspace_id).filter((claim) => claim.duplicateOfClaimId === null)
+      : [])
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
+  }
+
   public listLeads(): FindingSummary[] {
     return this.list().filter((claim) => claim.projection === "lead");
   }

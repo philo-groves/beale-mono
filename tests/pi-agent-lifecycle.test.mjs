@@ -211,6 +211,7 @@ test("OpenAI Responses requests enable native compaction before local context fa
   assert.deepEqual(compacted.context_management, [
     { type: "compaction", compact_threshold: 96_000 },
   ]);
+  assert.deepEqual(compacted.include, ["reasoning.encrypted_content"]);
 
   const codexCompacted = applyNativeOpenAiCompaction(
     { model: "gpt-5.4", input: [] },
@@ -219,6 +220,7 @@ test("OpenAI Responses requests enable native compaction before local context fa
   assert.deepEqual(codexCompacted.context_management, [
     { type: "compaction", compact_threshold: 96_000 },
   ]);
+  assert.deepEqual(codexCompacted.include, ["reasoning.encrypted_content"]);
 
   const unsupported = { model: "faux-model", input: [] };
   assert.equal(
@@ -304,6 +306,7 @@ test("Pi Agent applies OpenAI Fast mode to Lead-model request payloads", async (
     {
       model: model.id,
       input: [],
+      include: ["reasoning.encrypted_content"],
       context_management: [{ type: "compaction", compact_threshold: 96_000 }],
       service_tier: "priority",
     },
@@ -981,6 +984,11 @@ test("Pi Agent restores a host research checkpoint after native compaction", asy
   const legacyContextSentinel = "LEGACY_CONTEXT_SHOULD_BE_PRUNED";
   const result = await runResearchAgent({
     prompt: "Inspect target.c and preserve the decisive result across compaction.",
+    continuityContext: {
+      schemaVersion: 1,
+      workspacePath: "/workspaces/example-compaction-research",
+      recentMemories: [{ id: "memory_compaction", title: "Compaction anchor", summary: "EXPANDED_RECOVERY_MARKER" }],
+    },
     tools: [tool.descriptor],
     executor: createPiAgentExecutor({
       provider: "faux",
@@ -1002,6 +1010,9 @@ test("Pi Agent restores a host research checkpoint after native compaction", asy
   assert.doesNotMatch(contexts[1].messageContents.join("\n"), new RegExp(legacyContextSentinel));
   assert.match(contexts[1].messageContents.join("\n"), /opaque-provider-state/);
   assert.match(contexts[1].messageContents.join("\n"), /Research checkpoint after context compaction/);
+  assert.match(contexts[1].messageContents.join("\n"), /expanded: compacted context below 2000 estimated tokens/);
+  assert.match(contexts[1].messageContents.join("\n"), /EXPANDED_RECOVERY_MARKER/);
+  assert.match(contexts[1].messageContents.join("\n"), /\/workspaces\/example-compaction-research/);
   assert.match(contexts[1].messageContents.join("\n"), /Fixture inspected target\.c/);
   const checkpointIndexes = contexts[1].messageContents.flatMap((content, index) =>
     content.includes("Research checkpoint after context compaction") ? [index] : []
@@ -1302,6 +1313,15 @@ test("Pi Agent retries a transient provider failure before emitting a terminal e
   const liveEvents = [];
   const result = await runResearchAgent({
     prompt: "Continue after a transient provider failure.",
+    continuityContext: {
+      schemaVersion: 1,
+      workspacePath: "/workspaces/example-research",
+      activeInvestigation: { id: "investigation_0123456789abcdef01234567", title: "Synthetic parser review" },
+      recentMemories: [{ id: "memory_example", title: "Known parser invariant", summary: "LIGHT_RECOVERY_MUST_OMIT_THIS_VERBOSE_SUMMARY" }],
+      recentLeads: [],
+      recentFindings: [],
+      updatedRunbooks: [{ id: "runbook_example", title: "Parser proof" }],
+    },
     eventSink(event) {
       liveEvents.push(event);
     },
@@ -1318,6 +1338,14 @@ test("Pi Agent retries a transient provider failure before emitting a terminal e
   assert.equal(result.agentRun.status, "complete");
   assert.match(result.agentRun.output.text, /Recovered without losing/);
   assert.equal(contexts.length, 2);
+  const retryTranscript = contexts[1].messageContents.join("\n");
+  const retryRehydration = contexts[1].messageContents.find((content) => content.includes("Deterministic session rehydration after transient_retry"));
+  assert.match(retryTranscript, /Deterministic session rehydration after transient_retry/);
+  assert.match(retryRehydration, /\(light\)/);
+  assert.doesNotMatch(retryRehydration, /LIGHT_RECOVERY_MUST_OMIT_THIS_VERBOSE_SUMMARY/);
+  assert.match(retryTranscript, /\/workspaces\/example-research/);
+  assert.match(retryTranscript, /investigation_0123456789abcdef01234567/);
+  assert.match(retryTranscript, /runbook_example/);
   assert.ok(result.agentRun.output.raw.agentEvents.some((event) => event.type === "model_retry" && event.retry === 1));
   assert.ok(liveEvents.some((event) => event.kind === "agent.event" && event.payload.type === "model_retry"));
 });
