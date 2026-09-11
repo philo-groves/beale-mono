@@ -2151,6 +2151,7 @@ export async function main(
           resumableState,
           collaborationConfig,
           channelContext,
+          runtimeConfig.getContinuityContext,
         );
       }
       const sessionTitleRoute = args.mock
@@ -2337,6 +2338,7 @@ function createRealAgentExecutor(
   resumableState?: PiAgentResumableState | ClaudeAgentResumableState | ZCodeAgentResumableState,
   collaboration?: ResearchCollaborationConfig,
   channelContext?: SubagentChannelContext,
+  getContinuityContext?: () => unknown,
 ): ResearchAgentExecutor {
   const authenticationPreferences = readProviderAuthenticationPreferences();
   const providerSessionId = args.sessionId?.trim() || resumableState?.providerSessionId;
@@ -2356,6 +2358,7 @@ function createRealAgentExecutor(
         workflowId,
         authenticationPreferences,
         toolRegistry,
+        ...(getContinuityContext ? { getContinuityContext } : {}),
       })
     : undefined;
   const subagentRuntimeFactory = collaboration && collaboration.mode !== "solo"
@@ -2436,6 +2439,7 @@ function createRealAgentExecutor(
     researchProfile: resolvedResearchProfile.profile,
     workflowId,
     authenticationPreferences,
+    ...(getContinuityContext ? { getContinuityContext } : {}),
     ...(collaboration ? { collaboration } : {}),
     ...(channelContext ? { channelContext } : {}),
     ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
@@ -2470,12 +2474,14 @@ function createProviderNeutralSubagentRunner({
   workflowId,
   toolRegistry,
   authenticationPreferences,
+  getContinuityContext,
 }: {
   workspaceRoot: string;
   resolvedResearchProfile: ResolvedResearchProfile;
   workflowId: string;
   toolRegistry: ResearchToolRegistry | undefined;
   authenticationPreferences: ReturnType<typeof readProviderAuthenticationPreferences>;
+  getContinuityContext?: () => unknown;
 }): (request: SubagentRunRequest, rootInput: ResearchAgentExecutionInput) => Promise<SubagentRunResult> {
   return async (request, rootInput) => {
     const identity = { id: request.id, path: request.path, parentId: request.parentId };
@@ -2530,6 +2536,7 @@ function createProviderNeutralSubagentRunner({
           collaborationTools: request.collaborationTools,
           agentIdentity: identity,
           authenticationPreferences,
+          ...(getContinuityContext ? { getContinuityContext } : {}),
           getSteeringMessages: async () => takeSteeringMessages(),
           waitForSteeringMessages,
         });
@@ -3617,6 +3624,7 @@ async function createRuntimeConfig(args: {
   memoryContext: readonly ResearchModelMemoryContextNode[];
   campaignContext: CampaignGraphSummary;
   continuityContext: Record<string, unknown>;
+  getContinuityContext: () => Record<string, unknown>;
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
@@ -3839,7 +3847,7 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(...reportTools.map((tool) => tool.descriptor));
     cleanupCallbacks.push(async () => reports.close());
   }
-  const memoryContext = args.prompt && memoryActive
+  const createCurrentMemoryContext = (): readonly ResearchModelMemoryContextNode[] => args.prompt && memoryActive
     ? campaignTrackStore && activeCampaignTrackId
       ? campaignTrackStore.recall({
           investigationId: activeCampaignTrackId,
@@ -3847,94 +3855,122 @@ async function createRuntimeConfig(args: {
         }).nodes
       : compileMemoryModelContext(memoryGraph, args.prompt)
     : [];
-  const campaignMemoryNodes: MemoryNodeSummary[] = (memoryActive
-    ? memoryGraph.search({ scope: "workspace", limit: 1_000 })
-    : []).filter((node) => !LEGACY_CLAIM_MEMORY_TYPES.has(node.type)).map((node) => ({
-    id: node.id,
-    sessionIds: [...node.sessionIds],
-    workspaces: [...node.workspaces],
-    subjectId: node.subjectId,
-    subjectName: node.subjectName,
-    type: node.type,
-    title: node.title,
-    summary: node.summary,
-    body: node.body,
-    status: node.status,
-    confidence: node.confidence,
-    assetIds: [...node.assetIds],
-    tags: [...node.tags],
-    attributes: node.attributes,
-    evidenceRefs: node.evidence.map((evidence) => ({
-      id: evidence.id,
-      kind: evidence.kind,
-      pathBase: evidence.pathBase ?? null,
-      path: evidence.path ?? null,
-      locator: evidence.locator,
-      summary: evidence.summary,
-      createdAt: evidence.createdAt,
-    })),
-    createdAt: node.createdAt,
-    updatedAt: node.updatedAt,
-    revision: node.revision,
-    duplicateOfMemoryId: node.duplicateOfMemoryId,
-    duplicateMarkedAt: node.duplicateMarkedAt,
-    duplicateMemories: [...node.duplicateMemories],
-    authors: [],
-  }));
-  const campaignReplayMetrics = campaignTrackStore
-    ? campaignTrackStore.latestReplayMetrics()
-    : null;
-  const campaignContext = buildCampaignGraph({
-    nodes: campaignMemoryNodes,
-    edges: (memoryActive
-      ? memoryGraph.listEdgesForNodes(campaignMemoryNodes.map((node) => node.id))
-      : []).map((edge) => ({
-      fromId: edge.fromId,
-      toId: edge.toId,
-      relation: edge.relation,
-      note: edge.note,
-      createdAt: edge.createdAt,
-      updatedAt: edge.updatedAt,
-    })),
-    findings: memoryActive ? findingStore.list() : [],
-    runbooks: (memoryActive ? runbookStore?.list({ limit: 200 }) ?? [] : []).map((runbook) => ({
-      ...runbook,
-      revisions: [{
-        revision: runbook.revision,
-        sessionId: runbook.sessionId,
-        createdAt: runbook.updatedAt,
-      }],
-    })),
-    reports: (memoryActive ? reportStore?.list({ limit: 200 }) ?? [] : []).map((report) => ({
-      ...report,
-      revisions: [{
-        revision: report.revision,
-        sessionId: report.sessionId,
-        createdAt: report.updatedAt,
-      }],
-    })),
-    assetIds: memoryActive
-      ? workspaceContext.authorizedAssetIds ?? [
-          ...workspaceContext.knownRepositories.map((repository) => repository.rootPath),
-          ...workspaceContext.materializedSourcePaths,
-        ]
-      : [],
-    ...(campaignTrackStore
+  const createCurrentCampaignContext = (): CampaignGraphSummary => {
+    const campaignMemoryNodes: MemoryNodeSummary[] = (memoryActive
+      ? memoryGraph.search({ scope: "workspace", limit: 1_000 })
+      : []).filter((node) => !LEGACY_CLAIM_MEMORY_TYPES.has(node.type)).map((node) => ({
+      id: node.id,
+      sessionIds: [...node.sessionIds],
+      workspaces: [...node.workspaces],
+      subjectId: node.subjectId,
+      subjectName: node.subjectName,
+      type: node.type,
+      title: node.title,
+      summary: node.summary,
+      body: node.body,
+      status: node.status,
+      confidence: node.confidence,
+      assetIds: [...node.assetIds],
+      tags: [...node.tags],
+      attributes: node.attributes,
+      evidenceRefs: node.evidence.map((evidence) => ({
+        id: evidence.id,
+        kind: evidence.kind,
+        pathBase: evidence.pathBase ?? null,
+        path: evidence.path ?? null,
+        locator: evidence.locator,
+        summary: evidence.summary,
+        createdAt: evidence.createdAt,
+      })),
+      createdAt: node.createdAt,
+      updatedAt: node.updatedAt,
+      revision: node.revision,
+      duplicateOfMemoryId: node.duplicateOfMemoryId,
+      duplicateMarkedAt: node.duplicateMarkedAt,
+      duplicateMemories: [...node.duplicateMemories],
+      authors: [],
+    }));
+    const campaignReplayMetrics = campaignTrackStore
+      ? campaignTrackStore.latestReplayMetrics()
+      : null;
+    return buildCampaignGraph({
+      nodes: campaignMemoryNodes,
+      edges: (memoryActive
+        ? memoryGraph.listEdgesForNodes(campaignMemoryNodes.map((node) => node.id))
+        : []).map((edge) => ({
+        fromId: edge.fromId,
+        toId: edge.toId,
+        relation: edge.relation,
+        note: edge.note,
+        createdAt: edge.createdAt,
+        updatedAt: edge.updatedAt,
+      })),
+      findings: memoryActive ? findingStore.list() : [],
+      runbooks: (memoryActive ? runbookStore?.list({ limit: 200 }) ?? [] : []).map((runbook) => ({
+        ...runbook,
+        revisions: [{
+          revision: runbook.revision,
+          sessionId: runbook.sessionId,
+          createdAt: runbook.updatedAt,
+        }],
+      })),
+      reports: (memoryActive ? reportStore?.list({ limit: 200 }) ?? [] : []).map((report) => ({
+        ...report,
+        revisions: [{
+          revision: report.revision,
+          sessionId: report.sessionId,
+          createdAt: report.updatedAt,
+        }],
+      })),
+      assetIds: memoryActive
+        ? workspaceContext.authorizedAssetIds ?? [
+            ...workspaceContext.knownRepositories.map((repository) => repository.rootPath),
+            ...workspaceContext.materializedSourcePaths,
+          ]
+        : [],
+      ...(campaignTrackStore
+        ? {
+            tracks: campaignTrackStore.list().map((track) => {
+              const detail = campaignTrackStore.detail(track.id);
+              return {
+                ...track,
+                questions: (detail?.questions ?? []).map(campaignQuestionProjection),
+                experiments: (detail?.experiments ?? []).map(campaignExperimentProjection),
+                observations: (detail?.observations ?? []).map(campaignObservationProjection),
+              };
+            }),
+            activeTrackId: activeCampaignTrackId,
+            ...(campaignReplayMetrics ? { replayMetrics: campaignReplayMetrics } : {}),
+          }
+        : {}),
+    });
+  };
+  const createCurrentActiveCampaignResources = (): Partial<Record<"memory" | "finding" | "runbook", readonly string[]>> =>
+    campaignTrackStore && activeCampaignTrackId
       ? {
-          tracks: campaignTrackStore.list().map((track) => {
-            const detail = campaignTrackStore.detail(track.id);
-            return {
-              ...track,
-              questions: (detail?.questions ?? []).map(campaignQuestionProjection),
-              experiments: (detail?.experiments ?? []).map(campaignExperimentProjection),
-              observations: (detail?.observations ?? []).map(campaignObservationProjection),
-            };
-          }),
-          activeTrackId: activeCampaignTrackId,
-          ...(campaignReplayMetrics ? { replayMetrics: campaignReplayMetrics } : {}),
+          memory: [...new Set([
+            ...campaignTrackStore.linkedResourceIds(activeCampaignTrackId, "memory"),
+            ...(args.sessionId ? memoryGraph.search({ scope: "session", limit: 200 }).map((memory) => memory.id) : []),
+          ])],
+          finding: [...new Set([
+            ...campaignTrackStore.linkedResourceIds(activeCampaignTrackId, "finding"),
+            ...(args.sessionId ? findingStore.list().filter((finding) => finding.originSessionId === args.sessionId).map((finding) => finding.id) : []),
+          ])],
+          runbook: [...new Set([
+            ...campaignTrackStore.linkedResourceIds(activeCampaignTrackId, "runbook"),
+            ...(args.sessionId ? runbookStore?.list({ limit: 200 }).filter((runbook) => runbook.sessionId === args.sessionId).map((runbook) => runbook.id) ?? [] : []),
+          ])],
         }
-      : {}),
-  });
+      : activeCampaignResources;
+  const memoryContext = createCurrentMemoryContext();
+  const campaignContext = createCurrentCampaignContext();
+  const getContinuityContext = (): Record<string, unknown> => createSessionContinuityContext(
+    resolve(workspaceRoot),
+    args.prompt ?? "",
+    memoryActive ? compileMemoryModelContext(memoryGraph, args.prompt ?? "", { maxNodes: 25 }) : [],
+    createCurrentCampaignContext(),
+    createCurrentActiveCampaignResources(),
+  );
   const mcpCapture = await configureRuntimeMcpTools({
     runtimeTools,
     executableTools,
@@ -4137,13 +4173,8 @@ async function createRuntimeConfig(args: {
     workspaceContext,
     memoryContext,
     campaignContext,
-    continuityContext: createSessionContinuityContext(
-      resolve(workspaceRoot),
-      args.prompt ?? "",
-      memoryContext,
-      campaignContext,
-      activeCampaignResources,
-    ),
+    continuityContext: getContinuityContext(),
+    getContinuityContext,
     runtimeTools,
     dispositionRecorder,
     memoryGraph,

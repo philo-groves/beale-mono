@@ -1311,6 +1311,7 @@ test("Pi Agent reactivates a terminal goal for an explicit resumed invocation", 
 test("Pi Agent retries a transient provider failure before emitting a terminal error", async () => {
   const contexts = [];
   const liveEvents = [];
+  let continuityReads = 0;
   const result = await runResearchAgent({
     prompt: "Continue after a transient provider failure.",
     continuityContext: {
@@ -1328,6 +1329,21 @@ test("Pi Agent retries a transient provider failure before emitting a terminal e
     executor: createPiAgentExecutor({
       provider: "faux",
       model: "faux-model",
+      getContinuityContext() {
+        continuityReads += 1;
+        return {
+          schemaVersion: 1,
+          workspacePath: "/workspaces/example-research",
+          activeInvestigation: { id: "investigation_0123456789abcdef01234567", title: "Synthetic parser review" },
+          recentMemories: [{
+            id: continuityReads === 1 ? "memory_before_retry" : "memory_fresh_at_retry",
+            title: continuityReads === 1 ? "Initial canonical anchor" : "Fresh canonical retry anchor",
+          }],
+          recentLeads: [],
+          recentFindings: [],
+          updatedRunbooks: [{ id: "runbook_example", title: "Parser proof" }],
+        };
+      },
       models: createScriptedModels([
         assistantError("Codex error: An error occurred while processing your request. You can retry your request."),
         assistant("## Result\nRecovered without losing the active turn."),
@@ -1343,6 +1359,9 @@ test("Pi Agent retries a transient provider failure before emitting a terminal e
   assert.match(retryTranscript, /Deterministic session rehydration after transient_retry/);
   assert.match(retryRehydration, /\(light\)/);
   assert.doesNotMatch(retryRehydration, /LIGHT_RECOVERY_MUST_OMIT_THIS_VERBOSE_SUMMARY/);
+  assert.match(retryRehydration, /memory_fresh_at_retry/);
+  assert.doesNotMatch(retryRehydration, /memory_example/);
+  assert.ok(continuityReads >= 2, "continuity must be resolved again at the retry boundary");
   assert.match(retryTranscript, /\/workspaces\/example-research/);
   assert.match(retryTranscript, /investigation_0123456789abcdef01234567/);
   assert.match(retryTranscript, /runbook_example/);

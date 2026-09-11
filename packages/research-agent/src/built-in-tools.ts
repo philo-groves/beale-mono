@@ -87,6 +87,7 @@ const WORKSPACE_SEARCH_PARAMETERS = {
     modifiedAfter: { type: "string", description: "Optional ISO-8601 lower bound for file modification time." },
     includeRaw: { type: "boolean", description: "Include retained raw evidence and raw trace events/outputs. Defaults to false." },
     includeTemporary: { type: "boolean", description: "Include disposable scratch and cache files. Defaults to false." },
+    includeCanonicalExports: { type: "boolean", description: "Include explicitly exported canonical database projections. Defaults to false; use canonical research tools for current records." },
     offset: { type: "integer", minimum: 0, description: "Result offset for newest-first pagination. Follow nextOffset from the prior response." },
     maxResults: { type: "number" },
   },
@@ -325,7 +326,7 @@ export function createStructuredFileReadTool(
     name: "file.read",
     transportName: "file_read",
     description:
-      "Read a bounded byte range from a local file. Workspace context roots are audit hints, not access fences.",
+      "Read a bounded byte range from a local file. Workspace context roots are audit hints, not access fences. Canonical research records must be read through claim, memory, runbook, report, investigation, or history tools; exported workspace projections are point-in-time files and may be stale.",
     actionClasses: ["inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
@@ -412,7 +413,7 @@ export function createWorkspaceSearchTool(
     name: "workspace.search",
     transportName: "workspace_search",
     description:
-      "Search file names and bounded text content in the current Beale workspace, returning matches newest-first. Durable research is searched by default; raw evidence, trace streams, scratch, and cache require explicit inclusion. Use history.search with scope=subject for read-only canonical research from another workspace sharing this Subject; use repository.search for configured source repositories.",
+      "Search file-native names and bounded text content in the current Beale workspace, returning matches newest-first. Canonical database projections, raw evidence, trace streams, scratch, and cache require explicit inclusion. Use claim, memory, runbook, report, investigation, or history tools for current canonical records; history.search scope=subject provides read-only canonical research from another workspace sharing this Subject. Use repository.search for configured source repositories.",
     actionClasses: ["search", "inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],
@@ -464,6 +465,7 @@ export function createWorkspaceSearchTool(
           extensions: new Set(extensions),
           includeRaw: action.input.includeRaw === true,
           includeTemporary: action.input.includeTemporary === true,
+          includeCanonicalExports: action.input.includeCanonicalExports === true,
           ...(modifiedAfter ? { modifiedAfterMs: modifiedAfter.getTime() } : {}),
           offset,
           maxResults,
@@ -1110,6 +1112,7 @@ async function searchWorkspace(
     extensions: ReadonlySet<string>;
     includeRaw: boolean;
     includeTemporary: boolean;
+    includeCanonicalExports: boolean;
     modifiedAfterMs?: number;
     offset: number;
     maxResults: number;
@@ -1224,11 +1227,13 @@ function workspaceSearchPathIncluded(
     extensions: ReadonlySet<string>;
     includeRaw: boolean;
     includeTemporary: boolean;
+    includeCanonicalExports: boolean;
   },
 ): boolean {
   const [category] = path.split("/");
   if (options.categories.size > 0 && !options.categories.has(category ?? "")) return false;
   if (!options.includeTemporary && (category === "scratch" || category === "cache")) return false;
+  if (!options.includeCanonicalExports && isCanonicalWorkspaceExport(path)) return false;
   if (!options.includeRaw && (path.startsWith("evidence/raw/")
     || /^traces\/.*(?:\/outputs\/|events.*\.jsonl$)/u.test(path))) return false;
   if (options.extensions.size > 0) {
@@ -1236,6 +1241,16 @@ function workspaceSearchPathIncluded(
     if (!options.extensions.has(extension)) return false;
   }
   return true;
+}
+
+function isCanonicalWorkspaceExport(path: string): boolean {
+  return /^claims\/[^/]+\.json$/u.test(path)
+    || /^memories\/[^/]+\.md$/u.test(path)
+    || /^runbooks\/[^/]+\/(?:record\.json|runbook\.ipynb)$/u.test(path)
+    || /^reports\/[^/]+\/(?:record\.json|report\.md)$/u.test(path)
+    || /^investigations\/[^/]+\/record\.json$/u.test(path)
+    || /^traces\/[^/]+\/summary\.md$/u.test(path)
+    || path === "references/research-index.json";
 }
 
 function uniqueResolvedPaths(paths: readonly string[]): string[] {

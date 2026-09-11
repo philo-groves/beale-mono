@@ -219,12 +219,14 @@ export class AppServerHostService {
       if (!project) throw new Error('This reference workspace does not use the research project layout. Create a new workspace.');
       const key = workspaceOperationKey(workspace.workspacePath);
       if (this.workspaceExclusiveOperations.has(key)) throw new Error('Another workspace operation is in progress.');
-      if (input.action === 'import' && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error('Stop workspace research before importing canonical file edits.');
+      if ((input.action === 'import' || input.action === 'export') && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error(`Stop workspace research before ${input.action === 'import' ? 'importing' : 'exporting'} canonical research.`);
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
-      if (input.action === 'import') this.workspaceExclusiveOperations.add(key);
+      if (input.action === 'import' || input.action === 'export') this.workspaceExclusiveOperations.add(key);
       try { return await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
-        input.action === 'import' ? 'Import research file edit' : 'Operator research checkpoint', input.action === 'import' ? input : undefined, undefined, this.databaseCoordinator);
-      } finally { if (input.action === 'import') this.workspaceExclusiveOperations.delete(key); }
+        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export canonical research snapshot' : 'Operator workspace checkpoint',
+        input.action === 'import' ? input : undefined, undefined, this.databaseCoordinator,
+        input.action === 'export' ? { exportResearch: true } : undefined);
+      } finally { if (input.action === 'import' || input.action === 'export') this.workspaceExclusiveOperations.delete(key); }
     }
     const storage = request.operation === 'workspace.state'
       ? persistenceStorageFromInput(request.input)

@@ -96,6 +96,7 @@ export interface CreatePiAgentExecutorOptions {
   toolExecution?: ToolExecutionMode;
   getSteeringMessages?: () => Promise<AgentMessage[]>;
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<AgentMessage[]>;
+  getContinuityContext?: () => unknown;
   getModelSelection?: () => { provider: string; model: string; reasoningEffort: ModelThinkingLevel } | undefined;
   modelFirstEventTimeoutMs?: number;
   subagents?: false | {
@@ -347,9 +348,17 @@ export function createPiAgentExecutor(
       const agentInstructions = input.modelInput.agentInstructions;
       const durableContinuityContext = input.modelInput.contextSections
         .find((section) => section.label === "continuity")?.content;
-      const durableWorkspacePath = isRecord(durableContinuityContext)
-        && typeof durableContinuityContext.workspacePath === "string"
-        ? durableContinuityContext.workspacePath.trim()
+      const readDurableContinuityContext = (): unknown => {
+        try {
+          return options.getContinuityContext?.() ?? durableContinuityContext;
+        } catch {
+          return durableContinuityContext;
+        }
+      };
+      const initialContinuityContext = readDurableContinuityContext();
+      const durableWorkspacePath = isRecord(initialContinuityContext)
+        && typeof initialContinuityContext.workspacePath === "string"
+        ? initialContinuityContext.workspacePath.trim()
         : "";
       let runSession!: (request: SubagentRunRequest & {
         root?: boolean;
@@ -511,6 +520,7 @@ export function createPiAgentExecutor(
           ...(request.root && durableContinuityContext !== undefined
             ? { durableContext: durableContinuityContext }
             : {}),
+          ...(request.root ? { getDurableContext: readDurableContinuityContext } : {}),
           ...(request.root && durableWorkspacePath ? { workspacePath: durableWorkspacePath } : {}),
         };
         const emitRuntimeEvent = async (payload: Record<string, unknown>): Promise<void> => {
@@ -1267,6 +1277,7 @@ export function createPiAgentExecutor(
           {
             objective: goalRuntime?.snapshot().objective ?? input.modelInput.prompt,
             ...(durableContinuityContext !== undefined ? { durableContext: durableContinuityContext } : {}),
+            getDurableContext: readDurableContinuityContext,
           },
         );
       } else if (rootResult.contextWindowRetryCheckpointed) {
@@ -1279,6 +1290,7 @@ export function createPiAgentExecutor(
           {
             objective: goalRuntime?.snapshot().objective ?? input.modelInput.prompt,
             ...(durableContinuityContext !== undefined ? { durableContext: durableContinuityContext } : {}),
+            getDurableContext: readDurableContinuityContext,
           },
         );
       } else if (rootResult.lastNativeCompactionFingerprint) {
@@ -1291,6 +1303,7 @@ export function createPiAgentExecutor(
           {
             objective: goalRuntime?.snapshot().objective ?? input.modelInput.prompt,
             ...(durableContinuityContext !== undefined ? { durableContext: durableContinuityContext } : {}),
+            getDurableContext: readDurableContinuityContext,
           },
         );
       } else {
@@ -1302,6 +1315,7 @@ export function createPiAgentExecutor(
           {
             objective: goalRuntime?.snapshot().objective ?? input.modelInput.prompt,
             ...(durableContinuityContext !== undefined ? { durableContext: durableContinuityContext } : {}),
+            getDurableContext: readDurableContinuityContext,
           },
         );
       }
@@ -2130,6 +2144,7 @@ interface ResearchRehydrationState {
   objective: string;
   workspacePath?: string;
   durableContext?: unknown;
+  getDurableContext?: () => unknown;
 }
 
 interface ValidResearchCheckpoint {
@@ -2230,9 +2245,10 @@ function rehydrationReminder(
 ): string {
   const expanded = reason === "context_compaction"
     && estimatedMessageTokens(removeRehydrationReminders(messages)) < BAD_COMPACTION_TOKEN_THRESHOLD;
-  const durable = state.durableContext === undefined
+  const currentDurableContext = resolveDurableContinuityContext(state);
+  const durable = currentDurableContext === undefined
     ? "No additional durable continuity snapshot was supplied."
-    : boundedJson(expanded ? state.durableContext : lightContinuitySnapshot(state.durableContext), expanded ? 12_000 : 2_400);
+    : boundedJson(expanded ? currentDurableContext : lightContinuitySnapshot(currentDurableContext), expanded ? 12_000 : 2_400);
   const activity = recentVisibleActivity(messages, expanded ? 10 : 3, expanded ? 500 : 220);
   return [
     REHYDRATION_REMINDER_PREFIX.trimEnd(),
@@ -2252,6 +2268,14 @@ function rehydrationReminder(
     activity.length > 0 ? activity.map((entry) => `- ${entry}`).join("\n") : "- No bounded activity tail was available.",
     REHYDRATION_REMINDER_SUFFIX.trimStart(),
   ].join("\n");
+}
+
+function resolveDurableContinuityContext(state: ResearchRehydrationState): unknown {
+  try {
+    return state.getDurableContext?.() ?? state.durableContext;
+  } catch {
+    return state.durableContext;
+  }
 }
 
 function lightContinuitySnapshot(value: unknown): unknown {

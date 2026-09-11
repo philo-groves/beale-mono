@@ -6,11 +6,13 @@
 
 #### Changed
 
+- Routine workspace checkpoints now commit only file-native changes and no longer export canonical database records into workspace files. Contract v22 adds an explicit `workspace.project` export action for point-in-time projections; validated imports still republish before checkpointing.
 - OpenAI Responses research sessions now preserve replayable encrypted reasoning and use provider-native compaction before the local context-window fallback. Existing host checkpoints suppress repeated rolling truncation.
 - New workspaces use one research directory with visible category folders and local Git history; source repositories remain external. Workspace maintenance shows file/byte totals and checkpoint failures, and quarantines disposable files instead of deleting research by naming heuristics.
 
 #### Fixed
 
+- Compaction and retry rehydration now reads the current canonical memories, claims, runbooks, investigation binding, and campaign state at the recovery boundary instead of replaying the session-start snapshot. Workspace search excludes point-in-time canonical export files by default and directs current-record lookups to database-backed research tools.
 - Research sessions now resume campaign investigations automatically from explicit continuation language, referenced durable resources or sessions, semantic objective overlap, or an unambiguous active continuation. Compaction and transient recovery rehydrate the current objective, canonical workspace path, active investigation, recent durable records, updated runbooks, and bounded visible activity before work continues. Normal recovery uses a compact anchor; a compaction leaving fewer than 2,000 estimated tokens receives the expanded snapshot.
 - Workspace checkpoint workers now broker every SQLite operation through the resident app-server and its transaction coordinator instead of opening the canonical database directly.
 - Manual Stop now addresses the app-server session even when Desktop is detached, waits for an in-flight launch to register, and surfaces host rejection before recording a stopped run. Failed stop requests remain retryable.

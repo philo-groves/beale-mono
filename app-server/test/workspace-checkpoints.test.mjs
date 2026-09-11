@@ -22,6 +22,8 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
     const graph = new MemoryGraphStore({ workspaceRoot, databasePath, context: { workspaceId: options.workspaceId, workspaceName: 'Example', subjectId: 'subject-example', subjectName: 'Example' } });
     graph.save({ type: 'invariant', title: 'Example boundary', status: 'suspected' });
     graph.close();
+    mkdirSync(join(workspaceRoot, 'investigations', 'investigation-example'), { recursive: true });
+    writeFileSync(join(workspaceRoot, 'investigations', 'investigation-example', 'proof-plan.md'), 'Synthetic file-native proof plan.\n');
     const before = ticks;
     const coordinator = new AppServerWorkerDatabaseCoordinator();
     let brokeredRequests = 0;
@@ -33,8 +35,11 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
     ]);
     assert.equal(results[0].status, 'committed', results[0].error);
     assert.equal(results[1].status, 'unchanged', results[1].error);
-    assert.ok(brokeredRequests > 0, 'checkpoint database access must be brokered by the resident app-server');
-    assert.ok(ticks > before, 'Git publication must yield the host event loop');
+    assert.equal(brokeredRequests, 0, 'routine Git checkpoints must not read or export the canonical database');
+    assert.ok(ticks > before, 'Git checkpointing must yield the host event loop');
+    const exported = await runWorkspaceCheckpoint(options, 'Explicit research export', undefined, undefined, coordinator, { exportResearch: true });
+    assert.equal(exported.status, 'committed', exported.error);
+    assert.ok(brokeredRequests > 0, 'explicit export database access must be brokered by the resident app-server');
     writeFileSync(join(workspaceRoot, 'scratch', 'example.txt'), 'incomplete research');
     const maintenance = await runWorkspaceMaintenance({ workspacePath: workspaceRoot });
     assert.equal(maintenance.lastRun.status, 'completed');

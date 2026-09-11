@@ -327,7 +327,7 @@ function toolLabelInputKeys(toolName: string): readonly string[] {
     case 'file.read': return ['path'];
     case 'shell.run': return ['command', 'utility', 'args'];
     case 'repository.search': return ['query', 'root', 'path', 'repositoryPath', 'repository'];
-    case 'workspace.search': return ['query', 'path', 'mode'];
+    case 'workspace.search': return ['query', 'path', 'mode', 'categories', 'extensions', 'modifiedAfter', 'includeRaw', 'includeTemporary', 'includeCanonicalExports', 'offset', 'maxResults'];
     case 'list_agents': return ['path_prefix'];
     case 'wait_agent': return ['timeout_ms'];
     default: return [];
@@ -342,7 +342,7 @@ function toolLabelResultKeys(toolName: string): readonly string[] {
     case 'runbook.run': return ['runbookId', 'title'];
     case 'shell.run': return ['command', 'utility', 'args'];
     case 'repository.search': return ['query', 'roots', 'attemptedRoots'];
-    case 'workspace.search': return ['query', 'matches'];
+    case 'workspace.search': return ['query', 'matches', 'nextOffset', 'visitedFiles', 'partial'];
     case 'list_agents': return [];
     default: return [];
   }

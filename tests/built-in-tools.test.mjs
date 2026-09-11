@@ -1417,6 +1417,8 @@ test("workspace search finds paths and content outside configured repositories",
   await writeFile(join(root, "scratch", "temporary.txt"), "Synthetic continuity marker\n");
   await writeFile(join(root, "evidence", "raw", "capture.txt"), "Synthetic continuity marker\n");
   await writeFile(join(root, "investigations", "current.md"), "Synthetic current investigation\n");
+  await mkdir(join(root, "investigations", "investigation-example"));
+  await writeFile(join(root, "investigations", "investigation-example", "record.json"), '{"summary":"Synthetic current investigation canonical export"}\n');
   try {
     const registry = createResearchToolRegistry([createWorkspaceSearchTool({ workspaceRoot: root })]);
     const result = await registry.execute({
@@ -1445,6 +1447,20 @@ test("workspace search finds paths and content outside configured repositories",
       input: { query: "current", mode: "content", categories: ["investigations"], extensions: [".md"] },
     });
     assert.deepEqual(filtered.result.output.matches.map((match) => match.path), ["investigations/current.md"]);
+    const hiddenCanonicalExport = await registry.execute({
+      id: "workspace_search_hidden_canonical_export",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "canonical export", mode: "content" },
+    });
+    assert.deepEqual(hiddenCanonicalExport.result.output.matches, []);
+    const canonicalExport = await registry.execute({
+      id: "workspace_search_canonical_export",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "canonical export", mode: "content", includeCanonicalExports: true },
+    });
+    assert.deepEqual(canonicalExport.result.output.matches.map((match) => match.path), ["investigations/investigation-example/record.json"]);
     const hiddenByDefault = await registry.execute({
       id: "workspace_search_4",
       actionClass: "search",
