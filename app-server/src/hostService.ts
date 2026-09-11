@@ -19,7 +19,7 @@ import {
   type AppServerProtocolOperation,
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
-import { getProviderModelCatalog, readWorkspaceProject, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
+import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
 import { runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
@@ -214,23 +214,38 @@ export class AppServerHostService {
       const project = readWorkspaceProject(workspace.workspacePath);
       if (input.action === 'status') {
         const statusPath = join(workspace.workspacePath, '.git', 'beale', 'checkpoint.json');
-        return { project, checkpoint: existsSync(statusPath) ? JSON.parse(readFileSync(statusPath, 'utf8')) as unknown : null };
+        return { project, checkpoint: existsSync(statusPath) ? JSON.parse(readFileSync(statusPath, 'utf8')) as unknown : null,
+          researchIndex: readWorkspaceResearchCacheState(workspace.workspacePath) };
       }
       if (!project) throw new Error('This reference workspace does not use the research project layout. Create a new workspace.');
       const key = workspaceOperationKey(workspace.workspacePath);
       if (this.workspaceExclusiveOperations.has(key)) throw new Error('Another workspace operation is in progress.');
-      if ((input.action === 'import' || input.action === 'export') && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error(`Stop workspace research before ${input.action === 'import' ? 'importing' : 'exporting'} canonical research.`);
+      const exclusive = input.action === 'import' || input.action === 'export' || input.action === 'sync' || input.action === 'rebuild-index' || input.action === 'release-index';
+      if (exclusive && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error(`Stop workspace research before ${input.action.replace(/-/gu, ' ')}.`);
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
-      if (input.action === 'import' || input.action === 'export') this.workspaceExclusiveOperations.add(key);
+      if (exclusive) this.workspaceExclusiveOperations.add(key);
       try { return await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
-        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export canonical research snapshot' : 'Operator workspace checkpoint',
+        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export compatibility research snapshot' : input.action === 'sync' ? 'Synchronize file-authority research' : input.action === 'rebuild-index' ? 'Rebuild derived research index' : input.action === 'release-index' ? 'Release derived research index' : 'Operator workspace checkpoint',
         input.action === 'import' ? input : undefined, undefined, this.databaseCoordinator,
-        input.action === 'export' ? { exportResearch: true } : undefined);
-      } finally { if (input.action === 'import' || input.action === 'export') this.workspaceExclusiveOperations.delete(key); }
+        (input.action === 'export' || input.action === 'sync') ? { exportResearch: true }
+          : input.action === 'rebuild-index' ? { researchIndexAction: 'rebuild' }
+          : input.action === 'release-index' ? { researchIndexAction: 'release' }
+          : undefined);
+      } finally { if (exclusive) this.workspaceExclusiveOperations.delete(key); }
     }
     const storage = request.operation === 'workspace.state'
       ? persistenceStorageFromInput(request.input)
       : storageProfileId ? this.registry.storageForProfile(storageProfileId) : null;
+    if (workspace && storage && workspaceResearchIndexNeedsRebuild(workspace.workspacePath)) {
+      const key = workspaceOperationKey(workspace.workspacePath);
+      if (this.workspaceExclusiveOperations.has(key)) throw new Error('The workspace research index is unavailable during another workspace operation.');
+      this.workspaceExclusiveOperations.add(key);
+      try {
+        const rebuilt = await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
+          'Rehydrate derived research index', undefined, undefined, this.databaseCoordinator, { researchIndexAction: 'rebuild' });
+        if (rebuilt.status === 'failed' || rebuilt.researchIndex?.state !== 'ready') throw new Error(rebuilt.error ?? 'Derived research index rehydration failed.');
+      } finally { this.workspaceExclusiveOperations.delete(key); }
+    }
     const operationInput = workspace && storage
       ? request.operation.startsWith('research.tools.')
         ? this.hostedResearchToolInput(request.input, workspace)
@@ -250,7 +265,8 @@ export class AppServerHostService {
       || ['claim.mark_duplicate', 'claim.undo_duplicate', 'history.mark_duplicate', 'history.undo_duplicate', 'dreaming.apply', 'dreaming.restore', 'report.revise_content', 'report.update_triage_status', 'report.replace_packet', 'report.replace_recording'].includes(request.operation)
       || request.operation === 'workspace.state' && isRecord(request.input) && ['saveScope', 'setResearchSubject', 'addWorkspaceRules', 'addWorkspaceRule'].includes(String(request.input.action));
     if (workspace && storage && researchMutation && readWorkspaceProject(workspace.workspacePath)) {
-      // Canonical persistence already succeeded. A Git failure is reported separately and never rolls it back.
+      // Canonical persistence has already succeeded. A checkpoint failure must
+      // remain visible without making a retryable mutation appear rolled back.
       const mutation = isRecord(operationInput) ? operationInput : {};
       await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage,
         ...(nonEmpty(mutation.sessionId) ? { sessionId: nonEmpty(mutation.sessionId)! } : {}),
@@ -464,6 +480,7 @@ export class AppServerHostService {
             : {})
         }
       : null;
+    const workspaceReferences = await this.sameSubjectWorkspaceReferences(workspace, storage);
     const restartLaunch = restartLaunchDescriptor(request, {
       providerId,
       ...(model ? { model } : {}),
@@ -495,6 +512,7 @@ export class AppServerHostService {
       launch: {
         workspaceRoot: workspace.workspacePath,
         workspaceDirectories: [workspace.workspacePath],
+        ...(workspaceReferences.length > 0 ? { workspaceReferences } : {}),
         ...(request.launch.investigationId ? { investigationId: request.launch.investigationId } : {}),
         capturePath,
         attemptId,
@@ -546,16 +564,61 @@ export class AppServerHostService {
     };
   }
 
+  private async sameSubjectWorkspaceReferences(
+    current: AppServerHostWorkspace,
+    storage: AppServerHostStorage
+  ): Promise<Array<{ workspaceId: string; workspaceName: string; workspaceRoot: string; subjectId: string }>> {
+    return this.databaseCoordinator.runWhenAvailable(storage.databasePath, () => {
+      let currentBinding: ReturnType<typeof resolveStoredResearchWorkspaceBinding>;
+      try {
+        currentBinding = resolveStoredResearchWorkspaceBinding({
+          workspaceRoot: current.workspacePath,
+          databasePath: storage.databasePath,
+          researchProfileId: current.researchProfileId
+        });
+      } catch {
+        return [];
+      }
+      if (currentBinding.memoryContext.workspaceId !== current.workspaceId) return [];
+      const subjectId = currentBinding.memoryContext.subjectId;
+      return this.registry.listHostWorkspaces().flatMap((candidate) => {
+        if (candidate.workspaceId === current.workspaceId
+          || candidate.researchProfileId !== current.researchProfileId) return [];
+        try {
+          const binding = resolveStoredResearchWorkspaceBinding({
+            workspaceRoot: candidate.workspacePath,
+            databasePath: storage.databasePath,
+            researchProfileId: candidate.researchProfileId
+          });
+          if (binding.memoryContext.workspaceId !== candidate.workspaceId
+            || binding.memoryContext.subjectId !== subjectId) return [];
+          return [{
+            workspaceId: candidate.workspaceId,
+            workspaceName: candidate.name,
+            workspaceRoot: candidate.workspacePath,
+            subjectId
+          }];
+        } catch {
+          return [];
+        }
+      });
+    });
+  }
+
   public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false, investigationId?: string): Promise<WorkspaceCheckpointResult> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
     if (!readWorkspaceProject(workspace.workspacePath)) return { status: 'unmanaged', reason };
     const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    const key = workspaceOperationKey(workspace.workspacePath);
+    const anotherSessionIsActive = [...this.workspaceWriters.entries()].some(([activeSessionId, root]) => activeSessionId !== sessionId && workspaceOperationKey(root) === key);
+    const releaseResearchIndex = cleanupScratch && !anotherSessionIsActive && workspaceResearchAuthority(workspace.workspacePath) === 'files';
     const result = await runWorkspaceCheckpoint({
       workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId,
       databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
       sessionId,
       ...(investigationId ? { investigationId } : {}),
-    }, reason, undefined, cleanupScratch ? sessionId : undefined, this.databaseCoordinator);
+    }, reason, undefined, cleanupScratch ? sessionId : undefined, this.databaseCoordinator,
+    releaseResearchIndex ? { researchIndexAction: 'release' } : undefined);
     if (result.status === 'committed' || result.status === 'failed') {
       await this.invokeProtocol('session.append_event', {
         args: ['session', 'append-event', '--session-id', sessionId], storage,

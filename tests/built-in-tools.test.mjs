@@ -1402,6 +1402,8 @@ test("structured file read supports ranges and annotates paths outside context r
 
 test("workspace search finds paths and content outside configured repositories", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-workspace-search-"));
+  const referenceRoot = await mkdtemp(join(tmpdir(), "app-server-workspace-reference-search-"));
+  const unrelatedRoot = await mkdtemp(join(tmpdir(), "app-server-workspace-unrelated-search-"));
   await mkdir(join(root, "notes"));
   const olderPath = join(root, "notes", "proof-plan.txt");
   const newerPath = join(root, "notes", "latest-plan.txt");
@@ -1417,10 +1419,30 @@ test("workspace search finds paths and content outside configured repositories",
   await writeFile(join(root, "scratch", "temporary.txt"), "Synthetic continuity marker\n");
   await writeFile(join(root, "evidence", "raw", "capture.txt"), "Synthetic continuity marker\n");
   await writeFile(join(root, "investigations", "current.md"), "Synthetic current investigation\n");
+  await mkdir(join(referenceRoot, "investigations"));
+  await writeFile(join(referenceRoot, "investigations", "prior.md"), "Synthetic prior workspace result\n");
+  await mkdir(join(unrelatedRoot, "investigations"));
+  await writeFile(join(unrelatedRoot, "investigations", "unrelated.md"), "Synthetic unrelated workspace result\n");
   await mkdir(join(root, "investigations", "investigation-example"));
   await writeFile(join(root, "investigations", "investigation-example", "record.json"), '{"summary":"Synthetic current investigation canonical export"}\n');
   try {
-    const registry = createResearchToolRegistry([createWorkspaceSearchTool({ workspaceRoot: root })]);
+    const workspaceSearch = createWorkspaceSearchTool({
+      workspaceRoot: root,
+      workspaceId: "workspace-example",
+      workspaceName: "Current example",
+      subjectId: "subject-example",
+      referenceWorkspaces: [
+        { workspaceId: "workspace-prior-example", workspaceName: "Prior example", workspaceRoot: referenceRoot, subjectId: "subject-example" },
+        { workspaceId: "workspace-unrelated-example", workspaceName: "Unrelated example", workspaceRoot: unrelatedRoot, subjectId: "subject-other-example" },
+      ],
+    });
+    assert.deepEqual(workspaceSearch.parameters.properties.workspaceId.enum, [
+      "workspace-example",
+      "workspace-prior-example",
+    ]);
+    assert.match(workspaceSearch.parameters.properties.workspaceId.description, /workspace-prior-example.*Prior example/u);
+    assert.doesNotMatch(workspaceSearch.parameters.properties.workspaceId.description, /workspace-unrelated-example|app-server-workspace-reference-search/u);
+    const registry = createResearchToolRegistry([workspaceSearch]);
     const result = await registry.execute({
       id: "workspace_search_1",
       actionClass: "search",
@@ -1461,6 +1483,21 @@ test("workspace search finds paths and content outside configured repositories",
       input: { query: "canonical export", mode: "content", includeCanonicalExports: true },
     });
     assert.deepEqual(canonicalExport.result.output.matches.map((match) => match.path), ["investigations/investigation-example/record.json"]);
+    await writeFile(join(root, "workspace.json"), JSON.stringify({
+      schemaVersion: 2,
+      workspaceId: "workspace-example",
+      directories: ["investigations", "runbooks", "reports", "evidence", "references", "memories", "claims", "traces", "scratch", "cache"],
+      checkpointIntervalMs: 600000,
+      researchAuthority: "files",
+    }));
+    const canonicalFileAuthority = await registry.execute({
+      id: "workspace_search_file_authority",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { query: "canonical export", mode: "content" },
+    });
+    assert.equal(canonicalFileAuthority.result.output.researchAuthority, "files");
+    assert.deepEqual(canonicalFileAuthority.result.output.matches.map((match) => match.path), ["investigations/investigation-example/record.json"]);
     const hiddenByDefault = await registry.execute({
       id: "workspace_search_4",
       actionClass: "search",
@@ -1484,8 +1521,32 @@ test("workspace search finds paths and content outside configured repositories",
     });
     assert.equal(nextPage.result.output.matches.length, 2);
     assert.equal(new Set([...rawAndTemporary.result.output.matches, ...nextPage.result.output.matches].map((match) => match.path)).size, 4);
+    const priorWorkspace = await registry.execute({
+      id: "workspace_search_prior",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { workspaceId: "workspace-prior-example", query: "prior workspace", categories: ["investigations"] },
+    });
+    assert.equal(priorWorkspace.result.status, "complete");
+    assert.deepEqual(priorWorkspace.result.output.workspace, {
+      id: "workspace-prior-example",
+      name: "Prior example",
+      readOnlyReference: true,
+    });
+    assert.deepEqual(priorWorkspace.result.output.matches.map((match) => match.path), ["investigations/prior.md"]);
+    assert.equal("workspaceRoot" in priorWorkspace.result.output, false, "foreign host paths must not enter tool output");
+    const unrelatedWorkspace = await registry.execute({
+      id: "workspace_search_unrelated",
+      actionClass: "search",
+      toolName: "workspace.search",
+      input: { workspaceId: "workspace-unrelated-example", query: "unrelated workspace" },
+    });
+    assert.equal(unrelatedWorkspace.result.status, "error");
+    assert.match(unrelatedWorkspace.result.error.message, /sharing its research Subject/u);
   } finally {
     await rm(root, { recursive: true, force: true });
+    await rm(referenceRoot, { recursive: true, force: true });
+    await rm(unrelatedRoot, { recursive: true, force: true });
   }
 });
 

@@ -4,8 +4,10 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import {
   initializeWorkspaceProject, checkpointWorkspaceResearch, importWorkspaceResearchFile,
+  releaseWorkspaceResearchIndex, rebuildWorkspaceResearchIndex,
   MemoryGraphStore, FindingStore, RunbookStore, ReportStore, CampaignTrackStore,
   createResearchStorageLayout, ensureResearchStorageLayout,
 } from '../packages/research-agent/dist/index.js';
@@ -74,8 +76,31 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
       const track = tracks.ensureForSession({ sessionId: 'session-example', objective: 'Example investigation', source: 'runtime' });
       const attributed = checkpointWorkspaceResearch({ ...options, sessionId: 'session-example' }, 'Linked investigation checkpoint');
       assert.equal(attributed.status, 'committed', attributed.error);
+      const investigation = JSON.parse(readFileSync(join(workspaceRoot, 'investigations', track.id, 'record.json'), 'utf8'));
+      assert.equal(investigation.schemaVersion, 2);
+      assert.deepEqual(investigation.sessions.map((entry) => entry.session_id), ['session-example']);
+      for (const field of ['resources', 'questions', 'experiments', 'observations', 'nextActions', 'memoryClaimReviews', 'researchClaimReviews']) {
+        assert.ok(Array.isArray(investigation[field]), field);
+      }
+      assert.ok(existsSync(join(workspaceRoot, 'references', 'campaign-state.json')));
       const message = spawnSync('git', ['log', '-1', '--format=%B'], { cwd: workspaceRoot, encoding: 'utf8', windowsHide: true }).stdout.trim();
       assert.equal(message, `Linked investigation checkpoint\n\nInvestigation-ID: ${track.id}\nSession-ID: session-example`);
+
+      const released = releaseWorkspaceResearchIndex(options);
+      assert.equal(released.state, 'released');
+      const releasedDatabase = new DatabaseSync(databasePath, { readOnly: true });
+      for (const table of ['memory_node_workspaces', 'app_server_research_claims', 'app_server_runbooks', 'app_server_reports', 'campaign_tracks']) {
+        const clause = table === 'memory_node_workspaces' ? 'workspace_id=?' : 'workspace_id=?';
+        assert.equal(releasedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${clause}`).get(options.workspaceId).count, 0, table);
+      }
+      releasedDatabase.close();
+      const rebuilt = rebuildWorkspaceResearchIndex(options);
+      assert.equal(rebuilt.state, 'ready');
+      assert.equal(graph.get(memory.id).body, 'Revised explanation.');
+      assert.equal(claims.get(claim.id).summary, exported.summary);
+      assert.match(reports.get(report.id).content, /Revised/);
+      assert.equal(runbooks.get(runbook.id).contentRevision, runbook.contentRevision + 1);
+      assert.equal(tracks.get(track.id).id, track.id);
     } finally { tracks.close(); }
   } finally {
     reports.close(); runbooks.close(); claims.close(); graph.close(); other.close();

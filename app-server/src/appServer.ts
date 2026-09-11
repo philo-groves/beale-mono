@@ -1050,8 +1050,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         const payload = event.payload;
         const toolName = typeof payload.toolName === 'string' ? payload.toolName : '';
         if ((event.kind === 'tool.observed' && payload.status === 'complete' || payload.type === 'tool_execution_end' || payload.eventType === 'tool_execution_end') && payload.isError !== true
-          && /^(?:claim|finding|memory|runbook|report)[._]/u.test(toolName)
-          && /(?:create|revise|transition|save|correct|append|configure|run|execute)/u.test(toolName)) {
+          && /^(?:claim|finding|investigation|memory|runbook|report)[._]/u.test(toolName)
+          && /(?:create|revise|transition|save|correct|append|configure|run|execute|question|experiment|observe|next_action|review|consolidat)/u.test(toolName)) {
           void checkpointRuntime(runtime, 'Research milestone');
         }
         if (payload.eventType === 'runbook.execution' && ['succeeded', 'failed', 'cancelled'].includes(String(payload.status))) void checkpointRuntime(runtime, 'Runbook execution finished');

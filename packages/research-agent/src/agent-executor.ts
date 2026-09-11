@@ -64,6 +64,10 @@ import {
 } from "./memory-taxonomy.js";
 import { createCollaborationSystemGuidance } from "./collaboration-guidance.js";
 import {
+  isWorkspaceLayoutGuardMessage,
+  workspaceLayoutGuardMessage,
+} from "./workspace-project.js";
+import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   normalizeResearchProfile,
   overrideResearchProfileMemoryDescriptions,
@@ -828,10 +832,16 @@ export function createPiAgentExecutor(
           });
         }
         authoritativeContextMessages = initialMessages;
+        const initialLayoutGuard = request.root && durableWorkspacePath
+          ? workspaceLayoutGuardMessage(durableWorkspacePath)
+          : null;
         const agentMessages = await runAgentLoop(
-          [request.root && !request.terminalContinuation
-            ? createUserMessage(input.modelInput)
-            : createTaskMessage(request.prompt)],
+          [
+            request.root && !request.terminalContinuation
+              ? createUserMessage(input.modelInput)
+              : createTaskMessage(request.prompt),
+            ...(initialLayoutGuard ? [userAgentMessage(initialLayoutGuard)] : []),
+          ],
           {
             systemPrompt: createResearchSystemPrompt({
               hasTools: tools.length > 0,
@@ -964,8 +974,14 @@ export function createPiAgentExecutor(
               const authoritativeMessages = retryContextMessages
                 ? [...retryContextMessages, message, ...toolResults]
                 : context.messages;
+              const hadLayoutGuard = authoritativeMessages.some((candidate) =>
+                isWorkspaceLayoutGuardMessage(agentMessageText(candidate))
+              );
+              const messagesWithoutLayoutGuard = hadLayoutGuard
+                ? removeWorkspaceLayoutGuardMessages(authoritativeMessages)
+                : authoritativeMessages;
               const retainedMessages = retainMessagesFromLatestNativeCompaction(
-                authoritativeMessages,
+                messagesWithoutLayoutGuard,
               );
               const nativeBoundaryPruned = retainedMessages !== authoritativeMessages;
               const compactedMessages = compactAgentContextForModel(
@@ -988,6 +1004,12 @@ export function createPiAgentExecutor(
               const checkpoint = checkpointReason
                 ? researchFocus.compactionCheckpoint(checkpointReason, currentTurn)
                 : null;
+              const layoutGuard = request.root && durableWorkspacePath
+                ? workspaceLayoutGuardMessage(durableWorkspacePath)
+                : null;
+              // Tool turns continue directly from this hook. Terminal turns receive the same
+              // freshly scanned guard through getFollowUpMessages, which reactivates the loop.
+              const layoutGuardForNextTurn = message.stopReason === "toolUse" ? layoutGuard : null;
               const removeResearchTools =
                 typeof input.modelInput.toolBudget.maxToolCalls === "number"
                 && toolCallCount >= input.modelInput.toolBudget.maxToolCalls
@@ -1002,6 +1024,8 @@ export function createPiAgentExecutor(
                 && !checkpoint
                 && !focusTurn.steeringMessage
                 && !pluginToolsChanged
+                && !layoutGuard
+                && !hadLayoutGuard
               ) {
                 authoritativeContextMessages = context.messages;
                 newMessages.splice(0, newMessages.length);
@@ -1060,6 +1084,7 @@ export function createPiAgentExecutor(
                     )
                   : compactedMessages),
                 ...(focusTurn.steeringMessage ? [userAgentMessage(focusTurn.steeringMessage)] : []),
+                ...(layoutGuardForNextTurn ? [userAgentMessage(layoutGuardForNextTurn)] : []),
               ];
               authoritativeContextMessages = nextMessages;
               newMessages.splice(0, newMessages.length);
@@ -1093,10 +1118,14 @@ export function createPiAgentExecutor(
             getFollowUpMessages: async () => {
               const mailboxMessages = subagents?.takeMailbox(request.id) ?? [];
               const collaborationMessages = subagents?.collaborationFollowUp(request.id) ?? [];
+              const layoutGuard = request.root && durableWorkspacePath
+                ? workspaceLayoutGuardMessage(durableWorkspacePath)
+                : null;
               if (mailboxMessages.length > 0 || collaborationMessages.length > 0) researchFocus.notePotentialExternalChange();
               return [
                 ...mailboxMessages,
                 ...collaborationMessages,
+                ...(layoutGuard ? [userAgentMessage(layoutGuard)] : []),
                 ...await goalFollowUpMessages({
                   root: request.root === true,
                   goalRuntime,
@@ -2402,6 +2431,10 @@ function agentMessageText(message: AgentMessage): string {
     .map((item) => item.text)
     .join("\n")
     .trim();
+}
+
+function removeWorkspaceLayoutGuardMessages(messages: readonly AgentMessage[]): AgentMessage[] {
+  return messages.filter((message) => !isWorkspaceLayoutGuardMessage(agentMessageText(message)));
 }
 
 function removeHostResearchCheckpointMessages(messages: readonly AgentMessage[]): AgentMessage[] {

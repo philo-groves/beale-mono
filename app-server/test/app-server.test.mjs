@@ -62,7 +62,7 @@ test('research checkpoints are host-owned and a pending milestone does not delay
   servers.push(server);
   await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example', investigationId: 'investigation-example' }));
   assert.deepEqual(reasons, ['Before research session']);
-  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'finding.transition', status: 'complete' } });
+  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'investigation.observe', status: 'complete' } });
   await waitFor(() => Boolean(releaseMilestone));
   server.stopSession('session-checkpoint-example');
   assert.equal(upstream.stopCalls(), 1);
@@ -1108,6 +1108,7 @@ test("resolves workspace identity and host policy from the shared Beale registry
   const registry = new AppServerHostRegistry({ registryDirectory: directory });
   assert.equal(registry.listWorkspaces().length, 1);
   assert.equal(registry.listWorkspaces()[0].runCount, 1);
+  assert.equal(registry.listHostWorkspaces()[0].workspacePath, workspacePath);
   assert.equal(registry.resolveWorkspace("workspace-quick-chats").name, "Quick Chats");
   assert.equal(registry.resolveWorkspace("workspace-test").workspacePath, workspacePath);
   assert.equal(registry.resolveWorkspace("workspace-test").memoryBackend, "disabled");
@@ -1523,6 +1524,85 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
     }, "generated-invalid-session"),
     /Fast mode is available only when OpenAI is the Lead provider/,
   );
+});
+
+test("session launch exposes same-Subject workspace references without retained research rows", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-subject-reference-"));
+  const priorDirectory = join(directory, "prior-workspace");
+  const unrelatedDirectory = join(directory, "unrelated-workspace");
+  temporaryDirectories.push(directory);
+  mkdirSync(priorDirectory);
+  mkdirSync(unrelatedDirectory);
+  const databasePath = join(directory, "memory.sqlite");
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, workspace_path TEXT NOT NULL);
+      CREATE TABLE workspace_research_subjects (
+        workspace_id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, display_name TEXT NOT NULL
+      );
+    `);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name='memory_nodes'").get().count, 0,
+      "reference discovery must not depend on retained derived research tables");
+    const insertWorkspace = database.prepare("INSERT INTO workspaces VALUES (?, ?)");
+    const insertSubject = database.prepare("INSERT INTO workspace_research_subjects VALUES (?, ?, ?)");
+    for (const [workspaceId, workspacePath, subjectId] of [
+      ["workspace-test", directory, "subject-example"],
+      ["workspace-prior", priorDirectory, "subject-example"],
+      ["workspace-unrelated", unrelatedDirectory, "subject-other"],
+    ]) {
+      insertWorkspace.run(workspaceId, workspacePath);
+      insertSubject.run(workspaceId, subjectId, subjectId === "subject-example" ? "Example Subject" : "Other Subject");
+    }
+  } finally {
+    database.close();
+  }
+  const hostWorkspace = (workspaceId, name, workspacePath) => ({
+    id: `registry-${workspaceId}`,
+    workspaceId,
+    name,
+    researchProfileId: "security-research",
+    researchKitId: "general",
+    runCount: 0,
+    lastRunAt: null,
+    updatedAt: "2026-08-21T00:00:00.000Z",
+    workspacePath,
+    workspaceDirectories: [workspacePath],
+    memoryBackend: "app-server",
+  });
+  const registry = hostRegistryFixture(directory, {
+    hostWorkspaces: [
+      hostWorkspace("workspace-test", "Current", directory),
+      hostWorkspace("workspace-prior", "Prior", priorDirectory),
+      hostWorkspace("workspace-unrelated", "Unrelated", unrelatedDirectory),
+    ],
+  });
+  const service = new AppServerHostService({
+    registry,
+    invokeProtocol: async (operation) => {
+      if (operation === "provider.describe") return {
+        defaultSmallModels: { "openai-codex": "gpt-5.6-luna" },
+        sessionTitleEffort: "medium",
+        shellReviewEffort: "medium",
+      };
+      if (operation === "plugin.runtime") return { skillDirs: [], selectedSkillIds: [], allowedMcpServers: [] };
+      if (operation === "session.get") throw new Error("Session not found: session-subject-reference");
+      if (operation === "session.create") return { revision: 1 };
+      throw new Error(`Unexpected operation: ${operation}`);
+    },
+  });
+
+  const prepared = await service.prepareSession(
+    sessionLaunchRequest(directory, { sessionId: "session-subject-reference" }),
+    "generated-session",
+  );
+  assert.deepEqual(prepared.launch.workspaceReferences, [{
+    workspaceId: "workspace-prior",
+    workspaceName: "Prior",
+    workspaceRoot: priorDirectory,
+    subjectId: "subject-example",
+  }]);
+  assert.equal(appServerSessionArgs(prepared.launch, {}).filter((argument) => argument === "--workspace-reference").length, 1);
 });
 
 test("app-server owns built-in plugins and pins canonical session profile identity", async () => {
@@ -2207,6 +2287,12 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
   });
   const args = appServerSessionArgs({
     ...launch,
+    workspaceReferences: [{
+      workspaceId: "workspace-prior-example",
+      workspaceName: "Prior example",
+      workspaceRoot: "C:\\prior-workspace",
+      subjectId: "subject-example",
+    }],
     provider: { ...launch.provider, fastMode: true },
   }, {
     BEALE_APP_SERVER_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["repository-search", "file-read"]),
@@ -2222,6 +2308,12 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
     "--executor", "agent",
   ]);
   assert.equal(args[args.indexOf("--workspace-context") + 1], "C:\\workspace\\workspace-context.json");
+  assert.deepEqual(JSON.parse(args[args.indexOf("--workspace-reference") + 1]), {
+    workspaceId: "workspace-prior-example",
+    workspaceName: "Prior example",
+    workspaceRoot: "C:\\prior-workspace",
+    subjectId: "subject-example",
+  });
   assert.equal(args[args.indexOf("--attempt-id") + 1], "attempt-test");
   assert.equal(args[args.indexOf("--investigation-id") + 1], "investigation-example");
   assert.equal(args[args.indexOf("--memory-backend") + 1], "app-server");
@@ -3168,24 +3260,29 @@ function testHostService(directory, options = {}) {
 }
 
 function hostRegistryFixture(directory, options = {}) {
+  const currentWorkspace = {
+    id: "registry-workspace-test",
+    workspaceId: "workspace-test",
+    name: "Test workspace",
+    researchProfileId: "security-research",
+    researchKitId: "general",
+    runCount: 0,
+    lastRunAt: null,
+    updatedAt: "2026-08-21T00:00:00.000Z",
+    workspacePath: directory,
+    workspaceDirectories: [directory],
+    memoryBackend: options.memoryBackend ?? "app-server",
+  };
+  const hostWorkspaces = options.hostWorkspaces ?? [currentWorkspace];
   return {
     registryDirectory: directory,
     registryPath: join(directory, "workspace-registry.sqlite"),
     shellOptionsPath: join(directory, "shell-options.json"),
     listWorkspaces: () => [],
-    resolveWorkspace: (identifier) => identifier === "workspace-test" ? {
-      id: "registry-workspace-test",
-      workspaceId: "workspace-test",
-      name: "Test workspace",
-      researchProfileId: "security-research",
-      researchKitId: "general",
-      runCount: 0,
-      lastRunAt: null,
-      updatedAt: "2026-08-21T00:00:00.000Z",
-      workspacePath: directory,
-      workspaceDirectories: [directory],
-      memoryBackend: options.memoryBackend ?? "app-server",
-    } : null,
+    listHostWorkspaces: () => hostWorkspaces,
+    resolveWorkspace: (identifier) => hostWorkspaces.find((workspace) => (
+      workspace.workspaceId === identifier || workspace.id === identifier
+    )) ?? null,
     providerSettings: () => ({
       defaultProviderId: "openai-codex",
       modelDefaults: {},

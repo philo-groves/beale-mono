@@ -87,4 +87,5 @@ export * from "./file-mutation-tools.js";
 export * from "./workspace-project.js";
 export * from "./workspace-publication.js";
 export * from "./workspace-import.js";
+export * from "./workspace-research-index.js";
 export type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";

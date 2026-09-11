@@ -38,6 +38,12 @@ export interface PreparedAppServerSessionLaunch {
 export interface ResolvedAppServerSessionLaunch {
   workspaceRoot: string;
   workspaceDirectories: readonly string[];
+  workspaceReferences?: readonly {
+    workspaceId: string;
+    workspaceName: string;
+    workspaceRoot: string;
+    subjectId: string;
+  }[];
   investigationId?: string;
   capturePath: string;
   workspaceContextPath?: string;
@@ -115,6 +121,9 @@ export function appServerSessionArgs(
   ];
 
   if (launch.workspaceContextPath) args.push('--workspace-context', launch.workspaceContextPath);
+  for (const reference of launch.workspaceReferences ?? []) {
+    args.push('--workspace-reference', JSON.stringify(reference));
+  }
 
   if (launch.resumeCapturePath) args.push('--resume-capture', launch.resumeCapturePath);
   if (launch.resumeFallbackPromptPath) {

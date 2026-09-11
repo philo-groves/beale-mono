@@ -39,13 +39,13 @@ export function runWorkspaceCheckpoint(
   edit?: { path: string; expectedRevision: number },
   cleanupSession?: string,
   databaseCoordinator?: AppServerWorkerDatabaseCoordinator,
-  settings?: { exportResearch?: boolean },
+  settings?: { exportResearch?: boolean; researchIndexAction?: 'rebuild' | 'release' },
 ): Promise<WorkspaceCheckpointResult> {
   const key = workspaceOperationKey(options.workspaceRoot);
   const previous = queues.get(key) ?? Promise.resolve();
   const operation = previous.catch(() => undefined).then(() => new Promise<WorkspaceCheckpointResult>((resolve) => {
     let worker: Worker;
-    try { worker = new Worker(new URL('./workspaceCheckpointWorker.js', import.meta.url), { workerData: { options, reason, edit, exportResearch: settings?.exportResearch === true, cleanupSession } }); }
+    try { worker = new Worker(new URL('./workspaceCheckpointWorker.js', import.meta.url), { workerData: { options, reason, edit, exportResearch: settings?.exportResearch === true, researchIndexAction: settings?.researchIndexAction, cleanupSession } }); }
     catch (error) { resolve({ status: 'failed', reason, error: error instanceof Error ? error.message : String(error) }); return; }
     const databaseBroker = new AppServerWorkerDatabaseBroker(options.databasePath, databaseCoordinator);
     let result: WorkspaceCheckpointResult | undefined;

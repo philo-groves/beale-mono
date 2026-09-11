@@ -4,6 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import { createResearchStorageLayout, loadResearchStorageManifest } from "./storage.js";
 import { assertWorkspaceChild, atomicWorkspaceWrite, checkpointWorkspace, publishWorkspaceFiles, readWorkspaceProject, recoverWorkspacePublication, retainWorkspaceArtifact, workspaceFileHash, workspaceContentHash, type WorkspaceCheckpointResult, type WorkspaceCommitContext } from "./workspace-project.js";
+import { markWorkspaceResearchIndexReady } from "./workspace-research-index.js";
 
 type Row = Record<string, unknown>;
 export interface WorkspacePublicationOptions {
@@ -21,7 +22,12 @@ function identifier(value: unknown): string {
   return value;
 }
 
-/** Reads one SQLite snapshot, scoped to one workspace. Database files and session launch credentials are never exported. */
+/**
+ * Materializes one workspace-scoped derived-index snapshot into canonical research files.
+ * Schema-v2 workspaces treat the completed files as authority; schema-v1 workspaces
+ * retain this operation as a compatibility export. Database files and credentials
+ * are never published.
+ */
 export function publishWorkspaceResearch(options: WorkspacePublicationOptions): WorkspaceCommitContext | undefined {
   const root = options.workspaceRoot;
   const project = readWorkspaceProject(root);
@@ -65,7 +71,8 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     database.exec("BEGIN");
     const has = (table: string) => Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
     const rows = (table: string, where: string, parameters: SQLInputValue[] = [options.workspaceId]): Row[] => has(table)
-      ? database.prepare(`SELECT * FROM ${table} WHERE ${where}`).all(...parameters) as Row[] : [];
+      ? (database.prepare(`SELECT * FROM ${table} WHERE ${where}`).all(...parameters) as Row[])
+        .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))) : [];
     const owned = (table: string) => rows(table, "workspace_id = ?");
     if (!attribution.investigationId && options.sessionId && has('campaign_tracks') && has('campaign_track_sessions')) {
       const track = database.prepare(`SELECT t.id FROM campaign_tracks t JOIN campaign_track_sessions s ON s.investigation_id = t.id
@@ -96,9 +103,13 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       for (const entry of evidence) retainPath(entry.path, entry.path_base);
       const { body, ...metadata } = memory;
       files[`memories/${id}.md`] = `<!-- Beale canonical memory; edit through memory tools or validated import. -->\n\n\`\`\`json\n${json({ schemaVersion: 1, ...metadata, workspace_id: options.workspaceId,
+        workspaces: rows("memory_node_workspaces", "node_id = ? AND workspace_id = ?", [id, options.workspaceId]),
         tags: rows("memory_node_tags", "node_id = ?", [id]),
         assets: rows("memory_node_assets", "node_id = ?", [id]), evidence,
         edges: rows("memory_edges", "from_id = ?", [id]).filter((edge) => memoryIds.has(edge.to_id)),
+        sessions: rows("memory_node_sessions", "node_id = ?", [id]),
+        validations: rows("memory_node_catalog_validations", "node_id = ?", [id]),
+        authorship: rows("app_server_model_authorship", "resource_kind = ? AND resource_id = ?", ["memory", id]),
       })}\`\`\`\n\n${String(body ?? "")}\n`;
     }
     for (const [table, category] of [["app_server_runbooks", "runbooks"], ["app_server_reports", "reports"]] as const) {
@@ -118,13 +129,54 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
           }
         }
         files[`${category}/${id}/${category === "runbooks" ? "runbook" : "report"}.${extension}`] = content;
-        files[`${category}/${id}/record.json`] = json({ schemaVersion: 1, ...record });
+        files[`${category}/${id}/record.json`] = json({ schemaVersion: 2, ...record,
+          revisions: rows('app_server_artifact_revisions', 'artifact_kind = ? AND artifact_id = ?', [category === 'runbooks' ? 'runbook' : 'report', id]),
+          authorship: rows('app_server_model_authorship', 'resource_kind = ? AND resource_id = ?', [category === 'runbooks' ? 'runbook' : 'report', id]),
+        });
         retainArtifact(record.submission_packet_artifact_id);
         retainArtifact(record.recording_artifact_id);
         artifactPaths.set(path, `${category}/${id}/${category === "runbooks" ? "runbook" : "report"}.${extension}`);
       }
     }
-    for (const track of owned("campaign_tracks")) files[`investigations/${identifier(track.id)}/record.json`] = json({ schemaVersion: 1, ...track });
+    for (const track of owned("campaign_tracks")) {
+      const investigationId = identifier(track.id);
+      const observations = rows("campaign_track_observations", "investigation_id = ?", [investigationId]);
+      files[`investigations/${investigationId}/record.json`] = json({
+        schemaVersion: 2,
+        ...track,
+        sessions: rows("campaign_track_sessions", "investigation_id = ?", [investigationId]),
+        resources: rows("campaign_track_resources", "investigation_id = ?", [investigationId]),
+        questions: rows("campaign_track_questions", "investigation_id = ?", [investigationId]),
+        experiments: rows("campaign_track_experiments", "investigation_id = ?", [investigationId]),
+        observations: observations.map((observation) => ({
+          ...observation,
+          evidence: rows("campaign_track_observation_evidence", "observation_id = ?", [String(observation.id)]),
+        })),
+        nextActions: rows("campaign_track_next_actions", "investigation_id = ?", [investigationId]),
+        memoryClaimReviews: rows("campaign_track_claim_reviews", "investigation_id = ?", [investigationId]),
+        researchClaimReviews: rows("campaign_track_research_claim_reviews", "investigation_id = ?", [investigationId]),
+      });
+    }
+    if (has('campaign_track_replay_runs') || has('campaign_track_consolidations')) {
+      files['references/campaign-state.json'] = json({
+        schemaVersion: 1,
+        workspaceId: options.workspaceId,
+        replayRuns: owned('campaign_track_replay_runs'),
+        consolidations: owned('campaign_track_consolidations'),
+      });
+    }
+    if (has('app_server_research_resources') || has('resource_prior_art')) {
+      const resources = owned('app_server_research_resources');
+      files['references/resources.json'] = json({
+        schemaVersion: 1,
+        workspaceId: options.workspaceId,
+        resources: resources.map((resource) => ({
+          ...resource,
+          touches: rows('app_server_research_resource_touches', 'resource_id = ?', [String(resource.id)]),
+        })),
+        priorArt: owned('resource_prior_art'),
+      });
+    }
     const executions = owned("app_server_runbook_executions");
     for (const execution of executions) {
       const cells = rows("app_server_runbook_cell_executions", "run_id = ?", [String(execution.run_id)]);
@@ -162,6 +214,7 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       if (path in pins) pins[path] = workspaceContentHash(portable);
     }
     publishWorkspaceFiles(root, files, pins, rawFiles);
+    if (project.schemaVersion === 2 && project.researchAuthority === "files") markWorkspaceResearchIndexReady(options);
     return attribution;
   } catch (error) {
     try { database.exec("ROLLBACK"); } catch { /* Read snapshot already ended. */ }

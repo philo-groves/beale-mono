@@ -4,19 +4,31 @@ import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, o
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const WORKSPACE_PROJECT_VERSION = 1;
+export const WORKSPACE_PROJECT_VERSION = 2;
 export const WORKSPACE_CHECKPOINT_INTERVAL_MS = 10 * 60_000;
 export const WORKSPACE_DIRECTORIES = ["investigations", "runbooks", "reports", "evidence", "references", "memories", "claims", "traces", "scratch", "cache"] as const;
 const ROOT_FILES = new Set(["AGENTS.md", "AGENTS.override.md", "README.md", ".gitignore", "workspace.json"]);
+const WORKSPACE_ROOT_INTERNAL_ENTRIES = new Set([".git", ".beale"]);
 const MAX_TRACKED_BYTES = 5 * 1024 * 1024;
 const INDEX_PATH = "references/research-index.json";
 const IGNORES = ["/.beale/", "/scratch/", "/cache/", "/traces/**/events*.jsonl", "/traces/**/outputs/", "/evidence/raw/", "**/node_modules/", "**/.git/", "*.sqlite*", "*.db", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.tmp"];
+const WORKSPACE_GITIGNORE_START = "# >>> Beale managed workspace layout >>>";
+const WORKSPACE_GITIGNORE_END = "# <<< Beale managed workspace layout <<<";
+export const WORKSPACE_LAYOUT_GUARD_PREFIX = "[[APP_SERVER_HOST_WORKSPACE_LAYOUT_GUARD_V1]]\n";
+export const WORKSPACE_LAYOUT_GUARD_SUFFIX = "\n[[/APP_SERVER_HOST_WORKSPACE_LAYOUT_GUARD_V1]]";
+
+export interface UnexpectedWorkspaceTopLevelEntry {
+  name: string;
+  kind: "file" | "directory" | "symlink" | "other";
+}
 
 export interface WorkspaceProject {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   workspaceId: string;
   directories: readonly string[];
   checkpointIntervalMs: number;
+  /** Absent on schema-v1 database-first compatibility workspaces. */
+  researchAuthority?: "files";
 }
 export interface WorkspaceResearchIndex {
   schemaVersion: 1;
@@ -32,10 +44,20 @@ export interface WorkspaceCheckpointResult {
   reason: string;
   error?: string;
   imported?: boolean;
+  researchIndex?: {
+    state: "ready" | "released";
+    publicationHash: string;
+    affectedRows: number;
+  };
 }
 export interface WorkspaceCommitContext {
   investigationId?: string;
   sessionId?: string;
+}
+
+export interface WorkspaceResearchEdit {
+  path: string;
+  state: "created" | "modified" | "deleted";
 }
 
 /** Stable final trailers support git log --grep and Git's trailer filtering. */
@@ -99,10 +121,92 @@ export function readWorkspaceProject(root: string): WorkspaceProject | null {
   const path = join(root, "workspace.json");
   if (!existsSync(path)) return null;
   const value = JSON.parse(readFileSync(path, "utf8")) as Partial<WorkspaceProject>;
-  if (value.schemaVersion !== 1 || typeof value.workspaceId !== "string" || !value.workspaceId.trim()) {
-    throw new Error("Unsupported workspace.json. A Beale research workspace requires schemaVersion 1 and a workspaceId.");
+  if ((value.schemaVersion !== 1 && value.schemaVersion !== WORKSPACE_PROJECT_VERSION)
+    || typeof value.workspaceId !== "string" || !value.workspaceId.trim()
+    || (value.schemaVersion === WORKSPACE_PROJECT_VERSION && value.researchAuthority !== "files")) {
+    throw new Error("Unsupported workspace.json. A Beale research workspace requires schemaVersion 1 compatibility metadata or schemaVersion 2 with file authority.");
   }
   return value as WorkspaceProject;
+}
+
+export function workspaceResearchAuthority(root: string): "files" | "database" | null {
+  const project = readWorkspaceProject(root);
+  if (!project) return null;
+  return project.schemaVersion === WORKSPACE_PROJECT_VERSION && project.researchAuthority === "files"
+    ? "files"
+    : "database";
+}
+
+/** Scans the filesystem directly so Git-ignored root pollution remains visible to the agent. */
+export function listUnexpectedWorkspaceTopLevelEntries(root: string): UnexpectedWorkspaceTopLevelEntry[] {
+  if (!readWorkspaceProject(root)) return [];
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => !ROOT_FILES.has(entry.name)
+      && !WORKSPACE_ROOT_INTERNAL_ENTRIES.has(entry.name)
+      && !(WORKSPACE_DIRECTORIES as readonly string[]).includes(entry.name))
+    .map((entry) => ({
+      name: entry.name,
+      kind: entry.isSymbolicLink()
+        ? "symlink" as const
+        : entry.isDirectory()
+          ? "directory" as const
+          : entry.isFile()
+            ? "file" as const
+            : "other" as const,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function workspaceLayoutGuardMessage(root: string): string | null {
+  let entries: UnexpectedWorkspaceTopLevelEntry[];
+  try {
+    entries = listUnexpectedWorkspaceTopLevelEntries(root);
+  } catch {
+    return [
+      WORKSPACE_LAYOUT_GUARD_PREFIX.trimEnd(),
+      "Workspace layout verification failed on the canonical workspace root.",
+      "Do not treat this as a clean workspace root. Preserve existing material and repair the workspace metadata or filesystem access problem; ask the operator for help if it cannot be resolved safely.",
+      "This host check repeats every turn until the workspace layout can be verified.",
+      WORKSPACE_LAYOUT_GUARD_SUFFIX.trimStart(),
+    ].join("\n");
+  }
+  if (entries.length === 0) return null;
+  const shown = entries.slice(0, 20).map((entry) => `${JSON.stringify(entry.name)}${entry.kind === "directory" ? "/" : ""}`);
+  if (entries.length > shown.length) shown.push(`and ${entries.length - shown.length} more`);
+  return [
+    WORKSPACE_LAYOUT_GUARD_PREFIX.trimEnd(),
+    `Workspace layout repair is required before continuing or ending this session. Unexpected top-level entries: ${shown.join(", ")}.`,
+    "Move every research item into an approved directory: investigations/, runbooks/, reports/, evidence/, references/, memories/, claims/, traces/, scratch/, or cache/. Use typed research tools for canonical records when applicable. Do not delete research merely to clear this guard; remove only material known to be disposable.",
+    "The workspace root may contain only AGENTS.md, AGENTS.override.md, README.md, .gitignore, workspace.json, and the approved directories. This host check is filesystem-based and repeats every turn until all unexpected entries are resolved.",
+    WORKSPACE_LAYOUT_GUARD_SUFFIX.trimStart(),
+  ].join("\n");
+}
+
+export function isWorkspaceLayoutGuardMessage(message: string): boolean {
+  return message.startsWith(WORKSPACE_LAYOUT_GUARD_PREFIX)
+    && message.endsWith(WORKSPACE_LAYOUT_GUARD_SUFFIX);
+}
+
+function managedWorkspaceGitIgnore(): string {
+  return [
+    WORKSPACE_GITIGNORE_START,
+    "# Ignore every unexpected top-level entry; the runtime guard still reports it until moved.",
+    "/*",
+    ...[...ROOT_FILES].sort().map((name) => `!/${name}`),
+    ...(WORKSPACE_DIRECTORIES as readonly string[]).map((name) => `!/${name}/`),
+    ...IGNORES,
+    WORKSPACE_GITIGNORE_END,
+  ].join("\n");
+}
+
+function ensureWorkspaceGitIgnore(root: string): void {
+  const path = join(root, ".gitignore");
+  let existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const managedPattern = new RegExp(`${WORKSPACE_GITIGNORE_START.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}[\\s\\S]*?${WORKSPACE_GITIGNORE_END.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\n?`, "gu");
+  existing = existing.replace(managedPattern, "").trimEnd();
+  if (existing.trim() === IGNORES.join("\n")) existing = "";
+  const content = `${existing ? `${existing}\n\n` : ""}${managedWorkspaceGitIgnore()}\n`;
+  if (!existsSync(path) || readFileSync(path, "utf8") !== content) atomicWorkspaceWrite(root, ".gitignore", content);
 }
 
 /** A dedicated research directory is never adopted from an existing source repository. */
@@ -113,7 +217,9 @@ export function initializeWorkspaceProject(root: string, workspaceId: string): W
   if (existing) {
     if (existing.workspaceId !== workspaceId) throw new Error("Workspace identity does not match workspace.json.");
     if (!existsSync(join(root, '.git'))) git(root, ['init', '--initial-branch=research']);
+    ensureWorkspaceGitIgnore(root);
     installWorkspaceGitHook(root);
+    if (workspaceResearchAuthority(root) === 'files') restoreWorkspacePublicationMetadata(root, existing);
     let initialized = false;
     try { git(root, ['rev-parse', '--verify', 'HEAD']); initialized = true; } catch { /* Resume interrupted creation. */ }
     if (!initialized) {
@@ -125,21 +231,66 @@ export function initializeWorkspaceProject(root: string, workspaceId: string): W
   if (existsSync(join(root, ".git"))) throw new Error("Choose a dedicated research directory; keep source repositories outside the workspace.");
   const unexpected = readdirSync(root).filter((name) => name !== ".beale" && !ROOT_FILES.has(name));
   if (unexpected.length) throw new Error("New research workspaces must be empty apart from AGENTS.md, README.md, and workspace configuration. Import reference material after creation.");
-  const project: WorkspaceProject = { schemaVersion: 1, workspaceId, directories: WORKSPACE_DIRECTORIES, checkpointIntervalMs: WORKSPACE_CHECKPOINT_INTERVAL_MS };
+  const project: WorkspaceProject = {
+    schemaVersion: WORKSPACE_PROJECT_VERSION,
+    workspaceId,
+    directories: WORKSPACE_DIRECTORIES,
+    checkpointIntervalMs: WORKSPACE_CHECKPOINT_INTERVAL_MS,
+    researchAuthority: "files",
+  };
   for (const directory of WORKSPACE_DIRECTORIES) {
     mkdirSync(join(root, directory), { recursive: true });
     if (directory !== "scratch" && directory !== "cache") writeFileSync(join(root, directory, ".gitkeep"), "");
   }
   if (!existsSync(join(root, "AGENTS.md"))) writeFileSync(join(root, "AGENTS.md"), WORKSPACE_INSTRUCTIONS);
   if (!existsSync(join(root, "README.md"))) writeFileSync(join(root, "README.md"), "# Beale research workspace\n\nResearch files and local Git checkpoints are managed by app-server. Repositories remain outside this directory. Remote setup and synchronization are operator-controlled.\n");
-  const ignore = join(root, ".gitignore");
-  writeFileSync(ignore, `${existsSync(ignore) ? readFileSync(ignore, "utf8") + "\n" : ""}${IGNORES.join("\n")}\n`);
+  ensureWorkspaceGitIgnore(root);
   atomicWorkspaceWrite(root, "workspace.json", JSON.stringify(project, null, 2) + "\n");
   git(root, ["init", "--initial-branch=research"]);
   installWorkspaceGitHook(root);
+  publishWorkspaceFiles(root, {});
   const result = checkpointWorkspace(root, "Initialize research workspace");
   if (result.status === "failed") throw new Error(result.error);
   return project;
+}
+
+/** Rebuilds only disposable publication metadata from the canonical working files. */
+function restoreWorkspacePublicationMetadata(root: string, project: WorkspaceProject): void {
+  const statePath = join(root, '.git', 'beale', 'publication.json');
+  if (existsSync(statePath)) return;
+  const indexPath = join(root, INDEX_PATH);
+  if (!existsSync(indexPath)) {
+    const canonicalRoots = ['claims', 'memories', 'runbooks', 'reports', 'investigations'];
+    const hasResearch = canonicalRoots.some((directory) => readdirSync(join(root, directory), { withFileTypes: true })
+      .some((entry) => entry.name !== '.gitkeep'));
+    if (hasResearch) throw new Error('File-authority publication metadata is missing; restore references/research-index.json before continuing.');
+    publishWorkspaceFiles(root, {});
+    return;
+  }
+  const index = JSON.parse(readFileSync(indexPath, 'utf8')) as WorkspaceResearchIndex;
+  if (index.schemaVersion !== 1 || index.workspaceId !== project.workspaceId || !index.files || !index.pins) {
+    throw new Error('File-authority research index is invalid or belongs to another workspace.');
+  }
+  const contentDirectory = join(root, '.git', 'beale', 'publication-content');
+  mkdirSync(contentDirectory, { recursive: true });
+  for (const [path, hash] of Object.entries(index.files)) {
+    const absolute = join(root, path);
+    assertWorkspaceChild(root, absolute);
+    if (!safeRelative(path) || !existsSync(absolute) || workspaceFileHash(absolute) !== hash) {
+      throw new Error(`${path}: canonical research does not match the recoverable research index.`);
+    }
+    const content = readFileSync(absolute);
+    const baseline = join(contentDirectory, hash);
+    if (!existsSync(baseline)) writeFileSync(baseline, content, { mode: 0o600 });
+  }
+  for (const [path, hash] of Object.entries({ ...index.pins, ...index.rawFiles })) {
+    const absolute = join(root, path);
+    assertWorkspaceChild(root, absolute);
+    if (!safeRelative(path) || !existsSync(absolute) || workspaceFileHash(absolute) !== hash) {
+      throw new Error(`${path}: retained research evidence does not match the recoverable research index.`);
+    }
+  }
+  atomicWorkspaceWrite(root, '.git/beale/publication.json', JSON.stringify(index));
 }
 
 export const WORKSPACE_INSTRUCTIONS = `# Beale research workspace
@@ -149,14 +300,15 @@ This directory is one research workspace. Source repositories belong in the host
 - investigations/: stable candidate directories containing analysis, code, and fixtures; reuse identities across attempts.
 - runbooks/: canonical executable procedures and self-contained reproduction packages.
 - reports/: canonical reports and report-specific supporting material.
-- memories/ and claims/: app-server-published canonical records. Change these through research tools; direct edits require validated import.
+- memories/ and claims/: canonical file-authority records. Typed research tools trigger background synchronization; direct edits enter the derived index through validated import.
 - evidence/: retained evidence and provenance. Cited evidence is immutable; corrections require a new artifact.
 - references/: background material and the host-published research index.
 - traces/: session summaries and untracked raw event exports.
 - scratch/: disposable session experiments; cache/: rebuildable outputs and downloads. Both are excluded from Git.
 
 Keep related scripts and fixtures with their investigation or runbook. Default shell execution uses session scratch; specify an external repository cwd for source work and an explicit investigation directory for persistent candidate work.
-App-server creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
+Keep the workspace top level clean. Unexpected files and directories are ignored by Git but detected directly by app-server; the agent is reminded every turn until it moves them into an approved directory.
+App-server keeps its derived research index synchronized with these files and creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
 Every commit ends with Investigation-ID and Session-ID trailers. Supply the actual IDs for manual research commits; use none only when there is no associated investigation or session.
 Host commands retain the operator's privileges; these conventions are not filesystem isolation.
 `;
@@ -267,10 +419,20 @@ export function validateWorkspaceCommit(root: string): void {
   const projectEntry = entries.get("workspace.json");
   if (!projectEntry) throw new Error("workspace.json cannot be removed.");
   const project = JSON.parse(special.get(projectEntry.hash)!) as WorkspaceProject;
-  if (project.schemaVersion !== 1 || typeof project.workspaceId !== 'string' || !project.workspaceId.trim() || project.checkpointIntervalMs !== WORKSPACE_CHECKPOINT_INTERVAL_MS || JSON.stringify(project.directories) !== JSON.stringify(WORKSPACE_DIRECTORIES)) throw new Error("workspace.json must retain the supported layout and identity.");
+  if ((project.schemaVersion !== 1 && project.schemaVersion !== WORKSPACE_PROJECT_VERSION)
+    || typeof project.workspaceId !== 'string' || !project.workspaceId.trim()
+    || project.checkpointIntervalMs !== WORKSPACE_CHECKPOINT_INTERVAL_MS
+    || JSON.stringify(project.directories) !== JSON.stringify(WORKSPACE_DIRECTORIES)
+    || (project.schemaVersion === WORKSPACE_PROJECT_VERSION && project.researchAuthority !== 'files')) {
+    throw new Error("workspace.json must retain the supported layout, research authority, and identity.");
+  }
   let previousProject: WorkspaceProject | undefined;
   try { previousProject = JSON.parse(git(root, ['show', 'HEAD:workspace.json'])) as WorkspaceProject; } catch { /* Initial commit. */ }
-  if (previousProject && previousProject.workspaceId !== project.workspaceId) throw new Error('The committed workspace identity cannot be changed.');
+  if (previousProject && (previousProject.workspaceId !== project.workspaceId
+    || previousProject.schemaVersion !== project.schemaVersion
+    || previousProject.researchAuthority !== project.researchAuthority)) {
+    throw new Error('The committed workspace identity cannot be changed, and research authority cannot be changed manually.');
+  }
   for (const [path, entry] of entries) {
     const problem = workspacePathProblem(path);
     if (problem) throw new Error(`${path}: ${problem}.`);
@@ -479,6 +641,55 @@ export function readPublishedWorkspaceFile(root: string, path: string): string {
   const hash = index.files[path];
   if (!hash || !/^[a-f0-9]{64}$/u.test(hash)) throw new Error("File is not a published canonical research record.");
   return readFileSync(join(root, ".git", "beale", "publication-content", hash), "utf8");
+}
+
+/** Returns only edits to app-server-managed research files; ordinary file-native work is not included. */
+export function listWorkspaceResearchEdits(root: string): WorkspaceResearchEdit[] {
+  if (workspaceResearchAuthority(root) !== "files") return [];
+  const statePath = join(root, ".git", "beale", "publication.json");
+  const indexPath = join(root, INDEX_PATH);
+  if (!existsSync(statePath) || !existsSync(indexPath)) {
+    throw new Error("File-authority workspace metadata is incomplete; restore the research index before continuing.");
+  }
+  const index = JSON.parse(readFileSync(statePath, "utf8")) as WorkspaceResearchIndex;
+  if (readFileSync(indexPath, "utf8") !== JSON.stringify(index, null, 2) + "\n") {
+    throw new Error("The research index was edited directly; restore it before importing individual research files.");
+  }
+  const edits: WorkspaceResearchEdit[] = [];
+  for (const [path, hash] of Object.entries(index.files)) {
+    const absolute = join(root, path);
+    assertWorkspaceChild(root, absolute);
+    if (!existsSync(absolute)) edits.push({ path, state: "deleted" });
+    else if (workspaceFileHash(absolute) !== hash) edits.push({ path, state: "modified" });
+  }
+  for (const path of listManagedResearchRecordPaths(root)) {
+    if (!(path in index.files)) edits.push({ path, state: 'created' });
+  }
+  return edits.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function listManagedResearchRecordPaths(root: string): string[] {
+  const paths: string[] = [];
+  const flat = (directory: string, expression: RegExp): void => {
+    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
+      if (entry.isFile() && expression.test(entry.name)) paths.push(`${directory}/${entry.name}`);
+    }
+  };
+  const nested = (directory: string, names: readonly string[]): void => {
+    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      for (const name of names) if (existsSync(join(root, directory, entry.name, name))) paths.push(`${directory}/${entry.name}/${name}`);
+    }
+  };
+  flat('claims', /\.json$/u);
+  flat('memories', /\.md$/u);
+  flat('evidence', /\.json$/u);
+  nested('reports', ['report.md', 'record.json']);
+  nested('runbooks', ['runbook.ipynb', 'record.json']);
+  nested('investigations', ['record.json']);
+  nested('traces', ['summary.md']);
+  for (const name of ['scope.json', 'campaign-state.json']) if (existsSync(join(root, 'references', name))) paths.push(`references/${name}`);
+  return paths;
 }
 
 export function isPublishedWorkspacePath(root: string, path: string): boolean {

@@ -78,7 +78,7 @@ export function createWorkspaceHistorySearchTool(
   return tool(
     "history.search",
     "history_search",
-    "Search the current workspace's canonical claims, knowledge memories, and runbooks as compact typed cards through one history index. Scope defaults to the current workspace; scope=subject also returns compact read-only references from other workspaces sharing the active Subject. Files remain workspace-local, so use workspace.search only for the current workspace.",
+    "Search the current workspace's canonical claims, knowledge memories, and runbooks as compact typed cards through one history index. Scope defaults to the current workspace; scope=subject also returns compact read-only references from other workspaces sharing the active Subject while their derived index rows are loaded. For file-native material or a released schema-v2 index, use a host-advertised workspaceId with workspace.search.",
     schema,
     (input) => searchWorkspaceHistory(options, input),
   );

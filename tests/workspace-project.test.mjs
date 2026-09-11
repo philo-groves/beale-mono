@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test, afterEach } from 'node:test';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, copyFileSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { initializeWorkspaceProject, checkpointWorkspace, publishWorkspaceFiles, workspaceContentHash, preserveWorkspaceFile, quarantineWorkspaceDisposable, recoverWorkspacePublication, WORKSPACE_DIRECTORIES } from '../packages/research-agent/dist/workspace-project.js';
+import { initializeWorkspaceProject, checkpointWorkspace, listUnexpectedWorkspaceTopLevelEntries, listWorkspaceResearchEdits, publishWorkspaceFiles, workspaceContentHash, workspaceLayoutGuardMessage, preserveWorkspaceFile, quarantineWorkspaceDisposable, recoverWorkspacePublication, workspaceResearchAuthority, WORKSPACE_DIRECTORIES, WORKSPACE_PROJECT_VERSION } from '../packages/research-agent/dist/workspace-project.js';
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -20,12 +20,53 @@ function git(root, ...args) {
 
 test('creates a standalone local research repository with the explicit layout and no remote', () => {
   const root = workspace();
+  const project = JSON.parse(readFileSync(join(root, 'workspace.json'), 'utf8'));
+  assert.equal(project.schemaVersion, WORKSPACE_PROJECT_VERSION);
+  assert.equal(project.researchAuthority, 'files');
+  assert.equal(workspaceResearchAuthority(root), 'files');
+  assert.ok(existsSync(join(root, 'references', 'research-index.json')));
   assert.equal(git(root, 'remote').stdout, '');
   assert.equal(git(root, 'log', '--format=%s').stdout.trim(), 'Initialize research workspace');
   assert.match(git(root, 'log', '-1', '--format=%B').stdout.trim(), /\n\nInvestigation-ID: none\nSession-ID: none$/u);
   for (const directory of WORKSPACE_DIRECTORIES) assert.ok(existsSync(join(root, directory)));
   assert.equal(git(root, 'status', '--porcelain').stdout, '');
   assert.equal(checkpointWorkspace(root, 'No changes').status, 'unchanged');
+});
+
+test('workspace initialization updates the managed ignore block without replacing operator rules', () => {
+  const root = workspace();
+  const ignorePath = join(root, '.gitignore');
+  writeFileSync(ignorePath, `${readFileSync(ignorePath, 'utf8')}\n/operator-local.txt\n`);
+  initializeWorkspaceProject(root, 'workspace-example');
+  const once = readFileSync(ignorePath, 'utf8');
+  initializeWorkspaceProject(root, 'workspace-example');
+  const twice = readFileSync(ignorePath, 'utf8');
+  assert.match(twice, /^\/operator-local\.txt$/mu);
+  assert.equal(twice.match(/>>> Beale managed workspace layout >>>/gu)?.length, 1);
+  assert.equal(twice, once, 'managed migration must be idempotent');
+});
+
+test('schema-v1 workspaces retain database-first compatibility authority', () => {
+  const root = mkdtempSync(join(tmpdir(), 'beale-project-v1-test-'));
+  roots.push(root);
+  writeFileSync(join(root, 'workspace.json'), JSON.stringify({
+    schemaVersion: 1,
+    workspaceId: 'workspace-legacy-example',
+    directories: WORKSPACE_DIRECTORIES,
+    checkpointIntervalMs: 600000,
+  }));
+  assert.equal(workspaceResearchAuthority(root), 'database');
+});
+
+test('file authority distinguishes revisioned edits from untyped record creation', () => {
+  const root = workspace();
+  publishWorkspaceFiles(root, { 'claims/claim-example.json': '{"revision":1}' });
+  writeFileSync(join(root, 'claims', 'claim-example.json'), '{"revision":1,"summary":"edited"}');
+  writeFileSync(join(root, 'claims', 'claim-new-example.json'), '{"revision":1}');
+  assert.deepEqual(listWorkspaceResearchEdits(root), [
+    { path: 'claims/claim-example.json', state: 'modified' },
+    { path: 'claims/claim-new-example.json', state: 'created' },
+  ]);
 });
 
 test('checkpoints eligible files but excludes disposable files and raw traces', () => {
@@ -84,13 +125,44 @@ test('cited evidence cannot be deleted or modified by a manual commit', () => {
   assert.match(result.stderr, /evidence\/example.txt/);
 });
 
-test('unclassified files block checkpoints without being removed or automatically ignored', () => {
+test('unexpected top-level entries are ignored by Git but repeatedly exposed by the filesystem guard', () => {
   const root = workspace();
   writeFileSync(join(root, 'loose-example.py'), 'print(1)');
-  const result = checkpointWorkspace(root, 'Classify first');
-  assert.equal(result.status, 'failed');
-  assert.match(result.error, /loose-example.py/);
-  assert.ok(existsSync(join(root, 'loose-example.py')));
+  mkdirSync(join(root, 'loose-directory'));
+  writeFileSync(join(root, 'loose-directory', 'notes.txt'), 'notes');
+  writeFileSync(join(root, 'investigations', 'classified-example.md'), '# Candidate\n');
+
+  assert.equal(git(root, 'check-ignore', 'loose-example.py').status, 0);
+  assert.equal(git(root, 'check-ignore', 'loose-directory/notes.txt').status, 0);
+  assert.notEqual(git(root, 'check-ignore', 'investigations/classified-example.md').status, 0);
+  assert.deepEqual(listUnexpectedWorkspaceTopLevelEntries(root), [
+    { name: 'loose-directory', kind: 'directory' },
+    { name: 'loose-example.py', kind: 'file' },
+  ]);
+  assert.match(workspaceLayoutGuardMessage(root), /loose-example\.py/u);
+  assert.equal(checkpointWorkspace(root, 'Checkpoint classified work').status, 'committed');
+  assert.ok(existsSync(join(root, 'loose-example.py')), 'the guard must never remove misplaced research');
+
+  renameSync(join(root, 'loose-example.py'), join(root, 'investigations', 'loose-example.py'));
+  renameSync(join(root, 'loose-directory'), join(root, 'scratch', 'loose-directory'));
+  assert.equal(workspaceLayoutGuardMessage(root), null);
+});
+
+test('workspace layout verification failures remain visible instead of appearing clean', () => {
+  const root = workspace();
+  writeFileSync(join(root, 'workspace.json'), '{not-json');
+  const guard = workspaceLayoutGuardMessage(root);
+  assert.match(guard, /Workspace layout verification failed/u);
+  assert.match(guard, /repeats every turn/u);
+});
+
+test('forced staging cannot bypass the top-level workspace layout', () => {
+  const root = workspace();
+  writeFileSync(join(root, 'loose-example.py'), 'print(1)');
+  assert.equal(git(root, 'add', '-f', 'loose-example.py').status, 0);
+  const commit = git(root, 'commit', '-m', 'Misplaced file');
+  assert.notEqual(commit.status, 0);
+  assert.match(commit.stderr, /root files must be/u);
 });
 
 test('recovery copies retain bytes that have never been committed', () => {

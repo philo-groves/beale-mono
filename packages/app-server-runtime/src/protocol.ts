@@ -64,7 +64,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 22 as const;
+export const APP_SERVER_CONTRACT_VERSION = 24 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -72,10 +72,10 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-09T21:18:11.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-11T20:15:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
-  "workspace.research-project.v1",
+  "workspace.research-project.v3",
   "session.typed-launch.v2",
   "session.openai-fast-mode.v1",
   "session.introspection-runtime.v1",
@@ -472,7 +472,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
 export type AppServerProtocolOperation = (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number];
 
 export type WorkspaceProjectRequest =
-  | { workspaceId: string; action: 'status' | 'checkpoint' | 'export' }
+  | { workspaceId: string; action: 'status' | 'checkpoint' | 'sync' | 'export' | 'rebuild-index' | 'release-index' }
   | { workspaceId: string; action: 'import'; path: string; expectedRevision: number };
 
 export type { WorkspaceProject, WorkspaceProjectHealth, WorkspaceCheckpointResult } from '@beale/research-agent';
@@ -481,10 +481,10 @@ export function decodeWorkspaceProjectRequest(value: unknown): WorkspaceProjectR
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Workspace project input is required.');
   const input = value as Record<string, unknown>;
   if (typeof input.workspaceId !== 'string' || !input.workspaceId.trim()) throw new Error('workspaceId is required.');
-  if (input.action === 'status' || input.action === 'checkpoint' || input.action === 'export') return { workspaceId: input.workspaceId, action: input.action };
+  if (input.action === 'status' || input.action === 'checkpoint' || input.action === 'sync' || input.action === 'export' || input.action === 'rebuild-index' || input.action === 'release-index') return { workspaceId: input.workspaceId, action: input.action };
   if (input.action === 'import' && typeof input.path === 'string' && input.path.length > 0 && input.path.length < 1024
     && Number.isSafeInteger(input.expectedRevision) && Number(input.expectedRevision) > 0) return { workspaceId: input.workspaceId, action: 'import', path: input.path, expectedRevision: Number(input.expectedRevision) };
-  throw new Error('Expected status, checkpoint, export, or import with a path and positive expectedRevision.');
+  throw new Error('Expected status, checkpoint, sync, export, rebuild-index, release-index, or import with a path and positive expectedRevision.');
 }
 
 export interface AppServerProtocolErrorDetail {

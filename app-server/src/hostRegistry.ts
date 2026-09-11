@@ -67,6 +67,11 @@ export class AppServerHostRegistry {
   }
 
   public listWorkspaces(): BealeAppServerWorkspaceSummary[] {
+    return this.listHostWorkspaces().map(({ workspacePath: _workspacePath, workspaceDirectories: _workspaceDirectories, memoryBackend: _memoryBackend, ...summary }) => summary);
+  }
+
+  /** Path-bearing inventory for trusted app-server launch preparation only. */
+  public listHostWorkspaces(): AppServerHostWorkspace[] {
     return this.withDatabase((database) => {
       if (!tableExists(database, 'workspaces')) return [];
       const rows = database.prepare(`${workspaceProjection(database)}
@@ -74,7 +79,7 @@ export class AppServerHostRegistry {
       `).all() as SqlRow[];
       return rows
         .filter((row) => !this.isInternalWorkspacePath(requiredText(row, 'workspace_path')))
-        .map(projectWorkspaceSummary);
+        .map(projectHostWorkspace);
     }, []);
   }
 

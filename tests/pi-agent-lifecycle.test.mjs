@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   applyNativeOpenAiCompaction,
@@ -13,6 +16,7 @@ import {
   createResearchSystemPrompt,
   createResearchToolRegistry,
   createSessionDispositionTool,
+  initializeWorkspaceProject,
   extractCompatiblePiAgentResumableState,
   modelRetryDelayMs,
   normalizeResearchProfile,
@@ -75,6 +79,50 @@ const COLLABORATION_TOOL_NAMES = [
 const WORKSPACE_AGENT_INSTRUCTIONS = agentInstructions(
   "Security workspace guidance: use the Tart VM with SIP enabled for target execution.",
 );
+
+test("workspace layout guard reactivates the root agent every turn until misplaced entries move", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "beale-layout-agent-test-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  initializeWorkspaceProject(root, "workspace-layout-example");
+  writeFileSync(join(root, "loose-notes.txt"), "synthetic notes\n");
+
+  const contexts = [];
+  let calls = 0;
+  const models = {
+    getModel() {
+      return FAUX_MODEL;
+    },
+    streamSimple(_model, context) {
+      calls += 1;
+      contexts.push(context.messages.map((message) => JSON.stringify(message.content)).join("\n"));
+      if (calls === 2) {
+        renameSync(join(root, "loose-notes.txt"), join(root, "investigations", "loose-notes.txt"));
+      }
+      return streamFrom(assistant(calls === 1
+        ? "## Result\nI have not repaired the workspace yet."
+        : "## Result\nThe misplaced notes are now classified."));
+    },
+  };
+
+  const result = await runResearchAgent({
+    prompt: "Review the synthetic workspace.",
+    continuityContext: { schemaVersion: 1, workspacePath: root },
+    executor: createPiAgentExecutor({
+      provider: "faux",
+      model: "faux-model",
+      subagents: false,
+      getContinuityContext: () => ({ schemaVersion: 1, workspacePath: root }),
+      models,
+    }),
+  });
+
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(calls, 2, "an unresolved layout guard must reject a terminal response with a follow-up turn");
+  assert.match(contexts[0], /WORKSPACE_LAYOUT_GUARD_V1/u);
+  assert.match(contexts[1], /WORKSPACE_LAYOUT_GUARD_V1/u);
+  assert.equal(contexts[1].match(/\[\[APP_SERVER_HOST_WORKSPACE_LAYOUT_GUARD_V1\]\]/gu)?.length, 1,
+    "the current reminder must replace its prior copy instead of accumulating context");
+});
 
 test("Pi loads only requested plugin schemas on the next turn and preserves them across resume", async () => {
   const calls = [];

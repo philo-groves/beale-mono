@@ -24,6 +24,29 @@ function memoryDocument(content: string): { metadata: RecordValue; body: string 
   return { metadata: record(JSON.parse(match[1]!)), body: match[2]!.replace(/\n$/u, "") };
 }
 
+export function isImportableWorkspaceResearchPath(path: string): boolean {
+  return /^claims\/[^/]+\.json$/u.test(path)
+    || /^memories\/[^/]+\.md$/u.test(path)
+    || /^reports\/[^/]+\/report\.md$/u.test(path)
+    || /^runbooks\/[^/]+\/runbook\.ipynb$/u.test(path);
+}
+
+export function workspaceResearchFileExpectedRevision(root: string, path: string): number {
+  const baseline = readPublishedWorkspaceFile(root, path);
+  let revision: unknown;
+  if (/^claims\/[^/]+\.json$/u.test(path)) revision = record(JSON.parse(baseline)).revision;
+  else if (/^memories\/[^/]+\.md$/u.test(path)) revision = memoryDocument(baseline).metadata.revision;
+  else if (/^reports\/[^/]+\/report\.md$/u.test(path)) {
+    revision = record(JSON.parse(readPublishedWorkspaceFile(root, path.replace(/report\.md$/u, "record.json")))).revision;
+  } else if (/^runbooks\/[^/]+\/runbook\.ipynb$/u.test(path)) {
+    revision = record(record(record(JSON.parse(baseline)).metadata).beale).revision;
+  } else {
+    throw new Error(`${path}: this file-authority record cannot be imported directly; use its typed research operation.`);
+  }
+  if (!Number.isSafeInteger(revision) || Number(revision) < 1) throw new Error(`${path}: canonical revision is missing or invalid.`);
+  return Number(revision);
+}
+
 /** Imports one explicit edit through existing revision and evidence validation, never by replaying Git. */
 export function importWorkspaceResearchFile(options: WorkspacePublicationOptions, path: string, expectedRevision: number, resolvedProfile?: MemoryGraphStoreOptions['resolvedProfile']): void {
   assertWorkspaceChild(options.workspaceRoot, join(options.workspaceRoot, path));
@@ -80,7 +103,7 @@ export function importWorkspaceResearchFile(options: WorkspacePublicationOptions
     const store = new RunbookStore(options.databasePath, layout, context);
     try { store.append({ id: String(metadata.runbookId), expectedRevision, cells }, undefined, true); }
     finally { store.close(); }
-  } else throw new Error("Import supports claim prose, memory prose, report content, and existing runbook cell sources. Evidence and status changes require canonical research operations.");
+  } else throw new Error("Import supports claim prose, memory prose, report content, and existing runbook cell sources. Evidence and status changes require typed research operations.");
   // Restore the known published bytes only after validated persistence; the next publication replaces them.
   // The operator's imported bytes remain available in the recovery store even if publication fails.
   atomicWorkspaceWrite(options.workspaceRoot, path, baseline);

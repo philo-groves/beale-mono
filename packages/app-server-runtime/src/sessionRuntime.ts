@@ -234,6 +234,13 @@ interface ResolvedRuntimeToolConfig {
     preference: ResearchToolConfigPreference;
   };
 }
+
+interface WorkspaceSearchReferenceArgument {
+  workspaceId: string;
+  workspaceName: string;
+  workspaceRoot: string;
+  subjectId: string;
+}
 interface PreparedRuntimeConfigInputs {
   resolvedRuntimeTools: ResolvedRuntimeToolConfig;
   runtimeTools: RuntimeToolConfig;
@@ -303,6 +310,7 @@ interface ParsedArgs {
   resumeFallbackPromptPath: string | undefined;
   hostedSession: boolean;
   workspaceRoot: string;
+  workspaceReferences: WorkspaceSearchReferenceArgument[];
   json: boolean;
   help: boolean;
   version: boolean;
@@ -417,6 +425,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let resumeFallbackPromptPath: string | undefined;
   let hostedSession = false;
   let workspaceRoot = process.cwd();
+  const workspaceReferences: WorkspaceSearchReferenceArgument[] = [];
   const toolFamilies: ToolFamily[] = [];
   const disabledToolFamilies: ToolFamily[] = [];
   const profileToolFamilyCeiling: ToolFamily[] = [];
@@ -695,6 +704,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--workspace-root") {
       workspaceRoot = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--workspace-reference") {
+      workspaceReferences.push(parseWorkspaceSearchReference(readOptionValue(argv, index, arg)));
+      index += 1;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "-h" || arg === "--help") {
@@ -795,6 +807,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     resumeFallbackPromptPath,
     hostedSession,
     workspaceRoot,
+    workspaceReferences,
     json,
     help,
     version,
@@ -1342,6 +1355,26 @@ function parseShellReviewModels(value: string): Readonly<Record<string, string>>
   return parseProviderModelMap(value, "--shell-review-models");
 }
 
+function parseWorkspaceSearchReference(value: string): WorkspaceSearchReferenceArgument {
+  if (value.length > 8_000) throw new Error("--workspace-reference JSON is too large.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("--workspace-reference must be a JSON object.");
+  }
+  if (!isRecord(parsed)) throw new Error("--workspace-reference must be a JSON object.");
+  const workspaceId = typeof parsed.workspaceId === "string" ? parsed.workspaceId.trim() : "";
+  const workspaceName = typeof parsed.workspaceName === "string" ? parsed.workspaceName.trim() : "";
+  const workspaceRoot = typeof parsed.workspaceRoot === "string" ? parsed.workspaceRoot.trim() : "";
+  const subjectId = typeof parsed.subjectId === "string" ? parsed.subjectId.trim() : "";
+  if (!workspaceId || workspaceId.length > 300 || !workspaceName || workspaceName.length > 500
+    || !workspaceRoot || !isAbsolute(workspaceRoot) || !subjectId || subjectId.length > 300) {
+    throw new Error("--workspace-reference requires bounded workspaceId, workspaceName, absolute workspaceRoot, and subjectId strings.");
+  }
+  return { workspaceId, workspaceName, workspaceRoot: resolve(workspaceRoot), subjectId };
+}
+
 function parseProviderModelMap(value: string, option: string): Readonly<Record<string, string>> {
   if (value.length > 16_000) {
     throw new Error(`${option} JSON is too large.`);
@@ -1568,6 +1601,7 @@ function usage(): string {
     "  --source-path <path>   Add a materialized source context path",
     "  --project-note <text>  Add a project/workspace note to compiled context",
     "  --workspace-context <p> JSON workspace context file to merge with CLI hints",
+    "  --workspace-reference <json> Host-verified same-Subject workspace available to workspace.search",
     "  --allowed-side-effect <s> Allow tool side effect: none, read, write, network, process",
     "  --profile-side-effect-ceiling <s> Let the profile request none, read, write, or process within a host ceiling",
     "  --tool-max-calls <n>   Max tool calls for governance",
@@ -3607,6 +3641,7 @@ async function createRuntimeConfig(args: {
   inspectBytes: number | undefined;
   runtimeTools: RuntimeToolConfig;
   workspaceRoot?: string;
+  workspaceReferences?: readonly WorkspaceSearchReferenceArgument[];
   shellAuthorizer?: ShellCommandAuthorizer;
   resourceScopeAuthorizer?: ResearchResourceScopeAuthorizer;
   toolActionAuthorizer?: ToolActionAuthorizer;
@@ -4070,6 +4105,14 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(tool.descriptor);
     const workspaceSearchTool = createWorkspaceSearchTool({
       workspaceRoot,
+      ...(workspaceContext.memoryContext
+        ? {
+            workspaceId: workspaceContext.memoryContext.workspaceId,
+            workspaceName: workspaceContext.memoryContext.workspaceName,
+            subjectId: workspaceContext.memoryContext.subjectId,
+          }
+        : {}),
+      ...(args.workspaceReferences ? { referenceWorkspaces: args.workspaceReferences } : {}),
       ...(runtimeTools.toolMaxBytes ? { maxFileBytes: runtimeTools.toolMaxBytes } : {}),
       ...(runtimeTools.toolMaxFiles ? { maxResults: runtimeTools.toolMaxFiles } : {}),
     });
