@@ -14,6 +14,7 @@ import type {
   ComputerUseSettings,
   ProviderSettings,
   ProviderAuthenticationMethod,
+  ProviderContextSize,
   ProviderModelDefaults,
   AppServerRunbookDocument,
   AppServerReportDocument,
@@ -679,6 +680,17 @@ export function App(): JSX.Element {
     setError(null);
     try {
       applySnapshot(await window.beale.updateWorkspaceMemoryBackend(memoryBackend));
+    } catch (caught) {
+      const message = errorMessage(caught);
+      setError(message);
+      throw caught;
+    }
+  }, [applySnapshot]);
+
+  const changeWorkspaceResearchSubject = useCallback(async (researchSubjectName: string): Promise<void> => {
+    setError(null);
+    try {
+      applySnapshot(await window.beale.updateWorkspaceResearchSubject(researchSubjectName));
     } catch (caught) {
       const message = errorMessage(caught);
       setError(message);
@@ -1492,6 +1504,18 @@ export function App(): JSX.Element {
     setError(null);
     try {
       setProviderSettings(await window.beale.setProviderPreferredAuthenticationMethod(providerId, method));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }, []);
+
+  const setProviderContextSize = useCallback(async (
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize
+  ): Promise<void> => {
+    setError(null);
+    try {
+      setProviderSettings(await window.beale.setProviderContextSize(providerId, contextSize));
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -2400,6 +2424,7 @@ export function App(): JSX.Element {
             onSetDefaultProviderId={setDefaultProviderId}
             onSetProviderModelDefaults={setProviderModelDefaults}
             onSetProviderOptionalModelEnabled={setProviderOptionalModelEnabled}
+            onSetProviderContextSize={setProviderContextSize}
             onSetProviderCyberPolicyRiskAcknowledged={setProviderCyberPolicyRiskAcknowledged}
             onSetProviderPreferredAuthenticationMethod={setProviderPreferredAuthenticationMethod}
             onSetAgentPluginEnabled={setAgentPluginEnabled}
@@ -2650,6 +2675,7 @@ export function App(): JSX.Element {
               onSaveWorkspaceConfiguration={saveWorkspaceConfiguration}
               onChangeWorkspaceDirectories={changeWorkspaceDirectories}
               onChangeWorkspaceMemoryBackend={changeWorkspaceMemoryBackend}
+              onChangeWorkspaceResearchSubject={changeWorkspaceResearchSubject}
               onRemoveWorkspace={removeActiveWorkspace}
               onOpenSession={openWorkspaceDashboardSession}
               onWorkspaceViewChange={setWorkspaceDashboardViewName}

@@ -246,9 +246,15 @@ export class AppServerHostService {
         if (rebuilt.status === 'failed' || rebuilt.researchIndex?.state !== 'ready') throw new Error(rebuilt.error ?? 'Derived research index rehydration failed.');
       } finally { this.workspaceExclusiveOperations.delete(key); }
     }
+    const researchToolWorkspaceReferences = workspace && storage && request.operation.startsWith('research.tools.')
+      ? (await this.sameSubjectWorkspaceReferences(workspace, storage)).map(({ workspaceId, workspaceName }) => ({
+          workspaceId,
+          workspaceName
+        }))
+      : undefined;
     const operationInput = workspace && storage
       ? request.operation.startsWith('research.tools.')
-        ? this.hostedResearchToolInput(request.input, workspace)
+        ? this.hostedResearchToolInput(request.input, workspace, researchToolWorkspaceReferences)
         : request.operation.startsWith('suggestion.')
         ? this.hostedSuggestionInput(request.operation, request.input, workspace, storage)
         : request.operation === 'prompt.expand'
@@ -284,7 +290,8 @@ export class AppServerHostService {
 
   private hostedResearchToolInput(
     input: unknown,
-    workspace: AppServerHostWorkspace
+    workspace: AppServerHostWorkspace,
+    workspaceReferences?: readonly { workspaceId: string; workspaceName: string }[]
   ): Record<string, unknown> {
     const requested = isRecord(input) ? input : {};
     const toolInput = isRecord(requested.toolInput) ? requested.toolInput : {};
@@ -302,6 +309,7 @@ export class AppServerHostService {
       workspaceRoot: workspace.workspacePath,
       researchProfileId: workspace.researchProfileId,
       memoryBackend: workspace.memoryBackend,
+      ...(workspaceReferences?.length ? { workspaceReferences } : {}),
       ...(nonEmpty(requested.sessionId) ? { sessionId: nonEmpty(requested.sessionId)! } : {}),
       ...(nonEmpty(requested.investigationId) ? { investigationId: nonEmpty(requested.investigationId)! } : {}),
       ...(nonEmpty(requested.objective) ? { objective: nonEmpty(requested.objective)! } : {}),
@@ -523,6 +531,7 @@ export class AppServerHostService {
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(fastMode ? { fastMode: true } : {}),
+          contextSize: providerSettings.contextSizes?.['openai-codex'] ?? 'default',
           riskAcknowledgements: providerSettings.riskAcknowledgements,
           authenticationPreferences: providerSettings.authenticationPreferences,
           ...(request.launch.generateTitle
@@ -624,6 +633,9 @@ export class AppServerHostService {
         args: ['session', 'append-event', '--session-id', sessionId], storage,
         input: {
           id: `checkpoint-${randomUUID()}`, kind: 'agent.event', timestamp: new Date().toISOString(),
+          summary: result.status === 'committed'
+            ? 'Workspace checkpoint committed.'
+            : 'Workspace checkpoint failed.',
           payload: { eventType: 'workspace.checkpoint', ...result },
         },
       });

@@ -67,7 +67,7 @@ export interface CreateClaudeAgentExecutorOptions {
     request: SubagentRunRequest,
     rootInput: ResearchAgentExecutionInput,
   ) => Promise<SubagentRunResult>;
-  agentIdentity?: { id: string; path: string; parentId: string };
+  agentIdentity?: { id: string; path: string; parentId: string; freshSubagentContext?: boolean };
   authenticationPreferences?: ProviderAuthenticationPreferences;
 }
 
@@ -238,7 +238,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               arguments: isRecord(args) ? args : {},
             }, {
               toolCallCount,
+              agentId: options.agentIdentity?.id ?? "root",
               modelAuthor: { provider: "anthropic", model: options.model },
+              freshSubagentContext: options.agentIdentity?.freshSubagentContext === true,
               defaultActionClass: candidate.descriptor.actionClasses[0] ?? "analyze",
               ...(input.governance ? { governance: input.governance } : {}),
               ...(input.signal ? { signal: input.signal } : {}),

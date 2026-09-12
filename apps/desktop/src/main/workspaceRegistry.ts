@@ -13,6 +13,7 @@ import type {
   MemorySettings,
   MemoryTypeDescriptions,
   ProviderAuthenticationMethod,
+  ProviderContextSize,
   ProviderModelDefaults,
   ProviderSettings,
   ResearchModelProviderId,
@@ -139,6 +140,13 @@ export class WorkspaceRegistry {
     defaults: ProviderModelDefaults,
   ): ProviderSettings {
     return this.updateProviderSettings('setProviderModelDefaults', [providerId, defaults]);
+  }
+
+  public setProviderContextSize(
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize,
+  ): ProviderSettings {
+    return this.updateProviderSettings('setProviderContextSize', [providerId, contextSize]);
   }
 
   public setProviderOptionalModelEnabled(

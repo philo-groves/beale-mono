@@ -15,6 +15,7 @@ import {
 } from '@beale/research-agent/legacy-compatibility';
 
 export type AppServerMemoryBackendId = 'app-server' | 'disabled';
+export type AppServerProviderContextSize = 'default' | 'large';
 
 interface SqlRow {
   [key: string]: unknown;
@@ -30,6 +31,7 @@ export interface AppServerHostProviderSettings {
   defaultProviderId: string | null;
   modelDefaults: Readonly<Record<string, { leadModel?: string; smallModel?: string; reasoningEffort?: string }>>;
   authenticationPreferences: Readonly<Record<string, AppServerProviderAuthenticationMethod>>;
+  contextSizes?: Readonly<Record<string, AppServerProviderContextSize>>;
   riskAcknowledgements: readonly AppServerProviderRiskAcknowledgement[];
 }
 
@@ -109,6 +111,7 @@ export class AppServerHostRegistry {
     const authenticationPreferences = authenticationPreferenceRecord(
       meta.get('provider_preferred_authentication_methods_json')
     );
+    const contextSizes = providerContextSizeRecord(meta.get('provider_context_sizes_json'));
     const riskAcknowledgements: AppServerProviderRiskAcknowledgement[] = [];
     for (const [key, acknowledgement] of [
       ['openai_trusted_access_cyber_risk_acknowledged', 'openai-codex'],
@@ -123,6 +126,7 @@ export class AppServerHostRegistry {
       defaultProviderId: nonEmpty(meta.get('default_provider_id')),
       modelDefaults,
       authenticationPreferences,
+      contextSizes,
       riskAcknowledgements
     };
   }
@@ -191,6 +195,15 @@ export class AppServerHostRegistry {
       database?.close();
     }
   }
+}
+
+function providerContextSizeRecord(value: unknown): Record<string, AppServerProviderContextSize> {
+  const parsed = parseJson(value);
+  if (!isRecord(parsed)) return {};
+  const contextSize = parsed['openai-codex'];
+  return contextSize === 'default' || contextSize === 'large'
+    ? { 'openai-codex': contextSize }
+    : {};
 }
 
 function projectHostWorkspace(row: SqlRow): AppServerHostWorkspace {

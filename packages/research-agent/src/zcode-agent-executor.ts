@@ -57,7 +57,7 @@ export interface CreateZCodeAgentExecutorOptions {
     request: SubagentRunRequest,
     rootInput: ResearchAgentExecutionInput,
   ) => Promise<SubagentRunResult>;
-  agentIdentity?: { id: string; path: string; parentId: string };
+  agentIdentity?: { id: string; path: string; parentId: string; freshSubagentContext?: boolean };
 }
 
 interface ZCodeTool {
@@ -125,7 +125,9 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
               arguments: args,
             }, {
               toolCallCount: toolCallCount += 1,
+              agentId: options.agentIdentity?.id ?? "root",
               modelAuthor: { provider: "zai", model: options.model },
+              freshSubagentContext: options.agentIdentity?.freshSubagentContext === true,
               defaultActionClass: candidate.descriptor.actionClasses[0] ?? "analyze",
               ...(input.governance ? { governance: input.governance } : {}),
               signal,

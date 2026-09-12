@@ -191,6 +191,8 @@ export interface SaveMemoryNodeInput {
 export interface SearchMemoryNodesInput {
   query?: string;
   scope?: MemoryScope;
+  /** Internal host-authorized workspace filter for same-Subject reference searches. */
+  workspaceIds?: readonly string[];
   types?: readonly MemoryNodeType[];
   statuses?: readonly MemoryNodeStatus[];
   assetIds?: readonly string[];
@@ -820,6 +822,12 @@ export class MemoryGraphStore {
     } else if (scope === "workspace") {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_workspaces w_scope WHERE w_scope.node_id = n.id AND w_scope.workspace_id = ?)");
       params.push(this.local.context.workspaceId);
+    }
+    if (input.workspaceIds?.length) {
+      const workspaceIds = unique(input.workspaceIds.filter(Boolean));
+      clauses.push(`EXISTS (SELECT 1 FROM memory_node_workspaces w_selected
+        WHERE w_selected.node_id = n.id AND w_selected.workspace_id IN (${workspaceIds.map(() => "?").join(",")}))`);
+      params.push(...workspaceIds);
     }
     for (const assetId of input.assetIds ?? []) {
       clauses.push("EXISTS (SELECT 1 FROM memory_node_assets a WHERE a.node_id = n.id AND a.asset_id = ?)");

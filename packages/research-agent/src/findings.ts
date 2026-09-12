@@ -177,6 +177,10 @@ export class ResearchClaimStore {
     this.database.close();
   }
 
+  public getContext() {
+    return this.memoryGraph.getContext();
+  }
+
   public create(input: CreateFindingInput, author?: ModelAuthor, actorId?: string): FindingSummary {
     const context = this.memoryGraph.getContext();
     const memory = input.memoryNodeId ? this.requireWorkspaceMemory(input.memoryNodeId) : null;
@@ -230,7 +234,13 @@ export class ResearchClaimStore {
     return this.get(id)!;
   }
 
-  public transition(id: string, input: TransitionFindingInput, author?: ModelAuthor, actorId?: string): FindingSummary {
+  public transition(
+    id: string,
+    input: TransitionFindingInput,
+    author?: ModelAuthor,
+    actorId?: string,
+    reviewerContext: { freshSubagentContext?: boolean } = {},
+  ): FindingSummary {
     const current = this.get(id);
     if (!current) throw new Error(`Research claim not found: ${id}.`);
     requireCanonicalClaim(current);
@@ -247,7 +257,12 @@ export class ResearchClaimStore {
     const context = this.memoryGraph.getContext();
     if (current.workspaceId !== context.workspaceId) throw new Error("Finding is outside the active workspace.");
     const now = new Date().toISOString();
-    const newEvidence = normalizeEvidenceInputs(input.evidence ?? [], context.sessionId ?? null, actorId ?? null);
+    const newEvidence = normalizeEvidenceInputs(
+      input.evidence ?? [],
+      context.sessionId ?? null,
+      actorId ?? null,
+      { ...reviewerContext, modelAuthored: author !== undefined },
+    );
     const effective = {
       ...current,
       sourceRevision: input.sourceRevision === undefined || input.toStatus === "stale" ? current.sourceRevision : nullableText(input.sourceRevision),
@@ -320,10 +335,25 @@ export class ResearchClaimStore {
   }
 
   /** Fetch only requested collections within a consistent database snapshot. */
-  public readDetail(id: string, section: string, offset: number, limit: number, expectedReadRevision?: string) {
+  public readDetail(
+    id: string,
+    section: string,
+    offset: number,
+    limit: number,
+    expectedReadRevision?: string,
+    requestedWorkspaceId?: string,
+  ) {
     this.database.exec("BEGIN");
     try {
-      const workspaceId = this.memoryGraph.getContext().workspaceId;
+      const context = this.memoryGraph.getContext();
+      const workspaceId = requestedWorkspaceId ?? context.workspaceId;
+      if (workspaceId !== context.workspaceId) {
+        const subject = this.database.prepare(`SELECT subject_id FROM app_server_research_claims
+          WHERE id = ? AND workspace_id = ?`).get(id, workspaceId) as { subject_id?: unknown } | undefined;
+        if (typeof subject?.subject_id !== "string" || subject.subject_id !== context.subjectId) {
+          throw new Error(`Research claim not found in a same-Subject workspace: ${id}.`);
+        }
+      }
       const countsRow = this.database.prepare(`SELECT
           (SELECT COUNT(*) FROM app_server_claim_evidence WHERE claim_id = claim.id) AS evidence,
           (SELECT COUNT(*) FROM app_server_claim_transitions WHERE claim_id = claim.id) AS transitions,
@@ -550,11 +580,14 @@ export class ResearchClaimStore {
       .filter((claim) => claim.duplicateOfClaimId === null);
   }
 
-  /** Read-only catalog references from every workspace attached to the active Subject. */
-  public listSubjectReferences(): FindingSummary[] {
+  /** Read-only catalog references from selected workspaces attached to the active Subject. */
+  public listSubjectReferences(options: { workspaceIds?: readonly string[] } = {}): FindingSummary[] {
     const context = this.memoryGraph.getContext();
+    const selectedWorkspaceIds = uniqueStrings(options.workspaceIds ?? []);
     const workspaceIds = this.database.prepare(`SELECT DISTINCT workspace_id
-      FROM app_server_research_claims WHERE subject_id = ? ORDER BY workspace_id`).all(context.subjectId) as Array<{ workspace_id?: unknown }>;
+      FROM app_server_research_claims WHERE subject_id = ?${selectedWorkspaceIds.length
+        ? ` AND workspace_id IN (${selectedWorkspaceIds.map(() => "?").join(",")})`
+        : ""} ORDER BY workspace_id`).all(context.subjectId, ...selectedWorkspaceIds) as Array<{ workspace_id?: unknown }>;
     return workspaceIds.flatMap((row) => typeof row.workspace_id === "string"
       ? readFindings(this.database, row.workspace_id).filter((claim) => claim.duplicateOfClaimId === null)
       : [])
@@ -1276,7 +1309,7 @@ function validateTransitionEvidence(
   }
   if (["verified", "report_ready", "disclosed"].includes(input.toStatus)) {
     if (!evidence.some((item) => validIndependentEvidence(database, current, item))) {
-      throw new Error("Verified findings require an independent reviewer with host-recorded actor/session identity and a reference to a qualifying successful runbook execution.");
+      throw new Error("Verified findings require an independent reviewer with host-recorded actor/session identity, a fresh subagent context without inherited parent/channel history (or a human operator), and a reference to a qualifying successful runbook execution.");
     }
   }
   if (input.toStatus === "report_ready") {
@@ -1343,7 +1376,7 @@ export function candidateCompletionChecklist(
     item("affected_versions", "Affected versions", Boolean(tracking?.affectedVersions.length), targetRank >= 3, "Affected or fixed version ranges are recorded.", "Record the assessed affected range and fixed version when known."),
     item("cvss", "Assessed CVSS", Boolean(tracking?.cvssAssessments.length), targetRank >= 3, "A versioned CVSS assessment is recorded.", "Record an assessed CVSS vector, score, version, and nomenclature."),
     item("prior_art", "Prior-art disposition", priorArtReferences.length > 0, targetRank >= 3, "A public prior-art match or explicit no-match search is recorded.", "Record matched advisories or a prior_art_search external reference documenting the no-match query and date."),
-    item("independent_verification", "Independent verification", hasIndependentVerification, targetRank >= 3, "Independent evidence is linked.", "Link durable evidence from an independent reviewer; a distinct reviewer in the same session qualifies."),
+    item("independent_verification", "Independent verification", hasIndependentVerification, targetRank >= 3, "Independent evidence is linked.", "Link durable evidence from a distinct reviewer subagent spawned without inherited history; it may use the same provider and model."),
     composite
       ? item("components", "Composite components", claim.componentClaimIds.length > 0, targetRank >= 3, "Component claims are linked.", "Link every component claim used by the composite finding.")
       : { key: "components", label: "Composite components", required: false, status: "not_applicable", detail: "This is not a composite claim." },
@@ -1426,7 +1459,12 @@ function parseComparableFindingIdentity(
   return { kind: kind!, resourceId, value: identityValue.trim() };
 }
 
-function normalizeEvidenceInputs(items: readonly FindingEvidenceInput[], defaultSessionId: string | null, defaultActorId: string | null): NormalizedFindingEvidence[] {
+function normalizeEvidenceInputs(
+  items: readonly FindingEvidenceInput[],
+  defaultSessionId: string | null,
+  defaultActorId: string | null,
+  reviewerContext: { freshSubagentContext?: boolean; modelAuthored?: boolean } = {},
+): NormalizedFindingEvidence[] {
   return items.map((item) => ({
     kind: findingEvidenceKind(item.kind),
     referenceId: nullableText(item.referenceId),
@@ -1435,7 +1473,14 @@ function normalizeEvidenceInputs(items: readonly FindingEvidenceInput[], default
     sessionId: item.independent || item.sessionId === undefined ? defaultSessionId : nullableText(item.sessionId),
     actorId: item.independent || item.actorId === undefined ? defaultActorId : nullableText(item.actorId),
     independent: item.independent === true,
-    metadata: isRecord(item.metadata) ? item.metadata : {},
+    metadata: {
+      ...(isRecord(item.metadata) ? item.metadata : {}),
+      ...(item.independent ? {
+        verificationContext: item.kind === "human_review" && reviewerContext.modelAuthored !== true
+          ? "human_operator"
+          : reviewerContext.freshSubagentContext === true ? "fresh_subagent" : "unqualified",
+      } : {}),
+    },
   }));
 }
 
@@ -2070,6 +2115,7 @@ function validReproductionEvidence(database: DatabaseSync, claim: FindingSummary
 function validIndependentEvidence(database: DatabaseSync, claim: FindingSummary, evidence: FindingEvidenceSummary): boolean {
   if (!evidence.independent || !["independent_verification", "human_review", "proof"].includes(evidence.kind)
     || !evidence.actorId || !evidence.sessionId || !evidence.referenceId
+    || evidence.metadata.verificationContext === "unqualified"
     || evidence.claimBindingHash !== claimVerificationHash(claim)
     || !successfulRunbookExecutionExists(database, claim, evidence.referenceId)) return false;
   const authors = database.prepare(`SELECT actor_id, session_id FROM app_server_claim_transitions
@@ -2078,10 +2124,8 @@ function validIndependentEvidence(database: DatabaseSync, claim: FindingSummary,
       OR (from_status IS to_status AND json_array_length(evidence_ids_json) = 0))
     ORDER BY claim_revision`).all(claim.id) as SqlRow[];
   if (authors.length === 0) return false;
-  return authors.every((author) => {
-    if (typeof author.session_id === "string" && author.session_id !== evidence.sessionId) return true;
-    return typeof author.actor_id === "string" && author.actor_id !== evidence.actorId;
-  });
+  return authors.every((author) =>
+    typeof author.actor_id === "string" && author.actor_id !== evidence.actorId);
 }
 
 function claimVerificationHash(claim: FindingSummary): string {

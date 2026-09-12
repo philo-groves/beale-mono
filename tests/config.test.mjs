@@ -30,10 +30,10 @@ test("authenticated model catalog includes current supplemental models", () => {
   assert.equal(astra?.maxTokens, 128_000);
   assert.equal(daybreak?.name, "Daybreak Blue");
   assert.equal(daybreak?.provider, "openai-codex");
-  assert.equal(daybreak?.contextWindow, 272_000);
+  assert.equal(daybreak?.contextWindow, 1_050_000);
   assert.equal(daybreakRed?.name, "Daybreak Red");
   assert.equal(daybreakRed?.provider, "openai-codex");
-  assert.equal(daybreakRed?.contextWindow, daybreak?.contextWindow);
+  assert.equal(daybreakRed?.contextWindow, 400_000);
   assert.equal(grok46?.name, "Grok 4.6");
   assert.equal(grok46?.provider, "xai");
   assert.equal(grok46?.contextWindow, 500_000);
@@ -88,8 +88,9 @@ test("provider catalogs expose current supplemental models to frontends", () => 
   assert.equal(astra?.contextWindow, 1_050_000);
   assert.equal(astra?.maxTokens, 128_000);
   assert.deepEqual(daybreak?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
+  assert.equal(daybreak?.contextWindow, 1_050_000);
   assert.deepEqual(daybreakRed?.effortLevels, daybreak?.effortLevels);
-  assert.equal(daybreakRed?.contextWindow, daybreak?.contextWindow);
+  assert.equal(daybreakRed?.contextWindow, 400_000);
   const glm53 = zai?.models.find((model) => model.id === "glm-5.3");
   assert.equal(glm53?.name, "GLM-5.3");
   assert.equal(glm53?.contextWindow, 1_000_000);

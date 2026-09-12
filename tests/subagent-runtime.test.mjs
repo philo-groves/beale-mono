@@ -345,6 +345,8 @@ test("subagents inherit no parent transcript unless fork_turns is explicit", asy
 
   assert.deepEqual(requests[0].inheritedMessages, []);
   assert.equal(spawned.details.fork_turns, "none");
+  assert.equal(spawned.details.fresh_subagent_context, true);
+  assert.equal(requests[0].freshSubagentContext, true);
   assert.match(tools.spawn_agent.parameters.properties.fork_turns.description, /Defaults to none/);
 
   manager.captureContext("root", "spawn_with_history", [
@@ -361,6 +363,8 @@ test("subagents inherit no parent transcript unless fork_turns is explicit", asy
 
   assert.deepEqual(requests[1].inheritedMessages.map((message) => message.role), ["user", "assistant"]);
   assert.equal(inherited.details.fork_turns, "all");
+  assert.equal(inherited.details.fresh_subagent_context, false);
+  assert.equal(requests[1].freshSubagentContext, false);
 });
 
 test("single-worker delegation does not advertise an invalid free-form channel role", async () => {
@@ -571,6 +575,7 @@ test("subagent channel inheritance stays bounded independently of parent history
 
   assert.equal(spawned.details.inherited_channel_messages, 16);
   assert.equal(requests[0].inheritedMessages.length, 1);
+  assert.equal(requests[0].freshSubagentContext, false);
   const inherited = requests[0].inheritedMessages[0].content;
   assert.match(inherited, /bounded recent transcript \(at most 16 messages\)/);
   assert.match(inherited, /historical-marker-39/);

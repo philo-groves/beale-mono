@@ -34,6 +34,11 @@ const GET_PARAMETERS = {
   },
 };
 
+export interface RunbookReadWorkspaceReference {
+  workspaceId: string;
+  workspaceName: string;
+}
+
 const FEATURE_PARAMETERS = {
   type: "array",
   maxItems: 32,
@@ -42,12 +47,22 @@ const FEATURE_PARAMETERS = {
 
 export interface RunbookToolOptions {
   platform?: NodeJS.Platform;
+  referenceWorkspaces?: readonly RunbookReadWorkspaceReference[];
 }
 
 export function createRunbookTools(
   store: RunbookStore,
   options: RunbookToolOptions = {},
 ): ResearchExecutableTool[] {
+  const context = store.getContext();
+  const readableWorkspaces = readableWorkspaceCatalog(context.workspaceId, context.workspaceName, options.referenceWorkspaces);
+  const getParameters = {
+    ...GET_PARAMETERS,
+    properties: {
+      ...GET_PARAMETERS.properties,
+      workspaceId: { type: "string", enum: readableWorkspaces.map((workspace) => workspace.workspaceId), description: "Workspace owning the runbook. Omit for the current workspace; another advertised same-Subject workspace is read-only." },
+    },
+  };
   const cellParameters = createCellParameters(options.platform ?? process.platform);
   const createParameters = {
     type: "object",
@@ -127,22 +142,30 @@ export function createRunbookTools(
     tool(
       "runbook.get",
       "runbook_get",
-      "Read a bounded page or inclusive cell range from one workspace runbook, including feature toggles, cell executors, and recorded results. Follow nextOffset for ordinary pagination. For a range that exceeds limit, reuse endCellId and continue from nextCellId. Supply runId to review an immutable execution snapshot and its results. execution.latestSuccessfulRunId identifies a full successful run of the current content; claim promotion additionally requires matching source/environment provenance.",
+      "Read a bounded page or inclusive cell range from one workspace runbook, including feature toggles, cell executors, and recorded results. workspaceId may select a host-verified same-Subject workspace and remains read-only. Follow nextOffset for ordinary pagination. For a range that exceeds limit, reuse endCellId and continue from nextCellId. Supply runId to review an immutable execution snapshot and its results. execution.latestSuccessfulRunId identifies a full successful run of the current content; claim promotion additionally requires matching source/environment provenance.",
       "read",
-      GET_PARAMETERS,
-      (input) => ({
-        output: text(input.runId) ? store.getExecution(requiredText(input.id, "id"), requiredText(input.runId, "runId"), {
+      getParameters,
+      (input) => {
+        const selectedWorkspace = selectReadableWorkspace(input.workspaceId, readableWorkspaces);
+        const readOnlyReference = selectedWorkspace.workspaceId !== context.workspaceId;
+        const pageOptions = {
           ...(typeof input.offset === "number" ? { offset: input.offset } : {}),
           ...(text(input.startCellId) ? { startCellId: text(input.startCellId)! } : {}),
           ...(text(input.endCellId) ? { endCellId: text(input.endCellId)! } : {}),
           limit: typeof input.limit === "number" ? input.limit : 12,
-        }) : store.get(requiredText(input.id, "id"), {
-          ...(typeof input.offset === "number" ? { offset: input.offset } : {}),
-          ...(text(input.startCellId) ? { startCellId: text(input.startCellId)! } : {}),
-          ...(text(input.endCellId) ? { endCellId: text(input.endCellId)! } : {}),
-          limit: typeof input.limit === "number" ? input.limit : 12,
-        }),
-      }),
+        };
+        const runbook = text(input.runId)
+          ? store.getExecution(requiredText(input.id, "id"), requiredText(input.runId, "runId"), pageOptions, selectedWorkspace.workspaceId)
+          : readOnlyReference
+            ? store.getSubjectReference(requiredText(input.id, "id"), selectedWorkspace.workspaceId, pageOptions)
+            : store.get(requiredText(input.id, "id"), pageOptions);
+        return { output: readOnlyReference && runbook && typeof runbook === "object"
+          ? {
+              ...runbook,
+              workspace: { id: selectedWorkspace.workspaceId, name: selectedWorkspace.workspaceName, readOnlyReference: true },
+            }
+          : runbook };
+      },
     ),
     tool(
       "runbook.create",
@@ -209,6 +232,29 @@ export function createRunbookTools(
       },
     ),
   ];
+}
+
+function readableWorkspaceCatalog(
+  workspaceId: string,
+  workspaceName: string,
+  references: readonly RunbookReadWorkspaceReference[] = [],
+): RunbookReadWorkspaceReference[] {
+  const seen = new Set<string>();
+  return [{ workspaceId, workspaceName }, ...references].filter((workspace) => {
+    if (!workspace.workspaceId.trim() || !workspace.workspaceName.trim() || seen.has(workspace.workspaceId)) return false;
+    seen.add(workspace.workspaceId);
+    return true;
+  });
+}
+
+function selectReadableWorkspace(
+  value: unknown,
+  readableWorkspaces: readonly RunbookReadWorkspaceReference[],
+): RunbookReadWorkspaceReference {
+  const workspaceId = value === undefined ? readableWorkspaces[0]?.workspaceId : requiredText(value, "workspaceId");
+  const selected = readableWorkspaces.find((workspace) => workspace.workspaceId === workspaceId);
+  if (!selected) throw new Error("runbook.get can read only the current workspace or a host-verified workspace sharing its research Subject.");
+  return selected;
 }
 
 function createCellParameters(platform: NodeJS.Platform): Record<string, unknown> {

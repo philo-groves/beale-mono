@@ -350,7 +350,7 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
       toStatus: "verified",
       reason: "A distinct reviewer challenged the result and its assumptions in the originating session.",
       evidence: [{ kind: "independent_verification", referenceId: "runbook_run_one", summary: "Same-session independent review held.", independent: true }],
-    }, undefined, "agent_reviewer_example");
+    }, undefined, "agent_reviewer_example", { freshSubagentContext: true });
     assert.equal(finding.status, "verified");
     assert.equal(finding.evidence.at(-1).sessionId, "session_origin");
     const verifiedChecklist = verifierFindings.completionChecklist(findingId, "verified");

@@ -594,6 +594,17 @@ export function publishWorkspaceFiles(root: string, files: Record<string, string
   if (!project) return;
   const state = join(root, ".git", "beale", "publication.json");
   const previous = existsSync(state) ? JSON.parse(readFileSync(state, "utf8")) as WorkspaceResearchIndex : null;
+  const committed = readIndex(root, `HEAD:${INDEX_PATH}`);
+  const publishedFiles = { ...files };
+  // A completed checkpoint makes pinned evidence immutable. Publication may
+  // render database paths differently after a referenced workspace file is
+  // revised, but it must not rewrite the already-committed evidence snapshot.
+  for (const [path, hash] of Object.entries(committed?.pins ?? {})) {
+    if (!(path in publishedFiles)) continue;
+    const content = git(root, ['show', `HEAD:${path}`]);
+    if (workspaceContentHash(content) !== hash) throw new Error(`${path}: committed evidence does not match its canonical pin.`);
+    publishedFiles[path] = content;
+  }
   if (previous && (!existsSync(join(root, INDEX_PATH)) || readFileSync(join(root, INDEX_PATH), 'utf8') !== JSON.stringify(previous, null, 2) + '\n')) throw new Error('The published research index was edited or removed; preserve the edit before republishing.');
   // Verify the entire previous publication before changing any file. Never overwrite manual edits.
   for (const [path, hash] of Object.entries(previous?.files ?? {})) {
@@ -602,18 +613,18 @@ export function publishWorkspaceFiles(root: string, files: Record<string, string
     if (!existsSync(absolute) || workspaceContentHash(readFileSync(absolute)) !== hash) throw new Error(`${path}: canonical export was edited or removed; preserve/import the edit before republishing.`);
   }
   const hashes: Record<string, string> = {};
-  for (const [path, content] of Object.entries(files).sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [path, content] of Object.entries(publishedFiles).sort(([a], [b]) => a.localeCompare(b))) {
     if (workspacePathProblem(path)) throw new Error(`Invalid canonical export path: ${path}`);
     const destination = join(root, path);
     if (existsSync(destination) && !previous?.files[path] && readFileSync(destination, "utf8") !== content) throw new Error(`${path}: an existing file conflicts with canonical publication.`);
     hashes[path] = workspaceContentHash(content);
   }
-  const index: WorkspaceResearchIndex = { schemaVersion: 1, workspaceId: project.workspaceId, files: hashes, pins: { ...previous?.pins, ...pins }, rawFiles: { ...previous?.rawFiles, ...rawFiles } };
+  const index: WorkspaceResearchIndex = { schemaVersion: 1, workspaceId: project.workspaceId, files: hashes, pins: { ...previous?.pins, ...pins, ...committed?.pins }, rawFiles: { ...previous?.rawFiles, ...rawFiles } };
   // Persist a recovery journal before publishing. A restart can finish an interrupted publication.
   const directory = dirname(state);
   mkdirSync(directory, { recursive: true });
-  atomicWorkspaceWrite(root, '.git/beale/pending-publication.json', JSON.stringify({ files, index }));
-  finishWorkspacePublication(root, files, index, previous);
+  atomicWorkspaceWrite(root, '.git/beale/pending-publication.json', JSON.stringify({ files: publishedFiles, index }));
+  finishWorkspacePublication(root, publishedFiles, index, previous);
 }
 
 function finishWorkspacePublication(root: string, files: Record<string, string>, index: WorkspaceResearchIndex, previous: WorkspaceResearchIndex | null): void {
@@ -656,14 +667,15 @@ export function listWorkspaceResearchEdits(root: string): WorkspaceResearchEdit[
     throw new Error("The research index was edited directly; restore it before importing individual research files.");
   }
   const edits: WorkspaceResearchEdit[] = [];
-  for (const [path, hash] of Object.entries(index.files)) {
+  const managed = { ...index.pins, ...index.files };
+  for (const [path, hash] of Object.entries(managed)) {
     const absolute = join(root, path);
     assertWorkspaceChild(root, absolute);
     if (!existsSync(absolute)) edits.push({ path, state: "deleted" });
     else if (workspaceFileHash(absolute) !== hash) edits.push({ path, state: "modified" });
   }
   for (const path of listManagedResearchRecordPaths(root)) {
-    if (!(path in index.files)) edits.push({ path, state: 'created' });
+    if (!(path in managed)) edits.push({ path, state: 'created' });
   }
   return edits.sort((left, right) => left.path.localeCompare(right.path));
 }

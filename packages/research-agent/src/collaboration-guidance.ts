@@ -23,6 +23,7 @@ export function createCollaborationSystemGuidance(
 function runtimeGuidance(config: ResearchCollaborationConfig): readonly string[] {
   return [
     "Parent transcript inheritance is opt-in. Omit fork_turns for a fresh child, or set it to a bounded number only when recent parent turns are necessary. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the complete parent route and history.",
+    "For independent verification, spawn a distinct Reviewer with fork_turns=none and without channel_name. The Reviewer may use the same provider and model, then must inspect canonical claims and executions through durable tools rather than inherited conversation history.",
     `Concurrency limit: ${config.maxConcurrentRooms * config.maxMembersPerRoom} active subagent turns. Channels themselves persist and do not consume active-turn capacity.`,
   ];
 }

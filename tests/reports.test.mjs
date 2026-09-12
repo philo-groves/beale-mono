@@ -253,7 +253,7 @@ test("security report creation accepts a composite finding reviewed in the same 
         kind: "independent_verification", referenceId: runId,
         summary: "Independent replay held.", sessionId: "run_security", independent: true,
       }],
-    }, undefined, "agent_reviewer_example");
+    }, undefined, "agent_reviewer_example", { freshSubagentContext: true });
     const missingPacket = await registry.execute({
       id: "confirmed_chain_without_packet",
       actionClass: "synthesize",
@@ -273,7 +273,7 @@ test("security report creation accepts a composite finding reviewed in the same 
     assert.equal(store.list().length, 0, "invalid evidence must be rejected before creating report artifacts");
     chain = claims.transition(chain.id, { expectedRevision: chain.revision, toStatus: "verified", reason: "Reviewed the updated example conclusion.", evidence: [
       { kind: "independent_verification", referenceId: runId, summary: "Example renewed review.", independent: true },
-    ] }, undefined, "agent_reviewer_example");
+    ] }, undefined, "agent_reviewer_example", { freshSubagentContext: true });
     const created = await registry.execute({
       id: "confirmed_chain_report",
       actionClass: "synthesize",

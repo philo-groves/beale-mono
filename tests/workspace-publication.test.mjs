@@ -7,10 +7,93 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   initializeWorkspaceProject, checkpointWorkspaceResearch, importWorkspaceResearchFile,
-  releaseWorkspaceResearchIndex, rebuildWorkspaceResearchIndex,
+  releaseWorkspaceResearchIndex, rebuildWorkspaceResearchIndex, listWorkspaceResearchEdits,
+  publishWorkspaceResearch, workspaceContentHash,
   MemoryGraphStore, FindingStore, RunbookStore, ReportStore, CampaignTrackStore,
   createResearchStorageLayout, ensureResearchStorageLayout,
 } from '../packages/research-agent/dist/index.js';
+
+test('completed execution evidence remains pinned when its workspace candidate is revised', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-publication-pinned-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const artifactDirectoryPath = join(directory, 'runtime', 'artifacts');
+  mkdirSync(workspaceRoot);
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath };
+  initializeWorkspaceProject(workspaceRoot, options.workspaceId);
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout(options));
+  const context = { workspaceId: options.workspaceId, workspaceName: 'Example Research', subjectId: 'subject-example', subjectName: 'Example Subject' };
+  const runbooks = new RunbookStore(databasePath, layout, context);
+  const candidatePath = 'investigations/investigation-example/proof.sh';
+  const candidate = join(workspaceRoot, candidatePath);
+  mkdirSync(join(workspaceRoot, 'investigations', 'investigation-example'), { recursive: true });
+  writeFileSync(candidate, '#!/bin/sh\necho first-example\n');
+  try {
+    const created = runbooks.create({
+      title: 'Pinned evidence example',
+      purpose: 'Retain the exact candidate used by a completed execution.',
+      cells: [{ kind: 'code', source: 'Execute the synthetic candidate.', features: ['runtime'], language: 'sh' }],
+    }).runbook;
+    const cell = runbooks.get(created.id).cells.find((entry) => entry.kind === 'code');
+    runbooks.configure({
+      id: created.id,
+      expectedRevision: created.revision,
+      enabledFeatures: ['runtime'],
+      cellExecutors: [{
+        cellId: cell.id,
+        executor: { kind: 'tart-vm', vmName: 'example-vm', workspacePath: candidatePath, runAs: 'guest', argv: [] },
+      }],
+    });
+    const runId = 'runbook_run_pinned-example';
+    const startedAt = new Date().toISOString();
+    runbooks.beginExecution(created.id, runId, [cell.id], 'vm');
+    runbooks.beginCellExecution(created.id, runId, cell.id, 'vm');
+    const firstHash = workspaceContentHash(readFileSync(candidate));
+    runbooks.completeCellExecution({
+      id: created.id,
+      runId,
+      cellId: cell.id,
+      status: 'succeeded',
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs: 1,
+      stdout: `${firstHash}  ${candidate}\n`,
+      exitCode: 0,
+      proofTarget: 'vm',
+    });
+    runbooks.completeExecution({
+      id: created.id,
+      runId,
+      status: 'succeeded',
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs: 1,
+      proofTarget: 'vm',
+    });
+
+    const first = checkpointWorkspaceResearch(options, 'Publish completed execution');
+    assert.equal(first.status, 'committed', first.error);
+    const executionPath = join(workspaceRoot, 'evidence', `execution-${runId}.json`);
+    const pinnedExecution = readFileSync(executionPath, 'utf8');
+    assert.match(pinnedExecution, new RegExp(`evidence/raw/${firstHash}`));
+    assert.doesNotMatch(pinnedExecution, new RegExp(candidate.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')));
+
+    writeFileSync(candidate, '#!/bin/sh\necho second-example\n');
+    const secondHash = workspaceContentHash(readFileSync(candidate));
+    publishWorkspaceResearch(options);
+    assert.equal(readFileSync(executionPath, 'utf8'), pinnedExecution);
+    assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
+    const second = checkpointWorkspaceResearch(options, 'Publish revised candidate');
+    assert.equal(second.status, 'committed', second.error);
+    assert.equal(readFileSync(executionPath, 'utf8'), pinnedExecution);
+    assert.ok(existsSync(join(workspaceRoot, 'evidence', `${firstHash}.json`)));
+    assert.ok(existsSync(join(workspaceRoot, 'evidence', `${secondHash}.json`)));
+    assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
+  } finally {
+    runbooks.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('canonical snapshots isolate workspace records and imports preserve revision/evidence validation', () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-publication-example-'));

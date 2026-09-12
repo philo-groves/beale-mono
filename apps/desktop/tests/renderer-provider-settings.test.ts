@@ -56,6 +56,34 @@ describe('renderer provider settings', () => {
     expect(html.match(/>Prefer<\/button>/gu)).toHaveLength(1);
   });
 
+  it('shows the persisted OpenAI context size choices', () => {
+    const html = renderToStaticMarkup(createElement(ProvidersSettingsView, {
+      openAiStatus: configuredOpenAiStatus(),
+      openAiOAuthResult: null,
+      researchProviderOAuthResults: {},
+      researchProviderStatuses: researchProviderStatuses(),
+      researchProviderModelCatalog: modelCatalogs(),
+      providerSettings: {
+        defaultProviderId: 'openai-codex',
+        modelDefaults: {},
+        contextSizes: { 'openai-codex': 'large' }
+      },
+      providerStatusesLoaded: true,
+      busy: false,
+      onRefreshOpenAi: async () => undefined,
+      onStartOpenAiOAuth: async () => undefined,
+      onStartResearchProviderOAuth: async () => undefined,
+      onSetDefaultProviderId: async () => undefined,
+      onSetProviderModelDefaults: async () => undefined,
+      onSetProviderContextSize: async () => undefined
+    }));
+
+    expect(html).toContain('<h2>Context Size</h2>');
+    expect(html).toContain('Default — 272k');
+    expect(html).toContain('Large — up to 1m');
+    expect(html).toContain('<option value="large" selected="">');
+  });
+
   it('uses the shared white theme accent for all checkbox and radio controls', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const checkboxStyles = styles.match(/input\[type='checkbox'\],\s*input\[type='radio'\]\s*\{([^}]*)\}/)?.[1] ?? '';

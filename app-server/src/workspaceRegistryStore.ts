@@ -120,6 +120,7 @@ export class WorkspaceRegistry {
     const preferredAuthenticationMethods = normalizePreferredAuthenticationMethodsRecord(
       this.getMeta('provider_preferred_authentication_methods_json')
     );
+    const contextSizes = normalizeProviderContextSizesRecord(this.getMeta('provider_context_sizes_json'));
     if (this.getMeta('openai_trusted_access_cyber_risk_acknowledged') === '1') {
       cyberPolicyRiskAcknowledgements['openai-codex'] = true;
     }
@@ -138,6 +139,7 @@ export class WorkspaceRegistry {
     return {
       defaultProviderId: normalizeDefaultProviderId(this.getMeta('default_provider_id')),
       modelDefaults: normalizeProviderModelDefaultsRecord(this.getMeta('provider_model_defaults_json')),
+      ...(Object.keys(contextSizes).length > 0 ? { contextSizes } : {}),
       ...(Object.keys(enabledOptionalModels).length > 0 ? { enabledOptionalModels } : {}),
       ...(Object.keys(disabledOptionalModels).length > 0 ? { disabledOptionalModels } : {}),
       ...(Object.keys(preferredAuthenticationMethods).length > 0 ? { preferredAuthenticationMethods } : {}),
@@ -161,6 +163,17 @@ export class WorkspaceRegistry {
     settings.modelDefaults[providerId] = normalizeProviderModelDefaults(defaults);
     this.setMeta('provider_model_defaults_json', JSON.stringify(settings.modelDefaults));
     return settings;
+  }
+
+  public setProviderContextSize(
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize
+  ): ProviderSettings {
+    if (providerId !== 'openai-codex') throw new Error('Context size is configurable only for OpenAI.');
+    if (contextSize !== 'default' && contextSize !== 'large') throw new Error('Invalid provider context size.');
+    const contextSizes = { ...this.getProviderSettings().contextSizes, [providerId]: contextSize };
+    this.setMeta('provider_context_sizes_json', JSON.stringify(contextSizes));
+    return this.getProviderSettings();
   }
 
   public setProviderOptionalModelEnabled(
@@ -1276,6 +1289,22 @@ function normalizePreferredAuthenticationMethodsRecord(
       }
     }
     return normalized;
+  } catch {
+    return {};
+  }
+}
+
+function normalizeProviderContextSizesRecord(
+  value: unknown
+): Partial<Record<ResearchModelProviderId, ProviderContextSize>> {
+  if (typeof value !== 'string' || !value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const contextSize = (parsed as Record<string, unknown>)['openai-codex'];
+    return contextSize === 'default' || contextSize === 'large'
+      ? { 'openai-codex': contextSize }
+      : {};
   } catch {
     return {};
   }

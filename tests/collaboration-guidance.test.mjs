@@ -114,6 +114,8 @@ test("advanced collaboration guidance describes Simple controls with explicit de
   assert.match(lead, /Roles clarify responsibility; they do not impose a phase gate/);
   assert.match(lead, /Parent transcript inheritance is opt-in/);
   assert.match(lead, /fork_turns=all/);
+  assert.match(lead, /same provider and model/);
+  assert.match(lead, /fork_turns=none/);
   assert.match(worker, /delegation prompt names your Advanced role/);
   assert.doesNotMatch(lead, /delegate_batch|coordination_checkpoint|rolling, lead-owned evidence team/);
 });

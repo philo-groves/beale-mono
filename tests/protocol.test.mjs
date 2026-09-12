@@ -56,10 +56,10 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v24 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v25 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 24);
+  assert.equal(descriptor.contractVersion, 25);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 12);
   assert.equal(descriptor.schemas.finding, 5);
@@ -118,6 +118,7 @@ test("protocol describe exposes a runtime-bound v24 persistence, continuation, C
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.claim-deduplication.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.history-deduplication.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-subject-mutation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-project.v3"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));

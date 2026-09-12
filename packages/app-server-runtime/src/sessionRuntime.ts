@@ -2518,7 +2518,14 @@ function createProviderNeutralSubagentRunner({
   getContinuityContext?: () => unknown;
 }): (request: SubagentRunRequest, rootInput: ResearchAgentExecutionInput) => Promise<SubagentRunResult> {
   return async (request, rootInput) => {
-    const identity = { id: request.id, path: request.path, parentId: request.parentId };
+    const identity = {
+      id: request.id,
+      path: request.path,
+      parentId: request.parentId,
+      ...(request.freshSubagentContext !== undefined
+        ? { freshSubagentContext: request.freshSubagentContext }
+        : {}),
+    };
     const authenticationRouter = new ProviderAuthenticationRouter(authenticationPreferences);
     const takeSteeringMessages = (): Array<{ role: "user"; content: string; timestamp: number }> => {
       const messages = request.takeSteeringMessages?.() ?? [];
@@ -3834,6 +3841,9 @@ async function createRuntimeConfig(args: {
   const findingTools = memoryActive
     ? createFindingTools(findingStore, {
         classifications: resolvedResearchProfile.profile.claims.classifications.map((classification) => classification.id),
+        ...(args.workspaceReferences ? {
+          referenceWorkspaces: args.workspaceReferences.map(({ workspaceId, workspaceName }) => ({ workspaceId, workspaceName })),
+        } : {}),
       })
     : [];
   executableTools.push(...findingTools);
@@ -3847,7 +3857,11 @@ async function createRuntimeConfig(args: {
       memoryGraph.getContext(),
     );
     runbookStore = runbooks;
-    const runbookTools = createRunbookTools(runbooks);
+    const runbookTools = createRunbookTools(runbooks, {
+      ...(args.workspaceReferences ? {
+        referenceWorkspaces: args.workspaceReferences.map(({ workspaceId, workspaceName }) => ({ workspaceId, workspaceName })),
+      } : {}),
+    });
     executableTools.push(...runbookTools);
     toolDescriptors.push(...runbookTools.map((tool) => tool.descriptor));
     cleanupCallbacks.push(async () => runbooks.close());
@@ -3856,6 +3870,9 @@ async function createRuntimeConfig(args: {
     const historyToolOptions = {
       ...(memoryActive ? { memoryStore: memoryGraph, claimStore: findingStore } : {}),
       ...(runbookStore ? { runbookStore } : {}),
+      ...(args.workspaceReferences ? {
+        referenceWorkspaces: args.workspaceReferences.map(({ workspaceId, workspaceName }) => ({ workspaceId, workspaceName })),
+      } : {}),
     };
     const historyTools = [
       createWorkspaceHistorySearchTool(historyToolOptions),

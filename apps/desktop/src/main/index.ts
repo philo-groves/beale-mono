@@ -29,6 +29,7 @@ import type {
   ResearchModelProviderId,
   ProviderModelDefaults,
   ProviderAuthenticationMethod,
+  ProviderContextSize,
   TicketingMode,
   TicketingProviderId,
   TicketingTarget,
@@ -674,6 +675,11 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.setProviderModelDefaults, (_event, providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) =>
     workspaceService.setProviderModelDefaults(providerId, defaults)
   );
+  ipcMain.handle(IPC_CHANNELS.setProviderContextSize, (
+    _event,
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize
+  ) => workspaceService.setProviderContextSize(providerId, contextSize));
   ipcMain.handle(IPC_CHANNELS.setProviderOptionalModelEnabled, (
     _event,
     providerId: ResearchModelProviderId,
@@ -749,6 +755,9 @@ function registerIpc(): void {
   );
   ipcMain.handle(IPC_CHANNELS.updateWorkspaceMemoryBackend, (_event, memoryBackend: WorkspaceMemoryBackendId) =>
     workspaceService.updateWorkspaceMemoryBackend(memoryBackend)
+  );
+  ipcMain.handle(IPC_CHANNELS.updateWorkspaceResearchSubject, (_event, researchSubjectName: string) =>
+    workspaceService.updateWorkspaceResearchSubject(researchSubjectName)
   );
   ipcMain.handle(IPC_CHANNELS.cloneWorkspaceRepository, (_event, assetId: string, cloneMode: RepositoryCloneMode) =>
     workspaceService.cloneWorkspaceRepository(assetId, cloneMode)

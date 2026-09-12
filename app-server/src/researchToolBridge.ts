@@ -40,6 +40,10 @@ export interface AppServerResearchToolContext {
   investigationId?: string;
   objective?: string;
   modelAuthor?: ModelAuthor;
+  workspaceReferences?: readonly {
+    workspaceId: string;
+    workspaceName: string;
+  }[];
 }
 
 export interface AppServerResearchToolCall extends AppServerResearchToolContext {
@@ -164,7 +168,8 @@ async function createResearchToolBridgeRuntime(
     if (memoryActive) {
       tools.push(...createMemoryGraphTools(memoryGraph));
       tools.push(...createFindingTools(findingStore, {
-        classifications: resolvedProfile.profile.claims.classifications.map((classification) => classification.id)
+        classifications: resolvedProfile.profile.claims.classifications.map((classification) => classification.id),
+        ...(input.workspaceReferences ? { referenceWorkspaces: input.workspaceReferences } : {})
       }));
     }
 
@@ -172,7 +177,9 @@ async function createResearchToolBridgeRuntime(
     if (resolvedProfile.profile.capabilities.runbooksEnabled) {
       runbookStore = new RunbookStore(storage.databasePath, layout, context);
       close.unshift(() => runbookStore?.close());
-      tools.push(...createRunbookTools(runbookStore));
+      tools.push(...createRunbookTools(runbookStore, {
+        ...(input.workspaceReferences ? { referenceWorkspaces: input.workspaceReferences } : {})
+      }));
       const shellTool = createShellTool({
         workspaceRoot: input.workspaceRoot,
         authorize: async (request) => ({
@@ -192,7 +199,8 @@ async function createResearchToolBridgeRuntime(
     if (memoryActive || runbookStore) {
       const historyOptions = {
         ...(memoryActive ? { memoryStore: memoryGraph, claimStore: findingStore } : {}),
-        ...(runbookStore ? { runbookStore } : {})
+        ...(runbookStore ? { runbookStore } : {}),
+        ...(input.workspaceReferences ? { referenceWorkspaces: input.workspaceReferences } : {})
       };
       tools.push(createWorkspaceHistorySearchTool(historyOptions));
       tools.push(...createWorkspaceHistoryDuplicateTools(historyOptions));

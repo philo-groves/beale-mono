@@ -203,6 +203,7 @@ export function WorkspaceUnderstandingView({
   onSaveConfiguration = async () => undefined,
   onChangeWorkspaceDirectories = async () => undefined,
   onChangeMemoryBackend = async () => undefined,
+  onChangeResearchSubject = async () => undefined,
   onRemoveWorkspace = async () => undefined,
   onOpenClaim = () => undefined,
   onOpenMemory = () => undefined,
@@ -244,6 +245,7 @@ export function WorkspaceUnderstandingView({
   onSaveConfiguration?: (configuration: WorkspaceConfigurationInput) => Promise<void>;
   onChangeWorkspaceDirectories?: (directories: string[]) => Promise<void>;
   onChangeMemoryBackend?: (memoryBackend: WorkspaceMemoryBackendId) => Promise<void>;
+  onChangeResearchSubject?: (researchSubjectName: string) => Promise<void>;
   onRemoveWorkspace?: () => Promise<void>;
   onOpenSession?: (runId: string) => void;
   onOpenClaim?: (claimId: string) => void;
@@ -372,8 +374,10 @@ export function WorkspaceUnderstandingView({
         onSave={onSaveConfiguration}
         onChangeDirectories={onChangeWorkspaceDirectories}
         onChangeMemoryBackend={onChangeMemoryBackend}
+        onChangeResearchSubject={onChangeResearchSubject}
         memoryBackend={memoryBackend}
         memoryBackendLocked={runs.some(({ run }) => isLiveResearchRunStatus(run.status) || run.status === 'paused')}
+        researchSubjectLocked={runs.some(({ run }) => isLiveResearchRunStatus(run.status) || run.status === 'paused')}
         researchProfile={researchProfile}
         researchKitId={researchKitId}
         researchSubjectName={researchSubjectName}
@@ -673,12 +677,14 @@ function WorkspaceOverviewPanel({
   hidden,
   onChangeDirectories,
   onChangeMemoryBackend,
+  onChangeResearchSubject,
   onSave,
   memoryBackend,
   memoryBackendLocked,
   researchProfile,
   researchKitId,
   researchSubjectName,
+  researchSubjectLocked,
   workspaceName,
   workspacePath,
   workspaceDirectories
@@ -688,12 +694,14 @@ function WorkspaceOverviewPanel({
   hidden: boolean;
   onChangeDirectories: (directories: string[]) => Promise<void>;
   onChangeMemoryBackend: (memoryBackend: WorkspaceMemoryBackendId) => Promise<void>;
+  onChangeResearchSubject: (researchSubjectName: string) => Promise<void>;
   onSave: (configuration: WorkspaceConfigurationInput) => Promise<void>;
   memoryBackend: WorkspaceMemoryBackendId;
   memoryBackendLocked: boolean;
   researchProfile: ResearchProfile | null;
   researchKitId: ResearchKitId;
   researchSubjectName: string;
+  researchSubjectLocked: boolean;
   workspaceName: string;
   workspacePath: string;
   workspaceDirectories: readonly string[];
@@ -701,11 +709,13 @@ function WorkspaceOverviewPanel({
   const resolvedWorkspaceName = activeScope?.workspaceName || workspaceName;
   const resolvedDescription = activeScope?.descriptionMarkdown ?? '';
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState(resolvedWorkspaceName);
+  const [researchSubjectDraft, setResearchSubjectDraft] = useState(researchSubjectName);
   const [descriptionDraft, setDescriptionDraft] = useState(resolvedDescription);
   const [guidanceEditing, setGuidanceEditing] = useState(false);
   const [guidanceHeight, setGuidanceHeight] = useState(150);
   const [saving, setSaving] = useState(false);
   const [memorySaving, setMemorySaving] = useState(false);
+  const [researchSubjectSaving, setResearchSubjectSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const guidancePreviewRef = useRef<HTMLDivElement>(null);
   const guidanceEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -731,6 +741,9 @@ function WorkspaceOverviewPanel({
     }
     setSaveError(null);
   }, [activeScope?.id, resolvedDescription, resolvedWorkspaceName]);
+  useEffect(() => {
+    setResearchSubjectDraft(researchSubjectName);
+  }, [researchSubjectName]);
   const saveInPlace = (): void => {
     const configuration = {
       workspaceName: workspaceNameDraft,
@@ -776,6 +789,23 @@ function WorkspaceOverviewPanel({
       setSaveError(errorMessage(caught));
     } finally {
       setMemorySaving(false);
+    }
+  };
+  const saveResearchSubject = async (): Promise<void> => {
+    const name = researchSubjectDraft.trim().replace(/\s+/g, ' ');
+    if (!name) {
+      setSaveError('Research Subject is required.');
+      return;
+    }
+    if (busy || researchSubjectLocked || researchSubjectSaving || name === researchSubjectName) return;
+    setResearchSubjectSaving(true);
+    setSaveError(null);
+    try {
+      await onChangeResearchSubject(name);
+    } catch (caught) {
+      setSaveError(errorMessage(caught));
+    } finally {
+      setResearchSubjectSaving(false);
     }
   };
   const showGuidancePreview = (): void => {
@@ -848,8 +878,16 @@ function WorkspaceOverviewPanel({
                 <input
                   aria-label="Research Subject"
                   className="workspace-overview-input"
-                  disabled
-                  value={researchSubjectName}
+                  disabled={busy || researchSubjectLocked || researchSubjectSaving}
+                  maxLength={500}
+                  required
+                  title={researchSubjectLocked ? 'Research Subject cannot be changed while a research session is queued, active, or paused' : undefined}
+                  value={researchSubjectDraft}
+                  onChange={(event) => setResearchSubjectDraft(event.target.value)}
+                  onBlur={() => void saveResearchSubject()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur();
+                  }}
                 />
               </label>
               <label className="settings-form-control-row workspace-overview-control-row">

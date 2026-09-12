@@ -18,6 +18,7 @@ import type {
   OpenAiOAuthStartResult,
   ProviderSettings,
   ProviderAuthenticationMethod,
+  ProviderContextSize,
   ProviderModelDefaults,
   ResearchProfile,
   ResearchProfileMemoryType,
@@ -211,6 +212,7 @@ export function SettingsView({
   onSetDefaultProviderId,
   onSetProviderModelDefaults,
   onSetProviderOptionalModelEnabled = async () => undefined,
+  onSetProviderContextSize = async () => undefined,
   onSetProviderCyberPolicyRiskAcknowledged = async () => undefined,
   onSetProviderPreferredAuthenticationMethod = async () => undefined,
   onSetAgentPluginEnabled,
@@ -284,6 +286,10 @@ export function SettingsView({
   onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
   onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
   onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
+  onSetProviderContextSize?: (
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize
+  ) => Promise<void>;
   onSetProviderOptionalModelEnabled?: (
     providerId: ResearchModelProviderId,
     modelId: string,
@@ -385,6 +391,7 @@ export function SettingsView({
             onSetDefaultProviderId={onSetDefaultProviderId}
             onSetProviderModelDefaults={onSetProviderModelDefaults}
             onSetProviderOptionalModelEnabled={onSetProviderOptionalModelEnabled}
+            onSetProviderContextSize={onSetProviderContextSize}
             onSetProviderCyberPolicyRiskAcknowledged={onSetProviderCyberPolicyRiskAcknowledged}
             onSetProviderPreferredAuthenticationMethod={onSetProviderPreferredAuthenticationMethod}
           />
@@ -2175,6 +2182,7 @@ export function ProvidersSettingsView({
   onSetDefaultProviderId,
   onSetProviderModelDefaults,
   onSetProviderOptionalModelEnabled = async () => undefined,
+  onSetProviderContextSize = async () => undefined,
   onSetProviderCyberPolicyRiskAcknowledged = async () => undefined,
   onSetProviderPreferredAuthenticationMethod = async () => undefined
 }: {
@@ -2195,6 +2203,10 @@ export function ProvidersSettingsView({
   onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
   onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
   onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
+  onSetProviderContextSize?: (
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize
+  ) => Promise<void>;
   onSetProviderOptionalModelEnabled?: (
     providerId: ResearchModelProviderId,
     modelId: string,
@@ -2365,6 +2377,8 @@ export function ProvidersSettingsView({
           disabledOptionalModelIds={providerSettings?.disabledOptionalModels?.['openai-codex'] ?? []}
           onSetOptionalModelEnabled={(modelId, enabled) =>
             void onSetProviderOptionalModelEnabled('openai-codex', modelId, enabled)}
+          contextSize={providerSettings?.contextSizes?.['openai-codex'] ?? 'default'}
+          onSetContextSize={(contextSize) => void onSetProviderContextSize('openai-codex', contextSize)}
           policyRiskAcknowledged={providerSettings?.cyberPolicyRiskAcknowledgements?.['openai-codex'] === true}
           onSetPolicyRiskAcknowledged={(acknowledged) =>
             void onSetProviderCyberPolicyRiskAcknowledged('openai-codex', acknowledged)}
@@ -2572,7 +2586,8 @@ function ProviderSettingsProviderPanel({
   onSetPolicyRiskAcknowledged,
   policyBusy,
   policyLocked,
-  authentication
+  authentication,
+  additionalSettings
 }: {
   providerId: ResearchModelProviderId;
   providerName: string;
@@ -2594,6 +2609,7 @@ function ProviderSettingsProviderPanel({
   policyBusy: boolean;
   policyLocked: boolean;
   authentication: JSX.Element;
+  additionalSettings?: JSX.Element;
 }): JSX.Element {
   return (
     <div
@@ -2643,6 +2659,7 @@ function ProviderSettingsProviderPanel({
         </div>
       </section>
       {authentication}
+      {additionalSettings}
       <section className="settings-form provider-settings-form provider-default-models-form">
         <header className="settings-form-heading">
           <h2>Default Models</h2>
@@ -2698,7 +2715,9 @@ function OpenAiProviderCard({
   policyRiskAcknowledged,
   onSetPolicyRiskAcknowledged,
   preferredAuthenticationMethod,
-  onSetPreferredAuthenticationMethod
+  onSetPreferredAuthenticationMethod,
+  contextSize,
+  onSetContextSize
 }: {
   removing: boolean;
   busy: boolean;
@@ -2721,6 +2740,8 @@ function OpenAiProviderCard({
   onSetPolicyRiskAcknowledged: (acknowledged: boolean) => void;
   preferredAuthenticationMethod: ProviderAuthenticationMethod;
   onSetPreferredAuthenticationMethod: (method: ProviderAuthenticationMethod) => void;
+  contextSize: ProviderContextSize;
+  onSetContextSize: (contextSize: ProviderContextSize) => void;
 }): JSX.Element {
   const readiness = openAiStatus?.readiness ?? 'not_configured';
   const healthState: ProviderHealthState = openAiStatus?.loginInProgress ? 'authenticating' : openAiStatus?.configured && (readiness === 'oauth_ready' || readiness === 'development_fallback') ? 'healthy' : 'unhealthy';
@@ -2770,6 +2791,31 @@ function OpenAiProviderCard({
           onRemoveApiKey={onRemoveApiKey}
           onMarkPreferred={onSetPreferredAuthenticationMethod}
         />
+      )}
+      additionalSettings={(
+        <section className="settings-form provider-settings-form provider-context-size-form">
+          <header className="settings-form-heading">
+            <h2>Context Size</h2>
+            <p>Choose the context window used for OpenAI research sessions.</p>
+          </header>
+          <div className="settings-form-squircle provider-settings-form-squircle">
+            <label className="provider-context-size-control">
+              <span className="provider-model-default-copy">
+                <strong>Context Size</strong>
+                <small>Large uses up to 1 million tokens when the selected model allows it.</small>
+              </span>
+              <select
+                aria-label="Context Size"
+                value={contextSize}
+                disabled={busy}
+                onChange={(event) => onSetContextSize(event.target.value as ProviderContextSize)}
+              >
+                <option value="default">Default — 272k</option>
+                <option value="large">Large — up to 1m</option>
+              </select>
+            </label>
+          </div>
+        </section>
       )}
     />
   );

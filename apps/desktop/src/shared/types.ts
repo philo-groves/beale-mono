@@ -1465,6 +1465,7 @@ export interface ComputerUseSettings {
 export interface ProviderSettings {
   defaultProviderId: ResearchModelProviderId | null;
   modelDefaults: Partial<Record<ResearchModelProviderId, ProviderModelDefaults>>;
+  contextSizes?: Partial<Record<ResearchModelProviderId, ProviderContextSize>>;
   enabledOptionalModels?: Partial<Record<ResearchModelProviderId, string[]>>;
   disabledOptionalModels?: Partial<Record<ResearchModelProviderId, string[]>>;
   cyberPolicyRiskAcknowledgements?: Partial<Record<ResearchModelProviderId, true>>;
@@ -1476,6 +1477,7 @@ export interface ProviderCredentialAccessRequest {
 }
 
 export type ProviderAuthenticationMethod = 'subscription' | 'api_key';
+export type ProviderContextSize = 'default' | 'large';
 
 export interface ProviderModelDefaults {
   largeModel: string;
@@ -2462,6 +2464,7 @@ export interface BealeApi {
   getProviderSettings(): Promise<ProviderSettings>;
   setDefaultProviderId(providerId: ResearchModelProviderId | null): Promise<ProviderSettings>;
   setProviderModelDefaults(providerId: ResearchModelProviderId, defaults: ProviderModelDefaults): Promise<ProviderSettings>;
+  setProviderContextSize(providerId: ResearchModelProviderId, contextSize: ProviderContextSize): Promise<ProviderSettings>;
   setProviderOptionalModelEnabled(providerId: ResearchModelProviderId, modelId: string, enabled: boolean): Promise<ProviderSettings>;
   setProviderCyberPolicyRiskAcknowledged(providerId: ResearchModelProviderId, acknowledged: boolean): Promise<ProviderSettings>;
   setProviderPreferredAuthenticationMethod(providerId: ResearchModelProviderId, method: ProviderAuthenticationMethod): Promise<ProviderSettings>;
@@ -2490,6 +2493,7 @@ export interface BealeApi {
   createScopedWorkspace(input: WorkspaceOnboardingInput): Promise<WorkspaceSnapshot>;
   updateWorkspaceDirectories(directories: string[]): Promise<WorkspaceSnapshot>;
   updateWorkspaceMemoryBackend(memoryBackend: WorkspaceMemoryBackendId): Promise<WorkspaceSnapshot>;
+  updateWorkspaceResearchSubject(researchSubjectName: string): Promise<WorkspaceSnapshot>;
   cloneWorkspaceRepository(assetId: string, cloneMode: RepositoryCloneMode): Promise<WorkspaceSnapshot>;
   listResourcePriorArt(workspaceId: string, assetIds: string[], before?: number): Promise<ResourcePriorArtPage>;
   getResourcePriorArt(workspaceId: string, assetIds: string[], id: string, offset?: number): Promise<ResourcePriorArtDetail>;

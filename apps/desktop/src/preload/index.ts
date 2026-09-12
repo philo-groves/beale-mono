@@ -11,6 +11,7 @@ import type {
   ProviderCredentialAccessRequest,
   ProviderSettings,
   ProviderAuthenticationMethod,
+  ProviderContextSize,
   ProviderModelDefaults,
   TicketingMode,
   TicketingProviderId,
@@ -192,6 +193,12 @@ const api: BealeApi = {
   setProviderModelDefaults(providerId: ResearchModelProviderId, defaults: ProviderModelDefaults): Promise<ProviderSettings> {
     return ipcRenderer.invoke(IPC_CHANNELS.setProviderModelDefaults, providerId, defaults);
   },
+  setProviderContextSize(
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize
+  ): Promise<ProviderSettings> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setProviderContextSize, providerId, contextSize);
+  },
   setProviderOptionalModelEnabled(
     providerId: ResearchModelProviderId,
     modelId: string,
@@ -282,6 +289,9 @@ const api: BealeApi = {
   },
   updateWorkspaceMemoryBackend(memoryBackend: WorkspaceMemoryBackendId) {
     return ipcRenderer.invoke(IPC_CHANNELS.updateWorkspaceMemoryBackend, memoryBackend);
+  },
+  updateWorkspaceResearchSubject(researchSubjectName: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateWorkspaceResearchSubject, researchSubjectName);
   },
   cloneWorkspaceRepository(assetId: string, cloneMode: RepositoryCloneMode): Promise<WorkspaceSnapshot> {
     return ipcRenderer.invoke(IPC_CHANNELS.cloneWorkspaceRepository, assetId, cloneMode);

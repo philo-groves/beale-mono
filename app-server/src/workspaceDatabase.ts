@@ -2732,6 +2732,11 @@ function tableExists(database: DatabaseSync, table: string): boolean {
   return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
 }
 
+function sqliteIdentifier(value: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) throw new Error(`Unsupported SQLite identifier: ${value}`);
+  return `"${value}"`;
+}
+
 function rows(value: unknown[]): SqlRow[] {
   return value as SqlRow[];
 }
@@ -3181,21 +3186,80 @@ export class WorkspaceDatabase {
     }
     const updatedAt = nowIso();
     const createdAt = existing ? text(existing, 'created_at') : updatedAt;
-    this.db
-      .prepare(
-        `INSERT INTO workspace_research_subjects (
-           workspace_id, subject_id, display_name, source, created_at, updated_at
-         ) VALUES (?, ?, ?, 'explicit', ?, ?)
-         ON CONFLICT(workspace_id) DO UPDATE SET
-           subject_id = excluded.subject_id,
-           display_name = excluded.display_name,
-           source = 'explicit',
-           updated_at = excluded.updated_at`
-      )
-      .run(this.workspaceId, subjectId, name, createdAt, updatedAt);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (existingId && existingId !== subjectId) {
+        this.reassignWorkspaceResearchSubject(existingId, subjectId, name);
+      }
+      this.db
+        .prepare(
+          `INSERT INTO workspace_research_subjects (
+             workspace_id, subject_id, display_name, source, created_at, updated_at
+           ) VALUES (?, ?, ?, 'explicit', ?, ?)
+           ON CONFLICT(workspace_id) DO UPDATE SET
+             subject_id = excluded.subject_id,
+             display_name = excluded.display_name,
+             source = 'explicit',
+             updated_at = excluded.updated_at`
+        )
+        .run(this.workspaceId, subjectId, name, createdAt, updatedAt);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try { this.db.exec('ROLLBACK'); } catch { /* Preserve the original mutation error. */ }
+      throw error;
+    }
     return this.mapResearchSubject(
       rowOrUndefined(this.db.prepare('SELECT * FROM workspace_research_subjects WHERE workspace_id = ?').get(this.workspaceId))!
     );
+  }
+
+  private reassignWorkspaceResearchSubject(previousSubjectId: string, subjectId: string, subjectName: string): void {
+    if (tableExists(this.db, 'memory_nodes') && tableExists(this.db, 'memory_node_workspaces')) {
+      const incompatibleSharedMemory = this.db.prepare(
+        `SELECT n.id
+           FROM memory_nodes n
+           JOIN memory_node_workspaces current_membership
+             ON current_membership.node_id = n.id AND current_membership.workspace_id = ?
+           JOIN memory_node_workspaces other_membership
+             ON other_membership.node_id = n.id AND other_membership.workspace_id <> ?
+           LEFT JOIN workspace_research_subjects other_subject
+             ON other_subject.workspace_id = other_membership.workspace_id
+          WHERE n.subject_id = ?
+            AND COALESCE(other_subject.subject_id, '') <> ?
+          LIMIT 1`
+      ).get(this.workspaceId, this.workspaceId, previousSubjectId, subjectId) as { id?: unknown } | undefined;
+      if (incompatibleSharedMemory) {
+        throw new Error('Research Subject cannot be changed while a memory is shared with a workspace that belongs to a different Subject.');
+      }
+      const subjectNameAssignment = tableHasColumn(this.db, 'memory_nodes', 'subject_name') ? ', subject_name = ?' : '';
+      this.db.prepare(
+        `UPDATE memory_nodes
+            SET subject_id = ?${subjectNameAssignment}
+          WHERE subject_id = ?
+            AND EXISTS (
+              SELECT 1 FROM memory_node_workspaces membership
+               WHERE membership.node_id = memory_nodes.id AND membership.workspace_id = ?
+            )`
+      ).run(...(subjectNameAssignment
+        ? [subjectId, subjectName, previousSubjectId, this.workspaceId]
+        : [subjectId, previousSubjectId, this.workspaceId]));
+    }
+
+    const subjectTables = this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).all() as Array<{ name?: unknown }>;
+    for (const row of subjectTables) {
+      if (typeof row.name !== 'string' || row.name === 'workspace_research_subjects' || row.name === 'memory_nodes') continue;
+      const table = row.name;
+      if (!tableHasColumn(this.db, table, 'workspace_id') || !tableHasColumn(this.db, table, 'subject_id')) continue;
+      const quotedTable = sqliteIdentifier(table);
+      const subjectNameAssignment = tableHasColumn(this.db, table, 'subject_name') ? ', subject_name = ?' : '';
+      this.db.prepare(
+        `UPDATE ${quotedTable} SET subject_id = ?${subjectNameAssignment} WHERE workspace_id = ? AND subject_id = ?`
+      ).run(...(subjectNameAssignment
+        ? [subjectId, subjectName, this.workspaceId, previousSubjectId]
+        : [subjectId, this.workspaceId, previousSubjectId]));
+    }
   }
 
   public saveScope(draft: WorkspaceScopeDraft, options: { refreshInventory?: boolean } = {}): WorkspaceScopeVersion {

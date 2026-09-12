@@ -3,7 +3,7 @@ import type { RunDetail, TraceEventRecord } from '@shared/types';
 import { contextMeterForDetail, visibleCacheHitRateLabel, visibleContextMeterLabel, visibleCurrentContextTokenLabel, visibleContextWindowPercentageLabel, visibleSessionCachedTokenLabel, visibleSessionTokenBreakdownLabel, visibleSessionTokenUsageLabel } from '../src/renderer/features/momentum/contextMeter';
 
 describe('renderer session usage view models', () => {
-  it('formats context usage against the default 200k limit', () => {
+  it('formats context usage against the default 272k limit', () => {
     const meter = contextMeterForDetail(
       runDetail({
         traceEvents: [
@@ -18,12 +18,12 @@ describe('renderer session usage view models', () => {
       })
     );
 
-    expect(meter.label).toBe('136k/200k');
-    expect(visibleContextMeterLabel(meter)).toBe('136k/200k');
-    expect(visibleContextWindowPercentageLabel(meter)).toBe('68%');
+    expect(meter.label).toBe('136k/272k');
+    expect(visibleContextMeterLabel(meter)).toBe('136k/272k');
+    expect(visibleContextWindowPercentageLabel(meter)).toBe('50%');
     expect(visibleCurrentContextTokenLabel(meter)).toBe('136k Used');
     expect(visibleSessionTokenUsageLabel(meter)).toBe('136k');
-    expect(meter.fraction).toBeCloseTo(136 / 200);
+    expect(meter.fraction).toBeCloseTo(136 / 272);
   });
 
   it('uses the active provider model context window when app-server reports it', () => {
@@ -125,7 +125,7 @@ describe('renderer session usage view models', () => {
     );
 
     expect(meter.totalSessionTokens).toBe(5_000);
-    expect(meter.label).toBe('4.5k/200k');
+    expect(meter.label).toBe('4.5k/272k');
   });
 
   it('uses aggregate capture usage when turn telemetry is unavailable', () => {
@@ -155,8 +155,8 @@ describe('renderer session usage view models', () => {
       })
     );
 
-    expect(meter.label).toBe('9.3k/200k');
-    expect(visibleContextMeterLabel(meter)).toBe('9.3k/200k');
+    expect(meter.label).toBe('9.3k/272k');
+    expect(visibleContextMeterLabel(meter)).toBe('9.3k/272k');
     expect(visibleSessionTokenUsageLabel(meter)).toBe('0');
     expect(meter.source).toBe('app-server serialized capture estimate');
   });
@@ -179,7 +179,7 @@ describe('renderer session usage view models', () => {
       })
     );
 
-    expect(meter.label).toBe('12k/200k');
+    expect(meter.label).toBe('12k/272k');
     expect(meter.totalSessionTokens).toBe(12_800);
     expect(meter.sessionInputTokens).toBe(12_000);
     expect(meter.sessionOutputTokens).toBe(800);
@@ -208,7 +208,7 @@ describe('renderer session usage view models', () => {
       })
     );
 
-    expect(meter.label).toBe('1k/200k');
+    expect(meter.label).toBe('1k/272k');
     expect(meter.cacheReadTokens).toBe(800);
     expect(meter.cachePromptTokens).toBe(1_000);
     expect(meter.cacheHitRate).toBe(0.8);

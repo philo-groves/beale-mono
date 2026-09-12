@@ -36,6 +36,8 @@ import {
   listAppServerResearchTools,
 } from "../dist/researchToolBridge.js";
 import { WorkspaceDatabase } from "../dist/workspaceDatabase.js";
+import { initializeWorkspaceProjectAsync } from "../dist/workspaceCheckpoints.js";
+import { WorkspaceRegistry } from "../dist/workspaceRegistryStore.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const WebSocket = requireFromHere("ws");
@@ -43,6 +45,21 @@ const WebSocket = requireFromHere("ws");
 const servers = [];
 const temporaryDirectories = [];
 const originalMockMode = process.env.BEALE_APP_SERVER_MOCK;
+
+test("persists the OpenAI context size provider setting", () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-provider-context-size-"));
+  temporaryDirectories.push(directory);
+  const registry = new WorkspaceRegistry(directory);
+  assert.equal(registry.getProviderSettings().contextSizes, undefined);
+  assert.deepEqual(registry.setProviderContextSize("openai-codex", "large").contextSizes, {
+    "openai-codex": "large",
+  });
+  registry.close();
+
+  const reopened = new WorkspaceRegistry(directory);
+  assert.equal(reopened.getProviderSettings().contextSizes?.["openai-codex"], "large");
+  reopened.close();
+});
 
 test('research checkpoints are host-owned and a pending milestone does not delay Stop', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-lifecycle-example-'));
@@ -71,6 +88,34 @@ test('research checkpoints are host-owned and a pending milestone does not delay
   assert.deepEqual(reasons, ['Before research session', 'Research milestone', 'Research stopped; preserve incomplete work']);
 });
 
+test('runbook checkpoints occur once after the complete execution rather than after each cell', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-runbook-checkpoint-example-'));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const hostService = testHostService(directory);
+  const reasons = [];
+  hostService.checkpointSession = async (_workspaceId, _sessionId, reason) => {
+    reasons.push(reason);
+    return { status: 'unchanged', reason };
+  };
+  const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
+  servers.push(server);
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-runbook-checkpoint-example' }));
+  assert.deepEqual(reasons, ['Before research session']);
+
+  upstream.sendEvent({ kind: 'agent.event', payload: { eventType: 'runbook.execution', runId: 'runbook_run_example', cellId: 'cell-example', status: 'succeeded' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reasons, ['Before research session']);
+
+  upstream.sendEvent({ kind: 'agent.event', payload: { eventType: 'runbook.execution', runId: 'runbook_run_example', cellId: null, status: 'blocked' } });
+  await waitFor(() => reasons.length === 2);
+  assert.deepEqual(reasons, ['Before research session', 'Runbook execution finished']);
+
+  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'runbook.run', status: 'complete' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reasons, ['Before research session', 'Runbook execution finished']);
+});
+
 test('a failed pre-session checkpoint prevents worker launch without discarding files', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-failure-example-'));
   temporaryDirectories.push(directory);
@@ -81,6 +126,58 @@ test('a failed pre-session checkpoint prevents worker launch without discarding 
   servers.push(server);
   await assert.rejects(server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-failed-example' })), /Resolve the example staged edit/);
   assert.equal(spawned, false);
+});
+
+test('a committed host checkpoint appends a valid canonical session event', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-event-example-'));
+  temporaryDirectories.push(directory);
+  await initializeWorkspaceProjectAsync(directory, 'workspace-test');
+  mkdirSync(join(directory, 'investigations', 'investigation-example'), { recursive: true });
+  writeFileSync(
+    join(directory, 'investigations', 'investigation-example', 'proof-plan.md'),
+    'Synthetic checkpoint event regression fixture.\n',
+  );
+  const sessionId = 'session-checkpoint-event-example';
+  const sessionStore = new AppServerSessionStore({ databasePath: join(directory, 'memory.sqlite') });
+  sessionStore.create({
+    id: sessionId,
+    workspaceId: 'workspace-test',
+    attemptId: 'attempt-checkpoint-event-example',
+    title: 'Checkpoint event regression',
+    prompt: 'Exercise a committed pre-session checkpoint.',
+    provider: 'openai-codex',
+    model: 'gpt-example',
+    reasoningEffort: 'high',
+  });
+  sessionStore.close();
+  const calls = [];
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation, options) => {
+      calls.push({ operation, options });
+      const store = new AppServerSessionStore({ databasePath: options.storage.databasePath });
+      try {
+        return store.appendEvent(sessionId, options.input);
+      } finally {
+        store.close();
+      }
+    },
+  });
+
+  const result = await service.checkpointSession(
+    'workspace-test',
+    sessionId,
+    'Before research session',
+  );
+
+  assert.equal(result.status, 'committed', result.error);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].operation, 'session.append_event');
+  assert.equal(calls[0].options.input.summary, 'Workspace checkpoint committed.');
+  assert.deepEqual(calls[0].options.input.payload, {
+    eventType: 'workspace.checkpoint',
+    ...result,
+  });
 });
 
 test("creates a versioned app-server pairing payload without altering credentials", () => {
@@ -591,11 +688,28 @@ test("exposes the in-Beale durable tool registry to Codex with enforced effect r
     memoryBackend: "app-server",
     sessionId: "session-codex",
     modelAuthor: { provider: "openai-codex", model: "gpt-6-astra" },
+    workspaceReferences: [{
+      workspaceId: "workspace-prior-example",
+      workspaceName: "Prior example",
+    }],
   };
 
   const catalog = await listAppServerResearchTools(context, storage);
   const descriptors = new Map(catalog.tools.map((tool) => [tool.name, tool]));
   assert.equal(descriptors.get("history.search").sideEffects, "read");
+  assert.deepEqual(descriptors.get("history.search").inputSchema.properties.workspaceId.enum, [
+    "workspace-test",
+    "workspace-prior-example",
+  ]);
+  assert.match(descriptors.get("history.search").inputSchema.properties.workspaceId.description, /Prior example/u);
+  assert.deepEqual(descriptors.get("claim.get").inputSchema.properties.workspaceId.enum, [
+    "workspace-test",
+    "workspace-prior-example",
+  ]);
+  assert.deepEqual(descriptors.get("runbook.get").inputSchema.properties.workspaceId.enum, [
+    "workspace-test",
+    "workspace-prior-example",
+  ]);
   assert.equal(descriptors.get("lead.create").sideEffects, "write");
   assert.equal(descriptors.get("runbook.run").sideEffects, "process");
 
@@ -627,6 +741,62 @@ test("exposes the in-Beale durable tool registry to Codex with enforced effect r
   }, storage, "read");
   assert.equal(listed.result.status, "complete");
   assert.equal(listed.result.output.leads[0].title, "Parser boundary candidate");
+});
+
+test("research Subject rebinding migrates workspace-owned research identity", () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-subject-rebind-"));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, "memory.sqlite");
+  const workspaceId = "workspace-example";
+  const database = new WorkspaceDatabase(databasePath, join(directory, "artifacts"), {
+    workspacePath: directory,
+    workspaceId,
+  });
+  database.initialize();
+  const previous = database.setResearchSubject({ name: "Example Legacy Subject" });
+  const raw = new DatabaseSync(databasePath);
+  raw.exec(`
+    CREATE TABLE memory_nodes (
+      id TEXT PRIMARY KEY,
+      subject_id TEXT NOT NULL,
+      subject_name TEXT NOT NULL
+    );
+    CREATE TABLE memory_node_workspaces (
+      node_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      workspace_name TEXT NOT NULL,
+      PRIMARY KEY(node_id, workspace_id)
+    );
+    CREATE TABLE synthetic_subject_records (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      subject_name TEXT NOT NULL
+    );
+  `);
+  raw.prepare("INSERT INTO memory_nodes VALUES (?, ?, ?)").run("memory-example", previous.id, previous.name);
+  raw.prepare("INSERT INTO memory_node_workspaces VALUES (?, ?, ?)").run("memory-example", workspaceId, "Example Workspace");
+  raw.prepare("INSERT INTO synthetic_subject_records VALUES (?, ?, ?, ?)")
+    .run("record-example", workspaceId, previous.id, previous.name);
+  raw.close();
+
+  const next = database.setResearchSubject({ id: "subject-example-shared", name: "Example Shared Subject" });
+  assert.deepEqual({ id: next.id, name: next.name }, {
+    id: "subject-example-shared",
+    name: "Example Shared Subject",
+  });
+  database.close();
+
+  const verified = new DatabaseSync(databasePath, { readOnly: true });
+  assert.deepEqual({ ...verified.prepare("SELECT subject_id, subject_name FROM memory_nodes WHERE id = ?").get("memory-example") }, {
+    subject_id: "subject-example-shared",
+    subject_name: "Example Shared Subject",
+  });
+  assert.deepEqual({ ...verified.prepare("SELECT subject_id, subject_name FROM synthetic_subject_records WHERE id = ?").get("record-example") }, {
+    subject_id: "subject-example-shared",
+    subject_name: "Example Shared Subject",
+  });
+  verified.close();
 });
 
 test("owns research goal suggestion storage and provider routing at the app-server boundary", async () => {
@@ -1095,6 +1265,7 @@ test("resolves workspace identity and host policy from the shared Beale registry
         "openai-codex": { largeModel: "gpt-lead", smallModel: "gpt-small", reasoningEffort: "high" },
       })],
       ["provider_preferred_authentication_methods_json", JSON.stringify({ "openai-codex": "subscription" })],
+      ["provider_context_sizes_json", JSON.stringify({ "openai-codex": "large" })],
       ["openai_trusted_access_cyber_risk_acknowledged", "1"],
     ]) {
       database.prepare(`INSERT INTO registry_meta VALUES (?, ?, ?)`).run(
@@ -1119,6 +1290,7 @@ test("resolves workspace identity and host policy from the shared Beale registry
       "openai-codex": { leadModel: "gpt-lead", smallModel: "gpt-small", reasoningEffort: "high" },
     },
     authenticationPreferences: { "openai-codex": "subscription" },
+    contextSizes: { "openai-codex": "large" },
     riskAcknowledgements: ["openai-codex"],
   });
 });
@@ -1470,8 +1642,14 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-fast-mode-"));
   temporaryDirectories.push(directory);
   const calls = [];
+  const registry = hostRegistryFixture(directory);
+  const providerSettings = registry.providerSettings();
+  registry.providerSettings = () => ({
+    ...providerSettings,
+    contextSizes: { "openai-codex": "large" },
+  });
   const service = new AppServerHostService({
-    registry: hostRegistryFixture(directory),
+    registry,
     invokeProtocol: async (operation, options) => {
       calls.push({ operation, options });
       if (operation === "provider.describe") {
@@ -1501,6 +1679,8 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
   const prepared = await service.prepareSession(request, "generated-session");
 
   assert.equal(prepared.launch.provider.fastMode, true);
+  assert.equal(prepared.launch.provider.contextSize, "large");
+  assert.equal(appServerSessionEnvironment(prepared.launch, {}).APP_SERVER_OPENAI_CONTEXT_SIZE, "large");
   assert.equal(prepared.launch.investigationId, "investigation-example");
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--fast-mode"));
   const createCall = calls.find((call) => call.operation === "session.create");
@@ -1541,11 +1721,15 @@ test("session launch exposes same-Subject workspace references without retained 
       CREATE TABLE workspace_research_subjects (
         workspace_id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, display_name TEXT NOT NULL
       );
+      CREATE TABLE scope_versions (
+        workspace_id TEXT NOT NULL, status TEXT NOT NULL, workspace_name TEXT NOT NULL
+      );
     `);
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name='memory_nodes'").get().count, 0,
       "reference discovery must not depend on retained derived research tables");
     const insertWorkspace = database.prepare("INSERT INTO workspaces VALUES (?, ?)");
     const insertSubject = database.prepare("INSERT INTO workspace_research_subjects VALUES (?, ?, ?)");
+    const insertScope = database.prepare("INSERT INTO scope_versions VALUES (?, 'active', ?)");
     for (const [workspaceId, workspacePath, subjectId] of [
       ["workspace-test", directory, "subject-example"],
       ["workspace-prior", priorDirectory, "subject-example"],
@@ -1553,6 +1737,7 @@ test("session launch exposes same-Subject workspace references without retained 
     ]) {
       insertWorkspace.run(workspaceId, workspacePath);
       insertSubject.run(workspaceId, subjectId, subjectId === "subject-example" ? "Example Subject" : "Other Subject");
+      insertScope.run(workspaceId, workspaceId === "workspace-prior" ? "Canonical prior workspace" : "Canonical current workspace");
     }
   } finally {
     database.close();
@@ -1573,13 +1758,14 @@ test("session launch exposes same-Subject workspace references without retained 
   const registry = hostRegistryFixture(directory, {
     hostWorkspaces: [
       hostWorkspace("workspace-test", "Current", directory),
-      hostWorkspace("workspace-prior", "Prior", priorDirectory),
+      hostWorkspace("workspace-prior", "Registered prior label", priorDirectory),
       hostWorkspace("workspace-unrelated", "Unrelated", unrelatedDirectory),
     ],
   });
+  const researchToolCalls = [];
   const service = new AppServerHostService({
     registry,
-    invokeProtocol: async (operation) => {
+    invokeProtocol: async (operation, options) => {
       if (operation === "provider.describe") return {
         defaultSmallModels: { "openai-codex": "gpt-5.6-luna" },
         sessionTitleEffort: "medium",
@@ -1588,6 +1774,10 @@ test("session launch exposes same-Subject workspace references without retained 
       if (operation === "plugin.runtime") return { skillDirs: [], selectedSkillIds: [], allowedMcpServers: [] };
       if (operation === "session.get") throw new Error("Session not found: session-subject-reference");
       if (operation === "session.create") return { revision: 1 };
+      if (operation === "research.tools.list") {
+        researchToolCalls.push(options);
+        return { tools: [] };
+      }
       throw new Error(`Unexpected operation: ${operation}`);
     },
   });
@@ -1598,11 +1788,20 @@ test("session launch exposes same-Subject workspace references without retained 
   );
   assert.deepEqual(prepared.launch.workspaceReferences, [{
     workspaceId: "workspace-prior",
-    workspaceName: "Prior",
+    workspaceName: "Registered prior label",
     workspaceRoot: priorDirectory,
     subjectId: "subject-example",
   }]);
   assert.equal(appServerSessionArgs(prepared.launch, {}).filter((argument) => argument === "--workspace-reference").length, 1);
+
+  await service.executeOperation({
+    operation: "research.tools.list",
+    input: { workspaceId: "workspace-test" },
+  });
+  assert.deepEqual(researchToolCalls[0].input.workspaceReferences, [{
+    workspaceId: "workspace-prior",
+    workspaceName: "Registered prior label",
+  }]);
 });
 
 test("app-server owns built-in plugins and pins canonical session profile identity", async () => {
@@ -2336,6 +2535,7 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
   }, {});
   assert.equal(introspectionEnvironment.BEALE_INTROSPECTION_URL, "http://127.0.0.1:42125");
   assert.equal(introspectionEnvironment.BEALE_INTROSPECTION_TOKEN, "session-introspection-token");
+  assert.equal(introspectionEnvironment.APP_SERVER_OPENAI_CONTEXT_SIZE, "default");
 });
 
 test("proxies a real mock run over the versioned session transport and retains its terminal state", async () => {

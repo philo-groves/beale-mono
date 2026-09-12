@@ -19,9 +19,10 @@ async function fixture(t) {
   t.after(async () => { database.close(); runbooks.close(); claims.close(); graph.close(); await rm(root, { recursive: true, force: true }); });
   const sourceRevision = "git:example-component:revision-one";
   const environmentFingerprint = "environment:example-target:build-one";
-  let claim = claims.create({ title: "Example state mismatch", summary: "Synthetic proof obligation.", classification: "security.primitive", sourceRevision, environmentFingerprint }, undefined, "author-example");
+  const modelAuthor = { provider: "example-provider", model: "example-model" };
+  let claim = claims.create({ title: "Example state mismatch", summary: "Synthetic proof obligation.", classification: "security.primitive", sourceRevision, environmentFingerprint }, modelAuthor, "author-example");
   claim = claims.transition(claim.id, { expectedRevision: claim.revision, toStatus: "observed", reason: "Example direct observation.",
-    evidence: [{ kind: "code", referenceId: "src/example.ts:1", summary: "Example observation." }] }, undefined, "author-example");
+    evidence: [{ kind: "code", referenceId: "src/example.ts:1", summary: "Example observation." }] }, modelAuthor, "author-example");
   const book = runbooks.create({ title: "Example proof", purpose: "Run setup and the assertion.", cells: [
     { kind: "code", language: "javascript", source: "console.log('example setup')", features: ["setup"] },
     { kind: "code", language: "javascript", source: "console.log('example assertion')", features: ["runtime"] },
@@ -36,9 +37,9 @@ async function fixture(t) {
   const reproduce = (runId, overrides = {}) => {
     const current = claims.get(claim.id);
     return claims.transition(claim.id, { expectedRevision: current.revision, toStatus: "reproduced", reason: "Example reproduction.", reproductionRunbookId: book.id,
-      evidence: [{ kind: "runbook_execution", referenceId: runId, summary: "Example run." }], ...overrides }, undefined, "author-example");
+      evidence: [{ kind: "runbook_execution", referenceId: runId, summary: "Example run." }], ...overrides }, modelAuthor, "author-example");
   };
-  return { root, graph, context, claims, runbooks, database, claim, book, execute, run, reproduce, calls, sourceRevision, environmentFingerprint };
+  return { root, graph, context, claims, runbooks, database, claim, book, execute, run, reproduce, calls, sourceRevision, environmentFingerprint, modelAuthor };
 }
 
 test("verification resolves execution evidence and rejects self-review, missing identity, and fabricated references", async (t) => {
@@ -46,10 +47,10 @@ test("verification resolves execution evidence and rejects self-review, missing 
   const execution = await f.run();
   let claim = f.reproduce(execution.runId);
   const tool = createFindingTools(f.claims).find((candidate) => candidate.descriptor.name === "finding.transition");
-  const review = (actorId, referenceId, extra = {}) => tool.execute({ id: "review-example", toolName: "finding.transition", actionClass: "synthesize",
+  const review = (actorId, referenceId, extra = {}, context = {}) => tool.execute({ id: "review-example", toolName: "finding.transition", actionClass: "synthesize",
     input: { id: claim.id, expectedRevision: claim.revision, toStatus: "verified", reason: "Example independent review.", evidence: [
       { kind: "independent_verification", independent: true, referenceId, summary: "Example review conclusion.", ...extra },
-    ] } }, actorId ? { agentId: actorId } : {});
+    ] } }, actorId ? { agentId: actorId, modelAuthor: f.modelAuthor, freshSubagentContext: true, ...context } : context);
   for (const [actor, reference] of [["author-example", execution.runId], [undefined, execution.runId], ["reviewer-example", "missing-review-example"]]) {
     const result = await review(actor, reference);
     assert.equal(result.status, "error");
@@ -57,6 +58,10 @@ test("verification resolves execution evidence and rejects self-review, missing 
   }
   const spoofed = await review("author-example", execution.runId, { actorId: "reviewer-example", sessionId: "another-session-example", metadata: { validated: true } });
   assert.equal(spoofed.status, "error");
+  const inherited = await review("reviewer-example", execution.runId,
+    { metadata: { verificationContext: "fresh_subagent" } }, { freshSubagentContext: false });
+  assert.equal(inherited.status, "error");
+  assert.match(inherited.error.message, /independent reviewer/);
   assert.equal(f.claims.get(claim.id).revision, claim.revision);
   const result = await review("reviewer-example", execution.runId);
   assert.equal(result.status, "complete", result.error?.message);
@@ -65,6 +70,7 @@ test("verification resolves execution evidence and rejects self-review, missing 
   assert.equal(claim.evidence.at(-1).actorId, "reviewer-example");
   assert.equal(claim.evidence.at(-1).sessionId, f.context.sessionId);
   assert.equal(claim.evidence.at(-1).validated, true);
+  assert.equal(claim.evidence.at(-1).metadata.verificationContext, "fresh_subagent");
   assert.match(claim.evidence.at(-1).claimBindingHash, /^sha256:[a-f0-9]{64}$/);
   claim = f.claims.revise(claim.id, { expectedRevision: claim.revision, reason: "Changed the example conclusion.", summary: "A different example property requires review." }, undefined, "author-example");
   assert.equal(claim.evidence.at(-1).validated, false);
@@ -128,11 +134,11 @@ test("reviewers cannot verify content they revised or change claim content durin
     { kind: "independent_verification", independent: true, referenceId: run.runId, summary: "Example review." },
   ] };
   assert.throws(() => f.claims.transition(claim.id, { ...review, expectedRevision: claim.revision, classification: "security.chain" },
-    undefined, "reviewer-example"), /existing claim content/);
+    f.modelAuthor, "reviewer-example", { freshSubagentContext: true }), /existing claim content/);
   claim = f.claims.revise(claim.id, { expectedRevision: claim.revision, summary: "Revised example conclusion.", reason: "Example content revision." },
-    undefined, "reviewer-example");
-  assert.throws(() => f.claims.transition(claim.id, { ...review, expectedRevision: claim.revision }, undefined, "reviewer-example"), /independent reviewer/);
-  claim = f.claims.transition(claim.id, { ...review, expectedRevision: claim.revision }, undefined, "another-reviewer-example");
+    f.modelAuthor, "reviewer-example");
+  assert.throws(() => f.claims.transition(claim.id, { ...review, expectedRevision: claim.revision }, f.modelAuthor, "reviewer-example", { freshSubagentContext: true }), /independent reviewer/);
+  claim = f.claims.transition(claim.id, { ...review, expectedRevision: claim.revision }, f.modelAuthor, "another-reviewer-example", { freshSubagentContext: true });
   assert.equal(claim.evidence.at(-1).validated, true);
 });
 

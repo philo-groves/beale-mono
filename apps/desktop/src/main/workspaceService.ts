@@ -135,6 +135,7 @@ import type {
   ProviderSettings,
   ProviderModelDefaults,
   ProviderAuthenticationMethod,
+  ProviderContextSize,
   ExecutorStatus,
   GeneratedResearchGoalSuggestions,
   GeneratedResearchPrompt,
@@ -851,6 +852,13 @@ export class WorkspaceService {
 
   public setProviderModelDefaults(providerId: ResearchModelProviderId, defaults: ProviderModelDefaults): ProviderSettings {
     return this.getWorkspaceRegistry().setProviderModelDefaults(providerId, defaults);
+  }
+
+  public setProviderContextSize(
+    providerId: ResearchModelProviderId,
+    contextSize: ProviderContextSize,
+  ): ProviderSettings {
+    return this.getWorkspaceRegistry().setProviderContextSize(providerId, contextSize);
   }
 
   public setProviderOptionalModelEnabled(
@@ -2228,6 +2236,29 @@ export class WorkspaceService {
     if (!workspace) throw new Error(`Workspace registry entry not found: ${runtime.workspacePath}`);
     registry.setWorkspaceMemoryBackend(workspace.id, memoryBackend);
     runtime.memoryBackend = memoryBackend;
+    this.workspaceMemorySummaryLoads.delete(runtime.workspacePath);
+    this.workspaceMemorySummaryErrors.delete(runtime.workspacePath);
+    this.researchGoalSuggestionContexts.clear();
+    this.runDetailMemoryRefreshedAt.clear();
+    this.runDetailMemoryRetryAfter.clear();
+    this.snapshotCache.delete(runtime.workspacePath);
+    this.scheduleWorkspaceMemorySummaryLoad(runtime);
+    this.emitChange();
+    return this.requireSnapshot();
+  }
+
+  public updateWorkspaceResearchSubject(researchSubjectName: string): WorkspaceSnapshot {
+    const name = researchSubjectName.trim().replace(/\s+/g, ' ');
+    if (!name) throw new Error('Research Subject is required.');
+    if (name.length > 500 || /[\u0000-\u001f\u007f]/u.test(name)) {
+      throw new Error('Research Subject must be at most 500 printable characters.');
+    }
+    const runtime = this.getForegroundRuntime();
+    if (!runtime) throw new Error('No Beale workspace is open');
+    if (runtime.db.listRunRows().some(({ run }) => isLiveResearchRunStatus(run.status) || run.status === 'paused')) {
+      throw new Error('Wait for active research sessions to finish before changing the Research Subject.');
+    }
+    runtime.db.setResearchSubject({ id: memorySubjectId(name), name });
     this.workspaceMemorySummaryLoads.delete(runtime.workspacePath);
     this.workspaceMemorySummaryErrors.delete(runtime.workspacePath);
     this.researchGoalSuggestionContexts.clear();

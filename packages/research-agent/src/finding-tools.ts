@@ -18,7 +18,7 @@ const EVIDENCE_SCHEMA = {
   required: ["kind", "summary"],
   properties: {
     kind: { type: "string", enum: EVIDENCE_KINDS },
-    referenceId: { type: "string", description: "Durable evidence identity. For runbook_execution, or verification/human_review/proof with independent=true, use a successful full runId from runbook.run with matching sourceRevision and environmentFingerprint. Inspect that snapshot with runbook.get id/runId. Independent review requires a host-attributed reviewer who did not author the claim; the review is bound to the current claim content. For report use reportId; for disclosure use disclosureReference." },
+    referenceId: { type: "string", description: "Durable evidence identity. For runbook_execution, or verification/human_review/proof with independent=true, use a successful full runId from runbook.run with matching sourceRevision and environmentFingerprint. Inspect that snapshot with runbook.get id/runId. Agent verification requires a distinct reviewer subagent spawned with fork_turns=none and no inherited channel; it may use the same provider and model. The review is bound to the current claim content. For report use reportId; for disclosure use disclosureReference." },
     contentHash: { type: "string" },
     summary: { type: "string" },
     independent: { type: "boolean", description: "Request independent-review validation. The host checks reviewer identity, claim content, and the referenced execution; this flag alone does not establish independence." },
@@ -75,6 +75,12 @@ const SECURITY_TRACKING_SCHEMA = {
 
 export interface FindingToolDefaults {
   classifications?: readonly string[];
+  referenceWorkspaces?: readonly ReadOnlyWorkspaceReference[];
+}
+
+export interface ReadOnlyWorkspaceReference {
+  workspaceId: string;
+  workspaceName: string;
 }
 
 export const CLAIM_DETAIL_SECTIONS = ["all", "overview", "evidence", "transitions", "duplicates"] as const;
@@ -82,6 +88,7 @@ export type ClaimDetailSection = typeof CLAIM_DETAIL_SECTIONS[number];
 
 export interface ClaimDetailReadInput {
   id: string;
+  workspaceId?: string;
   section?: ClaimDetailSection;
   offset?: number;
   limit?: number;
@@ -107,21 +114,25 @@ export interface ClaimDetailReadResult {
   evidence?: ClaimDetailPage<FindingSummary["evidence"][number]>;
   transitions?: ClaimDetailPage<FindingSummary["transitions"][number]>;
   duplicates?: ClaimDetailPage<FindingSummary["duplicateClaims"][number]>;
+  workspace?: { id: string; name: string; readOnlyReference: true };
 }
 
 export function createFindingTools(store: ResearchClaimStore, defaults: FindingToolDefaults = {}): ResearchExecutableTool[] {
+  const context = store.getContext();
+  const readableWorkspaces = readableWorkspaceCatalog(context.workspaceId, context.workspaceName, defaults.referenceWorkspaces);
   return [
-    findingTool("claim.get", "claim_get", "Read one lead or finding by its stable claim ID, including evidence references, provenance, transition reasons, and duplicate relationships. Results page each collection; use section and nextOffset with expectedReadRevision to read more without repeating the overview.", "read", {
+    findingTool("claim.get", "claim_get", "Read one lead or finding by its stable claim ID, including evidence references, provenance, transition reasons, and duplicate relationships. workspaceId may select a host-verified same-Subject workspace and remains read-only. Results page each collection; use section and nextOffset with expectedReadRevision to read more without repeating the overview.", "read", {
       type: "object",
       required: ["id"],
       properties: {
         id: { type: "string", description: "Claim ID from history.search, lead.list, or finding.list; also accepts a retained duplicate ID." },
+        workspaceId: { type: "string", enum: readableWorkspaces.map((workspace) => workspace.workspaceId), description: "Workspace owning the claim. Omit for the current workspace; another advertised same-Subject workspace is read-only." },
         section: { type: "string", enum: CLAIM_DETAIL_SECTIONS, description: "Defaults to all: overview plus the first page of each collection. Select one section for focused follow-up reads." },
         offset: { type: "integer", minimum: 0, description: "Collection offset, default 0. Follow a section's nextOffset; offsets above zero require expectedReadRevision." },
         limit: { type: "integer", minimum: 1, maximum: 50, description: "Rows per collection, default 10. Reduce for large evidence metadata or transition reasons." },
         expectedReadRevision: { type: "string", description: "readRevision returned by claim.get, covering the claim and its related duplicate rows. If it changed, restart at offset 0; numeric revision remains the version used for edits." },
       },
-    }, (input) => readClaimDetail(store, input)),
+    }, (input) => readClaimDetail(store, input, readableWorkspaces)),
     findingTool("lead.list", "lead_list", "Browse a paged catalog of proposed or refuted leads; use history.search for search and claim.get for evidence, provenance, and transition history. Leads keep the same claim ID when promoted to findings.", "read", {
       type: "object",
       properties: {
@@ -225,12 +236,17 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       ...(input.disclosureReference !== undefined ? { disclosureReference: string(input.disclosureReference) } : {}),
       ...(input.classification !== undefined ? { classification: requiredClassification(input.classification, defaults.classifications) } : {}),
       ...(Array.isArray(input.componentClaimIds) ? { componentClaimIds: input.componentClaimIds.map((id) => requiredString(id, "componentClaimIds[]")) } : {}),
-    }, context?.modelAuthor, context?.agentId)),
+    }, context?.modelAuthor, context?.agentId, { freshSubagentContext: context?.freshSubagentContext === true })),
   ];
 }
 
-function readClaimDetail(store: ResearchClaimStore, input: Record<string, unknown>): ClaimDetailReadResult {
+function readClaimDetail(
+  store: ResearchClaimStore,
+  input: Record<string, unknown>,
+  readableWorkspaces: readonly ReadOnlyWorkspaceReference[],
+): ClaimDetailReadResult {
   const id = requiredString(input.id, "id");
+  const selectedWorkspace = selectReadableWorkspace(input.workspaceId, readableWorkspaces);
   const section = input.section ?? "all";
   if (typeof section !== "string" || !CLAIM_DETAIL_SECTIONS.some((value) => value === section)) throw new Error("Unknown claim detail section.");
   const offset = readPageInteger(input.offset, "offset", 0, 0);
@@ -238,7 +254,36 @@ function readClaimDetail(store: ResearchClaimStore, input: Record<string, unknow
   const expectedReadRevision = input.expectedReadRevision === undefined
     ? undefined : requiredString(input.expectedReadRevision, "expectedReadRevision");
   if (offset > 0 && expectedReadRevision === undefined) throw new Error("Claim detail pagination requires expectedReadRevision; read offset 0 first.");
-  return store.readDetail(id, section, offset, limit, expectedReadRevision);
+  const result = store.readDetail(id, section, offset, limit, expectedReadRevision, selectedWorkspace.workspaceId);
+  return selectedWorkspace.workspaceId === store.getContext().workspaceId
+    ? result
+    : {
+        ...result,
+        workspace: { id: selectedWorkspace.workspaceId, name: selectedWorkspace.workspaceName, readOnlyReference: true },
+      };
+}
+
+function readableWorkspaceCatalog(
+  workspaceId: string,
+  workspaceName: string,
+  references: readonly ReadOnlyWorkspaceReference[] = [],
+): ReadOnlyWorkspaceReference[] {
+  const seen = new Set<string>();
+  return [{ workspaceId, workspaceName }, ...references].filter((workspace) => {
+    if (!workspace.workspaceId.trim() || !workspace.workspaceName.trim() || seen.has(workspace.workspaceId)) return false;
+    seen.add(workspace.workspaceId);
+    return true;
+  });
+}
+
+function selectReadableWorkspace(
+  value: unknown,
+  readableWorkspaces: readonly ReadOnlyWorkspaceReference[],
+): ReadOnlyWorkspaceReference {
+  const workspaceId = value === undefined ? readableWorkspaces[0]?.workspaceId : requiredString(value, "workspaceId");
+  const selected = readableWorkspaces.find((workspace) => workspace.workspaceId === workspaceId);
+  if (!selected) throw new Error("claim.get can read only the current workspace or a host-verified workspace sharing its research Subject.");
+  return selected;
 }
 
 function readPageInteger(value: unknown, name: string, fallback: number, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number {

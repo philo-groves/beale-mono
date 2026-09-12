@@ -277,7 +277,7 @@ const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>
           },
         ],
       },
-      contextWindow: 272_000,
+      contextWindow: 1_050_000,
       maxTokens: 128_000,
     },
     {
@@ -312,7 +312,7 @@ const ADDITIONAL_PROVIDER_MODELS: Readonly<Record<string, readonly Model<Api>[]>
           },
         ],
       },
-      contextWindow: 272_000,
+      contextWindow: 400_000,
       maxTokens: 128_000,
     },
   ],

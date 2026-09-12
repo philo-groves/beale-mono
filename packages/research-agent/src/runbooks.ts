@@ -228,13 +228,19 @@ export class RunbookStore {
       .map((row) => this.toRecord(row));
   }
 
-  /** Read-only catalog references from every workspace attached to the active Subject. */
-  public listSubjectReferences(options: { query?: string; limit?: number } = {}): RunbookRecord[] {
+  /** Read-only catalog references from selected workspaces attached to the active Subject. */
+  public listSubjectReferences(options: { query?: string; limit?: number; workspaceIds?: readonly string[] } = {}): RunbookRecord[] {
     const query = options.query?.trim().toLowerCase() ?? "";
     const limit = clampInteger(options.limit ?? 50, 1, 200);
+    const workspaceIds = uniqueStrings(options.workspaceIds ?? []);
     return (this.database.prepare(`SELECT * FROM app_server_runbooks
-      WHERE subject_id = ? AND duplicate_of_runbook_id IS NULL
-      ORDER BY updated_at DESC, id`).all(this.context.subjectId ?? `subject_workspace:${this.context.workspaceId}`) as unknown as RunbookRow[])
+      WHERE subject_id = ? AND duplicate_of_runbook_id IS NULL${workspaceIds.length
+        ? ` AND workspace_id IN (${workspaceIds.map(() => "?").join(",")})`
+        : ""}
+      ORDER BY updated_at DESC, id`).all(
+        this.context.subjectId ?? `subject_workspace:${this.context.workspaceId}`,
+        ...workspaceIds,
+      ) as unknown as RunbookRow[])
       .filter((row) => !query || `${row.title}\n${row.purpose}`.toLowerCase().includes(query))
       .slice(0, limit)
       .map((row) => this.toRecord(row));
@@ -248,6 +254,28 @@ export class RunbookStore {
   } = {}): RunbookPage | null {
     const row = this.readRow(id);
     if (!row) return null;
+    return this.pageFromRow(id, row, options);
+  }
+
+  /** Read a host-authorized same-Subject runbook without enabling foreign mutation. */
+  public getSubjectReference(id: string, workspaceId: string, options: {
+    offset?: number;
+    limit?: number;
+    startCellId?: string;
+    endCellId?: string;
+  } = {}): RunbookPage | null {
+    if (workspaceId === this.context.workspaceId) return this.get(id, options);
+    const row = this.readRowForWorkspace(id, workspaceId);
+    if (!row || row.subject_id !== this.context.subjectId) return null;
+    return this.pageFromRow(id, row, options);
+  }
+
+  private pageFromRow(id: string, row: RunbookRow, options: {
+    offset?: number;
+    limit?: number;
+    startCellId?: string;
+    endCellId?: string;
+  }): RunbookPage {
     const notebook = this.readNotebook(row);
     const limit = clampInteger(options.limit ?? 40, 1, 100);
     if (options.offset !== undefined && (options.startCellId || options.endCellId)) {
@@ -612,14 +640,21 @@ export class RunbookStore {
     limit?: number;
     startCellId?: string;
     endCellId?: string;
-  } = {}) {
+  } = {}, requestedWorkspaceId?: string) {
+    const workspaceId = requestedWorkspaceId ?? this.context.workspaceId;
+    if (workspaceId !== this.context.workspaceId) {
+      const runbook = this.readRowForWorkspace(id, workspaceId);
+      if (!runbook || runbook.subject_id !== this.context.subjectId) {
+        throw new Error(`Runbook not found in a same-Subject workspace: ${id}`);
+      }
+    }
     const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 12)));
     if (options.offset !== undefined && (options.startCellId || options.endCellId)) {
       throw new Error("offset cannot be combined with startCellId or endCellId.");
     }
     const row = this.database.prepare(`SELECT * FROM app_server_runbook_executions
-      WHERE runbook_id = ? AND run_id = ? AND workspace_id = ?`).get(id, runId, this.context.workspaceId) as RunbookExecutionRow | undefined;
-    if (!row) throw new Error(`Runbook execution not found in this workspace: ${runId}`);
+      WHERE runbook_id = ? AND run_id = ? AND workspace_id = ?`).get(id, runId, workspaceId) as RunbookExecutionRow | undefined;
+    if (!row) throw new Error(`Runbook execution not found in the selected workspace: ${runId}`);
     const snapshot: unknown = typeof row.snapshot_json === "string" ? JSON.parse(row.snapshot_json) : null;
     const plan = isRecord(snapshot) && Array.isArray(snapshot.cells) ? snapshot.cells.filter(isRecord) : [];
     const identifiedPlan: Array<Record<string, unknown> & { id: string }> = plan
@@ -916,9 +951,13 @@ export class RunbookStore {
   }
 
   private readRow(id: string): RunbookRow | null {
+    return this.readRowForWorkspace(id, this.context.workspaceId);
+  }
+
+  private readRowForWorkspace(id: string, workspaceId: string): RunbookRow | null {
     return (this.database
       .prepare("SELECT * FROM app_server_runbooks WHERE id = ? AND workspace_id = ?")
-      .get(id, this.context.workspaceId) as unknown as RunbookRow | undefined) ?? null;
+      .get(id, workspaceId) as unknown as RunbookRow | undefined) ?? null;
   }
 
   private recordRevision(artifactId: string, revision: number, createdAt: string): void {
@@ -1303,6 +1342,10 @@ function safeSegment(value: string): string {
 function clampInteger(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
   return Math.max(minimum, Math.min(maximum, Math.floor(value)));
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function cellRange<T extends { id: string }>(

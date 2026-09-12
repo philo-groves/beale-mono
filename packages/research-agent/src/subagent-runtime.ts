@@ -53,6 +53,7 @@ export interface SubagentRunRequest {
   reasoning?: SimpleStreamOptions["reasoning"];
   prompt: string;
   inheritedMessages: AgentMessage[];
+  freshSubagentContext?: boolean;
   collaborationTools: readonly AgentTool[];
   takeSteeringMessages?: () => AgentMessage[];
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<AgentMessage[]>;
@@ -165,6 +166,7 @@ interface SubagentSession {
   model: string;
   reasoning?: SimpleStreamOptions["reasoning"];
   forkTurns: string;
+  freshSubagentContext: boolean;
   roomName: string | null;
   roomTitle: string | null;
   roomKind: string | null;
@@ -290,6 +292,7 @@ export class SubagentManager {
       model: options.rootModel,
       ...(options.rootReasoning ? { reasoning: options.rootReasoning } : {}),
       forkTurns: "all",
+      freshSubagentContext: false,
       roomName: null,
       roomTitle: null,
       roomKind: null,
@@ -443,6 +446,7 @@ export class SubagentManager {
         model: session.model,
         reasoningEffort: session.reasoning ?? null,
         forkTurns: session.forkTurns,
+        freshSubagentContext: session.freshSubagentContext,
         roomName: session.roomName,
         roomTitle: session.roomTitle,
         roomKind: session.roomKind,
@@ -1130,6 +1134,7 @@ export class SubagentManager {
       model: preference?.model ?? parent.model,
       ...(reasoningOverride ?? preference?.reasoning ?? parent.reasoning ? { reasoning: reasoningOverride ?? preference?.reasoning ?? parent.reasoning } : {}),
       forkTurns,
+      freshSubagentContext: forkTurns === "none" && channelDetail === null,
       roomName,
       roomTitle,
       roomKind,
@@ -1171,6 +1176,7 @@ export class SubagentManager {
       inherited_channel_messages: channelDetail?.messages.length ?? 0,
       reasoning_effort: child.reasoning ?? null,
       fork_turns: forkTurns,
+      fresh_subagent_context: child.freshSubagentContext,
     };
   }
 
@@ -1404,6 +1410,7 @@ export class SubagentManager {
           model: session.model,
           reasoning_effort: session.reasoning ?? null,
           fork_turns: session.forkTurns,
+          fresh_subagent_context: session.freshSubagentContext,
           room_name: session.roomName,
           room_title: session.roomTitle,
           room_kind: session.roomKind,
@@ -1479,6 +1486,7 @@ export class SubagentManager {
       ...(session.reasoning ? { reasoning: session.reasoning } : {}),
       prompt: this.delegationPrompt(session, prompt),
       inheritedMessages: [...inheritedMessages],
+      freshSubagentContext: session.freshSubagentContext,
       collaborationTools: this.createTools(session.id),
       takeSteeringMessages: () => this.takeMailbox(session.id),
       waitForSteeringMessages: (signal) => this.waitForMailbox(session.id, signal),

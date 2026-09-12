@@ -15538,6 +15538,26 @@ button.research-goal-choice:focus-visible {
   border-color: transparent;
 }
 
+.provider-context-size-control {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  color: var(--text);
+  font-size: var(--steer-control-font-size, 13px);
+}
+
+.provider-context-size-control select {
+  width: 170px;
+  max-width: 170px;
+  border: 0;
+  background-color: var(--gray-14);
+  font-weight: 400;
+}
+
 .provider-optional-models {
   display: grid;
   background: transparent;

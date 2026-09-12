@@ -179,7 +179,7 @@ export function createCampaignTrackTools(
     tool(
       "investigation.review_claim",
       "investigation_review_claim",
-      "Independently review a canonical research claim for both supporting proof and genuinely contrary evidence. Acceptance promotes the same stable claim ID and requires evidence plus a reviewer identity distinct from every authoring agent; a separate subagent or separate session qualifies when it did not author the claim. Missing support alone calls for revision or more work, not automatic rejection.",
+      "Review a canonical research claim for both supporting proof and genuinely contrary evidence. Acceptance promotes the same stable claim ID and requires evidence plus a reviewer identity distinct from every authoring agent. Finding verification has the stronger requirement enforced by finding.transition: use a fresh reviewer subagent with fork_turns=none and no inherited channel; the same provider and model are allowed. Missing support alone calls for revision or more work, not automatic rejection.",
       "write",
       {
         type: "object",

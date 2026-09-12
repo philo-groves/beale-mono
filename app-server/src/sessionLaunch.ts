@@ -5,6 +5,7 @@ import type {
   AppServerProviderAuthenticationMethod,
   AppServerProviderRiskAcknowledgement
 } from '@beale/app-server-runtime/protocol';
+import type { AppServerProviderContextSize } from './hostRegistry.js';
 import type { AppServerMemoryBackendId } from './hostRegistry.js';
 
 const DEFAULT_TOOL_MAX_BYTES = 200_000;
@@ -55,6 +56,7 @@ export interface ResolvedAppServerSessionLaunch {
     model?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    contextSize?: AppServerProviderContextSize;
     riskAcknowledgements: readonly AppServerProviderRiskAcknowledgement[];
     authenticationPreferences: Readonly<Record<string, AppServerProviderAuthenticationMethod>>;
     title?: { model?: string; effort: string };
@@ -196,7 +198,8 @@ export function appServerSessionEnvironment(
       xai: launch.provider.authenticationPreferences?.xai ?? 'subscription',
       zai: launch.provider.authenticationPreferences?.zai ?? 'subscription',
       openrouter: launch.provider.authenticationPreferences?.openrouter ?? 'api_key'
-    })
+    }),
+    APP_SERVER_OPENAI_CONTEXT_SIZE: launch.provider.contextSize ?? 'default'
   };
   if (launch.introspection) {
     env.BEALE_INTROSPECTION_URL = launch.introspection.url;

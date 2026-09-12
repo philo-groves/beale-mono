@@ -507,7 +507,8 @@ describe('workspace dashboard', () => {
     expect(html).toContain('<strong>Memory</strong>');
     expect(html).toContain('aria-label="Memory" class="workspace-overview-input"><option value="app-server" selected="">Enabled</option><option value="disabled">Disabled</option></select>');
     expect(html).toContain('Disabling memory retains existing data and removes recall, claim, and campaign tools from new sessions.');
-    expect(html).toMatch(/aria-label="Research Subject"[^>]*disabled=""[^>]*value="Parser"/u);
+    expect(html).toMatch(/aria-label="Research Subject"[^>]*required=""[^>]*value="Parser"/u);
+    expect(html).not.toMatch(/aria-label="Research Subject"[^>]*disabled=""/u);
     expect(html).toMatch(/aria-label="Workspace Name"[^>]*required=""[^>]*value="Parser Workspace"/u);
     expect(html.indexOf('aria-label="Research Profile"')).toBeLessThan(html.indexOf('aria-label="Research Subject"'));
     expect(html.indexOf('aria-label="Research Profile"')).toBeLessThan(html.indexOf('aria-label="Research Kit"'));
@@ -1228,6 +1229,18 @@ describe('workspace dashboard', () => {
     expect(workspaceSource).toContain("mode: 'deep'");
     expect(workspaceSource).toContain('<strong>Deep clone</strong>');
     expect(workspaceSource).toContain('<strong>Shallow clone</strong>');
+  });
+
+  it('routes Research Subject changes through the typed host IPC boundary', () => {
+    const ipcSource = readFileSync(new URL('../src/shared/ipc.ts', import.meta.url), 'utf8');
+    const preloadSource = readFileSync(new URL('../src/preload/index.ts', import.meta.url), 'utf8');
+    const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
+    const rendererSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
+
+    expect(ipcSource).toContain("updateWorkspaceResearchSubject: 'beale:update-workspace-research-subject'");
+    expect(preloadSource).toContain('ipcRenderer.invoke(IPC_CHANNELS.updateWorkspaceResearchSubject, researchSubjectName)');
+    expect(mainSource).toContain('workspaceService.updateWorkspaceResearchSubject(researchSubjectName)');
+    expect(rendererSource).toContain('window.beale.updateWorkspaceResearchSubject(researchSubjectName)');
   });
 
   it('keeps terminal session runs immutable when the session is continued', () => {

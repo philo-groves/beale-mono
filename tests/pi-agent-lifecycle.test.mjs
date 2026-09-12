@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   applyNativeOpenAiCompaction,
+  applyOpenAiContextSize,
   applyOpenAiFastMode,
   compactAgentContext,
   DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
@@ -245,7 +246,7 @@ test("agent context compacts proactively before a large model window is exhauste
     });
   }
 
-  const compacted = compactAgentContext(messages, 400_000);
+  const compacted = compactAgentContext(messages, 128_000);
   assert.notEqual(compacted, messages);
   assert.match(JSON.stringify(compacted), /LATEST_PROACTIVE_RESULT/);
   assert.match(JSON.stringify(compacted), /output compacted for context/);
@@ -257,7 +258,7 @@ test("OpenAI Responses requests enable native compaction before local context fa
     { api: "openai-responses", provider: "openai", contextWindow: 400_000 },
   );
   assert.deepEqual(compacted.context_management, [
-    { type: "compaction", compact_threshold: 96_000 },
+    { type: "compaction", compact_threshold: 336_000 },
   ]);
   assert.deepEqual(compacted.include, ["reasoning.encrypted_content"]);
 
@@ -266,7 +267,7 @@ test("OpenAI Responses requests enable native compaction before local context fa
     { api: "openai-codex-responses", provider: "openai-codex", contextWindow: 400_000 },
   );
   assert.deepEqual(codexCompacted.context_management, [
-    { type: "compaction", compact_threshold: 96_000 },
+    { type: "compaction", compact_threshold: 336_000 },
   ]);
   assert.deepEqual(codexCompacted.include, ["reasoning.encrypted_content"]);
 
@@ -275,6 +276,13 @@ test("OpenAI Responses requests enable native compaction before local context fa
     applyNativeOpenAiCompaction(unsupported, { api: "faux", provider: "faux", contextWindow: 400_000 }),
     unsupported,
   );
+});
+
+test("OpenAI context size caps model windows without exceeding model capability", () => {
+  const model = { api: "openai-codex-responses", provider: "openai-codex", contextWindow: 1_050_000 };
+  assert.equal(applyOpenAiContextSize(model, "default").contextWindow, 272_000);
+  assert.equal(applyOpenAiContextSize(model, "large").contextWindow, 1_000_000);
+  assert.equal(applyOpenAiContextSize({ ...model, contextWindow: 400_000 }, "large").contextWindow, 400_000);
 });
 
 test("OpenAI-compatible providers do not inherit native OpenAI compaction", () => {
@@ -355,7 +363,7 @@ test("Pi Agent applies OpenAI Fast mode to Lead-model request payloads", async (
       model: model.id,
       input: [],
       include: ["reasoning.encrypted_content"],
-      context_management: [{ type: "compaction", compact_threshold: 96_000 }],
+      context_management: [{ type: "compaction", compact_threshold: 208_000 }],
       service_tier: "priority",
     },
   );
@@ -598,9 +606,11 @@ test("research system prompt keeps investigations as cross-session overview stat
   assert.match(prompt, /must not be used as the live controller for step-by-step research/);
 });
 
-test("research system prompt allows same-session independent finding review", () => {
+test("research system prompt allows same-model review only from a fresh distinct subagent", () => {
   const prompt = createResearchSystemPrompt({ hasTools: true, hasFindingTools: true });
-  assert.match(prompt, /A distinct reviewer subagent in the same session qualifies/);
+  assert.match(prompt, /same provider and model/);
+  assert.match(prompt, /distinct reviewer subagent spawned with fork_turns=none/);
+  assert.match(prompt, /without an inherited channel transcript/);
   assert.doesNotMatch(prompt, /independent evidence outside the originating session/);
 });
 

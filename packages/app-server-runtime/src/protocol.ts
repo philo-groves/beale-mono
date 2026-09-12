@@ -64,7 +64,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 24 as const;
+export const APP_SERVER_CONTRACT_VERSION = 25 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -72,7 +72,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-11T20:15:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-11T23:30:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "workspace.research-project.v3",
@@ -99,6 +99,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "maintenance.repository-consolidation.v1",
   "host.shutdown-guard.v1",
   "workspace.memory-backend.v1",
+  "workspace.research-subject-mutation.v1",
   "knowledge.campaign-tracks.v2",
   "knowledge.claims.v2",
   "knowledge.claim-evidence-validation.v1",

@@ -6,12 +6,15 @@
 
 #### Changed
 
+- Workspace Settings now allows a workspace's Research Subject to be changed while its sessions are inactive. Contract v25 rebinds the stable Subject identity and workspace-owned research together so same-Subject reference discovery cannot diverge from the displayed label, and rejects older app-server processes that would perform only a label change.
 - New schema-v2 research workspaces use versioned workspace files as research authority. Typed mutations and routine checkpoints synchronize the app-server's derived query index and complete file snapshot; schema-v1 database-first workspaces retain explicit compatibility export behavior. Contract v24 adds explicit synchronization plus reversible release and files-to-index rebuild of workspace research rows, while retaining session, authorization, and runtime coordination state in SQLite.
 - OpenAI Responses research sessions now preserve replayable encrypted reasoning and use provider-native compaction before the local context-window fallback. Existing host checkpoints suppress repeated rolling truncation.
 - New workspaces use one research directory with visible category folders and local Git history; source repositories remain external. Workspace maintenance shows file/byte totals and checkpoint failures, and quarantines disposable files instead of deleting research by naming heuristics.
 
 #### Fixed
 
+- Workspace checkpoints now preserve the committed bytes and artifact mapping of completed execution evidence when a stable candidate path is revised, recover pinned-only evidence after an interrupted publication, and checkpoint a runbook once at whole-execution completion instead of after every terminal cell update.
+- Independent finding verification now permits the same provider and model while requiring a distinct reviewer subagent with no inherited parent or channel transcript. Host-attributed reviewer context prevents self-review and inherited-history review from satisfying the verification gate across supported agent providers.
 - Research workspaces now ignore unexpected top-level entries without hiding them from session enforcement. A filesystem-backed layout guard reactivates the root agent on every turn until misplaced material moves into an approved directory, while forced staging remains rejected by the commit guard.
 - Compaction and retry rehydration now reads the current memories, claims, runbooks, investigation binding, and campaign state at the recovery boundary instead of replaying the session-start snapshot. Workspace search includes schema-v2 canonical research files by default and keeps schema-v1 compatibility exports opt-in.
 - Research sessions now resume campaign investigations automatically from explicit continuation language, referenced durable resources or sessions, semantic objective overlap, or an unambiguous active continuation. Compaction and transient recovery rehydrate the current objective, canonical workspace path, active investigation, recent durable records, updated runbooks, and bounded visible activity before work continues. Normal recovery uses a compact anchor; a compaction leaving fewer than 2,000 estimated tokens receives the expanded snapshot.
@@ -61,6 +64,7 @@
 
 #### Added
 
+- OpenAI provider settings now offer Default (272k) and Large (up to 1m) context sizes for new sessions, capped by each model's published capability.
 - Runbook reads now return forward/back pagination cursors and accept inclusive start/end cell identifiers for current notebooks and immutable execution snapshots. A dedicated `workspace.search` tool finds files by name or bounded text content, ordered newest-first, with category, extension, modification-time, raw/temporary, and paging filters; its schema advertises exact app-server-verified, read-only same-Subject workspace references independently of released SQLite research rows. `history.search` separately returns compact canonical references currently loaded across that Subject.
 - Research runbooks now keep setup, runtime, and cleanup in one cohesive workflow using agent-managed feature tags. Only cells matching an enabled tag execute, every new cell requires a default phase tag, mutation batches support up to 100 cells, and guidance no longer treats phase changes or a target cell count as reasons to spawn sibling runbooks. Code cells can select host or Tart VM execution; Tart cells reference a host-built workspace executable or durable artifact that app-server materializes, streams, invokes as the guest service identity or through passwordless sudo, records, and cleans without a guest-side rewrite.
 - Added the optional `microsoft-security-devices` guidance plugin for Canary Hyper-V environment selection and per-session first-touch build freshness checks. Its local comparison utility warns about outdated builds, uncertain release coverage, and channel transitions without adding model-facing tools or managing VMs.
@@ -1117,6 +1121,9 @@
 
 #### Fixed
 
+- Subject-wide history search now accepts an exact host-advertised workspace selector, excludes stale unregistered workspace identities, and consistently uses canonical registry labels. Hosted sessions and Codex research-tool calls receive the same trusted reference catalog.
+- Same-Subject workspace references now preserve the registered sidebar display label instead of a stale scope or directory-derived fallback. `claim.get` and `runbook.get` accept host-advertised workspace IDs for full read-only foreign details, including paged claim collections, runbook cells, and execution snapshots.
+- Committed or failed host checkpoints now append contract-valid session events with non-empty summaries, preventing a new file-authority workspace's first pre-session checkpoint from aborting worker startup.
 - Accepted worker stop acknowledgements now arm bounded worker termination; late pause/resume acknowledgements cannot overwrite a manual stop or enable automatic recovery.
 - Claim verification now resolves the referenced execution, checks host-recorded reviewer identity against claim authorship, and binds the review to the claim content. Completion checks expose invalidated evidence instead of accepting self-declared independence.
 - Reproduction evidence now requires a complete successful run of the current notebook revision with matching source and environment identities. Execution snapshots and per-cell results are retained independently of later notebook edits and can be read with `runbook.get` and `runId`. Additive migrations preserve historical runs and reviews; records without the new provenance require renewed evidence before further promotion.
@@ -1124,6 +1131,7 @@
 
 #### Changed
 
+- OpenAI server-side and local fallback compaction thresholds now scale from the selected model context window instead of imposing a 96k active-context ceiling.
 - Public history recall now supports paginated NVD/OSV, public GitHub issues/PRs and releases, and supplied document pages, retaining structured advisory applicability and explicit partial/error coverage. Provenance adds bounded `prior_art.fetch` with content-hash-checked pages and an explicit `repository.fetch_history` operation that preserves worktree files while fetching or deepening named remote history. Model search cards defer large details to source URLs; first-touch guidance now states actual source coverage.
 - Agent claim recall now supports workspace-scoped `claim.get` for leads and findings, with evidence provenance, transition history, duplicate links, and revision-checked detail pagination in the Claims plugin. Lead and finding catalogs expose continuation offsets; search and recall guidance direct agents to record details instead of treating catalogs as complete records.
 

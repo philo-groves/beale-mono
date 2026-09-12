@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   createResearchStorageLayout,
   createResearchToolRegistry,
+  createFindingTools,
+  createRunbookTools,
   createWorkspaceHistorySearchTool,
   createWorkspaceHistoryDuplicateTools,
   ensureResearchStorageLayout,
@@ -123,11 +125,63 @@ test("workspace history search unifies canonical claims, memories, and runbooks 
       ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot })),
       referenceContext,
     );
+    const legacyContext = {
+      sessionId: "session_legacy",
+      workspaceId: "workspace_legacy_unregistered",
+      workspaceName: "Legacy directory label",
+      subjectId: context.subjectId,
+      subjectName: context.subjectName,
+    };
+    const legacyMemory = new MemoryGraphStore({ workspaceRoot, databasePath: memory.databasePath, context: legacyContext });
+    const legacyClaims = new ResearchClaimStore(legacyMemory);
+    const legacyRunbooks = new RunbookStore(
+      memory.databasePath,
+      ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot })),
+      legacyContext,
+    );
     try {
       referenceMemory.save({ type: "invariant", title: "Reference-only parser note", summary: "Prior workspace parser research." });
-      referenceClaims.create({ title: "Reference-only parser claim", classification: "security.primitive", rating: "medium" });
-      referenceRunbooks.create({ title: "Reference-only parser runbook", purpose: "Preserve the prior workspace procedure." });
-      const subjectSearch = await registry.execute({
+      const referenceClaim = referenceClaims.create({
+        title: "Reference-only parser claim",
+        summary: "Full same-Subject claim detail remains readable without switching workspaces.",
+        classification: "security.primitive",
+        rating: "medium",
+        evidence: [{ kind: "code", referenceId: "artifact-reference-parser", summary: "Synthetic prior-workspace evidence." }],
+      });
+      const referenceRunbook = referenceRunbooks.create({
+        title: "Reference-only parser runbook",
+        purpose: "Preserve the prior workspace procedure.",
+        cells: [{ kind: "markdown", source: "Inspect the synthetic prior-workspace parser evidence.", features: ["runtime"] }],
+      }).runbook;
+      legacyMemory.save({ type: "invariant", title: "Reference-only parser legacy note", summary: "Unregistered stale workspace research." });
+      legacyClaims.create({
+        title: "Reference-only parser legacy claim",
+        classification: "security.primitive",
+        rating: "medium",
+      });
+      legacyRunbooks.create({
+        title: "Reference-only parser legacy runbook",
+        purpose: "A stale unregistered workspace procedure.",
+      });
+      const referenceCatalog = [{
+        workspaceId: referenceContext.workspaceId,
+        workspaceName: "Canonical reference label",
+      }];
+      const subjectRegistry = createResearchToolRegistry([
+        createWorkspaceHistorySearchTool({
+          memoryStore: memory,
+          claimStore: claims,
+          runbookStore: runbooks,
+          referenceWorkspaces: referenceCatalog,
+        }),
+      ]);
+      const subjectDescriptor = subjectRegistry.listDescriptors()[0];
+      assert.deepEqual(subjectDescriptor.inputSchema.properties.workspaceId.enum, [
+        context.workspaceId,
+        referenceContext.workspaceId,
+      ]);
+      assert.match(subjectDescriptor.inputSchema.properties.workspaceId.description, /Canonical reference label/u);
+      const subjectSearch = await subjectRegistry.execute({
         id: "history_subject",
         actionClass: "recall",
         toolName: "history.search",
@@ -136,11 +190,83 @@ test("workspace history search unifies canonical claims, memories, and runbooks 
       assert.equal(subjectSearch.result.output.scope, "subject");
       assert.deepEqual(subjectSearch.result.output.subject, { id: context.subjectId, name: context.subjectName });
       assert.equal(subjectSearch.result.output.crossWorkspaceResultsReadOnly, true);
+      assert.deepEqual(subjectSearch.result.output.searchedWorkspaceIds, [context.workspaceId, referenceContext.workspaceId]);
       const referenceResults = subjectSearch.result.output.results.filter((result) => result.readOnlyReference === true);
       assert.deepEqual(new Set(referenceResults.map((result) => result.type)), new Set(["claim", "memory", "runbook"]));
       assert.equal(referenceResults.every((result) => result.workspaceId === referenceContext.workspaceId
         || result.workspaces?.some((workspace) => workspace.id === referenceContext.workspaceId)), true);
+      assert.equal(subjectSearch.result.output.results.some((result) => result.workspaceId === legacyContext.workspaceId
+        || result.workspaces?.some((workspace) => workspace.id === legacyContext.workspaceId)), false);
+      assert.equal(referenceResults.every((result) => result.workspaceName === "Canonical reference label"
+        || result.workspaces?.every((workspace) => workspace.name === "Canonical reference label")), true);
+      assert.match(subjectSearch.result.output.recall, /workspaceId with claim\.get or runbook\.get/u);
+
+      const exactReference = await subjectRegistry.execute({
+        id: "history_exact_reference",
+        actionClass: "recall",
+        toolName: "history.search",
+        input: { query: "reference-only parser", workspaceId: referenceContext.workspaceId, limit: 20 },
+      });
+      assert.equal(exactReference.result.status, "complete", exactReference.result.error?.message);
+      assert.equal(exactReference.result.output.workspaceId, referenceContext.workspaceId);
+      assert.equal(exactReference.result.output.workspaceName, "Canonical reference label");
+      assert.deepEqual(exactReference.result.output.searchedWorkspaceIds, [referenceContext.workspaceId]);
+      assert.equal(exactReference.result.output.results.length, 3);
+      assert.equal(exactReference.result.output.results.every((result) => result.readOnlyReference === true), true);
+
+      const rejectedLegacySearch = await subjectRegistry.execute({
+        id: "history_rejected_legacy",
+        actionClass: "recall",
+        toolName: "history.search",
+        input: { query: "parser", workspaceId: legacyContext.workspaceId },
+      });
+      assert.equal(rejectedLegacySearch.result.status, "error");
+      assert.match(rejectedLegacySearch.result.error.message, /host-verified same-Subject workspace/u);
+
+      const readRegistry = createResearchToolRegistry([
+        ...createFindingTools(claims, { referenceWorkspaces: referenceCatalog }),
+        ...createRunbookTools(runbooks, { referenceWorkspaces: referenceCatalog }),
+      ]);
+      const claimDetail = await readRegistry.execute({
+        id: "claim_reference_detail",
+        actionClass: "recall",
+        toolName: "claim.get",
+        input: { id: referenceClaim.id, workspaceId: referenceContext.workspaceId },
+      });
+      assert.equal(claimDetail.result.status, "complete", claimDetail.result.error?.message);
+      assert.equal(claimDetail.result.output.claim.title, referenceClaim.title);
+      assert.equal(claimDetail.result.output.evidence.items[0].referenceId, "artifact-reference-parser");
+      assert.deepEqual(claimDetail.result.output.workspace, {
+        id: referenceContext.workspaceId,
+        name: "Canonical reference label",
+        readOnlyReference: true,
+      });
+      const runbookDetail = await readRegistry.execute({
+        id: "runbook_reference_detail",
+        actionClass: "recall",
+        toolName: "runbook.get",
+        input: { id: referenceRunbook.id, workspaceId: referenceContext.workspaceId },
+      });
+      assert.equal(runbookDetail.result.status, "complete", runbookDetail.result.error?.message);
+      assert.equal(runbookDetail.result.output.title, referenceRunbook.title);
+      assert.match(runbookDetail.result.output.cells[1].source, /prior-workspace parser evidence/u);
+      assert.deepEqual(runbookDetail.result.output.workspace, {
+        id: referenceContext.workspaceId,
+        name: "Canonical reference label",
+        readOnlyReference: true,
+      });
+      const unadvertised = await readRegistry.execute({
+        id: "claim_unadvertised_workspace",
+        actionClass: "recall",
+        toolName: "claim.get",
+        input: { id: referenceClaim.id, workspaceId: "workspace-unadvertised" },
+      });
+      assert.equal(unadvertised.result.status, "error");
+      assert.match(unadvertised.result.error.message, /host-verified workspace/u);
     } finally {
+      legacyRunbooks.close();
+      legacyClaims.close();
+      legacyMemory.close();
       referenceRunbooks.close();
       referenceClaims.close();
       referenceMemory.close();
