@@ -28,6 +28,7 @@ import {
   createWorkspaceHistorySearchTool,
   createWorkspaceHistoryDuplicateTools,
   createCampaignTrackTools,
+  createCampaignTrackAssignmentTools,
   createFindingTools,
   FindingStore,
   LEGACY_CLAIM_MEMORY_TYPES,
@@ -71,7 +72,6 @@ import {
   createMcpResearchTools,
   MemoryGraphStore,
   CampaignTrackStore,
-  campaignTrackBindingFromPrompt,
   campaignExperimentProjection,
   campaignObservationProjection,
   campaignQuestionProjection,
@@ -1591,7 +1591,7 @@ function usage(): string {
     "  --research-profile-id <id> Require the stored research profile to match this id",
     "  --research-profile-hash <hash> Require the resolved profile to match this SHA-256 hash",
     "  --workflow <id>        Select a workflow from the resolved research profile",
-    "  --investigation-id <id> Continue one existing campaign track instead of creating a new track",
+    "  --investigation-id <id> Assert the immutable investigation already assigned to this session",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --profile-tool-family-ceiling <name> Let the active profile request this family within a host ceiling",
     "  --tool-config <path>   Runtime tool preference config (default: .beale/tools.json)",
@@ -1883,6 +1883,10 @@ export interface AppServerRuntimeTransport {
 export interface AppServerRuntimeHostOptions {
   /** App-server-owned transport. When present, no private loopback server is opened. */
   transport?: AppServerRuntimeTransport;
+  /** Reports bounded, user-visible initialization progress to the app-server host. */
+  reportStartupPhase?: (phase: string, message: string) => void;
+  /** Signals that configuration, tools, and the provider executor are ready. */
+  markReady?: () => void;
 }
 
 export async function main(
@@ -1947,10 +1951,10 @@ export async function main(
     if (args.goal && args.mock) {
       throw new Error("--goal requires the Pi agent executor and cannot be combined with --mock.");
     }
-    const { resolvedResearchProfile, workflow } = await resolveCliResearchProfile(args);
-
     if (!hostOptions.transport || !args.hostedSession) throw new Error('Research sessions must be launched by the Beale app-server.');
     if (!args.sessionId) throw new Error("Hosted app-server sessions require --session-id.");
+    hostOptions.reportStartupPhase?.("profile", "Loading the research profile and workflow.");
+    const { resolvedResearchProfile, workflow } = await resolveCliResearchProfile(args);
     const hostedTransport: AppServerRuntimeTransport = hostOptions.transport;
     try {
       await hostedTransport.waitForClient();
@@ -1960,6 +1964,7 @@ export async function main(
     }
 
     const transportEventSink = hostedTransport.eventSink;
+    hostOptions.reportStartupPhase?.("storage", "Opening the canonical session state.");
     const sessionStore = args.sessionId && args.attemptId
       ? new AppServerSessionStore()
       : undefined;
@@ -2033,6 +2038,7 @@ export async function main(
         : undefined;
       let preparedRuntimeConfig: PreparedRuntimeConfigInputs | undefined;
       if (!args.mock) {
+        hostOptions.reportStartupPhase?.("provider", "Resolving provider settings and workspace context.");
         modelConfig = await resolveResearchModelConfig({
           workspaceRoot: args.workspaceRoot,
           ...(args.configPath ? { configPath: args.configPath } : {}),
@@ -2112,6 +2118,7 @@ export async function main(
         onRequested: (event) => emitShellSafetyEvent(liveEventSink, event),
         onResolved: (event) => emitShellSafetyEvent(liveEventSink, event),
       });
+      hostOptions.reportStartupPhase?.("tools", "Initializing research tools, memory, and workspace context.");
       runtimeConfig = await createRuntimeConfig({
         ...args,
         shellAuthorizer,
@@ -2162,6 +2169,7 @@ export async function main(
         workingDirectory: runtimeConfig.workspaceContext.workspaceRoot,
       });
       let agentExecutor: ResearchAgentExecutor;
+      hostOptions.reportStartupPhase?.("executor", "Preparing the model session.");
       if (args.mock) {
         agentExecutor = createDeterministicAgentExecutor();
       } else {
@@ -2203,6 +2211,7 @@ export async function main(
         ? { events: runtimeConfig.events }
         : {};
 
+      hostOptions.markReady?.();
       const result = await runResearchAgent({
         prompt: effectivePrompt,
         workspaceRoot: args.workspaceRoot,
@@ -2234,6 +2243,7 @@ export async function main(
         ...(controlStream ? { signal: controlStream.signal } : {}),
       });
       await sessionTitle;
+      if (result.agentRun.status === "complete") runtimeConfig.requireInvestigationAssignment();
 
       if (args.capturePath) {
         const writtenCapture = await writeFlowCapture(
@@ -2653,7 +2663,7 @@ async function validateCollaborationProviders(
   for (const preference of enabled) {
     const status = await verifyProviderAuth(preference.provider, preference.model);
     if (!status.configured) {
-      throw new Error(`Channel collaborator ${status.providerName} is not authenticated for model ${status.modelId}. Authenticate it in Beale Settings > Providers before continuing.`);
+      throw new Error(`This session cannot continue because its enabled ${status.providerName} collaborator (${status.modelId}) is not authenticated. Authenticate ${status.providerName} in Beale Settings > Providers, then continue the session again.`);
     }
     if (!cybersecurity) continue;
     if (preference.provider === "openai-codex" && !args.openAiTrustedAccessCyberRiskAcknowledged) {
@@ -3655,6 +3665,7 @@ async function createRuntimeConfig(args: {
   resolvedResearchProfile?: ResolvedResearchProfile;
   preparedRuntimeConfig?: PreparedRuntimeConfigInputs;
   memoryBackend?: ResearchMemoryBackendId;
+  mock?: boolean;
   runbookExecutionUpdateSink?: (update: RunbookExecutionUpdate) => void | Promise<void>;
 }): Promise<{
   events: ResearchEvent[];
@@ -3670,6 +3681,7 @@ async function createRuntimeConfig(args: {
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
+  requireInvestigationAssignment: () => void;
   memoryGraph: MemoryGraphStore;
   executeRunbook?: (request: {
     runbookId: string;
@@ -3712,8 +3724,20 @@ async function createRuntimeConfig(args: {
   );
   const governance = createCliGovernance(runtimeTools);
   const cleanupCallbacks: (() => Promise<void>)[] = [];
+  let campaignTrackStore: CampaignTrackStore | undefined;
+  let activeCampaignTrackId: string | null = null;
+  let activeCampaignResources: Partial<Record<"memory" | "finding" | "runbook", readonly string[]>> = {};
+  const requireInvestigationAssignment = (): void => {
+    if (memoryActive && args.sessionId && args.prompt && !activeCampaignTrackId) {
+      throw new Error(
+        "This session has not selected its investigation. Get oriented, then call investigation.assign before finishing.",
+      );
+    }
+  };
   const dispositionRecorder = new ResearchDispositionRecorder();
-  const dispositionTool = createSessionDispositionTool(dispositionRecorder);
+  const dispositionTool = createSessionDispositionTool(dispositionRecorder, {
+    beforeRecord: requireInvestigationAssignment,
+  });
   executableTools.push(dispositionTool);
   toolDescriptors.push(dispositionTool.descriptor);
   const storageLayout = createResearchStorageLayout({
@@ -3772,9 +3796,6 @@ async function createRuntimeConfig(args: {
       };
     },
   });
-  let campaignTrackStore: CampaignTrackStore | undefined;
-  let activeCampaignTrackId: string | null = null;
-  let activeCampaignResources: Partial<Record<"memory" | "finding" | "runbook", readonly string[]>> = {};
   const memoryTools = memoryActive
     ? createMemoryGraphTools(memoryGraph)
     : [];
@@ -3797,29 +3818,54 @@ async function createRuntimeConfig(args: {
       });
     }
     if (args.sessionId && args.prompt) {
-      const requestedInvestigationId = args.investigationId
-        ?? campaignTrackBindingFromPrompt(args.prompt);
-      const activeTrack = requestedInvestigationId
-        ? campaignTrackStore.detail(requestedInvestigationId)
-        : campaignTrackStore.ensureForSession({
-            sessionId: args.sessionId,
-            objective: args.prompt,
-            source: "runtime",
-            allowSimilarMatch: true,
-            sourceRevision: workspaceContext.sourceRevision ?? null,
-            environmentFingerprint: workspaceContext.environmentFingerprint ?? null,
-          });
-      if (!activeTrack) {
-        throw new Error(`Campaign track not found in this workspace: ${requestedInvestigationId}`);
+      let assignedTrack = campaignTrackStore.getForSession(args.sessionId);
+      if (assignedTrack && args.investigationId && assignedTrack.id !== args.investigationId) {
+        throw new Error(
+          `Session ${args.sessionId} is already assigned to investigation ${assignedTrack.id}; investigation assignment is immutable.`,
+        );
       }
-      if (requestedInvestigationId) campaignTrackStore.linkSession(activeTrack.id, args.sessionId);
-      activeCampaignTrackId = activeTrack.id;
-      activeCampaignResources = {
-        memory: campaignTrackStore.linkedResourceIds(activeTrack.id, "memory"),
-        finding: campaignTrackStore.linkedResourceIds(activeTrack.id, "finding"),
-        runbook: campaignTrackStore.linkedResourceIds(activeTrack.id, "runbook"),
-      };
-      const investigationTools = createCampaignTrackTools(campaignTrackStore, activeTrack.id);
+      if (!assignedTrack && args.mock) {
+        assignedTrack = campaignTrackStore.ensureForSession({
+          sessionId: args.sessionId,
+          objective: args.prompt,
+          source: "runtime",
+          sourceRevision: workspaceContext.sourceRevision ?? null,
+          environmentFingerprint: workspaceContext.environmentFingerprint ?? null,
+        });
+      }
+      if (assignedTrack) {
+        activeCampaignTrackId = assignedTrack.id;
+        activeCampaignResources = {
+          memory: campaignTrackStore.linkedResourceIds(assignedTrack.id, "memory"),
+          finding: campaignTrackStore.linkedResourceIds(assignedTrack.id, "finding"),
+          runbook: campaignTrackStore.linkedResourceIds(assignedTrack.id, "runbook"),
+        };
+      } else {
+        const assignmentTools = createCampaignTrackAssignmentTools(
+          campaignTrackStore,
+          args.sessionId,
+          args.prompt,
+          {
+            get: () => activeCampaignTrackId,
+            assign: (investigationId) => {
+              activeCampaignTrackId = investigationId;
+              activeCampaignResources = {
+                memory: campaignTrackStore!.linkedResourceIds(investigationId, "memory"),
+                finding: campaignTrackStore!.linkedResourceIds(investigationId, "finding"),
+                runbook: campaignTrackStore!.linkedResourceIds(investigationId, "runbook"),
+              };
+            },
+          },
+        );
+        executableTools.push(...assignmentTools);
+        toolDescriptors.push(...assignmentTools.map((tool) => tool.descriptor));
+      }
+      const investigationTools = createCampaignTrackTools(campaignTrackStore, () => {
+        if (!activeCampaignTrackId) {
+          throw new Error("Select the session investigation with investigation.assign first.");
+        }
+        return activeCampaignTrackId;
+      });
       executableTools.push(...investigationTools);
       toolDescriptors.push(...investigationTools.map((tool) => tool.descriptor));
     }
@@ -4237,6 +4283,7 @@ async function createRuntimeConfig(args: {
     getContinuityContext,
     runtimeTools,
     dispositionRecorder,
+    requireInvestigationAssignment,
     memoryGraph,
     ...(executeRunbook ? { executeRunbook } : {}),
     capture: createRuntimeCapture({

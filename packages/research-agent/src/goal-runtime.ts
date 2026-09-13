@@ -47,26 +47,6 @@ const GOAL_REQUIREMENT_MAX_CHARS = 1_000;
 const GOAL_REQUIREMENTS_MAX_CHARS = 4_000;
 const GOAL_REQUIREMENTS_MAX_COUNT = 8;
 const GOAL_AUDIT_RESPONSE_MAX_CHARS = 4_000;
-const GOAL_AUDIT_STOP_WORDS = new Set([
-  "active", "binding", "completion", "continue", "current", "goal", "later",
-  "objective", "request", "requested", "requirement", "requirements", "research", "session",
-  "steering", "until", "user", "with",
-]);
-const RESOLVED_REQUIREMENT_NOUN = "(?:requirements?|blockers?|dependencies?|gaps?|issues?|conditions?|criteria|tasks?|work)";
-const RESOLVED_REQUIREMENT_QUALIFIER = "(?:binding|required|remaining|unresolved|unmet|outstanding|open|pending|missing)";
-const RESOLVED_REQUIREMENT_STATE = "(?:unresolved|unmet|outstanding|open|pending|missing|left)";
-const RESOLVED_REQUIREMENT_CLAIMS = [
-  new RegExp(
-    `\\bno\\s+(?:${RESOLVED_REQUIREMENT_QUALIFIER}\\s+){0,3}${RESOLVED_REQUIREMENT_NOUN}`
-      + `(?:\\s+(?:remain|remains|are|is))?(?:\\s+${RESOLVED_REQUIREMENT_STATE})?\\b`,
-    "giu",
-  ),
-  new RegExp(
-    `\\bwithout\\s+(?:any\\s+)?(?:${RESOLVED_REQUIREMENT_QUALIFIER}\\s+){0,3}${RESOLVED_REQUIREMENT_NOUN}\\b`,
-    "giu",
-  ),
-  /\b(?:nothing|none)\s+(?:material\s+)?remains?\s+(?:unresolved|unmet|outstanding|open|pending|missing|to\s+do)\b/giu,
-] as const;
 
 export function selectResearchGoalObjective(input: {
   explicitObjective?: string;
@@ -178,7 +158,7 @@ export class ResearchGoalRuntime {
     const disposition = this.options.getDisposition();
     this.lastDisposition = disposition ? structuredClone(disposition) : null;
     this.updateBlockerAudit(disposition);
-    const completionAuditRequired = this.applyTerminalDisposition(disposition, finalResponse);
+    const completionAuditRequired = this.applyTerminalDisposition(disposition);
     this.updatedAt = new Date().toISOString();
 
     if (this.status !== "active") return [];
@@ -192,7 +172,6 @@ export class ResearchGoalRuntime {
 
   private applyTerminalDisposition(
     disposition: ResearchFinalDisposition | null,
-    finalResponse: string,
   ): boolean {
     if (
       disposition?.outcome === "objective_achieved"
@@ -200,16 +179,13 @@ export class ResearchGoalRuntime {
       && !disposition.externalStateRequired
     ) {
       const auditFingerprint = this.completionAuditFingerprint();
-      if (
-        auditFingerprint
-        && (
-          this.pendingCompletionAuditFingerprint !== auditFingerprint
-          || hasExplicitRequirementContradiction(
-            `${disposition.summary}\n${finalResponse}`,
-            this.bindingRequirements(),
-          )
-        )
-      ) {
+      // A binding request gets exactly one host-required audit. The audited
+      // structured disposition is authoritative: applying another heuristic
+      // to its prose can misread expected negative language (for example,
+      // "no target flag is required") and schedule an unbounded audit loop.
+      // New steering changes the fingerprint and therefore requires a new
+      // audit; any non-achieved audit disposition clears the pending audit.
+      if (auditFingerprint && this.pendingCompletionAuditFingerprint !== auditFingerprint) {
         this.pendingCompletionAuditFingerprint = auditFingerprint;
         return true;
       }
@@ -468,30 +444,6 @@ function normalizeGoalObjective(value: string): string {
 
 function normalizeGoalRequirement(value: string): string {
   return compactText(value, GOAL_REQUIREMENT_MAX_CHARS);
-}
-
-function hasExplicitRequirementContradiction(
-  response: string,
-  requirements: readonly string[],
-): boolean {
-  const requirementTerms = new Set(requirements.flatMap((requirement) =>
-    (requirement.toLocaleLowerCase().match(/[a-z0-9][a-z0-9_-]{3,}/gu) ?? [])
-      .filter((term) => !GOAL_AUDIT_STOP_WORDS.has(term))
-  ));
-  if (requirementTerms.size === 0) return false;
-  const negative = /\b(?:no\s+(?!blockers?\b)|not\s+(?!only\b)|without|missing|absent|unmet|failed\s+to|did\s+not|does\s+not|has\s+not|have\s+not|remains?\s+(?:open|pending|unresolved)|not\s+demonstrated)\b/iu;
-  return response
-    .toLocaleLowerCase()
-    .split(/(?:\r?\n|(?<=[.!?])\s+)/u)
-    .some((segment) => {
-      const contradictionCandidate = RESOLVED_REQUIREMENT_CLAIMS.reduce(
-        (candidate, resolvedClaim) => candidate.replace(resolvedClaim, " "),
-        segment,
-      );
-      return negative.test(contradictionCandidate) && [...requirementTerms].some((term) =>
-        contradictionCandidate.includes(term)
-      );
-    });
 }
 
 function compactText(value: string, maxChars: number): string {

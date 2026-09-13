@@ -76,6 +76,7 @@ const MAX_FRAME_BYTES = 1_048_576;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_RETAINED_TERMINAL_SESSIONS = 50;
 const MAX_ERROR_DETAIL_CHARS = 1_000;
+const DEFAULT_SESSION_STARTUP_TIMEOUT_MS = 60_000;
 export const APP_SERVER_CAPABILITIES = BEALE_APP_SERVER_CAPABILITIES;
 
 export interface AppServerOptions {
@@ -98,6 +99,8 @@ export interface AppServerOptions {
     maxAttempts?: number;
     delayMs?: (recoveryNumber: number) => number;
   };
+  /** Maximum time from worker launch to runtime readiness. */
+  sessionStartupTimeoutMs?: number;
 }
 
 export type SessionStartRequest = AppServerSessionLaunchRequest;
@@ -159,6 +162,7 @@ interface SessionRuntime {
   exitCode: number | null;
   stopRequested: boolean;
   diagnostic: string | null;
+  startupDiagnostic: string | null;
   unsubscribeSessionEvents: (() => void) | null;
   currentAttemptId: string;
   currentAttemptWasInitial: boolean;
@@ -200,6 +204,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     ? boundedRecoveryAttempts(recoveryOptions.maxAttempts)
     : 0;
   const recoveryDelay = recoveryOptions?.delayMs ?? longSessionRecoveryDelayMs;
+  const sessionStartupTimeoutMs = boundedSessionStartupTimeout(options.sessionStartupTimeoutMs);
   const automationScheduler = options.automationScheduler === false
     ? null
     : options.automationScheduler ?? {};
@@ -717,7 +722,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       const message = { schemaVersion: 1 as const, requestId, ...control };
       if (control.type === 'stop') {
         requestRuntimeStop(runtime, message);
-      } else if (runtime.session) {
+      } else if (runtime.session && runtime.state === 'running') {
         runtime.session.sendControl(message);
       } else {
         if (runtime.pendingControls.length >= 128) runtime.pendingControls.shift();
@@ -822,11 +827,21 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (existing) {
       sessions.delete(sessionId);
     }
-    const runtime = createSessionRuntime(request, prepared);
+    const { investigationId: _requestedInvestigationId, ...unassignedLaunch } = request.launch;
+    const effectiveRequest = {
+      ...request,
+      launch: {
+        ...unassignedLaunch,
+        ...(prepared.launch.investigationId
+          ? { investigationId: prepared.launch.investigationId }
+          : {})
+      }
+    };
+    const runtime = createSessionRuntime(effectiveRequest, prepared);
     sessions.set(sessionId, runtime);
     evictOldestTerminalSessions();
     try {
-      await launchPreparedSession(runtime, prepared, request.launch.continuation === undefined);
+      await launchPreparedSession(runtime, prepared, effectiveRequest.launch.continuation === undefined);
       notifyChange();
       return {
         controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
@@ -893,6 +908,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       exitCode: null,
       stopRequested: false,
       diagnostic: null,
+      startupDiagnostic: null,
       unsubscribeSessionEvents: null,
       currentAttemptId: prepared.attemptId,
       currentAttemptWasInitial: false,
@@ -1061,17 +1077,78 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         }
       }
     });
+    runtime.state = 'starting';
+    runtime.endedAt = null;
+    runtime.exitCode = null;
+    runtime.diagnostic = null;
+    runtime.startupDiagnostic = null;
+    void session.waitExit().then((result) => handleSessionExit(runtime, session, prepared, result));
+    if (!session.waitReady) {
+      markRuntimeReady(runtime, session);
+      return;
+    }
+    void waitForRuntimeReady(runtime, session, session.waitReady(), sessionStartupTimeoutMs);
+  }
+
+  function markRuntimeReady(runtime: SessionRuntime, session: AppServerSession): void {
+    if (runtime.session !== session || sessions.get(runtime.sessionId) !== runtime || runtime.stopRequested) return;
     if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
     runtime.checkpointTimer = setInterval(() => {
       if (!runtime.stopRequested) void checkpointRuntime(runtime, 'Periodic research checkpoint');
     }, WORKSPACE_CHECKPOINT_INTERVAL_MS);
     runtime.checkpointTimer.unref();
     runtime.state = 'running';
-    runtime.endedAt = null;
-    runtime.exitCode = null;
     runtime.diagnostic = null;
+    runtime.startupDiagnostic = null;
     for (const control of runtime.pendingControls.splice(0)) session.sendControl(control);
-    void session.waitExit().then((result) => handleSessionExit(runtime, session, prepared, result));
+    notifyChange();
+  }
+
+  async function waitForRuntimeReady(
+    runtime: SessionRuntime,
+    session: AppServerSession,
+    ready: Promise<void>,
+    timeoutMs: number
+  ): Promise<void> {
+    let timeout: NodeJS.Timeout | null = null;
+    try {
+      await Promise.race([
+        ready,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error(
+            `Research runtime initialization did not become ready within ${Math.ceil(timeoutMs / 1_000)} seconds. No model request was sent.`
+          )), timeoutMs);
+          timeout.unref();
+        })
+      ]);
+      markRuntimeReady(runtime, session);
+    } catch (error) {
+      if (runtime.session !== session || sessions.get(runtime.sessionId) !== runtime || runtime.stopRequested) return;
+      const detail = error instanceof Error ? error.message : String(error);
+      runtime.startupDiagnostic = boundedDiagnostic(
+        `${detail} Retry the session; if this repeats, restart the Beale app-server.`
+      );
+      runtime.diagnostic = runtime.startupDiagnostic;
+      const event = {
+        schemaVersion: 1,
+        kind: 'model.output',
+        timestamp: new Date().toISOString(),
+        payload: {
+          eventId: `startup:${runtime.sessionId}:failed`,
+          phase: 'completed',
+          messagePhase: 'commentary',
+          text: runtime.diagnostic,
+          agentPath: '/root',
+          responseId: `startup-failed-${runtime.sessionId}`,
+          itemId: 'startup:failed'
+        }
+      };
+      deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
+      notifyChange();
+      session.stop();
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   function observeSessionControlState(runtime: SessionRuntime, event: Record<string, unknown>): void {
@@ -1081,6 +1158,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (type !== 'pause' && type !== 'resume' && type !== 'stop') return;
     if (runtime.stopRequested) return;
     if (type === 'stop') {
+      if (runtime.startupDiagnostic) return;
       // An accepted worker-side stop must arm the same forced-exit fallback as HTTP/WS stop.
       requestRuntimeStop(runtime);
       return;
@@ -1134,6 +1212,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       capturePath: prepared.launch.capturePath,
       stopRequested: runtime.stopRequested
     });
+    const startupDiagnostic = runtime.startupDiagnostic;
     if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
     runtime.checkpointTimer = null;
     if (runtime.checkpointPending) await runtime.checkpointPending;
@@ -1141,6 +1220,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       runtime.stopRequested || completion.succeeded || !completion.recoverable || runtime.recoveryCount >= maxRecoveryAttempts);
     hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
     if (sessions.get(runtime.sessionId) !== runtime) return;
+    if (startupDiagnostic) {
+      finishRuntime(runtime, 'failed', result.code === 0 ? 1 : result.code, startupDiagnostic);
+      return;
+    }
     if (runtime.stopRequested) {
       finishRuntime(runtime, 'stopped', result.code, null);
       return;
@@ -1407,7 +1490,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     const control = message.control as unknown as Record<string, unknown>;
     if (control.type === 'stop') {
       requestRuntimeStop(runtime, control);
-    } else if (runtime.session) {
+    } else if (runtime.session && runtime.state === 'running') {
       runtime.session.sendControl(control);
     } else {
       if (runtime.pendingControls.length >= 128) runtime.pendingControls.shift();
@@ -1693,4 +1776,12 @@ function normalizePublicUrl(value: string): string {
 function urlHost(host: string): string {
   const normalized = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
   return normalized.includes(':') && !normalized.startsWith('[') ? `[${normalized}]` : normalized;
+}
+
+function boundedSessionStartupTimeout(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_SESSION_STARTUP_TIMEOUT_MS;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('sessionStartupTimeoutMs must be a positive number.');
+  }
+  return Math.min(Math.floor(value), 10 * 60_000);
 }

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 const NON_RECOVERABLE_FAILURE_PATTERNS = [
+  /\bnot authenticated\b|\bisn['’]t authenticated\b/iu,
   /\b(?:authentication|credentials?|api key|oauth|login)\b.{0,80}\b(?:failed|missing|required|expired|invalid|unavailable)\b/iu,
   /\b(?:unauthorized|forbidden|permission denied|eacces)\b/iu,
   /\b(?:safety|cyber) (?:guardrail|safeguard)\b/iu,

@@ -38,6 +38,7 @@ export function createResearchPiAgent(
         ? appendResearchAgentInstructions(options.systemPrompt, options.agentInstructions)
         : createResearchSystemPrompt({
             hasTools: (options.tools?.length ?? 0) > 0,
+            hasInvestigationAssignmentTool: options.tools?.some((tool) => tool.name === "investigation_assign") === true,
             ...(options.researchProfile ? { researchProfile: options.researchProfile } : {}),
             ...(options.workflowId ? { workflowId: options.workflowId } : {}),
             ...(options.agentInstructions ? { agentInstructions: options.agentInstructions } : {}),

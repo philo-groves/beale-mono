@@ -33,6 +33,21 @@ describe('research provider auth parsing', () => {
     expect(invocation?.args.join(' ')).toContain('WaitForExit');
   });
 
+  it('launches macOS Claude subscription login in Terminal', () => {
+    const invocation = claudeSubscriptionLoginInvocation(
+      'darwin',
+      '',
+      '/Users/researcher/Example Workspace',
+      "/Users/researcher/.local/bin/claude"
+    );
+
+    expect(invocation?.command).toBe('/usr/bin/osascript');
+    expect(invocation?.displayCommand).toBe('claude auth login --claudeai');
+    expect(invocation?.args).toContain('tell application "Terminal"');
+    expect(invocation?.args.join(' ')).toContain("'/Users/researcher/.local/bin/claude' auth login --claudeai");
+    expect(invocation?.args.join(' ')).toContain("cd -- '/Users/researcher/Example Workspace'");
+  });
+
   it('resolves native and npm-installed Windows Claude CLIs outside Electron PATH', () => {
     const existing = new Set([
       'C:\\Users\\researcher\\.local\\bin\\claude.exe',
@@ -51,10 +66,21 @@ describe('research provider auth parsing', () => {
       .toBe('C:\\Users\\researcher\\AppData\\Roaming\\npm\\claude.cmd');
   });
 
-  it('resolves the Claude CLI bundled with the Windows Agent SDK dependency', () => {
-    const executable = resolveBundledClaudeCliExecutable('win32', process.arch);
+  it('resolves native macOS Claude CLIs outside Electron PATH', () => {
+    const existing = new Set(['/Users/researcher/.local/bin/claude']);
+    const environment = {
+      HOME: '/Users/researcher',
+      PATH: '/usr/bin:/bin'
+    };
 
-    expect(executable).toMatch(/claude-agent-sdk-win32-(?:x64|arm64).*[\\/]claude\.exe$/u);
+    expect(resolveClaudeCliExecutable('darwin', environment, (path) => existing.has(path)))
+      .toBe('/Users/researcher/.local/bin/claude');
+  });
+
+  it('resolves the Claude CLI bundled with the current macOS Agent SDK dependency', () => {
+    const executable = resolveBundledClaudeCliExecutable('darwin', process.arch);
+
+    expect(executable).toMatch(/claude-agent-sdk-darwin-(?:x64|arm64).*[\\/]claude$/u);
   });
 
   it('does not construct a Windows Claude login when the CLI is unavailable', () => {

@@ -2255,8 +2255,10 @@ export class WorkspaceService {
     }
     const runtime = this.getForegroundRuntime();
     if (!runtime) throw new Error('No Beale workspace is open');
-    if (runtime.db.listRunRows().some(({ run }) => isLiveResearchRunStatus(run.status) || run.status === 'paused')) {
-      throw new Error('Wait for active research sessions to finish before changing the Research Subject.');
+    if (runtime.db.listRunRows().some(({ run }) =>
+      isLiveResearchRunStatus(run.status)
+      || (run.status === 'paused' && runtime.appServerEngine.hasRun(run.id)))) {
+      throw new Error('Wait for the active or attached paused research session to finish before changing the Research Subject.');
     }
     runtime.db.setResearchSubject({ id: memorySubjectId(name), name });
     this.workspaceMemorySummaryLoads.delete(runtime.workspacePath);

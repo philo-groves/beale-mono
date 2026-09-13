@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import type {
   ResearchModelEffortLevel,
   ResearchModelProviderId,
@@ -121,18 +121,34 @@ export class ResearchProviderAuthService {
       return result;
     }
 
-    const appServerInvocation = resolveAppServerInvocation();
     const claudeInvocation = providerId === 'anthropic' ? claudeSubscriptionLoginInvocation() : null;
-    if (providerId === 'anthropic' && process.platform === 'win32' && !claudeInvocation) {
+    if (providerId === 'anthropic' && !claudeInvocation) {
       throw new Error(
         'The Claude Code CLI was not found in Beale dependencies or on the host. Reinstall dependencies or install Claude Code, then restart Beale.'
       );
     }
+    if (providerId === 'anthropic' && process.platform === 'darwin' && claudeInvocation) {
+      await launchDetachedApplication(claudeInvocation);
+      this.externalLoginDeadlines.set(providerId, Date.now() + EXTERNAL_AUTH_TIMEOUT_MS);
+      const result: ResearchProviderOAuthStartResult = {
+        providerId,
+        started: true,
+        command: claudeInvocation.displayCommand,
+        detail: 'Claude authentication opened in Terminal. Complete the Anthropic sign-in there; Beale will detect it automatically.',
+        verificationUri: null,
+        userCode: null,
+        instructions: null
+      };
+      this.latestStarts.set(providerId, result);
+      return result;
+    }
+
+    const appServerInvocation = resolveAppServerInvocation();
     const zcodeInvocation = providerId === 'zai' ? zcodeCliInvocation(['login']) : null;
     if (providerId === 'zai' && !zcodeInvocation) {
       throw new Error('The official ZCode CLI was not found. Install ZCode before signing in with a Z.ai subscription.');
     }
-    const invocation = providerId === 'anthropic' && claudeInvocation
+    const invocation = claudeInvocation
       ? claudeInvocation
       : zcodeInvocation
         ? { ...zcodeInvocation, displayCommand: 'zcode login' }
@@ -224,7 +240,10 @@ export class ResearchProviderAuthService {
       if (!status || !verification || status.providerId !== providerId || verification.providerId !== providerId) {
         throw new Error(`app-server returned an unrecognized ${providerId} auth status.`);
       }
-      const loginInProgress = this.loginProcesses.has(providerId);
+      if (verification.configured || (this.externalLoginDeadlines.get(providerId) ?? 0) <= Date.now()) {
+        this.externalLoginDeadlines.delete(providerId);
+      }
+      const loginInProgress = this.loginProcesses.has(providerId) || this.externalLoginDeadlines.has(providerId);
       const source = verification.source ?? status.storedCredentialType ?? null;
       return {
         id: providerId,
@@ -255,7 +274,7 @@ export class ResearchProviderAuthService {
         source: null,
         defaultModel: null,
         credentialsHostOnly: true,
-        loginInProgress: this.loginProcesses.has(providerId),
+        loginInProgress: this.loginProcesses.has(providerId) || this.externalLoginDeadlines.has(providerId),
         statusDetail: `app-server could not inspect ${providerDisplayName(providerId)}: ${errorMessage(error)}`,
         apiKeyEnvironmentVariable
       };
@@ -500,7 +519,22 @@ export function claudeSubscriptionLoginInvocation(
   cwd = process.cwd(),
   claudeExecutable = resolveClaudeCliExecutable(platform)
 ): InteractiveAuthInvocation | null {
-  if (platform !== 'win32' || !claudeExecutable) return null;
+  if (!claudeExecutable) return null;
+  if (platform === 'darwin') {
+    const shellCommand = `cd -- ${shellStringLiteral(cwd)} && exec ${shellStringLiteral(claudeExecutable)} auth login --claudeai`;
+    return {
+      command: '/usr/bin/osascript',
+      args: [
+        '-e', 'tell application "Terminal"',
+        '-e', 'activate',
+        '-e', `do script ${appleScriptStringLiteral(shellCommand)}`,
+        '-e', 'end tell'
+      ],
+      cwd,
+      displayCommand: 'claude auth login --claudeai'
+    };
+  }
+  if (platform !== 'win32') return null;
   const powershell = `${systemRoot.replace(/[\\/]+$/u, '')}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
   const script = [
     `$process = Start-Process -FilePath ${powershellStringLiteral(claudeExecutable)} -ArgumentList @('auth', 'login', '--claudeai') -WindowStyle Normal -PassThru`,
@@ -520,34 +554,44 @@ export function resolveClaudeCliExecutable(
   environment: NodeJS.ProcessEnv = process.env,
   fileExists: (path: string) => boolean = existsSync
 ): string | null {
-  if (platform !== 'win32') return null;
+  if (platform !== 'win32' && platform !== 'darwin') return null;
   const configuredExecutable = environment.BEALE_CLAUDE_EXECUTABLE?.trim();
   const bundledExecutable = resolveBundledClaudeCliExecutable(platform, process.arch, fileExists);
+  const userHome = environment.HOME?.trim();
   const userProfile = environment.USERPROFILE?.trim();
   const localAppData = environment.LOCALAPPDATA?.trim();
   const appData = environment.APPDATA?.trim();
   const pathDirectories = (environment.PATH ?? environment.Path ?? environment.path ?? '')
-    .split(';')
+    .split(platform === 'win32' ? ';' : ':')
     .map((entry) => entry.trim().replace(/^"|"$/gu, ''))
     .filter(Boolean);
   const pathExtensions = (environment.PATHEXT ?? '.COM;.EXE;.BAT;.CMD')
     .split(';')
     .map((extension) => extension.trim().toLowerCase())
     .filter(Boolean);
-  const candidates = [
-    configuredExecutable,
-    bundledExecutable,
-    userProfile ? join(userProfile, '.local', 'bin', 'claude.exe') : undefined,
-    localAppData ? join(localAppData, 'Programs', 'Claude', 'claude.exe') : undefined,
-    appData ? join(appData, 'npm', 'claude.cmd') : undefined,
-    ...pathDirectories.flatMap((directory) => [
-      join(directory, 'claude'),
-      ...pathExtensions.map((extension) => join(directory, `claude${extension}`))
-    ])
-  ].filter((candidate): candidate is string => Boolean(candidate));
+  const candidates = platform === 'win32'
+    ? [
+        configuredExecutable,
+        bundledExecutable,
+        userProfile ? win32.join(userProfile, '.local', 'bin', 'claude.exe') : undefined,
+        localAppData ? win32.join(localAppData, 'Programs', 'Claude', 'claude.exe') : undefined,
+        appData ? win32.join(appData, 'npm', 'claude.cmd') : undefined,
+        ...pathDirectories.flatMap((directory) => [
+          win32.join(directory, 'claude'),
+          ...pathExtensions.map((extension) => win32.join(directory, `claude${extension}`))
+        ])
+      ]
+    : [
+        configuredExecutable,
+        bundledExecutable,
+        userHome ? posix.join(userHome, '.local', 'bin', 'claude') : undefined,
+        '/opt/homebrew/bin/claude',
+        '/usr/local/bin/claude',
+        ...pathDirectories.map((directory) => posix.join(directory, 'claude'))
+      ];
   const visited = new Set<string>();
-  for (const candidate of candidates) {
-    const normalized = candidate.toLowerCase();
+  for (const candidate of candidates.filter((value): value is string => Boolean(value))) {
+    const normalized = platform === 'win32' ? candidate.toLowerCase() : candidate;
     if (visited.has(normalized)) continue;
     visited.add(normalized);
     if (fileExists(candidate)) return candidate;
@@ -561,7 +605,7 @@ export function resolveBundledClaudeCliExecutable(
   fileExists: (path: string) => boolean = existsSync,
   workspaceRoot = resolveAppServerWorkspaceRoot()
 ): string | null {
-  if (platform !== 'win32' || (architecture !== 'x64' && architecture !== 'arm64') || !workspaceRoot) return null;
+  if ((platform !== 'win32' && platform !== 'darwin') || (architecture !== 'x64' && architecture !== 'arm64') || !workspaceRoot) return null;
   const sdkEntry = join(
     workspaceRoot,
     'packages',
@@ -573,8 +617,9 @@ export function resolveBundledClaudeCliExecutable(
   );
   if (!fileExists(sdkEntry)) return null;
   try {
-    const platformPackage = `@anthropic-ai/claude-agent-sdk-win32-${architecture}`;
-    const executable = createRequire(sdkEntry).resolve(`${platformPackage}/claude.exe`);
+    const platformPackage = `@anthropic-ai/claude-agent-sdk-${platform}-${architecture}`;
+    const executableName = platform === 'win32' ? 'claude.exe' : 'claude';
+    const executable = createRequire(realpathSync(sdkEntry)).resolve(`${platformPackage}/${executableName}`);
     return fileExists(executable) ? executable : null;
   } catch {
     return null;
@@ -583,6 +628,14 @@ export function resolveBundledClaudeCliExecutable(
 
 function powershellStringLiteral(value: string): string {
   return `'${value.replace(/'/gu, "''")}'`;
+}
+
+function shellStringLiteral(value: string): string {
+  return `'${value.replace(/'/gu, `'"'"'`)}'`;
+}
+
+function appleScriptStringLiteral(value: string): string {
+  return JSON.stringify(value);
 }
 
 export function zcodeCliInvocation(

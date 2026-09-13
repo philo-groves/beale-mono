@@ -502,6 +502,7 @@ export function createPiAgentExecutor(
         || hasRunbookTools
         || hasReportTools;
       const hasSessionDispositionTool = researchToolNames.has("session_disposition");
+      const hasInvestigationAssignmentTool = researchToolNames.has("investigation_assign");
 
       runSession = async (request) => {
         const rawSessionModel = request.root ? model : getPiModel(models, request.provider, request.model);
@@ -877,6 +878,7 @@ export function createPiAgentExecutor(
               hasRunbookTools,
               hasReportTools,
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
+              hasInvestigationAssignmentTool: request.root === true && !options.agentIdentity && hasInvestigationAssignmentTool,
               ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_channel" || tool.name === "channel_post"),
               ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id, { lead: request.root === true }) } : {}),

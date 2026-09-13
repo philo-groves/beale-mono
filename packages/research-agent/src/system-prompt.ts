@@ -13,6 +13,7 @@ export interface CreateResearchSystemPromptOptions {
   hasRunbookTools?: boolean;
   hasReportTools?: boolean;
   hasSessionDispositionTool?: boolean;
+  hasInvestigationAssignmentTool?: boolean;
   agentPath?: string;
   hasCollaborationTools?: boolean;
   collaborationGuidance?: string;
@@ -95,6 +96,9 @@ export function createResearchSystemPrompt(
       "The current user request and later user steering are binding completion requirements even when the persistent goal is broader. Record objective_achieved only when evidence from this session satisfies all of them; a valuable intermediate finding is objective_partially_achieved when any requested outcome remains absent.",
     ] : []),
     ...(options.hasSessionDispositionTool ? ["Before the root final response, call session.disposition exactly once. Record the evidence-grounded outcome, every unresolved dependency, whether progress requires external state rather than more work in this session, and exactly three distinct nextPromptSuggestions. Make each suggestion a concrete continuation grounded in this session, with a short action-oriented title and a self-contained promptMarkdown; do not repeat completed work or include the suggestions in the visible final response."] : []),
+    ...(options.hasInvestigationAssignmentTool ? [
+      "After you have enough orientation to understand the concrete research question, mechanism, proof chain, and intended evidence outcome, call investigation.candidates and then investigation.assign exactly once. This permanent session assignment is required before session.disposition or the final response. Attach only when those semantics continue the same investigation; shared workspace, vocabulary, generic continuation language, or a single candidate are insufficient. Create a new investigation when the work is distinct or uncertain. Do not delegate this decision to a subagent.",
+    ] : []),
     ...(options.hasMemoryTools ? [
       "The following memory type descriptions are authoritative for this run. Use these definitions when interpreting memory and when proposing or making durable changes:",
       ...memoryTypeDescriptions,

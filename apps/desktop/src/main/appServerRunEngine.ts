@@ -2491,7 +2491,7 @@ export class AppServerRunEngine {
 
     if (code !== 0) {
       const summary = active.lastProcessDiagnostic
-        ? `app-server host process exited with an error: ${active.lastProcessDiagnostic}`
+        ? active.lastProcessDiagnostic
         : 'app-server host process exited with an error.';
       this.failRun(context, summary, processPayload);
       return;

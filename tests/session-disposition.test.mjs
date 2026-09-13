@@ -88,6 +88,35 @@ test("session disposition can be reset between nonterminal goal turns", async ()
   assert.equal(recorder.get().outcome, "objective_achieved");
 });
 
+test("session disposition cannot bypass a required investigation assignment", async () => {
+  const recorder = new ResearchDispositionRecorder();
+  let assigned = false;
+  const tool = createSessionDispositionTool(recorder, {
+    beforeRecord: () => {
+      if (!assigned) throw new Error("Select the session investigation first.");
+    },
+  });
+  const action = {
+    id: "disposition_guarded",
+    actionClass: "respond",
+    toolName: "session.disposition",
+    input: {
+      outcome: "objective_achieved",
+      summary: "The proof is complete.",
+      blockerDependencies: [],
+      externalStateRequired: false,
+    },
+  };
+
+  const blocked = await tool.execute(action);
+  assert.equal(blocked.status, "error");
+  assert.match(blocked.error.message, /investigation/iu);
+  assert.equal(recorder.get(), null);
+
+  assigned = true;
+  assert.equal((await tool.execute(action)).status, "complete");
+});
+
 test("session disposition rejects inconsistent external blockers and provides terminal fallbacks", async () => {
   const recorder = new ResearchDispositionRecorder();
   const tool = createSessionDispositionTool(recorder);

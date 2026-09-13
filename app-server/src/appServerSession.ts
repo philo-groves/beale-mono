@@ -20,6 +20,8 @@ export interface AppServerSession {
   onEvent(listener: (event: Record<string, unknown>) => void): () => void;
   sendControl(control: Record<string, unknown>): void;
   stderrTail(): string;
+  /** Resolves only after the worker has completed runtime initialization. */
+  waitReady?(): Promise<void>;
   waitExit(): Promise<{ code: number | null; stderr: string }>;
   stop(): void;
 }
@@ -64,8 +66,47 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
   const pendingEvents: Record<string, unknown>[] = [];
   let resolvedCode: number | null = null;
   let failureMessage = '';
+  let readySettled = false;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  // A worker can fail between coming online and the host attaching its
+  // readiness observer. Keep that early rejection handled while preserving it
+  // for waitReady callers.
+  void readyPromise.catch(() => undefined);
   let stopRequested = false;
   let forceStopTimeout: ReturnType<typeof setTimeout> | null = null;
+  const settleReady = (): void => {
+    if (readySettled) return;
+    readySettled = true;
+    resolveReady();
+  };
+  const failReady = (message: string): void => {
+    if (readySettled) return;
+    readySettled = true;
+    rejectReady(new Error(message));
+  };
+  const dispatchEvent = (event: Record<string, unknown>): void => {
+    if (listeners.size === 0) pendingEvents.push(event);
+    else for (const listener of listeners) listener(event);
+  };
+  const startupEvent = (phase: string, text: string): Record<string, unknown> => ({
+    schemaVersion: 1,
+    kind: 'model.output',
+    timestamp: new Date().toISOString(),
+    payload: {
+      eventId: `startup:${options.sessionId}:${phase}`,
+      phase: 'completed',
+      messagePhase: 'commentary',
+      text,
+      agentPath: '/root',
+      responseId: `startup-${options.sessionId}`,
+      itemId: `startup:${phase}`
+    }
+  });
   const exitPromise = new Promise<{ code: number | null; stderr: string }>((resolve) => {
     worker.on('message', (message: unknown) => {
       if (!message || typeof message !== 'object' || Array.isArray(message)) return;
@@ -73,20 +114,25 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
       if (record.type === 'database.request') {
         databaseBroker.handle(message as WorkerDatabaseRequestMessage);
       } else if (record.type === 'event' && record.event && typeof record.event === 'object' && !Array.isArray(record.event)) {
-        const event = record.event as Record<string, unknown>;
-        if (listeners.size === 0) pendingEvents.push(event);
-        else for (const listener of listeners) listener(event);
+        dispatchEvent(record.event as Record<string, unknown>);
+      } else if (record.type === 'startup' && typeof record.phase === 'string' && typeof record.message === 'string') {
+        dispatchEvent(startupEvent(record.phase, record.message));
+      } else if (record.type === 'ready') {
+        dispatchEvent(startupEvent('ready', 'Research runtime is ready. Waiting for the model’s first response.'));
+        settleReady();
       } else if (record.type === 'complete') {
         resolvedCode = typeof record.exitCode === 'number' ? record.exitCode : 0;
       } else if (record.type === 'failed') {
         failureMessage = typeof record.error === 'string' ? record.error : 'app-server runtime worker failed.';
         resolvedCode = 1;
+        failReady(failureMessage);
       }
     });
     worker.once('exit', (code) => {
       if (forceStopTimeout) clearTimeout(forceStopTimeout);
       forceStopTimeout = null;
       databaseBroker.close();
+      failReady(failureMessage || stderr || `app-server runtime worker exited before initialization completed (code ${code ?? 'unknown'}).`);
       resolve({ code: resolvedCode ?? code, stderr: failureMessage || stderr });
     });
   });
@@ -99,6 +145,7 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
     },
     sendControl: (control) => worker.postMessage({ type: 'control', control }),
     stderrTail: () => stderr,
+    waitReady: () => readyPromise,
     waitExit: () => exitPromise,
     stop: () => {
       if (stopRequested) return;
@@ -110,6 +157,9 @@ export function spawnAppServerSession(options: SpawnAppServerSessionOptions): Pr
   };
   return new Promise((resolve, reject) => {
     worker.once('online', () => resolve(session));
-    worker.once('error', reject);
+    worker.once('error', (error) => {
+      failReady(error.message);
+      reject(error);
+    });
   });
 }

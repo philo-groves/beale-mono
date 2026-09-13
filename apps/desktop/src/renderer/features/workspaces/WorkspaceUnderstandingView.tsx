@@ -377,7 +377,7 @@ export function WorkspaceUnderstandingView({
         onChangeResearchSubject={onChangeResearchSubject}
         memoryBackend={memoryBackend}
         memoryBackendLocked={runs.some(({ run }) => isLiveResearchRunStatus(run.status) || run.status === 'paused')}
-        researchSubjectLocked={runs.some(({ run }) => isLiveResearchRunStatus(run.status) || run.status === 'paused')}
+        researchSubjectLocked={runs.some(({ run }) => isLiveResearchRunStatus(run.status))}
         researchProfile={researchProfile}
         researchKitId={researchKitId}
         researchSubjectName={researchSubjectName}
@@ -881,7 +881,7 @@ function WorkspaceOverviewPanel({
                   disabled={busy || researchSubjectLocked || researchSubjectSaving}
                   maxLength={500}
                   required
-                  title={researchSubjectLocked ? 'Research Subject cannot be changed while a research session is queued, active, or paused' : undefined}
+                  title={researchSubjectLocked ? 'Research Subject cannot be changed while a research session is queued or active' : undefined}
                   value={researchSubjectDraft}
                   onChange={(event) => setResearchSubjectDraft(event.target.value)}
                   onBlur={() => void saveResearchSubject()}

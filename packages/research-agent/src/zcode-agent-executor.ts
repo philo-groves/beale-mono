@@ -184,6 +184,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
         hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
         hasReportTools: hasTool(options.toolRegistry, "report_list"),
         hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
+        hasInvestigationAssignmentTool: !options.agentIdentity && hasTool(options.toolRegistry, "investigation_assign"),
         hasCollaborationTools: agentTools.length > 0,
         ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id) } : {}),
         goalEnabled: false,

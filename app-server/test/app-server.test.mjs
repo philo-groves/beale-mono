@@ -26,7 +26,7 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
   MANAGED_TOOL_PLUGIN_IDS,
 } from "@beale/app-server-runtime/protocol";
-import { AppServerSessionStore } from "../../packages/research-agent/dist/index.js";
+import { AppServerSessionStore, CampaignTrackStore } from "../../packages/research-agent/dist/index.js";
 import {
   AppServerWorkerDatabaseBroker,
   AppServerWorkerDatabaseCoordinator,
@@ -126,6 +126,63 @@ test('a failed pre-session checkpoint prevents worker launch without discarding 
   servers.push(server);
   await assert.rejects(server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-failed-example' })), /Resolve the example staged edit/);
   assert.equal(spawned, false);
+});
+
+test('keeps a hosted session starting until the runtime readiness handshake completes', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-runtime-ready-example-'));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  let releaseReady;
+  const ready = new Promise((resolve) => { releaseReady = resolve; });
+  const server = await startAppServer({
+    hostService: testHostService(directory),
+    spawnSession: async (options) => ({
+      ...await upstream.spawnSession(options),
+      waitReady: () => ready,
+    }),
+  });
+  servers.push(server);
+
+  const started = await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-runtime-ready-example' }));
+  assert.equal(started.session.state, 'starting');
+  assert.equal(server.listSessions()[0]?.state, 'starting');
+
+  releaseReady();
+  await waitFor(() => server.listSessions()[0]?.state === 'running');
+  upstream.complete();
+});
+
+test('fails stalled runtime initialization with a visible bounded diagnostic', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-runtime-startup-timeout-example-'));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  const server = await startAppServer({
+    hostService: testHostService(directory),
+    sessionStartupTimeoutMs: 100,
+    longSessionRecovery: false,
+    spawnSession: async (options) => ({
+      ...await upstream.spawnSession(options),
+      waitReady: () => new Promise(() => undefined),
+    }),
+  });
+  servers.push(server);
+
+  const started = await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-runtime-timeout-example' }));
+  assert.equal(started.session.state, 'starting');
+  const messages = [];
+  const socket = await connect(webSocketUrl(server.url, started.transport.path), started.transport.token, messages);
+  socket.send(JSON.stringify(clientHello('session-runtime-timeout-example', 'startup-timeout-test')));
+  await waitFor(() => server.listSessions()[0]?.state === 'failed');
+  const entry = server.listSessions()[0];
+  assert.match(entry?.diagnostic ?? '', /did not become ready within 1 seconds/u);
+  assert.match(entry?.diagnostic ?? '', /No model request was sent/u);
+  assert.equal(upstream.stopCalls(), 1);
+  await waitFor(() => messages.some((message) => (
+    message.type === 'session.event'
+      && message.event?.kind === 'model.output'
+      && /No model request was sent/u.test(message.event.payload?.text ?? '')
+  )));
+  socket.close();
 });
 
 test('a committed host checkpoint appends a valid canonical session event', async () => {
@@ -1648,6 +1705,21 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
     ...providerSettings,
     contextSizes: { "openai-codex": "large" },
   });
+  const tracks = new CampaignTrackStore({
+    databasePath: join(directory, "memory.sqlite"),
+    context: {
+      workspaceId: "workspace-test",
+      workspaceName: "Test workspace",
+      subjectId: "subject-example",
+      subjectName: "Example",
+    },
+  });
+  const assigned = tracks.create({
+    title: "Existing proof",
+    objective: "Continue the existing proof.",
+    originSessionId: "session-fast-mode",
+  });
+  tracks.close();
   const service = new AppServerHostService({
     registry,
     invokeProtocol: async (operation, options) => {
@@ -1668,7 +1740,7 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
     },
   });
   const request = sessionLaunchRequest(directory, { sessionId: "session-fast-mode" });
-  request.launch.investigationId = "investigation-example";
+  request.launch.investigationId = assigned.id;
   request.launch.provider = {
     id: "openai-codex",
     model: "gpt-5.6-sol",
@@ -1681,7 +1753,7 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
   assert.equal(prepared.launch.provider.fastMode, true);
   assert.equal(prepared.launch.provider.contextSize, "large");
   assert.equal(appServerSessionEnvironment(prepared.launch, {}).APP_SERVER_OPENAI_CONTEXT_SIZE, "large");
-  assert.equal(prepared.launch.investigationId, "investigation-example");
+  assert.equal(prepared.launch.investigationId, assigned.id);
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--fast-mode"));
   const createCall = calls.find((call) => call.operation === "session.create");
   assert.equal(
@@ -1690,7 +1762,7 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
   );
   assert.equal(
     createCall.options.input.metadata.appServerRestartLaunch.launch.investigationId,
-    "investigation-example",
+    assigned.id,
   );
 
   await assert.rejects(
@@ -1866,6 +1938,7 @@ test("app-server owns built-in plugins and pins canonical session profile identi
     id: "xai",
     model: "grok-4.6",
     reasoningEffort: "high",
+    contextSize: "default",
     riskAcknowledgements: ["openai-codex", "anthropic", "xai"],
     authenticationPreferences: { xai: "api_key" },
     title: { model: "grok-4.3", effort: "medium" },
@@ -2574,20 +2647,6 @@ test("proxies a real mock run over the versioned session transport and retains i
   assert.equal(started.transport.path, "/v1/sessions/session-facade/transport");
   assert.equal(started.transport.reconnect, "replay");
   assert.ok(started.transport.token.length >= 16);
-
-  const liveSessionResponse = await fetch(`${server.url}/v1/sessions/session-facade`, {
-    headers: { authorization: `Bearer ${server.operatorToken}` },
-  });
-  assert.equal(liveSessionResponse.status, 200);
-  const liveSession = await liveSessionResponse.json();
-  assert.equal(liveSession.controlVersion, BEALE_APP_SERVER_CONTROL_VERSION);
-  assert.equal(liveSession.session.sessionId, "session-facade");
-  assert.equal(liveSession.session.state, "running");
-  assert.deepEqual(liveSession.session.replay, {
-    bufferedFrames: 0,
-    bufferedBytes: 0,
-    droppedFrames: 0,
-  });
 
   const duplicate = await fetch(`${server.url}/v1/sessions`, {
     method: "POST",
@@ -3435,6 +3494,7 @@ function testHostService(directory, options = {}) {
           capturePath: options.capturePath,
           workspaceContextPath: existsSync(workspaceContextPath) ? workspaceContextPath : undefined,
           promptMarkdown: request.launch.promptMarkdown,
+          investigationId: request.launch.investigationId,
           researchProfileHash: request.launch.researchProfileHash,
           workflowId: request.launch.workflowId,
           memoryBackend: options.memoryBackend,

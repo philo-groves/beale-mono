@@ -1243,6 +1243,41 @@ describe('workspace dashboard', () => {
     expect(rendererSource).toContain('window.beale.updateWorkspaceResearchSubject(researchSubjectName)');
   });
 
+  it('keeps Research Subject editable when only a dormant paused session remains', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
+      busy: false,
+      initialView: 'overview',
+      memoryDreamingInProgress: false,
+      appServerMemory: memorySummary(),
+      researchProfile: testResearchProfile(),
+      researchSubjectName: 'Example Subject',
+      workspaceName: 'Example Workspace',
+      runs: [runRow('run_paused', [], { status: 'paused' })],
+      onRunMemoryDreaming: () => undefined
+    }));
+
+    expect(html).toMatch(/aria-label="Research Subject"[^>]*value="Example Subject"/u);
+    expect(html).not.toMatch(/aria-label="Research Subject"[^>]*disabled=""/u);
+    expect(html).not.toContain('Research Subject cannot be changed while a research session is queued, active, or paused');
+  });
+
+  it('locks Research Subject while a session is genuinely live', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
+      busy: false,
+      initialView: 'overview',
+      memoryDreamingInProgress: false,
+      appServerMemory: memorySummary(),
+      researchProfile: testResearchProfile(),
+      researchSubjectName: 'Example Subject',
+      workspaceName: 'Example Workspace',
+      runs: [runRow('run_active', [], { status: 'active' })],
+      onRunMemoryDreaming: () => undefined
+    }));
+
+    expect(html).toMatch(/aria-label="Research Subject"[^>]*disabled=""/u);
+    expect(html).toContain('title="Research Subject cannot be changed while a research session is queued or active"');
+  });
+
   it('keeps terminal session runs immutable when the session is continued', () => {
     const continued = runRow('run_continued', [], { status: 'active' });
     continued.sessionRuns = [

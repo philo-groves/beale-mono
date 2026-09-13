@@ -247,8 +247,6 @@ interface EnsureCampaignTrackInput {
   title?: string;
   objective: string;
   source: CampaignTrackSource;
-  continuationTrackId?: string;
-  allowSimilarMatch?: boolean;
   sourceRevision?: string | null;
   environmentFingerprint?: string | null;
 }
@@ -261,6 +259,13 @@ interface CreateCampaignTrackInput {
   originSessionId?: string | null;
   sourceRevision?: string | null;
   environmentFingerprint?: string | null;
+  assignmentSource?: string;
+  assignmentRationale?: string;
+}
+
+export interface CampaignTrackSessionAssignment {
+  source?: string;
+  rationale?: string;
 }
 
 interface RecallOptions {
@@ -275,30 +280,6 @@ const SESSION_TITLE_STOP_WORDS = new Set([
   "apple", "ios", "macos", "research", "security", "analysis", "audit", "testing", "test",
   "boundaries", "boundary", "behavior", "behaviour", "current", "latest", "session", "support",
 ]);
-
-const CAMPAIGN_TRACK_ID_PATTERN = /\binvestigation_[a-f0-9]{24}\b/giu;
-
-export function campaignTrackBindingFromPrompt(prompt: string): string | null {
-  const explicitLine = prompt.match(
-    /^\s*(?:investigation(?:\s+id)?|campaign\s+track(?:\s+id)?|track\s+binding)\s*:\s*`?(investigation_[a-f0-9]{24})`?\s*$/imu,
-  );
-  if (explicitLine?.[1]) return explicitLine[1].toLowerCase();
-
-  const naturalBinding = prompt.match(
-    /\b(?:resume|continue|use|rebind(?:\s+to)?|canonical|active)\b[^\n]{0,120}\b(?:investigation|campaign\s+track|track)\b[^\n]{0,80}`?(investigation_[a-f0-9]{24})`?/iu,
-  ) ?? prompt.match(
-    /\b(?:investigation|campaign\s+track|track)\b[^\n]{0,80}`?(investigation_[a-f0-9]{24})`?[^\n]{0,120}\b(?:resume|continue|canonical|active)\b/iu,
-  );
-  if (naturalBinding?.[1]) return naturalBinding[1].toLowerCase();
-
-  const mandatoryMarker = /\bTRACK BINDING IS MANDATORY\b/iu.exec(prompt);
-  if (!mandatoryMarker) return null;
-  const ids = [...new Set(
-    [...prompt.slice(0, mandatoryMarker.index).matchAll(CAMPAIGN_TRACK_ID_PATTERN)]
-      .map((match) => match[0].toLowerCase()),
-  )];
-  return ids.length === 1 ? ids[0]! : null;
-}
 
 export class CampaignTrackStore {
   public readonly databasePath: string;
@@ -552,88 +533,63 @@ export class CampaignTrackStore {
           END;
         `);
       },
+    }, {
+      version: 3,
+      name: "immutable_session_investigation_assignment",
+      up(db) {
+        db.exec(`
+          ALTER TABLE campaign_track_sessions ADD COLUMN assignment_source TEXT NOT NULL DEFAULT 'legacy';
+          ALTER TABLE campaign_track_sessions ADD COLUMN assignment_rationale TEXT NOT NULL DEFAULT '';
+
+          DELETE FROM campaign_track_sessions
+          WHERE rowid IN (
+            SELECT rowid FROM (
+              SELECT s.rowid,
+                ROW_NUMBER() OVER (
+                  PARTITION BY s.session_id
+                  ORDER BY CASE WHEN t.origin_session_id = s.session_id THEN 0 ELSE 1 END,
+                    s.linked_at ASC,
+                    s.investigation_id ASC
+                ) AS assignment_order
+              FROM campaign_track_sessions s
+              JOIN campaign_tracks t ON t.id = s.investigation_id
+            ) WHERE assignment_order > 1
+          );
+
+          DELETE FROM campaign_track_resources
+          WHERE resource_kind = 'session'
+            AND NOT EXISTS (
+              SELECT 1 FROM campaign_track_sessions s
+              WHERE s.investigation_id = campaign_track_resources.investigation_id
+                AND s.session_id = campaign_track_resources.resource_id
+            );
+
+          CREATE UNIQUE INDEX campaign_track_sessions_one_investigation_per_session_idx
+            ON campaign_track_sessions(session_id);
+        `);
+      },
     }]);
   }
 
   public ensureForSession(input: EnsureCampaignTrackInput): CampaignTrackRecord {
-    const linked = this.database.prepare(`
-      SELECT t.* FROM campaign_tracks t
-      JOIN campaign_track_sessions s ON s.investigation_id = t.id
-      WHERE s.session_id = ? AND t.workspace_id = ? AND t.status <> 'archived'
-      ORDER BY t.updated_at DESC LIMIT 1
-    `).get(input.sessionId, this.context.workspaceId) as SqlRow | undefined;
-    if (linked) return trackFromRow(linked);
+    const linked = this.getForSession(input.sessionId);
+    if (linked) return linked;
 
     const requestedTitle = input.title?.trim();
     const sessionTitle = requestedTitle && !isPlaceholderTitle(requestedTitle)
       ? requestedTitle
       : this.sessionTitle(input.sessionId) ?? titleFromObjective(input.objective);
-    const explicitContinuation = input.continuationTrackId
-      ? this.get(input.continuationTrackId)
-      : null;
-    if (input.continuationTrackId && (!explicitContinuation || explicitContinuation.status === "archived")) {
-      throw new Error(`Campaign continuation track is unavailable: ${input.continuationTrackId}`);
-    }
-    const candidates = input.allowSimilarMatch ? this.list({ includeArchived: false }) : [];
-    const signature = researchSignature(`${sessionTitle} ${input.objective}`);
-    const referenceCounts = this.promptReferenceCounts(input.objective);
-    const closest = candidates
-      .map((candidate) => ({
-        candidate,
-        references: referenceCounts.get(candidate.id) ?? 0,
-        score: signatureSimilarity(signature, researchSignature(`${candidate.title} ${candidate.objective}`)),
-        overlap: intersectionSize(signature, researchSignature(`${candidate.title} ${candidate.objective}`)),
-      }))
-      .sort((left, right) => right.references - left.references || right.score - left.score || right.overlap - left.overlap || right.candidate.updatedAt.localeCompare(left.candidate.updatedAt))[0];
-    const activeCandidates = candidates.filter((candidate) => candidate.status === "active");
-    const uniqueContinuation = activeCandidates.length === 1
-      && /\b(?:continue|resume|finish|complete|pick\s+up|where\s+we\s+left)\b/iu.test(input.objective)
-      ? activeCandidates[0]!
-      : null;
-    const track = explicitContinuation
-      ?? (closest && (
-        closest.references > 0
-        || (closest.score >= 0.62 && closest.overlap >= 3)
-      ) ? closest.candidate : null)
-      ?? uniqueContinuation
-      ?? this.create({
-          title: sessionTitle,
-          objective: input.objective,
-          stage: inferStage(input.objective),
-          source: input.source,
-          originSessionId: input.sessionId,
-          sourceRevision: input.sourceRevision ?? null,
-          environmentFingerprint: input.environmentFingerprint ?? null,
-        });
-    this.linkSession(track.id, input.sessionId);
-    return this.get(track.id) ?? track;
-  }
-
-  private promptReferenceCounts(prompt: string): Map<string, number> {
-    const counts = new Map<string, number>();
-    const references = [...new Set(
-      [...prompt.matchAll(/\b[a-z][a-z0-9]*_[a-z0-9]{8,}\b/giu)]
-        .map((match) => match[0].toLowerCase()),
-    )].slice(0, 128);
-    if (references.length === 0) return counts;
-    const resourceLookup = this.database.prepare(`
-      SELECT investigation_id FROM campaign_track_resources
-      WHERE resource_id = ?
-    `);
-    const sessionLookup = this.database.prepare(`
-      SELECT investigation_id FROM campaign_track_sessions
-      WHERE session_id = ?
-    `);
-    for (const reference of references) {
-      const rows = [
-        ...(resourceLookup.all(reference) as Array<{ investigation_id: string }>),
-        ...(sessionLookup.all(reference) as Array<{ investigation_id: string }>),
-      ];
-      for (const row of rows) {
-        counts.set(row.investigation_id, (counts.get(row.investigation_id) ?? 0) + 1);
-      }
-    }
-    return counts;
+    return this.create({
+      title: sessionTitle,
+      objective: input.objective,
+      stage: inferStage(input.objective),
+      source: input.source,
+      originSessionId: input.sessionId,
+      sourceRevision: input.sourceRevision ?? null,
+      environmentFingerprint: input.environmentFingerprint ?? null,
+      assignmentSource: "runtime_new",
+      assignmentRationale: "No investigation was assigned before the research runtime started.",
+    });
   }
 
   public create(input: CreateCampaignTrackInput): CampaignTrackRecord {
@@ -644,12 +600,26 @@ export class CampaignTrackStore {
     input: CreateCampaignTrackInput,
     identity: Pick<CampaignTrackRecord, "workspaceName" | "subjectId" | "subjectName"> = this.context,
   ): CampaignTrackRecord {
+    if (input.originSessionId) {
+      const assigned = this.getForSession(input.originSessionId);
+      if (assigned) {
+        throw new Error(
+          `Session ${input.originSessionId} is already assigned to investigation ${assigned.id}; a new investigation cannot be created.`,
+        );
+      }
+    }
     const title = requiredText(input.title, "campaign track title");
     const titleNorm = normalizeText(title);
     const existing = this.database.prepare(
       "SELECT * FROM campaign_tracks WHERE workspace_id = ? AND title_norm = ?",
     ).get(this.context.workspaceId, titleNorm) as SqlRow | undefined;
-    if (existing) return trackFromRow(existing);
+    if (existing) {
+      if (!input.originSessionId) return trackFromRow(existing);
+      return this.createRecord({
+        ...input,
+        title: `${title} (${stableId("session", input.originSessionId).slice(-8)})`,
+      }, identity);
+    }
     const now = nowIso();
     const id = stableId("investigation", `${this.context.workspaceId}\0${titleNorm}`);
     this.database.prepare(`
@@ -664,7 +634,12 @@ export class CampaignTrackStore {
       title, titleNorm, input.objective.trim(), input.stage ?? inferStage(input.objective), input.source ?? "manual",
       input.originSessionId ?? null, input.sourceRevision ?? null, input.environmentFingerprint ?? null, now, now,
     );
-    if (input.originSessionId) this.linkSession(id, input.originSessionId);
+    if (input.originSessionId) {
+      this.linkSession(id, input.originSessionId, {
+        ...(input.assignmentSource ? { source: input.assignmentSource } : {}),
+        ...(input.assignmentRationale ? { rationale: input.assignmentRationale } : {}),
+      });
+    }
     return this.get(id)!;
   }
 
@@ -679,8 +654,8 @@ export class CampaignTrackStore {
     const row = this.database.prepare(`
       SELECT t.* FROM campaign_tracks t
       JOIN campaign_track_sessions s ON s.investigation_id = t.id
-      WHERE s.session_id = ? AND t.workspace_id = ? AND t.status <> 'archived'
-      ORDER BY t.updated_at DESC LIMIT 1
+      WHERE s.session_id = ? AND t.workspace_id = ?
+      LIMIT 1
     `).get(sessionId, this.context.workspaceId) as SqlRow | undefined;
     return row ? trackFromRow(row) : null;
   }
@@ -750,16 +725,39 @@ export class CampaignTrackStore {
     return this.requireTrack(id);
   }
 
-  public linkSession(investigationId: string, sessionId: string): void {
+  public linkSession(
+    investigationId: string,
+    sessionId: string,
+    assignment: CampaignTrackSessionAssignment = {},
+  ): void {
     this.requireTrack(investigationId);
+    const normalizedSessionId = requiredText(sessionId, "sessionId");
+    const existing = this.database.prepare(
+      "SELECT investigation_id FROM campaign_track_sessions WHERE session_id = ?",
+    ).get(normalizedSessionId) as { investigation_id: string } | undefined;
+    if (existing && existing.investigation_id !== investigationId) {
+      throw new Error(
+        `Session ${normalizedSessionId} is already assigned to investigation ${existing.investigation_id}; investigation assignment is immutable.`,
+      );
+    }
     const now = nowIso();
-    this.database.prepare(
-      "INSERT OR IGNORE INTO campaign_track_sessions(investigation_id, session_id, linked_at) VALUES (?, ?, ?)",
-    ).run(investigationId, requiredText(sessionId, "sessionId"), now);
+    if (!existing) {
+      this.database.prepare(`
+        INSERT INTO campaign_track_sessions(
+          investigation_id, session_id, linked_at, assignment_source, assignment_rationale
+        ) VALUES (?, ?, ?, ?, ?)
+      `).run(
+        investigationId,
+        normalizedSessionId,
+        now,
+        assignment.source?.trim() || "unspecified",
+        assignment.rationale?.trim() || "",
+      );
+    }
     this.database.prepare(
       "INSERT OR IGNORE INTO campaign_track_resources(investigation_id, resource_kind, resource_id, role, linked_at) VALUES (?, 'session', ?, 'execution', ?)",
-    ).run(investigationId, sessionId, now);
-    this.backfillSessionResources(investigationId, sessionId);
+    ).run(investigationId, normalizedSessionId, now);
+    this.backfillSessionResources(investigationId, normalizedSessionId);
     this.touch(investigationId);
   }
 

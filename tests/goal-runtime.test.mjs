@@ -68,7 +68,7 @@ test("research goal completion is inferred from an objective_achieved dispositio
   assert.deepEqual(resumed.continueAfterRootResponse(), []);
 });
 
-test("binding requests and steering require a consistent completion audit before goal mode stops", () => {
+test("binding requests and steering require one bounded completion audit before goal mode stops", () => {
   const recorder = new ResearchDispositionRecorder();
   const runtime = new ResearchGoalRuntime({
     objective: "Verify the complete synthetic parser correction.",
@@ -100,13 +100,29 @@ test("binding requests and steering require a consistent completion audit before
 
   recorder.record(disposition({
     outcome: "objective_achieved",
-    summary: "The partial parser trace is still the strongest result.",
+    summary: "The completion audit confirms every binding requirement is satisfied.",
   }));
-  const [contradictionAudit] = runtime.continueAfterRootResponse(
-    "The audit confirms that no fixture marker was captured.",
-  );
-  assert.equal(runtime.snapshot().status, "active");
-  assert.match(contradictionAudit.content, /Goal completion audit required/);
+  assert.deepEqual(runtime.continueAfterRootResponse(
+    "The requested fixture marker was captured and the audit passed.",
+  ), []);
+  assert.equal(runtime.snapshot().status, "complete");
+  assert.equal(runtime.snapshot().turnsUsed, 2);
+});
+
+test("a non-achieved audit continues research and a later completion gets one fresh audit", () => {
+  const recorder = new ResearchDispositionRecorder();
+  const runtime = new ResearchGoalRuntime({
+    objective: "Verify the complete synthetic parser correction.",
+    currentRequest: "Do not stop until the designated fixture marker is captured.",
+    getDisposition: () => recorder.get(),
+    resetDisposition: () => recorder.resetForGoalContinuation(),
+  });
+
+  recorder.record(disposition({
+    outcome: "objective_achieved",
+    summary: "A partial parser trace was produced.",
+  }));
+  assert.equal(runtime.continueAfterRootResponse().length, 1);
 
   recorder.record(disposition({
     outcome: "objective_partially_achieved",
@@ -129,6 +145,66 @@ test("binding requests and steering require a consistent completion audit before
   }));
   assert.deepEqual(runtime.continueAfterRootResponse("Audit confirmed the capture."), []);
   assert.equal(runtime.snapshot().status, "complete");
+});
+
+test("completion audit does not loop on valid negative requirement language", () => {
+  const recorder = new ResearchDispositionRecorder();
+  const runtime = new ResearchGoalRuntime({
+    objective: "Reproduce the synthetic pointer disclosure.",
+    currentRequest: "A target marker is not required because this is not an arbitrary read.",
+    getDisposition: () => recorder.get(),
+    resetDisposition: () => recorder.resetForGoalContinuation(),
+  });
+
+  recorder.record(disposition({
+    outcome: "objective_achieved",
+    summary: "The pointer disclosure was reproduced; no target marker was required.",
+  }));
+  assert.equal(runtime.continueAfterRootResponse(
+    "The result is a pointer disclosure, not an arbitrary read.",
+  ).length, 1);
+
+  recorder.record(disposition({
+    outcome: "objective_achieved",
+    summary: "Audit passed: the target marker is not required and the result is not an arbitrary read.",
+  }));
+  assert.deepEqual(runtime.continueAfterRootResponse(
+    "All binding requirements are satisfied; no target marker was required.",
+  ), []);
+  assert.equal(runtime.snapshot().status, "complete");
+  assert.equal(runtime.snapshot().turnsUsed, 2);
+});
+
+test("new steering received during an audit requires one audit for the new fingerprint", () => {
+  const recorder = new ResearchDispositionRecorder();
+  const runtime = new ResearchGoalRuntime({
+    objective: "Verify the synthetic parser correction.",
+    currentRequest: "Capture the designated fixture marker.",
+    getDisposition: () => recorder.get(),
+    resetDisposition: () => recorder.resetForGoalContinuation(),
+  });
+
+  recorder.record(disposition({
+    outcome: "objective_achieved",
+    summary: "The fixture marker was captured.",
+  }));
+  assert.equal(runtime.continueAfterRootResponse().length, 1);
+
+  runtime.noteAuthoritativeUserSteering(["Also verify the marker on the alternate fixture."]);
+  recorder.record(disposition({
+    outcome: "objective_achieved",
+    summary: "Both fixture markers were captured.",
+  }));
+  assert.equal(runtime.continueAfterRootResponse().length, 1);
+  assert.equal(runtime.snapshot().status, "active");
+
+  recorder.record(disposition({
+    outcome: "objective_achieved",
+    summary: "The audit confirms both fixture markers.",
+  }));
+  assert.deepEqual(runtime.continueAfterRootResponse(), []);
+  assert.equal(runtime.snapshot().status, "complete");
+  assert.equal(runtime.snapshot().turnsUsed, 3);
 });
 
 test("completion audits accept resolved-requirement language without scheduling another audit", () => {

@@ -13,6 +13,81 @@ import {
   createResearchStorageLayout, ensureResearchStorageLayout,
 } from '../packages/research-agent/dist/index.js';
 
+test('publication preserves directory evidence references without reading them as files', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-publication-directory-evidence-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const artifactDirectoryPath = join(directory, 'runtime', 'artifacts');
+  mkdirSync(workspaceRoot);
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath };
+  initializeWorkspaceProject(workspaceRoot, options.workspaceId);
+  const evidenceDirectory = join(workspaceRoot, 'investigations', 'investigation-example', 'captured-output');
+  mkdirSync(evidenceDirectory, { recursive: true });
+  writeFileSync(join(evidenceDirectory, 'result.txt'), 'synthetic result\n');
+  const context = { workspaceId: options.workspaceId, workspaceName: 'Example Research', subjectId: 'subject-example', subjectName: 'Example Subject' };
+  const graph = new MemoryGraphStore({ workspaceRoot, databasePath, context });
+  try {
+    const memory = graph.save({
+      type: 'invariant',
+      title: 'Directory evidence reference example',
+      body: 'A synthetic result collection is retained by its workspace path.',
+      status: 'suspected',
+      evidence: [{
+        kind: 'command',
+        pathBase: 'workspace',
+        path: 'investigations/investigation-example/captured-output',
+        locator: {},
+        summary: 'Directory containing synthetic command output.',
+      }],
+    });
+    const checkpoint = checkpointWorkspaceResearch(options, 'Publish directory evidence reference');
+    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    const published = readFileSync(join(workspaceRoot, 'memories', `${memory.id}.md`), 'utf8');
+    assert.match(published, /investigations\/investigation-example\/captured-output/u);
+  } finally {
+    graph.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('publication gives opaque legacy record IDs stable filesystem-safe paths', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-publication-opaque-id-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const artifactDirectoryPath = join(directory, 'runtime', 'artifacts');
+  mkdirSync(workspaceRoot);
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath };
+  initializeWorkspaceProject(workspaceRoot, options.workspaceId);
+  const context = { workspaceId: options.workspaceId, workspaceName: 'Example Research', subjectId: 'subject-example', subjectName: 'Example Subject' };
+  const graph = new MemoryGraphStore({ workspaceRoot, databasePath, context });
+  const opaqueId = 'legacy:example/memory';
+  try {
+    const memory = graph.save({
+      id: opaqueId,
+      type: 'invariant',
+      title: 'Legacy opaque identifier example',
+      body: 'Original synthetic body.',
+      status: 'suspected',
+    });
+    const checkpoint = checkpointWorkspaceResearch(options, 'Publish opaque legacy record');
+    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+
+    const memoryPath = `memories/encoded-${workspaceContentHash(opaqueId)}.md`;
+    const absoluteMemoryPath = join(workspaceRoot, memoryPath);
+    const published = readFileSync(absoluteMemoryPath, 'utf8');
+    assert.match(published, /"id": "legacy:example\/memory"/u);
+    assert.equal(existsSync(join(workspaceRoot, 'memories', 'legacy:example', 'memory.md')), false);
+
+    writeFileSync(absoluteMemoryPath, published.replace('Original synthetic body.', 'Revised synthetic body.'));
+    importWorkspaceResearchFile(options, memoryPath, memory.revision);
+    assert.equal(graph.get(opaqueId).body, 'Revised synthetic body.');
+    assert.equal(checkpointWorkspaceResearch(options, 'Publish revised opaque legacy record').status, 'committed');
+  } finally {
+    graph.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('completed execution evidence remains pinned when its workspace candidate is revised', () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-publication-pinned-example-'));
   const workspaceRoot = join(directory, 'workspace');

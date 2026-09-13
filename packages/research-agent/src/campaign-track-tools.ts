@@ -17,10 +17,115 @@ import type { ResearchToolAction } from "./types.js";
 
 const PRIORITIES = ["critical", "high", "medium", "low"] as const;
 
+export interface ActiveInvestigationBinding {
+  get(): string | null;
+  assign(investigationId: string): void;
+}
+
+export function createCampaignTrackAssignmentTools(
+  store: CampaignTrackStore,
+  sessionId: string,
+  sessionObjective: string,
+  binding: ActiveInvestigationBinding,
+): ResearchExecutableTool[] {
+  let candidatesListed = false;
+  return [
+    tool(
+      "investigation.candidates",
+      "investigation_candidates",
+      "Inspect the existing investigation candidates before making the session's permanent assignment. Use this after getting oriented in the workspace; compare concrete research questions, mechanisms, proof chains, and intended evidence outcomes rather than keywords.",
+      "read",
+      {
+        type: "object",
+        properties: {
+          investigationId: { type: "string", description: "Inspect one candidate in detail after listing the candidates." },
+        },
+      },
+      (input) => {
+        const investigationId = string(input.investigationId);
+        if (investigationId) {
+          const detail = store.detail(investigationId);
+          if (!detail || detail.status === "archived") {
+            throw new Error(`Investigation candidate is unavailable: ${investigationId}`);
+          }
+          return detail;
+        }
+        candidatesListed = true;
+        return store.list({ includeArchived: false });
+      },
+    ),
+    tool(
+      "investigation.assign",
+      "investigation_assign",
+      "Permanently assign this session to exactly one investigation after orientation. Attach only for the same concrete research question, mechanism, proof chain, and intended evidence outcome. Shared workspace, vocabulary, generic continuation language, or a single candidate are insufficient. Create a new investigation when the work is distinct or uncertain. This can succeed only once.",
+      "write",
+      {
+        type: "object",
+        required: ["decision", "orientationSummary", "rationale"],
+        properties: {
+          decision: { type: "string", enum: ["attach", "create"] },
+          investigationId: { type: "string", description: "Required for attach; must be an existing candidate id." },
+          title: { type: "string", description: "Required for create; concise durable investigation title." },
+          objective: { type: "string", description: "Required for create; specific durable evidence objective." },
+          orientationSummary: { type: "string", description: "What workspace state, source, history, or candidate details were inspected before deciding." },
+          rationale: { type: "string", description: "Reasoned comparison of the concrete mechanism, proof chain, and evidence outcome." },
+        },
+      },
+      (input, context) => {
+        if (context?.agentId && context.agentId !== "root") {
+          throw new Error("Only the root research agent may assign the session investigation.");
+        }
+        const existing = store.getForSession(sessionId);
+        if (existing || binding.get()) {
+          throw new Error(`Session ${sessionId} already has an investigation assignment; it cannot be changed.`);
+        }
+        if (!candidatesListed) {
+          throw new Error("Call investigation.candidates to inspect the current candidate set before assigning this session.");
+        }
+        const decision = requiredString(input.decision, "decision");
+        const orientationSummary = requiredString(input.orientationSummary, "orientationSummary");
+        const rationale = requiredString(input.rationale, "rationale");
+        const assignmentRationale = `Orientation: ${orientationSummary}\nDecision: ${rationale}`;
+        let assignedId: string;
+        if (decision === "attach") {
+          const investigationId = requiredString(input.investigationId, "investigationId");
+          const candidate = store.get(investigationId);
+          if (!candidate || candidate.status === "archived") {
+            throw new Error(`Investigation is unavailable for assignment: ${investigationId}`);
+          }
+          store.linkSession(investigationId, sessionId, {
+            source: "agent_reasoned",
+            rationale: assignmentRationale,
+          });
+          assignedId = investigationId;
+        } else if (decision === "create") {
+          assignedId = store.create({
+            title: requiredString(input.title, "title"),
+            objective: typeof input.objective === "string" && input.objective.trim()
+              ? input.objective.trim()
+              : sessionObjective,
+            source: "runtime",
+            originSessionId: sessionId,
+            assignmentSource: "agent_reasoned",
+            assignmentRationale,
+          }).id;
+        } else {
+          throw new Error(`Unsupported investigation assignment decision: ${decision}`);
+        }
+        binding.assign(assignedId);
+        return store.detail(assignedId);
+      },
+    ),
+  ];
+}
+
 export function createCampaignTrackTools(
   store: CampaignTrackStore,
-  activeInvestigationId: string,
+  activeInvestigation: string | (() => string),
 ): ResearchExecutableTool[] {
+  const activeInvestigationId = (): string => typeof activeInvestigation === "string"
+    ? activeInvestigation
+    : activeInvestigation();
   return [
     tool(
       "investigation.status",
@@ -34,7 +139,7 @@ export function createCampaignTrackTools(
           limit: { type: "number", minimum: 1, maximum: 20 },
         },
       },
-      (input) => store.status(activeInvestigationId, {
+      (input) => store.status(activeInvestigationId(), {
         ...(typeof input.afterRevision === "number" ? { afterRevision: Math.floor(input.afterRevision) } : {}),
         ...(typeof input.limit === "number" ? { limit: Math.floor(input.limit) } : {}),
       }),
@@ -54,7 +159,7 @@ export function createCampaignTrackTools(
         },
       },
       (input) => store.recall({
-        investigationId: activeInvestigationId,
+        investigationId: activeInvestigationId(),
         query: requiredString(input.query, "query"),
         ...(string(input.stage) ? { stage: string(input.stage) as CampaignTrackStage } : {}),
         ...(typeof input.limit === "number" ? { maxNodes: Math.floor(input.limit) } : {}),
@@ -76,7 +181,7 @@ export function createCampaignTrackTools(
         },
       },
       (input) => store.upsertQuestion({
-        investigationId: activeInvestigationId,
+        investigationId: activeInvestigationId(),
         text: requiredString(input.text, "text"),
         ...(string(input.status) ? { status: string(input.status) as InvestigationQuestion["status"] } : {}),
         ...(string(input.priority) ? { priority: string(input.priority) as InvestigationQuestion["priority"] } : {}),
@@ -104,7 +209,7 @@ export function createCampaignTrackTools(
         },
       },
       (input) => store.upsertExperiment({
-        investigationId: activeInvestigationId,
+        investigationId: activeInvestigationId(),
         title: requiredString(input.title, "title"),
         ...(string(input.status) ? { status: string(input.status) as InvestigationExperiment["status"] } : {}),
         ...(string(input.questionId) ? { questionId: string(input.questionId) } : {}),
@@ -135,7 +240,7 @@ export function createCampaignTrackTools(
         },
       },
       (input) => store.addObservation({
-        investigationId: activeInvestigationId,
+        investigationId: activeInvestigationId(),
         ...(string(input.experimentId) ? { experimentId: string(input.experimentId) } : {}),
         ...(string(input.memoryNodeId) ? { memoryNodeId: string(input.memoryNodeId) } : {}),
         kind: requiredString(input.kind, "kind") as InvestigationObservation["kind"],
@@ -165,7 +270,7 @@ export function createCampaignTrackTools(
         },
       },
       (input) => store.upsertNextAction({
-        investigationId: activeInvestigationId,
+        investigationId: activeInvestigationId(),
         title: requiredString(input.title, "title"),
         ...(typeof input.rationale === "string" ? { rationale: input.rationale } : {}),
         ...(string(input.status) ? { status: string(input.status) as InvestigationNextAction["status"] } : {}),
@@ -196,7 +301,7 @@ export function createCampaignTrackTools(
         },
       },
       (input, context) => store.reviewClaim({
-        investigationId: activeInvestigationId,
+        investigationId: activeInvestigationId(),
         claimId: requiredString(input.claimId, "claimId"),
         expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"),
         verdict: requiredString(input.verdict, "verdict") as "accept" | "revise" | "reject",

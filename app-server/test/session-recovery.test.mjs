@@ -65,6 +65,7 @@ test('trusts a durable completed capture when later worker cleanup exits nonzero
 test('does not recover explicit stops, policy failures, credentials, or invalid configuration', async () => {
   assert.equal(isRecoverableLongSessionFailure('Provider safety guardrail repeated.'), false);
   assert.equal(isRecoverableLongSessionFailure('Authentication credentials are unavailable.'), false);
+  assert.equal(isRecoverableLongSessionFailure('This session cannot continue because its enabled Anthropic collaborator (claude-opus-5) is not authenticated.'), false);
   assert.equal(isRecoverableLongSessionFailure('Invalid research profile configuration.'), false);
   assert.equal(isRecoverableLongSessionFailure('WebSocket disconnected unexpectedly.'), true);
 

@@ -26,7 +26,7 @@ export const MANAGED_TOOL_PLUGINS = [
   {
     id: "beale-investigations", name: "Investigations",
     description: "Use for investigation records, questions, observations, and configured experiments.",
-    tools: ["investigation.status", "investigation.recall", "investigation.question", "investigation.experiment", "investigation.observe", "investigation.next_action", "investigation.review_claim", "investigation.consolidate", "investigation.review_consolidation", "experiment.run"],
+    tools: ["investigation.candidates", "investigation.assign", "investigation.status", "investigation.recall", "investigation.question", "investigation.experiment", "investigation.observe", "investigation.next_action", "investigation.review_claim", "investigation.consolidate", "investigation.review_consolidation", "experiment.run"],
   },
   {
     id: "beale-runbooks", name: "Runbooks",

@@ -38,6 +38,10 @@ const transport: AppServerRuntimeTransport = {
   close: async () => { controlInput.end(); }
 };
 
+const reportStartupPhase = (phase: string, message: string): void => {
+  port.postMessage({ type: 'startup', phase, message });
+};
+
 port.on('message', (message: HostMessage) => {
   if (message.type === 'control') {
     controlInput.write(`${JSON.stringify(message.control)}\n`, 'utf8');
@@ -47,8 +51,13 @@ port.on('message', (message: HostMessage) => {
 });
 
 try {
+  reportStartupPhase('worker', 'Starting the isolated research runtime.');
   const { main } = await import('@beale/app-server-runtime/runtime');
-  await main(data.args, { transport });
+  await main(data.args, {
+    transport,
+    reportStartupPhase,
+    markReady: () => port.postMessage({ type: 'ready' })
+  });
   port.postMessage({ type: 'complete', exitCode: process.exitCode ?? 0 });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

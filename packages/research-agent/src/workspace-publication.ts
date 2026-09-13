@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
@@ -17,9 +17,22 @@ export interface WorkspacePublicationOptions {
 }
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
-function identifier(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u.test(value)) throw new Error("Research export requires a stable filesystem-safe record ID.");
+function recordIdentifier(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) throw new Error("Research export requires a stable non-empty record ID.");
   return value;
+}
+
+/**
+ * Canonical record IDs are opaque and may predate the workspace-file projection.
+ * Keep already-safe IDs readable, but derive a stable segment for namespaced or
+ * otherwise filesystem-unsafe IDs. The original ID remains in the file content
+ * and is the authority used by imports and typed operations.
+ */
+function fileIdentifier(value: unknown): string {
+  const id = recordIdentifier(value);
+  return /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u.test(id)
+    ? id
+    : `encoded-${workspaceContentHash(id)}`;
 }
 
 /**
@@ -58,6 +71,11 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     if (artifact) retainArtifact(artifact.id);
     else if (base === "workspace" && existsSync(candidate)) {
       assertWorkspaceChild(root, candidate);
+      // Evidence paths may intentionally identify a workspace directory. Keep
+      // that reference in the canonical record, but only pin byte-addressable
+      // regular files as raw evidence. Recursively retaining a directory would
+      // be unbounded, and reading it as a file raises EISDIR on POSIX hosts.
+      if (!statSync(candidate).isFile()) return;
       const hash = workspaceFileHash(candidate);
       const exported = `evidence/raw/${hash}`;
       const sizeBytes = retainWorkspaceArtifact(root, exported, candidate, hash);
@@ -84,10 +102,11 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       rules: owned('workspace_rules'), subject: owned('workspace_research_subjects'),
     });
     for (const claim of owned("app_server_research_claims")) {
-      const id = identifier(claim.id);
+      const id = recordIdentifier(claim.id);
+      const fileId = fileIdentifier(id);
       const evidence = rows("app_server_claim_evidence", "claim_id = ?", [id]);
       for (const entry of evidence) retainArtifact(entry.reference_id);
-      files[`claims/${id}.json`] = json({ schemaVersion: 1, ...claim, evidence,
+      files[`claims/${fileId}.json`] = json({ schemaVersion: 1, ...claim, evidence,
         transitions: rows("app_server_claim_transitions", "claim_id = ?", [id]),
         authorship: rows("app_server_claim_authorship", "claim_id = ?", [id]),
         components: rows("app_server_claim_components", "claim_id = ?", [id]),
@@ -98,11 +117,12 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       : owned("memory_nodes");
     const memoryIds = new Set(memories.map((row) => row.id));
     for (const memory of memories) {
-      const id = identifier(memory.id);
+      const id = recordIdentifier(memory.id);
+      const fileId = fileIdentifier(id);
       const evidence = rows("memory_evidence_refs", "node_id = ?", [id]);
       for (const entry of evidence) retainPath(entry.path, entry.path_base);
       const { body, ...metadata } = memory;
-      files[`memories/${id}.md`] = `<!-- Beale canonical memory; edit through memory tools or validated import. -->\n\n\`\`\`json\n${json({ schemaVersion: 1, ...metadata, workspace_id: options.workspaceId,
+      files[`memories/${fileId}.md`] = `<!-- Beale canonical memory; edit through memory tools or validated import. -->\n\n\`\`\`json\n${json({ schemaVersion: 1, ...metadata, workspace_id: options.workspaceId,
         workspaces: rows("memory_node_workspaces", "node_id = ? AND workspace_id = ?", [id, options.workspaceId]),
         tags: rows("memory_node_tags", "node_id = ?", [id]),
         assets: rows("memory_node_assets", "node_id = ?", [id]), evidence,
@@ -114,7 +134,8 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     }
     for (const [table, category] of [["app_server_runbooks", "runbooks"], ["app_server_reports", "reports"]] as const) {
       for (const record of owned(table)) {
-        const id = identifier(record.id);
+        const id = recordIdentifier(record.id);
+        const fileId = fileIdentifier(id);
         const path = resolve(options.artifactDirectoryPath, String(record.relative_path));
         assertWorkspaceChild(options.artifactDirectoryPath, path);
         const content = readFileSync(path, "utf8");
@@ -128,20 +149,21 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
             retainPath(executor?.workspacePath, 'workspace');
           }
         }
-        files[`${category}/${id}/${category === "runbooks" ? "runbook" : "report"}.${extension}`] = content;
-        files[`${category}/${id}/record.json`] = json({ schemaVersion: 2, ...record,
+        files[`${category}/${fileId}/${category === "runbooks" ? "runbook" : "report"}.${extension}`] = content;
+        files[`${category}/${fileId}/record.json`] = json({ schemaVersion: 2, ...record,
           revisions: rows('app_server_artifact_revisions', 'artifact_kind = ? AND artifact_id = ?', [category === 'runbooks' ? 'runbook' : 'report', id]),
           authorship: rows('app_server_model_authorship', 'resource_kind = ? AND resource_id = ?', [category === 'runbooks' ? 'runbook' : 'report', id]),
         });
         retainArtifact(record.submission_packet_artifact_id);
         retainArtifact(record.recording_artifact_id);
-        artifactPaths.set(path, `${category}/${id}/${category === "runbooks" ? "runbook" : "report"}.${extension}`);
+        artifactPaths.set(path, `${category}/${fileId}/${category === "runbooks" ? "runbook" : "report"}.${extension}`);
       }
     }
     for (const track of owned("campaign_tracks")) {
-      const investigationId = identifier(track.id);
+      const investigationId = recordIdentifier(track.id);
+      const investigationFileId = fileIdentifier(investigationId);
       const observations = rows("campaign_track_observations", "investigation_id = ?", [investigationId]);
-      files[`investigations/${investigationId}/record.json`] = json({
+      files[`investigations/${investigationFileId}/record.json`] = json({
         schemaVersion: 2,
         ...track,
         sessions: rows("campaign_track_sessions", "investigation_id = ?", [investigationId]),
@@ -179,16 +201,19 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     }
     const executions = owned("app_server_runbook_executions");
     for (const execution of executions) {
-      const cells = rows("app_server_runbook_cell_executions", "run_id = ?", [String(execution.run_id)]);
-      files[`evidence/execution-${identifier(execution.run_id)}.json`] = json({ schemaVersion: 1, ...execution, cells });
-      if (execution.completed_at) pins[`evidence/execution-${identifier(execution.run_id)}.json`] = workspaceContentHash(files[`evidence/execution-${identifier(execution.run_id)}.json`]!);
+      const runId = recordIdentifier(execution.run_id);
+      const path = `evidence/execution-${fileIdentifier(runId)}.json`;
+      const cells = rows("app_server_runbook_cell_executions", "run_id = ?", [runId]);
+      files[path] = json({ schemaVersion: 1, ...execution, cells });
+      if (execution.completed_at) pins[path] = workspaceContentHash(files[path]!);
     }
     for (const session of owned("app_server_sessions")) {
-      const id = identifier(session.id);
-      files[`traces/${id}/summary.md`] = `# ${String(session.title)}\n\nSession: ${id}\nStatus: ${String(session.status)}\n\n${String(session.summary)}\n`;
+      const id = recordIdentifier(session.id);
+      const fileId = fileIdentifier(id);
+      files[`traces/${fileId}/summary.md`] = `# ${String(session.title)}\n\nSession: ${id}\nStatus: ${String(session.status)}\n\n${String(session.summary)}\n`;
       if (options.sessionId === id && has("app_server_session_events")) {
         // Bounded pages avoid loading an entire long-running transcript into memory.
-        exportTrace(database, root, id);
+        exportTrace(database, root, id, fileId);
       }
     }
     database.exec("COMMIT");
@@ -198,8 +223,9 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       const path = `evidence/raw/${hash}`;
       const sizeBytes = retainWorkspaceArtifact(root, path, entry.path, hash);
       rawFiles[path] = hash;
-      files[`evidence/${identifier(id)}.json`] = json({ schemaVersion: 1, id, kind: entry.kind, purpose: entry.purpose, path, contentHash: hash, sizeBytes, sourceEventIds: entry.sourceEventIds });
-      pins[`evidence/${identifier(id)}.json`] = workspaceContentHash(files[`evidence/${identifier(id)}.json`]!);
+      const evidencePath = `evidence/${fileIdentifier(id)}.json`;
+      files[evidencePath] = json({ schemaVersion: 1, id, kind: entry.kind, purpose: entry.purpose, path, contentHash: hash, sizeBytes, sourceEventIds: entry.sourceEventIds });
+      pins[evidencePath] = workspaceContentHash(files[evidencePath]!);
       artifactPaths.set(resolve(entry.path), path);
     }
     // Exact known storage paths become portable references; never publish database or credential material.
@@ -222,13 +248,13 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
   } finally { database.close(); }
 }
 
-function exportTrace(database: DatabaseSync, root: string, sessionId: string): void {
+function exportTrace(database: DatabaseSync, root: string, sessionId: string, sessionFileId: string): void {
   // Shards are immutable exports at a bounded size; they are excluded from Git.
   let offset = 0;
   while (true) {
     const page = database.prepare("SELECT event_offset, event_json FROM app_server_session_events WHERE session_id=? AND event_offset>=? ORDER BY event_offset LIMIT 250").all(sessionId, offset) as Array<{ event_offset: number; event_json: string }>;
     if (!page.length) break;
-    atomicWorkspaceWrite(root, `traces/${sessionId}/events-${offset}.jsonl`, page.map((row) => row.event_json).join("\n") + "\n");
+    atomicWorkspaceWrite(root, `traces/${sessionFileId}/events-${offset}.jsonl`, page.map((row) => row.event_json).join("\n") + "\n");
     offset = page[page.length - 1]!.event_offset + 1;
   }
 }

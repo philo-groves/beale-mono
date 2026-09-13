@@ -47,6 +47,8 @@ test("all seven bundled tool plugins have unique ownership and compact matching 
   assert.equal(MANAGED_TOOL_PLUGINS.length, 7);
   const names = MANAGED_TOOL_PLUGINS.flatMap((plugin) => plugin.tools);
   assert.equal(new Set(names).size, names.length);
+  assert.equal(managedToolPluginId("investigation.candidates"), "beale-investigations");
+  assert.equal(managedToolPluginId("investigation.assign"), "beale-investigations");
   for (const plugin of MANAGED_TOOL_PLUGINS) {
     assert.match(plugin.description, /^Use for /);
     assert.ok(plugin.description.length < 160);

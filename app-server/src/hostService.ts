@@ -20,6 +20,7 @@ import {
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
+import { CampaignTrackStore } from '@beale/research-agent';
 import { runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
@@ -445,6 +446,14 @@ export class AppServerHostService {
         defaults.smallModel ? [[id, defaults.smallModel] as const] : []
       )))
     };
+    const investigationId = await this.resolveExistingSessionInvestigation({
+      sessionId,
+      workspace,
+      storage,
+      ...(request.launch.investigationId
+        ? { requestedInvestigationId: request.launch.investigationId }
+        : {})
+    });
     const runDirectory = readWorkspaceProject(workspace.workspacePath)
       ? join(workspace.workspacePath, 'traces', sessionId, 'outputs')
       : join(workspace.workspacePath, '.beale', 'app-server-runs');
@@ -494,7 +503,8 @@ export class AppServerHostService {
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(fastMode ? { fastMode: true } : {}),
-      profileId
+      profileId,
+      ...(investigationId ? { investigationId } : {})
     });
     await this.ensureCanonicalSession({
       sessionId,
@@ -521,7 +531,7 @@ export class AppServerHostService {
         workspaceRoot: workspace.workspacePath,
         workspaceDirectories: [workspace.workspacePath],
         ...(workspaceReferences.length > 0 ? { workspaceReferences } : {}),
-        ...(request.launch.investigationId ? { investigationId: request.launch.investigationId } : {}),
+        ...(investigationId ? { investigationId } : {}),
         capturePath,
         attemptId,
         promptMarkdown: request.launch.promptMarkdown,
@@ -573,6 +583,50 @@ export class AppServerHostService {
     };
   }
 
+  private async resolveExistingSessionInvestigation(input: {
+    sessionId: string;
+    workspace: AppServerHostWorkspace;
+    storage: AppServerHostStorage;
+    requestedInvestigationId?: string;
+  }): Promise<string | undefined> {
+    if (input.workspace.memoryBackend === 'disabled') return undefined;
+    const assigned = await this.databaseCoordinator.runWhenAvailable(
+      input.storage.databasePath,
+      () => this.withCampaignTrackStore(
+        input.workspace,
+        input.storage,
+        (store) => store.getForSession(input.sessionId)
+      )
+    );
+    if (assigned && input.requestedInvestigationId && input.requestedInvestigationId !== assigned.id) {
+      throw new Error(
+        `Session ${input.sessionId} is already assigned to investigation ${assigned.id}; investigation assignment is immutable.`
+      );
+    }
+    return assigned?.id;
+  }
+
+  private withCampaignTrackStore<T>(
+    workspace: AppServerHostWorkspace,
+    storage: AppServerHostStorage,
+    operation: (store: CampaignTrackStore) => T
+  ): T {
+    const store = new CampaignTrackStore({
+      databasePath: storage.databasePath,
+      context: {
+        workspaceId: workspace.workspaceId,
+        workspaceName: workspace.name,
+        subjectId: `subject_workspace:${workspace.workspaceId}`,
+        subjectName: workspace.name
+      }
+    });
+    try {
+      return operation(store);
+    } finally {
+      store.close();
+    }
+  }
+
   private async sameSubjectWorkspaceReferences(
     current: AppServerHostWorkspace,
     storage: AppServerHostStorage
@@ -618,6 +672,14 @@ export class AppServerHostService {
     const workspace = this.requireWorkspace(workspaceIdentifier);
     if (!readWorkspaceProject(workspace.workspacePath)) return { status: 'unmanaged', reason };
     const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    const resolvedInvestigationId = investigationId ?? await this.databaseCoordinator.runWhenAvailable(
+      storage.databasePath,
+      () => this.withCampaignTrackStore(
+        workspace,
+        storage,
+        (store) => store.getForSession(sessionId)?.id
+      )
+    );
     const key = workspaceOperationKey(workspace.workspacePath);
     const anotherSessionIsActive = [...this.workspaceWriters.entries()].some(([activeSessionId, root]) => activeSessionId !== sessionId && workspaceOperationKey(root) === key);
     const releaseResearchIndex = cleanupScratch && !anotherSessionIsActive && workspaceResearchAuthority(workspace.workspacePath) === 'files';
@@ -625,7 +687,7 @@ export class AppServerHostService {
       workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId,
       databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
       sessionId,
-      ...(investigationId ? { investigationId } : {}),
+      ...(resolvedInvestigationId ? { investigationId: resolvedInvestigationId } : {}),
     }, reason, undefined, cleanupScratch ? sessionId : undefined, this.databaseCoordinator,
     releaseResearchIndex ? { researchIndexAction: 'release' } : undefined);
     if (result.status === 'committed' || result.status === 'failed') {
@@ -1660,6 +1722,7 @@ function restartLaunchDescriptor(
     reasoningEffort?: string;
     fastMode?: boolean;
     profileId: string;
+    investigationId?: string;
   }
 ): StoredRestartLaunchDescriptor {
   return {
@@ -1678,7 +1741,7 @@ function restartLaunchDescriptor(
       },
       shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
       ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
-      ...(request.launch.investigationId ? { investigationId: request.launch.investigationId } : {}),
+      ...(resolved.investigationId ? { investigationId: resolved.investigationId } : {}),
       researchProfileId: request.launch.researchProfileId?.trim() || resolved.profileId,
       ...(request.launch.researchProfileHash
         ? { researchProfileHash: request.launch.researchProfileHash }
