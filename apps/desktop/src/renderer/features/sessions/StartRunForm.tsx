@@ -2,8 +2,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { ArrowRight, ChevronDown, Compass, FileText, Lightbulb, Play, Plus, RefreshCw, Repeat, ShieldAlert, Sparkles, Telescope, Waypoints, X } from 'lucide-react';
 import type {
-  DarwinVmSetupState,
-  DarwinVmSetupUpdate,
   HostEnvironment,
   OpenAiAccountStatus,
   ResearchGoalPhase,
@@ -46,7 +44,6 @@ import {
 import type { ResearchGoalSeed } from './SessionNextSteps';
 import { CommentaryView } from '../commentary/CommentaryView';
 import { SessionNextStepsWidget } from './SessionNextSteps';
-import { DarwinVmSetupDialog, loadOptionalDarwinVmSetup, shouldOfferDarwinVmSetup } from './DarwinVmSetupDialog';
 
 const PROMPT_STREAM_RENDER_INTERVAL_MS = 90;
 const MAX_RENDERED_GOAL_SUGGESTIONS = 12;
@@ -201,9 +198,6 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
   } | null>(null);
   const [credentialAccessBusy, setCredentialAccessBusy] = useState(false);
   const [credentialAccessError, setCredentialAccessError] = useState<string | null>(null);
-  const [darwinSetup, setDarwinSetup] = useState<{ input: StartRunInput; state: DarwinVmSetupState } | null>(null);
-  const [darwinSetupBusy, setDarwinSetupBusy] = useState(false);
-  const [darwinSetupError, setDarwinSetupError] = useState<string | null>(null);
   const preparingRun = useRef(false);
   const launchRun = async (input: StartRunInput): Promise<void> => {
     let latestRun: RunRecord | undefined;
@@ -228,39 +222,14 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
     }
   };
   const prepareRun = async (input: StartRunInput): Promise<void> => {
-    if (preparingRun.current || darwinSetup || credentialAccess) return;
+    if (preparingRun.current || credentialAccess) return;
     preparingRun.current = true;
-    setDarwinSetupBusy(true);
     try {
-      const state = await loadOptionalDarwinVmSetup(() => window.beale.getDarwinVmSetup());
-      if (state && shouldOfferDarwinVmSetup(state)) {
-        setDarwinSetup({ input, state });
-        setDarwinSetupError(null);
-      } else {
-        await prepareCredentials(input);
-      }
+      await prepareCredentials(input);
     } catch (caught) {
       await runAction(async () => { throw caught; });
     } finally {
       preparingRun.current = false;
-      setDarwinSetupBusy(false);
-    }
-  };
-  const continueAfterDarwinSetup = async (update?: DarwinVmSetupUpdate): Promise<void> => {
-    if (!darwinSetup || preparingRun.current) return;
-    preparingRun.current = true;
-    setDarwinSetupBusy(true);
-    setDarwinSetupError(null);
-    try {
-      if (update) await window.beale.updateDarwinVmSetup(update);
-      const input = darwinSetup.input;
-      setDarwinSetup(null);
-      await prepareCredentials(input);
-    } catch (caught) {
-      setDarwinSetupError(userFacingErrorMessage(caught));
-    } finally {
-      preparingRun.current = false;
-      setDarwinSetupBusy(false);
     }
   };
   const continueWithCredentialAccess = async (): Promise<void> => {
@@ -286,7 +255,7 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
     <>
       <ResearchSettingsForm
         {...settingsProps}
-        busy={props.busy || darwinSetupBusy}
+        busy={props.busy}
         researchProfile={snapshot.researchProfile ?? null}
         formIdentity={`${snapshot.workspace.workspaceId}:${snapshot.activeScope.id}:${snapshot.researchProfile?.profileHash ?? 'default'}`}
         workspaceName={snapshot.activeScope.workspaceName ?? 'Workspace'}
@@ -294,10 +263,6 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
         presentation={presentation}
         onSubmit={prepareRun}
       />
-      {darwinSetup ? (
-        <DarwinVmSetupDialog state={darwinSetup.state} busy={darwinSetupBusy} error={darwinSetupError}
-          onCancel={() => setDarwinSetup(null)} onContinue={(update) => void continueAfterDarwinSetup(update)} />
-      ) : null}
       {credentialAccess ? (
         <ProviderKeychainAccessDialog
           busy={credentialAccessBusy}

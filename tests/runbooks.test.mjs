@@ -188,7 +188,7 @@ test("runbook execution stages host-built executables into Tart VMs and records 
           workspacePath: "guest-probe",
           runAs: "root",
           argv: ["--verify"],
-          timeoutSeconds: 45,
+          timeoutSeconds: 1800,
           retainOnFailure: false,
         },
       }],
@@ -212,7 +212,8 @@ test("runbook execution stages host-built executables into Tart VMs and records 
     assert.deepEqual(calls[2].input.argv.slice(0, 3), ["/usr/bin/sudo", "--", calls[2].input.argv[2]]);
     assert.match(calls[2].input.argv[2], /^\/tmp\/\.beale-runbook-/);
     assert.deepEqual(calls[2].input.argv.slice(3), ["--verify"]);
-    assert.equal(calls[2].input.timeoutSeconds, 45);
+    assert.equal(calls[2].input.timeoutSeconds, 1800);
+    assert.equal(calls[2].input.bealeTimeoutMs, 1_800_000);
     assert.deepEqual(calls[3].input.argv.slice(0, 2), ["/bin/rm", "-f"]);
     assert.equal(calls[3].input.argv[2], calls[2].input.argv[2]);
     assert.equal(listResearchStorageArtifacts(layout, { kind: "runbook-guest-executable" }).length, 1);

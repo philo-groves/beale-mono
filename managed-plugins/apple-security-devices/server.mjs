@@ -29,6 +29,9 @@ const MAX_CONSOLE_OUTPUT_BYTES = 128 * 1024;
 const MAX_LOG_BYTES = 128 * 1024;
 const MAX_TART_COPY_BYTES = 4 * 1024 * 1024 * 1024;
 const DEFAULT_TART_COPY_BYTES = MAX_TART_COPY_BYTES;
+const MAX_TART_EXEC_TIMEOUT_SECONDS = 30 * 60;
+const DEFAULT_TART_EXEC_TIMEOUT_SECONDS = 60;
+const DEFAULT_DARWIN_BOOT_ARGUMENTS = 'rd=md0 serial=3 -v -noprogress wdt=-1 wlan-olyhal-abort';
 const TART_GUEST_DESCRIPTOR_RECOVERY_THRESHOLD = 96;
 const TART_GUEST_DESCRIPTOR_PROBE_INTERVAL = 12;
 const TART_GUEST_EXEC_HELPER_PATH = '/tmp/.beale-tart-exec-v3';
@@ -91,7 +94,7 @@ mkdirSync(TART_LOG_ROOT, { recursive: true, mode: 0o700 });
 
 const READ_ANNOTATION = toolAnnotation(['inspect'], 'read', ['apple-security-devices:observe'], 'never');
 const WRITE_ANNOTATION = toolAnnotation(['experiment'], 'write', ['apple-security-devices:mutate'], 'always');
-const TART_OPERATION_ANNOTATION = toolAnnotation(['experiment'], 'write', ['apple-security-devices:mutate'], 'never');
+const VM_OPERATION_ANNOTATION = toolAnnotation(['experiment'], 'write', ['apple-security-devices:mutate'], 'never');
 
 const TOOLS = [
   {
@@ -127,13 +130,13 @@ const TOOLS = [
       networkMode: { type: 'string', enum: ['shared', 'host-only'], default: 'shared' },
       waitSeconds: integerField(0, 90, 45)
     }, ['vmName']),
-    annotations: TART_OPERATION_ANNOTATION
+    annotations: VM_OPERATION_ANNOTATION
   },
   {
     name: 'stop_tart_vm',
     description: 'Stop a running Tart macOS VM.',
     inputSchema: objectSchema({ vmName: stringField(128), timeoutSeconds: integerField(1, 120, 30) }, ['vmName']),
-    annotations: TART_OPERATION_ANNOTATION
+    annotations: VM_OPERATION_ANNOTATION
   },
   {
     name: 'exec_tart_vm',
@@ -141,9 +144,9 @@ const TOOLS = [
     inputSchema: objectSchema({
       vmName: stringField(128),
       argv: { type: 'array', minItems: 1, maxItems: 128, items: stringField(4096) },
-      timeoutSeconds: integerField(1, 300, 60)
+      timeoutSeconds: integerField(1, MAX_TART_EXEC_TIMEOUT_SECONDS, DEFAULT_TART_EXEC_TIMEOUT_SECONDS)
     }, ['vmName', 'argv']),
-    annotations: TART_OPERATION_ANNOTATION
+    annotations: VM_OPERATION_ANNOTATION
   },
   {
     name: 'copy_to_tart_vm',
@@ -157,7 +160,7 @@ const TOOLS = [
       maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
       timeoutSeconds: integerField(1, 3600, 900)
     }, ['vmName', 'localPath', 'guestPath']),
-    annotations: TART_OPERATION_ANNOTATION
+    annotations: VM_OPERATION_ANNOTATION
   },
   {
     name: 'copy_from_tart_vm',
@@ -171,7 +174,7 @@ const TOOLS = [
       maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
       timeoutSeconds: integerField(1, 3600, 900)
     }, ['vmName', 'guestPath', 'localPath']),
-    annotations: TART_OPERATION_ANNOTATION
+    annotations: VM_OPERATION_ANNOTATION
   },
   {
     name: 'list_physical_iphones',
@@ -207,8 +210,8 @@ const TOOLS = [
   },
   {
     name: 'inspect_darwin_vm',
-    description: 'Inspect the configured Darwin VM checkout, or an explicit checkoutRoot, for its built QEMU and required, optionally hashed firmware artifacts.',
-    inputSchema: objectSchema({ checkoutRoot: stringField(4096), hashArtifacts: { type: 'boolean', default: false } }),
+    description: 'Inspect an existing Darwin VM checkout for its built QEMU and required, optionally hashed firmware artifacts.',
+    inputSchema: objectSchema({ checkoutRoot: stringField(4096), hashArtifacts: { type: 'boolean', default: false } }, ['checkoutRoot']),
     annotations: READ_ANNOTATION
   },
   {
@@ -225,19 +228,22 @@ const TOOLS = [
   },
   {
     name: 'start_darwin_vm',
-    description: 'Start the configured Darwin VM checkout (or explicit checkoutRoot) through built QEMU with no emulated network device, host share, graphics, or QEMU monitor.',
+    description: 'Start an existing Darwin VM checkout through built QEMU with no emulated network device, host share, graphics, or QEMU monitor.',
     inputSchema: objectSchema({
       checkoutRoot: stringField(4096),
       memoryMiB: integerField(2048, 32768, 8192),
-      bootArguments: stringField(2048)
-    }),
-    annotations: WRITE_ANNOTATION
+      bootArguments: {
+        ...stringField(2048),
+        description: 'Additional boot arguments appended to the required Darwin VM baseline.'
+      }
+    }, ['checkoutRoot']),
+    annotations: VM_OPERATION_ANNOTATION
   },
   {
     name: 'stop_darwin_vm',
     description: 'Stop a darwin-vm process previously started by this plugin.',
     inputSchema: objectSchema({ runId: runIdField() }, ['runId']),
-    annotations: WRITE_ANNOTATION
+    annotations: VM_OPERATION_ANNOTATION
   },
   {
     name: 'run_darwin_vm_console_command',
@@ -247,7 +253,7 @@ const TOOLS = [
       command: stringField(1024),
       readMilliseconds: integerField(100, 5000, 1000)
     }, ['runId', 'command']),
-    annotations: WRITE_ANNOTATION
+    annotations: VM_OPERATION_ANNOTATION
   }
 ];
 
@@ -542,7 +548,13 @@ async function execTartVm(args) {
   const vmName = safeVmName(args.vmName);
   const argv = safeArgv(args.argv);
   if (argv[0].startsWith('-')) throw new Error('The guest executable must not begin with a hyphen.');
-  const timeoutSeconds = boundedInteger(args.timeoutSeconds, 1, 300, 60);
+  const timeoutSeconds = optionalBoundedInteger(
+    args.timeoutSeconds,
+    1,
+    MAX_TART_EXEC_TIMEOUT_SECONDS,
+    DEFAULT_TART_EXEC_TIMEOUT_SECONDS,
+    'timeoutSeconds'
+  );
   const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10));
   const result = await runTartGuestCommand(vmName, argv, timeoutSeconds, transport);
   return { ...commandResult(result), transport };
@@ -1226,19 +1238,13 @@ async function launchPhysicalIphoneApp(args) {
 }
 
 async function darwinVmEnvironmentStatus() {
-  const configured = Boolean(process.env.BEALE_DARWIN_VM_CHECKOUT);
-  if (process.platform === 'win32') return { available: false, configured, detail: 'The Darwin VM launcher requires a macOS or Linux app-server host.' };
-  if (!configured) return { available: false, configured, detail: 'Use the session-start setup dialog or supply a prepared checkoutRoot to inspect_darwin_vm.' };
-  try {
-    const inspection = await inspectDarwinVm({});
-    return { available: inspection.ready, configured, errors: inspection.errors, detail: 'Artifact checks do not prove boot success or device/build compatibility.' };
-  } catch {
-    return { available: false, configured, detail: 'The saved checkout is unavailable. Reconfigure it or supply a prepared checkoutRoot to inspect_darwin_vm.' };
-  }
+  return process.platform === 'win32'
+    ? { available: false, detail: 'The Darwin VM launcher requires a macOS or Linux app-server host.' }
+    : { available: true, detail: 'Supply the existing VM checkout to inspect_darwin_vm or start_darwin_vm.' };
 }
 
 async function inspectDarwinVm(args) {
-  const checkoutRoot = canonicalDirectory(args.checkoutRoot ?? process.env.BEALE_DARWIN_VM_CHECKOUT, 'checkoutRoot');
+  const checkoutRoot = canonicalDirectory(args.checkoutRoot, 'checkoutRoot');
   const inspection = await inspectDarwinCheckout(checkoutRoot, args.hashArtifacts === true);
   return {
     ready: inspection.errors.length === 0,
@@ -1250,14 +1256,17 @@ async function inspectDarwinVm(args) {
 }
 
 function listDarwinVmRuns() {
+  const records = readRunRecords();
+  for (const record of records) recoverDarwinRun(record);
   return {
-    runs: readRunRecords().map(publicRunRecord),
-    note: 'Only runs started by this plugin are listed.'
+    runs: records.map(publicRunRecord),
+    note: 'Only runs started by this plugin are listed. A verified live QEMU process is reattached after an MCP restart.'
   };
 }
 
 function readDarwinVmLog(args) {
   const record = readRunRecord(args.runId);
+  recoverDarwinRun(record);
   const maxBytes = boundedInteger(args.maxBytes, 1024, MAX_LOG_BYTES, 32768);
   return {
     run: publicRunRecord(record),
@@ -1267,13 +1276,16 @@ function readDarwinVmLog(args) {
 }
 
 async function startDarwinVm(args) {
-  const checkoutRoot = canonicalDirectory(args.checkoutRoot ?? process.env.BEALE_DARWIN_VM_CHECKOUT, 'checkoutRoot');
+  const checkoutRoot = canonicalDirectory(args.checkoutRoot, 'checkoutRoot');
   const inspection = await inspectDarwinCheckout(checkoutRoot, false);
   if (inspection.errors.length) throw new Error(`darwin-vm checkout is not ready: ${inspection.errors.join(' ')}`);
   const memoryMiB = boundedInteger(args.memoryMiB, 2048, 32768, 8192);
-  const bootArguments = args.bootArguments === undefined
-    ? 'rd=md0 serial=3 -v -noprogress wdt=-1 wlan-olyhal-abort'
+  const additionalBootArguments = args.bootArguments === undefined
+    ? ''
     : requiredSingleLine(args.bootArguments, 'bootArguments', 2048);
+  const bootArguments = additionalBootArguments
+    ? `${DEFAULT_DARWIN_BOOT_ARGUMENTS} ${additionalBootArguments}`
+    : DEFAULT_DARWIN_BOOT_ARGUMENTS;
   const runId = `darwin_${randomUUID()}`;
   const runRoot = join(RUNS_ROOT, runId);
   mkdirSync(runRoot, { recursive: true, mode: 0o700 });
@@ -1548,7 +1560,11 @@ function readRunRecord(value) {
   const recordPath = join(runRoot, 'run.json');
   if (!existsSync(recordPath)) throw new Error('Unknown darwin-vm runId.');
   const record = JSON.parse(readFileSync(recordPath, 'utf8'));
-  if (!isRecord(record) || record.runId !== runId || !Number.isInteger(record.pid)) throw new Error('darwin-vm run record is invalid.');
+  if (!isRecord(record) || record.runId !== runId || !Number.isInteger(record.pid)
+    || typeof record.checkoutRoot !== 'string' || typeof record.serialSocketPath !== 'string'
+    || typeof record.serialLogPath !== 'string' || typeof record.qemuLogPath !== 'string') {
+    throw new Error('darwin-vm run record is invalid.');
+  }
   assertContained(runRoot, resolve(record.serialLogPath), 'serial log');
   assertContained(runRoot, resolve(record.qemuLogPath), 'QEMU log');
   const expectedSocketPath = join(tmpdir(), `beale-darwin-${runId.slice(-12)}.sock`);
@@ -1558,9 +1574,53 @@ function readRunRecord(value) {
 
 function activeDarwinRun(value) {
   const runId = requiredString(value, 'runId', 80);
-  const record = activeDarwinRuns.get(runId);
-  if (!record) throw new Error('The darwin-vm run is not active in this MCP process. Re-list runs and stop an orphaned QEMU process through an operator-controlled host workflow.');
+  const active = activeDarwinRuns.get(runId);
+  if (active) return active;
+  const record = readRunRecord(runId);
+  const recovered = recoverDarwinRun(record);
+  if (!recovered) {
+    throw new Error('The darwin-vm run cannot be safely controlled. Its recorded QEMU process is stopped or no longer matches the expected executable and serial endpoints.');
+  }
+  return recovered;
+}
+
+function recoverDarwinRun(record) {
+  if (activeDarwinRuns.has(record.runId)) return activeDarwinRuns.get(record.runId);
+  if (record.state !== 'running' || !isPidRunning(record.pid) || !darwinProcessIdentityMatches(record)) return null;
+  activeDarwinRuns.set(record.runId, record);
   return record;
+}
+
+function darwinProcessIdentityMatches(record) {
+  try {
+    const checkoutRoot = canonicalDirectory(record.checkoutRoot, 'recorded checkoutRoot');
+    const qemuPath = containedExistingFile(checkoutRoot, 'qemu-sptm/build/qemu-system-aarch64');
+    if (!qemuPath || !existsSync(record.serialSocketPath) || !statSync(record.serialSocketPath).isSocket()) return false;
+    const commandLine = processCommandLine(record.pid);
+    return commandLine.includes(qemuPath)
+      && commandLine.includes(`path=${record.serialSocketPath}`)
+      && commandLine.includes(`logfile=${record.serialLogPath}`);
+  } catch {
+    return false;
+  }
+}
+
+function processCommandLine(pid) {
+  if (process.platform === 'linux') {
+    try {
+      return readFileSync(`/proc/${pid}/cmdline`).toString('utf8').replaceAll('\0', ' ').trim();
+    } catch {
+      return '';
+    }
+  }
+  if (process.platform === 'darwin') {
+    try {
+      return runCommandSync('/bin/ps', ['-p', String(pid), '-o', 'command=']).trim();
+    } catch {
+      return '';
+    }
+  }
+  return '';
 }
 
 function writeRunRecord(record) {
@@ -1571,10 +1631,12 @@ function writeRunRecord(record) {
 }
 
 function publicRunRecord(record) {
-  const running = record.state === 'running' && isPidRunning(record.pid);
+  const processRunning = record.state === 'running' && isPidRunning(record.pid);
+  const controllable = processRunning && activeDarwinRuns.has(record.runId);
   return {
     runId: record.runId,
-    state: running ? 'running' : 'stopped',
+    state: controllable ? 'running' : processRunning ? 'orphaned' : 'stopped',
+    controllable,
     startedAt: record.startedAt,
     stoppedAt: record.stoppedAt ?? record.exitedAt ?? null,
     memoryMiB: record.memoryMiB
@@ -2175,6 +2237,14 @@ function requiredSingleLine(value, field, maxLength) {
 
 function boundedInteger(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
+}
+
+function optionalBoundedInteger(value, minimum, maximum, fallback, field) {
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${field} must be an integer from ${minimum} to ${maximum}.`);
+  }
+  return value;
 }
 
 function publicError(error, args = {}) {

@@ -896,8 +896,6 @@ async function harnessOperation(operation: AppServerProtocolOperation, options: 
       cloneMode: repositoryCloneMode(input.cloneMode),
       ...(optionalText(input.repositoryStoreDirectory) ? { repositoryStoreDirectory: optionalText(input.repositoryStoreDirectory)! } : {})
     });
-    case 'plugin.darwin_vm.get': return pluginRegistry(input).getDarwinVmSetup();
-    case 'plugin.darwin_vm.update': return pluginRegistry(input).updateDarwinVmSetup(input.update as import('@beale/research-agent').DarwinVmSetupUpdate);
     case 'plugin.list': return pluginRegistry(input).getState();
     case 'plugin.add_filesystem': return pluginRegistry(input).addFromFilesystem(requiredText(input.pluginRoot, 'pluginRoot'));
     case 'plugin.add_repository': return pluginRegistry(input).addFromRepository(requiredText(input.repositoryUrl, 'repositoryUrl'));

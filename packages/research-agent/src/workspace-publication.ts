@@ -17,9 +17,32 @@ export interface WorkspacePublicationOptions {
 }
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
+const PRIOR_ART_PAYLOAD_PATH = /^references\/prior-art\/[a-f0-9]{64}\.json$/u;
 function recordIdentifier(value: unknown): string {
   if (typeof value !== "string" || value.length === 0) throw new Error("Research export requires a stable non-empty record ID.");
   return value;
+}
+
+function publishPriorArtRows(rows: readonly Row[], files: Record<string, string>): Row[] {
+  return rows.map((row) => {
+    if (typeof row.data_json !== 'string') throw new Error('Saved prior art is missing its canonical data payload.');
+    const data = JSON.parse(row.data_json) as unknown;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Saved prior-art data must be a JSON object.');
+    const document = row.kind === 'document' ? data as Row : null;
+    const documentContent = document && typeof document.text === 'string' && Array.isArray(document.links)
+      ? { text: document.text, links: document.links }
+      : null;
+    const payload = json(documentContent ?? data);
+    const contentHash = workspaceContentHash(payload);
+    const path = `references/prior-art/${contentHash}.json`;
+    files[path] = payload;
+    const { data_json: _dataJson, ...metadata } = row;
+    if (documentContent) {
+      const { text: _text, links: _links, ...dataMetadata } = document!;
+      return { ...metadata, data: dataMetadata, dataRef: { path, contentHash, projection: 'document-content' } };
+    }
+    return { ...metadata, dataRef: { path, contentHash, projection: 'full' } };
+  });
 }
 
 /**
@@ -70,7 +93,11 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     const artifact = artifactByPath.get(candidate);
     if (artifact) retainArtifact(artifact.id);
     else if (base === "workspace" && existsSync(candidate)) {
-      assertWorkspaceChild(root, candidate);
+      // A relative "." reference identifies the workspace directory itself.
+      // It is valid evidence metadata, but there are no bounded bytes to pin.
+      // Keep strict child validation for every other path so traversal and
+      // symlink checks retain their existing fail-closed behavior.
+      if (candidate !== resolve(root)) assertWorkspaceChild(root, candidate);
       // Evidence paths may intentionally identify a workspace directory. Keep
       // that reference in the canonical record, but only pin byte-addressable
       // regular files as raw evidence. Recursively retaining a directory would
@@ -189,14 +216,15 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     }
     if (has('app_server_research_resources') || has('resource_prior_art')) {
       const resources = owned('app_server_research_resources');
+      const priorArt = publishPriorArtRows(owned('resource_prior_art'), files);
       files['references/resources.json'] = json({
-        schemaVersion: 1,
+        schemaVersion: 2,
         workspaceId: options.workspaceId,
         resources: resources.map((resource) => ({
           ...resource,
           touches: rows('app_server_research_resource_touches', 'resource_id = ?', [String(resource.id)]),
         })),
-        priorArt: owned('resource_prior_art'),
+        priorArt,
       });
     }
     const executions = owned("app_server_runbook_executions");
@@ -230,7 +258,7 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
     }
     // Exact known storage paths become portable references; never publish database or credential material.
     for (const [path, content] of Object.entries(files)) {
-      if (path.endsWith('.ipynb') || path.endsWith('.md')) continue;
+      if (path.endsWith('.ipynb') || path.endsWith('.md') || PRIOR_ART_PAYLOAD_PATH.test(path)) continue;
       let portable = content;
       for (const [absolute, exported] of artifactPaths) {
         portable = portable.split(absolute).join(exported).split(absolute.replace(/\\/gu, "\\\\")).join(exported);

@@ -183,6 +183,25 @@ const TERMINAL_APP_SERVER_STATES: ReadonlySet<AppServerCatalogEntry['state']> = 
   'stopped'
 ]);
 
+export async function waitForTerminalAppServerSession(
+  read: () => Promise<AppServerCatalogEntry | null>,
+  options: {
+    timeoutMs?: number;
+    intervalMs?: number;
+  } = {}
+): Promise<AppServerCatalogEntry | null> {
+  const timeoutMs = options.timeoutMs ?? APP_SERVER_FINALIZE_POLL_MS;
+  const intervalMs = options.intervalMs ?? APP_SERVER_FINALIZE_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const entry = await read();
+    if (entry && TERMINAL_APP_SERVER_STATES.has(entry.state)) return entry;
+    if (Date.now() >= deadline) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, intervalMs));
+  } while (Date.now() < deadline);
+  return null;
+}
+
 export interface AppServerRunEngineChange {
   workspaceRegistryChanged?: boolean;
   forceSnapshot?: boolean;
@@ -617,21 +636,14 @@ export class AppServerRunEngine {
     if (active.finalized) return;
     active.finalized = true;
     void (async (): Promise<void> => {
-      let exitCode: number | null = null;
-      let state: AppServerCatalogEntry['state'] | null = null;
-      const deadline = Date.now() + APP_SERVER_FINALIZE_POLL_MS;
-      while (Date.now() < deadline) {
-        const entry = active.appServerRecord && active.appServerSessionId
+      const entry = await waitForTerminalAppServerSession(async () => (
+        active.appServerRecord && active.appServerSessionId
           ? await fetchAppServerSession(active.appServerRecord, active.appServerSessionId)
-          : null;
-        if (!entry || TERMINAL_APP_SERVER_STATES.has(entry.state)) {
-          state = entry?.state ?? null;
-          exitCode = entry?.exitCode ?? null;
-          if (entry?.diagnostic) active.lastProcessDiagnostic = entry.diagnostic;
-          break;
-        }
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, APP_SERVER_FINALIZE_INTERVAL_MS));
-      }
+          : null
+      ));
+      const state = entry?.state ?? null;
+      const exitCode = entry?.exitCode ?? null;
+      if (entry?.diagnostic) active.lastProcessDiagnostic = entry.diagnostic;
       if (!this.disposed) {
         if (state === 'failed' && exitCode === null) {
           active.lastProcessDiagnostic = active.lastProcessDiagnostic ?? 'The app-server session ended with an error.';
@@ -691,9 +703,10 @@ export class AppServerRunEngine {
 
   private async requestUserStop(runId: string, active?: ActiveAppServerRun): Promise<void> {
     // The host owns the session even when Desktop is detached or still attaching.
-    // A launch must finish registering its session before DELETE can find it.
-    // Local setup can fail after the host accepted the launch; still stop by session ID.
-    if (active?.launchReady) await active.launchReady.catch(() => undefined);
+    // Do not await the start request: a required pre-session checkpoint can be
+    // the operation the user needs to cancel. The app-server reserves the
+    // caller-selected run ID before that checkpoint begins.
+    void active?.launchReady?.catch(() => undefined);
     const record = active?.appServerRecord ?? await ensureBealeAppServerRunning();
     await stopAppServerSession(record, active?.appServerSessionId ?? runId);
     if (active) {
@@ -1934,7 +1947,7 @@ export class AppServerRunEngine {
       decision: 'pending',
       reason: permissionMode === 'once_per_session' && targetBinary
         ? `Waiting for researcher approval to use ${targetBinary} for this session.`
-        : 'Waiting for researcher approval before changing a Windows application.',
+        : 'Waiting for researcher approval before running this computer-use action.',
       pending: true
     });
     active.shellApprovalRecords.set(approvalRequestId, approval.id);
@@ -2489,7 +2502,7 @@ export class AppServerRunEngine {
       return;
     }
 
-    if (code !== 0) {
+    if (code !== null && code !== 0) {
       const summary = active.lastProcessDiagnostic
         ? active.lastProcessDiagnostic
         : 'app-server host process exited with an error.';

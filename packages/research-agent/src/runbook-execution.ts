@@ -3,6 +3,7 @@ import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, re
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { ResearchExecutableTool, ResearchToolExecutionResult } from "./tool-registry.js";
 import { registerResearchStorageArtifact, resolveResearchStorageArtifact } from "./storage.js";
+import { MAX_MCP_CALL_TIMEOUT_MS } from "./mcp-tools.js";
 import type { ResearchArtifactRef, ResearchStorageLayout, ResearchToolAction } from "./types.js";
 import {
   RUNBOOK_PROOF_TARGETS,
@@ -384,7 +385,10 @@ async function executeTartVmCell(
         ? ["/usr/bin/sudo", "--", guestPath, ...executor.argv]
         : [guestPath, ...executor.argv],
       timeoutSeconds: executor.timeoutSeconds,
-      bealeTimeoutMs: Math.max(120_000, (executor.timeoutSeconds + 30) * 1_000),
+      bealeTimeoutMs: Math.min(
+        MAX_MCP_CALL_TIMEOUT_MS,
+        Math.max(120_000, (executor.timeoutSeconds + 30) * 1_000),
+      ),
     }, context);
     if (execution.status !== "complete") retained = executor.retainOnFailure && staged;
   } catch (error) {

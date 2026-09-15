@@ -44,6 +44,21 @@ type ProtocolInvoker = <T>(
   options: InvokeAppServerProtocolOptions
 ) => Promise<T>;
 
+function operationRequiresResearchIndex(operation: AppServerProtocolOperation): boolean {
+  return operation.startsWith('research.tools.')
+    || operation.startsWith('resource.')
+    || operation.startsWith('memory.')
+    || operation.startsWith('dreaming.')
+    || operation.startsWith('history.')
+    || operation.startsWith('claim.')
+    || operation.startsWith('investigation.')
+    || operation.startsWith('runbook.')
+    || operation.startsWith('report.')
+    || operation.startsWith('artifact.')
+    || operation.startsWith('suggestion.')
+    || operation === 'prompt.expand';
+}
+
 interface StoredRestartLaunchDescriptor {
   schemaVersion: 1;
   eligible: boolean;
@@ -237,7 +252,8 @@ export class AppServerHostService {
     const storage = request.operation === 'workspace.state'
       ? persistenceStorageFromInput(request.input)
       : storageProfileId ? this.registry.storageForProfile(storageProfileId) : null;
-    if (workspace && storage && workspaceResearchIndexNeedsRebuild(workspace.workspacePath)) {
+    if (workspace && storage && operationRequiresResearchIndex(request.operation)
+      && workspaceResearchIndexNeedsRebuild(workspace.workspacePath)) {
       const key = workspaceOperationKey(workspace.workspacePath);
       if (this.workspaceExclusiveOperations.has(key)) throw new Error('The workspace research index is unavailable during another workspace operation.');
       this.workspaceExclusiveOperations.add(key);
@@ -945,6 +961,29 @@ export class AppServerHostService {
         metadata: {
           manualControlState: input.state,
           manualControlAt: new Date().toISOString()
+        }
+      }
+    });
+  }
+
+  public async recordSessionLaunchFailure(input: {
+    request: AppServerSessionLaunchRequest;
+    sessionId: string;
+    attemptId: string;
+    diagnostic: string;
+  }): Promise<void> {
+    const workspace = this.requireWorkspace(input.request.launch.workspaceId);
+    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    await this.invokeProtocol('session.transition', {
+      args: ['session', 'transition', '--session-id', input.sessionId],
+      storage,
+      input: {
+        status: 'failed',
+        summary: 'The app-server session failed before its research worker started.',
+        attemptId: input.attemptId,
+        metadata: {
+          appServerLaunchFailure: true,
+          diagnostic: input.diagnostic.slice(-1_000)
         }
       }
     });

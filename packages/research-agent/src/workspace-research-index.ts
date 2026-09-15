@@ -130,7 +130,12 @@ function insertRows(database: DatabaseSync, table: string, source: readonly unkn
     const names = Object.keys(row).filter((name) => allowed.has(name));
     if (names.length === 0) continue;
     const statement = database.prepare(`INSERT OR IGNORE INTO ${table} (${names.join(",")}) VALUES (${names.map(() => "?").join(",")})`);
-    inserted += Number(statement.run(...names.map((name) => sqliteValue(row[name]))).changes);
+    try {
+      inserted += Number(statement.run(...names.map((name) => sqliteValue(row[name]))).changes);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Canonical research-index rebuild could not insert a ${table} row: ${message}`, { cause: error });
+    }
   }
   return inserted;
 }
@@ -163,8 +168,65 @@ function nested(row: Row, key: string): unknown[] {
   return value;
 }
 
+function priorArtRows(root: string, index: WorkspaceResearchIndex, resources: Row): Row[] {
+  return nested(resources, "priorArt").map((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("Canonical prior-art row must be an object.");
+    const row = candidate as Row;
+    if (typeof row.data_json === "string") return row;
+    const reference = row.dataRef;
+    if (!reference || typeof reference !== "object" || Array.isArray(reference)) throw new Error("Canonical prior-art row is missing its data reference.");
+    const { path, contentHash, projection } = reference as Row;
+    if (typeof path !== "string" || typeof contentHash !== "string"
+      || !/^references\/prior-art\/[a-f0-9]{64}\.json$/u.test(path)
+      || !/^[a-f0-9]{64}$/u.test(contentHash) || path !== `references/prior-art/${contentHash}.json`
+      || index.files[path] !== contentHash) {
+      throw new Error("Canonical prior-art data reference is invalid or absent from the research index.");
+    }
+    const content = readFileSync(join(root, path), "utf8");
+    if (workspaceContentHash(content) !== contentHash) throw new Error("Canonical prior-art data payload does not match its content hash.");
+    const payload = JSON.parse(content) as unknown;
+    let data: unknown;
+    if (projection === "full") {
+      data = payload;
+    } else if (projection === "document-content") {
+      if (!row.data || typeof row.data !== "object" || Array.isArray(row.data)
+        || !payload || typeof payload !== "object" || Array.isArray(payload)
+        || typeof (payload as Row).text !== "string" || !Array.isArray((payload as Row).links)) {
+        throw new Error("Canonical prior-art document projection is invalid.");
+      }
+      data = { ...(row.data as Row), ...(payload as Row) };
+    } else {
+      throw new Error("Canonical prior-art data projection is unsupported.");
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Canonical prior-art data must be a JSON object.");
+    const { dataRef: _dataRef, data: _data, ...metadata } = row;
+    return { ...metadata, data_json: JSON.stringify(data) };
+  });
+}
+
 function baseRow(row: Row, nestedKeys: readonly string[]): Row {
   return Object.fromEntries(Object.entries(row).filter(([key]) => key !== "schemaVersion" && !nestedKeys.includes(key)));
+}
+
+function parentFirstRows(source: readonly Row[], idColumn: string, parentColumn: string, context: string): Row[] {
+  const byId = new Map(source.flatMap((row) => typeof row[idColumn] === "string" ? [[row[idColumn] as string, row] as const] : []));
+  const state = new Map<Row, "visiting" | "ready">();
+  const ordered: Row[] = [];
+  const visit = (row: Row): void => {
+    const current = state.get(row);
+    if (current === "ready") return;
+    if (current === "visiting") throw new Error(`Canonical ${context} duplicate relationships contain a cycle.`);
+    state.set(row, "visiting");
+    const parentId = row[parentColumn];
+    if (typeof parentId === "string") {
+      const parent = byId.get(parentId);
+      if (parent) visit(parent);
+    }
+    state.set(row, "ready");
+    ordered.push(row);
+  };
+  for (const row of source) visit(row);
+  return ordered;
 }
 
 function canonicalPaths(index: WorkspaceResearchIndex, pattern: RegExp): string[] {
@@ -186,14 +248,15 @@ function rebuild(database: DatabaseSync, options: WorkspacePublicationOptions, i
   const root = options.workspaceRoot;
   let affected = 0;
   const claimDocuments = canonicalPaths(index, /^claims\/[^/]+\.json$/u).map((path) => readJson(root, path, options.workspaceId));
-  affected += insertRows(database, "app_server_research_claims", claimDocuments.map((row) => baseRow(row, ["evidence", "transitions", "authorship", "components"])));
+  const claimRows = claimDocuments.map((row) => baseRow(row, ["evidence", "transitions", "authorship", "components"]));
+  affected += insertRows(database, "app_server_research_claims", parentFirstRows(claimRows, "id", "duplicate_of_claim_id", "claim"));
   affected += insertRows(database, "app_server_claim_evidence", claimDocuments.flatMap((row) => nested(row, "evidence")));
   affected += insertRows(database, "app_server_claim_transitions", claimDocuments.flatMap((row) => nested(row, "transitions")));
   affected += insertRows(database, "app_server_claim_authorship", claimDocuments.flatMap((row) => nested(row, "authorship")));
   affected += insertRows(database, "app_server_claim_components", claimDocuments.flatMap((row) => nested(row, "components")));
 
   const memories = canonicalPaths(index, /^memories\/[^/]+\.md$/u).map((path) => memoryDocument(root, path, options.workspaceId));
-  affected += insertRows(database, "memory_nodes", memories.map((memory) => memory.row));
+  affected += insertRows(database, "memory_nodes", parentFirstRows(memories.map((memory) => memory.row), "id", "duplicate_of_memory_id", "memory"));
   affected += insertRows(database, "memory_node_workspaces", memories.flatMap((memory) => nested(memory.children, "workspaces")));
   affected += insertRows(database, "memory_node_tags", memories.flatMap((memory) => nested(memory.children, "tags")));
   affected += insertRows(database, "memory_node_assets", memories.flatMap((memory) => nested(memory.children, "assets")));
@@ -203,11 +266,12 @@ function rebuild(database: DatabaseSync, options: WorkspacePublicationOptions, i
   affected += insertRows(database, "memory_node_catalog_validations", memories.flatMap((memory) => nested(memory.children, "validations")));
   affected += insertRows(database, "app_server_model_authorship", memories.flatMap((memory) => nested(memory.children, "authorship")));
 
-  const artifactDocuments = [
-    ...canonicalPaths(index, /^runbooks\/[^/]+\/record\.json$/u).map((path) => ({ kind: "runbook", table: "app_server_runbooks", row: readJson(root, path, options.workspaceId) })),
-    ...canonicalPaths(index, /^reports\/[^/]+\/record\.json$/u).map((path) => ({ kind: "report", table: "app_server_reports", row: readJson(root, path, options.workspaceId) })),
-  ];
-  for (const document of artifactDocuments) affected += insertRows(database, document.table, [baseRow(document.row, ["revisions", "authorship"])]);
+  const runbookDocuments = canonicalPaths(index, /^runbooks\/[^/]+\/record\.json$/u).map((path) => ({ kind: "runbook", table: "app_server_runbooks", row: readJson(root, path, options.workspaceId) }));
+  const reportDocuments = canonicalPaths(index, /^reports\/[^/]+\/record\.json$/u).map((path) => ({ kind: "report", table: "app_server_reports", row: readJson(root, path, options.workspaceId) }));
+  const artifactDocuments = [...runbookDocuments, ...reportDocuments];
+  const runbookRows = runbookDocuments.map((document) => baseRow(document.row, ["revisions", "authorship"]));
+  affected += insertRows(database, "app_server_runbooks", parentFirstRows(runbookRows, "id", "duplicate_of_runbook_id", "runbook"));
+  affected += insertRows(database, "app_server_reports", reportDocuments.map((document) => baseRow(document.row, ["revisions", "authorship"])));
   affected += insertRows(database, "app_server_artifact_revisions", artifactDocuments.flatMap((document) => nested(document.row, "revisions")));
   affected += insertRows(database, "app_server_model_authorship", artifactDocuments.flatMap((document) => nested(document.row, "authorship")));
 
@@ -235,7 +299,7 @@ function rebuild(database: DatabaseSync, options: WorkspacePublicationOptions, i
     const rows = nested(resources, "resources") as Row[];
     affected += insertRows(database, "app_server_research_resources", rows.map((row) => baseRow(row, ["touches"])));
     affected += insertRows(database, "app_server_research_resource_touches", rows.flatMap((row) => nested(row, "touches")));
-    affected += insertRows(database, "resource_prior_art", nested(resources, "priorArt"));
+    affected += insertRows(database, "resource_prior_art", priorArtRows(root, index, resources));
   }
   const executions = canonicalPaths(index, /^evidence\/execution-[^/]+\.json$/u).map((path) => readJson(root, path, options.workspaceId));
   affected += insertRows(database, "app_server_runbook_executions", executions.map((row) => baseRow(row, ["cells"])));
@@ -255,6 +319,9 @@ function prune(database: DatabaseSync, workspaceId: string): number {
     : [];
   const claimIds = ids("app_server_research_claims");
   for (const id of claimIds) affected += deleteWhere(database, "app_server_claim_components", "claim_id=? OR component_claim_id=?", id, id);
+  if (columns(database, "app_server_research_claims").includes("duplicate_of_claim_id")) {
+    affected += deleteWhere(database, "app_server_research_claims", "workspace_id=? AND duplicate_of_claim_id IS NOT NULL", workspaceId);
+  }
   affected += deleteWhere(database, "app_server_research_claims", "workspace_id=?", workspaceId);
 
   const runbookIds = ids("app_server_runbooks");
@@ -263,6 +330,9 @@ function prune(database: DatabaseSync, workspaceId: string): number {
     for (const id of resourceIds) affected += deleteWhere(database, "app_server_model_authorship", "resource_kind=? AND resource_id=?", kind, id);
   }
   affected += deleteWhere(database, "app_server_artifact_revisions", "workspace_id=?", workspaceId);
+  if (columns(database, "app_server_runbooks").includes("duplicate_of_runbook_id")) {
+    affected += deleteWhere(database, "app_server_runbooks", "workspace_id=? AND duplicate_of_runbook_id IS NOT NULL", workspaceId);
+  }
   affected += deleteWhere(database, "app_server_runbooks", "workspace_id=?", workspaceId);
   affected += deleteWhere(database, "app_server_reports", "workspace_id=?", workspaceId);
   affected += deleteWhere(database, "campaign_tracks", "workspace_id=?", workspaceId);
@@ -274,12 +344,18 @@ function prune(database: DatabaseSync, workspaceId: string): number {
   if (tableExists(database, "memory_node_workspaces")) {
     const memoryIds = (database.prepare("SELECT node_id AS id FROM memory_node_workspaces WHERE workspace_id=?").all(workspaceId) as Array<{ id: string }>).map((row) => row.id);
     affected += deleteWhere(database, "memory_node_workspaces", "workspace_id=?", workspaceId);
-    for (const id of memoryIds) {
-      const stillOwned = database.prepare("SELECT 1 FROM memory_node_workspaces WHERE node_id=? LIMIT 1").get(id);
-      if (!stillOwned) {
-        affected += deleteWhere(database, "app_server_model_authorship", "resource_kind='memory' AND resource_id=?", id);
-        affected += deleteWhere(database, "memory_nodes", "id=?", id);
-      }
+    const orphanIds = memoryIds.filter((id) => !database.prepare("SELECT 1 FROM memory_node_workspaces WHERE node_id=? LIMIT 1").get(id));
+    for (const id of orphanIds) {
+      affected += deleteWhere(database, "app_server_model_authorship", "resource_kind='memory' AND resource_id=?", id);
+    }
+    const orphanSet = new Set(orphanIds);
+    const duplicateIds = columns(database, "memory_nodes").includes("duplicate_of_memory_id")
+      ? (database.prepare("SELECT id FROM memory_nodes WHERE duplicate_of_memory_id IS NOT NULL").all() as Array<{ id: string }>).map((row) => row.id).filter((id) => orphanSet.has(id))
+      : [];
+    const duplicateIdSet = new Set(duplicateIds);
+    for (const id of duplicateIds) affected += deleteWhere(database, "memory_nodes", "id=?", id);
+    for (const id of orphanIds) {
+      if (!duplicateIdSet.has(id)) affected += deleteWhere(database, "memory_nodes", "id=?", id);
     }
   }
   affected += deleteWhere(database, "research_goal_suggestion_cache", "workspace_id=?", workspaceId);

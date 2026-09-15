@@ -856,6 +856,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       notifyChange();
       const detail = error instanceof Error ? error.message : String(error);
       runtime.diagnostic = boundedDiagnostic(detail);
+      await recordSessionLaunchFailure(runtime, detail);
       throw new HttpError(502, `app-server session failed to start: ${detail}`);
     }
   }
@@ -957,11 +958,13 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         startedSessions += 1;
       } catch (error) {
         failedSessions += 1;
+        const detail = error instanceof Error ? error.message : String(error);
+        await recordSessionLaunchFailure(runtime, detail);
         finishRuntime(
           runtime,
           'failed',
           null,
-          `app-server startup recovery failed to launch: ${error instanceof Error ? error.message : String(error)}`
+          `app-server startup recovery failed to launch: ${detail}`
         );
       }
     }
@@ -1196,6 +1199,30 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     }
   }
 
+  async function recordSessionLaunchFailure(runtime: SessionRuntime, diagnostic: string): Promise<void> {
+    const service = hostService as AppServerHostService & {
+      recordSessionLaunchFailure?: (input: {
+        request: AppServerSessionLaunchRequest;
+        sessionId: string;
+        attemptId: string;
+        diagnostic: string;
+      }) => Promise<void>;
+    };
+    try {
+      await service.recordSessionLaunchFailure?.({
+        request: runtime.request,
+        sessionId: runtime.sessionId,
+        attemptId: runtime.currentAttemptId,
+        diagnostic
+      });
+    } catch (error) {
+      runtime.diagnostic = boundedDiagnostic(
+        `${diagnostic} Canonical launch-failure finalization also failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+      notifyChange();
+    }
+  }
+
   async function handleSessionExit(
     runtime: SessionRuntime,
     session: AppServerSession,
@@ -1294,6 +1321,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       notifyChange();
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      await recordSessionLaunchFailure(runtime, detail);
       finishRuntime(
         runtime,
         runtime.stopRequested ? 'stopped' : 'failed',

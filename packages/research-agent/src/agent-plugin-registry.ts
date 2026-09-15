@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameS
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { materializeGitRepositoryAsync, normalizeSourceRepositoryUrl } from './source-materializer.js';
 import { isManagedToolPluginId } from './managed-tool-plugins.js';
-import { readDarwinVmSetup, inspectDarwinVmSetup, saveDarwinVmSetup, type DarwinVmSetupState, type DarwinVmSetupUpdate } from './darwin-vm-setup.js';
 
 export type AgentPluginSourceKind = 'filesystem' | 'repository' | 'builtin';
 export type AgentPluginStatus = 'ready' | 'invalid';
@@ -137,25 +136,6 @@ export class AgentPluginRegistry {
     mkdirSync(this.runtimePath, { recursive: true });
   }
 
-  public getDarwinVmSetup(): DarwinVmSetupState {
-    const enabled = this.getState().plugins.some((plugin) => plugin.name === 'apple-security-devices'
-      && plugin.enabled && plugin.status === 'ready');
-    if (!enabled) return { enabled, neverPrompt: false, checkoutRoot: null, prepared: false, errors: [], hostPlatform: process.platform };
-    const saved = readDarwinVmSetup(this.registryDirectory);
-    const errors = saved.checkoutRoot ? inspectDarwinVmSetup(saved.checkoutRoot) : [];
-    if (saved.checkoutRoot && process.platform === 'win32') errors.push('The configured checkout requires a macOS or Linux app-server host.');
-    return { ...saved, enabled, prepared: Boolean(saved.checkoutRoot) && errors.length === 0, errors, hostPlatform: process.platform };
-  }
-
-  public updateDarwinVmSetup(update: DarwinVmSetupUpdate): DarwinVmSetupState {
-    if (!this.getDarwinVmSetup().enabled) throw new Error('Enable apple-security-devices before configuring Darwin VM.');
-    if (update?.checkoutRoot !== undefined && process.platform === 'win32') {
-      throw new Error('The Darwin VM plugin launcher requires a macOS or Linux app-server host. Windows native setup is not supported.');
-    }
-    saveDarwinVmSetup(this.registryDirectory, update);
-    return this.getDarwinVmSetup();
-  }
-
   public getState(): AgentPluginRegistryState {
     const registry = this.readRegistryWithBuiltins();
     return {
@@ -202,10 +182,6 @@ export class AgentPluginRegistry {
           extraEnvironment
         );
         if (!runtimeConfig) continue;
-        if (plugin.name === 'apple-security-devices' && isStringRecord(runtimeConfig.env)) {
-          const setup = readDarwinVmSetup(this.registryDirectory);
-          if (setup.checkoutRoot) runtimeConfig.env.BEALE_DARWIN_VM_CHECKOUT = setup.checkoutRoot;
-        }
         const runtimeName = uniqueRuntimeMcpServerName(plugin.name, serverName, usedMcpNames);
         mcpServers[runtimeName] = runtimeConfig;
         allowedMcpServers.push(runtimeName);

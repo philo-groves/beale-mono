@@ -18,6 +18,14 @@ function unchangedExcept(before: RecordValue, after: RecordValue, allowed: strin
     if (!allowed.includes(key) && JSON.stringify(before[key]) !== JSON.stringify(after[key])) throw new Error(`${key} is host-managed. Use the canonical transition/evidence operations instead of importing changes to it.`);
   }
 }
+function changedKeys(before: RecordValue, after: RecordValue): string[] {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+}
+function isRecoverableProjectionDrift(before: RecordValue, after: RecordValue): boolean {
+  const changed = changedKeys(before, after);
+  return changed.length === 0 || changed.every((key) => key === "updated_at" || key === "updatedAt");
+}
 function memoryDocument(content: string): { metadata: RecordValue; body: string } {
   const match = /```json\r?\n([\s\S]*?)\r?\n```\r?\n\r?\n([\s\S]*)$/u.exec(content);
   if (!match) throw new Error("Memory file must retain its JSON metadata block.");
@@ -60,6 +68,10 @@ export function importWorkspaceResearchFile(options: WorkspacePublicationOptions
   if (/^claims\/[^/]+\.json$/u.test(path)) {
     const before = record(JSON.parse(baseline));
     const after = record(JSON.parse(edited));
+    if (isRecoverableProjectionDrift(before, after)) {
+      atomicWorkspaceWrite(options.workspaceRoot, path, baseline);
+      return;
+    }
     context.subjectId = String(before.subject_id ?? context.subjectId);
     unchangedExcept(before, after, ["title", "summary", "impact", "confidence", "classification"]);
     if (before.revision !== expectedRevision || before.workspace_id !== options.workspaceId) throw new Error("Claim import revision or workspace mismatch.");
@@ -71,6 +83,10 @@ export function importWorkspaceResearchFile(options: WorkspacePublicationOptions
   } else if (/^memories\/[^/]+\.md$/u.test(path)) {
     const before = memoryDocument(baseline);
     const after = memoryDocument(edited);
+    if (before.body === after.body && isRecoverableProjectionDrift(before.metadata, after.metadata)) {
+      atomicWorkspaceWrite(options.workspaceRoot, path, baseline);
+      return;
+    }
     context.subjectId = String(before.metadata.subject_id ?? context.subjectId);
     context.subjectName = String(before.metadata.subject_name ?? context.subjectName);
     unchangedExcept(before.metadata, after.metadata, ["title", "summary", "confidence"]);

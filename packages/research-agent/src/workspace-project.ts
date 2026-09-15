@@ -10,10 +10,15 @@ export const WORKSPACE_DIRECTORIES = ["investigations", "runbooks", "reports", "
 const ROOT_FILES = new Set(["AGENTS.md", "AGENTS.override.md", "README.md", ".gitignore", "workspace.json"]);
 const WORKSPACE_ROOT_INTERNAL_ENTRIES = new Set([".git", ".beale"]);
 const MAX_TRACKED_BYTES = 5 * 1024 * 1024;
+const MAX_GENERATED_RESEARCH_BYTES = 32 * 1024 * 1024;
 const INDEX_PATH = "references/research-index.json";
-const IGNORES = ["/.beale/", "/scratch/", "/cache/", "/traces/**/events*.jsonl", "/traces/**/outputs/", "/evidence/raw/", "**/node_modules/", "**/.git/", "*.sqlite*", "*.db", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.tmp"];
+const IGNORES = ["/.beale/", "/scratch/", "/cache/", "/traces/**/events*.jsonl", "/traces/**/outputs/", "**/evidence/raw/", "**/node_modules/", "**/.git/", "**/*.noindex/", "*.sqlite*", "*.db", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.tmp"];
 const WORKSPACE_GITIGNORE_START = "# >>> Beale managed workspace layout >>>";
 const WORKSPACE_GITIGNORE_END = "# <<< Beale managed workspace layout <<<";
+const RAW_ARTIFACT_EXCLUDE_START = "# >>> Beale oversized candidate evidence >>>";
+const RAW_ARTIFACT_EXCLUDE_END = "# <<< Beale oversized candidate evidence <<<";
+const RAW_ARTIFACT_REGISTRY_PATH = ".git/beale/raw-artifacts.json";
+const RAW_ARTIFACT_MANIFEST_DIRECTORY = "evidence/raw-manifests";
 export const WORKSPACE_LAYOUT_GUARD_PREFIX = "[[APP_SERVER_HOST_WORKSPACE_LAYOUT_GUARD_V1]]\n";
 export const WORKSPACE_LAYOUT_GUARD_SUFFIX = "\n[[/APP_SERVER_HOST_WORKSPACE_LAYOUT_GUARD_V1]]";
 
@@ -44,11 +49,25 @@ export interface WorkspaceCheckpointResult {
   reason: string;
   error?: string;
   imported?: boolean;
+  recoveredRawArtifacts?: WorkspaceRawArtifactRecovery[];
   researchIndex?: {
     state: "ready" | "released";
     publicationHash: string;
     affectedRows: number;
   };
+}
+export interface WorkspaceRawArtifactRecovery {
+  path: string;
+  manifestPath: string;
+  sizeBytes: number;
+  sha256: string;
+}
+interface WorkspaceRawArtifactRegistryEntry extends WorkspaceRawArtifactRecovery {
+  mtimeMs: number;
+}
+interface WorkspaceRawArtifactRegistry {
+  schemaVersion: 1;
+  artifacts: WorkspaceRawArtifactRegistryEntry[];
 }
 export interface WorkspaceCommitContext {
   investigationId?: string;
@@ -104,7 +123,7 @@ export function getWorkspaceProjectHealth(root: string): WorkspaceProjectHealth 
       const child = relative(root, path).replace(/\\/gu, '/');
       health.fileCount++; health.totalBytes += stats.size;
       if (/^(?:scratch|cache)\//u.test(child)) health.temporaryBytes += stats.size;
-      else if (!/^traces\/.*(?:\.jsonl$|\/outputs\/)|^evidence\/raw\//u.test(child) && workspacePathProblem(child)) health.unclassifiedFileCount++;
+      else if (!/^traces\/.*(?:\.jsonl$|\/outputs\/)|(?:^|\/)evidence\/raw\//u.test(child) && workspacePathProblem(child)) health.unclassifiedFileCount++;
     }
   }
   health.partial ||= stack.length > 0;
@@ -364,7 +383,7 @@ export function workspacePathProblem(path: string): string | null {
   if (!(WORKSPACE_DIRECTORIES as readonly string[]).includes(parts[0]!)) return "file must belong to an approved research directory";
   if (parts[0] === "scratch" || parts[0] === "cache") return "disposable files must not be committed";
   if (parts.some((part) => /^(?:node_modules|\.env(?:\..*)?|credentials?(?:\..*)?|id_rsa|id_ed25519)$/iu.test(part)) || /\.(?:sqlite(?:-wal|-shm)?|db|pem|key|p12|pfx)$/iu.test(path)) return "runtime databases and credential material must not be committed";
-  if (path.startsWith("evidence/raw/") || (parts[0] === "traces" && (parts.includes("outputs") || /\.jsonl$/iu.test(path)))) return "raw captures are retained outside Git";
+  if (/(?:^|\/)evidence\/raw\//u.test(path) || (parts[0] === "traces" && (parts.includes("outputs") || /\.jsonl$/iu.test(path)))) return "raw captures are retained outside Git";
   return null;
 }
 
@@ -400,7 +419,13 @@ export function validateWorkspaceCommit(root: string): void {
     while (start < hashes.length && total < 8 * 1024 * 1024) {
       const hash = hashes[start++]!;
       const size = sizes.get(hash);
-      if (size === undefined || !Number.isFinite(size) || size > MAX_TRACKED_BYTES) throw new Error('A staged file exceeds the 5 MiB tracked-file limit; retain it as a raw artifact with a manifest.');
+      if (size === undefined || !Number.isFinite(size)) throw new Error('Beale could not determine the size of a staged research file.');
+      const oversized = [...entries].find(([path, entry]) => entry.hash === hash && size > trackedFileLimit(path));
+      if (oversized) {
+        const [path] = oversized;
+        const limitMiB = trackedFileLimit(path) / (1024 * 1024);
+        throw new Error(`Staged file ${JSON.stringify(path)} is ${(size / (1024 * 1024)).toFixed(2)} MiB and exceeds the ${limitMiB} MiB tracked-file limit; retain it as a raw artifact with a manifest.`);
+      }
       batch.push(hash); total += size;
     }
     const result = gitBytes(root, ['cat-file', '--batch'], {}, batch.join('\n') + '\n');
@@ -457,6 +482,130 @@ export function validateWorkspaceCommit(root: string): void {
   }
 }
 
+function trackedFileLimit(path: string): number {
+  // These files are generated canonical projections, not operator-supplied
+  // attachments. Prior-art bodies are already bounded by the public fetcher
+  // and split into content-addressed payloads during publication.
+  return path === 'references/resources.json' || /^references\/prior-art\/[a-f0-9]{64}\.json$/u.test(path)
+    ? MAX_GENERATED_RESEARCH_BYTES
+    : MAX_TRACKED_BYTES;
+}
+
+function isCandidateEvidencePath(path: string): boolean {
+  return safeRelative(path)
+    && !/[\0\r\n]/u.test(path)
+    && /(?:^|\/)evidence\//u.test(path)
+    && !/(?:^|\/)evidence\/raw(?:\/|$)/u.test(path)
+    && !path.startsWith(`${RAW_ARTIFACT_MANIFEST_DIRECTORY}/`);
+}
+
+function rawArtifactExcludePattern(path: string): string {
+  return `/${path.replace(/([\\*?[\] ])/gu, "\\$1")}`;
+}
+
+function writeRawArtifactExcludes(root: string, paths: readonly string[]): void {
+  const excludePath = join(root, ".git", "info", "exclude");
+  mkdirSync(dirname(excludePath), { recursive: true });
+  let existing = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
+  const managedPattern = new RegExp(`${RAW_ARTIFACT_EXCLUDE_START.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}[\\s\\S]*?${RAW_ARTIFACT_EXCLUDE_END.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\n?`, "gu");
+  existing = existing.replace(managedPattern, "").trimEnd();
+  const managed = [
+    RAW_ARTIFACT_EXCLUDE_START,
+    "# Exact workspace-local paths preserved after exceeding the tracked-file limit.",
+    ...[...new Set(paths)].sort().map(rawArtifactExcludePattern),
+    RAW_ARTIFACT_EXCLUDE_END,
+  ].join("\n");
+  const content = `${existing ? `${existing}\n\n` : ""}${managed}\n`;
+  if (!existsSync(excludePath) || readFileSync(excludePath, "utf8") !== content) atomicWorkspaceWrite(root, ".git/info/exclude", content);
+}
+
+function readRawArtifactRegistry(root: string): WorkspaceRawArtifactRegistry {
+  const path = join(root, RAW_ARTIFACT_REGISTRY_PATH);
+  if (!existsSync(path)) return { schemaVersion: 1, artifacts: [] };
+  const value = JSON.parse(readFileSync(path, "utf8")) as WorkspaceRawArtifactRegistry;
+  if (value.schemaVersion !== 1 || !Array.isArray(value.artifacts)) throw new Error("The workspace-local raw-artifact recovery registry is invalid.");
+  for (const artifact of value.artifacts) {
+    if (!isCandidateEvidencePath(artifact.path)
+      || !safeRelative(artifact.manifestPath)
+      || !artifact.manifestPath.startsWith(`${RAW_ARTIFACT_MANIFEST_DIRECTORY}/`)
+      || !Number.isFinite(artifact.sizeBytes)
+      || !Number.isFinite(artifact.mtimeMs)
+      || !/^[a-f0-9]{64}$/u.test(artifact.sha256)) {
+      throw new Error("The workspace-local raw-artifact recovery registry contains an invalid entry.");
+    }
+  }
+  return value;
+}
+
+function recoverRawArtifact(root: string, path: string): WorkspaceRawArtifactRegistryEntry {
+  const absolute = join(root, path);
+  assertWorkspaceChild(root, absolute);
+  const before = lstatSync(absolute);
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${path}: oversized candidate evidence must be a regular file.`);
+  const sha256 = workspaceFileHash(absolute);
+  const after = lstatSync(absolute);
+  if (!after.isFile() || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+    throw new Error(`${path}: candidate evidence changed while its recovery manifest was being created; retry after its writer finishes.`);
+  }
+  const manifestHash = workspaceContentHash(`${path}\0${sha256}`);
+  const manifestPath = `${RAW_ARTIFACT_MANIFEST_DIRECTORY}/${manifestHash}.json`;
+  const manifest = JSON.stringify({
+    schemaVersion: 1,
+    kind: "beale.raw-candidate-artifact",
+    workspacePath: path,
+    sizeBytes: after.size,
+    sha256,
+    tracking: "workspace-local",
+    reason: "Generated candidate evidence exceeded the ordinary tracked-file limit.",
+  }, null, 2) + "\n";
+  const manifestAbsolute = join(root, manifestPath);
+  if (existsSync(manifestAbsolute) && readFileSync(manifestAbsolute, "utf8") !== manifest) {
+    throw new Error(`${manifestPath}: an existing raw-artifact manifest conflicts with the recovered candidate.`);
+  }
+  if (!existsSync(manifestAbsolute)) atomicWorkspaceWrite(root, manifestPath, manifest);
+  return { path, manifestPath, sizeBytes: after.size, sha256, mtimeMs: after.mtimeMs };
+}
+
+/**
+ * Keep oversized, unpinned candidate evidence available to active research while
+ * preventing the same generated file from poisoning every later checkpoint.
+ * Tracked and published files remain subject to the normal commit guard.
+ */
+function recoverOversizedCandidateEvidence(root: string): WorkspaceRawArtifactRecovery[] {
+  const tracked = new Set(git(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
+  const retained: WorkspaceRawArtifactRegistryEntry[] = [];
+  const recovered: WorkspaceRawArtifactRegistryEntry[] = [];
+  for (const recorded of readRawArtifactRegistry(root).artifacts) {
+    const absolute = join(root, recorded.path);
+    if (tracked.has(recorded.path) || isPublishedWorkspacePath(root, recorded.path) || !existsSync(absolute)) continue;
+    const stats = lstatSync(absolute);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= trackedFileLimit(recorded.path)) continue;
+    if (stats.size === recorded.sizeBytes && stats.mtimeMs === recorded.mtimeMs) retained.push(recorded);
+    else {
+      const replacement = recoverRawArtifact(root, recorded.path);
+      retained.push(replacement);
+      recovered.push(replacement);
+    }
+  }
+  // Drop stale exclusions before looking for new candidates so a deleted,
+  // replaced, or now-small file becomes visible to Git again.
+  writeRawArtifactExcludes(root, retained.map(({ path }) => path));
+  const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+  for (const path of untracked) {
+    if (!isCandidateEvidencePath(path) || tracked.has(path) || isPublishedWorkspacePath(root, path)) continue;
+    const absolute = join(root, path);
+    const stats = lstatSync(absolute);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= trackedFileLimit(path)) continue;
+    const artifact = recoverRawArtifact(root, path);
+    retained.push(artifact);
+    recovered.push(artifact);
+  }
+  const artifacts = [...new Map(retained.map((artifact) => [artifact.path, artifact])).values()].sort((left, right) => left.path.localeCompare(right.path));
+  atomicWorkspaceWrite(root, RAW_ARTIFACT_REGISTRY_PATH, JSON.stringify({ schemaVersion: 1, artifacts }, null, 2) + "\n");
+  writeRawArtifactExcludes(root, artifacts.map(({ path }) => path));
+  return recovered.map(({ path, manifestPath, sizeBytes, sha256 }) => ({ path, manifestPath, sizeBytes, sha256 }));
+}
+
 function withProjectLock<T>(root: string, operation: () => T): T {
   const lock = join(root, ".git", "beale-checkpoint.lock");
   if (existsSync(lock)) {
@@ -500,6 +649,9 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
   try {
     checkpointDeadline = Date.now() + 60_000;
     return withProjectLock(root, () => {
+      // Refresh the managed block on every checkpoint so active sessions pick
+      // up new disposable-file exclusions without requiring a host restart.
+      ensureWorkspaceGitIgnore(root);
       installWorkspaceGitHook(root);
       publish?.();
       const message = formatWorkspaceCommitMessage(reason, context);
@@ -513,6 +665,7 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
         mkdirSync(dirname(indexJournal), { recursive: true });
         writeFileSync(indexJournal, JSON.stringify({ pid: process.pid, temporaryIndex: relative(join(root, '.git'), temporaryIndex) }));
         if (git(root, ["diff", "--cached", "--name-only"]).trim()) throw new Error("Manual staged changes are present. Commit or unstage them explicitly; automatic checkpoints preserve the index.");
+        const recoveredRawArtifacts = recoverOversizedCandidateEvidence(root);
         const indexPath = join(root, ".git", "index");
         if (existsSync(indexPath)) copyFileSync(indexPath, temporaryIndex);
         const env = { GIT_INDEX_FILE: temporaryIndex };
@@ -523,7 +676,7 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
         if (paths.length) git(root, ["add", "--all", "--pathspec-from-file=-", "--pathspec-file-nul"], env, paths.join("\0") + "\0");
         if (!git(root, ["diff", "--cached", "--name-only"], env).trim()) {
           git(root, ['hook', 'run', 'pre-commit'], env);
-          const result: WorkspaceCheckpointResult = { status: 'unchanged', reason, commit: git(root, ['rev-parse', 'HEAD']).trim() };
+          const result: WorkspaceCheckpointResult = { status: 'unchanged', reason, commit: git(root, ['rev-parse', 'HEAD']).trim(), ...(recoveredRawArtifacts.length ? { recoveredRawArtifacts } : {}) };
           writeCheckpointStatus(root, result);
           return result;
         }
@@ -533,8 +686,9 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
         indexLockOpen = false;
         renameSync(indexLock, indexPath);
         const commit = git(root, ["rev-parse", "HEAD"]).trim();
-        writeCheckpointStatus(root, { status: "committed", commit, reason });
-        return { status: "committed", commit, reason };
+        const result: WorkspaceCheckpointResult = { status: "committed", commit, reason, ...(recoveredRawArtifacts.length ? { recoveredRawArtifacts } : {}) };
+        writeCheckpointStatus(root, result);
+        return result;
       } finally {
         if (indexLockOpen) closeSync(lock);
         rmSync(indexLock, { force: true });
@@ -695,7 +849,11 @@ function listManagedResearchRecordPaths(root: string): string[] {
   };
   flat('claims', /\.json$/u);
   flat('memories', /\.md$/u);
-  flat('evidence', /\.json$/u);
+  // Evidence manifests become canonical only after publication pins them in
+  // the research index. A researcher may place candidate verifier output in
+  // evidence/ before citing it; treating every JSON file there as a newly
+  // created canonical record makes that candidate poison every later session
+  // checkpoint. Published evidence is already covered by `managed` above.
   nested('reports', ['report.md', 'record.json']);
   nested('runbooks', ['runbook.ipynb', 'record.json']);
   nested('investigations', ['record.json']);

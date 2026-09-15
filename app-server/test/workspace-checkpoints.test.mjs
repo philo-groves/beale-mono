@@ -4,9 +4,57 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSyn
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
-import { AppServerSessionStore, MemoryGraphStore, readWorkspaceResearchCacheState } from '@beale/research-agent';
+import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, checkpointWorkspace, publishWorkspaceFiles, readWorkspaceResearchCacheState, workspaceContentHash } from '@beale/research-agent';
 import { initializeWorkspaceProjectAsync, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
 import { AppServerWorkerDatabaseCoordinator } from '../dist/workerDatabaseBroker.js';
+
+test('session checkpointing automatically migrates an oversized monolithic prior-art export', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-prior-art-recovery-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const artifactDirectoryPath = join(directory, 'runtime', 'artifacts');
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath };
+  try {
+    await initializeWorkspaceProjectAsync(workspaceRoot, options.workspaceId);
+    mkdirSync(join(directory, 'runtime'), { recursive: true });
+    mkdirSync(artifactDirectoryPath, { recursive: true });
+    const locator = 'https://example.test/reference';
+    const catalog = new ResearchResourceCatalog({
+      databasePath,
+      workspaceId: options.workspaceId,
+      explicitResources: [{ id: 'asset-example', kind: 'documentation', direction: 'in_scope', locator, source: 'explicit_scope' }],
+    });
+    try {
+      const body = 'a'.repeat(6 * 1024 * 1024);
+      catalog.priorArt.save(catalog.list()[0].id, 'action-example', {
+        requestedUrl: locator, url: locator, fetchedAt: '2026-09-01T00:00:00.000Z', contentType: 'text/plain',
+        contentHash: workspaceContentHash(body), etag: null, lastModified: null, title: 'Example reference', text: body, links: [],
+      });
+    } finally { catalog.close(); }
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    let legacyResources;
+    try {
+      legacyResources = JSON.stringify({
+        schemaVersion: 1,
+        workspaceId: options.workspaceId,
+        resources: database.prepare('SELECT * FROM app_server_research_resources WHERE workspace_id=?').all(options.workspaceId),
+        priorArt: database.prepare('SELECT * FROM resource_prior_art WHERE workspace_id=?').all(options.workspaceId),
+      }, null, 2) + '\n';
+    } finally { database.close(); }
+    assert.equal(Buffer.byteLength(legacyResources) > 5 * 1024 * 1024, true);
+    publishWorkspaceFiles(workspaceRoot, { 'references/resources.json': legacyResources });
+    assert.equal(checkpointWorkspace(workspaceRoot, 'Simulate legacy prior-art publication').status, 'committed');
+
+    const recovered = await runWorkspaceCheckpoint(options, 'Before research session');
+    assert.equal(recovered.status, 'committed', recovered.error);
+    const resources = JSON.parse(readFileSync(join(workspaceRoot, 'references', 'resources.json'), 'utf8'));
+    assert.equal(resources.schemaVersion, 2);
+    assert.equal(resources.priorArt[0].data_json, undefined);
+    assert.match(resources.priorArt[0].dataRef.path, /^references\/prior-art\/[a-f0-9]{64}\.json$/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('workspace creation, queued checkpoints, and housekeeping keep the host event loop responsive', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-worker-'));
@@ -21,7 +69,9 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
     assert.ok(ticks > 0, 'initial Git setup must yield the host event loop');
     mkdirSync(artifactDirectoryPath, { recursive: true });
     const graph = new MemoryGraphStore({ workspaceRoot, databasePath, context: { workspaceId: options.workspaceId, workspaceName: 'Example', subjectId: 'subject-example', subjectName: 'Example' } });
-    const memory = graph.save({ type: 'invariant', title: 'Example boundary', body: 'Original file-authority body.', status: 'suspected' });
+    const memory = graph.save({ id: 'memory-z-parent-example', type: 'invariant', title: 'Example boundary', body: 'Original file-authority body.', status: 'suspected' });
+    const duplicateMemory = graph.save({ id: 'memory-a-duplicate-example', type: 'invariant', title: 'Repeated example boundary', body: 'Duplicate file-authority body.', status: 'suspected' });
+    graph.markDuplicate(duplicateMemory.id, { expectedRevision: duplicateMemory.revision, parentMemoryId: memory.id, reason: 'Synthetic duplicate for index ordering coverage.' });
     graph.close();
     const sessions = new AppServerSessionStore({ databasePath });
     sessions.create({ id: 'session-example', workspaceId: options.workspaceId, attemptId: 'attempt-example', title: 'Example session', prompt: 'Inspect the example.', provider: 'openai-codex', model: 'gpt-example', reasoningEffort: 'high' });
@@ -56,6 +106,7 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
     const releasedDatabase = new DatabaseSync(databasePath, { readOnly: true });
     assert.equal(releasedDatabase.prepare('SELECT COUNT(*) AS count FROM memory_node_workspaces WHERE workspace_id=?').get(options.workspaceId).count, 0);
     assert.equal(releasedDatabase.prepare('SELECT COUNT(*) AS count FROM memory_nodes WHERE id=?').get(memory.id).count, 0);
+    assert.equal(releasedDatabase.prepare('SELECT COUNT(*) AS count FROM memory_nodes WHERE id=?').get(duplicateMemory.id).count, 0);
     assert.equal(releasedDatabase.prepare('SELECT COUNT(*) AS count FROM app_server_sessions WHERE workspace_id=?').get(options.workspaceId).count, 1);
     releasedDatabase.close();
     rmSync(join(workspaceRoot, '.beale', 'research-cache.json'));
@@ -64,7 +115,11 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
     assert.equal(readWorkspaceResearchCacheState(workspaceRoot).state, 'ready');
     const rebuiltGraph = new MemoryGraphStore({ workspaceRoot, databasePath, context: { workspaceId: options.workspaceId, workspaceName: 'Example', subjectId: 'subject-example', subjectName: 'Example' } });
     assert.equal(rebuiltGraph.get(memory.id).body, 'Edited file-authority body.');
+    assert.equal(rebuiltGraph.get(duplicateMemory.id).duplicateOfMemoryId, memory.id);
     rebuiltGraph.close();
+    writeFileSync(join(workspaceRoot, 'evidence', 'candidate-verifier-example.json'), '{"result":"candidate"}\n');
+    const candidateEvidence = await runWorkspaceCheckpoint(options, 'Checkpoint candidate evidence', undefined, undefined, coordinator);
+    assert.equal(candidateEvidence.status, 'committed', candidateEvidence.error);
     const untypedClaim = join(workspaceRoot, 'claims', 'claim-untyped-example.json');
     writeFileSync(untypedClaim, '{"revision":1}');
     const rejected = await runWorkspaceCheckpoint(options, 'Reject untyped record creation', undefined, undefined, coordinator);

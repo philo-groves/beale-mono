@@ -24,14 +24,14 @@ If a request proposes iOS Simulator security research, stop that path and route 
 
 Use Darwin VM for a minimal, instrumentable Darwin command-line lab without a physical device. Use Tart for complete macOS app/service behavior and stock macOS checks; Darwin VM does not supply a GUI, full iOS services, or hardware fidelity.
 
-Desktop offers guided Darwin VM setup when starting a research session with this plugin enabled. Respect a declined setup: do not restart onboarding or acquire firmware during the session. A saved checkout is the default for `inspect_darwin_vm` and `start_darwin_vm`; omit `checkoutRoot` to use it, and inspect again because saved configuration is not boot evidence. If no checkout is configured, use an explicitly supplied prepared checkout or continue work that does not require a guest.
+The plugin does not set up, validate, save, or select a Darwin VM checkout. Pass the existing checkout root supplied by the authorized workspace context to `inspect_darwin_vm` and `start_darwin_vm`.
 
 ## Operating rules
 
 1. Confirm the recorded authorized scope before interacting with a device, guest, app, or firmware build.
 2. Call `environment_status` before planning an execution path.
 3. Inspect state with read-only tools before requesting any mutation.
-4. Explain the exact state-changing action and expected evidence before operations that require confirmation. Tart lifecycle and name-bound guest execution are auto-reviewed and do not require per-call confirmation.
+4. Explain the exact state-changing action and expected evidence before operations that require confirmation. Tart and Darwin VM lifecycle, guest execution, transfer, and console operations are auto-reviewed and do not require per-call confirmation.
 5. Use bounded commands and capture the OS/build, target type, artifact identity, inputs, outputs, and contrary results needed to reproduce the observation.
 6. Keep claims proportional to the environment. A modified `darwin-vm` root shell proves behavior in that lab configuration, not reachability on a stock iPhone or Mac.
 7. Require stock-device or stock-guest reproduction before promoting an environment-sensitive observation to a confirmed vulnerability conclusion.
@@ -55,14 +55,14 @@ Read-only tools:
 - `list_darwin_vm_runs`
 - `read_darwin_vm_log`
 
-Auto-reviewed Tart tools:
+Auto-reviewed VM tools:
 
 - `start_tart_vm`, `stop_tart_vm`, `exec_tart_vm`
 - `copy_to_tart_vm`, `copy_from_tart_vm`
+- `start_darwin_vm`, `stop_darwin_vm`, `run_darwin_vm_console_command`
 
 Confirmation-required tools:
 
 - `install_physical_iphone_app`, `launch_physical_iphone_app`
-- `start_darwin_vm`, `stop_darwin_vm`, `run_darwin_vm_console_command`
 
 Do not invent capabilities that these tools do not expose. In particular, this plugin does not automate firmware acquisition, code signing, device pairing, jailbreaking, Tart image deletion, or `darwin-vm` ramdisk modification.

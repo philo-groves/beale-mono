@@ -902,14 +902,6 @@ export class WorkspaceService {
     );
   }
 
-  public getDarwinVmSetup(): import('@beale/app-server-runtime/protocol').DarwinVmSetupState {
-    return this.getAgentPluginRegistry().getDarwinVmSetup();
-  }
-
-  public updateDarwinVmSetup(update: import('@beale/app-server-runtime/protocol').DarwinVmSetupUpdate): import('@beale/app-server-runtime/protocol').DarwinVmSetupState {
-    return this.getAgentPluginRegistry().updateDarwinVmSetup(update);
-  }
-
   public getAgentPlugins(): AgentPluginRegistryState {
     return this.getAgentPluginRegistry().getState();
   }

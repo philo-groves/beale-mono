@@ -56,18 +56,17 @@ describe('authoritative session stop', () => {
     expect(active.stopReason).toBe('user');
   });
 
-  it('waits for an in-flight launch before stopping its resulting host session', async () => {
+  it('stops an in-flight launch without waiting for its pre-session checkpoint', async () => {
     const active = activeRun();
     active.appServerSessionId = null;
     const ready = deferred();
     active.launchReady = ready.promise;
     const stopping = engine(active).stop('session-example');
     await Promise.resolve();
-    expect(host.stop).not.toHaveBeenCalled();
-    active.appServerSessionId = 'session-example';
-    ready.resolve();
-    await stopping;
     expect(host.stop).toHaveBeenCalledWith(record, 'session-example');
+    await stopping;
+    expect(active.stopped).toBe(true);
+    ready.resolve();
   });
 
   it('surfaces rejection and permits retry without claiming the session stopped', async () => {

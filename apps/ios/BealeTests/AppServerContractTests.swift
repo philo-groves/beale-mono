@@ -42,6 +42,29 @@ private final class TestOperatorTokenStore: OperatorTokenStore, @unchecked Senda
 }
 
 final class AppServerContractTests: XCTestCase {
+    func testSteeringRequestEncodesCurrentHTTPControlContract() throws {
+        let encoded = try JSONEncoder().encode(
+            AppServerSessionControlRequest.steering("Inspect the alternate parser.")
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: String])
+        XCTAssertEqual(object, [
+            "type": "steer",
+            "instruction": "Inspect the alternate parser."
+        ])
+    }
+
+    func testValidatesCorrelatedSteeringResponse() throws {
+        let response = AppServerSessionControlResult(
+            controlVersion: 1,
+            accepted: true,
+            sessionId: "session-example",
+            requestId: "request-example",
+            type: "steer"
+        )
+        XCTAssertNoThrow(try response.validate(sessionId: "session-example", type: "steer"))
+        XCTAssertThrowsError(try response.validate(sessionId: "session-other", type: "steer"))
+    }
+
     func testContinuationRequestEncodesWorkspaceAndInstruction() throws {
         let encoded = try JSONEncoder().encode(
             AppServerSessionContinuationRequest(
@@ -275,6 +298,7 @@ final class AppServerContractTests: XCTestCase {
                 "session.event-identity.v1",
                 "session.continuation.v1",
                 "session.multi-client.v1",
+                "session.http-control.v1",
                 "host.control.v1",
                 "host.descriptor.v1",
                 "host.provider-catalog.v1",
@@ -306,7 +330,7 @@ final class AppServerContractTests: XCTestCase {
                 "version": "0.1.0",
                 "buildId": "build-current"
               },
-              "contractVersion": 20,
+              "contractVersion": 26,
               "schemas": {
                 "protocol": 1,
                 "session": 1,
@@ -341,7 +365,7 @@ final class AppServerContractTests: XCTestCase {
                 "version": "0.1.0",
                 "buildId": "build-old"
               },
-              "contractVersion": 18,
+              "contractVersion": 25,
               "schemas": {
                 "protocol": 1,
                 "session": 1,

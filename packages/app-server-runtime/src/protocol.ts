@@ -13,8 +13,6 @@ import type {
 } from "@beale/research-agent";
 
 export type {
-  DarwinVmSetupState,
-  DarwinVmSetupUpdate,
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   ResourcePriorArtSummary,
@@ -64,7 +62,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 25 as const;
+export const APP_SERVER_CONTRACT_VERSION = 26 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -72,7 +70,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-11T23:30:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-13T21:15:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "workspace.research-project.v3",
@@ -464,7 +462,6 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "tools.list", "tools.config", "config.show", "config.set",
   "research.tools.list", "research.tools.read", "research.tools.mutate",
   "source.inspect", "source.materialize", "plugin.list", "plugin.add_filesystem",
-  "plugin.darwin_vm.get", "plugin.darwin_vm.update",
   "plugin.add_repository", "plugin.set_enabled", "plugin.remove", "plugin.runtime",
   "maintenance.summary", "maintenance.run",
   "workspace.project",

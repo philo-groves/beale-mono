@@ -26,7 +26,7 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
   MANAGED_TOOL_PLUGIN_IDS,
 } from "@beale/app-server-runtime/protocol";
-import { AppServerSessionStore, CampaignTrackStore } from "../../packages/research-agent/dist/index.js";
+import { AppServerSessionStore, CampaignTrackStore, WORKSPACE_DIRECTORIES } from "../../packages/research-agent/dist/index.js";
 import {
   AppServerWorkerDatabaseBroker,
   AppServerWorkerDatabaseCoordinator,
@@ -45,6 +45,48 @@ const WebSocket = requireFromHere("ws");
 const servers = [];
 const temporaryDirectories = [];
 const originalMockMode = process.env.BEALE_APP_SERVER_MOCK;
+
+test("released research-index state cannot block core workspace state", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-workspace-state-isolation-"));
+  temporaryDirectories.push(directory);
+  mkdirSync(join(directory, ".beale"), { recursive: true });
+  writeFileSync(join(directory, "workspace.json"), JSON.stringify({
+    schemaVersion: 2,
+    workspaceId: "workspace-test",
+    directories: WORKSPACE_DIRECTORIES,
+    checkpointIntervalMs: 600000,
+    researchAuthority: "files",
+  }));
+  writeFileSync(join(directory, ".beale", "research-cache.json"), JSON.stringify({
+    schemaVersion: 1,
+    workspaceId: "workspace-test",
+    publicationHash: "a".repeat(64),
+    state: "released",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  }));
+  let invoked = false;
+  const host = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation) => {
+      assert.equal(operation, "workspace.state");
+      invoked = true;
+      return { opened: true };
+    },
+  });
+  const result = await host.executeOperation({
+    operation: "workspace.state",
+    input: {
+      workspacePath: directory,
+      workspaceId: "workspace-test",
+      artifactRoot: join(directory, ".beale", "artifacts"),
+      databasePath: join(directory, "memory.sqlite"),
+      artifactDirectoryPath: join(directory, "artifacts"),
+      action: "initialize",
+    },
+  });
+  assert.equal(invoked, true);
+  assert.deepEqual(result, { opened: true });
+});
 
 test("persists the OpenAI context size provider setting", () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-provider-context-size-"));
@@ -121,11 +163,16 @@ test('a failed pre-session checkpoint prevents worker launch without discarding 
   temporaryDirectories.push(directory);
   const hostService = testHostService(directory);
   hostService.checkpointSession = async () => ({ status: 'failed', reason: 'Before research session', error: 'Resolve the example staged edit.' });
+  const launchFailures = [];
+  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
   let spawned = false;
   const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: async () => { spawned = true; throw new Error('Must not launch'); } });
   servers.push(server);
   await assert.rejects(server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-failed-example' })), /Resolve the example staged edit/);
   assert.equal(spawned, false);
+  assert.equal(launchFailures.length, 1);
+  assert.equal(launchFailures[0].sessionId, 'session-checkpoint-failed-example');
+  assert.match(launchFailures[0].diagnostic, /Resolve the example staged edit/);
 });
 
 test('keeps a hosted session starting until the runtime readiness handshake completes', async () => {
@@ -3214,6 +3261,55 @@ test("app-server startup relaunches interrupted sessions before clients attach",
   await waitForSocketClose(socket);
   assert.equal(server.listSessions()[0].state, "completed");
   await fakeHost.close();
+});
+
+test("app-server startup recovery finalizes a session when its checkpoint cannot launch", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-startup-checkpoint-failure-"));
+  temporaryDirectories.push(directory);
+  const request = sessionLaunchRequest(directory, {
+    sessionId: "session-startup-checkpoint-failure",
+    promptMarkdown: "Resume the synthetic interrupted session.",
+  });
+  const hostService = testHostService(directory);
+  const launchFailures = [];
+  hostService.recoverInterruptedSessions = async () => ({
+    interruptedSessions: 1,
+    skippedSessions: 0,
+    errors: [],
+    recovered: [{
+      request,
+      prepared: {
+        sessionId: request.sessionId,
+        attemptId: "attempt-startup-checkpoint-failure",
+        launch: {
+          ...resolvedSessionLaunch(directory, {
+            capturePath: join(directory, "session-startup-checkpoint-failure.capture.json"),
+            promptMarkdown: request.launch.promptMarkdown,
+          }),
+          attemptId: "attempt-startup-checkpoint-failure",
+        },
+      },
+    }],
+  });
+  hostService.checkpointSession = async () => ({
+    status: "failed",
+    reason: "Before research session",
+    error: "Resolve the synthetic generated projection drift.",
+  });
+  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
+  let spawned = false;
+  const server = await startAppServer({
+    hostService,
+    recoverInterruptedOnStart: true,
+    spawnSession: async () => { spawned = true; throw new Error("Must not launch"); },
+  });
+  servers.push(server);
+
+  assert.equal(spawned, false);
+  assert.equal(server.listSessions()[0].state, "failed");
+  assert.equal(launchFailures.length, 1);
+  assert.equal(launchFailures[0].sessionId, request.sessionId);
+  assert.match(launchFailures[0].diagnostic, /generated projection drift/u);
 });
 
 test("accepted pause and stop controls are persisted as intentional session state", async () => {

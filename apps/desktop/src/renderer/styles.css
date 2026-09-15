@@ -12301,29 +12301,6 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
   overflow: hidden;
 }
 
-.modal-panel.darwin-vm-setup-dialog {
-  width: min(640px, calc(100vw - 32px));
-  border-radius: 32px;
-  corner-shape: squircle;
-}
-
-.darwin-vm-setup-dialog .modal-body {
-  line-height: 1.55;
-}
-
-.darwin-vm-setup-steps li + li {
-  margin-top: 10px;
-}
-
-.darwin-vm-setup-steps input {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.darwin-vm-setup-dialog .modal-footer {
-  flex-wrap: wrap;
-}
-
 .modal-panel.wide-modal {
   width: min(940px, calc(100vw - 36px));
 }

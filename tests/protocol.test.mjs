@@ -56,10 +56,10 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v25 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v26 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 25);
+  assert.equal(descriptor.contractVersion, 26);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 12);
   assert.equal(descriptor.schemas.finding, 5);

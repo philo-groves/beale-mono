@@ -58,7 +58,7 @@ enum BealeAppServerContract {
     static let controlVersion = 1
     static let sessionLaunchVersion = 2
     static let appServerProtocolVersion = 1
-    static let appServerContractVersion = 20
+    static let appServerContractVersion = 26
     static let memoryNotificationSchemaVersion = 3
     static let workspaceMemorySchemaVersion = 4
 
@@ -76,6 +76,7 @@ enum BealeAppServerContract {
         "session.event-identity.v1",
         "session.continuation.v1",
         "session.multi-client.v1",
+        "session.http-control.v1",
         "host.control.v1",
         "host.descriptor.v1",
         "host.provider-catalog.v1",
@@ -1241,6 +1242,34 @@ struct AppServerSessionStopResult: Decodable, Sendable {
         guard controlVersion == BealeAppServerContract.controlVersion,
               sessionId == expectedSessionId else {
             throw AppServerClientError.incompatible("The session stop response did not match this request.")
+        }
+    }
+}
+
+struct AppServerSessionControlRequest: Encodable, Sendable {
+    let type: String
+    let instruction: String
+
+    static func steering(_ instruction: String) -> Self {
+        Self(type: "steer", instruction: instruction)
+    }
+}
+
+struct AppServerSessionControlResult: Decodable, Sendable {
+    let controlVersion: Int
+    let accepted: Bool
+    let sessionId: String
+    let requestId: String
+    let type: String
+
+    func validate(sessionId expectedSessionId: String, type expectedType: String) throws {
+        guard controlVersion == BealeAppServerContract.controlVersion,
+              accepted,
+              sessionId == expectedSessionId,
+              !requestId.isEmpty,
+              requestId.count <= 200,
+              type == expectedType else {
+            throw AppServerClientError.incompatible("The session control response did not match this request.")
         }
     }
 }

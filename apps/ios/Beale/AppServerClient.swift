@@ -351,6 +351,18 @@ struct AppServerClient: Sendable {
         }
     }
 
+    func sendSteering(_ instruction: String, sessionId: String) async throws -> String {
+        let body = try JSONEncoder().encode(AppServerSessionControlRequest.steering(instruction))
+        let response: AppServerSessionControlResult = try await request(
+            url: endpoint.url(pathComponents: ["v1", "sessions", sessionId, "control"]),
+            method: "POST",
+            authenticated: true,
+            body: body
+        )
+        try response.validate(sessionId: sessionId, type: "steer")
+        return response.requestId
+    }
+
     func generateResearchSuggestions(
         workspaceId: String,
         refresh: Bool = false
@@ -560,10 +572,6 @@ final class AppServerSessionControlChannel {
         receiveTask = Task { [weak self] in
             await self?.receiveMessages()
         }
-    }
-
-    func sendSteering(_ instruction: String) async throws -> String {
-        try await sendControl(type: "steer", fields: ["instruction": instruction])
     }
 
     func sendApproval(

@@ -9,9 +9,62 @@ import {
   initializeWorkspaceProject, checkpointWorkspaceResearch, importWorkspaceResearchFile,
   releaseWorkspaceResearchIndex, rebuildWorkspaceResearchIndex, listWorkspaceResearchEdits,
   publishWorkspaceResearch, workspaceContentHash,
-  MemoryGraphStore, FindingStore, RunbookStore, ReportStore, CampaignTrackStore,
+  MemoryGraphStore, FindingStore, RunbookStore, ReportStore, CampaignTrackStore, ResearchResourceCatalog,
   createResearchStorageLayout, ensureResearchStorageLayout,
 } from '../packages/research-agent/dist/index.js';
+
+test('publication splits and deduplicates large prior-art bodies and rebuilds their complete history', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-publication-prior-art-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const artifactDirectoryPath = join(directory, 'runtime', 'artifacts');
+  mkdirSync(workspaceRoot);
+  mkdirSync(join(directory, 'runtime'));
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath };
+  initializeWorkspaceProject(workspaceRoot, options.workspaceId);
+  const locator = 'https://example.test/reference';
+  const catalog = new ResearchResourceCatalog({
+    databasePath,
+    workspaceId: options.workspaceId,
+    explicitResources: [{ id: 'asset-example', kind: 'documentation', direction: 'in_scope', locator, source: 'explicit_scope' }],
+  });
+  let catalogOpen = true;
+  try {
+    const resourceId = catalog.list()[0].id;
+    const body = 'a'.repeat(6 * 1024 * 1024);
+    const document = {
+      requestedUrl: locator, url: locator, fetchedAt: '2026-09-01T00:00:00.000Z', contentType: 'text/plain',
+      contentHash: workspaceContentHash(body), etag: null, lastModified: null, title: 'Example reference', text: body, links: [],
+    };
+    catalog.priorArt.save(resourceId, 'action-example-one', document, { revision: 'build-example-001' });
+    catalog.priorArt.save(resourceId, 'action-example-two', { ...document, fetchedAt: '2026-09-02T00:00:00.000Z' }, { revision: 'build-example-001' });
+
+    const checkpoint = checkpointWorkspaceResearch(options, 'Publish bounded prior-art payloads');
+    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    const resources = JSON.parse(readFileSync(join(workspaceRoot, 'references', 'resources.json'), 'utf8'));
+    assert.equal(resources.schemaVersion, 2);
+    assert.equal(resources.priorArt.length, 2);
+    assert.equal(resources.priorArt[0].data_json, undefined);
+    assert.equal(resources.priorArt[0].dataRef.path, resources.priorArt[1].dataRef.path);
+    assert.equal(readFileSync(join(workspaceRoot, resources.priorArt[0].dataRef.path), 'utf8').length > 5 * 1024 * 1024, true);
+    assert.equal(readFileSync(join(workspaceRoot, 'references', 'resources.json')).length < 128 * 1024, true);
+
+    catalog.close();
+    catalogOpen = false;
+    releaseWorkspaceResearchIndex(options);
+    rebuildWorkspaceResearchIndex(options);
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const rows = database.prepare('SELECT data_json FROM resource_prior_art WHERE workspace_id=? ORDER BY action_id').all(options.workspaceId);
+      assert.equal(rows.length, 2);
+      assert.equal(JSON.parse(rows[0].data_json).text.length, body.length);
+      assert.equal(JSON.parse(rows[1].data_json).fetchedAt, '2026-09-02T00:00:00.000Z');
+    } finally { database.close(); }
+  } finally {
+    if (catalogOpen) catalog.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('publication preserves directory evidence references without reading them as files', () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-publication-directory-evidence-example-'));
@@ -44,6 +97,40 @@ test('publication preserves directory evidence references without reading them a
     assert.equal(checkpoint.status, 'committed', checkpoint.error);
     const published = readFileSync(join(workspaceRoot, 'memories', `${memory.id}.md`), 'utf8');
     assert.match(published, /investigations\/investigation-example\/captured-output/u);
+  } finally {
+    graph.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('publication preserves a workspace-root evidence reference without rejecting the checkpoint', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-publication-root-evidence-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const artifactDirectoryPath = join(directory, 'runtime', 'artifacts');
+  mkdirSync(workspaceRoot);
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath };
+  initializeWorkspaceProject(workspaceRoot, options.workspaceId);
+  const context = { workspaceId: options.workspaceId, workspaceName: 'Example Research', subjectId: 'subject-example', subjectName: 'Example Subject' };
+  const graph = new MemoryGraphStore({ workspaceRoot, databasePath, context });
+  try {
+    const memory = graph.save({
+      type: 'trajectory',
+      title: 'Workspace-root command example',
+      body: 'A synthetic command ran from the research workspace root.',
+      status: 'suspected',
+      evidence: [{
+        kind: 'command',
+        pathBase: 'workspace',
+        path: '.',
+        locator: {},
+        summary: 'The command used the workspace root as its working directory.',
+      }],
+    });
+    const checkpoint = checkpointWorkspaceResearch(options, 'Publish workspace-root evidence reference');
+    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    const published = readFileSync(join(workspaceRoot, 'memories', `${memory.id}.md`), 'utf8');
+    assert.match(published, /"path": "\."/u);
   } finally {
     graph.close();
     rmSync(directory, { recursive: true, force: true });
@@ -199,6 +286,14 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
 
     const claimPath = `claims/${claim.id}.json`;
     const exported = JSON.parse(readFileSync(join(workspaceRoot, claimPath), 'utf8'));
+    const publishedClaim = readFileSync(join(workspaceRoot, claimPath), 'utf8');
+    exported.updated_at = '2026-09-01T00:00:00.000Z';
+    writeFileSync(join(workspaceRoot, claimPath), JSON.stringify(exported));
+    importWorkspaceResearchFile(options, claimPath, claim.revision);
+    assert.equal(readFileSync(join(workspaceRoot, claimPath), 'utf8'), publishedClaim);
+    assert.equal(claims.get(claim.id).revision, claim.revision);
+
+    exported.updated_at = JSON.parse(publishedClaim).updated_at;
     exported.status = 'verified';
     writeFileSync(join(workspaceRoot, claimPath), JSON.stringify(exported));
     assert.throws(() => importWorkspaceResearchFile(options, claimPath, claim.revision), /host-managed/);
@@ -211,6 +306,14 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
     assert.equal(checkpointWorkspaceResearch(options, 'Imported claim').status, 'committed');
 
     const memoryPath = `memories/${memory.id}.md`;
+    const publishedMemory = readFileSync(join(workspaceRoot, memoryPath), 'utf8');
+    const driftedMemory = publishedMemory.replace(/"updated_at": "[^"]+"/u, '"updated_at": "2026-09-01T00:00:00.000Z"');
+    assert.notEqual(driftedMemory, publishedMemory);
+    writeFileSync(join(workspaceRoot, memoryPath), driftedMemory);
+    importWorkspaceResearchFile(options, memoryPath, memory.revision);
+    assert.equal(readFileSync(join(workspaceRoot, memoryPath), 'utf8'), publishedMemory);
+    assert.equal(graph.get(memory.id).revision, memory.revision);
+
     writeFileSync(join(workspaceRoot, memoryPath), readFileSync(join(workspaceRoot, memoryPath), 'utf8').replace('Original explanation.', 'Revised explanation.'));
     importWorkspaceResearchFile(options, memoryPath, memory.revision);
     assert.equal(graph.get(memory.id).body, 'Revised explanation.');

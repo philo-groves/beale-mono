@@ -46,6 +46,63 @@ test('workspace initialization updates the managed ignore block without replacin
   assert.equal(twice, once, 'managed migration must be idempotent');
 });
 
+test('active checkpoints refresh generated-file ignores and name unexpected oversized files', () => {
+  const root = workspace();
+  const ignorePath = join(root, '.gitignore');
+  writeFileSync(ignorePath, readFileSync(ignorePath, 'utf8').replace('**/*.noindex/\n', ''));
+  assert.equal(git(root, 'add', '.gitignore').status, 0);
+  assert.equal(git(root, 'commit', '--no-verify', '-m', 'Simulate prior managed ignore block').status, 0);
+  const generated = join(root, 'investigations', 'example', 'Build', 'Intermediates.noindex', 'Example.pcm');
+  mkdirSync(join(generated, '..'), { recursive: true });
+  writeFileSync(generated, Buffer.alloc(5 * 1024 * 1024 + 1));
+
+  const refreshed = checkpointWorkspace(root, 'Refresh managed generated-file ignores');
+  assert.equal(refreshed.status, 'committed', refreshed.error);
+  assert.match(readFileSync(ignorePath, 'utf8'), /^\*\*\/\*\.noindex\/$/mu);
+  assert.match(git(root, 'check-ignore', '-v', generated).stdout, /\*\*\/\*\.noindex\//u);
+  assert.equal(git(root, 'ls-files', generated).stdout, '');
+
+  const generatedIndexPath = 'references/resources.json';
+  writeFileSync(join(root, generatedIndexPath), JSON.stringify({ padding: 'a'.repeat(5 * 1024 * 1024) }));
+  const relaxed = checkpointWorkspace(root, 'Checkpoint bounded generated research index');
+  assert.equal(relaxed.status, 'committed', relaxed.error);
+
+  const oversizedPath = 'investigations/example/oversized-example.bin';
+  writeFileSync(join(root, oversizedPath), Buffer.alloc(5 * 1024 * 1024 + 1));
+  const rejected = checkpointWorkspace(root, 'Reject unexpected oversized file');
+  assert.equal(rejected.status, 'failed');
+  assert.match(rejected.error, new RegExp(`${oversizedPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}.*5\\.00 MiB.*exceeds the 5 MiB`, 'u'));
+});
+
+test('automatic checkpoints retain oversized candidate evidence with a tracked manifest', () => {
+  const root = workspace();
+  const candidatePath = 'investigations/example/evidence/generated/example-census.json';
+  const candidate = Buffer.alloc(5 * 1024 * 1024 + 1, 0x61);
+  mkdirSync(join(root, candidatePath, '..'), { recursive: true });
+  writeFileSync(join(root, candidatePath), candidate);
+
+  const recovered = checkpointWorkspace(root, 'Retain oversized candidate evidence');
+  assert.equal(recovered.status, 'committed', recovered.error);
+  assert.equal(recovered.recoveredRawArtifacts?.length, 1);
+  const [artifact] = recovered.recoveredRawArtifacts;
+  assert.equal(artifact.path, candidatePath);
+  assert.equal(artifact.sizeBytes, candidate.length);
+  assert.equal(artifact.sha256, workspaceContentHash(candidate));
+  assert.deepEqual(readFileSync(join(root, candidatePath)), candidate);
+  assert.equal(git(root, 'ls-files', candidatePath).stdout, '');
+  assert.match(git(root, 'check-ignore', '-v', candidatePath).stdout, /\.git\/info\/exclude/u);
+
+  const manifest = JSON.parse(readFileSync(join(root, artifact.manifestPath), 'utf8'));
+  assert.equal(manifest.workspacePath, candidatePath);
+  assert.equal(manifest.sha256, artifact.sha256);
+  assert.equal(git(root, 'ls-files', artifact.manifestPath).stdout.trim(), artifact.manifestPath);
+
+  writeFileSync(join(root, 'investigations', 'example', 'follow-up.txt'), 'checkpoint remains usable');
+  const followUp = checkpointWorkspace(root, 'Checkpoint after raw candidate recovery');
+  assert.equal(followUp.status, 'committed', followUp.error);
+  assert.equal(followUp.recoveredRawArtifacts, undefined);
+});
+
 test('schema-v1 workspaces retain database-first compatibility authority', () => {
   const root = mkdtempSync(join(tmpdir(), 'beale-project-v1-test-'));
   roots.push(root);

@@ -741,7 +741,13 @@ final class AppModel: ObservableObject {
             let optimisticId: String
             let optimisticAttemptId: String?
             if current.status == "active" {
-                let requestId = try await sendSteeringOverChannel(instruction, sessionId: sessionId)
+                let requestedServerURL = serverURL
+                let requestedToken = operatorToken
+                let client = try appServerClient(serverURL: requestedServerURL, token: requestedToken)
+                let requestId = try await client.sendSteering(instruction, sessionId: sessionId)
+                guard connectionMatches(serverURL: requestedServerURL, token: requestedToken) else {
+                    throw CancellationError()
+                }
                 optimisticId = "transcript_steering_\(requestId)"
                 optimisticAttemptId = nil
             } else {
@@ -1154,10 +1160,6 @@ final class AppModel: ObservableObject {
 
     private func appServerClient(serverURL: String, token: String) throws -> AppServerClient {
         AppServerClient(endpoint: try AppServerEndpoint(serverURL), operatorToken: token)
-    }
-
-    private func sendSteeringOverChannel(_ instruction: String, sessionId: String) async throws -> String {
-        try await sessionControlChannel(sessionId: sessionId).sendSteering(instruction)
     }
 
     private func sessionControlChannel(sessionId: String) async throws -> AppServerSessionControlChannel {

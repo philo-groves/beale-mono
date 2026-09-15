@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import net from 'node:net';
 import test from 'node:test';
 import { AgentPluginRegistry } from '../packages/research-agent/dist/agent-plugin-registry.js';
 
@@ -65,7 +66,7 @@ test('managed apple-security-devices is importable through the Beale Agent Plugi
   }
 });
 
-test('apple-security-devices MCP surface auto-reviews Tart operations and confirms external device mutations', () => {
+test('apple-security-devices MCP surface auto-reviews VM operations and confirms physical device mutations', () => {
   const messages = runServer([
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
     { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
@@ -95,12 +96,15 @@ test('apple-security-devices MCP surface auto-reviews Tart operations and confir
     'stop_darwin_vm',
     'run_darwin_vm_console_command'
   ];
-  const autoReviewedTartTools = [
+  const autoReviewedVmTools = [
     'start_tart_vm',
     'stop_tart_vm',
     'exec_tart_vm',
     'copy_to_tart_vm',
-    'copy_from_tart_vm'
+    'copy_from_tart_vm',
+    'start_darwin_vm',
+    'stop_darwin_vm',
+    'run_darwin_vm_console_command'
   ];
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [...expectedReadTools, ...expectedWriteTools].sort());
   for (const name of ['copy_to_tart_vm', 'copy_from_tart_vm']) {
@@ -110,6 +114,13 @@ test('apple-security-devices MCP surface auto-reviews Tart operations and confir
     assert.equal(transfer.inputSchema.properties.timeoutSeconds.default, 900);
     assert.equal(transfer.inputSchema.properties.timeoutSeconds.maximum, 3600);
     assert.match(transfer.description, /Stream one regular file/u);
+  }
+  const tartExec = tools.find((tool) => tool.name === 'exec_tart_vm');
+  assert.equal(tartExec.inputSchema.properties.timeoutSeconds.default, 60);
+  assert.equal(tartExec.inputSchema.properties.timeoutSeconds.maximum, 1800);
+  for (const name of ['inspect_darwin_vm', 'start_darwin_vm']) {
+    const tool = tools.find((candidate) => candidate.name === name);
+    assert.ok(tool.inputSchema.required.includes('checkoutRoot'));
   }
   assert.equal(tools.some((tool) => /simulator|simctl/iu.test(tool.name)), false);
   for (const tool of tools) {
@@ -121,7 +132,7 @@ test('apple-security-devices MCP surface auto-reviews Tart operations and confir
     } else {
       assert.equal(tool.annotations.readOnlyHint, false);
       assert.equal(policy.sideEffects, 'write');
-      assert.equal(policy.confirmation, autoReviewedTartTools.includes(tool.name) ? 'never' : 'always');
+      assert.equal(policy.confirmation, autoReviewedVmTools.includes(tool.name) ? 'never' : 'always');
     }
   }
 });
@@ -152,6 +163,150 @@ test('apple-security-devices reports capabilities without claiming iOS Simulator
   assert.equal(typeof status.tart.available, 'boolean');
   assert.equal(typeof status.physicalIphone.available, 'boolean');
   assert.equal(typeof status.darwinVm.available, 'boolean');
+});
+
+test('apple-security-devices reattaches a verified Darwin VM after an MCP restart', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-fake-darwin-restart-'));
+  const pluginData = join(directory, 'plugin-data');
+  const checkoutRoot = join(directory, 'checkout');
+  const qemuDirectory = join(checkoutRoot, 'qemu-sptm', 'build');
+  const firmwareDirectory = join(checkoutRoot, 'firmware');
+  const qemu = join(qemuDirectory, 'qemu-system-aarch64');
+  const capture = join(directory, 'qemu-capture.jsonl');
+  let pid = null;
+  try {
+    mkdirSync(pluginData, { recursive: true });
+    mkdirSync(qemuDirectory, { recursive: true });
+    mkdirSync(firmwareDirectory, { recursive: true });
+    for (const name of ['bootkc', 'dtree', 'ramdisk.tc', 'ramdisk.dmg']) {
+      writeFileSync(join(firmwareDirectory, name), `synthetic-${name}`);
+    }
+    writeFileSync(qemu, `#!/usr/bin/env node
+const { appendFileSync, existsSync, unlinkSync } = require('node:fs');
+const net = require('node:net');
+const args = process.argv.slice(2);
+const chardev = args[args.indexOf('-chardev') + 1] || '';
+const socketPath = chardev.match(/(?:^|,)path=([^,]+)/)?.[1];
+const bootArguments = args[args.indexOf('-args') + 1] || '';
+appendFileSync(process.env.APPLE_SECURITY_TEST_QEMU_CAPTURE, JSON.stringify({ bootArguments }) + '\\n');
+if (!socketPath) process.exit(64);
+if (existsSync(socketPath)) unlinkSync(socketPath);
+const server = net.createServer((socket) => socket.on('data', (chunk) => socket.write('guest:' + chunk.toString('utf8'))));
+server.listen(socketPath);
+process.on('SIGTERM', () => server.close(() => {
+  if (existsSync(socketPath)) unlinkSync(socketPath);
+  process.exit(0);
+}));
+setInterval(() => {}, 1000);
+`);
+    chmodSync(qemu, 0o755);
+    const environment = {
+      APPLE_SECURITY_TEST_PLATFORM: 'darwin',
+      APPLE_SECURITY_TEST_QEMU_CAPTURE: capture
+    };
+    const startedMessages = runServerWithPluginData([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'start_darwin_vm', arguments: { checkoutRoot, memoryMiB: 2048, bootArguments: 'debug=0x14e' } }
+      }
+    ], pluginData, environment);
+    assert.equal(startedMessages[1].result.isError, undefined, startedMessages[1].result.content[0].text);
+    const started = JSON.parse(startedMessages[1].result.content[0].text);
+    const runId = started.run.runId;
+    const recordPath = join(pluginData, 'darwin-vm-runs', runId, 'run.json');
+    const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+    pid = record.pid;
+    assert.equal(waitUntil(() => existsSync(record.serialSocketPath), 2000), true);
+    const captured = JSON.parse(readFileSync(capture, 'utf8').trim());
+    assert.match(captured.bootArguments, /^rd=md0 serial=3 -v -noprogress wdt=-1 wlan-olyhal-abort /u);
+    assert.match(captured.bootArguments, /debug=0x14e$/u);
+
+    const listedMessages = runServerWithPluginData([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_darwin_vm_runs', arguments: {} } }
+    ], pluginData, environment);
+    const listed = JSON.parse(listedMessages[1].result.content[0].text);
+    assert.equal(listed.runs[0].state, 'running');
+    assert.equal(listed.runs[0].controllable, true);
+
+    const consoleMessages = runServerWithPluginData([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'run_darwin_vm_console_command', arguments: { runId, command: 'id', readMilliseconds: 100 } }
+      }
+    ], pluginData, environment);
+    assert.equal(consoleMessages[1].result.isError, undefined, consoleMessages[1].result.content[0].text);
+    assert.match(JSON.parse(consoleMessages[1].result.content[0].text).output, /guest:id/u);
+
+    const stoppedMessages = runServerWithPluginData([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'stop_darwin_vm', arguments: { runId } } }
+    ], pluginData, environment);
+    assert.equal(stoppedMessages[1].result.isError, undefined, stoppedMessages[1].result.content[0].text);
+    assert.equal(JSON.parse(stoppedMessages[1].result.content[0].text).run.state, 'stopped');
+    assert.equal(waitUntil(() => !processExists(pid), 2000), true);
+    pid = null;
+  } finally {
+    if (pid && processExists(pid)) process.kill(pid, 'SIGTERM');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('apple-security-devices refuses to adopt a live PID with mismatched QEMU identity', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-fake-darwin-mismatch-'));
+  const pluginData = join(directory, 'plugin-data');
+  const checkoutRoot = join(directory, 'checkout');
+  const qemuDirectory = join(checkoutRoot, 'qemu-sptm', 'build');
+  const runId = 'darwin_00000000-0000-4000-8000-000000000123';
+  const runRoot = join(pluginData, 'darwin-vm-runs', runId);
+  const serialSocketPath = join(tmpdir(), `beale-darwin-${runId.slice(-12)}.sock`);
+  const serialLogPath = join(runRoot, 'serial.log');
+  const qemuLogPath = join(runRoot, 'qemu.log');
+  const socketServer = net.createServer();
+  try {
+    mkdirSync(qemuDirectory, { recursive: true });
+    mkdirSync(runRoot, { recursive: true });
+    writeFileSync(join(qemuDirectory, 'qemu-system-aarch64'), 'synthetic-qemu');
+    if (existsSync(serialSocketPath)) rmSync(serialSocketPath, { force: true });
+    await new Promise((resolvePromise, rejectPromise) => {
+      socketServer.once('error', rejectPromise);
+      socketServer.listen(serialSocketPath, resolvePromise);
+    });
+    writeFileSync(join(runRoot, 'run.json'), `${JSON.stringify({
+      version: 1,
+      runId,
+      pid: process.pid,
+      checkoutRoot,
+      serialSocketPath,
+      serialLogPath,
+      qemuLogPath,
+      startedAt: new Date().toISOString(),
+      memoryMiB: 2048,
+      state: 'running'
+    }, null, 2)}\n`);
+
+    const listedMessages = runServerWithPluginData([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_darwin_vm_runs', arguments: {} } }
+    ], pluginData, { APPLE_SECURITY_TEST_PLATFORM: 'darwin' });
+    const listed = JSON.parse(listedMessages[1].result.content[0].text);
+    assert.equal(listed.runs[0].state, 'orphaned');
+    assert.equal(listed.runs[0].controllable, false);
+
+    const stoppedMessages = runServerWithPluginData([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'stop_darwin_vm', arguments: { runId } } }
+    ], pluginData, { APPLE_SECURITY_TEST_PLATFORM: 'darwin' });
+    assert.equal(stoppedMessages[1].result.isError, true);
+    assert.match(stoppedMessages[1].result.content[0].text, /cannot be safely controlled/u);
+    assert.equal(processExists(process.pid), true);
+  } finally {
+    await new Promise((resolvePromise) => socketServer.close(resolvePromise));
+    if (existsSync(serialSocketPath)) rmSync(serialSocketPath, { force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('apple-security-devices allows name-bound Tart concurrency by default but supports explicit exclusivity', () => {
@@ -325,7 +480,7 @@ process.stdout.write('fallback-ok');
       { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
       {
         jsonrpc: '2.0', id: 2, method: 'tools/call',
-        params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/printf', '%s', 'safe value'], timeoutSeconds: 10 } }
+        params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/printf', '%s', 'safe value'], timeoutSeconds: 1700 } }
       }
     ], {
       APPLE_SECURITY_TEST_PLATFORM: 'darwin',
@@ -346,6 +501,18 @@ process.stdout.write('fallback-ok');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('apple-security-devices rejects an invalid explicit Tart execution timeout', () => {
+  const messages = runServer([
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+    {
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/true'], timeoutSeconds: 1801 } }
+    }
+  ], { APPLE_SECURITY_TEST_PLATFORM: 'darwin' });
+  assert.equal(messages[1].result.isError, true);
+  assert.match(messages[1].result.content[0].text, /timeoutSeconds must be an integer from 1 to 1800/u);
 });
 
 test('apple-security-devices guest-agent-only policy never opens SSH or a host command runner', () => {
@@ -1003,15 +1170,38 @@ process.exit(99);
 function runServer(messages, extraEnvironment = {}) {
   const pluginData = mkdtempSync(join(tmpdir(), 'beale-apple-security-plugin-data-'));
   try {
-    const result = spawnSync(process.execPath, [serverPath], {
-      input: `${messages.map((message) => JSON.stringify(message)).join('\n')}\n`,
-      encoding: 'utf8',
-      env: { ...process.env, PLUGIN_ROOT: pluginRoot, PLUGIN_DATA: pluginData, ...extraEnvironment },
-      timeout: 5000
-    });
-    assert.equal(result.status, 0, result.stderr);
-    return result.stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    return runServerWithPluginData(messages, pluginData, extraEnvironment);
   } finally {
     rmSync(pluginData, { recursive: true, force: true });
+  }
+}
+
+function runServerWithPluginData(messages, pluginData, extraEnvironment = {}) {
+  const result = spawnSync(process.execPath, [serverPath], {
+    input: `${messages.map((message) => JSON.stringify(message)).join('\n')}\n`,
+    encoding: 'utf8',
+    env: { ...process.env, PLUGIN_ROOT: pluginRoot, PLUGIN_DATA: pluginData, ...extraEnvironment },
+    timeout: 5000
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+
+function waitUntil(predicate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    Atomics.wait(cell, 0, 0, 20);
+  }
+  return predicate();
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
