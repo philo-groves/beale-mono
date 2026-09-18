@@ -34,7 +34,7 @@ export type AdvancedSubagentRole = typeof ADVANCED_SUBAGENT_ROLES[number]["id"];
 
 export const ADVANCED_SUBAGENT_COLLABORATION_TOOLS = SUBAGENT_COLLABORATION_TOOLS;
 
-/** Simple orchestration with a required, explicit responsibility for each delegated agent. */
+/** Sustained role-based orchestration with an explicit responsibility for each delegated agent. */
 export const advancedSubagentRuntimeFactory: SubagentRuntimeFactory = {
   id: "advanced",
   toolDescriptors: ADVANCED_SUBAGENT_COLLABORATION_TOOLS,

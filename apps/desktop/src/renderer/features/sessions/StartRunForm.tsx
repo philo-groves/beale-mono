@@ -1209,7 +1209,7 @@ export function ResearchSettingsForm({
             <div className="collaboration-controls-row">
               <div className="collaboration-controls-right">
                 <label className="collaboration-inline-control">
-                  <span title="Simple provides direct subagents. Advanced uses the same direct controls and requires each delegated subagent to be a Discoverer, Prover, Reviewer, or Reporter.">Subagents</span>
+                  <span title="Simple provides direct subagents for bounded delegation. Advanced coordinates sustained parallel discovery with role-based Discoverers, Provers, Reviewers, and Reporters.">Subagents</span>
                   <select
                     value={collaboration.subagentMode}
                     onChange={(event) => selectSubagentMode(event.target.value as ResearchSubagentMode)}

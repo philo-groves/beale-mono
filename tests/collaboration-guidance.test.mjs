@@ -47,8 +47,8 @@ test("collaboration config preserves validated Advanced compatible roles", () =>
 
   assert.deepEqual(config.providers[0].roles, ["discoverer", "prover"]);
   assert.deepEqual(config.providers[1].roles, ["reviewer"]);
-  assert.match(createCollaborationSystemGuidance(config), /Use at most one Discoverer at a time/);
-  assert.match(createCollaborationSystemGuidance(config), /completed Discoverer is not a vacancy to refill/);
+  assert.match(createCollaborationSystemGuidance(config, "discovery"), /continuous discovery coverage with multiple bounded Discoverer scouts/);
+  assert.match(createCollaborationSystemGuidance(config, "discovery"), /launch a fresh non-duplicative Discoverer assignment/);
   assert.deepEqual(decodeResearchCollaborationConfig({
     ...BASE_CONFIG,
     providers: [{ ...BASE_CONFIG.providers[0], role: "reviewer" }],
@@ -91,22 +91,40 @@ test("discovery-specific collaboration guidance does not leak into other workflo
   assert.doesNotMatch(guidance, /Discovery may benefit/);
 });
 
-test("advanced collaboration defaults sequential work to bounded closure without lane coupling", () => {
+test("advanced discovery maintains multiple non-duplicative scouts and replenishes completed coverage", () => {
   const advanced = { ...BASE_CONFIG, subagentMode: "advanced" };
-  const chaining = createCollaborationSystemGuidance(advanced, "chaining");
   const discovery = createCollaborationSystemGuidance(advanced, "discovery");
+  const exploration = createCollaborationSystemGuidance(advanced, "exploration");
+  const longshot = createCollaborationSystemGuidance(advanced, "longshot");
+  const customDiscovery = createCollaborationSystemGuidance(advanced, "custom-discovery");
+  const unspecified = createCollaborationSystemGuidance(advanced);
 
-  assert.match(chaining, /continue in the lead plus bounded Prover or Reviewer assignments/);
-  assert.match(discovery, /continue in the lead plus bounded Prover or Reviewer assignments/);
-  assert.doesNotMatch(chaining, /continuous discovery coverage/);
+  for (const guidance of [discovery, exploration, longshot, customDiscovery, unspecified]) {
+    assert.match(guidance, /continuous discovery coverage with multiple bounded Discoverer scouts/);
+    assert.match(guidance, /every active Discoverer a distinct assignment/);
+    assert.match(guidance, /launch a fresh non-duplicative Discoverer assignment/);
+    assert.doesNotMatch(guidance, /at most one Discoverer|not a vacancy to refill/);
+    assert.doesNotMatch(guidance, /continue in the lead plus bounded Prover or Reviewer assignments/);
+  }
 });
 
-test("advanced collaboration guidance describes Simple controls with explicit delegation roles", () => {
+test("advanced sequential workflows retain bounded proof and review closure", () => {
+  const advanced = { ...BASE_CONFIG, subagentMode: "advanced" };
+
+  for (const workflowId of ["chaining", "proof", "verification", "reporting", "synthesis"]) {
+    const guidance = createCollaborationSystemGuidance(advanced, workflowId);
+    assert.match(guidance, /continue in the lead plus bounded Prover or Reviewer assignments/);
+    assert.match(guidance, /specific missing link has genuinely independent search space/);
+    assert.doesNotMatch(guidance, /continuous discovery coverage/);
+  }
+});
+
+test("advanced collaboration guidance describes sustained role-based orchestration", () => {
   const advanced = { ...BASE_CONFIG, subagentMode: "advanced", intensity: "deep" };
   const lead = createCollaborationSystemGuidance(advanced, "discovery");
   const worker = createCollaborationSystemGuidance(advanced, "discovery", { lead: false });
 
-  assert.match(lead, /same direct spawning, messaging, follow-up, interruption, waiting, and channel collaboration behavior as Simple mode/);
+  assert.match(lead, /coordinates a sustained role-based research team through direct spawning/);
   assert.match(lead, /Use Discoverer as the scout for general analysis and discovery/);
   assert.match(lead, /Use Prover to reproduce a specific finding/);
   assert.match(lead, /Use Reviewer for independent review/);

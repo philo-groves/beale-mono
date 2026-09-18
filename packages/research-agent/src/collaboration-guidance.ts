@@ -1,10 +1,17 @@
 import type { ResearchCollaborationConfig } from "./types.js";
 
 const ALL_SUBAGENT_ROLES = ["discoverer", "prover", "reviewer", "reporter"] as const;
+const SEQUENTIAL_ADVANCED_WORKFLOWS = new Set([
+  "chaining",
+  "proof",
+  "verification",
+  "reporting",
+  "synthesis",
+]);
 
 export function createCollaborationSystemGuidance(
   config: ResearchCollaborationConfig,
-  _workflowId?: string,
+  workflowId?: string,
   options: { lead?: boolean } = {},
 ): string {
   const enabled = config.providers.filter((provider) => provider.enabled);
@@ -15,7 +22,7 @@ export function createCollaborationSystemGuidance(
     "Startup context contains only a bounded campaign-state projection. Query the specific memory, finding, runbook, report, or investigation catalog needed for the assignment instead of assuming the full campaign was injected.",
     "Channel communication is intentionally lax: post useful work as it becomes available, preserve dissent, and do not wait for a quorum or protocol phase.",
     ...(lead ? ["Before recording session disposition or sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot."] : []),
-    ...subagentModeGuidance(config.subagentMode, lead),
+    ...subagentModeGuidance(config.subagentMode, lead, workflowId),
     ...(lead ? modeGuidance(config.mode) : []),
   ].join(" ");
 }
@@ -31,6 +38,7 @@ function runtimeGuidance(config: ResearchCollaborationConfig): readonly string[]
 function subagentModeGuidance(
   mode: ResearchCollaborationConfig["subagentMode"],
   lead: boolean,
+  workflowId?: string,
 ): readonly string[] {
   if (mode === "advanced") {
     if (!lead) {
@@ -39,15 +47,26 @@ function subagentModeGuidance(
       ];
     }
     return [
-      "Advanced subagent mode uses the same direct spawning, messaging, follow-up, interruption, waiting, and channel collaboration behavior as Simple mode, with a required role for every delegated subagent.",
-      "Use at most one Discoverer at a time, only for a named independently explorable gap that does not duplicate active or completed coverage. A completed Discoverer is not a vacancy to refill: preserve its durable result, then continue in the lead or reuse that agent with followup_task when its context fits the next bounded question.",
-      "For chain closure, proof, verification, reporting, synthesis, or other sequential work, continue in the lead plus bounded Prover or Reviewer assignments. Use a Discoverer only when a specific missing link has genuinely independent search space.",
+      "Advanced subagent mode coordinates a sustained role-based research team through direct spawning, messaging, follow-up, interruption, waiting, and channel collaboration, with a required role for every delegated subagent.",
+      ...advancedWorkflowGuidance(workflowId),
       "Use Discoverer as the scout for general analysis and discovery. Use Prover to reproduce a specific finding and record exact prerequisites, steps, results, and evidence. Use Reviewer for independent review of the finding and reproduction, including contrary evidence and an approve, reject, or needs-work decision. Use Reporter only to write a submission report for a reviewed and approved finding.",
       "Choose the role that matches the bounded assignment. Roles clarify responsibility; they do not impose a phase gate or require all four roles for every task.",
     ];
   }
   return [
     "Simple subagent mode exposes direct spawning, messaging, follow-up, interruption, waiting, and channel collaboration with the established behavior.",
+  ];
+}
+
+function advancedWorkflowGuidance(workflowId: string | undefined): readonly string[] {
+  if (workflowId && SEQUENTIAL_ADVANCED_WORKFLOWS.has(workflowId)) {
+    return [
+      "For chain closure, proof, verification, reporting, synthesis, or other sequential work, continue in the lead plus bounded Prover or Reviewer assignments. Use a Discoverer only when a specific missing link has genuinely independent search space.",
+    ];
+  }
+  return [
+    "Maintain continuous discovery coverage with multiple bounded Discoverer scouts whenever material, independently explorable attack surface remains. Give every active Discoverer a distinct assignment that does not duplicate active or completed coverage, and run discovery alongside proof, review, and reporting work when those tasks are separable.",
+    "When a Discoverer completes, preserve its leads, observations, coverage, and negative results, then launch a fresh non-duplicative Discoverer assignment when meaningful unexplored surface remains and capacity permits. Stop refreshing scouts when coverage is exhausted or the remaining work is sequential; do not spawn merely to fill capacity.",
   ];
 }
 

@@ -31,6 +31,7 @@ import {
   AppServerWorkerDatabaseBroker,
   AppServerWorkerDatabaseCoordinator,
 } from "../dist/workerDatabaseBroker.js";
+import { createWorkerResearchDatabaseFactory } from "../dist/workerDatabaseClient.js";
 import {
   callAppServerResearchTool,
   listAppServerResearchTools,
@@ -1152,6 +1153,34 @@ test("mediates runtime-worker SQLite operations through host-owned connections",
     );
   } finally {
     inspection.close();
+  }
+});
+
+test("retries oversized read-only database responses with a larger bounded buffer", () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-worker-database-growth-"));
+  temporaryDirectories.push(directory);
+  const databasePath = join(directory, "memory.sqlite");
+  const broker = new AppServerWorkerDatabaseBroker(databasePath);
+  const createDatabase = createWorkerResearchDatabaseFactory(
+    (message) => broker.handle(message),
+    {
+      initialResponseBufferBytes: 1024,
+      maximumResponseBufferBytes: 64 * 1024,
+    },
+  );
+  const database = createDatabase(databasePath);
+  const value = "x".repeat(16 * 1024);
+  try {
+    database.exec("CREATE TABLE large_records (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    database.prepare("INSERT INTO large_records (id, value) VALUES (?, ?)").run("record-1", value);
+
+    assert.deepEqual(
+      database.prepare("SELECT id, value FROM large_records WHERE id = ?").get("record-1"),
+      { id: "record-1", value },
+    );
+  } finally {
+    database.close();
+    broker.close();
   }
 });
 

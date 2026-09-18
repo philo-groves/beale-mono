@@ -57,7 +57,7 @@ test("subagent orchestration accepts an opt-in runtime without changing the defa
   assert.deepEqual(executor.collaborationTools, toolDescriptors);
 });
 
-test("advanced subagent mode mirrors Simple controls and requires explicit delegation roles", async () => {
+test("advanced subagent mode retains direct controls and requires explicit delegation roles", async () => {
   const requests = [];
   const runtime = createSubagentRuntime({
     rootProvider: "openai",

@@ -628,7 +628,7 @@ export function CollaborationSettingsForm({
           <label className="settings-form-control-row collaboration-selector-mode-row">
             <span className="settings-form-control-copy">
               <strong>Subagent Mode</strong>
-              <small>Choose direct collaborators or select their compatible Advanced roles.</small>
+              <small>Choose bounded direct delegation or sustained role-based Advanced discovery.</small>
             </span>
             <select
               aria-label="Subagent mode"

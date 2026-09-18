@@ -307,7 +307,7 @@ describe('renderer dialog surfaces', () => {
     expect(html).not.toContain('Independent first pass');
     expect(html.match(/class="collaboration-inline-control"/g)).toHaveLength(1);
     expect(html).not.toContain('>Challenge Rounds</span>');
-    expect(html).toContain('Simple provides direct subagents. Advanced uses the same direct controls and requires each delegated subagent to be a Discoverer, Prover, Reviewer, or Reporter.');
+    expect(html).toContain('Simple provides direct subagents for bounded delegation. Advanced coordinates sustained parallel discovery with role-based Discoverers, Provers, Reviewers, and Reporters.');
     expect(html).not.toContain('title="Controls whether research runs solo, calls collaborators adaptively, or always uses the configured team."');
     expect(html).not.toContain('title="Controls how broadly and deeply collaborators are used during the session."');
     expect(html).not.toContain('>Add Context</button>');

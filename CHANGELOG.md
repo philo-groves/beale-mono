@@ -59,7 +59,7 @@
 - Research sessions now start directly with the deterministic workspace, memory, campaign, and instruction projections; the separate model-driven startup context selector and its fallback, events, and selected-context API have been removed.
 - MCP tools now expose a bounded per-call `bealeTimeoutMs` override up to 30 minutes. Beale removes the control field before provider dispatch and applies the selected timeout consistently across the research-tool budget, MCP wrapper, and stdio request transport so slow VM operations can complete.
 - Stop controls from Desktop, iOS, HTTP clients, and resident automation now share the app-server's bounded worker-termination fallback, preventing stopped sessions or continuations from remaining active when cooperative cancellation stalls.
-- Fresh subagents now inherit at most 16 recent channel messages plus a bounded shared-resource index, so durable channels no longer bypass opt-in parent history by replaying hundreds of messages into every child. Advanced collaboration no longer treats a completed Discoverer as an automatic vacancy, and sequential chain or proof work defaults to lead-owned closure with bounded Prover or Reviewer assignments.
+- Fresh subagents now inherit at most 16 recent channel messages plus a bounded shared-resource index, so durable channels no longer bypass opt-in parent history by replaying hundreds of messages into every child. Advanced discovery maintains multiple non-duplicative Discoverer scouts and replenishes completed coverage while meaningful unexplored surface remains; sequential chain or proof work retains lead-owned closure with bounded Prover or Reviewer assignments.
 - Durable-progress checkpoints no longer block Tart inspection, lifecycle, or file-transfer recovery operations, and those operational support calls do not count as new research evidence. Host-bound campaign state is authoritative over stale investigation identifiers embedded in historical prompt prose.
 - Newly spawned research subagents now start with a fresh task context by default; parent transcript inheritance remains available explicitly through bounded or full `fork_turns` values.
 - Repository search now accepts natural repository-name aliases for materialized checkout labels, while preserving full-label compatibility and rejecting genuinely ambiguous aliases.
@@ -1136,6 +1136,8 @@
 - Workspace-scoped research snapshots, raw evidence retention, JSONL trace exports, recoverable file publication, and explicit revision-checked file imports. Contract version 21 adds `workspace.project` and `workspace.research-project.v1`; rebuild both clients and host.
 
 #### Fixed
+
+- Long research sessions now retry oversized read-only worker database responses with a larger bounded IPC buffer, preventing preserved event history from making later continuations fail at the former fixed 16 MiB transport limit.
 
 - Subject-wide history search now accepts an exact host-advertised workspace selector, excludes stale unregistered workspace identities, and consistently uses canonical registry labels. Hosted sessions and Codex research-tool calls receive the same trusted reference catalog.
 - Same-Subject workspace references now preserve the registered sidebar display label instead of a stale scope or directory-derived fallback. `claim.get` and `runbook.get` accept host-advertised workspace IDs for full read-only foreign details, including paged claim collections, runbook cells, and execution snapshots.

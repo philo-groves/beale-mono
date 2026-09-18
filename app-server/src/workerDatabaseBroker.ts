@@ -8,7 +8,7 @@ const RESPONSE_HEADER_BYTES = 8;
 interface WorkerDatabaseResponse {
   ok: boolean;
   value?: unknown;
-  error?: { message: string; code?: string };
+  error?: { message: string; code?: string; requiredBytes?: number };
 }
 
 interface CoordinatedDatabaseRequest {
@@ -254,7 +254,11 @@ function writeWorkerDatabaseResponse(buffer: SharedArrayBuffer, response: Worker
   if (bytes.byteLength > capacity) {
     bytes = serialize({
       ok: false,
-      error: { message: `The app-server database response exceeds ${capacity} bytes.` }
+      error: {
+        message: `The app-server database response exceeds ${capacity} bytes.`,
+        code: 'BEALE_DATABASE_RESPONSE_BUFFER_TOO_SMALL',
+        requiredBytes: bytes.byteLength
+      }
     } satisfies WorkerDatabaseResponse);
   }
   new Uint8Array(buffer, RESPONSE_HEADER_BYTES, bytes.byteLength).set(bytes);
