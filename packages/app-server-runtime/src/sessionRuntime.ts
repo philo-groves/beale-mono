@@ -1583,7 +1583,7 @@ function usage(): string {
     "  --shell-safety-mode <m> Shell safety: manual_approval, auto_review (default), or danger",
     "  --shell-review-models <json> Provider-to-small-reviewer-model JSON object",
     "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3, zai=glm-5-turbo, openrouter=auto",
-    "  --shell-review-effort <level> Small-model review effort (default: medium)",
+    "  --shell-review-effort <level> Small-model review effort (default: low)",
     "  --memory-backend <id>  Workspace memory: appServer or disabled (legacy v1/v2 values migrate in place)",
     "  --memory-type-descriptions <json> Per-memory-type description overrides used by active agents",
     "  --profile <path>       Explicit research profile JSON (overrides the workspace default)",

@@ -287,7 +287,7 @@ export interface AppServerProviderSemantics {
   defaultSmallModels: Record<'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter', string>;
   auxiliaryEfforts: Array<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
   sessionTitleEffort: 'medium';
-  shellReviewEffort: 'medium';
+  shellReviewEffort: 'low';
 }
 
 let providerSemanticsCache: AppServerProviderSemantics | null = null;

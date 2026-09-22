@@ -733,11 +733,15 @@ export class AppServerRunEngine {
     const attempt = detail.attempts.at(-1);
     if (!run || run.status !== 'active' || !attempt) return false;
     const context: CreatedRunContext = { run, attempt };
+    const recoveredApprovals = recoveredApprovalState(detail, attempt.id);
     let resolveTransportReady!: (connected: boolean) => void;
     const transportReady = new Promise<boolean>((resolve) => { resolveTransportReady = resolve; });
     let resolveCompletion!: () => void;
     const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
     const approvedComputerUseTargetBinaries = this.computerUseBinaryGrants.get(runId) ?? new Set<string>();
+    for (const targetBinary of recoveredApprovals.approvedComputerUseTargetBinaries) {
+      approvedComputerUseTargetBinaries.add(targetBinary);
+    }
     this.computerUseBinaryGrants.set(runId, approvedComputerUseTargetBinaries);
     const active: ActiveAppServerRun = {
       context,
@@ -751,11 +755,11 @@ export class AppServerRunEngine {
       liveReasoningSummaries: new Map(),
       pendingControls: new Map(),
       queuedContinuations: new Map(),
-      shellApprovalRecords: new Map(),
+      shellApprovalRecords: recoveredApprovals.shellApprovalRecords,
       shellApprovalDecisionsInFlight: new Map(),
       resolvedShellApprovalRequestIds: new Set(),
-      toolApprovalRequestIds: new Set(),
-      toolApprovalSessionGrantTargets: new Map(),
+      toolApprovalRequestIds: recoveredApprovals.toolApprovalRequestIds,
+      toolApprovalSessionGrantTargets: recoveredApprovals.toolApprovalSessionGrantTargets,
       approvedComputerUseTargetBinaries,
       appServerRecord: null,
       appServerSessionId: runId,
@@ -3326,6 +3330,49 @@ function resolveResearchWorkflowId(
   const selected = profile.workflows.find((workflow) => workflow.default) ?? profile.workflows[0];
   if (!selected) throw new Error(`Research profile ${profile.id} does not define a workflow.`);
   return selected.id;
+}
+
+export function recoveredApprovalState(
+  detail: Pick<RunDetail, 'policyEvents'>,
+  currentAttemptId: string
+): {
+  shellApprovalRecords: Map<string, string>;
+  toolApprovalRequestIds: Set<string>;
+  toolApprovalSessionGrantTargets: Map<string, string>;
+  approvedComputerUseTargetBinaries: Set<string>;
+} {
+  const shellApprovalRecords = new Map<string, string>();
+  const toolApprovalRequestIds = new Set<string>();
+  const toolApprovalSessionGrantTargets = new Map<string, string>();
+  const approvedComputerUseTargetBinaries = new Set<string>();
+  for (const approval of detail.policyEvents) {
+    if (approval.attemptId && approval.attemptId !== currentAttemptId) continue;
+    if (approval.requestKind !== 'shell_command' && approval.requestKind !== 'computer_use') continue;
+    const approvalRequestId = typeof approval.requestedAction.approvalRequestId === 'string'
+      ? approval.requestedAction.approvalRequestId.trim()
+      : '';
+    if (!approvalRequestId || approvalRequestId.length > 200) continue;
+    if (approval.requestKind === 'computer_use'
+      && approval.requestedAction.permissionMode === 'once_per_session'
+      && typeof approval.requestedAction.targetBinary === 'string'
+      && approval.requestedAction.targetBinary.trim()) {
+      const targetBinary = approval.requestedAction.targetBinary.trim();
+      if (approval.decision === 'approved' && approval.decidedAt !== null) {
+        approvedComputerUseTargetBinaries.add(targetBinary);
+      } else if (approval.decision === 'pending' && approval.decidedAt === null) {
+        toolApprovalSessionGrantTargets.set(approvalRequestId, targetBinary);
+      }
+    }
+    if (approval.decision !== 'pending' || approval.decidedAt !== null) continue;
+    shellApprovalRecords.set(approvalRequestId, approval.id);
+    if (approval.requestKind === 'computer_use') toolApprovalRequestIds.add(approvalRequestId);
+  }
+  return {
+    shellApprovalRecords,
+    toolApprovalRequestIds,
+    toolApprovalSessionGrantTargets,
+    approvedComputerUseTargetBinaries
+  };
 }
 
 function normalizeTokenUsage(record: Record<string, unknown>): NormalizedTokenUsage | null {

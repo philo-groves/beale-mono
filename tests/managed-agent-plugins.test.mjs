@@ -481,6 +481,10 @@ process.stdout.write('fallback-ok');
       {
         jsonrpc: '2.0', id: 2, method: 'tools/call',
         params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', argv: ['/usr/bin/printf', '%s', 'safe value'], timeoutSeconds: 1700 } }
+      },
+      {
+        jsonrpc: '2.0', id: 3, method: 'tools/call',
+        params: { name: 'exec_tart_vm', arguments: { vmName: 'selected-vm', transport: 'ssh', argv: ['/usr/bin/printf', '%s', 'explicit ssh'], timeoutSeconds: 1700 } }
       }
     ], {
       APPLE_SECURITY_TEST_PLATFORM: 'darwin',
@@ -495,8 +499,11 @@ process.stdout.write('fallback-ok');
     const result = JSON.parse(messages[1].result.content[0].text);
     assert.equal(result.transport, 'ssh');
     assert.equal(result.stdout, 'fallback-ok');
+    const explicit = JSON.parse(messages[2].result.content[0].text);
+    assert.equal(explicit.transport, 'ssh');
+    assert.equal(explicit.stdout, 'fallback-ok');
     const runnerCalls = readFileSync(runnerLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-    assert.equal(runnerCalls.length, 2);
+    assert.equal(runnerCalls.length, 4);
     for (const call of runnerCalls) assert.deepEqual(call.slice(0, 3), ['run', '--', fakeSsh]);
   } finally {
     rmSync(directory, { recursive: true, force: true });

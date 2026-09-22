@@ -1325,7 +1325,7 @@ export class AppServerHostService {
     return {
       defaultSmallModels: stringRecord(descriptor.defaultSmallModels),
       sessionTitleEffort: nonEmpty(descriptor.sessionTitleEffort) ?? 'medium',
-      shellReviewEffort: nonEmpty(descriptor.shellReviewEffort) ?? 'medium'
+      shellReviewEffort: nonEmpty(descriptor.shellReviewEffort) ?? 'low'
     };
   }
 

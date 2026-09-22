@@ -14,8 +14,13 @@
 
 #### Fixed
 
+- Tart proof cells and managed Tart communication tools now support an explicit bounded SSH transport for host-to-guest proofs, while preserving Guest Agent-first auto-selection and the fail-closed `guest-agent-only` policy.
+- Auto-Review now uses low-effort small-model reasoning and a bounded 45-second reviewer deadline, reducing false timeout failures when provider latency briefly spikes under concurrent sessions.
+- Workspace publication now validates pinned evidence with batched Git reads and skips unchanged pins, preventing large workspaces from exhausting the checkpoint deadline with one `git show` process per pinned file.
+- Desktop now recovers a session-start request that exceeds the client timeout by polling the app-server catalog and reattaching to the reserved worker, preventing slow macOS workspace checkpoints from falsely failing and orphaning a resumed session.
+- Desktop now restores live approval routing after reattaching to an app-server session and suppresses approvals orphaned by an interrupted attempt, preventing a stale approval prompt from trapping session controls after an app or device restart.
 - Released file-authority research indexes now rebuild duplicate memories, findings, and runbooks parent-first and release duplicate children before their canonical parents. A malformed derived-index rebuild no longer blocks the core workspace-state operation used to open a workspace.
-- Oversized untracked candidate evidence now remains available in place with a small tracked integrity manifest and an exact workspace-local exclusion, preventing one generated corpus from repeatedly blocking later checkpoints while preserving the normal limit for tracked and published files.
+- Oversized untracked candidate evidence now remains available in place with a small tracked integrity manifest and an exact workspace-local exclusion, preventing one generated corpus from repeatedly blocking later checkpoints while preserving the normal limit for tracked and published files. Workspace guidance and checkpoint diagnostics now direct large generated artifacts into an `evidence/` directory so they enter that recovery path instead of blocking session startup.
 - Interrupted sessions now discard timestamp-only drift in generated claim and memory projections before republishing, and a failed pre-session checkpoint finalizes the canonical attempt instead of leaving it falsely active. Desktop Stop addresses the reserved app-server session immediately instead of waiting behind the in-flight startup checkpoint it is cancelling.
 - Workspace checkpoints now keep the 5 MiB limit for ordinary tracked files while allowing bounded generated research indexes and content-addressed prior-art payloads up to 32 MiB. Existing monolithic prior-art exports are split automatically on the next checkpoint, and repeated document bodies share one payload without losing retrieval history.
 - Tart runbook cells now preserve guest execution timeouts up to the runbook's 30-minute limit instead of silently replacing values above five minutes with the 60-second default; invalid explicit timeouts fail validation.
@@ -1137,6 +1142,7 @@
 
 #### Fixed
 
+- Startup recovery now records pending shell and computer-use approvals as denied before continuing the session, so clients do not mistake an approval waiter lost with the prior process for a live request.
 - Long research sessions now retry oversized read-only worker database responses with a larger bounded IPC buffer, preventing preserved event history from making later continuations fail at the former fixed 16 MiB transport limit.
 
 - Subject-wide history search now accepts an exact host-advertised workspace selector, excludes stale unregistered workspace identities, and consistently uses canonical registry labels. Hosted sessions and Codex research-tool calls receive the same trusted reference catalog.

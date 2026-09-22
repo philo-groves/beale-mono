@@ -909,6 +909,42 @@ describe('app-server session persistence boundary', () => {
       ]));
       expect(database.listPendingShellApprovals()).toEqual([]);
 
+      const interrupted = database.createApproval({
+        runId: context.run.id,
+        attemptId: context.attempt.id,
+        requestKind: 'shell_command',
+        requestedAction: { approvalRequestId: 'shell_interrupted' },
+        decision: 'denied',
+        reason: 'Waiting for the researcher.',
+        pending: true
+      });
+      await flushAppServerSessionWrites(database, context.run.id);
+      const sessionStore = new AppServerSessionStore({ databasePath });
+      try {
+        sessionStore.appendEvent(context.run.id, {
+          id: 'session_recovery_legacy_approval',
+          kind: 'session.recovery',
+          timestamp: '2099-09-18T12:00:00.000Z',
+          summary: 'Workspace recovery paused an interrupted app-server session.',
+          payload: {
+            recoveredAt: '2099-09-18T12:00:00.000Z',
+            recoveredAttemptIds: [context.attempt.id],
+            attemptId: context.attempt.id
+          }
+        });
+      } finally {
+        sessionStore.close();
+      }
+      expect(database.getRunDetail(context.run.id).policyEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: interrupted.id,
+          decision: 'denied',
+          reason: 'Shell approval denied because the prior app-server process was interrupted.',
+          decidedAt: '2099-09-18T12:00:00.000Z'
+        })
+      ]));
+      expect(database.listPendingShellApprovals()).toEqual([]);
+
       const inspection = new DatabaseSync(databasePath, { readOnly: true });
       try {
         const storedEvents = inspection.prepare(`

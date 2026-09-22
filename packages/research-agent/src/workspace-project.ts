@@ -326,6 +326,7 @@ This directory is one research workspace. Source repositories belong in the host
 - scratch/: disposable session experiments; cache/: rebuildable outputs and downloads. Both are excluded from Git.
 
 Keep related scripts and fixtures with their investigation or runbook. Default shell execution uses session scratch; specify an external repository cwd for source work and an explicit investigation directory for persistent candidate work.
+Place generated candidate artifacts larger than 5 MiB beneath an evidence/ directory, including a nested investigation/evidence/ directory when the artifact belongs with candidate code. App-server retains those oversized files locally, records tracked integrity manifests, and excludes their exact paths from Git. Do not generate oversized artifacts elsewhere in the workspace because required checkpoints will reject them.
 Keep the workspace top level clean. Unexpected files and directories are ignored by Git but detected directly by app-server; the agent is reminded every turn until it moves them into an approved directory.
 App-server keeps its derived research index synchronized with these files and creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
 Every commit ends with Investigation-ID and Session-ID trailers. Supply the actual IDs for manual research commits; use none only when there is no associated investigation or session.
@@ -424,7 +425,7 @@ export function validateWorkspaceCommit(root: string): void {
       if (oversized) {
         const [path] = oversized;
         const limitMiB = trackedFileLimit(path) / (1024 * 1024);
-        throw new Error(`Staged file ${JSON.stringify(path)} is ${(size / (1024 * 1024)).toFixed(2)} MiB and exceeds the ${limitMiB} MiB tracked-file limit; retain it as a raw artifact with a manifest.`);
+        throw new Error(`Staged file ${JSON.stringify(path)} is ${(size / (1024 * 1024)).toFixed(2)} MiB and exceeds the ${limitMiB} MiB tracked-file limit; generated candidate artifacts must live beneath an evidence/ directory so Beale can retain them locally with a tracked integrity manifest.`);
       }
       batch.push(hash); total += size;
     }
@@ -753,11 +754,19 @@ export function publishWorkspaceFiles(root: string, files: Record<string, string
   // A completed checkpoint makes pinned evidence immutable. Publication may
   // render database paths differently after a referenced workspace file is
   // revised, but it must not rewrite the already-committed evidence snapshot.
-  for (const [path, hash] of Object.entries(committed?.pins ?? {})) {
-    if (!(path in publishedFiles)) continue;
-    const content = git(root, ['show', `HEAD:${path}`]);
-    if (workspaceContentHash(content) !== hash) throw new Error(`${path}: committed evidence does not match its canonical pin.`);
-    publishedFiles[path] = content;
+  const pinnedReplacements = Object.entries(committed?.pins ?? {}).flatMap(([path, hash]) => {
+    if (!(path in publishedFiles) || workspaceContentHash(publishedFiles[path]!) === hash) return [];
+    return [[path, hash] as const];
+  });
+  if (pinnedReplacements.length > 0) {
+    const committedFiles = readCommittedWorkspaceFiles(root, pinnedReplacements.map(([path]) => path));
+    for (const [path, hash] of pinnedReplacements) {
+      const content = committedFiles.get(path);
+      if (content === undefined || workspaceContentHash(content) !== hash) {
+        throw new Error(`${path}: committed evidence does not match its canonical pin.`);
+      }
+      publishedFiles[path] = content;
+    }
   }
   if (previous && (!existsSync(join(root, INDEX_PATH)) || readFileSync(join(root, INDEX_PATH), 'utf8') !== JSON.stringify(previous, null, 2) + '\n')) throw new Error('The published research index was edited or removed; preserve the edit before republishing.');
   // Verify the entire previous publication before changing any file. Never overwrite manual edits.
@@ -779,6 +788,62 @@ export function publishWorkspaceFiles(root: string, files: Record<string, string
   mkdirSync(directory, { recursive: true });
   atomicWorkspaceWrite(root, '.git/beale/pending-publication.json', JSON.stringify({ files: publishedFiles, index }));
   finishWorkspacePublication(root, publishedFiles, index, previous);
+}
+
+/** Read multiple committed paths in one tree walk and one bounded blob stream. */
+function readCommittedWorkspaceFiles(root: string, paths: readonly string[]): Map<string, string> {
+  const requested = new Set(paths);
+  const objectByPath = new Map<string, string>();
+  for (const entry of gitBytes(root, ['ls-tree', '-r', '-z', 'HEAD']).toString('utf8').split('\0')) {
+    if (!entry) continue;
+    const separator = entry.indexOf('\t');
+    if (separator < 0) continue;
+    const metadata = entry.slice(0, separator).split(' ');
+    const path = entry.slice(separator + 1);
+    if (metadata[1] === 'blob' && requested.has(path)) objectByPath.set(path, metadata[2]!);
+  }
+  const result = new Map<string, string>();
+  const entries = [...objectByPath.entries()];
+  if (entries.length === 0) return result;
+  const sizeByObject = new Map(
+    gitBytes(root, ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], {}, `${entries.map(([, objectId]) => objectId).join('\n')}\n`)
+      .toString('utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [objectId, type, size] = line.split(' ');
+        return [objectId!, type === 'blob' ? Number(size) : 0] as const;
+      })
+  );
+  for (let start = 0; start < entries.length;) {
+    const batch: Array<[string, string]> = [];
+    let estimatedBytes = 0;
+    while (start < entries.length) {
+      const entry = entries[start]!;
+      const objectBytes = sizeByObject.get(entry[1]) ?? 0;
+      if (batch.length > 0 && estimatedBytes + objectBytes > 8 * 1024 * 1024) break;
+      start += 1;
+      batch.push(entry);
+      estimatedBytes += objectBytes;
+    }
+    const output = gitBytes(root, ['cat-file', '--batch'], {}, `${batch.map(([, objectId]) => objectId).join('\n')}\n`);
+    let offset = 0;
+    for (const [path, objectId] of batch) {
+      const headerEnd = output.indexOf(10, offset);
+      if (headerEnd < 0) throw new Error('Incomplete Git blob response while reading committed evidence.');
+      const header = output.subarray(offset, headerEnd).toString('utf8').split(' ');
+      const size = Number(header[2]);
+      const contentStart = headerEnd + 1;
+      const contentEnd = contentStart + size;
+      if (header[0] !== objectId || header[1] !== 'blob' || !Number.isSafeInteger(size) || contentEnd > output.length) {
+        throw new Error('Invalid Git blob response while reading committed evidence.');
+      }
+      result.set(path, output.subarray(contentStart, contentEnd).toString('utf8'));
+      offset = contentEnd + 1;
+    }
+  }
+  return result;
 }
 
 function finishWorkspacePublication(root: string, files: Record<string, string>, index: WorkspaceResearchIndex, previous: WorkspaceResearchIndex | null): void {

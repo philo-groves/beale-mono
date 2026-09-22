@@ -372,15 +372,17 @@ async function executeTartVmCell(
       guestPath,
       overwrite: true,
       preserveMode: true,
+      transport: executor.transport,
       timeoutSeconds: 900,
       bealeTimeoutMs: 15 * 60_000,
     }, context);
     requireComplete(copied, "stage the guest executable");
     staged = true;
-    const inspected = await executeInternalTool(tools.inspectTool, { vmName: executor.vmName }, context);
+    const inspected = await executeInternalTool(tools.inspectTool, { vmName: executor.vmName, transport: executor.transport }, context);
     requireComplete(inspected, "inspect the Tart VM before execution");
     execution = await executeInternalTool(tools.execTool, {
       vmName: executor.vmName,
+      transport: executor.transport,
       argv: executor.runAs === "root"
         ? ["/usr/bin/sudo", "--", guestPath, ...executor.argv]
         : [guestPath, ...executor.argv],
@@ -399,6 +401,7 @@ async function executeTartVmCell(
       try {
         const cleanup = await executeInternalTool(tools.execTool, {
           vmName: executor.vmName,
+          transport: executor.transport,
           argv: ["/bin/rm", "-f", guestPath],
           timeoutSeconds: 30,
           bealeTimeoutMs: 120_000,

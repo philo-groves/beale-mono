@@ -1002,6 +1002,7 @@ export interface AppServerRunbookCell {
     artifactId: string | null;
     workspacePath: string | null;
     runAs: 'guest' | 'root';
+    transport: 'auto' | 'guest-agent' | 'ssh';
     argv: string[];
     timeoutSeconds: number;
     retainOnFailure: boolean;

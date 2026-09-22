@@ -92,6 +92,7 @@ function parseCellExecutor(value: unknown): RunbookCell["executor"] {
     artifactId: optionalString(executor.artifactId),
     workspacePath: optionalString(executor.workspacePath),
     runAs: executor.runAs === "root" ? "root" : "guest",
+    transport: executor.transport === "ssh" || executor.transport === "guest-agent" ? executor.transport : "auto",
     argv: Array.isArray(executor.argv) ? executor.argv.filter((item): item is string => typeof item === "string") : [],
     timeoutSeconds: optionalInteger(executor.timeoutSeconds) ?? RUNBOOK_DEFAULT_TIMEOUT_SECONDS,
     retainOnFailure: executor.retainOnFailure === true,

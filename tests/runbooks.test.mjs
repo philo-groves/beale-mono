@@ -187,6 +187,7 @@ test("runbook execution stages host-built executables into Tart VMs and records 
           vmName: "example-vm",
           workspacePath: "guest-probe",
           runAs: "root",
+          transport: "ssh",
           argv: ["--verify"],
           timeoutSeconds: 1800,
           retainOnFailure: false,
@@ -209,10 +210,13 @@ test("runbook execution stages host-built executables into Tart VMs and records 
     assert.equal(calls[0].input.vmName, "example-vm");
     assert.match(calls[0].input.localPath, /runbook-packages/);
     assert.equal(calls[0].input.preserveMode, true);
+    assert.equal(calls[0].input.transport, "ssh");
+    assert.equal(calls[1].input.transport, "ssh");
     assert.deepEqual(calls[2].input.argv.slice(0, 3), ["/usr/bin/sudo", "--", calls[2].input.argv[2]]);
     assert.match(calls[2].input.argv[2], /^\/tmp\/\.beale-runbook-/);
     assert.deepEqual(calls[2].input.argv.slice(3), ["--verify"]);
     assert.equal(calls[2].input.timeoutSeconds, 1800);
+    assert.equal(calls[2].input.transport, "ssh");
     assert.equal(calls[2].input.bealeTimeoutMs, 1_800_000);
     assert.deepEqual(calls[3].input.argv.slice(0, 2), ["/bin/rm", "-f"]);
     assert.equal(calls[3].input.argv[2], calls[2].input.argv[2]);

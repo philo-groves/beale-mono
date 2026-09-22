@@ -17,7 +17,7 @@ export interface ProviderSemanticsDescriptor {
   defaultSmallModels: Readonly<Record<ResearchProviderId, string>>;
   auxiliaryEfforts: readonly ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
   sessionTitleEffort: 'medium';
-  shellReviewEffort: 'medium';
+  shellReviewEffort: 'low';
 }
 
 export function providerSemanticsDescriptor(): ProviderSemanticsDescriptor {
@@ -27,6 +27,6 @@ export function providerSemanticsDescriptor(): ProviderSemanticsDescriptor {
     defaultSmallModels: DEFAULT_SMALL_MODELS,
     auxiliaryEfforts: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     sessionTitleEffort: 'medium',
-    shellReviewEffort: 'medium',
+    shellReviewEffort: 'low',
   };
 }

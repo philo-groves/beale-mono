@@ -1714,11 +1714,37 @@ function reconciledApprovalRecords(
       decidedAt: trace.createdAt
     });
   }
+  const recoveries = events.flatMap((event) => {
+    if (event.kind !== 'session.recovery') return [];
+    const payload = recordValue(event.payload);
+    const recoveredAttemptIds = Array.isArray(payload?.recoveredAttemptIds)
+      ? payload.recoveredAttemptIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+      : [];
+    const attemptId = stringValue(payload?.attemptId);
+    return [{
+      recoveredAt: stringValue(payload?.recoveredAt) ?? event.timestamp,
+      attemptIds: new Set(attemptId ? [...recoveredAttemptIds, attemptId] : recoveredAttemptIds)
+    }];
+  });
   return approvals.map((approval) => {
     if (approval.decision !== 'pending' || approval.decidedAt !== null) return approval;
     const approvalRequestId = stringValue(approval.requestedAction.approvalRequestId);
     const resolution = approvalRequestId ? resolutions.get(approvalRequestId) : undefined;
-    return resolution ? { ...approval, ...resolution } : approval;
+    if (resolution) return { ...approval, ...resolution };
+    const recovery = recoveries.find((candidate) =>
+      candidate.recoveredAt >= approval.createdAt
+      && (candidate.attemptIds.size === 0
+        || (approval.attemptId !== null && candidate.attemptIds.has(approval.attemptId)))
+    );
+    if (!recovery) return approval;
+    return {
+      ...approval,
+      decision: 'denied',
+      reason: approval.requestKind === 'computer_use'
+        ? 'Computer-use approval denied because the prior app-server process was interrupted.'
+        : 'Shell approval denied because the prior app-server process was interrupted.',
+      decidedAt: recovery.recoveredAt
+    };
   });
 }
 

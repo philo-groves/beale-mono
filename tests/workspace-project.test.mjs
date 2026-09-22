@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { initializeWorkspaceProject, checkpointWorkspace, listUnexpectedWorkspaceTopLevelEntries, listWorkspaceResearchEdits, publishWorkspaceFiles, workspaceContentHash, workspaceLayoutGuardMessage, preserveWorkspaceFile, quarantineWorkspaceDisposable, recoverWorkspacePublication, workspaceResearchAuthority, WORKSPACE_DIRECTORIES, WORKSPACE_PROJECT_VERSION } from '../packages/research-agent/dist/workspace-project.js';
+import { initializeWorkspaceProject, checkpointWorkspace, listUnexpectedWorkspaceTopLevelEntries, listWorkspaceResearchEdits, publishWorkspaceFiles, workspaceContentHash, workspaceLayoutGuardMessage, preserveWorkspaceFile, quarantineWorkspaceDisposable, recoverWorkspacePublication, workspaceResearchAuthority, WORKSPACE_DIRECTORIES, WORKSPACE_INSTRUCTIONS, WORKSPACE_PROJECT_VERSION } from '../packages/research-agent/dist/workspace-project.js';
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -31,6 +31,7 @@ test('creates a standalone local research repository with the explicit layout an
   for (const directory of WORKSPACE_DIRECTORIES) assert.ok(existsSync(join(root, directory)));
   assert.equal(git(root, 'status', '--porcelain').stdout, '');
   assert.equal(checkpointWorkspace(root, 'No changes').status, 'unchanged');
+  assert.match(WORKSPACE_INSTRUCTIONS, /larger than 5 MiB beneath an evidence\/ directory/u);
 });
 
 test('workspace initialization updates the managed ignore block without replacing operator rules', () => {
@@ -72,6 +73,7 @@ test('active checkpoints refresh generated-file ignores and name unexpected over
   const rejected = checkpointWorkspace(root, 'Reject unexpected oversized file');
   assert.equal(rejected.status, 'failed');
   assert.match(rejected.error, new RegExp(`${oversizedPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}.*5\\.00 MiB.*exceeds the 5 MiB`, 'u'));
+  assert.match(rejected.error, /must live beneath an evidence\/ directory/u);
 });
 
 test('automatic checkpoints retain oversized candidate evidence with a tracked manifest', () => {

@@ -133,7 +133,9 @@ export interface CreateShellSafetyAuthorizerOptions {
   authenticationPreferences?: ProviderAuthenticationPreferences;
 }
 
-const DEFAULT_REVIEW_TIMEOUT_MS = 30_000;
+// Shell review is a small, schema-constrained classification, but provider
+// queueing can add a few seconds when several research sessions are active.
+const DEFAULT_REVIEW_TIMEOUT_MS = 45_000;
 const AUTO_REVIEW_FAILURE_COOLDOWN_MS = 60_000;
 const DEFAULT_MAX_REVIEW_INPUT_BYTES = 64 * 1024;
 const MAX_REVIEW_OUTPUT_TOKENS = 1_024;

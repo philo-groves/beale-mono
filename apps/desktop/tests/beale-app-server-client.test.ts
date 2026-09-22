@@ -736,6 +736,59 @@ describe('beale app-server client', () => {
 
     await expect(stopAppServerSession(record, 'session-1')).resolves.toBeUndefined();
   });
+
+  it('reattaches when the session-start request times out after the app-server has reserved the session', async () => {
+    let postSeen = false;
+    await startStubServer((request, response) => {
+      if (request.url === '/v1/sessions' && request.method === 'POST') {
+        postSeen = true;
+        request.resume();
+        // Model the slow pre-session checkpoint: the app-server has reserved
+        // the session, but the original HTTP response is later than Desktop's
+        // request deadline.
+        setTimeout(() => {
+          if (!response.writableEnded) response.end();
+        }, 100);
+        return;
+      }
+      if (request.url === '/v1/sessions/session-timeout-recovery' && request.method === 'GET') {
+        response.writeHead(postSeen ? 200 : 404, { 'content-type': 'application/json' });
+        response.end(postSeen
+          ? JSON.stringify({
+              controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+              session: appServerSessionEntry('session-timeout-recovery', 'running')
+            })
+          : JSON.stringify({ error: 'Not found.' }));
+        return;
+      }
+      if (request.url === '/v1/sessions/session-timeout-recovery/attachments' && request.method === 'POST') {
+        response.writeHead(201, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          session: appServerSessionEntry('session-timeout-recovery', 'running'),
+          transport: {
+            path: '/v1/sessions/session-timeout-recovery/transport',
+            protocolVersion: 1,
+            authentication: 'bearer',
+            token: 'recovered-session-token',
+            reconnect: 'replay'
+          }
+        }));
+        return;
+      }
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'Not found.' }));
+    });
+    const record = discoveryRecord({ url: serverUrl });
+    const started = await startAppServerSession(
+      record,
+      sessionLaunchRequest('session-timeout-recovery'),
+      { requestTimeoutMs: 20, recoveryTimeoutMs: 1_000 }
+    );
+    expect(started.sessionId).toBe('session-timeout-recovery');
+    expect(started.token).toBe('recovered-session-token');
+    expect(started.url).toBe(`${serverUrl.replace('http', 'ws')}/v1/sessions/session-timeout-recovery/transport`);
+  });
 });
 
 function offsetContractTimestamp(milliseconds: number): string {

@@ -357,6 +357,26 @@ test("session recovery atomically pauses interrupted workspace sessions and thei
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
     });
+    store.appendEvent("session_interrupted", {
+      id: "approval_pending",
+      kind: "beale.approval",
+      timestamp: "2026-08-16T11:59:00.000Z",
+      summary: "beale.approval",
+      payload: {
+        record: {
+          id: "approval_example",
+          runId: "session_interrupted",
+          attemptId: "attempt_interrupted",
+          requestKind: "shell_command",
+          requestedAction: { approvalRequestId: "shell_approval_example" },
+          decision: "pending",
+          reason: "Waiting for researcher approval.",
+          scopeAmendmentId: null,
+          createdAt: "2026-08-16T11:59:00.000Z",
+          decidedAt: null,
+        },
+      },
+    });
 
     const report = store.recoverInterrupted("workspace_recovery", {
       reason: "app_restart",
@@ -379,6 +399,12 @@ test("session recovery atomically pauses interrupted workspace sessions and thei
     assert.equal(recovered?.metadata.recoveredAt, "2026-08-16T12:00:00.000Z");
     assert.equal(recovered?.events.at(-1)?.kind, "session.recovery");
     assert.equal(recovered?.events.at(-1)?.payload.interruptedByRecovery, true);
+    const recoveredApproval = recovered?.events.findLast((event) =>
+      event.kind === "beale.approval" && event.payload?.record?.id === "approval_example"
+    )?.payload.record;
+    assert.equal(recoveredApproval?.decision, "denied");
+    assert.equal(recoveredApproval?.decidedAt, "2026-08-16T12:00:00.000Z");
+    assert.match(recoveredApproval?.reason ?? "", /prior app-server process was interrupted/);
     assert.equal(store.get("session_other_workspace")?.status, "active");
     assert.equal(store.recoverInterrupted("workspace_recovery").interruptedSessions, 0);
   } finally {

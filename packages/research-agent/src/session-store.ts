@@ -1157,7 +1157,11 @@ export class AppServerSessionStore {
           },
           agentPath: "/root",
         });
-        this.insertEvents(session.id, [recoveryEvent]);
+        const interruptedApprovalEvents = approvalRecoveryEvents(
+          this.readEvents(session.id),
+          recoveredAt,
+        );
+        this.insertEvents(session.id, [...interruptedApprovalEvents, recoveryEvent]);
         session.revision += 1;
         session.updatedAt = recoveredAt;
         const document = storedSessionDocument(session);
@@ -2433,6 +2437,44 @@ function captureEvent(value: unknown): AppServerSessionEvent | null {
     ...(optionalString(event.agentId) ? { agentId: optionalString(event.agentId)! } : {}),
     ...(optionalString(event.agentPath) ? { agentPath: optionalString(event.agentPath)! } : {}),
     ...(optionalString(event.parentAgentId) ? { parentAgentId: optionalString(event.parentAgentId)! } : {}),
+  });
+}
+
+function approvalRecoveryEvents(
+  events: readonly AppServerSessionEvent[],
+  recoveredAt: string,
+): AppServerSessionEvent[] {
+  const approvals = new Map<string, Record<string, unknown>>();
+  for (const event of events) {
+    if (event.kind !== "beale.approval") continue;
+    const payload = recordValue(event.payload);
+    const approval = recordValue(payload?.record);
+    const approvalId = optionalString(approval?.id);
+    if (approval && approvalId) approvals.set(approvalId, approval);
+  }
+  return [...approvals.values()].flatMap((approval) => {
+    const requestKind = optionalString(approval.requestKind);
+    if ((requestKind !== "shell_command" && requestKind !== "computer_use")
+      || optionalString(approval.decision) !== "pending"
+      || optionalString(approval.decidedAt)) return [];
+    const reason = requestKind === "computer_use"
+      ? "Computer-use approval denied because the prior app-server process was interrupted."
+      : "Shell approval denied because the prior app-server process was interrupted.";
+    return [normalizeEvent({
+      id: `session_recovery_approval_${randomUUID()}`,
+      kind: "beale.approval",
+      timestamp: recoveredAt,
+      summary: "beale.approval",
+      payload: {
+        record: {
+          ...approval,
+          decision: "denied",
+          reason,
+          decidedAt: recoveredAt,
+        },
+      },
+      agentPath: "/root",
+    })];
   });
 }
 

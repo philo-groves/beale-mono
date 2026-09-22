@@ -26,6 +26,8 @@ import { appServerRemoteAccessLaunchEnvironment } from './appServerRemoteAccess'
 const DEFAULT_HEALTH_TIMEOUT_MS = 2_000;
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
 const SESSION_REQUEST_TIMEOUT_MS = 35_000;
+const SESSION_START_RECOVERY_TIMEOUT_MS = 90_000;
+const SESSION_START_RECOVERY_POLL_MS = 500;
 const SESSION_READ_RETRY_DELAYS_MS = [100, 300] as const;
 const POLL_INTERVAL_MS = 250;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -55,6 +57,11 @@ export interface AppServerSessionStartResult {
   attemptId: string;
   url: string;
   token: string;
+}
+
+export interface AppServerSessionStartOptions {
+  requestTimeoutMs?: number;
+  recoveryTimeoutMs?: number;
 }
 
 export interface AppServerSessionAttachment {
@@ -198,17 +205,31 @@ export async function probeAppServerHealth(record: BealeAppServerDiscovery, time
 
 export async function startAppServerSession(
   record: BealeAppServerDiscovery,
-  request: AppServerSessionLaunchRequest
+  request: AppServerSessionLaunchRequest,
+  options: AppServerSessionStartOptions = {}
 ): Promise<AppServerSessionStartResult> {
-  const response = await fetch(`${appServerControlUrl(record)}${BEALE_APP_SERVER_SESSIONS_PATH}`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${record.operatorToken}`,
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify(request),
-    signal: AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS)
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${appServerControlUrl(record)}${BEALE_APP_SERVER_SESSIONS_PATH}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${record.operatorToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(options.requestTimeoutMs ?? SESSION_REQUEST_TIMEOUT_MS)
+    });
+  } catch (error) {
+    if (!isTimeoutAbort(error) || !request.sessionId) throw error;
+    const recovered = await recoverTimedOutSessionStart(
+      record,
+      request.sessionId,
+      request.launch.attemptId ?? '',
+      options.recoveryTimeoutMs ?? SESSION_START_RECOVERY_TIMEOUT_MS
+    );
+    if (recovered) return recovered;
+    throw error;
+  }
   if (!response.ok) {
     const detail = await describeResponse(response);
     throw new Error(`The Beale app-server rejected the session request (${response.status}): ${detail}`);
@@ -226,6 +247,38 @@ export async function startAppServerSession(
     url: appServerWebSocketUrl(appServerControlUrl(record), decoded.transport.path),
     token: decoded.transport.token
   };
+}
+
+async function recoverTimedOutSessionStart(
+  record: BealeAppServerDiscovery,
+  sessionId: string,
+  attemptId: string,
+  recoveryTimeoutMs: number
+): Promise<AppServerSessionStartResult | null> {
+  const deadline = Date.now() + Math.max(0, recoveryTimeoutMs);
+  while (Date.now() < deadline) {
+    const entry = await fetchAppServerSession(record, sessionId, Math.min(2_000, Math.max(1, deadline - Date.now())));
+    if (entry && (entry.state === 'starting' || entry.state === 'running')) {
+      try {
+        const attachment = await attachAppServerSession(record, sessionId);
+        return { sessionId, attemptId, url: attachment.url, token: attachment.token };
+      } catch {
+        // The runtime may still be transitioning from preparation to its
+        // attachable state. Continue polling within the bounded recovery window.
+      }
+    } else if (entry) {
+      return null;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(SESSION_START_RECOVERY_POLL_MS, remaining)));
+  }
+  return null;
+}
+
+function isTimeoutAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'TimeoutError'
+    || error instanceof Error && /aborted due to timeout|timed out/iu.test(error.message);
 }
 
 export async function stopAppServerSession(record: BealeAppServerDiscovery, sessionId: string): Promise<void> {

@@ -15,6 +15,7 @@ import { readPreBealeRecord } from "./legacy-compatibility.js";
 
 export type RunbookCellKind = "markdown" | "code";
 export type RunbookExecutionStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "skipped";
+export type TartTransportPreference = "auto" | "guest-agent" | "ssh";
 export type RunbookCellExecutor =
   | { kind: "host"; timeoutSeconds: number }
   | {
@@ -23,6 +24,7 @@ export type RunbookCellExecutor =
       artifactId?: string;
       workspacePath?: string;
       runAs: "guest" | "root";
+      transport: TartTransportPreference;
       argv: string[];
       timeoutSeconds: number;
       retainOnFailure: boolean;
@@ -1260,12 +1262,17 @@ function validateCellExecutor(value: unknown, field: string): RunbookCellExecuto
   if (typeof timeoutSeconds !== "number" || !Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > RUNBOOK_MAX_TIMEOUT_SECONDS) throw new Error(`${field}.timeoutSeconds must be an integer from 1 to ${RUNBOOK_MAX_TIMEOUT_SECONDS}.`);
   const runAs = value.runAs === undefined ? "guest" : value.runAs;
   if (runAs !== "guest" && runAs !== "root") throw new Error(`${field}.runAs must be guest or root.`);
+  const transport = value.transport === undefined ? "auto" : value.transport;
+  if (transport !== "auto" && transport !== "guest-agent" && transport !== "ssh") {
+    throw new Error(`${field}.transport must be auto, guest-agent, or ssh.`);
+  }
   return {
     kind: "tart-vm",
     vmName: requiredText(value.vmName, `${field}.vmName`, 128),
     ...(artifactId ? { artifactId } : {}),
     ...(workspacePath ? { workspacePath } : {}),
     runAs,
+    transport,
     argv: [...value.argv],
     timeoutSeconds,
     retainOnFailure: value.retainOnFailure === true,

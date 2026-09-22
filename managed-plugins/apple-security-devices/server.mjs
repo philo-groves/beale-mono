@@ -117,17 +117,18 @@ const TOOLS = [
   },
   {
     name: 'inspect_tart_vm',
-    description: 'Inspect one Tart VM and, when running, probe its guest agent plus fixed macOS build, architecture, and SIP baseline without SSH or an IP address.',
-    inputSchema: objectSchema({ vmName: stringField(128), timeoutSeconds: integerField(1, 30, 10) }, ['vmName']),
+    description: 'Inspect one Tart VM and, when running, probe its guest agent or configured SSH transport plus fixed macOS build, architecture, and SIP baseline.',
+    inputSchema: objectSchema({ vmName: stringField(128), transport: tartTransportField(), timeoutSeconds: integerField(1, 30, 10) }, ['vmName']),
     annotations: READ_ANNOTATION
   },
   {
     name: 'start_tart_vm',
-    description: 'Start one existing Tart macOS VM headlessly and wait for its guest agent. Concurrent name-bound guests are allowed by default; request exclusivity only when an experiment requires it.',
+    description: 'Start one existing Tart macOS VM headlessly and wait for the configured guest transport. Concurrent name-bound guests are allowed by default; request exclusivity only when an experiment requires it.',
     inputSchema: objectSchema({
       vmName: stringField(128),
       requireExclusive: { type: 'boolean', default: false },
       networkMode: { type: 'string', enum: ['shared', 'host-only'], default: 'shared' },
+      transport: tartTransportField(),
       waitSeconds: integerField(0, 90, 45)
     }, ['vmName']),
     annotations: VM_OPERATION_ANNOTATION
@@ -144,6 +145,7 @@ const TOOLS = [
     inputSchema: objectSchema({
       vmName: stringField(128),
       argv: { type: 'array', minItems: 1, maxItems: 128, items: stringField(4096) },
+      transport: tartTransportField(),
       timeoutSeconds: integerField(1, MAX_TART_EXEC_TIMEOUT_SECONDS, DEFAULT_TART_EXEC_TIMEOUT_SECONDS)
     }, ['vmName', 'argv']),
     annotations: VM_OPERATION_ANNOTATION
@@ -155,6 +157,7 @@ const TOOLS = [
       vmName: stringField(128),
       localPath: stringField(4096),
       guestPath: stringField(4096),
+      transport: tartTransportField(),
       overwrite: { type: 'boolean', default: false },
       preserveMode: { type: 'boolean', default: true },
       maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
@@ -169,6 +172,7 @@ const TOOLS = [
       vmName: stringField(128),
       guestPath: stringField(4096),
       localPath: stringField(4096),
+      transport: tartTransportField(),
       overwrite: { type: 'boolean', default: false },
       preserveMode: { type: 'boolean', default: true },
       maxBytes: integerField(1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES),
@@ -466,7 +470,7 @@ async function inspectTartVm(args) {
   return {
     vm,
     concurrentRunningVms: vms.filter((candidate) => candidate.running && candidate.name !== vmName).map((candidate) => candidate.name),
-    guest: vm.running ? await tartGuestBaseline(vmName, timeoutSeconds) : { ready: false, detail: 'VM is stopped.' },
+    guest: vm.running ? await tartGuestBaseline(vmName, timeoutSeconds, tartTransportPreference(args.transport)) : { ready: false, detail: 'VM is stopped.' },
     recommendedTransport: configuredTartTransportPolicy() === 'guest-agent-only'
       ? 'Use exec_tart_vm and the Tart copy tools. This host requires Tart Guest Agent and will not fall back to SSH or a host command runner.'
       : 'Use exec_tart_vm and the Tart copy tools; the plugin selects Tart Guest Agent or its configured bounded SSH fallback without exposing connection details.'
@@ -485,7 +489,7 @@ async function startTartVm(args) {
       started: false,
       alreadyRunning: true,
       vmName,
-      guest: await waitForTartGuest(vmName, waitSeconds),
+      guest: await waitForTartGuest(vmName, waitSeconds, tartTransportPreference(args.transport)),
       concurrentRunningVms: otherRunningVms
     };
   }
@@ -506,7 +510,7 @@ async function startTartVm(args) {
   ];
   if (networkMode === 'host-only') tartArgs.push('--net-host');
   await spawnDetached(tartCommand(), tartArgs, { cwd: PLUGIN_DATA, logPath, startupGraceMs: 750 });
-  const guest = await waitForTartGuest(vmName, waitSeconds);
+  const guest = await waitForTartGuest(vmName, waitSeconds, tartTransportPreference(args.transport));
   const runningAfterStart = waitSeconds === 0
     ? true
     : (await readTartVms()).find((candidate) => candidate.name === vmName)?.running === true;
@@ -555,7 +559,7 @@ async function execTartVm(args) {
     DEFAULT_TART_EXEC_TIMEOUT_SECONDS,
     'timeoutSeconds'
   );
-  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10));
+  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10), tartTransportPreference(args.transport));
   const result = await runTartGuestCommand(vmName, argv, timeoutSeconds, transport);
   return { ...commandResult(result), transport };
 }
@@ -570,7 +574,7 @@ async function copyToTartVm(args) {
   const maxBytes = boundedInteger(args.maxBytes, 1, MAX_TART_COPY_BYTES, DEFAULT_TART_COPY_BYTES);
   const localStat = statSync(localPath);
   if (localStat.size > maxBytes) throw new Error(`localPath exceeds the ${maxBytes}-byte transfer limit.`);
-  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10));
+  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10), tartTransportPreference(args.transport));
   const guestPathExists = await tartGuestPathExists(vmName, guestPath, timeoutSeconds, transport);
   if (guestPathExists) {
     if (args.overwrite !== true) throw new Error('guestPath already exists; set overwrite=true to replace it.');
@@ -666,7 +670,7 @@ async function copyFromTartVm(args) {
   if (existsSync(localPath) && args.overwrite !== true) {
     throw new Error('localPath already exists; set overwrite=true to replace it.');
   }
-  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10));
+  const transport = await resolveTartGuestTransport(vmName, Math.min(timeoutSeconds, 10), tartTransportPreference(args.transport));
   await requireTartGuestRegularFile(vmName, guestPath, timeoutSeconds, transport, 'guestPath');
   const guest = await tartGuestFileMetadata(vmName, guestPath, timeoutSeconds, transport);
   if (guest.bytes > maxBytes) throw new Error(`guestPath exceeds the ${maxBytes}-byte transfer limit.`);
@@ -751,13 +755,13 @@ async function removeTartGuestTemporaryFile(vmName, path, timeoutSeconds, transp
   }
 }
 
-async function waitForTartGuest(vmName, waitSeconds) {
+async function waitForTartGuest(vmName, waitSeconds, transportPreference = 'auto') {
   if (waitSeconds === 0) return { ready: false, detail: 'Guest-agent readiness wait was disabled.' };
   const deadline = Date.now() + waitSeconds * 1000;
   let lastDetail = 'Tart guest agent did not become ready.';
   while (Date.now() < deadline) {
     const remainingSeconds = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
-    const baseline = await tartGuestBaseline(vmName, Math.min(5, remainingSeconds));
+    const baseline = await tartGuestBaseline(vmName, Math.min(5, remainingSeconds), transportPreference);
     if (baseline.ready) return baseline;
     if (baseline.restartRequired) return baseline;
     lastDetail = baseline.detail;
@@ -766,9 +770,9 @@ async function waitForTartGuest(vmName, waitSeconds) {
   return { ready: false, detail: lastDetail };
 }
 
-async function tartGuestBaseline(vmName, timeoutSeconds) {
+async function tartGuestBaseline(vmName, timeoutSeconds, transportPreference = 'auto') {
   try {
-    const transport = await resolveTartGuestTransport(vmName, timeoutSeconds);
+    const transport = await resolveTartGuestTransport(vmName, timeoutSeconds, transportPreference);
     const productVersion = await runTartGuestProbe(vmName, ['/usr/bin/sw_vers', '-productVersion'], timeoutSeconds, false, transport);
     const buildVersion = await runTartGuestProbe(vmName, ['/usr/bin/sw_vers', '-buildVersion'], timeoutSeconds, false, transport);
     const architecture = await runTartGuestProbe(vmName, ['/usr/bin/uname', '-m'], timeoutSeconds, false, transport);
@@ -799,10 +803,23 @@ async function runTartGuestProbe(vmName, argv, timeoutSeconds, allowFailure = fa
   }
 }
 
-async function resolveTartGuestTransport(vmName, timeoutSeconds) {
+async function resolveTartGuestTransport(vmName, timeoutSeconds, transportPreference = 'auto') {
+  const transportPolicy = configuredTartTransportPolicy();
+  if (transportPreference === 'ssh') {
+    if (transportPolicy === 'guest-agent-only') {
+      throw new Error('SSH transport was requested, but the configured Tart transport policy is guest-agent-only.');
+    }
+    await runTartSshCommand(vmName, ['/usr/bin/true'], timeoutSeconds);
+    tartGuestTransports.set(vmName, 'ssh');
+    return 'ssh';
+  }
   const restartRequired = tartGuestRestartRequired.get(vmName);
   if (restartRequired) throw new TartGuestRestartRequiredError(restartRequired);
-  const transportPolicy = configuredTartTransportPolicy();
+  if (transportPreference === 'guest-agent') {
+    await prepareTartGuestAgent(vmName, timeoutSeconds);
+    tartGuestTransports.set(vmName, 'guest-agent');
+    return 'guest-agent';
+  }
   const cached = tartGuestTransports.get(vmName);
   if (cached === 'ssh' && transportPolicy !== 'guest-agent-only') return cached;
   if (cached === 'ssh') tartGuestTransports.delete(vmName);
@@ -2130,6 +2147,12 @@ function tartNetworkMode(value) {
   throw new Error('networkMode must be either shared or host-only.');
 }
 
+function tartTransportPreference(value) {
+  if (value === undefined || value === 'auto') return 'auto';
+  if (value === 'guest-agent' || value === 'ssh') return value;
+  throw new Error('transport must be auto, guest-agent, or ssh.');
+}
+
 function safeArgv(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > 128) throw new Error('argv must contain 1 to 128 arguments.');
   return value.map((item, index) => requiredArgument(item, `argv[${index}]`));
@@ -2292,6 +2315,10 @@ function stringField(maxLength) {
 
 function integerField(minimum, maximum, defaultValue) {
   return { type: 'integer', minimum, maximum, default: defaultValue };
+}
+
+function tartTransportField() {
+  return { type: 'string', enum: ['auto', 'guest-agent', 'ssh'], default: 'auto' };
 }
 
 function deviceRefField() {

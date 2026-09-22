@@ -354,6 +354,7 @@ function createCellExecutorParameters(): Record<string, unknown> {
       artifactId: { type: "string", description: "Durable host artifact containing the guest executable. Mutually exclusive with workspacePath." },
       workspacePath: { type: "string", description: "Workspace-relative host build output to materialize and stage. Mutually exclusive with artifactId." },
       runAs: { type: "string", enum: ["guest", "root"], default: "guest", description: "Execute as the Guest Agent service identity or through passwordless sudo as root." },
+      transport: { type: "string", enum: ["auto", "guest-agent", "ssh"], default: "auto", description: "Tart host-to-guest transport. Auto prefers Guest Agent and falls back to the configured bounded SSH identity; select SSH when the proof requires network communication." },
       argv: { type: "array", maxItems: 128, items: { type: "string" }, description: "Arguments passed after the staged guest executable." },
       timeoutSeconds: {
         type: "integer",
@@ -387,12 +388,17 @@ function parseCellExecutor(value: unknown, field: string): RunbookCellExecutor {
   if (!argv.every((argument) => typeof argument === "string")) throw new Error(`${field}.argv must contain strings.`);
   const runAs = executor.runAs === undefined ? "guest" : requiredText(executor.runAs, `${field}.runAs`);
   if (runAs !== "guest" && runAs !== "root") throw new Error(`${field}.runAs must be guest or root.`);
+  const transport = executor.transport === undefined ? "auto" : requiredText(executor.transport, `${field}.transport`);
+  if (transport !== "auto" && transport !== "guest-agent" && transport !== "ssh") {
+    throw new Error(`${field}.transport must be auto, guest-agent, or ssh.`);
+  }
   return {
     kind: "tart-vm",
     vmName: requiredText(executor.vmName, `${field}.vmName`),
     ...(artifactId ? { artifactId } : {}),
     ...(workspacePath ? { workspacePath } : {}),
     runAs,
+    transport: transport as "auto" | "guest-agent" | "ssh",
     argv: argv as string[],
     timeoutSeconds: executor.timeoutSeconds === undefined ? RUNBOOK_DEFAULT_TIMEOUT_SECONDS : requiredInteger(executor.timeoutSeconds, `${field}.timeoutSeconds`),
     retainOnFailure: executor.retainOnFailure === true,

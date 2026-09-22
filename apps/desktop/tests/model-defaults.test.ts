@@ -12,7 +12,7 @@ describe('research session title models', () => {
       openrouter: 'auto'
     });
     expect(semantics.sessionTitleEffort).toBe('medium');
-    expect(semantics.shellReviewEffort).toBe('medium');
+    expect(semantics.shellReviewEffort).toBe('low');
   });
 
   it('does not invent a title model for unknown providers', () => {
