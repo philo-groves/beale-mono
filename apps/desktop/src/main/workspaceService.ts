@@ -3392,10 +3392,12 @@ export class WorkspaceService {
       throw new Error('No Lead provider is configured. Choose one in Provider settings before starting research.');
     }
     const leadDefaults = providerSettings.modelDefaults[leadProvider];
+    const { daybreakBlue: requestedDaybreakBlue, ...providerNeutralInput } = normalizedInput;
     normalizedInput = {
-      ...normalizedInput,
+      ...providerNeutralInput,
       provider: leadProvider,
       fastMode: leadProvider === 'openai-codex' && normalizedInput.fastMode === true,
+      ...(leadProvider === 'openai-codex' ? { daybreakBlue: requestedDaybreakBlue === true } : {}),
       ...(!explicitProvider && leadDefaults?.largeModel ? { model: leadDefaults.largeModel } : {}),
       ...(!explicitProvider && leadDefaults?.reasoningEffort ? { reasoningEffort: leadDefaults.reasoningEffort } : {})
     };
@@ -3441,6 +3443,9 @@ export class WorkspaceService {
       model: input.modelSelection.model,
       reasoningEffort: input.modelSelection.reasoningEffort,
       fastMode: input.modelSelection.fastMode === true,
+      ...(input.modelSelection.provider === 'openai-codex'
+        ? { daybreakBlue: input.modelSelection.daybreakBlue === true }
+        : {}),
       sandboxProfile: 'workspace-write',
       budget: {
         maxMinutes: UNBOUNDED_RUN_MINUTES,
@@ -4132,6 +4137,9 @@ export class WorkspaceService {
           model: run.model,
           reasoningEffort: run.reasoningEffort,
           fastMode: run.budget.fastMode === true,
+          ...(run.budget.modelProvider === 'openai-codex'
+            ? { daybreakBlue: run.budget.daybreakBlue === true }
+            : {}),
           ...(run.budget.collaboration ? { collaboration: normalizeResearchCollaboration(run.budget.collaboration) } : {}),
           sandboxProfile: run.sandboxProfile,
           targetAssetId: run.targetAssetId,
@@ -7788,6 +7796,7 @@ function automationSettingsFromSession(
     model: session.model,
     reasoningEffort: session.reasoningEffort,
     fastMode: budget.fastMode === true,
+    ...(provider === 'openai-codex' ? { daybreakBlue: budget.daybreakBlue === true } : {}),
     ...(budget.collaboration ? { collaboration: normalizeResearchCollaboration(budget.collaboration) } : {}),
     sandboxProfile: stringFromRecord(storedRun ?? {}, 'sandboxProfile') || 'host',
     targetAssetId: stringFromRecord(storedRun ?? {}, 'targetAssetId') || null,
@@ -7813,6 +7822,7 @@ function automationSettingsFromRun(run: RunRecord, schedule: ActiveRepeatSchedul
     model: run.model,
     reasoningEffort: run.reasoningEffort,
     fastMode: run.budget.fastMode === true,
+    ...(provider === 'openai-codex' ? { daybreakBlue: run.budget.daybreakBlue === true } : {}),
     ...(run.budget.collaboration ? { collaboration: normalizeResearchCollaboration(run.budget.collaboration) } : {}),
     sandboxProfile: run.sandboxProfile,
     targetAssetId: run.targetAssetId,
@@ -8138,7 +8148,7 @@ function requireCollaborationPolicyAcknowledgements(
   const missing = [...new Set(providers)].filter((provider) => settings.cyberPolicyRiskAcknowledgements?.[provider] !== true);
   if (missing.length === 0) return;
   const labels = missing.map((provider) => provider === 'openai-codex'
-    ? 'OpenAI Trusted Access for Cyber and policy-use risk'
+    ? 'OpenAI Daybreak Access and policy-use risk'
     : provider === 'anthropic'
       ? 'Anthropic Cyber Verification Program usage-risk'
       : provider === 'xai'

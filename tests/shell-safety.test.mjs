@@ -19,7 +19,7 @@ const BASE_REQUEST = {
 
 test("standalone Auto-Review defaults cover each supported provider", () => {
   assert.deepEqual(DEFAULT_SHELL_REVIEW_MODELS, {
-    "openai-codex": "gpt-5.6-luna",
+    "openai-codex": "gpt-6-luna",
     anthropic: "claude-haiku-4-5",
     xai: "grok-4.3",
     zai: "glm-5-turbo",

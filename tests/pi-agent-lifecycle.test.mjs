@@ -8,6 +8,7 @@ import {
   applyNativeOpenAiCompaction,
   applyOpenAiContextSize,
   applyOpenAiFastMode,
+  applyOpenAiDaybreakBlue,
   compactAgentContext,
   DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
@@ -328,6 +329,50 @@ test("OpenAI Fast mode adds the request service tier only to native OpenAI Respo
   );
 });
 
+test("Daybreak Blue request access applies only to native OpenAI provider models", () => {
+  const payload = { model: "example-model", input: [] };
+  for (const model of [
+    { api: "openai-codex-responses", provider: "openai-codex", contextWindow: 400_000 },
+    { api: "openai-responses", provider: "openai", contextWindow: 400_000 },
+  ]) {
+    assert.deepEqual(
+      applyOpenAiDaybreakBlue(payload, model, true),
+      { ...payload, access_programs: { cyber: "daybreak_blue" } },
+    );
+  }
+  for (const model of [
+    { api: "openai-responses", provider: "openrouter", contextWindow: 400_000 },
+    { api: "openai-responses", provider: "xai", contextWindow: 400_000 },
+    { api: "anthropic-messages", provider: "anthropic", contextWindow: 400_000 },
+  ]) {
+    assert.equal(applyOpenAiDaybreakBlue(payload, model, true), payload);
+  }
+});
+
+test("Pi Agent never attaches Daybreak Blue to an OpenRouter stream", async () => {
+  const model = { ...FAUX_MODEL, id: "openrouter/auto", provider: "openrouter", api: "openai-responses" };
+  let streamOptions;
+  const result = await runResearchAgent({
+    prompt: "Inspect the parser boundary.",
+    executor: createPiAgentExecutor({
+      provider: model.provider,
+      model: model.id,
+      daybreakBlue: true,
+      models: {
+        getModel() {
+          return model;
+        },
+        streamSimple(_model, _context, options) {
+          streamOptions = options;
+          return streamFrom(assistant("Inspection complete."));
+        },
+      },
+    }),
+  });
+  assert.equal(result.agentRun.status, "complete");
+  assert.equal(streamOptions?.onPayload, undefined);
+});
+
 test("Pi Agent applies OpenAI Fast mode to Lead-model request payloads", async () => {
   const model = {
     ...FAUX_MODEL,
@@ -344,6 +389,7 @@ test("Pi Agent applies OpenAI Fast mode to Lead-model request payloads", async (
       provider: model.provider,
       model: model.id,
       fastMode: true,
+      daybreakBlue: true,
       models: {
         getModel() {
           return model;
@@ -365,8 +411,50 @@ test("Pi Agent applies OpenAI Fast mode to Lead-model request payloads", async (
       include: ["reasoning.encrypted_content"],
       context_management: [{ type: "compaction", compact_threshold: 208_000 }],
       service_tier: "priority",
+      access_programs: { cyber: "daybreak_blue" },
     },
   );
+});
+
+test("Pi Agent applies a selected Daybreak Blue access program to the chosen OpenAI model", async () => {
+  const model = {
+    ...FAUX_MODEL,
+    id: "gpt-6-sol",
+    name: "GPT-6 Sol",
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    contextWindow: 400_000,
+    reasoning: true,
+  };
+  let streamOptions;
+  await runResearchAgent({
+    prompt: "Inspect the parser boundary.",
+    executor: createPiAgentExecutor({
+      provider: model.provider,
+      model: model.id,
+      daybreakBlue: false,
+      getModelSelection: () => ({
+        provider: model.provider,
+        model: model.id,
+        reasoningEffort: "high",
+        daybreakBlue: true,
+      }),
+      models: {
+        getModel() {
+          return model;
+        },
+        streamSimple(_model, _context, options) {
+          streamOptions = options;
+          return streamFrom(assistant("Inspection complete."));
+        },
+      },
+    }),
+  });
+
+  assert.equal(typeof streamOptions?.onPayload, "function");
+  const payload = await streamOptions.onPayload({ model: model.id, input: [] }, model);
+  assert.equal(payload.model, model.id);
+  assert.deepEqual(payload.access_programs, { cyber: "daybreak_blue" });
 });
 
 test("patched Responses stream preserves and replays opaque compaction items", async () => {

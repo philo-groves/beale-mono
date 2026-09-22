@@ -45,6 +45,7 @@ export interface AppServerModelSelection {
   provider: string;
   model: string;
   reasoningEffort: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  daybreakBlue?: boolean;
 }
 
 export type AppServerControlEvent =
@@ -588,7 +589,13 @@ function parseModelSelection(value: unknown): AppServerModelSelection {
     && reasoningEffort !== "medium" && reasoningEffort !== "high" && reasoningEffort !== "xhigh"
     && reasoningEffort !== "max"
   ) throw new Error("Model selection has an unsupported reasoning effort.");
-  return { provider, model, reasoningEffort };
+  if (value.daybreakBlue !== undefined && typeof value.daybreakBlue !== "boolean") {
+    throw new Error("Model selection daybreakBlue must be a boolean.");
+  }
+  if (value.daybreakBlue !== undefined && provider !== "openai-codex") {
+    throw new Error("Daybreak Blue requires the openai-codex provider.");
+  }
+  return { provider, model, reasoningEffort, ...(value.daybreakBlue !== undefined ? { daybreakBlue: value.daybreakBlue } : {}) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

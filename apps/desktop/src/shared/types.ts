@@ -1710,6 +1710,7 @@ export interface ResearchModelSelection {
   model: string;
   reasoningEffort: ResearchModelEffortLevel;
   fastMode?: boolean;
+  daybreakBlue?: boolean;
 }
 
 export type ResearchCollaborationMode = 'solo' | 'adaptive' | 'always';
@@ -1779,6 +1780,7 @@ export interface StartRunInput {
   model: string;
   reasoningEffort: string;
   fastMode?: boolean;
+  daybreakBlue?: boolean;
   collaboration?: ResearchCollaborationPreferences;
   sandboxProfile: string;
   targetAssetId?: string | null;

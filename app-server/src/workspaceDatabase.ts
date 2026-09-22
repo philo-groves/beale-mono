@@ -4330,7 +4330,14 @@ export class WorkspaceDatabase {
     if (!run) throw new Error(`Run not found: ${runId}`);
     const model = selection.model.trim();
     if (!model) throw new Error('Research model cannot be empty.');
-    const nextBudget = { ...run.budget, modelProvider: selection.provider };
+    const { daybreakBlue: _previousDaybreakBlue, ...providerNeutralBudget } = run.budget;
+    const nextBudget = {
+      ...providerNeutralBudget,
+      modelProvider: selection.provider,
+      ...(selection.provider === 'openai-codex'
+        ? { daybreakBlue: selection.daybreakBlue === true }
+        : {})
+    };
     const reasoningEffort = selection.reasoningEffort === 'off' ? '' : selection.reasoningEffort;
     this.db
       .prepare('UPDATE runs SET model = ?, reasoning_effort = ?, budget_json = ? WHERE id = ?')

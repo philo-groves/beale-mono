@@ -6,6 +6,9 @@
 
 #### Changed
 
+- Provider model catalogs now include GPT-6 Sol, GPT-6 Luna, Claude Opus 5.5, and Grok 4.7 alongside the existing GPT-5.6 and earlier provider models.
+- New OpenAI configurations default to GPT-6 Sol for the large model and GPT-6 Luna for the small model, including API-key routing. Existing saved model choices remain in place. Daybreak Blue request access is omitted for other providers.
+- OpenAI Lead model selection now offers Daybreak Blue access separately from the base model. The selection persists across session turns and restarts; the Daybreak Blue model alias remains available for existing configurations. Beale requires a rebuilt app-server for the new launch contract.
 - The managed `apple-security-devices` plugin now auto-reviews bounded Darwin VM lifecycle and console operations. Desktop no longer offers Darwin VM setup or stores and injects a saved checkout; Darwin inspection and launch receive an existing checkout root from authorized workspace context. Contract v26 removes the obsolete setup operations.
 - Workspace Settings now allows a workspace's Research Subject to be changed while its sessions are inactive. Contract v25 rebinds the stable Subject identity and workspace-owned research together so same-Subject reference discovery cannot diverge from the displayed label, and rejects older app-server processes that would perform only a label change.
 - New schema-v2 research workspaces use versioned workspace files as research authority. Typed mutations and routine checkpoints synchronize the app-server's derived query index and complete file snapshot; schema-v1 database-first workspaces retain explicit compatibility export behavior. Contract v24 adds explicit synchronization plus reversible release and files-to-index rebuild of workspace research rows, while retaining session, authorization, and runtime coordination state in SQLite.

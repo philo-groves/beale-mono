@@ -278,6 +278,7 @@ interface ParsedArgs {
   openrouterPolicyRiskAcknowledged: boolean;
   model: string | undefined;
   fastMode: boolean;
+  daybreakBlue: boolean;
   titleModel: string | undefined;
   titleEffort: ResearchModelEffort | undefined;
   titleModelDefault: string | undefined;
@@ -396,6 +397,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let openrouterPolicyRiskAcknowledged = false;
   let model: string | undefined;
   let fastMode = false;
+  let daybreakBlue = false;
   let titleModel: string | undefined;
   let titleEffort: ResearchModelEffort | undefined;
   let titleModelDefault: string | undefined;
@@ -526,6 +528,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     } else if (arg === "--fast-mode") {
       fastMode = true;
+    } else if (arg === "--daybreak-blue") {
+      daybreakBlue = true;
     } else if (arg === "--title-model") {
       titleModel = readOptionValue(argv, index, arg);
       index += 1;
@@ -748,6 +752,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     openrouterPolicyRiskAcknowledged,
     model,
     fastMode,
+    daybreakBlue,
     titleModel,
     titleEffort,
     titleModelDefault,
@@ -1558,13 +1563,14 @@ function usage(): string {
     "  --collaboration-config <path>  Host-written channel collaborator and budget configuration",
     "                         Defaults to .beale/config.json under --workspace-root when present",
     "  --provider <provider>  Override configured/default provider for real mode",
-    "  --openai-trusted-access-cyber-risk-acknowledged  Confirm host-recorded OpenAI Trusted Access for Cyber and policy-risk acceptance",
+    "  --openai-trusted-access-cyber-risk-acknowledged  Confirm host-recorded OpenAI Daybreak Access and policy-risk acceptance",
     "  --anthropic-cvp-risk-acknowledged  Confirm host-recorded Anthropic CVP risk acceptance",
     "  --xai-policy-risk-acknowledged  Confirm host-recorded xAI policy-risk acceptance",
     "  --zai-policy-risk-acknowledged  Confirm host-recorded Z.ai policy-risk acceptance",
     "  --openrouter-policy-risk-acknowledged  Confirm host-recorded OpenRouter and routed-provider policy-risk acceptance",
     "  --model <model>        Override configured/default model for real mode",
     "  --fast-mode            Use OpenAI Fast mode for Lead-model requests",
+    "  --daybreak-blue        Request Daybreak Blue access with the selected OpenAI Lead model",
     "  --title-model <model>  Generate a session title with this model from the selected provider",
     "  --title-effort <level> Reasoning effort for session title generation (default: medium)",
     "  --title-model-default <model>  Host fallback used only when the profile has no applicable title model",
@@ -1582,7 +1588,7 @@ function usage(): string {
     "  --shell-options <path> Harness-wide shell utility policy JSON",
     "  --shell-safety-mode <m> Shell safety: manual_approval, auto_review (default), or danger",
     "  --shell-review-models <json> Provider-to-small-reviewer-model JSON object",
-    "                               Defaults: openai-codex=gpt-5.6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3, zai=glm-5-turbo, openrouter=auto",
+    "                               Defaults: openai-codex=gpt-6-luna, anthropic=claude-haiku-4-5, xai=grok-4.3, zai=glm-5-turbo, openrouter=auto",
     "  --shell-review-effort <level> Small-model review effort (default: low)",
     "  --memory-backend <id>  Workspace memory: appServer or disabled (legacy v1/v2 values migrate in place)",
     "  --memory-type-descriptions <json> Per-memory-type description overrides used by active agents",
@@ -2390,6 +2396,7 @@ function createRealAgentExecutor(
     provider: modelConfig.provider,
     model: modelConfig.model,
     ...(args.fastMode ? { fastMode: true } : {}),
+    ...(args.daybreakBlue ? { daybreakBlue: true } : {}),
     ...(providerSessionId ? { sessionId: providerSessionId } : {}),
     ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
     ...(modelConfig.effort ? { reasoning: modelConfig.effort } : {}),
@@ -2667,7 +2674,7 @@ async function validateCollaborationProviders(
     }
     if (!cybersecurity) continue;
     if (preference.provider === "openai-codex" && !args.openAiTrustedAccessCyberRiskAcknowledged) {
-      throw new Error("OpenAI channel collaborators require Trusted Access for Cyber membership and policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.");
+      throw new Error("OpenAI channel collaborators require Daybreak Access and policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.");
     }
     if (preference.provider === "anthropic" && !args.anthropicCvpRiskAcknowledged) {
       throw new Error("Anthropic channel collaborators require the Cyber Verification Program usage-risk acknowledgement. Accept it in Beale Settings > Providers before continuing.");
@@ -3547,6 +3554,9 @@ function validateCybersecurityRunPreflight(
   if (args.fastMode && modelConfig.provider !== "openai-codex") {
     throw new Error("--fast-mode requires the openai-codex Lead provider.");
   }
+  if (args.daybreakBlue && modelConfig.provider !== "openai-codex") {
+    throw new Error("--daybreak-blue requires the openai-codex Lead provider.");
+  }
   if (!isCybersecurityRun) return;
   if (!workspaceContext.authorization) {
     throw new Error(
@@ -3555,7 +3565,7 @@ function validateCybersecurityRunPreflight(
   }
   if (modelConfig.provider === "openai-codex" && !args.openAiTrustedAccessCyberRiskAcknowledged) {
     throw new Error(
-      "OpenAI cybersecurity research requires Trusted Access for Cyber membership and policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
+      "OpenAI cybersecurity research requires Daybreak Access and policy-use risk acknowledgement. Accept it in Beale Settings > Providers before continuing.",
     );
   }
   if (modelConfig.provider === "anthropic" && !args.anthropicCvpRiskAcknowledged) {

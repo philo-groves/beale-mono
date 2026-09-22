@@ -595,7 +595,7 @@ describe('renderer provider settings', () => {
     expect(fableDisabledHtml).not.toContain('value="claude-fable-5"');
   });
 
-  it('shows the OpenAI Trusted Access for Cyber and policy-use acknowledgement', () => {
+  it('shows the OpenAI Daybreak Access and policy-use acknowledgement', () => {
     const html = renderToStaticMarkup(createElement(ProvidersSettingsView, {
       openAiStatus: configuredOpenAiStatus(),
       openAiOAuthResult: null,
@@ -620,9 +620,9 @@ describe('renderer provider settings', () => {
       onSetProviderModelDefaults: async () => undefined
     }));
 
-    expect(html).toContain('OpenAI Trusted Access for Cyber members');
+    expect(html).toContain('OpenAI Daybreak Access');
     expect(html).toContain('You have accepted the OpenAI provider acknowledgment.');
-    expect(html).toContain('I confirm this account has OpenAI Trusted Access for Cyber membership');
+    expect(html).toContain('I confirm this account has OpenAI Daybreak Access');
     expect(html).toContain('class="provider-risk-acknowledgement is-locked"');
     expect(html).toMatch(/<input type="checkbox"[^>]*disabled=""[^>]*checked=""/u);
     expect(html).toContain('Acknowledgment is recorded until this provider is removed.');
@@ -657,7 +657,7 @@ describe('renderer provider settings', () => {
     expect(disabledHtml).toContain('Enable additional provider models when they are available to your account.');
     expect(disabledHtml).toContain('class="provider-optional-model-copy"');
     expect(disabledHtml).toContain('<strong>Daybreak Blue</strong>');
-    expect(disabledHtml).toContain('Expected, but not guaranteed, for Trusted Access for Cyber members.');
+    expect(disabledHtml).toContain('Select a base model and Daybreak Blue in the model picker');
     expect(disabledHtml).toMatch(/<label><span class="provider-optional-model-copy"><strong>Daybreak Blue<\/strong>[\s\S]*?<\/span><input type="checkbox"[^>]*checked=""\/><\/label>/u);
     expect(disabledHtml).toContain('<strong>Daybreak Red</strong>');
     expect(disabledHtml).toContain('primarily available to approved commercial users');

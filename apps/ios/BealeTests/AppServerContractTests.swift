@@ -402,12 +402,12 @@ final class AppServerContractTests: XCTestCase {
               "providers": [{
                 "providerId": "openai-codex",
                 "providerName": "OpenAI",
-                "defaultLeadModel": "gpt-5.6-sol",
-                "defaultSubagentModel": "gpt-5.6-luna",
+                "defaultLeadModel": "gpt-6-sol",
+                "defaultSubagentModel": "gpt-6-luna",
                 "defaultReasoningEffort": "high",
                 "models": [{
-                  "id": "gpt-5.6-sol",
-                  "name": "GPT-5.6 Sol",
+                  "id": "gpt-6-sol",
+                  "name": "GPT-6 Sol",
                   "reasoning": true,
                   "effortLevels": ["low", "medium", "high"]
                 }]
@@ -419,9 +419,9 @@ final class AppServerContractTests: XCTestCase {
 
         XCTAssertNoThrow(try catalog.validateCompatibility())
         XCTAssertEqual(catalog.defaultProviderId, "openai-codex")
-        XCTAssertEqual(catalog.providers.first?.defaultLeadModel, "gpt-5.6-sol")
-        XCTAssertEqual(catalog.providers.first?.defaultSubagentModel, "gpt-5.6-luna")
-        XCTAssertEqual(catalog.providers.first?.models.first?.name, "GPT-5.6 Sol")
+        XCTAssertEqual(catalog.providers.first?.defaultLeadModel, "gpt-6-sol")
+        XCTAssertEqual(catalog.providers.first?.defaultSubagentModel, "gpt-6-luna")
+        XCTAssertEqual(catalog.providers.first?.models.first?.name, "GPT-6 Sol")
     }
 
     func testNormalizesSecureEndpoint() throws {

@@ -553,6 +553,7 @@ test("publishes a path-free model catalog for connected providers with host defa
   assert.equal(payload.providers[0].defaultSubagentModel, "grok-4.3");
   assert.equal(payload.providers[0].defaultReasoningEffort, "high");
   assert.ok(payload.providers[0].models.some((model) => model.id === "grok-4.6"));
+  assert.ok(payload.providers[0].models.some((model) => model.id === "grok-4.7"));
   assert.doesNotMatch(JSON.stringify(payload), /credential|token|auth|workspacePath|databasePath/u);
 });
 
@@ -1771,7 +1772,7 @@ test("rejects a client profile that differs from the registered workspace profil
   );
 });
 
-test("app-server preserves OpenAI Fast mode through restart metadata and runtime arguments", async () => {
+test("app-server preserves OpenAI Fast mode and Daybreak Blue through restart metadata and runtime arguments", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-fast-mode-"));
   temporaryDirectories.push(directory);
   const calls = [];
@@ -1822,18 +1823,25 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
     model: "gpt-5.6-sol",
     reasoningEffort: "high",
     fastMode: true,
+    daybreakBlue: true,
   };
 
   const prepared = await service.prepareSession(request, "generated-session");
 
   assert.equal(prepared.launch.provider.fastMode, true);
+  assert.equal(prepared.launch.provider.daybreakBlue, true);
   assert.equal(prepared.launch.provider.contextSize, "large");
   assert.equal(appServerSessionEnvironment(prepared.launch, {}).APP_SERVER_OPENAI_CONTEXT_SIZE, "large");
   assert.equal(prepared.launch.investigationId, assigned.id);
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--fast-mode"));
+  assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--daybreak-blue"));
   const createCall = calls.find((call) => call.operation === "session.create");
   assert.equal(
     createCall.options.input.metadata.appServerRestartLaunch.launch.provider.fastMode,
+    true,
+  );
+  assert.equal(
+    createCall.options.input.metadata.appServerRestartLaunch.launch.provider.daybreakBlue,
     true,
   );
   assert.equal(
@@ -1851,6 +1859,17 @@ test("app-server preserves OpenAI Fast mode through restart metadata and runtime
       },
     }, "generated-invalid-session"),
     /Fast mode is available only when OpenAI is the Lead provider/,
+  );
+  await assert.rejects(
+    service.prepareSession({
+      ...request,
+      sessionId: "session-invalid-daybreak",
+      launch: {
+        ...request.launch,
+        provider: { id: "xai", model: "grok-4.7", daybreakBlue: true },
+      },
+    }, "generated-invalid-session"),
+    /Daybreak Blue is available only when OpenAI is the Lead provider/,
   );
 });
 

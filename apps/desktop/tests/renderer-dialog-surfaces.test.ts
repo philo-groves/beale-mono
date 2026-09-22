@@ -29,15 +29,18 @@ describe('renderer dialog surfaces', () => {
       modelOptions: [{ value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' }],
       effortOptions: [{ value: 'high', label: 'High' }],
       fastModeValue: true,
+      daybreakBlueValue: true,
       title: 'Lead provider, model, effort, and processing mode',
       ariaLabel: 'Lead model settings',
       onSelectProvider: () => undefined,
       onSelectModel: () => undefined,
       onSelectEffort: () => undefined,
-      onSelectFastMode: () => undefined
+      onSelectFastMode: () => undefined,
+      onSelectDaybreakBlue: () => undefined
     }));
 
     expect(html).toContain('class="model-selection-picker-fast-mode">Fast</span>');
+    expect(html).toContain('class="model-selection-picker-fast-mode">Daybreak Blue</span>');
   });
 
   it('sizes expanded device capture from the available height instead of half the workspace', () => {

@@ -388,6 +388,10 @@ export function ResearchSettingsForm({
   );
   const selectedProvider = providerOptions.find((provider) => provider.id === selectedProviderId) ?? null;
   const selectedModel = selectedProvider?.models.find((model) => model.id === input.model) ?? null;
+  const daybreakBlueAvailable = selectedProviderId === 'openai-codex'
+    && Boolean(selectedModel)
+    && selectedModel?.id !== 'gpt-6-astra'
+    && !selectedModel?.id.startsWith('gpt-daybreak-');
   const configuredProviderModelCatalog = useMemo(
     () => providerModelCatalog.filter((catalog) => (
       providerOptions.some((provider) => provider.id === catalog.providerId && provider.configured)
@@ -579,12 +583,17 @@ export function ResearchSettingsForm({
       if (current.provider === selectedProvider.id && current.model === model.id && current.reasoningEffort === effort) {
         return current;
       }
+      const { daybreakBlue: _previousDaybreakBlue, ...otherInput } = current;
       return {
-        ...current,
+        ...otherInput,
         provider: selectedProvider.id,
         model: model.id,
         reasoningEffort: effort,
-        fastMode: selectedProvider.id === 'openai-codex' && current.fastMode === true
+        fastMode: selectedProvider.id === 'openai-codex' && current.fastMode === true,
+        ...(selectedProvider.id === 'openai-codex'
+          ? { daybreakBlue: model.id !== 'gpt-6-astra'
+              && !model.id.startsWith('gpt-daybreak-') && current.daybreakBlue === true }
+          : {})
       };
     });
   }, [defaultProviderId, openAiStatus, providerModelDefaults, researchProviderStatuses, selectedProvider]);
@@ -730,11 +739,16 @@ export function ResearchSettingsForm({
     const model = provider?.models.find((candidate) => candidate.id === preferredModelId) ?? provider?.models[0];
     if (!model) return;
     setInput((current) => {
+      const { daybreakBlue: _previousDaybreakBlue, ...otherInput } = current;
       const next = {
-        ...current,
+        ...otherInput,
         provider: providerId,
         model: model.id,
         fastMode: providerId === 'openai-codex' && current.fastMode === true,
+        ...(providerId === 'openai-codex'
+          ? { daybreakBlue: model.id !== 'gpt-6-astra'
+              && !model.id.startsWith('gpt-daybreak-') && current.daybreakBlue === true }
+          : {}),
         reasoningEffort: inputValueForEffort(preferredEffort(
           model.effortLevels,
           providerModelDefaults?.[providerId]?.reasoningEffort ?? effortLevelFromInput(current.reasoningEffort)
@@ -749,9 +763,14 @@ export function ResearchSettingsForm({
     const model = selectedProvider?.models.find((candidate) => candidate.id === modelId);
     if (!model) return;
     setInput((current) => {
+      const { daybreakBlue: _previousDaybreakBlue, ...otherInput } = current;
       const next = {
-        ...current,
+        ...otherInput,
         model: model.id,
+        ...(selectedProviderId === 'openai-codex'
+          ? { daybreakBlue: model.id !== 'gpt-6-astra'
+              && !model.id.startsWith('gpt-daybreak-') && current.daybreakBlue === true }
+          : {}),
         reasoningEffort: inputValueForEffort(preferredEffort(model.effortLevels, effortLevelFromInput(current.reasoningEffort)))
       };
       inputRef.current = next;
@@ -882,20 +901,27 @@ export function ResearchSettingsForm({
       provider: selectedProviderId,
       model: selectedModel.id,
       reasoningEffort: selectedEffort,
-      fastMode: selectedProviderId === 'openai-codex' && input.fastMode === true
+      fastMode: selectedProviderId === 'openai-codex' && input.fastMode === true,
+      ...(selectedProviderId === 'openai-codex'
+        ? { daybreakBlue: daybreakBlueAvailable && input.daybreakBlue === true }
+        : {})
     } : undefined;
     const startFromSessionComposer = (
       promptMarkdown: string,
       modelSelection: ResearchModelSelection,
       shellSafetyMode: ShellSafetyMode
     ): void => {
+      const { daybreakBlue: _previousDaybreakBlue, ...otherInput } = inputRef.current;
       const next: StartRunInput = {
-        ...inputRef.current,
+        ...otherInput,
         promptMarkdown,
         provider: modelSelection.provider,
         model: modelSelection.model,
         reasoningEffort: inputValueForEffort(modelSelection.reasoningEffort),
         fastMode: modelSelection.provider === 'openai-codex' && modelSelection.fastMode === true,
+        ...(modelSelection.provider === 'openai-codex'
+          ? { daybreakBlue: modelSelection.daybreakBlue === true }
+          : {}),
         shellSafetyMode
       };
       inputRef.current = next;
@@ -1105,6 +1131,7 @@ export function ResearchSettingsForm({
                   modelValue={selectedModel?.id ?? ''}
                   effortValue={selectedEffort}
                   fastModeValue={selectedProviderId === 'openai-codex' ? input.fastMode === true : undefined}
+                  daybreakBlueValue={daybreakBlueAvailable ? input.daybreakBlue === true : undefined}
                   title="Lead provider, model, and effort"
                   ariaLabel="Lead model settings"
                   disabled={!selectedModel || generatingPrompt}
@@ -1122,6 +1149,7 @@ export function ResearchSettingsForm({
                   onSelectModel={selectModel}
                   onSelectEffort={(value) => selectEffort(value as ResearchModelEffortLevel)}
                   onSelectFastMode={(enabled) => update('fastMode', enabled)}
+                  onSelectDaybreakBlue={(enabled) => update('daybreakBlue', enabled)}
                 />
               </div>
               <div className="research-model-team-column research-collaborator-model-column">

@@ -254,6 +254,7 @@ export class AppServerRunEngine {
         runEngine: 'app-server',
         modelProvider: input.provider?.trim() || null,
         fastMode: input.fastMode === true,
+        ...(input.provider === 'openai-codex' ? { daybreakBlue: input.daybreakBlue === true } : {}),
         goalEnabled: input.goalEnabled,
         goalObjective,
         researchWorkflowId: workflowId,
@@ -272,6 +273,7 @@ export class AppServerRunEngine {
         model: input.model,
         reasoningEffort: input.reasoningEffort,
         fastMode: input.fastMode === true,
+        ...(input.provider === 'openai-codex' ? { daybreakBlue: input.daybreakBlue === true } : {}),
         goalEnabled: input.goalEnabled,
         goalObjective,
         researchProfileSnapshotId: researchProfile.id,
@@ -474,6 +476,9 @@ export class AppServerRunEngine {
         model: launchRequest.launch.provider?.model ?? null,
         reasoningEffort: launchRequest.launch.provider?.reasoningEffort ?? null,
         fastMode: launchRequest.launch.provider?.fastMode === true,
+        ...(launchRequest.launch.provider?.id === 'openai-codex'
+          ? { daybreakBlue: launchRequest.launch.provider.daybreakBlue === true }
+          : {}),
         goalEnabled: Boolean(launchRequest.launch.goal),
         shellSafetyMode: launchRequest.launch.shellSafetyMode,
         workspaceId: launchRequest.launch.workspaceId,
@@ -2737,12 +2742,16 @@ function appServerSessionLaunchRequest(
       ...(input.goalEnabled ? { goal: { ...(objective ? { objective } : {}) } } : {}),
       ...(
         input.provider?.trim() || input.model.trim() || input.reasoningEffort.trim() || input.fastMode
+          || (input.provider?.trim() === 'openai-codex' && input.daybreakBlue)
           ? {
               provider: {
                 ...(input.provider?.trim() ? { id: input.provider.trim() } : {}),
                 ...(input.model.trim() ? { model: input.model.trim() } : {}),
                 ...(input.reasoningEffort.trim() ? { reasoningEffort: input.reasoningEffort.trim() } : {}),
-                ...(input.fastMode ? { fastMode: true } : {})
+                ...(input.fastMode ? { fastMode: true } : {}),
+                ...(input.provider?.trim() === 'openai-codex' && input.daybreakBlue
+                  ? { daybreakBlue: true }
+                  : {})
               }
             }
           : {}
@@ -2784,6 +2793,9 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
     model: run.model,
     reasoningEffort: run.reasoningEffort,
     fastMode: run.budget.fastMode === true,
+    ...(run.budget.modelProvider === 'openai-codex'
+      ? { daybreakBlue: run.budget.daybreakBlue === true }
+      : {}),
     ...(run.budget.collaboration ? { collaboration: normalizeResearchCollaboration(run.budget.collaboration) } : {}),
     sandboxProfile: run.sandboxProfile,
     targetAssetId: run.targetAssetId,

@@ -2978,7 +2978,7 @@ function ProviderCyberPolicyAcknowledgement({
   onChange: (acknowledged: boolean) => void;
 }): JSX.Element {
   const detail = providerId === 'openai-codex'
-    ? 'Cybersecurity use is intended for OpenAI Trusted Access for Cyber members. Program membership does not waive OpenAI policy requirements: requests may still be blocked or treated as usage violations.'
+    ? 'Cybersecurity use requires OpenAI Daybreak Access. Beale’s acknowledgement does not grant account or API project access, and requests remain subject to OpenAI policy.'
     : providerId === 'anthropic'
       ? 'Subscription sign-in is experimental and only intended for Anthropic Cyber Verification Program members. CVP membership does not waive Anthropic\'s Usage Policy: requests may still be blocked or treated as usage violations. Beale delegates Claude sessions to the official Claude Agent SDK and Claude Code CLI; it does not copy or replay subscription tokens.'
       : providerId === 'xai'
@@ -2987,7 +2987,7 @@ function ProviderCyberPolicyAcknowledgement({
           ? 'Cybersecurity use remains subject to Z.ai policy and Coding Plan terms. Requests may be blocked or treated as usage violations. Subscription sessions are delegated to the official ZCode agent; Beale does not copy or replay subscription credentials.'
           : 'Requests sent through OpenRouter remain subject to OpenRouter terms and the policies of the selected model provider. Requests may be blocked or treated as usage violations by either service.';
   const label = providerId === 'openai-codex'
-    ? 'I confirm this account has OpenAI Trusted Access for Cyber membership and I accept the policy-use risk.'
+    ? 'I confirm this account has OpenAI Daybreak Access and I accept the policy-use risk.'
     : providerId === 'anthropic'
       ? 'I confirm this account is enrolled in Anthropic\'s Cyber Verification Program and I accept the usage-policy risk.'
       : providerId === 'xai'

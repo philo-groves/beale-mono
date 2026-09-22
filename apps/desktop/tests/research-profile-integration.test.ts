@@ -564,7 +564,7 @@ describe('research profile host integration', () => {
       const shellReviewModels = JSON.parse(
         launchArgs[launchArgs.indexOf('--shell-review-models') + 1] ?? '{}'
       ) as Record<string, string>;
-      expect(shellReviewModels['openai-codex']).toBe('gpt-5.6-luna');
+      expect(shellReviewModels['openai-codex']).toBe('gpt-6-luna');
       expect(shellReviewModels.anthropic).toBe('claude-haiku-4-5');
       expect(launchArgs[launchArgs.indexOf('--shell-review-effort') + 1]).toBe('low');
       const workspaceContext = invocation?.workspaceContext as {

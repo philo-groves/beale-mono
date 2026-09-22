@@ -453,8 +453,12 @@ export class AppServerHostService {
     const reasoningEffort = request.launch.provider?.reasoningEffort?.trim()
       || providerDefaults?.reasoningEffort;
     const fastMode = request.launch.provider?.fastMode === true;
+    const daybreakBlue = request.launch.provider?.daybreakBlue === true;
     if (fastMode && providerId !== 'openai-codex') {
       throw new Error('Fast mode is available only when OpenAI is the Lead provider.');
+    }
+    if (request.launch.provider?.daybreakBlue !== undefined && providerId !== 'openai-codex') {
+      throw new Error('Daybreak Blue is available only when OpenAI is the Lead provider.');
     }
     const shellReviewModels = {
       ...providerSemantics.defaultSmallModels,
@@ -519,6 +523,7 @@ export class AppServerHostService {
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(fastMode ? { fastMode: true } : {}),
+      ...(daybreakBlue ? { daybreakBlue: true } : {}),
       profileId,
       ...(investigationId ? { investigationId } : {})
     });
@@ -557,6 +562,7 @@ export class AppServerHostService {
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(fastMode ? { fastMode: true } : {}),
+          ...(daybreakBlue ? { daybreakBlue: true } : {}),
           contextSize: providerSettings.contextSizes?.['openai-codex'] ?? 'default',
           riskAcknowledgements: providerSettings.riskAcknowledgements,
           authenticationPreferences: providerSettings.authenticationPreferences,
@@ -1760,6 +1766,7 @@ function restartLaunchDescriptor(
     model?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    daybreakBlue?: boolean;
     profileId: string;
     investigationId?: string;
   }
@@ -1776,7 +1783,8 @@ function restartLaunchDescriptor(
         id: resolved.providerId,
         ...(resolved.model ? { model: resolved.model } : {}),
         ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
-        ...(resolved.fastMode ? { fastMode: true } : {})
+        ...(resolved.fastMode ? { fastMode: true } : {}),
+        ...(resolved.daybreakBlue ? { daybreakBlue: true } : {})
       },
       shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
       ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
@@ -1827,6 +1835,7 @@ function dueAutomation(
   const workflowId = nonEmpty(session.workflowId);
   const collaboration = isRecord(budget.collaboration) ? budget.collaboration : null;
   const fastMode = budget.fastMode === true && providerId === 'openai-codex';
+  const daybreakBlue = budget.daybreakBlue === true && providerId === 'openai-codex';
   const shellSafetyMode = nonEmpty(metadata.shellSafetyMode)
     ?? nonEmpty(storedRun.shellSafetyMode)
     ?? 'auto_review';
@@ -1842,12 +1851,13 @@ function dueAutomation(
         workspaceId,
         promptMarkdown,
         ...(goalEnabled ? { goal: { objective: goalObjective } } : {}),
-        ...(providerId || model || reasoningEffort || fastMode ? {
+        ...(providerId || model || reasoningEffort || fastMode || daybreakBlue ? {
           provider: {
             ...(providerId ? { id: providerId } : {}),
             ...(model ? { model } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
-            ...(fastMode ? { fastMode: true } : {})
+            ...(fastMode ? { fastMode: true } : {}),
+            ...(daybreakBlue ? { daybreakBlue: true } : {})
           }
         } : {}),
         shellSafetyMode,

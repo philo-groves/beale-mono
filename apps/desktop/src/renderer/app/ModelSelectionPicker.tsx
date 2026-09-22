@@ -10,7 +10,7 @@ export interface ModelSelectionPickerOption {
   disabled?: boolean;
 }
 
-type ModelSelectionSection = 'provider' | 'model' | 'effort' | 'fastMode';
+type ModelSelectionSection = 'provider' | 'model' | 'effort' | 'fastMode' | 'daybreakBlue';
 
 interface ModelSelectionSectionDefinition {
   id: ModelSelectionSection;
@@ -46,6 +46,7 @@ export function ModelSelectionPicker({
   modelOptions,
   effortOptions,
   fastModeValue,
+  daybreakBlueValue,
   disabled = false,
   title,
   ariaLabel,
@@ -53,7 +54,8 @@ export function ModelSelectionPicker({
   onSelectProvider,
   onSelectModel,
   onSelectEffort,
-  onSelectFastMode
+  onSelectFastMode,
+  onSelectDaybreakBlue
 }: {
   className?: string;
   providerValue: string;
@@ -63,6 +65,7 @@ export function ModelSelectionPicker({
   modelOptions: ModelSelectionPickerOption[];
   effortOptions: ModelSelectionPickerOption[];
   fastModeValue?: boolean;
+  daybreakBlueValue?: boolean;
   disabled?: boolean;
   title: string;
   ariaLabel: string;
@@ -71,6 +74,7 @@ export function ModelSelectionPicker({
   onSelectModel: (value: string) => void;
   onSelectEffort: (value: string) => void;
   onSelectFastMode?: (enabled: boolean) => void;
+  onSelectDaybreakBlue?: (enabled: boolean) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<ModelSelectionSection | null>(null);
@@ -84,7 +88,8 @@ export function ModelSelectionPicker({
     provider: null,
     model: null,
     effort: null,
-    fastMode: null
+    fastMode: null,
+    daybreakBlue: null
   });
   const sections: ModelSelectionSectionDefinition[] = [
     {
@@ -118,6 +123,18 @@ export function ModelSelectionPicker({
             { value: 'on', label: 'On' }
           ],
           onSelect: (value: string) => onSelectFastMode(value === 'on')
+        }]
+      : []),
+    ...(daybreakBlueValue !== undefined && onSelectDaybreakBlue
+      ? [{
+          id: 'daybreakBlue' as const,
+          label: 'Daybreak Blue',
+          value: daybreakBlueValue ? 'on' : 'off',
+          options: [
+            { value: 'off', label: 'Off' },
+            { value: 'on', label: 'On' }
+          ],
+          onSelect: (value: string) => onSelectDaybreakBlue(value === 'on')
         }]
       : [])
   ];
@@ -372,6 +389,7 @@ export function ModelSelectionPicker({
         <span className="model-selection-picker-model">{modelLabel}</span>
         <span className="model-selection-picker-effort">{effortLabel}</span>
         {fastModeValue ? <span className="model-selection-picker-fast-mode">Fast</span> : null}
+        {daybreakBlueValue ? <span className="model-selection-picker-fast-mode">Daybreak Blue</span> : null}
         <ChevronDown className="model-selection-picker-trigger-chevron" size={13} aria-hidden="true" />
       </button>
       {menu}

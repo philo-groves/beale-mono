@@ -38,11 +38,17 @@ test("control stream rejects malformed messages without closing", async () => {
   controls.start();
 
   input.write("not-json\n");
+  input.write(`${JSON.stringify({
+    schemaVersion: 1,
+    type: "configure",
+    modelSelection: { provider: "xai", model: "grok-4.7", reasoningEffort: "high", daybreakBlue: false },
+  })}\n`);
   input.write(`${JSON.stringify({ schemaVersion: 1, type: "steer", instruction: "Continue carefully." })}\n`);
 
   assert.deepEqual(await controls.takeSteeringInstructions(), ["Continue carefully."]);
   assert.equal(events[0]?.accepted, false);
-  assert.equal(events[1]?.accepted, true);
+  assert.equal(events[1]?.accepted, false);
+  assert.equal(events[2]?.accepted, true);
   controls.close();
   assert.equal(input.isPaused(), true);
   input.destroy();
@@ -57,14 +63,15 @@ test("control stream retains the latest model selection from steering", async ()
     schemaVersion: 1,
     type: "steer",
     instruction: "Continue with the selected model.",
-    modelSelection: { provider: "xai", model: "grok-4.5", reasoningEffort: "high" },
+    modelSelection: { provider: "openai-codex", model: "gpt-5.6-sol", reasoningEffort: "high", daybreakBlue: true },
   })}\n`);
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(controls.getModelSelection(), {
-    provider: "xai",
-    model: "grok-4.5",
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
     reasoningEffort: "high",
+    daybreakBlue: true,
   });
   assert.deepEqual(await controls.takeSteeringInstructions(), ["Continue with the selected model."]);
   controls.close();

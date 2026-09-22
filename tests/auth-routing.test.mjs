@@ -68,9 +68,9 @@ test("OpenAI API-key preference routes the same model through the API provider",
         return { provider, id: model };
       },
     };
-    assert.deepEqual(router.routePiModel(models, "openai-codex", "gpt-5.6-sol"), {
+    assert.deepEqual(router.routePiModel(models, "openai-codex", "gpt-6-sol"), {
       provider: "openai",
-      id: "gpt-5.6-sol",
+      id: "gpt-6-sol",
     });
     assert.equal(router.requestApiKey("openai-codex"), "test-key");
   } finally {

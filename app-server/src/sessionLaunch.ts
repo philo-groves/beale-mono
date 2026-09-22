@@ -56,6 +56,7 @@ export interface ResolvedAppServerSessionLaunch {
     model?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    daybreakBlue?: boolean;
     contextSize?: AppServerProviderContextSize;
     riskAcknowledgements: readonly AppServerProviderRiskAcknowledgement[];
     authenticationPreferences: Readonly<Record<string, AppServerProviderAuthenticationMethod>>;
@@ -155,6 +156,7 @@ export function appServerSessionArgs(
   if (launch.provider.model) args.push('--model', launch.provider.model);
   if (launch.provider.reasoningEffort) args.push('--effort', launch.provider.reasoningEffort);
   if (launch.provider.fastMode) args.push('--fast-mode');
+  if (launch.provider.daybreakBlue) args.push('--daybreak-blue');
 
   if (launch.researchProfileId) args.push('--research-profile-id', launch.researchProfileId);
   if (launch.researchProfileHash) args.push('--research-profile-hash', launch.researchProfileHash);

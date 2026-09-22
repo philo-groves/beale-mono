@@ -120,6 +120,7 @@ test("protocol describe exposes a runtime-bound v26 persistence, continuation, C
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-subject-mutation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-project.v3"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-daybreak-blue.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.http-control.v1"));
@@ -195,14 +196,14 @@ test("HTTP session control DTOs are bounded and correlated", () => {
   );
 });
 
-test("the typed session launch carries track binding and an OpenAI Fast mode preference", () => {
+test("the typed session launch carries track binding, OpenAI Fast mode, and Daybreak Blue", () => {
   const request = {
     launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
     launch: {
       workspaceId: "workspace-example",
       investigationId: "investigation-example",
       promptMarkdown: "Inspect the parser boundary.",
-      provider: { id: "openai-codex", model: "gpt-5.6-sol", fastMode: true },
+      provider: { id: "openai-codex", model: "gpt-5.6-sol", fastMode: true, daybreakBlue: true },
     },
   };
   assert.deepEqual(decodeAppServerSessionLaunchRequest(request), request);
@@ -212,6 +213,20 @@ test("the typed session launch carries track binding and an OpenAI Fast mode pre
       launch: { ...request.launch, provider: { ...request.launch.provider, fastMode: "yes" } },
     }),
     /fastMode must be a boolean/,
+  );
+  assert.throws(
+    () => decodeAppServerSessionLaunchRequest({
+      ...request,
+      launch: { ...request.launch, provider: { ...request.launch.provider, daybreakBlue: "yes" } },
+    }),
+    /daybreakBlue must be a boolean/,
+  );
+  assert.throws(
+    () => decodeAppServerSessionLaunchRequest({
+      ...request,
+      launch: { ...request.launch, provider: { id: "openrouter", model: "auto", daybreakBlue: false } },
+    }),
+    /daybreakBlue requires the openai-codex provider/,
   );
   assert.throws(
     () => decodeAppServerSessionLaunchRequest({
@@ -253,12 +268,12 @@ test("app-server control DTOs share strict version, route, replay, and error sem
     providers: [{
       providerId: "openai-codex",
       providerName: "OpenAI",
-      defaultLeadModel: "gpt-5.6-sol",
-      defaultSubagentModel: "gpt-5.6-luna",
+      defaultLeadModel: "gpt-6-sol",
+      defaultSubagentModel: "gpt-6-luna",
       defaultReasoningEffort: "high",
       models: [{
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
+        id: "gpt-6-sol",
+        name: "GPT-6 Sol",
         reasoning: true,
         effortLevels: ["low", "medium", "high"],
       }],

@@ -11,23 +11,51 @@ import {
   getProviderModelCatalog,
   loadResearchModelConfig,
   resolveResearchModelConfig,
+  verifyProviderAuth,
   writeResearchModelConfig,
 } from "../packages/research-agent/dist/index.js";
+import { providerSemanticsDescriptor } from "../packages/research-agent/dist/harness.js";
+
+test("OpenAI auxiliary requests default to GPT-6 Luna", () => {
+  assert.equal(providerSemanticsDescriptor().defaultSmallModels["openai-codex"], "gpt-6-luna");
+});
 
 test("authenticated model catalog includes current supplemental models", () => {
   const models = createAuthenticatedModels();
   const astra = models.getModel("openai-codex", "gpt-6-astra");
+  const sol = models.getModel("openai-codex", "gpt-6-sol");
+  const luna = models.getModel("openai-codex", "gpt-6-luna");
+  const apiSol = models.getModel("openai", "gpt-6-sol");
+  const apiLuna = models.getModel("openai", "gpt-6-luna");
+  const previousSol = models.getModel("openai-codex", "gpt-5.6-sol");
+  const previousTerra = models.getModel("openai-codex", "gpt-5.6-terra");
   const daybreak = models.getModel("openai-codex", "gpt-daybreak-blue-latest");
   const daybreakRed = models.getModel("openai-codex", "gpt-daybreak-red-latest");
   const grok46 = models.getModel("xai", "grok-4.6");
+  const grok47 = models.getModel("xai", "grok-4.7");
   const glm53 = models.getModel("zai", "glm-5.3");
 
   assert.equal(models.getProvider("anthropic"), undefined);
   assert.equal(models.getModel("anthropic", "claude-opus-5"), undefined);
+  assert.equal(models.getModel("anthropic", "claude-opus-5-5"), undefined);
+  assert.equal(previousSol?.name, "GPT-5.6 Sol");
+  assert.equal(previousTerra?.name, "GPT-5.6 Terra");
   assert.equal(astra?.name, "GPT-6 Astra");
   assert.equal(astra?.provider, "openai-codex");
   assert.equal(astra?.contextWindow, 1_050_000);
   assert.equal(astra?.maxTokens, 128_000);
+  assert.equal(sol?.name, "GPT-6 Sol");
+  assert.equal(sol?.provider, "openai-codex");
+  assert.equal(sol?.contextWindow, 1_050_000);
+  assert.equal(sol?.maxTokens, 128_000);
+  assert.equal(luna?.name, "GPT-6 Luna");
+  assert.equal(luna?.provider, "openai-codex");
+  assert.equal(luna?.contextWindow, 1_050_000);
+  assert.equal(luna?.maxTokens, 128_000);
+  assert.equal(apiSol?.provider, "openai");
+  assert.equal(apiSol?.api, "openai-responses");
+  assert.equal(apiLuna?.provider, "openai");
+  assert.equal(apiLuna?.api, "openai-responses");
   assert.equal(daybreak?.name, "Daybreak Blue");
   assert.equal(daybreak?.provider, "openai-codex");
   assert.equal(daybreak?.contextWindow, 1_050_000);
@@ -37,10 +65,22 @@ test("authenticated model catalog includes current supplemental models", () => {
   assert.equal(grok46?.name, "Grok 4.6");
   assert.equal(grok46?.provider, "xai");
   assert.equal(grok46?.contextWindow, 500_000);
+  assert.equal(grok47?.name, "Grok 4.7");
+  assert.equal(grok47?.provider, "xai");
+  assert.equal(grok47?.contextWindow, 500_000);
   assert.equal(glm53?.name, "GLM-5.3");
   assert.equal(glm53?.provider, "zai");
   assert.equal(glm53?.contextWindow, 1_000_000);
   assert.equal(glm53?.maxTokens, 128_000);
+});
+
+test("OpenAI authorization selects GPT-6 Sol when no model is configured", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-openai-default-"));
+  const result = await verifyProviderAuth("openai-codex", undefined, {
+    authFile: join(directory, "auth.json"),
+    codexAuthFile: join(directory, "codex-auth.json"),
+  });
+  assert.equal(result.modelId, "gpt-6-sol");
 });
 
 test("credential store treats legacy Anthropic credentials as cleanup-only", async () => {
@@ -68,6 +108,11 @@ test("provider catalogs expose current supplemental models to frontends", () => 
   const [openrouter] = getProviderModelCatalog("openrouter");
 
   assert.ok(anthropic?.models.some((model) => model.id === "claude-opus-5"));
+  const opus55 = anthropic?.models.find((model) => model.id === "claude-opus-5-5");
+  assert.equal(opus55?.name, "Claude Opus 5.5");
+  assert.deepEqual(opus55?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
+  assert.equal(opus55?.contextWindow, 1_000_000);
+  assert.equal(opus55?.maxTokens, 128_000);
   const fable = anthropic?.models.find((model) => model.id === "claude-fable-5");
   const mythos = anthropic?.models.find((model) => model.id === "claude-mythos-5");
   assert.equal(fable?.name, "Claude Fable 5");
@@ -83,10 +128,16 @@ test("provider catalogs expose current supplemental models to frontends", () => 
     (model) => model.id === "gpt-daybreak-red-latest",
   );
   const astra = openai?.models.find((model) => model.id === "gpt-6-astra");
+  const sol = openai?.models.find((model) => model.id === "gpt-6-sol");
+  const luna = openai?.models.find((model) => model.id === "gpt-6-luna");
   assert.equal(astra?.name, "GPT-6 Astra");
   assert.deepEqual(astra?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
   assert.equal(astra?.contextWindow, 1_050_000);
   assert.equal(astra?.maxTokens, 128_000);
+  assert.deepEqual(sol?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
+  assert.equal(sol?.contextWindow, 1_050_000);
+  assert.deepEqual(luna?.effortLevels, sol?.effortLevels);
+  assert.equal(luna?.contextWindow, 1_050_000);
   assert.deepEqual(daybreak?.effortLevels, ["low", "medium", "high", "xhigh", "max"]);
   assert.equal(daybreak?.contextWindow, 1_050_000);
   assert.deepEqual(daybreakRed?.effortLevels, daybreak?.effortLevels);
@@ -105,12 +156,16 @@ test("provider catalog reports Pi model names and model-specific effort levels",
   const grok43 = catalog?.models.find((model) => model.id === "grok-4.3");
   const grok45 = catalog?.models.find((model) => model.id === "grok-4.5");
   const grok46 = catalog?.models.find((model) => model.id === "grok-4.6");
+  const grok47 = catalog?.models.find((model) => model.id === "grok-4.7");
   assert.equal(grok43?.name, "Grok 4.3");
   assert.deepEqual(grok43?.effortLevels, ["off", "minimal", "low", "medium", "high"]);
   assert.deepEqual(grok45?.effortLevels, ["low", "medium", "high"]);
   assert.equal(grok46?.name, "Grok 4.6");
   assert.deepEqual(grok46?.effortLevels, ["low", "medium", "high", "xhigh"]);
   assert.equal(grok46?.contextWindow, 500_000);
+  assert.equal(grok47?.name, "Grok 4.7");
+  assert.deepEqual(grok47?.effortLevels, ["low", "medium", "high", "xhigh"]);
+  assert.equal(grok47?.contextWindow, 500_000);
 });
 
 test("research model config accepts Pi max effort", async () => {

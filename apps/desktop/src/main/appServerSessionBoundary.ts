@@ -611,7 +611,19 @@ export function createAppServerSessionBoundary(
       if (!ownedRunIds.has(runId)) return database.updateRunModelSelection(runId, selection);
       const session = getAppServerSession(runId, storage);
       const run = sessionRun(session);
-      const updated = { ...run, model: selection.model, reasoningEffort: selection.reasoningEffort };
+      const { daybreakBlue: _previousDaybreakBlue, ...providerNeutralBudget } = run.budget;
+      const updated = {
+        ...run,
+        model: selection.model,
+        reasoningEffort: selection.reasoningEffort,
+        budget: {
+          ...providerNeutralBudget,
+          modelProvider: selection.provider,
+          ...(selection.provider === 'openai-codex'
+            ? { daybreakBlue: selection.daybreakBlue === true }
+            : {})
+        }
+      };
       const next = transitionAppServerSession(runId, {
         status: session.status,
         summary: session.summary,

@@ -120,6 +120,9 @@ export const MainSteerArea = memo(function MainSteerArea({
     ? researchEffort(detail.run.reasoningEffort)
     : preferredResearchEffort(initialModel?.effortLevels ?? [], initialModelSelection?.reasoningEffort ?? 'high'));
   const [fastMode, setFastMode] = useState(initialModelSelection?.fastMode === true);
+  const [daybreakBlue, setDaybreakBlue] = useState(
+    detail ? detail.run.budget.daybreakBlue === true : initialModelSelection?.daybreakBlue === true
+  );
   const [initialShellSafetyMode, setInitialShellSafetyMode] = useState<ShellSafetyMode>(() =>
     normalizeShellSafetyMode(detail?.run.shellSafetyMode ?? initialSafetyMode)
   );
@@ -162,11 +165,18 @@ export const MainSteerArea = memo(function MainSteerArea({
     ? providerCatalog.models
     : fallbackModel && selectedProviderId === runProviderId ? [fallbackModel] : [];
   const selectedModel = modelOptions.find((model) => model.id === selectedModelId) ?? modelOptions[0] ?? null;
+  const daybreakBlueAvailable = selectedProviderId === 'openai-codex'
+    && Boolean(selectedModel)
+    && selectedModel?.id !== 'gpt-6-astra'
+    && !selectedModel?.id.startsWith('gpt-daybreak-');
   const modelSelection: ResearchModelSelection = {
     provider: selectedProviderId,
     model: selectedModel?.id ?? detail?.run.model ?? '',
     reasoningEffort: selectedEffort,
-    fastMode: selectedProviderId === 'openai-codex' && fastMode
+    fastMode: selectedProviderId === 'openai-codex' && fastMode,
+    ...(selectedProviderId === 'openai-codex'
+      ? { daybreakBlue: daybreakBlueAvailable && daybreakBlue }
+      : {})
   };
   const collaboration = normalizeResearchCollaboration(collaborationInput ?? detail?.run.budget.collaboration);
 
@@ -184,6 +194,7 @@ export const MainSteerArea = memo(function MainSteerArea({
         initialModelSelection?.reasoningEffort ?? (current === 'off' ? 'high' : current)
       ));
       setFastMode(initialModelSelection?.fastMode === true && nextProvider.providerId === 'openai-codex');
+      setDaybreakBlue(initialModelSelection?.daybreakBlue === true && nextProvider.providerId === 'openai-codex');
       return;
     }
     const nextModel = providerModelCatalog
@@ -196,14 +207,17 @@ export const MainSteerArea = memo(function MainSteerArea({
     setSelectedProviderId(runModelProvider(detail, providerModelCatalog));
     setSelectedModelId(nextModel?.id ?? detail.run.model);
     setSelectedEffort(nextEffort);
+    setDaybreakBlue(detail.run.budget.daybreakBlue === true);
   }, [
     detail?.run.id,
     detail?.run.model,
     detail?.run.reasoningEffort,
+    detail?.run.budget.daybreakBlue,
     initialModelSelection?.model,
     initialModelSelection?.provider,
     initialModelSelection?.reasoningEffort,
     initialModelSelection?.fastMode,
+    initialModelSelection?.daybreakBlue,
     providerModelCatalog
   ]);
 
@@ -323,6 +337,7 @@ export const MainSteerArea = memo(function MainSteerArea({
           modelValue={selectedModel?.id ?? ''}
           effortValue={selectedEffort}
           fastModeValue={!detail && selectedProviderId === 'openai-codex' ? fastMode : undefined}
+          daybreakBlueValue={daybreakBlueAvailable ? daybreakBlue : undefined}
           title="Model settings for the next agent turn"
           ariaLabel="Model settings for the next agent turn"
           disabled={!selectedModel || composerControlsDisabled}
@@ -341,16 +356,22 @@ export const MainSteerArea = memo(function MainSteerArea({
             setSelectedProviderId(providerId);
             setSelectedModelId(nextModel.id);
             setSelectedEffort((current) => preferredResearchEffort(nextModel.effortLevels, current));
-            if (providerId !== 'openai-codex') setFastMode(false);
+            if (nextModel.id === 'gpt-6-astra' || nextModel.id.startsWith('gpt-daybreak-')) setDaybreakBlue(false);
+            if (providerId !== 'openai-codex') {
+              setFastMode(false);
+              setDaybreakBlue(false);
+            }
           }}
           onSelectModel={(value) => {
             const model = modelOptions.find((candidate) => candidate.id === value);
             if (!model) return;
             setSelectedModelId(model.id);
             setSelectedEffort((current) => preferredResearchEffort(model.effortLevels, current));
+            if (model.id === 'gpt-6-astra' || model.id.startsWith('gpt-daybreak-')) setDaybreakBlue(false);
           }}
           onSelectEffort={(value) => setSelectedEffort(value as ResearchModelEffortLevel)}
           onSelectFastMode={setFastMode}
+          onSelectDaybreakBlue={setDaybreakBlue}
         />
         {showCollaboration ? (
           <CollaborationSelector

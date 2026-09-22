@@ -70,12 +70,13 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-13T21:15:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-22T22:58:24.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "workspace.research-project.v3",
   "session.typed-launch.v2",
   "session.openai-fast-mode.v1",
+  "session.openai-daybreak-blue.v1",
   "session.introspection-runtime.v1",
   "session.exit-diagnostics",
   "session.transport-path.v1",
@@ -633,6 +634,7 @@ export interface AppServerSessionLaunchProvider {
   model?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  daybreakBlue?: boolean;
 }
 
 export interface AppServerSessionLaunchContinuation {
@@ -714,6 +716,12 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
     optionalBoundedString(provider, "reasoningEffort", 64);
     if (provider.fastMode !== undefined && typeof provider.fastMode !== "boolean") {
       throw new Error("launch.provider.fastMode must be a boolean.");
+    }
+    if (provider.daybreakBlue !== undefined && typeof provider.daybreakBlue !== "boolean") {
+      throw new Error("launch.provider.daybreakBlue must be a boolean.");
+    }
+    if (provider.daybreakBlue !== undefined && provider.id !== undefined && provider.id !== "openai-codex") {
+      throw new Error("launch.provider.daybreakBlue requires the openai-codex provider.");
     }
   }
 
