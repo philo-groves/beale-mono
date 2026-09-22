@@ -6,6 +6,7 @@
 
 #### Changed
 
+- New Research starts with Goal mode off by default; the Goal option remains available for individual prompts and saved settings retain their choice.
 - Provider model catalogs now include GPT-6 Sol, GPT-6 Luna, Claude Opus 5.5, and Grok 4.7 alongside the existing GPT-5.6 and earlier provider models.
 - New OpenAI configurations default to GPT-6 Sol for the large model and GPT-6 Luna for the small model, including API-key routing. Existing saved model choices remain in place. Daybreak Blue request access is omitted for other providers.
 - OpenAI Lead model selection now offers Daybreak Blue access separately from the base model. The selection persists across session turns and restarts; the Daybreak Blue model alias remains available for existing configurations. Beale requires a rebuilt app-server for the new launch contract.

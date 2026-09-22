@@ -14,7 +14,7 @@ describe('renderer run settings view model', () => {
     expect(defaultRunInput.budget.maxMinutes).toBe(UNBOUNDED_MINUTES);
     expect(defaultRunInput.budget.maxAttempts).toBe(1);
     expect(defaultRunInput.runEngine).toBe('app-server');
-    expect(defaultRunInput.goalEnabled).toBe(true);
+    expect(defaultRunInput.goalEnabled).toBe(false);
     expect(defaultRunInput.goalObjective).toBeNull();
     expect(defaultRunInput.provider).toBeUndefined();
     expect(defaultRunInput.shellSafetyMode).toBe('auto_review');

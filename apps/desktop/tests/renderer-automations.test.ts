@@ -242,8 +242,11 @@ describe('automation workspace', () => {
     const defaults = researchSettingsInput(undefined, 'discovery', null);
     const dangerDefaults = researchSettingsInput(undefined, 'discovery', null, 'danger');
     const inflated = researchSettingsInput(activeAutomation.settings, 'longshot', null);
+    const explicitGoal = researchSettingsInput({ ...activeAutomation.settings, goalEnabled: true }, 'longshot', null);
 
     expect(defaults.promptMarkdown).toBe('');
+    expect(defaults.goalEnabled).toBe(false);
+    expect(explicitGoal.goalEnabled).toBe(true);
     expect(defaults.model).toBe('');
     expect(defaults.shellSafetyMode).toBe('auto_review');
     expect(dangerDefaults.shellSafetyMode).toBe('danger');

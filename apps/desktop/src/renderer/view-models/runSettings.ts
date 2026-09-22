@@ -9,7 +9,7 @@ export const UNBOUNDED_ATTEMPTS = 999_999;
 export const defaultRunInput: StartRunInput = {
   runEngine: 'app-server',
   shellSafetyMode: DEFAULT_SHELL_SAFETY_MODE,
-  goalEnabled: true,
+  goalEnabled: false,
   goalObjective: null,
   promptMarkdown: '',
   mode: 'dynamic',

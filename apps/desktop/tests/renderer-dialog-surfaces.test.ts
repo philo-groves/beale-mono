@@ -271,7 +271,7 @@ describe('renderer dialog surfaces', () => {
     for (const suggestion of [...(suggestions.longshot ?? []), ...(suggestions.chaining ?? []), ...(suggestions.reporting ?? [])]) expect(html).not.toContain(suggestion);
   });
 
-  it('starts goals directly by default in New Research', () => {
+  it('leaves Goal mode available but off by default in New Research', () => {
     const suggestions = phaseSuggestions();
     const html = renderToStaticMarkup(
       createElement(StartRunForm, {
@@ -297,7 +297,7 @@ describe('renderer dialog surfaces', () => {
 
     expect(html).toContain('class="new-research-goal-toggle"');
     expect(html).toContain('class="new-research-generate-toggle"');
-    expect(html).toMatch(/<input type="checkbox" checked=""\/>/);
+    expect(html).toMatch(/<label class="new-research-goal-toggle"[^>]*><input type="checkbox"\/><span>Goal<\/span><\/label>/);
     expect(html).toContain('<span>Goal</span>');
     expect(html).toContain('<span>Add Context</span>');
     expect(html).toContain('aria-label="Shell safety mode"');
