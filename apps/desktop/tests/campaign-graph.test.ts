@@ -1,7 +1,9 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { layoutCampaignGraph } from '../src/renderer/view-models/campaignGraph';
 import { campaignClaimRatingPresentation } from '../src/renderer/view-models/campaignClaims';
-import { campaignBoardClaimMetadata, campaignBoardFindings, campaignPriorityClaimMetadata } from '../src/renderer/features/workspaces/CampaignGraphView';
+import { CampaignBoardView, campaignBoardClaimMetadata, campaignBoardFindings, campaignPriorityClaimMetadata } from '../src/renderer/features/workspaces/CampaignGraphView';
 import { findingRevisionContext } from '../src/main/findingRevisionContext';
 import type { AppServerFindingSummary, AppServerMemorySummary, WorkspaceScopeVersion } from '@shared/types';
 
@@ -73,6 +75,49 @@ describe('campaign graph projection', () => {
 
     expect(campaignBoardClaimMetadata(claim)).toBe('Medium');
     expect(campaignBoardClaimMetadata(claim)).not.toContain('Chain');
+  });
+
+  it('places the live text filter before Classes on the Board', () => {
+    const html = renderToStaticMarkup(createElement(CampaignBoardView, {
+      memory: null,
+      providerModelCatalog: [],
+      workspaceName: 'Example Workspace',
+      onOpenClaim: () => undefined
+    }));
+
+    expect(html).toContain('type="search"');
+    expect(html.indexOf('aria-label="Filter board findings"')).toBeLessThan(html.indexOf('aria-label="Finding class filter"'));
+  });
+
+  it('filters Board findings by text alongside class and rating', () => {
+    const parserClaim = {
+      id: 'finding-example-parser',
+      maturity: 'reproduced',
+      rating: 'high',
+      classification: 'security.primitive',
+      title: 'Example parser boundary',
+      summary: 'Unexpected payload handling',
+      impact: 'Synthetic impact',
+      status: 'reproduced',
+      workflow: 'active',
+      evidence: [{ summary: 'Example proof note' }],
+      securityTracking: null
+    } as AppServerFindingSummary;
+    const chainClaim = {
+      ...parserClaim,
+      id: 'finding-example-chain',
+      classification: 'security.chain',
+      title: 'Example chain finding',
+      summary: 'Separate finding',
+      evidence: []
+    };
+    const memory = { findings: [parserClaim, chainClaim] } as AppServerMemorySummary;
+
+    expect(campaignBoardFindings(memory, 'reproduced', { classification: 'all', rating: 'all', query: '  PARSER  ' })).toEqual([parserClaim]);
+    expect(campaignBoardFindings(memory, 'reproduced', { classification: 'security.primitive', rating: 'high', query: 'proof note' })).toEqual([parserClaim]);
+    expect(campaignBoardFindings(memory, 'reproduced', { classification: 'security.chain', rating: 'all', query: 'parser' })).toEqual([]);
+    expect(campaignBoardFindings(memory, 'reproduced', { classification: 'all', rating: 'all', query: 'missing' })).toEqual([]);
+    expect(campaignBoardFindings(memory, 'reproduced', { classification: 'all', rating: 'all', query: '  ' })).toEqual([parserClaim, chainClaim]);
   });
 });
 

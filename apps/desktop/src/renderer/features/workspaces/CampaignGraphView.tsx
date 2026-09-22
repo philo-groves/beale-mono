@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, JSX, RefObject } from 'react';
-import { BadgeCheck, CircleHelp, Eye, FlaskConical, GitBranch, Lightbulb, Minus, Plus } from 'lucide-react';
+import { BadgeCheck, CircleHelp, Eye, FlaskConical, GitBranch, Lightbulb, Minus, Plus, Search } from 'lucide-react';
 import type {
   AppServerFindingSummary,
   AppServerMemorySummary,
@@ -122,6 +122,7 @@ export function CampaignBoardView({
   onOpenClaim: (claimId: string) => void;
 }): JSX.Element {
   const loading = memory === null || memory.loading === true;
+  const [query, setQuery] = useState('');
   const [classificationFilter, setClassificationFilter] = useState('all');
   const [ratingFilter, setRatingFilter] = useState<CampaignBoardRatingFilter>('all');
   const classificationOptions = campaignBoardClassificationOptions(memory);
@@ -139,6 +140,16 @@ export function CampaignBoardView({
           <p>Findings grouped by maturity; proposed leads are excluded.</p>
         </div>
         <div className="campaign-board-filters" aria-label="Board filters">
+          <label className="campaign-board-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              aria-label="Filter board findings"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter findings"
+              type="search"
+              value={query}
+            />
+          </label>
           <FloatingTextPicker
             ariaLabel="Finding class filter"
             className="campaign-board-filter campaign-board-class-filter"
@@ -160,7 +171,7 @@ export function CampaignBoardView({
 
       <div className="campaign-board-lanes">
         {CAMPAIGN_BOARD_MATURITIES.map((maturity) => {
-          const findings = campaignBoardFindings(memory, maturity, { classification: classificationFilter, rating: ratingFilter });
+          const findings = campaignBoardFindings(memory, maturity, { classification: classificationFilter, rating: ratingFilter, query });
           return (
             <section className={`campaign-board-lane maturity-${maturity}`} key={maturity} aria-labelledby={`campaign-board-${maturity}-heading`}>
               <h3 className="campaign-trail-section-heading campaign-board-lane-heading" id={`campaign-board-${maturity}-heading`}>{traceLabel(maturity)} ({findings.length.toLocaleString()})</h3>
@@ -298,11 +309,15 @@ export function campaignBoardClaimMetadata(claim: AppServerFindingSummary): stri
 export function campaignBoardFindings(
   memory: AppServerMemorySummary | null,
   maturity: CampaignBoardMaturity,
-  filters: { classification: string; rating: CampaignBoardRatingFilter } = { classification: 'all', rating: 'all' }
+  filters: { classification: string; rating: CampaignBoardRatingFilter; query?: string } = { classification: 'all', rating: 'all' }
 ): AppServerFindingSummary[] {
+  const query = filters.query?.trim().toLocaleLowerCase() ?? '';
   return (memory?.findings ?? []).filter((claim) => claim.maturity === maturity
     && (filters.classification === 'all' || claim.classification === filters.classification)
-    && (filters.rating === 'all' || campaignClaimRatingPresentation(claim).value === filters.rating));
+    && (filters.rating === 'all' || campaignClaimRatingPresentation(claim).value === filters.rating)
+    && (!query || [claim.id, claim.title, claim.summary, claim.impact, claim.classification, claim.status,
+      claim.maturity, claim.workflow, claim.rating, ...claim.evidence.map((evidence) => evidence.summary)]
+      .join('\n').toLocaleLowerCase().includes(query)));
 }
 
 export function campaignBoardClassificationOptions(memory: AppServerMemorySummary | null): Array<{ value: string; label: string }> {
