@@ -4,6 +4,10 @@
 
 ### Beale
 
+#### Added
+
+- A default-enabled Browser Use plugin adds bounded tab navigation, page observation, element interaction, and screenshots through WebDriver BiDi. The plugin can be disabled in Plugins and launches a separate browser profile.
+
 #### Changed
 
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.

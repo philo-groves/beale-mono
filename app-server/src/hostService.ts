@@ -1701,6 +1701,7 @@ function defaultBuiltinPlugins(): Array<{ id: string; path: string; installedAt:
   return [
     ...MANAGED_TOOL_PLUGIN_IDS.map((id) => builtinPlugin(`${id}-builtin`, id, false)),
     builtinPlugin('beale-introspection-builtin', 'beale-introspection', false),
+    builtinPlugin('beale-browser-use-builtin', 'beale-browser-use', false),
     builtinPlugin('beale-terminator-builtin', 'beale-terminator', true)
   ].flatMap((plugin) => existsSync(plugin.path) ? [plugin] : []);
 }

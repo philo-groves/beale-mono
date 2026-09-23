@@ -2043,7 +2043,10 @@ test("app-server owns built-in plugins and pins canonical session profile identi
     },
   });
   const pluginCall = calls.find((call) => call.operation === "plugin.runtime");
-  assert.equal(pluginCall.options.input.builtinPlugins.length, MANAGED_TOOL_PLUGIN_IDS.length + 2);
+  assert.equal(pluginCall.options.input.builtinPlugins.length, MANAGED_TOOL_PLUGIN_IDS.length + 3);
+  assert.ok(pluginCall.options.input.builtinPlugins.some((plugin) =>
+    plugin.id === "beale-browser-use-builtin" && plugin.enabledByDefault !== false
+  ));
   assert.deepEqual(prepared.launch.pluginRuntime.managedPluginIds, MANAGED_TOOL_PLUGIN_IDS);
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes(MANAGED_TOOL_PLUGIN_IDS.join(',')));
   assert.ok(pluginCall.options.input.builtinPlugins.every((plugin) =>

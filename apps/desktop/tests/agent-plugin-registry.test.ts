@@ -83,7 +83,7 @@ describe('AgentPluginRegistry', () => {
       env: {
         PLUGIN_ROOT: sourceRoot,
         PLUGIN_DATA: join(dirname(mcpConfigPath), '..', 'agent-plugin-data', installed.plugins[0].id),
-        CONFIG: join(sourceRoot, 'config.json')
+        CONFIG: `${sourceRoot}/config.json`
       }
     });
 
@@ -159,12 +159,15 @@ describe('AgentPluginRegistry', () => {
 
     const plugin = registry.getState().plugins.find((candidate) => candidate.name === 'beale-introspection');
     const terminator = registry.getState().plugins.find((candidate) => candidate.name === 'beale-terminator');
+    const browser = registry.getState().plugins.find((candidate) => candidate.name === 'beale-browser-use');
     expect(plugin).toBeTruthy();
     expect(plugin?.enabled).toBe(true);
     expect(plugin?.source.kind).toBe('builtin');
     expect(terminator).toBeTruthy();
     expect(terminator?.enabled).toBe(false);
     expect(terminator?.source.kind).toBe('builtin');
+    expect(browser?.enabled).toBe(true);
+    expect(browser?.source.kind).toBe('builtin');
     expect(plugin?.mcpServers).toMatchObject([
       {
         name: 'beale',
@@ -175,7 +178,7 @@ describe('AgentPluginRegistry', () => {
     ]);
 
     const runtime = registry.getAppServerRuntime();
-    expect(runtime.allowedMcpServers).toEqual(['beale-introspection.beale']);
+    expect(runtime.allowedMcpServers).toEqual(['beale-browser-use.browser-use', 'beale-introspection.beale']);
     expect(runtime.mcpConfigPath).toBeTruthy();
     const mcpConfig = JSON.parse(readFileSync(runtime.mcpConfigPath ?? '', 'utf8')) as {
       servers: Record<string, { env: Record<string, string> }>;
@@ -197,6 +200,8 @@ describe('AgentPluginRegistry', () => {
     expect(terminatorEnabled.plugins.find((candidate) => candidate.id === terminator!.id)?.enabled).toBe(true);
     const computerRuntime = registry.getAppServerRuntime();
     expect(computerRuntime.allowedMcpServers).toContain('beale-terminator.computer-use');
+    registry.setEnabled(browser!.id, false);
+    expect(registry.getAppServerRuntime().allowedMcpServers).not.toContain('beale-browser-use.browser-use');
   });
 
   it('speaks app-server newline-delimited JSON-RPC over stdio', () => {
