@@ -449,7 +449,9 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'repository.search': { singular: 'Searching the Repository', plural: (count) => `Running ${count} Repository Searches` },
   'workspace.search': { singular: 'Searching the Workspace', plural: (count) => `Running ${count} Workspace Searches` },
   'runbook.append': { singular: 'Updating a Runbook', plural: (count) => `Updating ${count} Runbooks` },
+  'runbook.edit': { singular: 'Editing a Runbook Cell', plural: (count) => `Editing ${count} Runbook Cells` },
   'runbook.configure': { singular: 'Configuring a Runbook', plural: (count) => `Configuring ${count} Runbooks` },
+  'runbook.prepare': { singular: 'Preparing a Runbook', plural: (count) => `Preparing ${count} Runbooks` },
   'runbook.create': { singular: 'Creating a Runbook', plural: (count) => `Creating ${count} Runbooks` },
   'runbook.get': { singular: 'Reading a Runbook', plural: (count) => `Reading ${count} Runbooks` },
   'runbook.list': { singular: 'Checking Runbooks', plural: (count) => `Checking Runbooks ${count} Times` },
@@ -525,8 +527,10 @@ const STRUCTURED_SINGULAR_TOOL_NAMES = new Set([
   'memory.get',
   'memory.save',
   'runbook.append',
+  'runbook.edit',
   'runbook.configure',
   'runbook.create',
+  'runbook.prepare',
   'runbook.get',
   'runbook.list',
   'runbook.run',
@@ -581,11 +585,17 @@ function commentaryRunbookCallLabel(
   if (toolName === 'runbook.append') {
     return title ? `Revising runbook in ${title}` : 'Revising a runbook';
   }
+  if (toolName === 'runbook.edit') {
+    return title ? `Editing a cell in ${title}` : 'Editing a runbook cell';
+  }
   if (toolName === 'runbook.configure') {
     return title ? `Configuring features in ${title}` : 'Configuring runbook features';
   }
   if (toolName === 'runbook.create') {
     return title ? `Creating runbook in ${title}` : 'Creating a runbook';
+  }
+  if (toolName === 'runbook.prepare') {
+    return title ? `Preparing runbook in ${title}` : 'Preparing a runbook';
   }
   if (toolName === 'runbook.list') {
     const query = firstStringValue(input, ['query']) ?? firstStringValue(output, ['query']);

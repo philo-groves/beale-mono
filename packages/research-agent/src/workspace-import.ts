@@ -114,7 +114,7 @@ export function importWorkspaceResearchFile(options: WorkspacePublicationOptions
       unchangedExcept(original, cell, ["source"]);
       const metadata = record(record(cell.metadata).beale);
       if (!Array.isArray(cell.source) || cell.source.some((line) => typeof line !== "string")) throw new Error("Runbook cell source must be an array of strings.");
-      return { kind: cell.cell_type as RunbookCellInput["kind"], source: cell.source.join(""), features: metadata.features as string[], ...(metadata.executor ? { executor: metadata.executor as NonNullable<RunbookCellInput["executor"]> } : {}), ...(typeof metadata.language === "string" ? { language: metadata.language } : {}) };
+      return { kind: cell.cell_type as RunbookCellInput["kind"], source: cell.source.join(""), features: metadata.features as string[], ...(metadata.executor ? { executor: metadata.executor as NonNullable<RunbookCellInput["executor"]> } : {}), ...(typeof metadata.language === "string" ? { language: metadata.language } : {}), ...(typeof metadata.cwd === "string" ? { cwd: metadata.cwd } : {}) };
     });
     const store = new RunbookStore(options.databasePath, layout, context);
     try { store.append({ id: String(metadata.runbookId), expectedRevision, cells }, undefined, true); }

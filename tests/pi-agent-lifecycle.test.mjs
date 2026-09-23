@@ -678,7 +678,8 @@ test("research system prompt keeps workflow phases behind runbook feature tags w
   assert.match(prompt, /matching workflow runbook before executing the first claim-confirming experiment/);
   assert.match(prompt, /Execute every proof-of-concept.*through runbook\.run/);
   assert.match(prompt, /Auto-Review denies proofing outside a recorded runbook cell/);
-  assert.match(prompt, /Rerun that cell.*do not create lifecycle wrappers/);
+  assert.match(prompt, /Before implementing a candidate proof, call runbook\.prepare/);
+  assert.match(prompt, /revision-checked runbook\.edit.*rerun the same cell.*do not create lifecycle wrappers/);
   assert.match(prompt, /Start a sibling runbook only for a genuinely unrelated objective/);
   assert.doesNotMatch(prompt, /proof development.*shell\.run/);
 });

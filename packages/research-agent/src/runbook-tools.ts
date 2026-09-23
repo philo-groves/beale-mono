@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { nowIso } from "./ids.js";
+import { workspacePathProblem } from "./workspace-project.js";
 import {
   MAX_RUNBOOK_MUTATION_CELLS,
   RUNBOOK_DEFAULT_TIMEOUT_SECONDS,
   RUNBOOK_MAX_TIMEOUT_SECONDS,
   RUNBOOK_DEFAULT_FEATURES,
   RunbookStore,
+  RunbookTitleConflictError,
   type RunbookCellInput,
   type RunbookCellExecutor,
 } from "./runbooks.js";
@@ -81,6 +83,28 @@ export function createRunbookTools(
       id: { type: "string" },
       expectedRevision: { type: "number" },
       cells: { type: "array", minItems: 1, maxItems: MAX_RUNBOOK_MUTATION_CELLS, items: cellParameters },
+    },
+  };
+  const prepareParameters = {
+    type: "object",
+    required: ["title", "purpose", "language"],
+    properties: {
+      id: { type: "string", description: "Optional existing runbook ID when more than one runbook shares the title." },
+      title: { type: "string", description: "Exact workflow title used to find an existing runbook in this workspace." },
+      purpose: { type: "string", description: "Reusable proof objective and expected decision." },
+      candidatePath: { type: "string", description: "Optional workspace-relative file beneath investigations/. Omit for a stable path generated from title and purpose." },
+      entryCommand: { type: "string", description: "Optional bounded host command containing candidatePath. Omit for a language-specific entry command." },
+      language: { type: "string", description: "Candidate implementation language, such as python3, sh, or node. The entry command runs as a host shell cell from the workspace root." },
+    },
+  };
+  const editParameters = {
+    type: "object",
+    required: ["id", "expectedRevision", "cellId", "source"],
+    properties: {
+      id: { type: "string" },
+      expectedRevision: { type: "integer", minimum: 1 },
+      cellId: { type: "string", description: "Existing code cell ID from runbook.prepare or runbook.get." },
+      source: { type: "string", description: "Replacement command or code. The cell ID, feature tags, and executor are preserved." },
     },
   };
   const configureParameters = {
@@ -168,9 +192,83 @@ export function createRunbookTools(
       },
     ),
     tool(
+      "runbook.prepare",
+      "runbook_prepare",
+      "Before writing a candidate proof, find or create its cohesive runbook and runtime entry cell in one call. Title, purpose, and language generate a stable investigations/ candidate path and bounded entry command; supply either explicitly when needed. Exact-title matches are reused when the command already exists; an empty workflow gains the entry cell. A different existing code command requires inspection and runbook.edit, preventing duplicate proof cells. Returns the candidate path, entry command, runbook revision, and entry cell ID for implementation and later runbook.run.",
+      "write",
+      prepareParameters,
+      (input, context) => {
+        const title = requiredText(input.title, "title");
+        const purpose = requiredText(input.purpose, "purpose");
+        const language = requiredText(input.language, "language");
+        const candidatePath = input.candidatePath === undefined
+          ? defaultCandidatePath(title, purpose, language)
+          : requiredText(input.candidatePath, "candidatePath");
+        const entryCommand = input.entryCommand === undefined
+          ? defaultEntryCommand(language, candidatePath)
+          : requiredText(input.entryCommand, "entryCommand");
+        if (!candidatePath.startsWith("investigations/") || workspacePathProblem(candidatePath)) {
+          throw new Error("candidatePath must be a valid workspace-relative file beneath investigations/.");
+        }
+        if (candidatePath.length > 4_096) throw new Error("candidatePath exceeds 4096 characters.");
+        if (input.entryCommand === undefined && !/^[A-Za-z0-9_./-]+$/u.test(candidatePath)) {
+          throw new Error("A candidatePath containing shell-special characters requires an explicit entryCommand.");
+        }
+        if (!entryCommand.includes(candidatePath)) throw new Error("entryCommand must reference candidatePath.");
+        const selectedId = text(input.id);
+        const matches = selectedId ? [store.get(selectedId, { limit: 1 })].filter((value) => value !== null) : store.findByTitle(title);
+        if (selectedId && matches.length === 0) throw new Error(`Runbook not found in this workspace: ${selectedId}`);
+        if (matches.length > 1) throw new Error(`Multiple runbooks have the title ${title}; inspect them with runbook.list and pass id to select one.`);
+        let runbook = matches[0];
+        let artifactRef: ResearchArtifactRef | undefined;
+        let disposition: "created" | "reused" | "added-entry" = "reused";
+        if (!runbook) {
+          try {
+            const created = store.create({ title, purpose, cells: [{ kind: "code", source: entryCommand, language: "sh", cwd: ".", features: ["runtime"], summary: `Entry command for ${candidatePath}` }] }, context?.modelAuthor, true);
+            runbook = created.runbook;
+            artifactRef = created.artifactRef;
+            disposition = "created";
+          } catch (error) {
+            if (!(error instanceof RunbookTitleConflictError)) throw error;
+            const raced = store.findByTitle(title);
+            if (raced.length !== 1) throw error;
+            runbook = raced[0];
+          }
+        }
+        if (!runbook) throw new Error("Prepared runbook was not persisted.");
+        if (runbook.title.toLowerCase() !== title.toLowerCase()) throw new Error(`Runbook ${runbook.id} has a different title; inspect it with runbook.get.`);
+        if (runbook.purpose !== purpose) throw new Error(`Runbook ${runbook.id} has a different purpose; inspect it with runbook.get before choosing a workflow.`);
+        if (disposition !== "created") {
+          const cells = allRunbookCells(store, runbook.id);
+          const matching = cells.filter((cell) => cell.kind === "code" && cell.language === "sh" && cell.cwd === "." && cell.source.includes(candidatePath));
+          if (matching.length > 1) throw new Error(`Runbook ${runbook.id} has multiple matching entry cells; inspect it with runbook.get.`);
+          if (matching.length === 0) {
+            if (cells.some((cell) => cell.kind === "code")) {
+              throw new Error(`Runbook ${runbook.id} already has code cells with a different entry command. Inspect it with runbook.get and revise one with runbook.edit.`);
+            }
+            const appended = store.append({ id: runbook.id, expectedRevision: runbook.revision, cells: [
+              { kind: "code", source: entryCommand, language: "sh", cwd: ".", features: ["runtime"], summary: `Entry command for ${candidatePath}` },
+            ] }, context?.modelAuthor);
+            runbook = appended.runbook;
+            artifactRef = appended.artifactRef;
+            disposition = "added-entry";
+          } else {
+            if (input.entryCommand !== undefined && matching[0]!.source !== entryCommand) {
+              throw new Error(`Runbook ${runbook.id} has a different entry command. Inspect it with runbook.get and revise it with runbook.edit.`);
+            }
+            disposition = "reused";
+          }
+        }
+        const entryCell = allRunbookCells(store, runbook.id).find((cell) => cell.kind === "code" && cell.language === "sh" && cell.cwd === "." && cell.source.includes(candidatePath));
+        if (!entryCell) throw new Error("Prepared runbook entry cell was not persisted.");
+        return { output: { disposition, runbookId: runbook.id, revision: runbook.revision, candidatePath, entryCommand: entryCell.source, entryCellId: entryCell.id },
+          ...(artifactRef ? { artifactRefs: [artifactRef] } : {}) };
+      },
+    ),
+    tool(
       "runbook.create",
       "runbook_create",
-      "Create a revisioned Jupyter-format research runbook only when the workflow is not already represented. Keep setup, runtime, and cleanup in one cohesive runbook and label every cell with at least one of those default phase features; add narrower text tags when useful. Split only for a genuinely unrelated objective, target, or authorization boundary, not for phase changes, prerequisites, target state, review, or cleanup. Record prerequisites and expected evidence in markdown, then use repeatable code cells. Host cells require an explicit supported language and accept executor.timeoutSeconds for bounded long-running collectors instead of inheriting the shell default. A tart-vm cell references a host-built executable by workspacePath or artifactId; runbook.run materializes, stages, executes, records, and cleans it without a guest-side rewrite. Keep iterative implementation in a stable candidate artifact so the same entry cell can be rerun without per-tweak append churn.",
+      "Create a revisioned Jupyter-format research runbook only when the workflow is not already represented. Use runbook.prepare first for a new candidate proof so its path and entry cell exist before implementation. Keep setup, runtime, and cleanup in one cohesive runbook and label every cell with at least one of those default phase features; add narrower text tags when useful. Split only for a genuinely unrelated objective, target, or authorization boundary, not for phase changes, prerequisites, target state, review, or cleanup. Record prerequisites and expected evidence in markdown, then use repeatable code cells. Host cells require an explicit supported language and accept executor.timeoutSeconds for bounded long-running collectors instead of inheriting the shell default. A tart-vm cell references a host-built executable by workspacePath or artifactId; runbook.run materializes, stages, executes, records, and cleans it without a guest-side rewrite. Keep iterative implementation in a stable candidate artifact so the same entry cell can be rerun without per-tweak append churn.",
       "write",
       createParameters,
       (input, context) => {
@@ -186,7 +284,7 @@ export function createRunbookTools(
     tool(
       "runbook.append",
       "runbook_append",
-      "Append concise markdown or code cells to the existing cohesive workflow using its current revision. Use setup, runtime, and cleanup feature tags to keep phases, prerequisites, target states, review steps, and cleanup in that runbook. Start another runbook only for a genuinely unrelated objective, target, or authorization boundary. Failed outputs already preserve attempt history: rerun an unchanged entry cell after editing its candidate artifact instead of appending one cell per tweak.",
+      "Append concise markdown or code cells to the existing cohesive workflow using its current revision. Use runbook.edit when an existing cell's command changes. Use setup, runtime, and cleanup feature tags to keep phases, prerequisites, target states, review steps, and cleanup in that runbook. Start another runbook only for a genuinely unrelated objective, target, or authorization boundary. Failed outputs already preserve attempt history: rerun an unchanged entry cell after editing its candidate artifact instead of appending one cell per tweak.",
       "write",
       appendParameters,
       (input, context) => {
@@ -196,6 +294,22 @@ export function createRunbookTools(
           cells: requiredArray(input.cells, "cells").map(parseCell),
         }, context?.modelAuthor);
         return { output: appended.runbook, artifactRefs: [appended.artifactRef] };
+      },
+    ),
+    tool(
+      "runbook.edit",
+      "runbook_edit",
+      "Replace an existing code cell's command or source using its current runbook revision. This preserves the cell ID, phase tags, and executor, clears the cell's prior displayed output, and invalidates successful-run eligibility for the old content. Use this when the entry procedure changes; rerun an unchanged entry cell after editing only its candidate artifact.",
+      "write",
+      editParameters,
+      (input, context) => {
+        const edited = store.editCell({
+          id: requiredText(input.id, "id"),
+          expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"),
+          cellId: requiredText(input.cellId, "cellId"),
+          source: requiredText(input.source, "source"),
+        }, context?.modelAuthor);
+        return { output: { ...edited.runbook, editedCellId: requiredText(input.cellId, "cellId") }, artifactRefs: [edited.artifactRef] };
       },
     ),
     tool(
@@ -234,6 +348,45 @@ export function createRunbookTools(
   ];
 }
 
+function allRunbookCells(store: RunbookStore, id: string): NonNullable<ReturnType<RunbookStore["get"]>>["cells"] {
+  const cells: NonNullable<ReturnType<RunbookStore["get"]>>["cells"] = [];
+  let offset = 0;
+  while (true) {
+    const page = store.get(id, { offset, limit: 100 });
+    if (!page) throw new Error(`Runbook not found in this workspace: ${id}`);
+    cells.push(...page.cells);
+    if (page.nextOffset === null) return cells;
+    offset = page.nextOffset;
+  }
+}
+
+const PREPARE_LANGUAGES: Readonly<Record<string, { extension: string; command: string }>> = {
+  python: { extension: "py", command: "python" },
+  python3: { extension: "py", command: "python3" },
+  javascript: { extension: "js", command: "node" },
+  node: { extension: "js", command: "node" },
+  sh: { extension: "sh", command: "sh" },
+  bash: { extension: "sh", command: "bash" },
+  zsh: { extension: "sh", command: "zsh" },
+  pwsh: { extension: "ps1", command: "pwsh -File" },
+  ruby: { extension: "rb", command: "ruby" },
+  perl: { extension: "pl", command: "perl" },
+};
+
+function defaultCandidatePath(title: string, purpose: string, language: string): string {
+  const runner = PREPARE_LANGUAGES[language];
+  if (!runner) throw new Error(`runbook.prepare cannot generate a candidate path for unsupported language: ${language}.`);
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "").slice(0, 48) || "candidate";
+  const identity = createHash("sha256").update(`${title.toLowerCase()}\0${purpose}`).digest("hex").slice(0, 8);
+  return `investigations/${slug}-${identity}/candidate.${runner.extension}`;
+}
+
+function defaultEntryCommand(language: string, candidatePath: string): string {
+  const runner = PREPARE_LANGUAGES[language];
+  if (!runner) throw new Error(`runbook.prepare cannot generate an entry command for unsupported language: ${language}.`);
+  return `${runner.command} ${candidatePath}`;
+}
+
 function readableWorkspaceCatalog(
   workspaceId: string,
   workspaceName: string,
@@ -270,6 +423,7 @@ function createCellParameters(platform: NodeJS.Platform): Record<string, unknown
       features: { ...FEATURE_PARAMETERS, minItems: 1, description: `Feature tags controlling activation. Include at least one phase tag: ${RUNBOOK_DEFAULT_FEATURES.join(", ")}.` },
       executor: createCellExecutorParameters(),
       language: { type: "string", description: `Required for host code cells and ignored by tart-vm cells. Supported host runners: ${supportedRunners}.` },
+      cwd: { type: "string", description: "Optional working directory. Use . for the research workspace root; omitted cells inherit the session shell default." },
       summary: { type: "string", description: "Concise purpose, expected evidence, or interpretation of this cell." },
       stdout: { type: "string", description: "Bounded observed stdout when preserving a meaningful execution result." },
       stderr: { type: "string", description: "Bounded observed stderr when preserving a meaningful execution result." },
@@ -337,6 +491,7 @@ function parseCell(value: unknown): RunbookCellInput {
     features: parseFeatures(input.features, "cell features", true),
     ...(input.executor === undefined ? {} : { executor: parseCellExecutor(input.executor, "cell executor") }),
     ...(text(input.language) ? { language: text(input.language)! } : {}),
+    ...(text(input.cwd) ? { cwd: text(input.cwd)! } : {}),
     ...(text(input.summary) ? { summary: text(input.summary)! } : {}),
     ...(typeof input.stdout === "string" ? { stdout: input.stdout } : {}),
     ...(typeof input.stderr === "string" ? { stderr: input.stderr } : {}),

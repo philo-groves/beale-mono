@@ -133,8 +133,8 @@ test("research focus guard converts broad exploration into a runbook proof path"
   assert.equal(guard.beforeToolCall({
     callId: "checkpoint_action",
     turn: 4,
-    toolName: "runbook_append",
-    input: { id: "runbook_one", cells: [{ kind: "code", source: "./candidate" }] },
+    toolName: "runbook_prepare",
+    input: { title: "Candidate proof", purpose: "Test the candidate.", language: "sh" },
     kind: "research",
   }).block, false);
   guard.afterToolCall({
@@ -266,8 +266,8 @@ test("investigation bookkeeping cannot clear an execution-progress checkpoint", 
   assert.equal(guard.beforeToolCall({
     callId: "runbook_checkpoint",
     turn: 2,
-    toolName: "runbook_create",
-    input: { title: "Candidate proof" },
+    toolName: "runbook_edit",
+    input: { id: "runbook_one", cellId: "cell-one", expectedRevision: 1 },
     kind: "research",
   }).block, false);
   guard.afterToolCall({

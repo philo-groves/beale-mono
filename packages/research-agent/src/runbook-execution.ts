@@ -586,14 +586,15 @@ function cellInvocation(cell: RunbookExecutionPlanCell): Record<string, unknown>
   const language = cell.language?.trim().toLowerCase();
   if (!language) throw new Error(`Runbook code cell ${cell.id} requires an explicit language.`);
   const timeoutMs = cell.executor.kind === "host" ? cell.executor.timeoutSeconds * 1_000 : undefined;
-  if (["shell", "sh", "posix-shell"].includes(language)) return { command: cell.source, timeoutMs };
-  if (language === "bash") return { utility: "bash", args: ["-lc", cell.source], timeoutMs };
-  if (language === "zsh") return { utility: "zsh", args: ["-lc", cell.source], timeoutMs };
-  if (["python", "python3", "py"].includes(language)) return { utility: "python3", args: ["-c", cell.source], timeoutMs };
-  if (["javascript", "js", "node"].includes(language)) return { utility: "node", args: ["-e", cell.source], timeoutMs };
-  if (language === "ruby") return { utility: "ruby", args: ["-e", cell.source], timeoutMs };
-  if (language === "perl") return { utility: "perl", args: ["-e", cell.source], timeoutMs };
-  if (["powershell", "pwsh"].includes(language)) return { utility: "pwsh", args: ["-NoProfile", "-Command", cell.source], timeoutMs };
+  const cwd = cell.cwd ? { cwd: cell.cwd } : {};
+  if (["shell", "sh", "posix-shell"].includes(language)) return { command: cell.source, timeoutMs, ...cwd };
+  if (language === "bash") return { utility: "bash", args: ["-lc", cell.source], timeoutMs, ...cwd };
+  if (language === "zsh") return { utility: "zsh", args: ["-lc", cell.source], timeoutMs, ...cwd };
+  if (["python", "python3", "py"].includes(language)) return { utility: "python3", args: ["-c", cell.source], timeoutMs, ...cwd };
+  if (["javascript", "js", "node"].includes(language)) return { utility: "node", args: ["-e", cell.source], timeoutMs, ...cwd };
+  if (language === "ruby") return { utility: "ruby", args: ["-e", cell.source], timeoutMs, ...cwd };
+  if (language === "perl") return { utility: "perl", args: ["-e", cell.source], timeoutMs, ...cwd };
+  if (["powershell", "pwsh"].includes(language)) return { utility: "pwsh", args: ["-NoProfile", "-Command", cell.source], timeoutMs, ...cwd };
   throw new Error(`Runbook code cell ${cell.id} uses unsupported language ${cell.language}.`);
 }
 
