@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import { checkpointWorkspace, checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, installResearchDatabaseFactory, isImportableWorkspaceResearchPath, listWorkspaceResearchEdits, quarantineWorkspaceDisposable, rebuildWorkspaceResearchIndex, releaseWorkspaceResearchIndex, resolveStoredResearchProfile, workspaceResearchAuthority, workspaceResearchFileExpectedRevision, workspaceResearchIndexNeedsRebuild, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
+import { checkpointWorkspace, checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, installResearchDatabaseFactory, isImportableWorkspaceResearchPath, listWorkspaceResearchEdits, quarantineWorkspaceDisposable, rebuildWorkspaceResearchIndex, recoverWorkspacePublication, releaseWorkspaceResearchIndex, resolveStoredResearchProfile, workspaceResearchAuthority, workspaceResearchFileExpectedRevision, workspaceResearchIndexNeedsRebuild, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
 import { createWorkerResearchDatabaseFactory } from './workerDatabaseClient.js';
 
 if ('initializeInput' in workerData) {
@@ -17,6 +17,7 @@ const checkpointPort = parentPort;
 installResearchDatabaseFactory(createWorkerResearchDatabaseFactory((message) => checkpointPort.postMessage(message)));
 try {
   const fileAuthority = workspaceResearchAuthority(input.options.workspaceRoot) === 'files';
+  if (fileAuthority) recoverWorkspacePublication(input.options.workspaceRoot);
   if (fileAuthority && (input.researchIndexAction === 'rebuild' || workspaceResearchIndexNeedsRebuild(input.options.workspaceRoot))) {
     const researchIndex = rebuildWorkspaceResearchIndex(input.options);
     if (input.researchIndexAction === 'rebuild') {

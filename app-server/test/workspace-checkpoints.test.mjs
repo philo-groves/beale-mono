@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
-import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, checkpointWorkspace, publishWorkspaceFiles, readWorkspaceResearchCacheState, workspaceContentHash } from '@beale/research-agent';
+import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, checkpointWorkspace, listWorkspaceResearchEdits, publishWorkspaceFiles, publishWorkspaceResearch, readWorkspaceResearchCacheState, workspaceContentHash } from '@beale/research-agent';
 import { initializeWorkspaceProjectAsync, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
 import { AppServerWorkerDatabaseCoordinator } from '../dist/workerDatabaseBroker.js';
 
@@ -51,6 +51,51 @@ test('session checkpointing automatically migrates an oversized monolithic prior
     assert.equal(resources.schemaVersion, 2);
     assert.equal(resources.priorArt[0].data_json, undefined);
     assert.match(resources.priorArt[0].dataRef.path, /^references\/prior-art\/[a-f0-9]{64}\.json$/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('session checkpoint recovers an interrupted publication before checking direct research edits', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-interrupted-publication-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const artifactDirectoryPath = join(directory, 'runtime', 'artifacts');
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath };
+  try {
+    await initializeWorkspaceProjectAsync(workspaceRoot, options.workspaceId);
+    mkdirSync(artifactDirectoryPath, { recursive: true });
+    const graph = new MemoryGraphStore({
+      workspaceRoot,
+      databasePath,
+      context: { workspaceId: options.workspaceId, workspaceName: 'Example', subjectId: 'subject-example', subjectName: 'Example' }
+    });
+    let memory;
+    try {
+      memory = graph.save({ type: 'invariant', title: 'Example boundary', body: 'Original example.', status: 'suspected' });
+      assert.equal((await runWorkspaceCheckpoint(options, 'Initial publication')).status, 'committed');
+      graph.correct(memory.id, memory.revision, { body: 'Revised example.' });
+    } finally { graph.close(); }
+
+    const publicationPath = join(workspaceRoot, '.git', 'beale', 'publication.json');
+    const indexPath = join(workspaceRoot, 'references', 'research-index.json');
+    const previousPublication = readFileSync(publicationPath, 'utf8');
+    const previousIndex = readFileSync(indexPath, 'utf8');
+    publishWorkspaceResearch(options);
+
+    const nextIndex = JSON.parse(readFileSync(publicationPath, 'utf8'));
+    const files = Object.fromEntries(Object.keys(nextIndex.files).map((path) => [path, readFileSync(join(workspaceRoot, path), 'utf8')]));
+    writeFileSync(publicationPath, previousPublication);
+    writeFileSync(indexPath, previousIndex);
+    const pendingPath = join(workspaceRoot, '.git', 'beale', 'pending-publication.json');
+    writeFileSync(pendingPath, JSON.stringify({ files, index: nextIndex }));
+    assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot).map((edit) => edit.state), ['modified']);
+
+    const recovered = await runWorkspaceCheckpoint(options, 'Before research session');
+    assert.equal(recovered.status, 'committed', recovered.error);
+    assert.equal(existsSync(pendingPath), false);
+    assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
+    assert.match(readFileSync(join(workspaceRoot, 'memories', `${memory.id}.md`), 'utf8'), /Revised example\./);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
