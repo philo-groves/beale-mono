@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a Meta Bug Bounty Research Kit that imports published scope examples, responsible research rules, and guidance into new workspaces and refreshes existing kit imports without replacing manual resources.
 - Added a Google OSS VRP Research Kit with the official published OT0 and OT1 repository catalog, preserved repository-tier metadata, Google Bug Hunters OSS rules and report requirements, bundled refresh support, and Googlesource repository materialization.
 - Workspace Campaign view now visualizes authorized assets, durable memory, canonical findings, runbooks, and reports; ranks uncovered assets, unsupported claims, lifecycle gaps, staleness, and contradictions; and opens the highest-value gap as a prefilled research run.
 - Runbook views now support inclusive start/end cell selection in addition to whole-run and single-cell execution, allowing a repaired late failure to continue without replaying successful prefix cells.

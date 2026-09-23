@@ -420,7 +420,7 @@ function WorkspaceCreationKit({
                     ? 'Loading the repository catalog…'
                     : form.repositoryCatalogError
                       ? 'The repository catalog could not be loaded.'
-                      : `${form.rules.length} rules and ${form.repositoryCandidates.length} repository candidates are ready${selectedRepositories ? `; ${selectedRepositories} selected` : ''}.`}</small>
+                    : `${form.rules.length} rules and ${form.assets.length + form.repositoryCandidates.length} resources are ready${selectedRepositories ? `; ${selectedRepositories} repositories selected` : ''}.`}</small>
               </span>
               {isHackerOne ? (
                 <button disabled={busy || !hackerOneSource.trim()} onClick={onImportHackerOne} type="button">
@@ -453,7 +453,7 @@ function WorkspaceCreationResources({
   onChange: (next: WorkspaceOnboardingFormState) => void;
   onNext: () => void;
 }): JSX.Element {
-  const [activeKind, setActiveKind] = useState<ScopeAssetKind>('repo');
+  const [activeKind, setActiveKind] = useState<ScopeAssetKind>(() => form.repositoryCandidates.length > 0 ? 'repo' : (form.assets[0]?.kind ?? 'repo'));
   const [dialog, setDialog] = useState<{ kind: ScopeAssetKind; assetIndex: number | null } | null>(null);
   const assets = form.assets.map((asset, index) => ({ asset, index })).filter(({ asset }) => asset.kind === activeKind);
   const repositories = activeKind === 'repo' ? onboardingRepositories(form).filter((repository) => repository.candidateIndex !== null) : [];

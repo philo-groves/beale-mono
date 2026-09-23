@@ -203,6 +203,7 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toContain('<option value="hackerone">HackerOne</option>');
     expect(securityHtml).toContain('<option value="apple-security-bounty">Apple Security Bounty</option>');
     expect(securityHtml).toContain('<option value="msrc">MSRC</option>');
+    expect(securityHtml).toContain('<option value="meta-bug-bounty">Meta Bug Bounty</option>');
     expect(securityHtml).toContain('<span>Settings</span>');
     expect(securityHtml).toContain('<h2>Erdos-Straus Conjecture Settings</h2>');
     expect(emptyHtml).toContain('<h2>New Workspace Settings</h2>');
@@ -218,6 +219,7 @@ describe('renderer dialog surfaces', () => {
     expect(mathematicsHtml).toContain('<option value="mathematics" selected="">Mathematics</option>');
     expect(mathematicsHtml).not.toContain('<option value="apple-security-bounty">Apple Security Bounty</option>');
     expect(mathematicsHtml).not.toContain('<option value="msrc">MSRC</option>');
+    expect(mathematicsHtml).not.toContain('<option value="meta-bug-bounty">Meta Bug Bounty</option>');
 
     const appleHtml = renderToStaticMarkup(createElement(WorkspaceCreationView, {
       form: applyResearchKit(form, 'apple-security-bounty'),

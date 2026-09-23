@@ -1,7 +1,7 @@
 import { normalizeResearchProfile } from '@beale/research-agent';
 export { selectRunTarget } from './workspaceRunTarget.js';
 
-const RESEARCH_KIT_IDS = new Set(['general', 'hackerone', 'apple-security-bounty', 'google-oss-vrp', 'msrc']);
+const RESEARCH_KIT_IDS = new Set(['general', 'hackerone', 'apple-security-bounty', 'google-oss-vrp', 'msrc', 'meta-bug-bounty']);
 const PROFILE_SOURCES = new Set(['explicit', 'workspace-default', 'bundled-default']);
 const SUBAGENT_MODES = new Set(['simple', 'advanced']);
 const PROVIDERS = new Set(['openai-codex', 'anthropic', 'xai', 'zai', 'openrouter']);

@@ -20,7 +20,7 @@ export const DEFAULT_MEMORY_TYPE_DESCRIPTIONS = Object.freeze({
   trajectory: 'A reusable sequence of significant research choices and results that explains how an investigation advanced or why a path failed. Omit routine narration and transcripts; preserve the discriminating steps and outcome.',
 });
 
-const RESEARCH_KIT_IDS = new Set(['general', 'hackerone', 'apple-security-bounty', 'google-oss-vrp', 'msrc']);
+const RESEARCH_KIT_IDS = new Set(['general', 'hackerone', 'apple-security-bounty', 'google-oss-vrp', 'msrc', 'meta-bug-bounty']);
 const RESEARCH_PROFILE_IDS = new Set(['security-research', 'mathematics']);
 const OPTIONAL_MODELS = new Map([
   ['openai-codex\u0000gpt-daybreak-blue-latest', true],

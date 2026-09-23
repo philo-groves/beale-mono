@@ -1,4 +1,12 @@
 import type { ResearchProfileId } from './researchProfile';
+import type { ScopeAssetInput } from './types';
+import {
+  META_BUG_BOUNTY_PAYOUT_GUIDELINES_URL,
+  META_BUG_BOUNTY_RULES,
+  META_BUG_BOUNTY_SCOPE_ASSETS,
+  META_BUG_BOUNTY_SCOPE_URL,
+  META_BUG_BOUNTY_TERMS_URL
+} from './metaBugBountyResearchKit';
 import {
   GOOGLE_OSS_REPOSITORIES,
   GOOGLE_OSS_RULES,
@@ -8,7 +16,7 @@ import {
 
 export type { GoogleOssRepositoryTier } from './googleOssResearchKit';
 
-export const RESEARCH_KIT_IDS = ['general', 'hackerone', 'apple-security-bounty', 'google-oss-vrp', 'msrc'] as const;
+export const RESEARCH_KIT_IDS = ['general', 'hackerone', 'apple-security-bounty', 'google-oss-vrp', 'msrc', 'meta-bug-bounty'] as const;
 
 export type ResearchKitId = typeof RESEARCH_KIT_IDS[number];
 
@@ -32,6 +40,7 @@ export interface ResearchKitDefinition {
     researchSubjectName: string;
     descriptionMarkdown: string;
     rules: readonly string[];
+    assets?: readonly ScopeAssetInput[];
   };
   repositoryCatalog?: ({
     provider: 'github-organization';
@@ -154,6 +163,24 @@ export const RESEARCH_KITS: readonly ResearchKitDefinition[] = [{
     sourceDescription: 'Refreshes the MSRC guidance bundled with this version of Beale.',
     fixedSource: 'Microsoft Security Response Center',
     imports: ['rules', 'guidance']
+  }
+}, {
+  id: 'meta-bug-bounty',
+  label: 'Meta Bug Bounty',
+  description: 'Import Meta Bug Bounty scope examples, responsible research rules, and program guidance.',
+  supportedResearchProfileIds: ['security-research'],
+  onboardingDefaults: {
+    workspaceName: 'Meta Bug Bounty',
+    researchSubjectName: 'Meta',
+    descriptionMarkdown: `Authorized research under the Meta Bug Bounty program. The imported resources are examples from the published scope, not an exhaustive list or authorization for third-party systems. Check [program scope](${META_BUG_BOUNTY_SCOPE_URL}) and [responsible research terms](${META_BUG_BOUNTY_TERMS_URL}) before testing. Narrow the workspace resources to the surfaces you intend to test.\n\nThe [payout guidelines](${META_BUG_BOUNTY_PAYOUT_GUIDELINES_URL}) describe category-specific maximums and mitigating factors. Meta assesses reports and deductions case by case; these guidelines do not expand testing scope.`,
+    rules: META_BUG_BOUNTY_RULES,
+    assets: META_BUG_BOUNTY_SCOPE_ASSETS
+  },
+  refresh: {
+    sourceLabel: 'Program Guidance',
+    sourceDescription: 'Refreshes imported scope examples, rules, and guidance bundled with this version of Beale.',
+    fixedSource: 'Meta Bug Bounty',
+    imports: ['resources', 'rules', 'guidance']
   }
 }] as const;
 

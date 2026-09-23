@@ -128,6 +128,69 @@ describe('Research Kit refresh', () => {
     }
   });
 
+  it('refreshes imported Meta scope examples, rules, and guidance while preserving manual resources', async () => {
+    const { root, workspacePath } = workspaceDirectory('beale-meta-kit-refresh-');
+    const service = workspaceService(root);
+    try {
+      service.createScopedWorkspace({
+        workspacePath,
+        researchKitId: 'meta-bug-bounty',
+        workspaceName: 'ExampleCo Research',
+        researchSubjectName: 'ExampleCo',
+        scopeOwner: 'ExampleCo',
+        descriptionMarkdown: 'Old guidance.',
+        rules: [],
+        expiresAt: null,
+        assets: [{
+          direction: 'in_scope',
+          kind: 'domain',
+          value: 'facebook.com',
+          sensitivity: 'public',
+          attributes: { source: 'meta-bug-bounty', researchKitId: 'meta-bug-bounty', note: 'Retain this note.' }
+        }, {
+          direction: 'out_of_scope',
+          kind: 'domain',
+          value: 'fbsbx.com',
+          sensitivity: 'public',
+          attributes: { source: 'meta-bug-bounty', researchKitId: 'meta-bug-bounty' }
+        }, {
+          direction: 'in_scope',
+          kind: 'domain',
+          value: 'example.test',
+          sensitivity: 'public',
+          attributes: { source: 'manual' }
+        }]
+      });
+
+      const refreshed = await service.refreshResearchKit({});
+      const definition = researchKitDefinition('meta-bug-bounty');
+      expect(refreshed).toMatchObject({
+        researchKitId: 'meta-bug-bounty',
+        resourcesRefreshed: 2,
+        rulesRefreshed: definition.onboardingDefaults?.rules.length,
+        guidanceRefreshed: true
+      });
+      expect(refreshed.snapshot.activeScope.assets).toHaveLength(3);
+      expect(refreshed.snapshot.activeScope.assets).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          direction: 'in_scope',
+          value: 'facebook.com',
+          attributes: expect.objectContaining({
+            note: 'Retain this note.',
+            researchKitSourceUrl: 'https://bugbounty.meta.com/scope/',
+            researchKitRefreshedAt: refreshed.refreshedAt
+          })
+        }),
+        expect.objectContaining({ direction: 'out_of_scope', value: 'fbsbx.com' }),
+        expect.objectContaining({ value: 'example.test', attributes: { source: 'manual' } })
+      ]));
+      expect(refreshed.snapshot.workspaceRules.map((rule) => rule.text)).toEqual(definition.onboardingDefaults?.rules);
+      expect(refreshed.snapshot.activeScope.descriptionMarkdown).toBe(definition.onboardingDefaults?.descriptionMarkdown);
+    } finally {
+      service.close();
+    }
+  });
+
   it('refreshes selected Google OSS tiers while preserving checkout metadata', async () => {
     const { root, workspacePath } = workspaceDirectory('beale-google-oss-kit-refresh-');
     const service = workspaceService(root);

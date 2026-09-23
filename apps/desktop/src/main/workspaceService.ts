@@ -2086,6 +2086,19 @@ export class WorkspaceService {
       importedAssets = lookup.assets;
       importedRules = lookup.rules;
       importedGuidance = lookup.descriptionMarkdown;
+    } else if (kit.onboardingDefaults?.assets) {
+      const bundledAssetsByKey = new Map(kit.onboardingDefaults.assets.map((asset) => [researchKitAssetKey(asset), asset]));
+      importedAssets = initialRuntime.db.getActiveScope().assets
+        .filter((asset) => isResearchKitAsset(asset, researchKitId, researchKitId))
+        .map((asset) => {
+          const current = scopeAssetInput(asset);
+          const bundled = bundledAssetsByKey.get(researchKitAssetKey(asset));
+          return bundled ? {
+            ...current,
+            sensitivity: bundled.sensitivity,
+            attributes: { ...current.attributes, ...bundled.attributes }
+          } : current;
+        });
     } else if (kit.repositoryCatalog) {
       const catalog = kit.repositoryCatalog;
       const repositories = catalog.provider === 'github-organization'

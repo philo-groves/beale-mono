@@ -345,7 +345,10 @@ export function applyResearchKit(form: WorkspaceOnboardingFormState, researchKit
     researchKitId,
     descriptionMarkdown: kit.onboardingDefaults.descriptionMarkdown,
     rules: [...kit.onboardingDefaults.rules],
-    assets: [],
+    assets: kit.onboardingDefaults.assets?.map((asset) => ({
+      ...asset,
+      ...(asset.attributes ? { attributes: { ...asset.attributes } } : {})
+    })) ?? [],
     repositoryCandidates: bundledRepositories,
     repositoryCatalogLoading: kit.repositoryCatalog?.provider === 'github-organization',
     repositoryCatalogError: null

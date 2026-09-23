@@ -104,6 +104,7 @@ describe('renderer workspace onboarding view model', () => {
     const apple = applyResearchKit(base, 'apple-security-bounty');
     const google = applyResearchKit(base, 'google-oss-vrp');
     const msrc = applyResearchKit(base, 'msrc');
+    const meta = applyResearchKit(base, 'meta-bug-bounty');
 
     expect(apple.workspaceName).toBe(base.workspaceName);
     expect(apple.researchSubjectName).toBe(base.researchSubjectName);
@@ -112,6 +113,21 @@ describe('renderer workspace onboarding view model', () => {
     expect(msrc.workspaceName).toBe(base.workspaceName);
     expect(msrc.researchSubjectName).toBe(base.researchSubjectName);
     expect(msrc.rules).toEqual(expect.arrayContaining([expect.stringContaining('Researcher Portal')]));
+    expect(meta.workspaceName).toBe(base.workspaceName);
+    expect(meta.researchSubjectName).toBe(base.researchSubjectName);
+    expect(meta.rules).toEqual(expect.arrayContaining([expect.stringContaining('test account')]));
+    expect(meta.descriptionMarkdown).toContain('https://bugbounty.meta.com/scope/');
+    expect(meta.assets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ direction: 'in_scope', kind: 'domain', value: 'facebook.com' }),
+      expect.objectContaining({ direction: 'out_of_scope', kind: 'domain', value: 'fbsbx.com' })
+    ]));
+    expect(onboardingInputFromForm(meta).assets).toEqual(meta.assets);
+    expect(meta.assets[0]?.attributes).toMatchObject({
+      researchKitId: 'meta-bug-bounty',
+      researchKitSourceUrl: 'https://bugbounty.meta.com/scope/',
+      scopeExample: true
+    });
+    expect(workspaceCreationViewError(meta, 'resources')).toBeNull();
   });
 
   it('keeps tiered Google OSS repositories unchecked and preserves the selected tier', () => {
@@ -142,6 +158,7 @@ describe('renderer workspace onboarding view model', () => {
 
     expect(workspaceOnboardingFormForProfile(apple, 'mathematics').researchKitId).toBe('general');
     expect(workspaceOnboardingFormForProfile(apple, 'security-research')).toBe(apple);
+    expect(researchKitsForProfile('mathematics').map((kit) => kit.id)).not.toContain('meta-bug-bounty');
   });
 
   it('applies a HackerOne lookup without changing the workspace identity or directory', () => {
