@@ -40,8 +40,10 @@ test('research workspace operations require explicit revisions for canonical imp
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'export' }), { workspaceId: 'workspace-example', action: 'export' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'rebuild-index' }), { workspaceId: 'workspace-example', action: 'rebuild-index' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'release-index' }), { workspaceId: 'workspace-example', action: 'release-index' });
+  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'repair-preview' }), { workspaceId: 'workspace-example', action: 'repair-preview' });
+  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) }), { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 }), { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 });
-  for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
+  for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'invalid' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
 });
 
 test("protocol envelopes are versioned, correlated, and strictly decoded", () => {
@@ -120,6 +122,7 @@ test("protocol describe exposes a runtime-bound v26 persistence, continuation, C
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-subject-mutation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-project.v3"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.checkpoint-repair.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-daybreak-blue.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));

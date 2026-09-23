@@ -430,6 +430,43 @@ test("runbook execution records cell status, output, and duration through the sh
   }
 });
 
+test("runbook failure runs remaining cleanup cells and preserves the proof failure", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-cleanup-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const store = new RunbookStore(getDefaultMemoryDatabasePath(workspaceRoot), layout,
+    { sessionId: "session_cleanup", workspaceId: "workspace_cleanup", workspaceName: "Cleanup" });
+  const calls = [];
+  const shellTool = {
+    descriptor: { name: "shell.run", description: "fixture", actionClasses: ["experiment"], sideEffects: "process", requiredPermissions: [] },
+    async execute(action) {
+      calls.push(action.input.command);
+      const failed = action.input.command === "proof";
+      return { action, status: failed ? "error" : "complete", startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+        summary: failed ? "proof failed" : "complete", ...(failed ? { error: { message: "proof failed" } } : {}),
+        output: { exitCode: failed ? 1 : 0 }, followUpActions: [] };
+    },
+  };
+  try {
+    const created = store.create({ title: "Cleanup after failure", purpose: "Preserve cleanup after a failed proof.", cells: [
+      { kind: "code", language: "sh", source: "setup", features: ["setup"] },
+      { kind: "code", language: "sh", source: "proof", features: ["runtime"] },
+      { kind: "code", language: "sh", source: "later-proof", features: ["runtime"] },
+      { kind: "code", language: "sh", source: "cleanup", features: ["cleanup"] },
+    ] }).runbook;
+    const executed = await createRunbookExecutor({ store, shellTool })({ runbookId: created.id, proofTarget: "localhost" });
+    assert.equal(executed.status, "failed");
+    assert.match(executed.error, /proof failed/);
+    assert.deepEqual(calls, ["setup", "proof", "cleanup"]);
+    const snapshot = store.getExecution(created.id, executed.runId);
+    assert.equal(snapshot.cells.find((cell) => cell.source === "cleanup").result.status, "succeeded");
+    assert.equal(snapshot.cells.find((cell) => cell.source === "later-proof").result, null);
+    assert.equal(store.get(created.id).execution.latestSuccessfulRunId, null);
+  } finally {
+    store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("runbook execution plans support inclusive cell ranges and resume-from-here selection", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-range-"));
   const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));

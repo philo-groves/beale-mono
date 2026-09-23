@@ -9,7 +9,7 @@ import { gzipSync } from 'node:zlib';
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
 import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
-import type { ResourcePriorArtPage, ResourcePriorArtDetail, ResourcePriorArtListInput } from '@beale/app-server-runtime/protocol';
+import type { ResourcePriorArtPage, ResourcePriorArtDetail, ResourcePriorArtListInput, WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -88,6 +88,7 @@ import { BealeIntrospectionServer } from './bealeIntrospectionServer';
 import { ProfilingService } from './profilingService';
 import {
   getWorkspaceDejunkSummaryAsync,
+  invalidateWorkspaceDejunkSummary,
   runWorkspaceDejunkAsync as runWorkspaceDejunkMaintenance
 } from './workspaceDejunk';
 import {
@@ -1673,6 +1674,23 @@ export class WorkspaceService {
       this.snapshotCache.delete(runtime.workspacePath);
     }
     return summary;
+  }
+
+  public async repairWorkspaceCheckpoint(fingerprint: string): Promise<WorkspaceSnapshot> {
+    const runtime = this.getForegroundRuntime();
+    if (!runtime) throw new Error('No Beale workspace is open');
+    if (runtime.db.listRunRows().some(({ run }) => isLiveResearchRunStatus(run.status))) {
+      throw new Error('Stop workspace research before repairing a checkpoint.');
+    }
+    const result = await invokeAppServerOperation<WorkspaceCheckpointResult>({
+      operation: 'workspace.project',
+      input: { workspaceId: runtime.db.getWorkspaceId(), action: 'repair', fingerprint }
+    });
+    invalidateWorkspaceDejunkSummary(runtime.workspacePath);
+    this.workspaceDejunkSummaries.set(runtime.workspacePath, await getWorkspaceDejunkSummaryAsync(runtime.workspacePath));
+    this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
+    if (result.status === 'failed') throw new Error(result.error ?? 'Checkpoint repair failed.');
+    return this.requireSnapshot();
   }
 
   public async runMemoryDreaming(onProgress: MemoryDreamingProgressHandler | null = null): Promise<WorkspaceSnapshot> {

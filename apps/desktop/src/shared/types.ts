@@ -2549,6 +2549,7 @@ export interface BealeApi {
   startReportSession(input: ReportSessionStartInput): Promise<ReportSessionStartResult>;
   getWorkspaceDejunkSummary(workspaceId: string): Promise<WorkspaceDejunkSummary>;
   runWorkspaceDejunk(): Promise<WorkspaceSnapshot>;
+  repairWorkspaceCheckpoint(fingerprint: string): Promise<WorkspaceSnapshot>;
   runMemoryDreaming(): Promise<WorkspaceSnapshot>;
   onMemoryDreamingProgress(listener: (update: MemoryDreamingProgressUpdate) => void): () => void;
   restoreMemoryDreamingChange(changeId: string): Promise<WorkspaceSnapshot>;

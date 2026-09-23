@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const WORKSPACE_PROJECT_VERSION = 2;
@@ -50,11 +50,27 @@ export interface WorkspaceCheckpointResult {
   error?: string;
   imported?: boolean;
   recoveredRawArtifacts?: WorkspaceRawArtifactRecovery[];
+  repair?: WorkspaceCheckpointRepairPlan;
   researchIndex?: {
     state: "ready" | "released";
     publicationHash: string;
     affectedRows: number;
   };
+}
+export interface WorkspaceCheckpointRepairFile {
+  path: string;
+  sizeBytes: number;
+  destinationPath: string;
+}
+export interface WorkspaceCheckpointRepairBlocker {
+  path: string;
+  sizeBytes: number;
+  reason: string;
+}
+export interface WorkspaceCheckpointRepairPlan {
+  fingerprint: string;
+  candidates: WorkspaceCheckpointRepairFile[];
+  blockers: WorkspaceCheckpointRepairBlocker[];
 }
 export interface WorkspaceRawArtifactRecovery {
   path: string;
@@ -327,6 +343,7 @@ This directory is one research workspace. Source repositories belong in the host
 
 Keep related scripts and fixtures with their investigation or runbook. Default shell execution uses session scratch; specify an external repository cwd for source work and an explicit investigation directory for persistent candidate work.
 Place generated candidate artifacts larger than 5 MiB beneath an evidence/ directory, including a nested investigation/evidence/ directory when the artifact belongs with candidate code. App-server retains those oversized files locally, records tracked integrity manifests, and excludes their exact paths from Git. Do not generate oversized artifacts elsewhere in the workspace because required checkpoints will reject them.
+If an untracked investigation file exceeds the limit, Beale reports its path before staging and offers a previewed move into evidence/recovered/ followed by a checkpoint retry. Tracked or canonical oversized files require an explicit operator repair.
 Keep the workspace top level clean. Unexpected files and directories are ignored by Git but detected directly by app-server; the agent is reminded every turn until it moves them into an approved directory.
 App-server keeps its derived research index synchronized with these files and creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
 Every commit ends with Investigation-ID and Session-ID trailers. Supply the actual IDs for manual research commits; use none only when there is no associated investigation or session.
@@ -500,6 +517,61 @@ function isCandidateEvidencePath(path: string): boolean {
     && !path.startsWith(`${RAW_ARTIFACT_MANIFEST_DIRECTORY}/`);
 }
 
+/** Preview only untracked investigation files. Tracked and canonical files need operator-directed repair. */
+export function workspaceCheckpointRepairPlan(root: string): WorkspaceCheckpointRepairPlan {
+  const tracked = new Set(git(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
+  const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+  const candidates: WorkspaceCheckpointRepairFile[] = [];
+  const blockers: WorkspaceCheckpointRepairBlocker[] = [];
+  const revisions: string[] = [];
+  for (const path of [...new Set([...tracked, ...untracked])].sort()) {
+    const absolute = join(root, path);
+    if (!existsSync(absolute)) continue;
+    const stats = lstatSync(absolute);
+    if (!stats.isFile() || stats.size <= trackedFileLimit(path) || (isCandidateEvidencePath(path) && !tracked.has(path))) continue;
+    revisions.push(`${path}\0${stats.size}\0${stats.mtimeMs}`);
+    const eligible = !tracked.has(path) && path.startsWith("investigations/")
+      && !workspacePathProblem(path) && !isPublishedWorkspacePath(root, path);
+    if (eligible) {
+      const destinationPath = `evidence/recovered/${workspaceContentHash(path).slice(0, 16)}-${basename(path)}`;
+      candidates.push({ path, sizeBytes: stats.size, destinationPath });
+    } else {
+      blockers.push({ path, sizeBytes: stats.size, reason: tracked.has(path)
+        ? "Tracked files require an explicit revision or relocation."
+        : "Only untracked investigation files can be relocated automatically." });
+    }
+  }
+  return { fingerprint: workspaceContentHash(revisions.join("\n")), candidates, blockers };
+}
+
+function relocateCheckpointRepairCandidates(root: string, plan: WorkspaceCheckpointRepairPlan): void {
+  if (plan.blockers.length > 0) throw new Error("Checkpoint repair has tracked or canonical oversized files; resolve those paths before retrying.");
+  if (plan.candidates.length === 0) throw new Error("Checkpoint repair has no eligible oversized files.");
+  for (const candidate of plan.candidates) {
+    const source = join(root, candidate.path);
+    const destination = join(root, candidate.destinationPath);
+    assertWorkspaceChild(root, source);
+    assertWorkspaceChild(root, destination);
+    if (existsSync(destination)) throw new Error(`Checkpoint repair destination already exists: ${candidate.destinationPath}`);
+    const stats = lstatSync(source);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.size !== candidate.sizeBytes) throw new Error(`Checkpoint repair source changed: ${candidate.path}`);
+  }
+  const moved: WorkspaceCheckpointRepairFile[] = [];
+  try {
+    for (const candidate of plan.candidates) {
+      mkdirSync(dirname(join(root, candidate.destinationPath)), { recursive: true });
+      renameSync(join(root, candidate.path), join(root, candidate.destinationPath));
+      moved.push(candidate);
+    }
+  } catch (error) {
+    for (const candidate of moved.reverse()) {
+      try { renameSync(join(root, candidate.destinationPath), join(root, candidate.path)); }
+      catch { /* Preserve both paths for operator inspection if rollback cannot complete. */ }
+    }
+    throw error;
+  }
+}
+
 function rawArtifactExcludePattern(path: string): string {
   return `/${path.replace(/([\\*?[\] ])/gu, "\\$1")}`;
 }
@@ -645,8 +717,9 @@ function recoverCheckpointIndex(root: string, owner: number): void {
 }
 
 /** No reset, stash, clean, remote operation, or working-tree rollback is used. */
-export function checkpointWorkspace(root: string, reason: string, publish?: () => void, context: WorkspaceCommitContext = {}): WorkspaceCheckpointResult {
+export function checkpointWorkspace(root: string, reason: string, publish?: () => void, context: WorkspaceCommitContext = {}, repairFingerprint?: string): WorkspaceCheckpointResult {
   if (!readWorkspaceProject(root)) return { status: "unmanaged", reason };
+  let repair: WorkspaceCheckpointRepairPlan | undefined;
   try {
     checkpointDeadline = Date.now() + 60_000;
     return withProjectLock(root, () => {
@@ -666,7 +739,17 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
         mkdirSync(dirname(indexJournal), { recursive: true });
         writeFileSync(indexJournal, JSON.stringify({ pid: process.pid, temporaryIndex: relative(join(root, '.git'), temporaryIndex) }));
         if (git(root, ["diff", "--cached", "--name-only"]).trim()) throw new Error("Manual staged changes are present. Commit or unstage them explicitly; automatic checkpoints preserve the index.");
+        if (repairFingerprint) {
+          repair = workspaceCheckpointRepairPlan(root);
+          if (repair.fingerprint !== repairFingerprint) throw new Error("Checkpoint repair preview is stale; preview the current files and retry.");
+          relocateCheckpointRepairCandidates(root, repair);
+        }
         const recoveredRawArtifacts = recoverOversizedCandidateEvidence(root);
+        repair = workspaceCheckpointRepairPlan(root);
+        if (repair.candidates.length || repair.blockers.length) {
+          const files = [...repair.candidates, ...repair.blockers].slice(0, 8).map((file) => file.path).join(", ");
+          throw new Error(`Oversized checkpoint files need repair before Git staging: ${files}.`);
+        }
         const indexPath = join(root, ".git", "index");
         if (existsSync(indexPath)) copyFileSync(indexPath, temporaryIndex);
         const env = { GIT_INDEX_FILE: temporaryIndex };
@@ -699,7 +782,8 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
       }
     });
   } catch (error) {
-    const result: WorkspaceCheckpointResult = { status: "failed", reason, error: error instanceof Error ? error.message : String(error) };
+    const result: WorkspaceCheckpointResult = { status: "failed", reason, error: error instanceof Error ? error.message : String(error),
+      ...(repair && (repair.candidates.length || repair.blockers.length) ? { repair } : {}) };
     writeCheckpointStatus(root, result);
     return result;
   } finally { checkpointDeadline = 0; }

@@ -6,6 +6,7 @@
 
 #### Changed
 
+- Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
 - Workspace Board now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
 - New Research starts with Goal mode off by default; the Goal option remains available for individual prompts and saved settings retain their choice.
 - Provider model catalogs now include GPT-6 Sol, GPT-6 Luna, Claude Opus 5.5, and Grok 4.7 alongside the existing GPT-5.6 and earlier provider models.
@@ -1149,6 +1150,8 @@
 
 #### Fixed
 
+- Runbook executions now attempt remaining selected cleanup cells after a proof cell fails, record their results, and preserve the failed run outcome.
+- Workspace checkpoints now detect oversized files before Git staging and retain a repair preview in the persisted failure status. The new `workspace.checkpoint-repair.v1` capability adds previewed relocation and retry for eligible untracked investigation files.
 - Startup recovery now records pending shell and computer-use approvals as denied before continuing the session, so clients do not mistake an approval waiter lost with the prior process for a live request.
 - Long research sessions now retry oversized read-only worker database responses with a larger bounded IPC buffer, preventing preserved event history from making later continuations fail at the former fixed 16 MiB transport limit.
 

@@ -422,6 +422,34 @@ describe('workspace dashboard', () => {
     expect(html).toContain('disabled=""');
   });
 
+  it('previews checkpoint file moves and keeps repair unavailable for blockers', () => {
+    const renderRepair = (blockers: Array<{ path: string; sizeBytes: number; reason: string }>): string => renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
+      busy: false,
+      initialView: 'utilities',
+      appServerMemory: memorySummary(),
+      workspaceName: 'Example Workspace',
+      runs: [],
+      memoryDreamingInProgress: false,
+      onRunMemoryDreaming: () => undefined,
+      workspaceDejunk: {
+        available: true, newFileCount: 1, newFileCountCapped: false, baselineAt: '2026-08-12T12:00:00.000Z', lastRun: null,
+        project: { fileCount: 1, totalBytes: 6 * 1048576, temporaryBytes: 0, unclassifiedFileCount: 0, partial: false,
+          checkpoint: { status: 'failed', reason: 'Test checkpoint', error: 'Oversized file.', repair: {
+            fingerprint: 'a'.repeat(64), candidates: [{ path: 'investigations/example/generated.bin', sizeBytes: 6 * 1048576,
+              destinationPath: 'evidence/recovered/example-generated.bin' }], blockers
+          } }
+        }
+      }
+    }));
+    const ready = renderRepair([]);
+    expect(ready).toContain('investigations/example/generated.bin');
+    expect(ready).toContain('evidence/recovered/example-generated.bin');
+    expect(ready).toMatch(/<button[^>]*>Move and retry<\/button>/u);
+    const blocked = renderRepair([{ path: 'reports/example/large.md', sizeBytes: 6 * 1048576, reason: 'Tracked file.' }]);
+    expect(blocked).toContain('reports/example/large.md');
+    expect(blocked).toMatch(/<button[^>]*disabled=""[^>]*>Move and retry<\/button>/u);
+  });
+
   it('shows the active Research Kit tab while mounting only the requested Settings panel', () => {
     const memory = memorySummary();
     const html = renderToStaticMarkup(createElement(MainSessionWorkspace, {

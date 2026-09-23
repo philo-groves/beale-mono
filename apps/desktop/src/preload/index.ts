@@ -471,6 +471,9 @@ const api: BealeApi = {
   runWorkspaceDejunk() {
     return ipcRenderer.invoke(IPC_CHANNELS.runWorkspaceDejunk);
   },
+  repairWorkspaceCheckpoint(fingerprint: string) {
+    return ipcRenderer.invoke(IPC_CHANNELS.repairWorkspaceCheckpoint, fingerprint);
+  },
   runMemoryDreaming() {
     return ipcRenderer.invoke(IPC_CHANNELS.runMemoryDreaming);
   },

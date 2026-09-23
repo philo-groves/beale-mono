@@ -54,6 +54,7 @@ export interface RunbookExecutionPlanCell {
   source: string;
   language: string | null;
   executor: RunbookCellExecutor;
+  features: string[];
 }
 
 export interface RunbookCellInput {
@@ -613,6 +614,7 @@ export class RunbookStore {
               ? vscode.languageId
               : null,
           executor: notebookCellExecutor(cell),
+          features: cellFeatures(cell),
           active: cellIsActive(cell, enabledFeatures),
         };
       });
@@ -621,7 +623,7 @@ export class RunbookStore {
       const cell = executableCells.find((candidate) => candidate.id === cellId);
       if (!cell) throw new Error(`Code cell not found in runbook ${id}: ${cellId}`);
       if (!cell.active) throw new Error(`Code cell is deactivated by runbook feature toggles: ${cellId}`);
-      return [{ id: cell.id, source: cell.source, language: cell.language, executor: cell.executor }];
+      return [{ id: cell.id, source: cell.source, language: cell.language, executor: cell.executor, features: cell.features }];
     }
     const startIndex = startCellId
       ? executableCells.findIndex((candidate) => candidate.id === startCellId)
@@ -634,7 +636,7 @@ export class RunbookStore {
     if (startIndex > endIndex) throw new Error("startCellId must precede or equal endCellId in runbook order.");
     const selected = executableCells.slice(startIndex, endIndex + 1).filter((cell) => cell.active);
     if (selected.length === 0) throw new Error("No active code cells remain in the selected runbook range.");
-    return selected.map(({ id: selectedId, source, language, executor }) => ({ id: selectedId, source, language, executor }));
+    return selected.map(({ id: selectedId, source, language, executor, features }) => ({ id: selectedId, source, language, executor, features }));
   }
 
   public getExecution(id: string, runId: string, options: {
