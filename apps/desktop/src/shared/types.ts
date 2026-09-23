@@ -2545,6 +2545,7 @@ export interface BealeApi {
   chooseReportRecording(locator: AppServerReportLocator): Promise<AppServerReportSummary | null>;
   submitReportTicket(locator: AppServerReportLocator): Promise<TicketSubmissionResult>;
   openExternalUrl(url: string): Promise<void>;
+  openContentLink(link: string): Promise<void>;
   startReportSession(input: ReportSessionStartInput): Promise<ReportSessionStartResult>;
   getWorkspaceDejunkSummary(workspaceId: string): Promise<WorkspaceDejunkSummary>;
   runWorkspaceDejunk(): Promise<WorkspaceSnapshot>;

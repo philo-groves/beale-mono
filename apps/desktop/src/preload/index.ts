@@ -459,6 +459,9 @@ const api: BealeApi = {
   openExternalUrl(url: string): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.openExternalUrl, url);
   },
+  openContentLink(link: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.openContentLink, link);
+  },
   startReportSession(input: ReportSessionStartInput): Promise<ReportSessionStartResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.startReportSession, input);
   },

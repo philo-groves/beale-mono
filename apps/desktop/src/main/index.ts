@@ -69,6 +69,7 @@ import {
 import { restoreAndFocusWindow } from './windowLifecycle';
 import { IosDeviceCaptureService } from './iosDeviceCaptureService';
 import { getWorkspaceEditorCatalogForHost, openWorkspaceInEditor } from './workspaceEditors';
+import { resolveContentLink } from './contentLinks';
 import { WorkspaceTerminalService } from './workspaceTerminalService';
 import { TicketingService } from './ticketingService';
 import {
@@ -934,6 +935,17 @@ function registerIpc(): void {
       throw new Error('Only GitHub and Linear HTTPS ticket links can be opened externally.');
     }
     await shell.openExternal(url.toString());
+  });
+  ipcMain.handle(IPC_CHANNELS.openContentLink, async (_event, value: string) => {
+    const target = resolveContentLink(value, workspaceService.getSnapshot()?.workspace.workspacePath ?? null);
+    if (target.kind === 'web') {
+      await shell.openExternal(target.url);
+    } else if (target.directory) {
+      const error = await shell.openPath(target.path);
+      if (error) throw new Error(error);
+    } else {
+      shell.showItemInFolder(target.path);
+    }
   });
   ipcMain.handle(IPC_CHANNELS.startReportSession, (_event, input: ReportSessionStartInput) =>
     timedMainIpc('startReportSession', { report: shortMetricId(input.reportId) }, () =>

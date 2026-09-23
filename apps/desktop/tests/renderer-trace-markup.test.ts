@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { createElement, Fragment } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { codeBlockLineRows, normalizeTraceMathDelimiters, renderTraceProseText } from '../src/renderer/features/traces/traceMarkup';
+import { codeBlockLineRows, normalizeTraceMathDelimiters, renderTraceProseText, traceMarkdownUrlTransform } from '../src/renderer/features/traces/traceMarkup';
 
 describe('renderer trace markup helpers', () => {
+  it('keeps web and file links clickable while rejecting executable URL schemes', () => {
+    const markdown = '[handoff](file:///tmp/example/HANDOFF.md) and [site](https://example.test/docs)';
+    const html = renderToStaticMarkup(createElement(Fragment, null, renderTraceProseText(markdown, 'reasoning')));
+
+    expect(html).toContain('href="file:///tmp/example/HANDOFF.md"');
+    expect(html).toContain('href="https://example.test/docs"');
+    expect(traceMarkdownUrlTransform('javascript:alert(1)')).toBe('');
+  });
+
   it('builds generated code block line numbers without changing code text', () => {
     expect(codeBlockLineRows(['print(1)', 'print(2)'])).toEqual({
       codeLines: ['print(1)', 'print(2)'],

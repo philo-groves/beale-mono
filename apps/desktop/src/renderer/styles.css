@@ -11470,6 +11470,12 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
   text-underline-offset: 2px;
 }
 
+.main-trace-markdown-link-error {
+  display: block;
+  color: var(--red);
+  font-size: 0.85em;
+}
+
 .main-trace-markdown hr {
   height: 1px;
   border: 0;

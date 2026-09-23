@@ -19,6 +19,7 @@
 
 #### Fixed
 
+- Session commentary Markdown links now reveal local files, including workspace files referenced through localhost URLs, in the file explorer and open web pages in the default browser.
 - App-server now completes an interrupted file-authority publication before checking for direct research edits, so a partially published claim or memory cannot reject the next session at startup.
 - Tart proof cells and managed Tart communication tools now support an explicit bounded SSH transport for host-to-guest proofs, while preserving Guest Agent-first auto-selection and the fail-closed `guest-agent-only` policy.
 - Auto-Review now uses low-effort small-model reasoning and a bounded 45-second reviewer deadline, reducing false timeout failures when provider latency briefly spikes under concurrent sessions.

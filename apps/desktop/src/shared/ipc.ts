@@ -107,6 +107,7 @@ export const IPC_CHANNELS = {
   chooseReportRecording: 'beale:choose-report-recording',
   submitReportTicket: 'beale:submit-report-ticket',
   openExternalUrl: 'beale:open-external-url',
+  openContentLink: 'beale:open-content-link',
   startReportSession: 'beale:start-report-session',
   getWorkspaceDejunkSummary: 'beale:get-workspace-dejunk-summary',
   runWorkspaceDejunk: 'beale:run-workspace-dejunk',

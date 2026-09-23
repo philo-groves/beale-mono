@@ -1,6 +1,6 @@
-import { Children, isValidElement } from 'react';
-import type { ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { Children, isValidElement, useState } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import type { Components, Options as ReactMarkdownOptions } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
@@ -8,6 +8,7 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { devInstrumentation } from '../../devInstrumentation';
+import { errorMessage } from '../../lib/errors';
 import type { TraceCategoryId } from '../../traceClassification';
 
 const TRACE_MARKUP_CACHE_MAX_ENTRIES = 320;
@@ -22,11 +23,7 @@ const TRACE_MARKDOWN_REHYPE_PLUGINS: NonNullable<ReactMarkdownOptions['rehypePlu
   [rehypeHighlight, { detect: false, plainText: ['text', 'txt', 'plaintext'] }]
 ];
 const TRACE_MARKDOWN_COMPONENTS: Components = {
-  a: ({ node: _node, children, ...props }) => (
-    <a {...props} rel="noreferrer" target="_blank" onClick={(event) => event.stopPropagation()}>
-      {children}
-    </a>
-  ),
+  a: ({ node: _node, children, ...props }) => <TraceMarkdownLink {...props}>{children}</TraceMarkdownLink>,
   code: ({ node: _node, className, children, ...props }) => {
     const fenced = Boolean(className?.split(/\s+/).some((value) => value === 'hljs' || value.startsWith('language-')));
     return (
@@ -48,6 +45,35 @@ const TRACE_MARKDOWN_COMPONENTS: Components = {
     );
   }
 };
+
+function TraceMarkdownLink({ href, children, ...props }: React.ComponentProps<'a'>): ReactNode {
+  const [error, setError] = useState<string | null>(null);
+  const openLink = (event: MouseEvent<HTMLAnchorElement>): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!href) return;
+    setError(null);
+    void window.beale.openContentLink(href).catch((caught: unknown) => setError(errorMessage(caught)));
+  };
+  return (
+    <>
+      <a {...props} href={href} onClick={openLink}>{children}</a>
+      {error ? <span className="main-trace-markdown-link-error" role="alert">Could not open link: {error}</span> : null}
+    </>
+  );
+}
+
+export function traceMarkdownUrlTransform(value: string): string {
+  if (/^file:/i.test(value)) {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'file:' ? url.href : '';
+    } catch {
+      return '';
+    }
+  }
+  return defaultUrlTransform(value);
+}
 
 export type CodeBlockLineNumberMode = 'generated' | 'source-prefix';
 
@@ -160,7 +186,7 @@ function cachedMarkup<T>(cache: Map<string, T>, key: string, create: () => T): T
 function renderMarkdownTraceText(text: string): ReactNode[] {
   return [
     <div className="main-trace-markdown" key="markdown">
-      <ReactMarkdown components={TRACE_MARKDOWN_COMPONENTS} rehypePlugins={TRACE_MARKDOWN_REHYPE_PLUGINS} remarkPlugins={TRACE_MARKDOWN_REMARK_PLUGINS} skipHtml>
+      <ReactMarkdown components={TRACE_MARKDOWN_COMPONENTS} rehypePlugins={TRACE_MARKDOWN_REHYPE_PLUGINS} remarkPlugins={TRACE_MARKDOWN_REMARK_PLUGINS} skipHtml urlTransform={traceMarkdownUrlTransform}>
         {normalizeTraceMathDelimiters(text)}
       </ReactMarkdown>
     </div>
