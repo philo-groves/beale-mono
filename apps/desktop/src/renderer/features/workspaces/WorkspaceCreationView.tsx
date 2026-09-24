@@ -10,6 +10,7 @@ import {
   onboardingRepositories,
   removeDirectoryFromOnboardingForm,
   setOnboardingRepositorySelected,
+  setOnboardingResourceSelected,
   workspaceCreationViewError,
   workspaceCreationViews,
   workspaceOnboardingFormForProfile,
@@ -395,6 +396,7 @@ function WorkspaceCreationKit({
   if (!refresh) throw new Error(`Research Kit ${form.researchKitId} does not define imports.`);
   const isHackerOne = form.researchKitId === 'hackerone';
   const selectedRepositories = form.repositoryCandidates.filter((candidate) => candidate.selected).length;
+  const selectedResources = form.resourceCandidates.filter((candidate) => candidate.selected).length;
   return (
     <section className="workspace-dashboard-panel workspace-research-kit-view" id="workspace-creation-kit-panel" role="tabpanel">
       <div className="settings-form workspace-research-kit-form">
@@ -420,7 +422,9 @@ function WorkspaceCreationKit({
                     ? 'Loading the repository catalog…'
                     : form.repositoryCatalogError
                       ? 'The repository catalog could not be loaded.'
-                    : `${form.rules.length} rules and ${form.assets.length + form.repositoryCandidates.length} resources are ready${selectedRepositories ? `; ${selectedRepositories} repositories selected` : ''}.`}</small>
+                    : form.resourceCandidates.length
+                      ? `${form.rules.length} rules and ${selectedResources} of ${form.resourceCandidates.length} catalog resources selected. Verify them on the test guest.`
+                      : `${form.rules.length} rules and ${form.assets.length + form.repositoryCandidates.length} resources are ready${selectedRepositories ? `; ${selectedRepositories} repositories selected` : ''}.`}</small>
               </span>
               {isHackerOne ? (
                 <button disabled={busy || !hackerOneSource.trim()} onClick={onImportHackerOne} type="button">
@@ -453,16 +457,17 @@ function WorkspaceCreationResources({
   onChange: (next: WorkspaceOnboardingFormState) => void;
   onNext: () => void;
 }): JSX.Element {
-  const [activeKind, setActiveKind] = useState<ScopeAssetKind>(() => form.repositoryCandidates.length > 0 ? 'repo' : (form.assets[0]?.kind ?? 'repo'));
+  const [activeKind, setActiveKind] = useState<ScopeAssetKind>(() => form.resourceCandidates[0]?.asset.kind ?? (form.repositoryCandidates.length > 0 ? 'repo' : (form.assets[0]?.kind ?? 'repo')));
   const [dialog, setDialog] = useState<{ kind: ScopeAssetKind; assetIndex: number | null } | null>(null);
   const assets = form.assets.map((asset, index) => ({ asset, index })).filter(({ asset }) => asset.kind === activeKind);
   const repositories = activeKind === 'repo' ? onboardingRepositories(form).filter((repository) => repository.candidateIndex !== null) : [];
+  const catalogResources = form.resourceCandidates.map((candidate, index) => ({ candidate, index })).filter(({ candidate }) => candidate.asset.kind === activeKind);
   const initialAsset = dialog?.assetIndex !== null && dialog?.assetIndex !== undefined
     ? scopeAssetForCreation(form.assets[dialog.assetIndex], dialog.assetIndex)
     : null;
   return (
     <section className="workspace-dashboard-panel workspace-surface-area workspace-creation-resources" id="workspace-creation-resources-panel" role="tabpanel">
-      <WorkspaceCreationHeader busy={busy} description="Record the authorized targets and source material available to this workspace." error={error} onCancel={onCancel} onPrimary={onNext} primaryLabel="Next" title="Resources" />
+      <WorkspaceCreationHeader busy={busy} description={form.resourceCandidates.length ? 'Select only resources observed on the test guest. Catalog entries are research candidates; confirm program and servicing eligibility before testing.' : 'Record the authorized targets and source material available to this workspace.'} error={error} onCancel={onCancel} onPrimary={onNext} primaryLabel="Next" title="Resources" />
       <div className="workspace-resource-tabs-bar">
         <div className="research-side-view-tabs workspace-resource-tabs" role="tablist" aria-label="Workspace resource types">
           {WORKSPACE_ASSET_KINDS.map((kind) => (
@@ -478,6 +483,13 @@ function WorkspaceCreationResources({
       <div className="workspace-surface-scroll">
         <div className="workspace-surface-list" role="tabpanel" aria-label={`${workspaceAssetKindLabel(activeKind)} resources`}>
           {form.repositoryCatalogLoading && activeKind === 'repo' ? <div className="workspace-surface-empty"><Loader2 aria-hidden="true" className="is-spinning" size={15} /> Loading repository catalog…</div> : null}
+          {catalogResources.map(({ candidate, index }) => (
+            <label className="workspace-surface-item workspace-creation-candidate" key={`catalog-${index}`}>
+              <input aria-label={`Include ${String(candidate.asset.attributes?.displayName ?? candidate.asset.value)}`} checked={candidate.selected} disabled={busy} onChange={(event) => onChange(setOnboardingResourceSelected(form, index, event.target.checked))} type="checkbox" />
+              <span className="workspace-surface-item-icon" aria-hidden="true"><WorkspaceAssetIcon kind={candidate.asset.kind} /></span>
+              <span className="workspace-surface-item-main"><strong>{String(candidate.asset.attributes?.displayName ?? candidate.asset.value)}</strong><small title={candidate.asset.value}>{candidate.asset.value}</small><span className="workspace-surface-item-meta">{String(candidate.asset.attributes?.catalogGroup ?? 'Catalog')}{candidate.asset.attributes?.catalogNote ? ` · ${String(candidate.asset.attributes.catalogNote)}` : ''}</span></span>
+            </label>
+          ))}
           {repositories.map((repository) => (
             <label className="workspace-surface-item workspace-creation-candidate" key={`candidate-${repository.candidateIndex}`}>
               <input aria-label={`Include ${repository.label}`} checked={repository.selected} disabled={busy} onChange={(event) => onChange(setOnboardingRepositorySelected(form, repository.candidateIndex!, event.target.checked))} type="checkbox" />
@@ -493,7 +505,7 @@ function WorkspaceCreationResources({
               </button>
             </article>
           ))}
-          {!form.repositoryCatalogLoading && repositories.length === 0 && assets.length === 0 ? <div className="workspace-surface-empty">No {workspaceAssetKindLabel(activeKind).toLowerCase()} resources recorded.</div> : null}
+          {!form.repositoryCatalogLoading && catalogResources.length === 0 && repositories.length === 0 && assets.length === 0 ? <div className="workspace-surface-empty">No {workspaceAssetKindLabel(activeKind).toLowerCase()} resources recorded.</div> : null}
         </div>
       </div>
       {dialog ? (

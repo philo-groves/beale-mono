@@ -13,6 +13,7 @@ import {
   onboardingRepositories,
   removeDirectoryFromOnboardingForm,
   setOnboardingRepositorySelected,
+  setOnboardingResourceSelected,
   workspaceCreationViewError,
   workspaceCreationViews,
   workspaceOnboardingFormForProfile
@@ -112,7 +113,19 @@ describe('renderer workspace onboarding view model', () => {
     expect(google.rules).toEqual(expect.arrayContaining([expect.stringContaining('OSS-Fuzz')]));
     expect(msrc.workspaceName).toBe(base.workspaceName);
     expect(msrc.researchSubjectName).toBe(base.researchSubjectName);
+    expect(researchKitDefinition('msrc').label).toBe('MSRC Windows');
     expect(msrc.rules).toEqual(expect.arrayContaining([expect.stringContaining('Researcher Portal')]));
+    expect(msrc.resourceCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ selected: false, asset: expect.objectContaining({ value: 'MsMpEngCP.exe' }) }),
+      expect.objectContaining({ selected: false, asset: expect.objectContaining({ value: 'https://github.com/microsoft/terminal' }) })
+    ]));
+    expect(onboardingInputFromForm(msrc).assets).toEqual([]);
+    expect(workspaceCreationViewError(msrc, 'resources')).toContain('in-scope resource');
+    const selectedSandbox = setOnboardingResourceSelected(msrc, msrc.resourceCandidates.findIndex(({ asset }) => asset.value === 'MsMpEngCP.exe'), true);
+    expect(onboardingInputFromForm(selectedSandbox).assets).toEqual([
+      expect.objectContaining({ kind: 'binary', value: 'MsMpEngCP.exe', attributes: expect.objectContaining({ researchKitId: 'msrc' }) })
+    ]);
+    expect(workspaceCreationViewError(selectedSandbox, 'resources')).toBeNull();
     expect(meta.workspaceName).toBe(base.workspaceName);
     expect(meta.researchSubjectName).toBe(base.researchSubjectName);
     expect(meta.rules).toEqual(expect.arrayContaining([expect.stringContaining('test account')]));

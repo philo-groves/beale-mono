@@ -1596,6 +1596,7 @@ export interface HackerOneScopeLookupResult {
 
 export interface ResearchKitRefreshInput {
   sourceIdentifier?: string;
+  selectedResourceKeys?: string[];
 }
 
 export interface ResearchKitRefreshResult {

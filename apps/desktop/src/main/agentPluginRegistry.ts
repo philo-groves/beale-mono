@@ -81,6 +81,12 @@ function defaultBuiltinPlugins(): AppServerBuiltinPlugin[] {
       enabledByDefault: true
     },
     {
+      id: 'meta-skills-builtin',
+      path: defaultBuiltinPluginPath('meta-skills'),
+      installedAt: '2026-09-23T00:00:00.000Z',
+      enabledByDefault: true
+    },
+    {
       id: 'beale-terminator-builtin',
       path: defaultBuiltinPluginPath('beale-terminator'),
       installedAt: '2026-08-17T00:00:00.000Z',

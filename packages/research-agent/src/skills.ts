@@ -233,13 +233,16 @@ function parseSkillMarkdownMetadata(text: string): ParsedSkillMarkdownMetadata {
   const metadata: ParsedSkillMarkdownMetadata = {
     instructions: text.trim(),
   };
-  const instructionStart = lines.findIndex((line) => line.trim() === "---");
-  const metadataLines =
-    instructionStart >= 0 ? lines.slice(0, instructionStart) : lines.slice(0, 12);
-  metadata.instructions =
-    instructionStart >= 0
-      ? lines.slice(instructionStart + 1).join("\n").trim()
-      : text.trim();
+  const yamlFrontmatter = lines[0]?.trim() === "---";
+  const instructionStart = lines.findIndex((line, index) =>
+    line.trim() === "---" && (!yamlFrontmatter || index > 0),
+  );
+  const metadataLines = instructionStart >= 0
+    ? lines.slice(yamlFrontmatter ? 1 : 0, instructionStart)
+    : yamlFrontmatter ? [] : lines.slice(0, 12);
+  metadata.instructions = instructionStart >= 0
+    ? lines.slice(instructionStart + 1).join("\n").trim()
+    : text.trim();
 
   for (const line of metadataLines) {
     const match = line.match(/^([A-Za-z][A-Za-z -]+):\s*(.+)$/);

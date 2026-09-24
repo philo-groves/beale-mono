@@ -20,6 +20,7 @@ import {
   workspaceMemoryTypeGroups,
   workspaceTokenActivity,
   WorkspaceHousekeepingPanel,
+  WorkspaceResearchKitPanel,
   WorkspaceResourceDialog,
   WorkspaceUnderstandingView
 } from '../src/renderer/features/workspaces/WorkspaceUnderstandingView';
@@ -29,6 +30,19 @@ import { testResearchProfile } from './researchProfileFixture';
 const NOW = Date.parse('2026-08-12T12:00:00.000Z');
 
 describe('workspace dashboard', () => {
+  it('shows selectable Windows catalog groups in the MSRC kit panel', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceResearchKitPanel, {
+      activeScope: null,
+      busy: false,
+      onRefresh: async () => { throw new Error('Not called during rendering.'); },
+      researchKitId: 'msrc'
+    }));
+    expect(html).toContain('MSRC Windows Research Kit');
+    expect(html).toContain('Attack-scenario sandboxes');
+    expect(html).toContain('MsMpEngCP.exe');
+    expect(html).toContain('https://github.com/microsoft/terminal');
+    expect(html).toContain('Select resources observed on the Windows test guest');
+  });
   it('centers workspace forms, catalogs, and activity at the standard content width', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const dashboardStyles = styles.match(/\.workspace-dashboard\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -508,7 +522,7 @@ describe('workspace dashboard', () => {
     expect(html).toContain('<span>Apple Security Bounty</span>');
     expect(html).toContain('workspace-dashboard-tab workspace-dashboard-kit-tab');
     expect(html).not.toContain('<span>HackerOne</span>');
-    expect(html).not.toContain('<span>MSRC</span>');
+    expect(html).not.toContain('<span>MSRC Windows</span>');
     expect(html).toContain('lucide-refresh-cw');
     expect(html.match(/workspace-dashboard-tab-icon/g)).toHaveLength(6);
     expect(html).not.toContain('aria-label="Campaign views"');

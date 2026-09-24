@@ -7,9 +7,11 @@
 #### Added
 
 - A default-enabled Browser Use plugin adds bounded tab navigation, page observation, element interaction, and screenshots through WebDriver BiDi. The plugin can be disabled in Plugins and launches a separate browser profile.
+- A bundled Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default but loads into sessions only for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
 
 #### Changed
 
+- The MSRC Research Kit is now MSRC Windows for the Windows Insider Preview bounty. A selectable catalog of common Windows apps, services, four program-listed sandbox contexts, and repositories for shipped open-source code can be managed during workspace creation and kit refresh; existing `msrc` workspace metadata remains compatible. Catalog entries are candidates that require guest and program eligibility checks.
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
 - Workspace Board now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
 - New Research starts with Goal mode off by default; the Goal option remains available for individual prompts and saved settings retain their choice.

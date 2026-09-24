@@ -52,6 +52,25 @@ test("MCP skill metadata converts to selectable skill descriptors", () => {
   );
 });
 
+test("standard SKILL.md frontmatter is metadata, not model instructions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-frontmatter-skill-"));
+  const skillDir = join(root, "example-research");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), [
+    "---",
+    "name: example-research",
+    "description: Research guidance for a synthetic example program.",
+    "---",
+    "# Example research",
+    "Check the workspace authorization before testing."
+  ].join("\n"), "utf8");
+  const [skill] = loadResearchSkillsFromDirectory(root);
+  assert.equal(skill.id, "example-research");
+  assert.equal(skill.description, "Research guidance for a synthetic example program.");
+  assert.equal(skill.instructions.startsWith("# Example research"), true);
+  assert.equal(skill.instructions.includes("name: example-research"), false);
+});
+
 async function createSkillFixture() {
   const root = await mkdtemp(join(tmpdir(), "app-server-skills-"));
   const skillDir = join(root, "vuln-research");

@@ -160,6 +160,7 @@ describe('AgentPluginRegistry', () => {
     const plugin = registry.getState().plugins.find((candidate) => candidate.name === 'beale-introspection');
     const terminator = registry.getState().plugins.find((candidate) => candidate.name === 'beale-terminator');
     const browser = registry.getState().plugins.find((candidate) => candidate.name === 'beale-browser-use');
+    const metaSkills = registry.getState().plugins.find((candidate) => candidate.name === 'meta-skills');
     expect(plugin).toBeTruthy();
     expect(plugin?.enabled).toBe(true);
     expect(plugin?.source.kind).toBe('builtin');
@@ -168,6 +169,8 @@ describe('AgentPluginRegistry', () => {
     expect(terminator?.source.kind).toBe('builtin');
     expect(browser?.enabled).toBe(true);
     expect(browser?.source.kind).toBe('builtin');
+    expect(metaSkills?.enabled).toBe(true);
+    expect(metaSkills?.skills.map((skill) => skill.id)).toEqual(['meta-bug-bounty-tools']);
     expect(plugin?.mcpServers).toMatchObject([
       {
         name: 'beale',
@@ -178,6 +181,7 @@ describe('AgentPluginRegistry', () => {
     ]);
 
     const runtime = registry.getAppServerRuntime();
+    expect(runtime.selectedSkillIds).toContain('meta-bug-bounty-tools');
     expect(runtime.allowedMcpServers).toEqual(['beale-browser-use.browser-use', 'beale-introspection.beale']);
     expect(runtime.mcpConfigPath).toBeTruthy();
     const mcpConfig = JSON.parse(readFileSync(runtime.mcpConfigPath ?? '', 'utf8')) as {
@@ -202,6 +206,8 @@ describe('AgentPluginRegistry', () => {
     expect(computerRuntime.allowedMcpServers).toContain('beale-terminator.computer-use');
     registry.setEnabled(browser!.id, false);
     expect(registry.getAppServerRuntime().allowedMcpServers).not.toContain('beale-browser-use.browser-use');
+    registry.setEnabled(metaSkills!.id, false);
+    expect(registry.getAppServerRuntime().selectedSkillIds).not.toContain('meta-bug-bounty-tools');
   });
 
   it('speaks app-server newline-delimited JSON-RPC over stdio', () => {

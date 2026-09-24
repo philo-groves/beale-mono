@@ -8,7 +8,7 @@ import type {
   WorkspaceOnboardingInput,
   ScopeAssetInput
 } from '@shared/types';
-import { researchKitDefinition, researchKitSupportsProfile } from '../../shared/researchKits';
+import { researchKitDefinition, researchKitResourceKey, researchKitSupportsProfile } from '../../shared/researchKits';
 
 export interface WorkspaceOnboardingFormState {
   researchKitId: ResearchKitId;
@@ -20,6 +20,7 @@ export interface WorkspaceOnboardingFormState {
   descriptionMarkdown: string;
   rules: string[];
   assets: ScopeAssetInput[];
+  resourceCandidates: OnboardingResourceCandidate[];
   repositoryCandidates: OnboardingRepositoryCandidate[];
   repositoryCatalogLoading: boolean;
   repositoryCatalogError: string | null;
@@ -82,6 +83,7 @@ export function workspaceOnboardingFormForProfile(
     ? {
         ...form,
         researchKitId: 'general',
+        resourceCandidates: [],
         repositoryCandidates: [],
         repositoryCatalogLoading: false,
         repositoryCatalogError: null
@@ -109,6 +111,11 @@ export interface OnboardingRepositoryCandidate {
   tier?: GoogleOssRepositoryTier;
 }
 
+export interface OnboardingResourceCandidate {
+  asset: ScopeAssetInput;
+  selected: boolean;
+}
+
 const SOURCE_REPOSITORY_RE = /\b(?:https?:\/\/)?(?:github\.com|gitlab\.com)\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+(?:\.git)?(?:[/?#][^\s<>)\]]*)?/gi;
 
 export function onboardingFormFromDefaults(defaults: WorkspaceOnboardingDefaults): WorkspaceOnboardingFormState {
@@ -123,6 +130,7 @@ export function onboardingFormFromDefaults(defaults: WorkspaceOnboardingDefaults
     descriptionMarkdown: defaults.descriptionMarkdown,
     rules: [...defaults.rules],
     assets: defaults.assets,
+    resourceCandidates: [],
     repositoryCandidates: [],
     repositoryCatalogLoading: false,
     repositoryCatalogError: null
@@ -283,6 +291,19 @@ export function setOnboardingRepositorySelected(
   };
 }
 
+export function setOnboardingResourceSelected(
+  form: WorkspaceOnboardingFormState,
+  candidateIndex: number,
+  selected: boolean
+): WorkspaceOnboardingFormState {
+  return {
+    ...form,
+    resourceCandidates: form.resourceCandidates.map((candidate, index) => (
+      index === candidateIndex ? { ...candidate, selected } : candidate
+    ))
+  };
+}
+
 export function applyGitHubRepositoryCatalog(
   form: WorkspaceOnboardingFormState,
   repositories: GitHubRepositorySummary[]
@@ -312,6 +333,7 @@ export function onboardingFormFromHackerOneLookup(
     descriptionMarkdown: lookup.descriptionMarkdown,
     rules: [...lookup.rules],
     assets: lookup.assets,
+    resourceCandidates: [],
     repositoryCandidates: [],
     repositoryCatalogLoading: false,
     repositoryCatalogError: null
@@ -325,6 +347,7 @@ export function applyResearchKit(form: WorkspaceOnboardingFormState, researchKit
     return {
       ...form,
       researchKitId,
+      resourceCandidates: [],
       repositoryCandidates: [],
       repositoryCatalogLoading: false,
       repositoryCatalogError: null
@@ -349,6 +372,10 @@ export function applyResearchKit(form: WorkspaceOnboardingFormState, researchKit
       ...asset,
       ...(asset.attributes ? { attributes: { ...asset.attributes } } : {})
     })) ?? [],
+    resourceCandidates: kit.resourceCatalog?.resources.map((asset) => ({
+      asset: { ...asset, attributes: { ...asset.attributes } },
+      selected: false
+    })) ?? [],
     repositoryCandidates: bundledRepositories,
     repositoryCatalogLoading: kit.repositoryCatalog?.provider === 'github-organization',
     repositoryCatalogError: null
@@ -357,6 +384,14 @@ export function applyResearchKit(form: WorkspaceOnboardingFormState, researchKit
 
 function selectedOnboardingAssets(form: WorkspaceOnboardingFormState): ScopeAssetInput[] {
   const assets = [...form.assets];
+  const existingResourceKeys = new Set(assets.map(researchKitResourceKey));
+  for (const candidate of form.resourceCandidates) {
+    if (!candidate.selected) continue;
+    const key = researchKitResourceKey(candidate.asset);
+    if (existingResourceKeys.has(key)) continue;
+    existingResourceKeys.add(key);
+    assets.push({ ...candidate.asset, attributes: { ...candidate.asset.attributes } });
+  }
   const existingUrls = new Set(onboardingRepositories({ ...form, repositoryCandidates: [] }).map((repository) => repository.url.toLowerCase()));
   const repositoryCatalog = researchKitDefinition(form.researchKitId).repositoryCatalog;
   const researchKitSourceUrl = repositoryCatalog?.provider === 'github-organization'

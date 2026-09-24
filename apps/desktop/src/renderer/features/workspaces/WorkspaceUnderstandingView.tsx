@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import { BadgeCheck, Binary, BookOpen, Boxes, Brain, Columns3, Download, GitBranch, Globe2, Info, Layers3, ListChecks, MoonStar, Plus, RefreshCw, Server, Settings, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../shared/types';
-import { researchKitDefinition, researchKitLabel } from '../../../shared/researchKits';
+import { researchKitDefinition, researchKitLabel, researchKitResourceKey } from '../../../shared/researchKits';
 import type {
   AppServerMemorySummary,
   MemoryDreamingProgressPhase,
@@ -538,12 +538,21 @@ export function WorkspaceResearchKitPanel({
 }): JSX.Element {
   const kit = researchKitDefinition(researchKitId);
   const refresh = kit.refresh;
+  const catalog = kit.resourceCatalog;
   const initialSource = researchKitId === 'hackerone' ? hackerOneProgramIdentifier(activeScope) : (refresh?.fixedSource ?? '');
   const [sourceIdentifier, setSourceIdentifier] = useState(initialSource);
+  const [selectedResourceKeys, setSelectedResourceKeys] = useState<string[]>(() => activeScope?.assets
+    .filter((asset) => asset.attributes?.researchKitId === researchKitId || asset.attributes?.source === catalog?.resourceSource)
+    .map(researchKitResourceKey)
+    .filter((key) => catalog?.resources.some((asset) => researchKitResourceKey(asset) === key)) ?? []);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ResearchKitRefreshResult | null>(null);
   useEffect(() => setSourceIdentifier(initialSource), [initialSource]);
+  useEffect(() => setSelectedResourceKeys(activeScope?.assets
+    .filter((asset) => asset.attributes?.researchKitId === researchKitId || asset.attributes?.source === catalog?.resourceSource)
+    .map(researchKitResourceKey)
+    .filter((key) => catalog?.resources.some((asset) => researchKitResourceKey(asset) === key)) ?? []), [activeScope, catalog?.resourceSource, researchKitId]);
   if (!refresh) throw new Error(`Research Kit ${researchKitId} does not define refresh behavior.`);
   const editableSource = Boolean(refresh.sourceIdentifierPlaceholder);
   const submit = async (event: FormEvent): Promise<void> => {
@@ -553,7 +562,10 @@ export function WorkspaceResearchKitPanel({
     setError(null);
     setResult(null);
     try {
-      setResult(await onRefresh({ ...(editableSource ? { sourceIdentifier: sourceIdentifier.trim() } : {}) }));
+      setResult(await onRefresh({
+        ...(editableSource ? { sourceIdentifier: sourceIdentifier.trim() } : {}),
+        ...(catalog ? { selectedResourceKeys } : {})
+      }));
     } catch (caught: unknown) {
       setError(errorMessage(caught));
     } finally {
@@ -590,15 +602,38 @@ export function WorkspaceResearchKitPanel({
             </label>
             <div className="settings-form-control-row workspace-research-kit-refresh">
               <span className="settings-form-control-copy">
-                <strong>Refresh Imports</strong>
-                <small>Refresh {importLabels}. Manually added resources and cloned directories are preserved.</small>
+                <strong>{catalog ? 'Apply Catalog & Refresh' : 'Refresh Imports'}</strong>
+                <small>{catalog ? 'Apply selected catalog resources and refresh bundled rules and guidance. Unselected kit resources are removed; manual resources and checkout metadata are preserved.' : `Refresh ${importLabels}. Manually added resources and cloned directories are preserved.`}</small>
               </span>
               <button className="secondary-button" disabled={busy || submitting || (editableSource && !sourceIdentifier.trim())} type="submit">
                 <RefreshCw aria-hidden="true" className={submitting ? 'is-spinning' : ''} size={14} />
-                {submitting ? 'Refreshing…' : 'Refresh'}
+                {submitting ? 'Refreshing…' : catalog ? 'Apply & Refresh' : 'Refresh'}
               </button>
             </div>
           </div>
+          {catalog ? (
+            <div className="workspace-research-kit-catalog">
+              <p>Select resources observed on the Windows test guest. These entries do not establish installation, servicing eligibility, or an award category.</p>
+              {['Windows apps', 'Windows services', 'Attack-scenario sandboxes', 'Shipped open source'].map((group) => {
+                const resources = catalog.resources.filter((asset) => asset.attributes?.catalogGroup === group);
+                if (!resources.length) return null;
+                return <details key={group} open={group === 'Attack-scenario sandboxes'}>
+                  <summary>{group} · {resources.filter((asset) => selectedResourceKeys.includes(researchKitResourceKey(asset))).length} selected</summary>
+                  <div className="workspace-surface-list">
+                    {resources.map((asset) => {
+                      const key = researchKitResourceKey(asset);
+                      const selected = selectedResourceKeys.includes(key);
+                      return <label className="workspace-surface-item workspace-creation-candidate" key={key}>
+                        <input aria-label={`Include ${String(asset.attributes?.displayName ?? asset.value)}`} checked={selected} disabled={busy || submitting} onChange={(event) => setSelectedResourceKeys((current) => event.target.checked ? [...current, key] : current.filter((value) => value !== key))} type="checkbox" />
+                        <span className="workspace-surface-item-icon" aria-hidden="true"><WorkspaceAssetIcon kind={asset.kind} /></span>
+                        <span className="workspace-surface-item-main"><strong>{String(asset.attributes?.displayName ?? asset.value)}</strong><small title={asset.value}>{asset.value}</small>{asset.attributes?.catalogNote ? <span className="workspace-surface-item-meta">{String(asset.attributes.catalogNote)}</span> : null}</span>
+                      </label>;
+                    })}
+                  </div>
+                </details>;
+              })}
+            </div>
+          ) : null}
           {error ? <p className="workspace-research-kit-status is-error" role="alert">{error}</p> : null}
           {result ? <p className="workspace-research-kit-status" role="status">
             Refreshed {result.resourcesRefreshed} resources and {result.rulesRefreshed} rules{result.guidanceRefreshed ? ', plus workspace guidance' : ''}.

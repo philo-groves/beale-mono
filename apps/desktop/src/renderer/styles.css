@@ -4115,13 +4115,35 @@ body.is-resizing-research-side .main-session-grid {
   color: var(--red);
 }
 
+.workspace-research-kit-catalog {
+  padding: 0 var(--settings-form-inline-padding) var(--settings-form-inline-padding);
+}
+
+.workspace-research-kit-catalog > p {
+  margin: 0 0 14px;
+  color: var(--muted-strong);
+}
+
+.workspace-research-kit-catalog details {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+.workspace-research-kit-catalog summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
 .workspace-creation-resources .workspace-creation-view-heading {
   align-self: start;
 }
 
 .workspace-creation-candidate {
+  display: grid;
   grid-template-columns: auto auto minmax(0, 1fr);
   align-items: center;
+  gap: 10px;
+  padding: 12px;
   cursor: pointer;
 }
 
@@ -5091,6 +5113,11 @@ body.is-resizing-research-side .main-session-grid {
   gap: 10px;
   overflow: auto;
   padding: 8px 0 0;
+}
+
+.workspace-research-kit-catalog details .workspace-surface-list {
+  height: auto;
+  overflow: visible;
 }
 
 .workspace-surface-item {

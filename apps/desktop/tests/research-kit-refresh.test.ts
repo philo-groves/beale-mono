@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WorkspaceService } from '../src/main/workspaceService';
-import { researchKitDefinition } from '../src/shared/researchKits';
+import { researchKitDefinition, researchKitResourceKey } from '../src/shared/researchKits';
 import { resolvedTestResearchProfile } from './researchProfileFixture';
 
 const createdDirectories: string[] = [];
@@ -97,7 +97,7 @@ describe('Research Kit refresh', () => {
     }
   }, 15_000);
 
-  it('refreshes bundled MSRC rules and guidance without creating resources', async () => {
+  it('manages selected MSRC Windows resources while preserving manual resources and checkout metadata', async () => {
     const { root, workspacePath } = workspaceDirectory('beale-msrc-kit-refresh-');
     const service = workspaceService(root);
     try {
@@ -110,19 +110,47 @@ describe('Research Kit refresh', () => {
         descriptionMarkdown: 'Old guidance.',
         rules: [],
         expiresAt: null,
-        assets: []
+        assets: [{
+          direction: 'in_scope',
+          kind: 'documentation',
+          value: 'https://example.test/manual',
+          sensitivity: 'public',
+          attributes: { source: 'manual' }
+        }, {
+          direction: 'in_scope',
+          kind: 'repo',
+          value: 'https://github.com/microsoft/terminal',
+          sensitivity: 'public',
+          attributes: { source: 'msrc-windows', clonedDirectory: 'C:\\ExampleResearch\\terminal' }
+        }]
       });
-      const refreshed = await service.refreshResearchKit({});
       const definition = researchKitDefinition('msrc');
+      const catalog = definition.resourceCatalog?.resources ?? [];
+      const consoleSource = catalog.find((asset) => asset.value === 'https://github.com/microsoft/terminal');
+      const defenderSandbox = catalog.find((asset) => asset.value === 'MsMpEngCP.exe');
+      expect(consoleSource).toBeDefined();
+      expect(defenderSandbox).toBeDefined();
+      const refreshed = await service.refreshResearchKit({
+        selectedResourceKeys: [researchKitResourceKey(consoleSource!), researchKitResourceKey(defenderSandbox!)]
+      });
       expect(refreshed).toMatchObject({
         researchKitId: 'msrc',
-        resourcesRefreshed: 0,
+        resourcesRefreshed: 2,
         rulesRefreshed: definition.onboardingDefaults?.rules.length,
         guidanceRefreshed: true
       });
-      expect(refreshed.snapshot.activeScope.assets).toEqual([]);
+      expect(refreshed.snapshot.activeScope.assets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ value: 'MsMpEngCP.exe', attributes: expect.objectContaining({ researchKitId: 'msrc' }) }),
+        expect.objectContaining({ value: 'https://github.com/microsoft/terminal', kind: 'repo', attributes: expect.objectContaining({ clonedDirectory: 'C:\\ExampleResearch\\terminal' }) }),
+        expect.objectContaining({ value: 'https://example.test/manual', attributes: { source: 'manual' } })
+      ]));
       expect(refreshed.snapshot.workspaceRules.map((rule) => rule.text)).toEqual(definition.onboardingDefaults?.rules);
       expect(refreshed.snapshot.activeScope.descriptionMarkdown).toBe(definition.onboardingDefaults?.descriptionMarkdown);
+      const narrowed = await service.refreshResearchKit({ selectedResourceKeys: [researchKitResourceKey(defenderSandbox!)] });
+      expect(narrowed.resourcesRefreshed).toBe(1);
+      expect(narrowed.snapshot.activeScope.assets.map((asset) => asset.value)).toEqual(expect.arrayContaining(['MsMpEngCP.exe', 'https://example.test/manual']));
+      expect(narrowed.snapshot.activeScope.assets.some((asset) => asset.value === 'https://github.com/microsoft/terminal')).toBe(false);
+      await expect(service.refreshResearchKit({ selectedResourceKeys: ['unknown'] })).rejects.toThrow('Unknown Research Kit resource');
     } finally {
       service.close();
     }

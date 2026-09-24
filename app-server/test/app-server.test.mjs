@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, test } from "node:test";
 import { deserialize } from "node:v8";
+import { fileURLToPath } from "node:url";
 import {
   AppServerHostRegistry,
   AppServerHostService,
@@ -1974,6 +1975,7 @@ test("session launch exposes same-Subject workspace references without retained 
 test("app-server owns built-in plugins and pins canonical session profile identity", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-host-policy-"));
   temporaryDirectories.push(directory);
+  const metaSkillDirectory = fileURLToPath(new URL('../resources/agent-plugins/meta-skills/skills', import.meta.url));
   const calls = [];
   let managedPluginIds = [...MANAGED_TOOL_PLUGIN_IDS];
   let pluginReadFails = false;
@@ -2001,8 +2003,8 @@ test("app-server owns built-in plugins and pins canonical session profile identi
         if (pluginReadFails) throw new Error("Synthetic plugin settings read failure.");
         return {
           managedPluginIds,
-          skillDirs: [],
-          selectedSkillIds: [],
+          skillDirs: [metaSkillDirectory],
+          selectedSkillIds: ["meta-bug-bounty-tools"],
           allowedMcpServers: ["beale-introspection.beale", "example.tools"],
         };
       }
@@ -2029,6 +2031,8 @@ test("app-server owns built-in plugins and pins canonical session profile identi
   assert.equal(prepared.launch.researchProfileHash, hash);
   assert.equal(prepared.launch.memoryBackend, "disabled");
   assert.deepEqual(prepared.launch.pluginRuntime.allowedMcpServers, ["example.tools"]);
+  assert.deepEqual(prepared.launch.pluginRuntime.skillDirectories, []);
+  assert.deepEqual(prepared.launch.pluginRuntime.selectedSkillIds, []);
   assert.deepEqual(prepared.launch.provider, {
     id: "xai",
     model: "grok-4.6",
@@ -2043,9 +2047,12 @@ test("app-server owns built-in plugins and pins canonical session profile identi
     },
   });
   const pluginCall = calls.find((call) => call.operation === "plugin.runtime");
-  assert.equal(pluginCall.options.input.builtinPlugins.length, MANAGED_TOOL_PLUGIN_IDS.length + 3);
+  assert.equal(pluginCall.options.input.builtinPlugins.length, MANAGED_TOOL_PLUGIN_IDS.length + 4);
   assert.ok(pluginCall.options.input.builtinPlugins.some((plugin) =>
     plugin.id === "beale-browser-use-builtin" && plugin.enabledByDefault !== false
+  ));
+  assert.ok(pluginCall.options.input.builtinPlugins.some((plugin) =>
+    plugin.id === "meta-skills-builtin" && plugin.enabledByDefault !== false
   ));
   assert.deepEqual(prepared.launch.pluginRuntime.managedPluginIds, MANAGED_TOOL_PLUGIN_IDS);
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes(MANAGED_TOOL_PLUGIN_IDS.join(',')));
@@ -2067,8 +2074,11 @@ test("app-server owns built-in plugins and pins canonical session profile identi
     },
   });
   managedPluginIds = [];
+  registry.resolveWorkspace("workspace-test").researchKitId = "meta-bug-bounty";
   const next = await service.prepareSession({ ...sessionLaunchRequest(directory), sessionId: "session-plugin-disabled" }, "generated-disabled-session");
   assert.deepEqual(next.launch.pluginRuntime.managedPluginIds, []);
+  assert.deepEqual(next.launch.pluginRuntime.skillDirectories, [metaSkillDirectory]);
+  assert.deepEqual(next.launch.pluginRuntime.selectedSkillIds, ["meta-bug-bounty-tools"]);
   const nextArgs = appServerSessionArgs(next.launch, {});
   assert.equal(nextArgs[nextArgs.indexOf('--managed-plugins') + 1], 'none');
   pluginReadFails = true;

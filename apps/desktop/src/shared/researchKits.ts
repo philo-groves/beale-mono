@@ -1,5 +1,6 @@
 import type { ResearchProfileId } from './researchProfile';
 import type { ScopeAssetInput } from './types';
+import { MSRC_WINDOWS_PROGRAM_URL, MSRC_WINDOWS_RESOURCES } from './msrcWindowsResearchKit';
 import {
   META_BUG_BOUNTY_PAYOUT_GUIDELINES_URL,
   META_BUG_BOUNTY_RULES,
@@ -50,6 +51,11 @@ export interface ResearchKitDefinition {
     sourceUrl: string;
     repositories: readonly ResearchKitRepositoryCatalogEntry[];
   }) & { resourceSource: string };
+  resourceCatalog?: {
+    sourceUrl: string;
+    resourceSource: string;
+    resources: readonly ScopeAssetInput[];
+  };
   refresh?: {
     sourceLabel: string;
     sourceDescription: string;
@@ -73,12 +79,15 @@ const APPLE_RULES = [
 ] as const;
 
 const MSRC_RULES = [
-  'Verify current Microsoft bounty scope, rules of engagement, coordinated vulnerability disclosure requirements, safe harbor, bounty guidelines, and individual program rules before testing or submitting.',
+  'Verify the current Windows Insider Preview bounty scope, Rules of Engagement, safe harbor, bounty guidelines, and eligibility criteria before testing or submitting.',
+  'Reproduce and validate on the latest applicable Windows Insider Preview Canary build; record the tested build and exact BuildLabEx revision string.',
+  'Confirm that the affected feature is serviced and eligible under the Windows Security Servicing Criteria. An installed app, service, or open-source component is a research candidate, not an automatic bounty determination.',
+  'For local Attack Scenario Awards from an eligible sandbox, demonstrate the restricted context using the Launch App Container tool with the LPAC flag and only capabilities used by eligible sandboxes.',
   'Submit privately through the MSRC Researcher Portal under Coordinated Vulnerability Disclosure.',
   'Provide clear reproduction steps, proof-of-concept code when safe, detailed technical analysis, affected assets, expected and observed behavior, security impact, prerequisites, and remediation-relevant details.',
   'Prioritize new, unique vulnerabilities with meaningful real-world customer security impact.',
   'Include enough detail for Microsoft to validate, triage, reproduce, and fix the issue quickly.',
-  'Follow Microsoft Security Testing Rules of Engagement and the rules on the applicable individual bounty program page.',
+  'Follow Microsoft Security Testing Rules of Engagement and the current Windows Insider Preview bounty program page.',
   'Do not access, modify, exfiltrate, disclose, or share customer data.',
   'Do not disrupt Microsoft services, compromise uptime, degrade availability, or harm other customers or infrastructure.',
   'If unauthorized or sensitive data is encountered, stop immediately, notify MSRC with details, delete the data, and acknowledge this in the report.',
@@ -149,20 +158,25 @@ export const RESEARCH_KITS: readonly ResearchKitDefinition[] = [{
   }
 }, {
   id: 'msrc',
-  label: 'MSRC',
-  description: 'Start with Microsoft Security Response Center bounty guidance and rules.',
+  label: 'MSRC Windows',
+  description: 'Research the Windows Insider Preview bounty with selectable Windows apps, services, sandbox contexts, and shipped source repositories.',
   supportedResearchProfileIds: ['security-research'],
   onboardingDefaults: {
-    workspaceName: 'Microsoft Security Response Center',
-    researchSubjectName: 'Microsoft',
-    descriptionMarkdown: 'Authorized research under Microsoft Security Response Center bounty programs for eligible Microsoft cloud, endpoint, on-premises, developer, AI, identity, and service vulnerabilities described by MSRC.',
+    workspaceName: 'MSRC Windows',
+    researchSubjectName: 'Windows Insider Preview',
+    descriptionMarkdown: `Authorized research under the [Microsoft Windows Insider Preview bounty program](${MSRC_WINDOWS_PROGRAM_URL}) on the latest applicable Canary build. Select only resources present on the test guest and confirm the current program scope, Windows servicing eligibility, and exact installed versions before testing. Common Windows 11 apps and services vary by edition, image, region, and update state; a catalog entry is not proof of installation or award eligibility. Open-source repositories are source references, not proof that the guest contains the same revision.\n\nThe program currently lists four sandboxes for local Attack Scenario Awards: Microsoft Edge Chromium renderer, Windows Defender (MsMpEngCP), WinHTTP WPAD sandboxed process, and UtcDecoderHost.exe. The restricted-context proof must follow the current program's Launch App Container and LPAC requirements. Windows Sandbox is a separate optional Windows feature and is not one of those four listed sandbox contexts. Recheck the [program page](${MSRC_WINDOWS_PROGRAM_URL}) before relying on any award category.`,
     rules: MSRC_RULES
   },
+  resourceCatalog: {
+    sourceUrl: MSRC_WINDOWS_PROGRAM_URL,
+    resourceSource: 'msrc-windows',
+    resources: MSRC_WINDOWS_RESOURCES
+  },
   refresh: {
-    sourceLabel: 'Program Guidance',
-    sourceDescription: 'Refreshes the MSRC guidance bundled with this version of Beale.',
-    fixedSource: 'Microsoft Security Response Center',
-    imports: ['rules', 'guidance']
+    sourceLabel: 'Windows Insider Preview Program',
+    sourceDescription: 'Refreshes selected resource metadata, rules, and guidance bundled with this version of Beale. Check Microsoft for current terms.',
+    fixedSource: 'Microsoft Windows Insider Preview',
+    imports: ['resources', 'rules', 'guidance']
   }
 }, {
   id: 'meta-bug-bounty',
@@ -202,4 +216,27 @@ export function researchKitsForProfile(profileId: ResearchProfileId): readonly R
 
 export function researchKitSupportsProfile(id: ResearchKitId, profileId: ResearchProfileId): boolean {
   return researchKitDefinition(id).supportedResearchProfileIds.includes(profileId);
+}
+
+export function researchKitResourceKey(asset: Pick<ScopeAssetInput, 'direction' | 'kind' | 'value'>): string {
+  return JSON.stringify([asset.direction, asset.kind, asset.value.trim().toLowerCase()]);
+}
+
+export function selectedResearchKitCatalogAssets(
+  catalog: NonNullable<ResearchKitDefinition['resourceCatalog']>,
+  existing: readonly ScopeAssetInput[],
+  requestedKeys?: readonly string[]
+): ScopeAssetInput[] {
+  const catalogByKey = new Map(catalog.resources.map((asset) => [researchKitResourceKey(asset), asset]));
+  const existingByKey = new Map(existing.map((asset) => [researchKitResourceKey(asset), asset]));
+  const selectedKeys = requestedKeys ?? [...existingByKey.keys()].filter((key) => catalogByKey.has(key));
+  if (selectedKeys.some((key) => !catalogByKey.has(key))) throw new Error('Unknown Research Kit resource selection.');
+  return [...new Set(selectedKeys)].map((key) => {
+    const bundled = catalogByKey.get(key)!;
+    const current = existingByKey.get(key);
+    return current ? {
+      ...current,
+      attributes: { ...current.attributes, ...bundled.attributes }
+    } : { ...bundled, attributes: { ...bundled.attributes } };
+  });
 }

@@ -107,7 +107,7 @@ import {
 import { resolveGoalObjective } from '../shared/goalObjective';
 import { normalizeResearchCollaboration } from '../shared/collaboration';
 import { isResearchProfileId, RESEARCH_PROFILE_IDS } from '../shared/researchProfile';
-import { researchKitDefinition, researchKitSupportsProfile } from '../shared/researchKits';
+import { researchKitDefinition, researchKitResourceKey, researchKitSupportsProfile, selectedResearchKitCatalogAssets } from '../shared/researchKits';
 import { normalizeRepeatSchedule } from '../shared/repeatSchedule';
 import { DEFAULT_SHELL_SAFETY_MODE, normalizeShellSafetyMode } from '../shared/shellSafety';
 import { isProviderModelEnabled } from '../shared/optionalProviderModels';
@@ -2077,6 +2077,7 @@ export class WorkspaceService {
     const researchKitId = initialRuntime.db.getResearchKitId();
     const kit = researchKitDefinition(researchKitId);
     if (!kit.refresh) throw new Error('The General Research Kit has no imports to refresh.');
+    if (input.selectedResourceKeys && !kit.resourceCatalog) throw new Error('This Research Kit has no selectable resource catalog.');
 
     let importedAssets: ScopeAssetInput[] | null = null;
     let importedRules: readonly string[] = kit.onboardingDefaults?.rules ?? [];
@@ -2086,6 +2087,12 @@ export class WorkspaceService {
       importedAssets = lookup.assets;
       importedRules = lookup.rules;
       importedGuidance = lookup.descriptionMarkdown;
+    } else if (kit.resourceCatalog) {
+      const catalog = kit.resourceCatalog;
+      const existing = initialRuntime.db.getActiveScope().assets
+        .filter((asset) => isResearchKitAsset(asset, researchKitId, catalog.resourceSource))
+        .map(scopeAssetInput);
+      importedAssets = selectedResearchKitCatalogAssets(catalog, existing, input.selectedResourceKeys);
     } else if (kit.onboardingDefaults?.assets) {
       const bundledAssetsByKey = new Map(kit.onboardingDefaults.assets.map((asset) => [researchKitAssetKey(asset), asset]));
       importedAssets = initialRuntime.db.getActiveScope().assets
@@ -2137,7 +2144,7 @@ export class WorkspaceService {
     const activeScope = runtime.db.getActiveScope();
     let resourcesRefreshed = 0;
     if (importedAssets) {
-      const source = kit.repositoryCatalog?.resourceSource ?? researchKitId;
+      const source = kit.resourceCatalog?.resourceSource ?? kit.repositoryCatalog?.resourceSource ?? researchKitId;
       const existingManagedAssets = activeScope.assets.filter((asset) => isResearchKitAsset(asset, researchKitId, source));
       const existingByKey = new Map(existingManagedAssets.map((asset) => [researchKitAssetKey(asset), asset]));
       const refreshedAssets = importedAssets.map((asset) => {
@@ -2152,18 +2159,24 @@ export class WorkspaceService {
           }
         };
       });
+      const catalogKeys = kit.resourceCatalog
+        ? new Set(kit.resourceCatalog.resources.map(researchKitResourceKey))
+        : null;
       const retainedAssets = activeScope.assets
-        .filter((asset) => !isResearchKitAsset(asset, researchKitId, source))
+        .filter((asset) => !isResearchKitAsset(asset, researchKitId, source)
+          || Boolean(catalogKeys && !catalogKeys.has(researchKitResourceKey(asset))))
         .map(scopeAssetInput);
+      const retainedKeys = new Set(retainedAssets.map(researchKitResourceKey));
+      const uniqueRefreshedAssets = refreshedAssets.filter((asset) => !retainedKeys.has(researchKitResourceKey(asset)));
       runtime.db.saveScope({
         workspaceName: activeScope.workspaceName,
         scopeOwner: activeScope.scopeOwner,
         descriptionMarkdown: '',
         rulesMarkdown: '',
         expiresAt: activeScope.expiresAt,
-        assets: [...retainedAssets, ...refreshedAssets]
+        assets: [...retainedAssets, ...uniqueRefreshedAssets]
       });
-      resourcesRefreshed = refreshedAssets.length;
+      resourcesRefreshed = uniqueRefreshedAssets.length;
     }
     runtime.db.addWorkspaceRules(importedRules, `research_kit:${researchKitId}`);
     if (importedGuidance !== null) writeWorkspaceDescription(runtime.workspacePath, importedGuidance);

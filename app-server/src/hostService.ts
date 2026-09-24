@@ -507,9 +507,20 @@ export class AppServerHostService {
     const loadedPluginRuntime = introspection?.runtimeMode === 'isolated'
       ? await this.loadIntrospectionPluginRuntime()
       : await this.resolvePluginRuntime();
+    const metaSkillDirectory = resolve(builtinPluginPath('meta-skills'), 'skills');
     const pluginRuntime = loadedPluginRuntime
       ? {
           ...loadedPluginRuntime,
+          ...(workspace.researchKitId !== 'meta-bug-bounty'
+            ? {
+                skillDirectories: (loadedPluginRuntime.skillDirectories ?? []).filter(
+                  (directory) => resolve(directory) !== metaSkillDirectory
+                ),
+                selectedSkillIds: (loadedPluginRuntime.selectedSkillIds ?? []).filter(
+                  (id) => id !== 'meta-bug-bounty-tools'
+                )
+              }
+            : {}),
           ...(!introspection && loadedPluginRuntime.allowedMcpServers
             ? {
                 allowedMcpServers: loadedPluginRuntime.allowedMcpServers.filter(
@@ -1702,6 +1713,7 @@ function defaultBuiltinPlugins(): Array<{ id: string; path: string; installedAt:
     ...MANAGED_TOOL_PLUGIN_IDS.map((id) => builtinPlugin(`${id}-builtin`, id, false)),
     builtinPlugin('beale-introspection-builtin', 'beale-introspection', false),
     builtinPlugin('beale-browser-use-builtin', 'beale-browser-use', false),
+    builtinPlugin('meta-skills-builtin', 'meta-skills', false),
     builtinPlugin('beale-terminator-builtin', 'beale-terminator', true)
   ].flatMap((plugin) => existsSync(plugin.path) ? [plugin] : []);
 }
