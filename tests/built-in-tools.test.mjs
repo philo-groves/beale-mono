@@ -812,6 +812,21 @@ test("tool runtime budget aborts a pending approval before any later spawn", asy
   }
 });
 
+test("shell approval waits without the default tool runtime deadline", () => {
+  const action = {
+    id: "shell_approval_wait_fixture",
+    actionClass: "experiment",
+    toolName: "shell.run",
+    input: { utility: "printf", args: ["%s", "example"] },
+  };
+  assert.equal(resolveResearchToolRuntimeBudgetMs(action, undefined), 0);
+  assert.equal(resolveResearchToolRuntimeBudgetMs(action, { maxRuntimeMs: 60_000 }), 60_000);
+  assert.equal(
+    resolveResearchToolRuntimeBudgetMs({ ...action, budget: { maxRuntimeMs: 45_000 } }, undefined),
+    45_000,
+  );
+});
+
 test("runbook execution delegates runtime limits to its cell executors", async () => {
   const action = {
     id: "runbook_runtime_fixture",

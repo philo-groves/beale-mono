@@ -19,6 +19,7 @@
 
 #### Fixed
 
+- Auto-Review now permits bounded vulnerability experiments and read-only research artifacts outside the workspace directory without a runbook cell. It reserves human overrides for concrete destructive or clearly out-of-scope commands, and shell approvals no longer expire under the default two-minute tool budget. Runbooks remain the path to reproduction-grade evidence.
 - Session commentary Markdown links now reveal local files, including workspace files referenced through localhost URLs, in the file explorer and open web pages in the default browser.
 - App-server now completes an interrupted file-authority publication before checking for direct research edits, so a partially published claim or memory cannot reject the next session at startup.
 - Tart proof cells and managed Tart communication tools now support an explicit bounded SSH transport for host-to-guest proofs, while preserving Guest Agent-first auto-selection and the fail-closed `guest-agent-only` policy.

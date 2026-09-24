@@ -754,6 +754,9 @@ export function resolveResearchToolRuntimeBudgetMs(
 ): number {
   const actionBudget = action.budget?.maxRuntimeMs;
   if (actionBudget !== undefined) return actionBudget;
+  // A human Auto-Review override can wait for the researcher without consuming
+  // the command's own execution timeout. Shell execution is bounded separately.
+  if (action.toolName === "shell.run") return governance?.maxRuntimeMs ?? 0;
   // A runbook is a container of independently bounded cells. Applying the
   // general per-tool governance deadline to the container can abandon a cell
   // before its declared executor timeout and leave external work in flight.
