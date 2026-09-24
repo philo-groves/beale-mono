@@ -76,9 +76,11 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   connectedDeviceCaptureEnabled = false,
   workspaceDejunk = null,
   workspaceDejunkInProgress = false,
+  checkpointRepairInProgress = false,
   memoryDreamingInProgress,
   memoryDreamingProgress = null,
   onRunWorkspaceDejunk = () => undefined,
+  onRepairWorkspaceCheckpoint = () => undefined,
   onRunMemoryDreaming,
   onMarkHistoryDuplicate = () => undefined,
   onUndoHistoryDuplicate = () => undefined,
@@ -152,9 +154,11 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   connectedDeviceCaptureEnabled?: boolean;
   workspaceDejunk?: WorkspaceDejunkSummary | null;
   workspaceDejunkInProgress?: boolean;
+  checkpointRepairInProgress?: boolean;
   memoryDreamingInProgress: boolean;
   memoryDreamingProgress?: MemoryDreamingProgressUpdate | null;
   onRunWorkspaceDejunk?: () => void;
+  onRepairWorkspaceCheckpoint?: (fingerprint: string) => void;
   onRunMemoryDreaming: () => void;
   onMarkHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, parentId: string, expectedRevision: number) => void;
   onUndoHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, expectedRevision: number) => void;
@@ -368,6 +372,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           workspaceRules={workspaceRules}
           workspaceDejunk={workspaceDejunk}
           workspaceDejunkInProgress={workspaceDejunkInProgress}
+          checkpointRepairInProgress={checkpointRepairInProgress}
           memoryDreamingInProgress={memoryDreamingInProgress}
           memoryDreamingProgress={memoryDreamingProgress}
           appServerMemory={appServerMemory}
@@ -384,6 +389,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           initialView={initialWorkspaceView}
           runs={runs}
           onRunWorkspaceDejunk={onRunWorkspaceDejunk}
+          onRepairWorkspaceCheckpoint={onRepairWorkspaceCheckpoint}
           onRunMemoryDreaming={onRunMemoryDreaming}
           onAddResource={onAddWorkspaceResource}
           onChangeResource={onChangeWorkspaceResource}

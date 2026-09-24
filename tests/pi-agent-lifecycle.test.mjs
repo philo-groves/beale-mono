@@ -678,7 +678,8 @@ test("research system prompt keeps workflow phases behind runbook feature tags w
   assert.match(prompt, /matching workflow runbook for reproduction-grade evidence/);
   assert.match(prompt, /Direct shell execution may support bounded exploratory tests/);
   assert.match(prompt, /Use runbook\.run for repeatable proof procedures and reproduction-grade evidence/);
-  assert.match(prompt, /Rerun that cell.*do not create lifecycle wrappers/);
+  assert.match(prompt, /Before implementing a candidate proof, call runbook\.prepare/);
+  assert.match(prompt, /revision-checked runbook\.edit.*rerun the same cell.*do not create lifecycle wrappers/);
   assert.match(prompt, /Start a sibling runbook only for a genuinely unrelated objective/);
   assert.doesNotMatch(prompt, /proof development.*shell\.run/);
 });

@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { initializeWorkspaceProject, checkpointWorkspace, listUnexpectedWorkspaceTopLevelEntries, listWorkspaceResearchEdits, publishWorkspaceFiles, workspaceContentHash, workspaceLayoutGuardMessage, preserveWorkspaceFile, quarantineWorkspaceDisposable, recoverWorkspacePublication, workspaceResearchAuthority, WORKSPACE_DIRECTORIES, WORKSPACE_INSTRUCTIONS, WORKSPACE_PROJECT_VERSION } from '../packages/research-agent/dist/workspace-project.js';
+import { initializeWorkspaceProject, checkpointWorkspace, workspaceCheckpointRepairPlan, listUnexpectedWorkspaceTopLevelEntries, listWorkspaceResearchEdits, publishWorkspaceFiles, workspaceContentHash, workspaceLayoutGuardMessage, preserveWorkspaceFile, quarantineWorkspaceDisposable, recoverWorkspacePublication, workspaceResearchAuthority, WORKSPACE_DIRECTORIES, WORKSPACE_INSTRUCTIONS, WORKSPACE_PROJECT_VERSION } from '../packages/research-agent/dist/workspace-project.js';
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -72,8 +72,19 @@ test('active checkpoints refresh generated-file ignores and name unexpected over
   writeFileSync(join(root, oversizedPath), Buffer.alloc(5 * 1024 * 1024 + 1));
   const rejected = checkpointWorkspace(root, 'Reject unexpected oversized file');
   assert.equal(rejected.status, 'failed');
-  assert.match(rejected.error, new RegExp(`${oversizedPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}.*5\\.00 MiB.*exceeds the 5 MiB`, 'u'));
-  assert.match(rejected.error, /must live beneath an evidence\/ directory/u);
+  assert.match(rejected.error, /Oversized checkpoint files need repair before Git staging/u);
+  assert.equal(rejected.repair.candidates[0].path, oversizedPath);
+  const preview = workspaceCheckpointRepairPlan(root);
+  assert.deepEqual(preview, rejected.repair);
+  const stale = checkpointWorkspace(root, 'Reject stale repair', undefined, {}, '0'.repeat(64));
+  assert.equal(stale.status, 'failed');
+  assert.match(stale.error, /preview is stale/u);
+  assert.equal(existsSync(join(root, oversizedPath)), true);
+  const repaired = checkpointWorkspace(root, 'Repair oversized file', undefined, {}, preview.fingerprint);
+  assert.equal(repaired.status, 'committed', repaired.error);
+  assert.equal(existsSync(join(root, oversizedPath)), false);
+  assert.equal(existsSync(join(root, preview.candidates[0].destinationPath)), true);
+  assert.equal(repaired.recoveredRawArtifacts[0].path, preview.candidates[0].destinationPath);
 });
 
 test('automatic checkpoints retain oversized candidate evidence with a tracked manifest', () => {
@@ -103,6 +114,21 @@ test('automatic checkpoints retain oversized candidate evidence with a tracked m
   const followUp = checkpointWorkspace(root, 'Checkpoint after raw candidate recovery');
   assert.equal(followUp.status, 'committed', followUp.error);
   assert.equal(followUp.recoveredRawArtifacts, undefined);
+});
+
+test('checkpoint repair reports oversized tracked evidence as a blocker', () => {
+  const root = workspace();
+  const path = 'investigations/example/evidence/tracked-example.bin';
+  mkdirSync(join(root, 'investigations', 'example', 'evidence'), { recursive: true });
+  writeFileSync(join(root, path), 'small example');
+  assert.equal(checkpointWorkspace(root, 'Track example evidence').status, 'committed');
+  writeFileSync(join(root, path), Buffer.alloc(5 * 1024 * 1024 + 1));
+
+  const failed = checkpointWorkspace(root, 'Reject oversized tracked evidence');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.repair.candidates.length, 0);
+  assert.equal(failed.repair.blockers[0].path, path);
+  assert.match(failed.repair.blockers[0].reason, /Tracked files/u);
 });
 
 test('schema-v1 workspaces retain database-first compatibility authority', () => {

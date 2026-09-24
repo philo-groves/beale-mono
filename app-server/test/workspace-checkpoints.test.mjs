@@ -5,8 +5,31 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, checkpointWorkspace, listWorkspaceResearchEdits, publishWorkspaceFiles, publishWorkspaceResearch, readWorkspaceResearchCacheState, workspaceContentHash } from '@beale/research-agent';
-import { initializeWorkspaceProjectAsync, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
+import { initializeWorkspaceProjectAsync, previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
 import { AppServerWorkerDatabaseCoordinator } from '../dist/workerDatabaseBroker.js';
+
+test('checkpoint worker previews and repairs oversized untracked investigation files', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-repair-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath: join(directory, 'runtime', 'memory.sqlite'), artifactDirectoryPath: join(directory, 'runtime', 'artifacts') };
+  try {
+    await initializeWorkspaceProjectAsync(workspaceRoot, options.workspaceId);
+    mkdirSync(options.artifactDirectoryPath, { recursive: true });
+    const path = join(workspaceRoot, 'investigations', 'example', 'generated.bin');
+    mkdirSync(join(workspaceRoot, 'investigations', 'example'), { recursive: true });
+    writeFileSync(path, Buffer.alloc(5 * 1024 * 1024 + 1));
+    const failed = await runWorkspaceCheckpoint(options, 'Preflight oversized file');
+    assert.equal(failed.status, 'failed');
+    const preview = await previewWorkspaceCheckpointRepair(workspaceRoot);
+    assert.deepEqual(preview, failed.repair);
+    const repaired = await runWorkspaceCheckpoint(options, 'Repair oversized file', undefined, undefined, undefined, { repairFingerprint: preview.fingerprint });
+    assert.equal(repaired.status, 'committed', repaired.error);
+    assert.equal(existsSync(path), false);
+    assert.equal(existsSync(join(workspaceRoot, preview.candidates[0].destinationPath)), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('session checkpointing automatically migrates an oversized monolithic prior-art export', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-prior-art-recovery-'));

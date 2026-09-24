@@ -25,8 +25,10 @@ const COLLABORATION_TOOL_LABELS: Readonly<Record<string, string>> = {
 const RUNBOOK_TOOL_LABELS: Readonly<Record<string, string>> = {
   'runbook.list': 'Runbook List',
   'runbook.get': 'Runbook Get',
+  'runbook.prepare': 'Runbook Preparation',
   'runbook.create': 'Runbook Creation',
   'runbook.append': 'Runbook Update',
+  'runbook.edit': 'Runbook Cell Edit',
   'runbook.configure': 'Runbook Features'
 };
 
@@ -174,13 +176,14 @@ export function appServerToolTraceSubtext(event: TraceEventRecord, detail: RunDe
   if (toolName === 'runbook.list') return stringRecordValue(inputs, 'query') ?? 'All workspace runbooks';
   if (toolName === 'report.list') return stringRecordValue(inputs, 'query') ?? 'All workspace reports';
   if (toolName === 'runbook.get') return stringRecordValue(inputs, 'id') ?? '';
+  if (toolName === 'runbook.prepare') return [stringRecordValue(inputs, 'title'), stringRecordValue(inputs, 'candidatePath')].filter(Boolean).join(' · ');
   if (toolName === 'runbook.create') {
     const result = tracePayloadRecord(payload, 'result');
     const title = (result ? stringRecordValue(result, 'title') : null) ?? stringRecordValue(inputs, 'title');
     const revision = result ? numberRecordValue(result, 'revision') : null;
     return [title, revision ? `Update ${revision}` : null].filter((value): value is string => Boolean(value)).join(' · ');
   }
-  if (toolName === 'runbook.append') {
+  if (toolName === 'runbook.append' || toolName === 'runbook.edit') {
     const result = tracePayloadRecord(payload, 'result');
     const id = stringRecordValue(inputs, 'id');
     const title = result ? stringRecordValue(result, 'title') : null;

@@ -111,6 +111,7 @@ export const IPC_CHANNELS = {
   startReportSession: 'beale:start-report-session',
   getWorkspaceDejunkSummary: 'beale:get-workspace-dejunk-summary',
   runWorkspaceDejunk: 'beale:run-workspace-dejunk',
+  repairWorkspaceCheckpoint: 'beale:repair-workspace-checkpoint',
   runMemoryDreaming: 'beale:run-memory-dreaming',
   memoryDreamingUpdated: 'beale:memory-dreaming-updated',
   restoreMemoryDreamingChange: 'beale:restore-memory-dreaming-change',

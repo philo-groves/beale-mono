@@ -8,7 +8,7 @@ The app-server is the single host adapter for Desktop, iOS, and future clients. 
 
 The host owns local Git checkpoints for the single-directory research layout described in the root README. Checkpoints serialize per workspace and use a separate Git index, preserving manual staging. Schema-v2 workspaces use files as research authority; routine checkpoints ingest validated direct edits, refresh the app-server's derived query index, republish typed mutations, and commit the complete snapshot. Schema-v1 workspaces retain database-first compatibility behavior. Unexpected root entries are Git-ignored but detected directly from the filesystem, and the root agent is reactivated every turn until it classifies them. Synchronization and import run in a dedicated worker so Stop remains responsive. Filesystem publication has a recovery journal; failed checkpoints leave working files intact. Both Desktop and remote clients use the same canonical operations and host lifecycle.
 
-Contract version 24 advertises reversible derived-index release through `workspace.research-project.v3`. The `workspace.project` operation accepts these inputs through the normal canonical operation endpoint:
+Contract version 24 introduced reversible derived-index release through `workspace.research-project.v3`. Current hosts also advertise `workspace.checkpoint-repair.v1`. The `workspace.project` operation accepts these inputs through the normal canonical operation endpoint:
 
 ```json
 {"workspaceId":"workspace-example","action":"status"}
@@ -18,9 +18,13 @@ Contract version 24 advertises reversible derived-index release through `workspa
 {"workspaceId":"workspace-example","action":"sync"}
 {"workspaceId":"workspace-example","action":"export"}
 {"workspaceId":"workspace-example","action":"import","path":"claims/claim-example.json","expectedRevision":1}
+{"workspaceId":"workspace-example","action":"repair-preview"}
+{"workspaceId":"workspace-example","action":"repair","fingerprint":"<sha256-from-preview>"}
 ```
 
 `status` returns the layout, latest checkpoint result, and derived-index state. In schema-v2 workspaces, `checkpoint` and `sync` reconcile supported file edits, refresh the derived index, republish, and commit; routine lifecycle checkpoints invoke the same path. A clean terminal checkpoint releases rebuildable research rows when no second session is active in the workspace. `release-index` provides the same explicit operation while retaining sessions, authorization, and runtime coordination. `rebuild-index` restores those rows from canonical files, and ordinary workspace operations rehydrate a released index automatically. Explicit index maintenance cannot run while research is active. `export` retains point-in-time publication for schema-v1 compatibility workspaces. `import` accepts one supported file, checks its published revision and immutable fields, applies the typed validators, republishes, and checkpoints. Full JSONL traces and raw evidence stay out of Git; retained evidence manifests remain hash-checked dependencies.
+
+The `workspace.checkpoint-repair.v1` capability adds `repair-preview` and `repair`. A failed checkpoint reports oversized paths before Git staging. Preview identifies untracked investigation files that can move to `evidence/recovered/`, and separately lists tracked or canonical blockers requiring manual repair. `repair` requires the preview fingerprint, refuses changed previews or active sessions, moves eligible files, retains them through evidence manifests, and retries the checkpoint. The move changes workspace-relative paths, so callers must review the preview before submitting it.
 
 Workspace creation installs a local pre-commit hook using the host's Node/Electron runtime; it configures no remote. Reinstalling the guard preserves an existing non-Beale hook by reporting an integration error. The workspace's Git metadata contains publication, checkpoint, recovery, and quarantine journals; these are not model-facing database exports.
 

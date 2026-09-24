@@ -21,7 +21,7 @@ import {
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
 import { CampaignTrackStore } from '@beale/research-agent';
-import { runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
+import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
   type AppServerHostRegistryOptions,
@@ -236,16 +236,18 @@ export class AppServerHostService {
       if (!project) throw new Error('This reference workspace does not use the research project layout. Create a new workspace.');
       const key = workspaceOperationKey(workspace.workspacePath);
       if (this.workspaceExclusiveOperations.has(key)) throw new Error('Another workspace operation is in progress.');
-      const exclusive = input.action === 'import' || input.action === 'export' || input.action === 'sync' || input.action === 'rebuild-index' || input.action === 'release-index';
+      if (input.action === 'repair-preview') return previewWorkspaceCheckpointRepair(workspace.workspacePath);
+      const exclusive = input.action === 'import' || input.action === 'export' || input.action === 'sync' || input.action === 'rebuild-index' || input.action === 'release-index' || input.action === 'repair';
       if (exclusive && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error(`Stop workspace research before ${input.action.replace(/-/gu, ' ')}.`);
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
       if (exclusive) this.workspaceExclusiveOperations.add(key);
       try { return await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
-        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export compatibility research snapshot' : input.action === 'sync' ? 'Synchronize file-authority research' : input.action === 'rebuild-index' ? 'Rebuild derived research index' : input.action === 'release-index' ? 'Release derived research index' : 'Operator workspace checkpoint',
+        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export compatibility research snapshot' : input.action === 'sync' ? 'Synchronize file-authority research' : input.action === 'rebuild-index' ? 'Rebuild derived research index' : input.action === 'release-index' ? 'Release derived research index' : input.action === 'repair' ? 'Repair oversized checkpoint files' : 'Operator workspace checkpoint',
         input.action === 'import' ? input : undefined, undefined, this.databaseCoordinator,
         (input.action === 'export' || input.action === 'sync') ? { exportResearch: true }
           : input.action === 'rebuild-index' ? { researchIndexAction: 'rebuild' }
           : input.action === 'release-index' ? { researchIndexAction: 'release' }
+          : input.action === 'repair' ? { repairFingerprint: input.fingerprint }
           : undefined);
       } finally { if (exclusive) this.workspaceExclusiveOperations.delete(key); }
     }

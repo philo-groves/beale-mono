@@ -88,7 +88,7 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
     activeRunbooks.add(runbookId);
     let finalStatus: "succeeded" | "failed" | "blocked" = "succeeded";
     let finalError: string | undefined;
-    let completedCount = 0;
+    const completedCellIds = new Set<string>();
     let completedAt = startedAt;
     let durationMs = 0;
     try {
@@ -102,86 +102,88 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
       activeRunbooks.delete(runbookId);
       throw error;
     }
-    try {
-      await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: null, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
-      for (const cell of cells) {
-        const signal = request.signal ?? options.signal;
-        throwIfAborted(signal);
-        const cellStartedAt = new Date().toISOString();
-        const cellStartedMs = Date.now();
-        options.store.beginCellExecution(runbookId, runId, cell.id, proofTarget, deviceOs);
-        await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: cell.id, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
-        let result: ResearchToolExecutionResult;
-        try {
-          result = await executeCell(options, runbookId, runId, cell, proofTarget, signal);
-        } catch (error) {
-          const message = errorMessage(error);
-          const completedAt = new Date().toISOString();
-          const durationMs = Math.max(0, Date.now() - cellStartedMs);
-          options.store.completeCellExecution({
-            id: runbookId,
-            runId,
-            cellId: cell.id,
-            status: "failed",
-            startedAt: cellStartedAt,
-            completedAt,
-            durationMs,
-            error: message,
-            proofTarget,
-            ...(deviceOs ? { deviceOs } : {}),
-          });
-          completedCount += 1;
-          await options.onUpdate?.({
-            type: "runbook_execution",
-            runbookId,
-            runId,
-            cellId: cell.id,
-            status: "failed",
-            durationMs,
-            error: message,
-            proofTarget,
-            ...(deviceOs ? { deviceOs } : {}),
-          });
-          finalStatus = "failed";
-          finalError = message;
-          break;
-        }
-        const output = shellOutput(result.output);
-        const status = result.status === "complete" ? "succeeded" : result.status === "error" ? "failed" : "blocked";
+    const runCell = async (cell: RunbookExecutionPlanCell, signal?: AbortSignal): Promise<{ status: "succeeded" | "failed" | "blocked"; error?: string }> => {
+      const cellStartedAt = new Date().toISOString();
+      const cellStartedMs = Date.now();
+      options.store.beginCellExecution(runbookId, runId, cell.id, proofTarget, deviceOs);
+      await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: cell.id, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
+      let result: ResearchToolExecutionResult;
+      try {
+        result = await executeCell(options, runbookId, runId, cell, proofTarget, signal);
+      } catch (error) {
+        const message = errorMessage(error);
         const completedAt = new Date().toISOString();
         const durationMs = Math.max(0, Date.now() - cellStartedMs);
-        const evidence = executionEvidence(result.output);
         options.store.completeCellExecution({
           id: runbookId,
           runId,
           cellId: cell.id,
-          status,
+          status: "failed",
           startedAt: cellStartedAt,
           completedAt,
           durationMs,
-          ...(output.stdout ? { stdout: output.stdout } : {}),
-          ...(output.stderr ? { stderr: output.stderr } : {}),
-          ...(output.exitCode !== undefined ? { exitCode: output.exitCode } : {}),
-          ...(result.error?.message ? { error: result.error.message } : {}),
+          error: message,
           proofTarget,
           ...(deviceOs ? { deviceOs } : {}),
-          ...(evidence ? { evidence } : {}),
         });
-        completedCount += 1;
+        completedCellIds.add(cell.id);
         await options.onUpdate?.({
           type: "runbook_execution",
           runbookId,
           runId,
           cellId: cell.id,
-          status,
+          status: "failed",
           durationMs,
-          ...(result.error?.message ? { error: result.error.message } : {}),
+          error: message,
           proofTarget,
           ...(deviceOs ? { deviceOs } : {}),
         });
-        if (status !== "succeeded") {
-          finalStatus = status;
-          finalError = result.error?.message ?? result.summary;
+        return { status: "failed", error: message };
+      }
+      const output = shellOutput(result.output);
+      const status = result.status === "complete" ? "succeeded" : result.status === "error" ? "failed" : "blocked";
+      const completedAt = new Date().toISOString();
+      const durationMs = Math.max(0, Date.now() - cellStartedMs);
+      const evidence = executionEvidence(result.output);
+      options.store.completeCellExecution({
+        id: runbookId,
+        runId,
+        cellId: cell.id,
+        status,
+        startedAt: cellStartedAt,
+        completedAt,
+        durationMs,
+        ...(output.stdout ? { stdout: output.stdout } : {}),
+        ...(output.stderr ? { stderr: output.stderr } : {}),
+        ...(output.exitCode !== undefined ? { exitCode: output.exitCode } : {}),
+        ...(result.error?.message ? { error: result.error.message } : {}),
+        proofTarget,
+        ...(deviceOs ? { deviceOs } : {}),
+        ...(evidence ? { evidence } : {}),
+      });
+      completedCellIds.add(cell.id);
+      await options.onUpdate?.({
+        type: "runbook_execution",
+        runbookId,
+        runId,
+        cellId: cell.id,
+        status,
+        durationMs,
+        ...(result.error?.message ? { error: result.error.message } : {}),
+        proofTarget,
+        ...(deviceOs ? { deviceOs } : {}),
+      });
+      return { status, ...(status !== "succeeded" ? { error: result.error?.message ?? result.summary } : {}) };
+    };
+    try {
+      await options.onUpdate?.({ type: "runbook_execution", runbookId, runId, cellId: null, status: "running", proofTarget, ...(deviceOs ? { deviceOs } : {}) });
+      for (const cell of cells) {
+        const signal = request.signal ?? options.signal;
+        throwIfAborted(signal);
+        const outcome = await runCell(cell, signal);
+        if (outcome.status !== "succeeded") {
+          finalStatus = outcome.status;
+          finalError = outcome.error;
           break;
         }
       }
@@ -189,7 +191,24 @@ export function createRunbookExecutor(options: RunbookExecutorOptions): (
       finalStatus = "failed";
       finalError = errorMessage(error);
     } finally {
-      const skipped = cells.slice(completedCount).map((cell) => cell.id);
+      if (finalStatus !== "succeeded") {
+        for (const cell of cells.filter((candidate) => !completedCellIds.has(candidate.id) && candidate.features.includes("cleanup"))) {
+          try {
+            // A stopped proof still gets a short, independently bounded cleanup attempt.
+            const requestedSignal = request.signal ?? options.signal;
+            const signal = requestedSignal?.aborted
+              ? AbortSignal.timeout(Math.min(30_000, cell.executor.timeoutSeconds * 1_000))
+              : requestedSignal;
+            const outcome = await runCell(cell, signal);
+            if (outcome.status !== "succeeded") {
+              finalError = `${finalError ?? "Runbook execution failed."} Cleanup cell ${cell.id}: ${outcome.error ?? outcome.status}`;
+            }
+          } catch (error) {
+            finalError = `${finalError ?? "Runbook execution failed."} Cleanup cell ${cell.id}: ${errorMessage(error)}`;
+          }
+        }
+      }
+      const skipped = cells.filter((cell) => !completedCellIds.has(cell.id)).map((cell) => cell.id);
       if (skipped.length > 0) {
         options.store.skipCellExecutions(runbookId, runId, skipped, finalError ?? "Skipped after an earlier cell did not succeed.", proofTarget, deviceOs);
         for (const cellId of skipped) {
@@ -268,7 +287,7 @@ export function createRunbookExecutionTool(
     descriptor: {
       name: "runbook.run",
       transportName: "runbook_run",
-      description: "Execute active code cells from one cell, an inclusive ordered range, or a complete runbook. Host cells use the app-server shell safety boundary. Tart VM cells automatically materialize a referenced host-built executable, stream it to the named guest, inspect immediately before execution, invoke it as the Guest Agent service identity or through passwordless sudo according to runAs, capture output and guest evidence, and clean up; cells whose feature tags are all disabled are skipped. This is the required execution path for proof-of-concepts, vulnerability reproductions, exploit-path tests, verifiers, claim-confirming experiments, and evidence benchmarks. Returns the durable runId required for reproduction-grade runbook_execution finding evidence. Use startCellId after repairing a late failure so already-successful cells are not repeated.",
+      description: "Execute active code cells from one cell, an inclusive ordered range, or a complete runbook. Host cells use the app-server shell safety boundary. Tart VM cells automatically materialize a referenced host-built executable, stream it to the named guest, inspect immediately before execution, invoke it as the Guest Agent service identity or through passwordless sudo according to runAs, capture output and guest evidence, and clean up; cells whose feature tags are all disabled are skipped. Remaining selected cleanup-tagged cells run after a failed proof cell and are recorded without changing the failed run to success. This is the required execution path for proof-of-concepts, vulnerability reproductions, exploit-path tests, verifiers, claim-confirming experiments, and evidence benchmarks. Returns the durable runId required for reproduction-grade runbook_execution finding evidence. Use startCellId after repairing a late failure so already-successful cells are not repeated.",
       actionClasses: ["experiment"],
       sideEffects: "process",
       requiredPermissions: ["process:spawn"],
@@ -567,14 +586,15 @@ function cellInvocation(cell: RunbookExecutionPlanCell): Record<string, unknown>
   const language = cell.language?.trim().toLowerCase();
   if (!language) throw new Error(`Runbook code cell ${cell.id} requires an explicit language.`);
   const timeoutMs = cell.executor.kind === "host" ? cell.executor.timeoutSeconds * 1_000 : undefined;
-  if (["shell", "sh", "posix-shell"].includes(language)) return { command: cell.source, timeoutMs };
-  if (language === "bash") return { utility: "bash", args: ["-lc", cell.source], timeoutMs };
-  if (language === "zsh") return { utility: "zsh", args: ["-lc", cell.source], timeoutMs };
-  if (["python", "python3", "py"].includes(language)) return { utility: "python3", args: ["-c", cell.source], timeoutMs };
-  if (["javascript", "js", "node"].includes(language)) return { utility: "node", args: ["-e", cell.source], timeoutMs };
-  if (language === "ruby") return { utility: "ruby", args: ["-e", cell.source], timeoutMs };
-  if (language === "perl") return { utility: "perl", args: ["-e", cell.source], timeoutMs };
-  if (["powershell", "pwsh"].includes(language)) return { utility: "pwsh", args: ["-NoProfile", "-Command", cell.source], timeoutMs };
+  const cwd = cell.cwd ? { cwd: cell.cwd } : {};
+  if (["shell", "sh", "posix-shell"].includes(language)) return { command: cell.source, timeoutMs, ...cwd };
+  if (language === "bash") return { utility: "bash", args: ["-lc", cell.source], timeoutMs, ...cwd };
+  if (language === "zsh") return { utility: "zsh", args: ["-lc", cell.source], timeoutMs, ...cwd };
+  if (["python", "python3", "py"].includes(language)) return { utility: "python3", args: ["-c", cell.source], timeoutMs, ...cwd };
+  if (["javascript", "js", "node"].includes(language)) return { utility: "node", args: ["-e", cell.source], timeoutMs, ...cwd };
+  if (language === "ruby") return { utility: "ruby", args: ["-e", cell.source], timeoutMs, ...cwd };
+  if (language === "perl") return { utility: "perl", args: ["-e", cell.source], timeoutMs, ...cwd };
+  if (["powershell", "pwsh"].includes(language)) return { utility: "pwsh", args: ["-NoProfile", "-Command", cell.source], timeoutMs, ...cwd };
   throw new Error(`Runbook code cell ${cell.id} uses unsupported language ${cell.language}.`);
 }
 

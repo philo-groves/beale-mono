@@ -600,7 +600,9 @@ function isSourceExplorationTool(toolName: string): boolean {
 function isConvergenceResolutionTool(toolName: string): boolean {
   const normalized = toolName.replaceAll(".", "_").toLowerCase();
   return normalized === "runbook_create"
+    || normalized === "runbook_prepare"
     || normalized === "runbook_append"
+    || normalized === "runbook_edit"
     || normalized === "runbook_configure"
     || normalized === "runbook_run";
 }
@@ -614,7 +616,9 @@ function isDurableProgressTool(toolName: string): boolean {
     || normalized === "finding_revise"
     || normalized === "finding_transition"
     || normalized === "runbook_create"
+    || normalized === "runbook_prepare"
     || normalized === "runbook_append"
+    || normalized === "runbook_edit"
     || normalized === "runbook_configure"
     || normalized === "runbook_run"
     || normalized === "report_create"

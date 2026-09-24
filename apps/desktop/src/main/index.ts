@@ -960,6 +960,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.runWorkspaceDejunk, () =>
     timedMainIpc('runWorkspaceDejunk', {}, () => workspaceService.runWorkspaceDejunk())
   );
+  ipcMain.handle(IPC_CHANNELS.repairWorkspaceCheckpoint, (_event, fingerprint: string) =>
+    timedMainIpcAsync('repairWorkspaceCheckpoint', {}, () => workspaceService.repairWorkspaceCheckpoint(fingerprint))
+  );
   ipcMain.handle(IPC_CHANNELS.runMemoryDreaming, (event) =>
     timedMainIpcAsync('runMemoryDreaming', {}, () => workspaceService.runMemoryDreaming((update) => {
       if (!event.sender.isDestroyed()) event.sender.send(IPC_CHANNELS.memoryDreamingUpdated, update);

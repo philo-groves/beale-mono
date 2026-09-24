@@ -29,10 +29,12 @@ test("runbook tools expose bounded artifact operations", async () => {
   const registry = createResearchToolRegistry(createRunbookTools(store));
   try {
     const descriptors = registry.listDescriptors();
-    assert.deepEqual(descriptors.map((tool) => tool.name), ["runbook.list", "runbook.get", "runbook.create", "runbook.append", "runbook.configure"]);
+    assert.deepEqual(descriptors.map((tool) => tool.name), ["runbook.list", "runbook.get", "runbook.prepare", "runbook.create", "runbook.append", "runbook.edit", "runbook.configure"]);
     assert.equal("statuses" in descriptors.find((tool) => tool.name === "runbook.list").inputSchema.properties, false);
     assert.equal("status" in descriptors.find((tool) => tool.name === "runbook.create").inputSchema.properties, false);
     assert.equal("status" in descriptors.find((tool) => tool.name === "runbook.append").inputSchema.properties, false);
+    assert.deepEqual(descriptors.find((tool) => tool.name === "runbook.prepare").inputSchema.required, ["title", "purpose", "language"]);
+    assert.deepEqual(descriptors.find((tool) => tool.name === "runbook.edit").inputSchema.required, ["id", "expectedRevision", "cellId", "source"]);
     assert.match(descriptors.find((tool) => tool.name === "runbook.create").description, /setup, runtime, and cleanup in one cohesive runbook/);
     assert.doesNotMatch(descriptors.find((tool) => tool.name === "runbook.create").description, /4–12|medium-sized/);
     assert.match(descriptors.find((tool) => tool.name === "runbook.append").description, /only for a genuinely unrelated objective/);
@@ -424,6 +426,164 @@ test("runbook execution records cell status, output, and duration through the sh
     } finally {
       database.close();
     }
+  } finally {
+    store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runbook preparation reuses an entry cell and revision-checked editing revises its command", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-prepare-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const store = new RunbookStore(getDefaultMemoryDatabasePath(workspaceRoot), layout,
+    { sessionId: "session_prepare", workspaceId: "workspace_prepare", workspaceName: "Prepare" });
+  const registry = createResearchToolRegistry(createRunbookTools(store));
+  const input = {
+    title: "Example parser proof",
+    purpose: "Reproduce the example parser behavior.",
+    candidatePath: "investigations/example-parser/candidate.py",
+    entryCommand: "python3 investigations/example-parser/candidate.py",
+    language: "python3",
+  };
+  const execute = async (toolName, actionInput) => (await registry.execute({
+    id: `${toolName}-example`, actionClass: "synthesize", toolName, input: actionInput,
+  })).result;
+  try {
+    const minimal = await execute("runbook.prepare", { title: "Minimal example", purpose: "Prove the bounded example.", language: "python3" });
+    assert.equal(minimal.status, "complete", minimal.error?.message);
+    assert.match(minimal.output.candidatePath, /^investigations\/minimal-example-[a-f0-9]{8}\/candidate\.py$/u);
+    assert.equal(minimal.output.entryCommand, `python3 ${minimal.output.candidatePath}`);
+    assert.equal(store.get(minimal.output.runbookId).cells[1].id, minimal.output.entryCellId);
+    assert.equal(store.get(minimal.output.runbookId).cells[1].language, "sh");
+    assert.equal(store.get(minimal.output.runbookId).cells[1].cwd, ".");
+    const minimalAgain = await execute("runbook.prepare", { title: "Minimal example", purpose: "Prove the bounded example.", language: "python3" });
+    assert.equal(minimalAgain.output.disposition, "reused");
+    assert.equal(minimalAgain.output.entryCellId, minimal.output.entryCellId);
+    const caseVariant = await execute("runbook.prepare", { title: "MINIMAL EXAMPLE", purpose: "Prove the bounded example.", language: "python3" });
+    assert.equal(caseVariant.output.disposition, "reused");
+    assert.equal(caseVariant.output.candidatePath, minimal.output.candidatePath);
+    const invocations = [];
+    const shellTool = {
+      descriptor: { name: "shell.run", description: "fixture", actionClasses: ["experiment"], sideEffects: "process", requiredPermissions: [] },
+      async execute(action) {
+        invocations.push(action.input);
+        return { action, status: "complete", startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+          summary: "complete", output: { exitCode: 0 }, followUpActions: [] };
+      },
+    };
+    const entryRun = await createRunbookExecutor({ store, shellTool })({ runbookId: minimal.output.runbookId, proofTarget: "localhost" });
+    assert.equal(entryRun.status, "succeeded");
+    assert.equal(invocations[0].cwd, ".");
+    assert.equal(invocations[0].command, minimal.output.entryCommand);
+    assert.equal(store.get(minimal.output.runbookId).execution.latestSuccessfulRunId, entryRun.runId);
+    store.editCell({ id: minimal.output.runbookId, expectedRevision: store.get(minimal.output.runbookId).revision,
+      cellId: minimal.output.entryCellId, source: `${minimal.output.entryCommand} --verbose` });
+    assert.equal(store.get(minimal.output.runbookId).execution.latestSuccessfulRunId, null);
+    const preparedAfterEdit = await execute("runbook.prepare", { title: "Minimal example", purpose: "Prove the bounded example.", language: "python3" });
+    assert.equal(preparedAfterEdit.output.disposition, "reused");
+    assert.equal(preparedAfterEdit.output.entryCellId, minimal.output.entryCellId);
+    assert.equal(preparedAfterEdit.output.entryCommand, `${minimal.output.entryCommand} --verbose`);
+    store.create({ title: "Minimal example", purpose: "Prove the bounded example." });
+    const ambiguous = await execute("runbook.prepare", { title: "Minimal example", purpose: "Prove the bounded example.", language: "python3" });
+    assert.equal(ambiguous.status, "error");
+    assert.match(ambiguous.error.message, /Multiple runbooks/u);
+    const selected = await execute("runbook.prepare", { id: minimal.output.runbookId, title: "Minimal example", purpose: "Prove the bounded example.", language: "python3" });
+    assert.equal(selected.output.disposition, "reused");
+    assert.equal(selected.output.entryCellId, minimal.output.entryCellId);
+
+    const prepared = await execute("runbook.prepare", input);
+    assert.equal(prepared.status, "complete", prepared.error?.message);
+    assert.equal(prepared.output.disposition, "created");
+    assert.equal(prepared.output.candidatePath, input.candidatePath);
+    assert.ok(prepared.output.entryCellId);
+    assert.equal(store.get(prepared.output.runbookId).cells[1].source, input.entryCommand);
+
+    const reused = await execute("runbook.prepare", input);
+    assert.equal(reused.status, "complete", reused.error?.message);
+    assert.equal(reused.output.disposition, "reused");
+    assert.equal(reused.output.runbookId, prepared.output.runbookId);
+    assert.equal(reused.output.entryCellId, prepared.output.entryCellId);
+    assert.equal(reused.output.revision, prepared.output.revision);
+    assert.throws(() => store.create({ title: input.title, purpose: input.purpose }, undefined, true), /created while preparing/u);
+    const empty = store.create({ title: "Example empty workflow", purpose: "Prepare an existing outline." });
+    const extended = await execute("runbook.prepare", { ...input, title: empty.runbook.title, purpose: empty.runbook.purpose });
+    assert.equal(extended.status, "complete", extended.error?.message);
+    assert.equal(extended.output.disposition, "added-entry");
+    assert.equal(extended.output.runbookId, empty.runbook.id);
+    assert.equal(store.get(empty.runbook.id).cells[1].id, extended.output.entryCellId);
+    assert.equal((await execute("runbook.prepare", { ...input, candidatePath: "../outside.py" })).status, "error");
+    assert.match((await execute("runbook.prepare", { ...input, entryCommand: "python3 investigations/example-parser/other.py" })).error.message, /must reference candidatePath/u);
+
+    const edited = await execute("runbook.edit", {
+      id: prepared.output.runbookId,
+      expectedRevision: reused.output.revision,
+      cellId: reused.output.entryCellId,
+      source: "python3 -u investigations/example-parser/candidate.py",
+    });
+    assert.equal(edited.status, "complete", edited.error?.message);
+    assert.equal(edited.output.revision, reused.output.revision + 1);
+    assert.equal(edited.output.contentRevision, 2);
+    assert.equal(edited.output.editedCellId, reused.output.entryCellId);
+    const cell = store.get(prepared.output.runbookId).cells[1];
+    assert.equal(cell.id, reused.output.entryCellId);
+    assert.equal(cell.source, "python3 -u investigations/example-parser/candidate.py");
+    assert.deepEqual(cell.features, ["runtime"]);
+    assert.equal(cell.language, "sh");
+    assert.equal(cell.cwd, ".");
+    const stale = await execute("runbook.edit", {
+      id: prepared.output.runbookId, expectedRevision: reused.output.revision,
+      cellId: reused.output.entryCellId, source: "python3 investigations/example-parser/other.py",
+    });
+    assert.equal(stale.status, "error");
+    assert.match(stale.error.message, /revision conflict/u);
+    assert.equal(store.get(prepared.output.runbookId).cells[1].source, cell.source);
+
+    const withOutput = store.create({ title: "Example output", purpose: "Preserve a prior result.", cells: [
+      { kind: "code", language: "sh", source: "echo old", features: ["runtime"], stdout: "old output", exitCode: 1 },
+    ] });
+    const outputCell = store.get(withOutput.runbook.id).cells[1];
+    assert.equal(outputCell.stdout, "old output");
+    assert.equal(outputCell.exitCode, 1);
+    store.editCell({ id: withOutput.runbook.id, expectedRevision: withOutput.runbook.revision, cellId: outputCell.id, source: "echo revised" });
+    assert.equal(store.get(withOutput.runbook.id).cells[1].stdout, undefined);
+    assert.equal(store.get(withOutput.runbook.id).cells[1].exitCode, undefined);
+  } finally {
+    store.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runbook failure runs remaining cleanup cells and preserves the proof failure", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-runbook-cleanup-"));
+  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
+  const store = new RunbookStore(getDefaultMemoryDatabasePath(workspaceRoot), layout,
+    { sessionId: "session_cleanup", workspaceId: "workspace_cleanup", workspaceName: "Cleanup" });
+  const calls = [];
+  const shellTool = {
+    descriptor: { name: "shell.run", description: "fixture", actionClasses: ["experiment"], sideEffects: "process", requiredPermissions: [] },
+    async execute(action) {
+      calls.push(action.input.command);
+      const failed = action.input.command === "proof";
+      return { action, status: failed ? "error" : "complete", startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+        summary: failed ? "proof failed" : "complete", ...(failed ? { error: { message: "proof failed" } } : {}),
+        output: { exitCode: failed ? 1 : 0 }, followUpActions: [] };
+    },
+  };
+  try {
+    const created = store.create({ title: "Cleanup after failure", purpose: "Preserve cleanup after a failed proof.", cells: [
+      { kind: "code", language: "sh", source: "setup", features: ["setup"] },
+      { kind: "code", language: "sh", source: "proof", features: ["runtime"] },
+      { kind: "code", language: "sh", source: "later-proof", features: ["runtime"] },
+      { kind: "code", language: "sh", source: "cleanup", features: ["cleanup"] },
+    ] }).runbook;
+    const executed = await createRunbookExecutor({ store, shellTool })({ runbookId: created.id, proofTarget: "localhost" });
+    assert.equal(executed.status, "failed");
+    assert.match(executed.error, /proof failed/);
+    assert.deepEqual(calls, ["setup", "proof", "cleanup"]);
+    const snapshot = store.getExecution(created.id, executed.runId);
+    assert.equal(snapshot.cells.find((cell) => cell.source === "cleanup").result.status, "succeeded");
+    assert.equal(snapshot.cells.find((cell) => cell.source === "later-proof").result, null);
+    assert.equal(store.get(created.id).execution.latestSuccessfulRunId, null);
   } finally {
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });

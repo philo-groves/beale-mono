@@ -321,8 +321,10 @@ function toolLabelInputKeys(toolName: string): readonly string[] {
     case 'runbook.list':
     case 'report.list': return ['query'];
     case 'runbook.get': return ['id'];
+    case 'runbook.prepare': return ['title', 'candidatePath'];
     case 'runbook.create': return ['title', 'status'];
     case 'runbook.append': return ['id', 'status', 'expectedRevision'];
+    case 'runbook.edit': return ['id', 'cellId', 'expectedRevision'];
     case 'runbook.run': return ['id', 'cellId', 'startCellId', 'endCellId'];
     case 'file.read': return ['path'];
     case 'shell.run': return ['command', 'utility', 'args'];
@@ -338,7 +340,9 @@ function toolLabelResultKeys(toolName: string): readonly string[] {
   switch (toolName) {
     case 'memory.save': return ['id', 'type', 'status', 'revision'];
     case 'runbook.create':
-    case 'runbook.append': return ['title', 'status', 'revision'];
+    case 'runbook.append':
+    case 'runbook.edit': return ['title', 'status', 'revision'];
+    case 'runbook.prepare': return ['runbookId', 'entryCellId', 'candidatePath', 'revision'];
     case 'runbook.run': return ['runbookId', 'title'];
     case 'shell.run': return ['command', 'utility', 'args'];
     case 'repository.search': return ['query', 'roots', 'attemptedRoots'];
