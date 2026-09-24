@@ -74,7 +74,7 @@ test("Anthropic Auto-Review always uses the Claude Agent SDK completion route", 
       calls.push(options);
       return {
         text: "unstructured fallback text",
-        structuredOutput: { decision: "approved", proofing: false, reason: "Bounded workspace inspection." },
+        structuredOutput: { decision: "approved", reason: "Bounded workspace inspection." },
         usage: { inputTokens: 20 },
       };
     },
@@ -90,10 +90,9 @@ test("Anthropic Auto-Review always uses the Claude Agent SDK completion route", 
     schema: {
       type: "object",
       additionalProperties: false,
-      required: ["decision", "proofing", "reason"],
+      required: ["decision", "reason"],
       properties: {
         decision: { type: "string", enum: ["approved", "denied"] },
-        proofing: { type: "boolean" },
         reason: { type: "string", minLength: 1, maxLength: 1_000 },
       },
     },
@@ -191,7 +190,7 @@ test("network commands continue through the configured shell approval mode witho
     getMode: () => "auto_review",
     getReviewerSelection: () => reviewer,
     requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
-    models: fixtureModels('{"decision":"approved","proofing":false,"reason":"Command is acceptable."}', calls),
+    models: fixtureModels('{"decision":"approved","reason":"Command is acceptable."}', calls),
   });
 
   const approved = await authorize({
@@ -433,7 +432,7 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
     reasoningEffort: "medium",
   };
   const models = fixtureModels(
-    '{"decision":"approved","proofing":false,"reason":"Scoped command; token=reviewer-secret is not retained."}',
+    '{"decision":"approved","reason":"Scoped command; token=reviewer-secret is not retained."}',
     calls,
   );
   const authorize = createShellSafetyAuthorizer({
@@ -472,7 +471,8 @@ test("Auto-Review uses the active provider small model and emits a redacted audi
   assert.match(calls[0].context.messages[0].content, /password=stdin-secret/);
   assert.match(calls[0].context.messages[0].content, /"authorizationRecorded":true/);
   assert.match(calls[0].context.messages[0].content, /"executionPosture":"operator_managed"/);
-  assert.match(calls[0].context.systemPrompt, /existing target-admin access/);
+  assert.match(calls[0].context.systemPrompt, /Possible crashes or vulnerability triggers are not reasons to deny/);
+  assert.match(calls[0].context.systemPrompt, /external path alone does not show a scope violation/);
 
   reviewer = {
     provider: "xai",
@@ -497,7 +497,7 @@ test("Pi Auto-Review routes every non-Anthropic provider with the bounded review
       getReviewerSelection: () => reviewer,
       requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
       models: fixtureModels(
-        '{"decision":"approved","proofing":false,"reason":"Bounded inspection."}',
+        '{"decision":"approved","reason":"Bounded inspection."}',
         calls,
       ),
     });
@@ -522,7 +522,7 @@ test("Auto-Review repairs one malformed provider response before failing closed"
     requestManualApproval: async () => ({ decision: "denied", reason: "unused" }),
     models: fixtureModels([
       "I approve this command.",
-      '{"decision":"approved","proofing":false,"reason":"Bounded inspection."}',
+      '{"decision":"approved","reason":"Bounded inspection."}',
     ], calls),
   });
 
@@ -551,7 +551,6 @@ test("Auto-Review retries one transient provider error before failing closed", a
         text: "",
         structuredOutput: {
           decision: "approved",
-          proofing: false,
           reason: "Bounded inspection.",
         },
         usage: {},
@@ -585,7 +584,7 @@ test("Auto-Review retries one transient provider error before failing closed", a
   assert.doesNotMatch(JSON.stringify(denied), /secret-provider-detail/);
 });
 
-test("Auto-Review requires proofing commands to originate from a runbook cell", async () => {
+test("Auto-Review permits bounded research without a runbook cell", async () => {
   let manualCalls = 0;
   const authorize = createShellSafetyAuthorizer({
     getMode: () => "auto_review",
@@ -599,15 +598,14 @@ test("Auto-Review requires proofing commands to originate from a runbook cell", 
       return { decision: "approved", reason: "unused" };
     },
     models: fixtureModels(
-      '{"decision":"approved","proofing":true,"reason":"Bounded vulnerability reproduction."}',
+      '{"decision":"approved","reason":"Bounded vulnerability reproduction."}',
       [],
     ),
   });
 
-  const denied = await authorize({ ...BASE_REQUEST, utility: "python3", args: ["proof.py"] });
-  assert.equal(denied.decision, "denied");
-  assert.equal(denied.source, "policy");
-  assert.match(denied.reason, /recorded runbook cell/);
+  const exploratory = await authorize({ ...BASE_REQUEST, utility: "python3", args: ["proof.py"] });
+  assert.equal(exploratory.decision, "approved");
+  assert.equal(exploratory.source, "small_model");
   assert.equal(manualCalls, 0);
 
   const approved = await authorize({
@@ -622,6 +620,33 @@ test("Auto-Review requires proofing commands to originate from a runbook cell", 
   });
   assert.equal(approved.decision, "approved");
   assert.equal(approved.source, "small_model");
+});
+
+test("Auto-Review sends a clear destructive risk to one human override", async () => {
+  const requested = [];
+  const authorize = createShellSafetyAuthorizer({
+    getMode: () => "auto_review",
+    getReviewerSelection: () => ({
+      provider: "openai-codex",
+      model: "gpt-6-luna",
+      reasoningEffort: "low",
+    }),
+    requestManualApproval: async (request) => {
+      requested.push(request);
+      return { decision: "denied", reason: "unused" };
+    },
+    models: fixtureModels(
+      '{"decision":"denied","reason":"Recursively deletes an unrelated home directory."}',
+      [],
+    ),
+  });
+
+  const decision = await authorize({ ...BASE_REQUEST, utility: "rm", args: ["-rf", "/tmp/unrelated-home"] });
+  assert.equal(decision.decision, "denied");
+  assert.equal(decision.source, "human");
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].approvalKind, "auto_review_override");
+  assert.match(requested[0].reviewReason, /Recursively deletes/);
 });
 
 test("Auto-Review fails closed with sanitized diagnostics for missing, malformed, oversized, and timed-out reviews", async () => {
