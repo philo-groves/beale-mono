@@ -31,6 +31,10 @@ export type {
   ResearchGoalSuggestionSelectionInput,
 } from "@beale/research-agent";
 
+export interface SteeringSuggestionResult {
+  suggestion: string | null;
+}
+
 export interface CreateResearchChannelInput {
   name: string;
   title?: string;
@@ -70,7 +74,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-23T10:38:10.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-28T16:20:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "workspace.research-project.v3",
@@ -459,7 +463,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
   "investigation.list", "investigation.get", "investigation.replay",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",
-  "suggestion.generate", "suggestion.select", "prompt.expand",
+  "suggestion.generate", "suggestion.select", "suggestion.steering", "prompt.expand",
   "profile.resolve", "auth.list", "auth.status", "auth.verify", "auth.logout", "model.list",
   "tools.list", "tools.config", "config.show", "config.set",
   "research.tools.list", "research.tools.read", "research.tools.mutate",

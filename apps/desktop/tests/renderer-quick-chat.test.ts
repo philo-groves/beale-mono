@@ -33,7 +33,7 @@ describe('quick chats', () => {
     expect(component).toContain('window.beale.startQuickChat');
     expect(component).toContain('showCollaboration={false}');
     expect(component).toContain('initialSafetyMode="auto_review"');
-    expect(component).toContain('showSafetyMode={false}');
+    expect(component).not.toContain('showSafetyMode=');
     expect(component).toContain("onReportInitialInstruction(instruction, modelSelection, 'auto_review')");
     expect(component).not.toContain('safetyModeOptions=');
     expect(component).toContain('className="quick-chat-empty-state"');
@@ -81,7 +81,8 @@ describe('quick chats', () => {
     expect(html).toContain('lucide-file-text');
     expect(html).not.toContain('Report editing ·');
     expect(html).not.toContain('lucide-message-square');
-    expect(html).toContain('Review and improve this report.');
+    expect(html).toContain('Describe a change to this report');
+    expect(html).not.toContain('Review and improve this report.');
     expect(html).toContain('This chat will be automatically archived.');
     expect(html).toContain('class="new-research-welcome-icon"');
     expect(html).toContain('Send a report editing message');

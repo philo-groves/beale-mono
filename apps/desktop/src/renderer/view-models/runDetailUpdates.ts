@@ -1,4 +1,4 @@
-import type { RunDetail, RunDetailUpdate, RunDetailUpdateCursor, SubagentPreviewRecord, TraceEventRecord, TranscriptMessageRecord, WorkspaceSnapshot } from '@shared/types';
+import type { RunDetail, RunDetailUpdate, RunDetailUpdateCursor, RunHistoryPage, SubagentPreviewRecord, TraceEventRecord, TranscriptMessageRecord, WorkspaceSnapshot } from '@shared/types';
 import type { DevMetricDetail } from '../devInstrumentation';
 
 export function selectRunId(current: string | null, snapshot: WorkspaceSnapshot | null): string | null {
@@ -76,7 +76,18 @@ export function mergeRunDetailUpdate(current: RunDetail, update: RunDetailUpdate
     exports: mergeRecordsById(current.exports, update.exports),
     appServerMemory: update.appServerMemory ?? current.appServerMemory,
     subagentPreviews: mergeSubagentPreviews(current.subagentPreviews ?? [], update.subagentPreviews ?? []),
-    projectionCursor: update.projectionCursor ?? current.projectionCursor
+    projectionCursor: update.projectionCursor ?? current.projectionCursor,
+    historyCursor: current.historyCursor
+  };
+}
+
+export function mergeRunHistoryPage(current: RunDetail, page: RunHistoryPage): RunDetail {
+  if (current.run.id !== page.runId) return current;
+  return {
+    ...current,
+    traceEvents: mergeTraceEvents(page.traceEvents, current.traceEvents),
+    transcriptMessages: mergeTranscriptMessages(page.transcriptMessages, current.transcriptMessages),
+    historyCursor: page.historyCursor
   };
 }
 

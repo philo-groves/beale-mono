@@ -5,17 +5,11 @@ import type { ApprovalRecord, ResearchProviderModelCatalog, RunDetail, RunStatus
 import {
   CollaborationSettingsForm,
   MainSteerArea,
-  SHELL_SAFETY_MODE_OPTIONS,
   STEER_TEXTAREA_DEFAULT_EXTRA_LINES,
   STEER_TEXTAREA_MAX_LINES,
-  selectNextCollaborationRoute,
-  steeringSafetyModeOptions
+  selectNextCollaborationRoute
 } from '../src/renderer/features/sessions/SessionComposer';
-import {
-  shortSteeringSuggestion,
-  steeringInputSuggestion,
-  steeringInputTabAction
-} from '../src/renderer/view-models/steeringSuggestions';
+import { steeringInputTabAction } from '../src/renderer/view-models/steeringSuggestions';
 
 describe('renderer session composer', () => {
   it('allows the steering input to grow through seven typed lines', () => {
@@ -39,31 +33,7 @@ describe('renderer session composer', () => {
 
     expect(html).toContain('aria-label="Send steering instruction"');
     expect(html).not.toContain('aria-label="Stop session"');
-    expect(html).toContain('placeholder="Resume from the last useful result."');
-  });
-
-  it('shows a current-session continuation suggestion when the run has ended', () => {
-    const html = renderTraceComposer('completed', {
-      transcriptMessages: [{
-        id: 'final_message',
-        runId: 'run_composer',
-        attemptId: 'attempt_one',
-        traceEventId: 'trace_final',
-        role: 'assistant',
-        phase: 'final_answer',
-        contentMarkdown: 'Final result.',
-        source: 'app-server',
-        metadata: {
-          nextPromptSuggestions: [{
-            title: 'Validate crash',
-            promptMarkdown: 'Inspect the saved crash and validate the suspected bounds check.'
-          }]
-        },
-        createdAt: '2026-08-14T10:00:00.000Z'
-      }]
-    });
-
-    expect(html).toContain('placeholder="Inspect the saved crash and validate the suspected bounds check."');
+    expect(html).toContain('placeholder="Your move"');
   });
 
   it('hides response suggestions when they are disabled', () => {
@@ -117,27 +87,6 @@ describe('renderer session composer', () => {
     })).toBe('none');
   });
 
-  it('shows an explicit initial suggestion immediately so the first Tab accepts it', () => {
-    const html = renderToStaticMarkup(createElement(MainSteerArea, {
-      runId: null,
-      detail: null,
-      providerModelCatalog: providerModelCatalog(),
-      busy: false,
-      initialSuggestion: 'Review this report.',
-      onInitialInstruction: () => undefined,
-      onSessionAction: () => undefined,
-      onSteerInstruction: () => undefined
-    }));
-
-    expect(html).toContain('placeholder="Review this report."');
-    expect(html).toMatch(/aria-label="Shell safety mode" aria-haspopup="listbox" aria-expanded="false"><svg[^>]*main-steer-safety-mode-icon/u);
-    expect(steeringInputTabAction({
-      instruction: '',
-      suggestion: 'Review this report.',
-      suggestionShowing: true
-    })).toBe('accept_suggestion');
-  });
-
   it('supports a view-specific input placeholder', () => {
     const html = renderToStaticMarkup(createElement(MainSteerArea, {
       runId: null,
@@ -151,80 +100,6 @@ describe('renderer session composer', () => {
     }));
 
     expect(html).toContain('placeholder="Write a full research prompt"');
-  });
-
-  it('keeps steering suggestions under fifteen words', () => {
-    const suggestion = shortSteeringSuggestion(
-      'Continue by validating the parser crash with saved artifacts and then compare adjacent bounds checks carefully.'
-    );
-    expect(suggestion?.split(/\s+/u).length).toBeLessThanOrEqual(14);
-    expect(suggestion).toBe('Continue by validating the parser crash with saved artifacts.');
-  });
-
-  it('removes dangling conjunctions from model steering suggestions', () => {
-    expect(shortSteeringSuggestion('Inspect the saved crash artifacts and.')).toBe(
-      'Inspect the saved crash artifacts.'
-    );
-  });
-
-  it('grounds a generic model suggestion in the latest user steering context', () => {
-    const detail = composerDetail('active', {
-      run: {
-        ...composerDetail('active').run,
-        title: 'OAuth callback validation',
-        promptMarkdown: 'Review OAuth callback validation.'
-      },
-      transcriptMessages: [{
-        id: 'steering_message',
-        runId: 'run_composer',
-        attemptId: 'attempt_one',
-        traceEventId: 'trace_steering',
-        role: 'user',
-        phase: 'commentary',
-        contentMarkdown: 'Investigate malformed state parameters bypassing OAuth callback validation.',
-        source: 'user',
-        metadata: {
-          nextPromptSuggestions: [{
-            title: 'Continue research',
-            promptMarkdown: 'Continue from the latest findings.'
-          }]
-        },
-        createdAt: '2026-08-15T10:00:00.000Z'
-      }]
-    });
-
-    expect(steeringInputSuggestion(detail)).toBe(
-      'Continue investigating malformed state parameters bypassing OAuth callback validation.'
-    );
-  });
-
-  it('uses the session title when no model or steering suggestion is available', () => {
-    const detail = composerDetail('paused', {
-      run: {
-        ...composerDetail('paused').run,
-        title: 'Parser bounds-check bypass',
-        promptMarkdown: 'Investigate the parser.'
-      }
-    });
-
-    expect(steeringInputSuggestion(detail)).toBe(
-      'Continue investigating Parser bounds-check bypass.'
-    );
-  });
-
-  it('uses the completed session summary before its original objective', () => {
-    const detail = composerDetail('completed', {
-      run: {
-        ...composerDetail('completed').run,
-        title: 'Parser review',
-        promptMarkdown: 'Review the request parser for memory-safety issues.',
-        summary: 'The investigation confirmed that crafted length fields bypass the parser signed bounds check.'
-      }
-    });
-
-    expect(steeringInputSuggestion(detail)).toBe(
-      'Continue investigating crafted length fields bypass the parser signed bounds check.'
-    );
   });
 
   it('combines model and effort into one model settings picker', () => {
@@ -260,13 +135,11 @@ describe('renderer session composer', () => {
     });
     const modelIndex = html.indexOf('aria-label="Model settings for the next agent turn"');
     const collaborationIndex = html.indexOf('aria-label="Collaboration settings"');
-    const safetyIndex = html.indexOf('aria-label="Shell safety mode"');
 
     expect(modelIndex).toBeGreaterThanOrEqual(0);
     expect(collaborationIndex).toBeGreaterThanOrEqual(0);
-    expect(safetyIndex).toBeGreaterThanOrEqual(0);
     expect(collaborationIndex).toBeGreaterThan(modelIndex);
-    expect(safetyIndex).toBeGreaterThan(collaborationIndex);
+    expect(html).not.toContain('aria-label="Shell safety mode"');
     expect(html).toContain('main-steer-collaboration-icon');
     expect(html).toContain('class="main-steer-collaboration-label">2 Collabs</span>');
     expect(html).toContain('class="main-steer-collaboration-mode">Advanced</span>');
@@ -478,30 +351,11 @@ describe('renderer session composer', () => {
     });
   });
 
-  it('places the persisted shell safety picker after model settings', () => {
+  it('keeps permissions out of the steering composer', () => {
     const html = renderTraceComposer('stopped');
-    const safetyIndex = html.indexOf('aria-label="Shell safety mode"');
-    const shieldIndex = html.indexOf('main-steer-safety-mode-icon', safetyIndex);
-    const modelIndex = html.indexOf('aria-label="Model settings for the next agent turn"');
 
-    expect(html).toContain('Auto-Review');
-    expect(safetyIndex).toBeGreaterThanOrEqual(0);
-    expect(shieldIndex).toBeGreaterThan(safetyIndex);
-    expect(safetyIndex).toBeGreaterThan(modelIndex);
-    expect(SHELL_SAFETY_MODE_OPTIONS).toEqual([
-      { value: 'manual_approval', label: 'Manual Approval' },
-      { value: 'auto_review', label: 'Auto-Review' },
-      { value: 'danger', label: 'Danger Mode' }
-    ]);
-    expect(steeringSafetyModeOptions(SHELL_SAFETY_MODE_OPTIONS, false).map((option) => option.value)).toEqual([
-      'manual_approval',
-      'auto_review'
-    ]);
-    expect(steeringSafetyModeOptions(SHELL_SAFETY_MODE_OPTIONS, true).map((option) => option.value)).toEqual([
-      'manual_approval',
-      'auto_review',
-      'danger'
-    ]);
+    expect(html).toContain('aria-label="Model settings for the next agent turn"');
+    expect(html).not.toContain('aria-label="Shell safety mode"');
   });
 
   it('replaces the steering composer with an inline Auto-Review override question', () => {
@@ -552,22 +406,21 @@ describe('renderer session composer', () => {
     expect(renderTraceComposer('stopped')).toContain('aria-label="Collaboration settings"');
   });
 
-  it('can omit collaboration and safety mode without leaving empty action-row slots', () => {
+  it('can omit collaboration without leaving an empty action-row slot', () => {
     const html = renderToStaticMarkup(createElement(MainSteerArea, {
       busy: false,
       detail: composerDetail('stopped'),
       providerModelCatalog: providerModelCatalog(),
       runId: 'run_composer',
       showCollaboration: false,
-      showSafetyMode: false,
       onSessionAction: () => undefined,
       onSteerInstruction: () => undefined
     }));
 
-    expect(html).toContain('class="main-steer-input-row without-trace-filters without-collaboration without-safety-mode"');
+    expect(html).toContain('class="main-steer-input-row without-trace-filters without-collaboration"');
     expect(html).not.toContain('aria-label="Collaboration settings"');
     expect(html).not.toContain('aria-label="Shell safety mode"');
-    expect(renderTraceComposer('stopped')).toContain('aria-label="Shell safety mode"');
+    expect(renderTraceComposer('stopped')).toContain('aria-label="Collaboration settings"');
   });
 });
 

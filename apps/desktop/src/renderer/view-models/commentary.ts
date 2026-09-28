@@ -27,6 +27,7 @@ export interface CommentaryMessage {
   toolCalls?: CommentaryToolCall[];
   reasoningTraceLines?: string[];
   contentMarkdown: string;
+  abortNotice?: string;
   createdAt: string;
 }
 
@@ -102,6 +103,7 @@ export function commentaryMessagesForSession(
   }
   messages = coalesceConsecutiveToolMessages(messages, useActiveToolTense);
   messages = appendRecoveryErrorFallback(messages, detail, projectedEvents);
+  messages = promoteCheckpointAfterAbort(messages, detail, projectedEvents);
 
   if (!includeInitialPrompt || !detail.run.promptMarkdown.trim() || hasRecordedInitialPrompt(events)) {
     return messages;
@@ -114,6 +116,55 @@ export function commentaryMessagesForSession(
     contentMarkdown: detail.run.promptMarkdown.trim(),
     createdAt: detail.run.createdAt
   }, ...messages];
+}
+
+function promoteCheckpointAfterAbort(
+  messages: CommentaryMessage[],
+  detail: RunDetail,
+  events: readonly TraceDisplayEvent[]
+): CommentaryMessage[] {
+  if (detail.run.status === 'active' || detail.run.status === 'queued') return messages;
+  const eventById = new Map(events.map((event) => [event.id, event]));
+  let abortIndex = messages.length - 1;
+  while (abortIndex >= 0 && messages[abortIndex]?.kind !== 'error' && messages[abortIndex]?.kind !== 'final_answer') {
+    abortIndex -= 1;
+  }
+  const aborted = messages[abortIndex];
+  if (!aborted || !isAbortedRequestText(aborted.contentMarkdown)) return messages;
+  const abortEvent = eventById.get(aborted.id);
+  if (!abortEvent) return messages;
+  const checkpoint = messages.slice(0, abortIndex).reverse().find((message) => {
+    if ((message.kind !== 'commentary' && message.kind !== 'final_answer') || !message.contentMarkdown.trim()) return false;
+    if (isAbortedRequestText(message.contentMarkdown)) return false;
+    const event = eventById.get(message.id);
+    if (!event) return false;
+    const agentPath = payloadString(event, 'agentPath');
+    return !agentPath || agentPath === '/root';
+  });
+  if (!checkpoint) return messages;
+  const checkpointTime = Date.parse(checkpoint.createdAt);
+  const abortTime = Date.parse(aborted.createdAt);
+  if (!Number.isFinite(checkpointTime) || !Number.isFinite(abortTime) || abortTime < checkpointTime) return messages;
+  const elapsedSeconds = Math.floor((abortTime - checkpointTime) / 1_000);
+  const hours = Math.floor(elapsedSeconds / 3_600);
+  const minutes = Math.floor(elapsedSeconds % 3_600 / 60);
+  const seconds = elapsedSeconds % 60;
+  const duration = [hours ? `${hours}h` : '', hours || minutes ? `${minutes}m` : '', `${seconds}s`].filter(Boolean).join(' ');
+  return messages.map((message, index) => {
+    if (index === abortIndex) return {
+      ...message,
+      kind: 'final_answer',
+      contentMarkdown: checkpoint.contentMarkdown,
+      abortNotice: `Request was aborted ${duration} after the above checkpoint.`
+    };
+    if (message === checkpoint && message.kind === 'final_answer') return { ...message, kind: 'commentary' };
+    return message;
+  });
+}
+
+function isAbortedRequestText(value: string): boolean {
+  const normalized = appServerErrorDisplayText(value) ?? value.trim();
+  return /^(?:Request was aborted|(?:The|This) operation was aborted)\.?$/iu.test(normalized);
 }
 
 function modelSafetyPauseMessage(

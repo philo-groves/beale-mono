@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { JSX, ReactNode } from 'react';
-import { ArrowRight, ChevronDown, Plus, Shield, Square, Users, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, Plus, Square, Users, X } from 'lucide-react';
 import type {
   ApprovalRecord,
   PolicyReviewDecision,
@@ -20,15 +20,12 @@ import type {
 } from '@shared/types';
 import { ModelSelectionPicker } from '../../app/ModelSelectionPicker';
 import { Modal } from '../../app/Modal';
-import { FloatingTextPicker } from '../../app/FloatingTextPicker';
 import { CenteredLoadingState } from '../../app/CenteredLoadingState';
 import { researchModelNameLabel } from '../../lib/formatting';
-import { normalizeShellSafetyMode, shellSafetyModeLabel, SHELL_SAFETY_MODE_OPTIONS } from '../../../shared/shellSafety';
+import { normalizeShellSafetyMode } from '../../../shared/shellSafety';
 import { normalizeResearchCollaboration, RESEARCH_SUBAGENT_ROLES } from '../../../shared/collaboration';
-export { SHELL_SAFETY_MODE_OPTIONS } from '../../../shared/shellSafety';
 import { contextMeterForDetail, visibleContextWindowPercentageLabel } from '../momentum/contextMeter';
 import {
-  steeringInputSuggestion,
   steeringInputTabAction,
   steeringSuggestionAutoVisible
 } from '../../view-models/steeringSuggestions';
@@ -55,15 +52,11 @@ export const MainSteerArea = memo(function MainSteerArea({
   collaboration: collaborationInput,
   initialSafetyMode,
   initialInstruction = '',
-  initialSuggestion,
   inputPlaceholder,
-  dangerModeEnabled = false,
-  safetyModeOptions = SHELL_SAFETY_MODE_OPTIONS,
   preComposerContent,
   postComposerContent,
   ariaLabel = 'Steer research session',
   showCollaboration = true,
-  showSafetyMode = true,
   responseSuggestionsEnabled = true,
   onCollaborationChange,
   onInitialInstruction,
@@ -83,15 +76,11 @@ export const MainSteerArea = memo(function MainSteerArea({
   collaboration?: ResearchCollaborationPreferences;
   initialSafetyMode?: ShellSafetyMode;
   initialInstruction?: string;
-  initialSuggestion?: string;
   inputPlaceholder?: string;
-  dangerModeEnabled?: boolean;
-  safetyModeOptions?: Array<{ value: ShellSafetyMode; label: string }>;
   preComposerContent?: ReactNode;
   postComposerContent?: ReactNode;
   ariaLabel?: string;
   showCollaboration?: boolean;
-  showSafetyMode?: boolean;
   responseSuggestionsEnabled?: boolean;
   onCollaborationChange?: (collaboration: ResearchCollaborationPreferences) => void;
   onInitialInstruction?: (
@@ -106,6 +95,10 @@ export const MainSteerArea = memo(function MainSteerArea({
 }): JSX.Element {
   const [instruction, setInstruction] = useState(initialInstruction);
   const [tabSuggestionVisible, setTabSuggestionVisible] = useState(false);
+  const [requestedSuggestionKey, setRequestedSuggestionKey] = useState<string | null>(null);
+  const [, setSuggestionVersion] = useState(0);
+  const suggestionCacheRef = useRef(new Map<string, string | null>());
+  const pendingSuggestionKeysRef = useRef(new Set<string>());
   const runProviderId = runModelProvider(detail, providerModelCatalog);
   const initialProviderId = detail ? runProviderId : initialModelSelection?.provider ?? runProviderId;
   const initialProvider = providerModelCatalog.find((catalog) => catalog.providerId === initialProviderId)
@@ -123,9 +116,6 @@ export const MainSteerArea = memo(function MainSteerArea({
   const [daybreakBlue, setDaybreakBlue] = useState(
     detail ? detail.run.budget.daybreakBlue === true : initialModelSelection?.daybreakBlue === true
   );
-  const [initialShellSafetyMode, setInitialShellSafetyMode] = useState<ShellSafetyMode>(() =>
-    normalizeShellSafetyMode(detail?.run.shellSafetyMode ?? initialSafetyMode)
-  );
   const footerRef = useRef<HTMLElement | null>(null);
   const preComposerRef = useRef<HTMLDivElement | null>(null);
   const postComposerRef = useRef<HTMLDivElement | null>(null);
@@ -134,19 +124,19 @@ export const MainSteerArea = memo(function MainSteerArea({
   const trimmedInstruction = instruction.trim();
   const disabled = busy || (!runId && !onInitialInstruction) || !trimmedInstruction || !selectedModelId;
   const status = detail?.run.status ?? null;
+  const suggestionKey = detail
+    ? `${detail.run.id}:${status}:${detail.transcriptMessages?.at(-1)?.id ?? ''}:${detail.run.summary}`
+    : null;
+  const generatedSuggestion = suggestionKey
+    ? suggestionCacheRef.current.get(suggestionKey) ?? null
+    : null;
+  const suggestionResolved = suggestionKey ? suggestionCacheRef.current.has(suggestionKey) : false;
   const steeringSuggestion = responseSuggestionsEnabled
-    ? initialSuggestion ?? steeringInputSuggestion(detail)
+    ? generatedSuggestion
     : null;
   const suggestionShowing = Boolean(
-    steeringSuggestion && (initialSuggestion || tabSuggestionVisible || steeringSuggestionAutoVisible(status))
+    steeringSuggestion && (tabSuggestionVisible || steeringSuggestionAutoVisible(status))
   );
-  const shellSafetyMode = detail
-    ? normalizeShellSafetyMode(detail.run.shellSafetyMode)
-    : initialShellSafetyMode;
-  const availableSafetyModeOptions = steeringSafetyModeOptions(safetyModeOptions, dangerModeEnabled);
-  const selectedSafetyModeLabel = availableSafetyModeOptions.some((option) => option.value === shellSafetyMode)
-    ? undefined
-    : shellSafetyModeLabel(shellSafetyMode);
   const sessionControlsDisabled = busy || !runId;
   const composerControlsDisabled = busy || (!runId && !onInitialInstruction);
   const fallbackModel = detail ? fallbackResearchModel(detail.run.model, researchEffort(detail.run.reasoningEffort)) : null;
@@ -221,7 +211,24 @@ export const MainSteerArea = memo(function MainSteerArea({
     providerModelCatalog
   ]);
 
-  useEffect(() => setTabSuggestionVisible(false), [runId, status, steeringSuggestion]);
+  useEffect(() => setTabSuggestionVisible(false), [suggestionKey]);
+  useEffect(() => {
+    if (!responseSuggestionsEnabled || !runId || !suggestionKey || !detail) return;
+    if (!steeringSuggestionAutoVisible(status) && requestedSuggestionKey !== suggestionKey) return;
+    if (suggestionCacheRef.current.has(suggestionKey) || pendingSuggestionKeysRef.current.has(suggestionKey)) return;
+    pendingSuggestionKeysRef.current.add(suggestionKey);
+    void window.beale.generateSteeringSuggestion(runId)
+      .then(({ suggestion }) => {
+        suggestionCacheRef.current.set(suggestionKey, suggestion);
+        if (suggestionCacheRef.current.size > 24) suggestionCacheRef.current.delete(suggestionCacheRef.current.keys().next().value!);
+        setSuggestionVersion((version) => version + 1);
+      })
+      .catch(() => {
+        suggestionCacheRef.current.set(suggestionKey, null);
+        setSuggestionVersion((version) => version + 1);
+      })
+      .finally(() => pendingSuggestionKeysRef.current.delete(suggestionKey));
+  }, [detail, requestedSuggestionKey, responseSuggestionsEnabled, runId, status, suggestionKey]);
   useEffect(() => {
     if (!detail) setInstruction(initialInstruction);
   }, [detail, initialInstruction]);
@@ -273,7 +280,7 @@ export const MainSteerArea = memo(function MainSteerArea({
   const submit = (): void => {
     if (disabled) return;
     if (runId) onSteerInstruction(runId, trimmedInstruction, modelSelection);
-    else onInitialInstruction?.(trimmedInstruction, modelSelection, shellSafetyMode);
+    else onInitialInstruction?.(trimmedInstruction, modelSelection, normalizeShellSafetyMode(initialSafetyMode));
     setInstruction('');
     setTabSuggestionVisible(false);
   };
@@ -285,6 +292,8 @@ export const MainSteerArea = memo(function MainSteerArea({
   const sessionActive = status === 'active';
   const placeholder = suggestionShowing && steeringSuggestion
     ? steeringSuggestion
+    : suggestionKey !== null && requestedSuggestionKey === suggestionKey && !suggestionResolved
+      ? 'Writing a suggestion…'
     : inputPlaceholder ?? (sessionActive ? 'Steer the research' : 'Your move');
 
   return (
@@ -296,7 +305,7 @@ export const MainSteerArea = memo(function MainSteerArea({
       {preComposerContent ? (
         <div className="main-steer-pre-composer-content" ref={preComposerRef}>{preComposerContent}</div>
       ) : null}
-      <div className={`main-steer-input-row without-trace-filters${showCollaboration ? '' : ' without-collaboration'}${showSafetyMode ? '' : ' without-safety-mode'}`}>
+      <div className={`main-steer-input-row without-trace-filters${showCollaboration ? '' : ' without-collaboration'}`}>
         <textarea
           ref={textareaRef}
           rows={1}
@@ -313,6 +322,12 @@ export const MainSteerArea = memo(function MainSteerArea({
               return;
             }
             if (event.key === 'Tab' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+              if (!instruction.trim() && responseSuggestionsEnabled && suggestionKey && !steeringSuggestion && !suggestionResolved) {
+                event.preventDefault();
+                setTabSuggestionVisible(true);
+                setRequestedSuggestionKey(suggestionKey);
+                return;
+              }
               const action = steeringInputTabAction({ instruction, suggestion: steeringSuggestion, suggestionShowing });
               if (action !== 'none') {
                 event.preventDefault();
@@ -386,25 +401,6 @@ export const MainSteerArea = memo(function MainSteerArea({
               note: 'Collaboration settings updated.'
             }) : undefined)}
             providerModelCatalog={providerOptions}
-          />
-        ) : null}
-        {showSafetyMode ? (
-          <FloatingTextPicker
-            className={`main-steer-safety-mode-picker mode-${shellSafetyMode}`}
-            leadingIcon={<Shield aria-hidden="true" className="main-steer-safety-mode-icon" size={13} />}
-            value={shellSafetyMode}
-            options={availableSafetyModeOptions}
-            selectedLabelOverride={selectedSafetyModeLabel}
-            title="Shell safety mode"
-            ariaLabel="Shell safety mode"
-            disabled={busy || status === 'paused' || (!runId && !onInitialInstruction)}
-            onChange={(value) => {
-              const nextMode = normalizeShellSafetyMode(value);
-              if (nextMode === 'danger' && !dangerModeEnabled) return;
-              if (nextMode === shellSafetyMode) return;
-              if (!runId) setInitialShellSafetyMode(nextMode);
-              else onSessionAction({ type: 'set_shell_safety_mode', runId, shellSafetyMode: nextMode });
-            }}
           />
         ) : null}
         <ContextUsageDonut detail={detail} />
@@ -883,13 +879,6 @@ function orderedCollaborationModels(
     return savedOrder.get(model.id) ?? Number.MAX_SAFE_INTEGER;
   };
   return [...catalog.models].sort((left, right) => rank(left) - rank(right));
-}
-
-export function steeringSafetyModeOptions(
-  options: Array<{ value: ShellSafetyMode; label: string }>,
-  dangerModeEnabled: boolean
-): Array<{ value: ShellSafetyMode; label: string }> {
-  return dangerModeEnabled ? options : options.filter((option) => option.value !== 'danger');
 }
 
 function runModelProvider(detail: RunDetail | null, catalogs: ResearchProviderModelCatalog[]): ResearchModelProviderId {

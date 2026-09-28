@@ -1036,6 +1036,18 @@ test("session event, collaboration, capture, and nested trace reads are targeted
     ]);
     assert.equal(update?.nextAfterEventId, "subagent_completed");
     assert.equal(update?.hasMore, false);
+    const recent = store.getUpdate("session_targeted", null, { tail: true, limit: 2 });
+    assert.deepEqual(recent?.events.map((event) => event.id), ["event_after_nested", "subagent_completed"]);
+    assert.equal(recent?.hasEarlier, true);
+    assert.deepEqual(store.getEventPage("session_targeted", {
+      beforeEventId: recent.events[0].id, limit: 2,
+    }).events.map((event) => event.id), ["room_one_create", "room_one_complete"]);
+    const older = store.getEventPage("session_targeted", { beforeEventId: "event_after_nested", limit: 2 });
+    assert.deepEqual(older.events.map((event) => event.id), ["room_one_create", "room_one_complete"]);
+    assert.equal(older.hasEarlier, true);
+    assert.deepEqual(store.getEventPage("session_targeted", {
+      beforeEventId: older.events[0].id, limit: 2,
+    }).events.map((event) => event.id), ["trace_batch_one"]);
     assert.deepEqual(store.getEventDetails("session_targeted", ["trace_nested"]).map((event) => event.id), [
       "trace_batch_one",
     ]);

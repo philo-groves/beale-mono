@@ -39,11 +39,11 @@ interface CommentaryScrollAnchorOptions {
   canUseMessageId?: (messageId: string) => boolean;
 }
 
-export const COMMENTARY_RENDER_WINDOW_SIZE = 60;
-const COMMENTARY_ESTIMATED_MESSAGE_HEIGHT = 104;
-const COMMENTARY_AUTO_FOLLOW_THRESHOLD = COMMENTARY_ESTIMATED_MESSAGE_HEIGHT * 2;
-const COMMENTARY_WINDOW_SLIDE_STEP = 15;
-const COMMENTARY_WINDOW_EDGE_BUFFER = COMMENTARY_ESTIMATED_MESSAGE_HEIGHT * 5;
+export const COMMENTARY_RENDER_WINDOW_SIZE = 120;
+const COMMENTARY_ESTIMATED_MESSAGE_HEIGHT = 56;
+const COMMENTARY_AUTO_FOLLOW_THRESHOLD = 112;
+const COMMENTARY_WINDOW_SLIDE_STEP = 30;
+const COMMENTARY_WINDOW_EDGE_BUFFER = 280;
 const returnToolCallWithoutLoading = async (toolCall: CommentaryToolCall): Promise<CommentaryToolCall> => toolCall;
 const INLINE_SINGULAR_TOOL_NAMES = new Set(['file.read', 'shell.run']);
 
@@ -55,6 +55,7 @@ export const CommentaryView = memo(function CommentaryView({
   detail,
   sessionSetupPending = false,
   events,
+  onLoadOlderHistory,
   activeScope = null,
   providerModelCatalog,
   providerModelDefaults,
@@ -65,21 +66,16 @@ export const CommentaryView = memo(function CommentaryView({
   searchHighlightQuery,
   shellApproval = null,
   shellApprovalBusy = false,
-  postSessionContent,
   emptyContent,
   initialModelSelection,
   collaboration,
   initialSafetyMode,
-  safetyModeOptions,
   inputPlaceholder,
   ariaLabel,
   showCollaboration = true,
-  showSafetyMode = true,
-  initialSuggestion,
   initialInstruction,
   preComposerContent,
   postComposerContent,
-  dangerModeEnabled = false,
   responseSuggestionsEnabled = true,
   onBackToMain,
   onCancel,
@@ -94,6 +90,7 @@ export const CommentaryView = memo(function CommentaryView({
   detail: RunDetail | null;
   sessionSetupPending?: boolean;
   events: TraceDisplayEvent[];
+  onLoadOlderHistory?: () => Promise<boolean>;
   activeScope?: WorkspaceScopeVersion | null;
   providerModelCatalog: ResearchProviderModelCatalog[];
   providerModelDefaults?: Partial<Record<ResearchModelProviderId, ProviderModelDefaults>>;
@@ -104,21 +101,16 @@ export const CommentaryView = memo(function CommentaryView({
   searchHighlightQuery: string;
   shellApproval?: ApprovalRecord | null;
   shellApprovalBusy?: boolean;
-  postSessionContent?: ReactNode;
   emptyContent?: ReactNode;
   initialModelSelection?: ResearchModelSelection;
   collaboration?: ResearchCollaborationPreferences;
   initialSafetyMode?: ShellSafetyMode;
-  safetyModeOptions?: Array<{ value: ShellSafetyMode; label: string }>;
   inputPlaceholder?: string;
   ariaLabel?: string;
   showCollaboration?: boolean;
-  showSafetyMode?: boolean;
-  initialSuggestion?: string;
   initialInstruction?: string;
   preComposerContent?: ReactNode;
   postComposerContent?: ReactNode;
-  dangerModeEnabled?: boolean;
   responseSuggestionsEnabled?: boolean;
   onBackToMain: () => void;
   onCancel?: () => void;
@@ -173,13 +165,36 @@ export const CommentaryView = memo(function CommentaryView({
   const [windowStart, setWindowStart] = useState(maxWindowStart);
   const normalizedWindowStart = Math.min(windowStart, maxWindowStart);
   const renderedMessages = activityMessages.slice(normalizedWindowStart, normalizedWindowStart + COMMENTARY_RENDER_WINDOW_SIZE);
-  const topSpacerHeight = normalizedWindowStart * COMMENTARY_ESTIMATED_MESSAGE_HEIGHT;
-  const bottomSpacerHeight = Math.max(0, activityMessages.length - normalizedWindowStart - renderedMessages.length) * COMMENTARY_ESTIMATED_MESSAGE_HEIGHT;
+  const measuredHeightsRef = useRef<{ scopeKey: string | null; heights: Map<string, number> }>({ scopeKey: scrollScopeKey, heights: new Map() });
+  if (measuredHeightsRef.current.scopeKey !== scrollScopeKey) {
+    measuredHeightsRef.current = { scopeKey: scrollScopeKey, heights: new Map() };
+  }
+  const [heightRevision, setHeightRevision] = useState(0);
+  const [itemGap, setItemGap] = useState(14);
+  const messageOffsets = useMemo(() => commentaryMessageOffsets(
+    activityMessages,
+    measuredHeightsRef.current.heights,
+    commentaryEstimatedMessageHeight(measuredHeightsRef.current.heights),
+    itemGap
+  ), [activityMessages, heightRevision, itemGap, scrollScopeKey]);
+  const topSpacerHeight = commentarySpacerHeight(messageOffsets, 0, normalizedWindowStart, itemGap);
+  const bottomSpacerHeight = commentarySpacerHeight(
+    messageOffsets, normalizedWindowStart + renderedMessages.length, activityMessages.length, itemGap
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const topSpacerRef = useRef<HTMLDivElement | null>(null);
+  const bottomSpacerRef = useRef<HTMLDivElement | null>(null);
   const followLatestRef = useRef(true);
   const restoringAnchorRef = useRef(false);
   const pendingScrollAnchorRef = useRef<CommentaryScrollAnchor | null>(null);
+  const pendingScrollTopRef = useRef<number | null>(null);
+  const pendingScrollWindowStartRef = useRef<number | null>(null);
+  const pendingMeasuredRevisionRef = useRef<number | null>(null);
+  const pendingItemGapRef = useRef<number | null>(null);
+  const historyAnchorRef = useRef<CommentaryScrollAnchor | null>(null);
+  const historyCursorRef = useRef(detail?.historyCursor?.beforeEventId ?? null);
+  const requestedHistoryCursorRef = useRef<string | null>(null);
   const userScrollIntentRef = useRef(false);
   const userScrollIntentTimerRef = useRef<number | null>(null);
   const scrollbarDragRef = useRef(false);
@@ -249,20 +264,107 @@ export const CommentaryView = memo(function CommentaryView({
     }, 200);
   }, []);
 
+  const loadOlderHistory = useCallback((): void => {
+    const cursor = detail?.historyCursor;
+    if (!onLoadOlderHistory || !cursor?.hasEarlier || !cursor.beforeEventId
+      || requestedHistoryCursorRef.current === cursor.beforeEventId) return;
+    const beforeEventId = cursor.beforeEventId;
+    requestedHistoryCursorRef.current = beforeEventId;
+    historyAnchorRef.current = listRef.current ? captureCommentaryScrollAnchor(listRef.current) : null;
+    void onLoadOlderHistory().then((loaded) => {
+      if (!loaded && requestedHistoryCursorRef.current === beforeEventId) {
+        requestedHistoryCursorRef.current = null;
+        historyAnchorRef.current = null;
+      }
+    });
+  }, [detail?.historyCursor, onLoadOlderHistory]);
+
   useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return undefined;
+    const nodes = commentaryMessageNodes(list);
+    const measure = (): void => {
+      const gap = Number.parseFloat(window.getComputedStyle(list).getPropertyValue('--main-commentary-item-gap'));
+      if (Number.isFinite(gap) && gap !== itemGap) {
+        if (!followLatestRef.current && pendingScrollAnchorRef.current === null && pendingScrollTopRef.current === null) {
+          pendingScrollAnchorRef.current = captureCommentaryScrollAnchor(list);
+        }
+        pendingItemGapRef.current = gap;
+        setItemGap(gap);
+      }
+      let changed = false;
+      for (const node of nodes) {
+        const id = node.dataset.commentaryEventId;
+        if (!id) continue;
+        const height = Math.ceil(node.getBoundingClientRect().height);
+        if (height <= 0 || measuredHeightsRef.current.heights.get(id) === height) continue;
+        measuredHeightsRef.current.heights.set(id, height);
+        changed = true;
+      }
+      if (!changed) return;
+      if (!followLatestRef.current && pendingScrollAnchorRef.current === null && pendingScrollTopRef.current === null) {
+        pendingScrollAnchorRef.current = captureCommentaryScrollAnchor(list);
+      }
+      pendingMeasuredRevisionRef.current = heightRevision + 1;
+      setHeightRevision((revision) => revision + 1);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    for (const node of nodes) observer.observe(node);
+    return () => observer.disconnect();
+  }, [heightRevision, itemGap, messageUpdateKey, normalizedWindowStart, renderedMessages.length, scrollScopeKey]);
+
+  useLayoutEffect(() => {
+    const cursor = detail?.historyCursor?.beforeEventId ?? null;
+    if (historyCursorRef.current === cursor) return;
+    historyCursorRef.current = cursor;
+    requestedHistoryCursorRef.current = null;
+    const anchor = historyAnchorRef.current;
+    historyAnchorRef.current = null;
+    if (!anchor) return;
+    const index = messageIndexById.get(anchor.messageId)
+      ?? (anchor.messageId.startsWith('tool:') ? messageIndexById.get(anchor.messageId.slice(5)) : undefined);
+    if (index === undefined) return;
+    const nextStart = commentaryWindowStartForIndex(activityMessages.length, index);
+    pendingScrollAnchorRef.current = { ...anchor, messageId: activityMessages[index].id };
+    pendingScrollWindowStartRef.current = nextStart;
+    if (nextStart !== normalizedWindowStart) setWindowStart(nextStart);
+  }, [activityMessages.length, detail?.historyCursor?.beforeEventId, messageIndexById, normalizedWindowStart]);
+
+  useLayoutEffect(() => {
+    if (pendingMeasuredRevisionRef.current !== null && heightRevision < pendingMeasuredRevisionRef.current) return undefined;
+    if (pendingItemGapRef.current !== null && itemGap !== pendingItemGapRef.current) return undefined;
+    pendingMeasuredRevisionRef.current = null;
+    pendingItemGapRef.current = null;
+    if (pendingScrollWindowStartRef.current !== null && pendingScrollWindowStartRef.current !== normalizedWindowStart) return undefined;
+    const targetScrollTop = pendingScrollTopRef.current;
     const anchor = pendingScrollAnchorRef.current;
-    if (!anchor) return undefined;
+    if (targetScrollTop === null && !anchor) return undefined;
     const list = listRef.current;
     if (!list) {
       pendingScrollAnchorRef.current = null;
+      pendingScrollTopRef.current = null;
+      pendingScrollWindowStartRef.current = null;
+      pendingMeasuredRevisionRef.current = null;
+      pendingItemGapRef.current = null;
       return undefined;
     }
-    const anchorNode = commentaryMessageNodes(list).find((node) => node.dataset.commentaryEventId === anchor.messageId);
+    const anchorNode = anchor
+      ? commentaryMessageNodes(list).find((node) => node.dataset.commentaryEventId === anchor.messageId)
+      : null;
     pendingScrollAnchorRef.current = null;
-    if (!anchorNode) return undefined;
+    pendingScrollTopRef.current = null;
+    pendingScrollWindowStartRef.current = null;
+    if (targetScrollTop === null && !anchorNode) return undefined;
 
     restoringAnchorRef.current = true;
-    list.scrollTop = Math.max(0, anchorNode.offsetTop - anchor.offsetTop);
+    if (targetScrollTop !== null) {
+      list.scrollTop = Math.max(0, targetScrollTop);
+    } else {
+      const currentTop = anchorNode!.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      list.scrollTop = Math.max(0, list.scrollTop + currentTop - anchor!.offsetTop);
+    }
     updateScrollEdges();
     const frame = window.requestAnimationFrame(() => {
       restoringAnchorRef.current = false;
@@ -272,7 +374,7 @@ export const CommentaryView = memo(function CommentaryView({
       window.cancelAnimationFrame(frame);
       restoringAnchorRef.current = false;
     };
-  }, [normalizedWindowStart, renderedMessages.length, updateScrollEdges]);
+  }, [detail?.historyCursor?.beforeEventId, heightRevision, itemGap, normalizedWindowStart, renderedMessages.length, updateScrollEdges]);
 
   useLayoutEffect(() => {
     if (scrollScopeKeyRef.current !== scrollScopeKey) {
@@ -281,6 +383,13 @@ export const CommentaryView = memo(function CommentaryView({
       userScrollIntentRef.current = false;
       scrollbarDragRef.current = false;
       pendingScrollAnchorRef.current = null;
+      pendingScrollTopRef.current = null;
+      pendingScrollWindowStartRef.current = null;
+      pendingMeasuredRevisionRef.current = null;
+      pendingItemGapRef.current = null;
+      historyAnchorRef.current = null;
+      requestedHistoryCursorRef.current = null;
+      historyCursorRef.current = detail?.historyCursor?.beforeEventId ?? null;
       if (userScrollIntentTimerRef.current !== null) {
         window.clearTimeout(userScrollIntentTimerRef.current);
         userScrollIntentTimerRef.current = null;
@@ -296,7 +405,7 @@ export const CommentaryView = memo(function CommentaryView({
     }
     const frame = window.requestAnimationFrame(scrollToLatest);
     return () => window.cancelAnimationFrame(frame);
-  }, [maxWindowStart, messageUpdateKey, normalizedWindowStart, scrollScopeKey, scrollToLatest, updateScrollEdges]);
+  }, [heightRevision, itemGap, maxWindowStart, messageUpdateKey, normalizedWindowStart, scrollScopeKey, scrollToLatest, updateScrollEdges]);
 
   useEffect(() => {
     setWindowStart((current) => Math.min(current, maxWindowStart));
@@ -327,7 +436,7 @@ export const CommentaryView = memo(function CommentaryView({
     const list = listRef.current;
     if (!list) return;
     updateScrollEdges();
-    if (restoringAnchorRef.current) return;
+    if (restoringAnchorRef.current && !userScrollIntentRef.current && !scrollbarDragRef.current) return;
     const distanceFromBottom = list.scrollHeight - list.clientHeight - list.scrollTop;
     followLatestRef.current = commentaryFollowLatestAfterScroll({
       wasFollowingLatest: followLatestRef.current,
@@ -339,29 +448,57 @@ export const CommentaryView = memo(function CommentaryView({
       window.clearTimeout(userScrollIntentTimerRef.current);
       userScrollIntentTimerRef.current = null;
     }
-    if (messages.length <= COMMENTARY_RENDER_WINDOW_SIZE) return;
-    if (distanceFromBottom <= COMMENTARY_AUTO_FOLLOW_THRESHOLD) {
-      if (normalizedWindowStart !== maxWindowStart) setWindowStart(maxWindowStart);
-      return;
-    }
-
     const messageNodes = commentaryMessageNodes(list);
-    const visibleAnchor = captureCommentaryScrollAnchor(list);
     const viewportTop = list.scrollTop;
+    if (requestedHistoryCursorRef.current) {
+      historyAnchorRef.current = captureCommentaryScrollAnchor(list) ?? historyAnchorRef.current;
+    }
+    if (normalizedWindowStart === 0 && messageNodes[0]
+      && viewportTop <= commentaryNodeTop(list, messageNodes[0]) + list.clientHeight * 0.75) {
+      loadOlderHistory();
+    }
+    if (activityMessages.length <= COMMENTARY_RENDER_WINDOW_SIZE) return;
+
+    const visibleAnchor = captureCommentaryScrollAnchor(list);
     const viewportBottom = viewportTop + list.clientHeight;
     let nextStart = normalizedWindowStart;
+    let preserveAnchor = true;
+    const topSpacer = topSpacerRef.current;
+    const listRect = list.getBoundingClientRect();
+    const topSpacerRect = topSpacer?.getBoundingClientRect();
+    const bottomSpacerRect = bottomSpacerRef.current?.getBoundingClientRect();
 
-    if (messageNodes.length === 0 || !visibleAnchor) {
-      nextStart = Math.floor(list.scrollTop / COMMENTARY_ESTIMATED_MESSAGE_HEIGHT);
+    if (topSpacerRect && topSpacerRect.bottom > listRect.top && topSpacerRect.top < listRect.bottom) {
+      const spacerTop = viewportTop + topSpacerRect.top - listRect.top;
+      nextStart = commentaryWindowStartForOffset(messageOffsets, viewportTop - spacerTop, maxWindowStart);
+      preserveAnchor = false;
+    } else if (bottomSpacerRect && bottomSpacerRect.top <= listRect.top && bottomSpacerRect.bottom > listRect.top) {
+      const spacerTop = viewportTop + bottomSpacerRect.top - listRect.top;
+      const firstIndex = normalizedWindowStart + renderedMessages.length;
+      nextStart = commentaryWindowStartForOffset(
+        messageOffsets, messageOffsets[firstIndex] + viewportTop - spacerTop, maxWindowStart
+      );
+      preserveAnchor = false;
+    } else if (distanceFromBottom <= COMMENTARY_AUTO_FOLLOW_THRESHOLD) {
+      nextStart = maxWindowStart;
+    } else if (messageNodes.length === 0 || !visibleAnchor) {
+      const firstNodeTop = messageNodes[0] ? commentaryNodeTop(list, messageNodes[0]) : 0;
+      nextStart = commentaryWindowStartForOffset(
+        messageOffsets, messageOffsets[normalizedWindowStart] + viewportTop - firstNodeTop, maxWindowStart
+      );
+      preserveAnchor = false;
     } else {
-      const firstRenderedTop = messageNodes[0]?.offsetTop ?? 0;
+      const firstRenderedTop = messageNodes[0] ? commentaryNodeTop(list, messageNodes[0]) : 0;
       const lastNode = messageNodes.at(-1);
-      const lastRenderedBottom = lastNode ? lastNode.offsetTop + lastNode.offsetHeight : firstRenderedTop;
+      const lastRenderedBottom = lastNode ? commentaryNodeTop(list, lastNode) + lastNode.offsetHeight : firstRenderedTop;
       const edgeBuffer = Math.max(COMMENTARY_WINDOW_EDGE_BUFFER, list.clientHeight * 0.35);
       const viewportMissedWindow = viewportBottom < firstRenderedTop - edgeBuffer || viewportTop > lastRenderedBottom + edgeBuffer;
 
       if (viewportMissedWindow) {
-        nextStart = Math.floor(list.scrollTop / COMMENTARY_ESTIMATED_MESSAGE_HEIGHT);
+        nextStart = commentaryWindowStartForOffset(
+          messageOffsets, messageOffsets[normalizedWindowStart] + viewportTop - firstRenderedTop, maxWindowStart
+        );
+        preserveAnchor = false;
       } else if (viewportTop < firstRenderedTop + edgeBuffer && normalizedWindowStart > 0) {
         nextStart = normalizedWindowStart - COMMENTARY_WINDOW_SLIDE_STEP;
       } else if (viewportBottom > lastRenderedBottom - edgeBuffer && normalizedWindowStart < maxWindowStart) {
@@ -371,15 +508,18 @@ export const CommentaryView = memo(function CommentaryView({
 
     nextStart = Math.max(0, Math.min(maxWindowStart, nextStart));
     if (nextStart !== normalizedWindowStart) {
-      pendingScrollAnchorRef.current = captureCommentaryScrollAnchor(list, {
+      const anchor = preserveAnchor ? captureCommentaryScrollAnchor(list, {
         canUseMessageId: (messageId) => {
           const index = messageIndexById.get(messageId);
           return index !== undefined && index >= nextStart && index < nextStart + COMMENTARY_RENDER_WINDOW_SIZE;
         }
-      });
+      }) : null;
+      pendingScrollAnchorRef.current = anchor;
+      pendingScrollTopRef.current = anchor ? null : viewportTop;
+      pendingScrollWindowStartRef.current = nextStart;
       setWindowStart(nextStart);
     }
-  }, [activityMessages.length, maxWindowStart, messageIndexById, normalizedWindowStart, updateScrollEdges]);
+  }, [activityMessages.length, loadOlderHistory, maxWindowStart, messageIndexById, messageOffsets, normalizedWindowStart, renderedMessages.length, updateScrollEdges]);
 
   if (!selectedRunId && !onInitialInstruction) return null;
 
@@ -406,8 +546,8 @@ export const CommentaryView = memo(function CommentaryView({
           <div className="main-commentary-list">{emptyContent}</div>
         </div>
       ) : null}
-      {detail && showBackToMain && messages.length === 0 && !postSessionContent ? <div className="main-trace-empty">No commentary recorded yet.</div> : null}
-      {detail && (!showBackToMain || messages.length > 0 || postSessionContent) ? (
+      {detail && showBackToMain && messages.length === 0 ? <div className="main-trace-empty">No commentary recorded yet.</div> : null}
+      {detail && (!showBackToMain || messages.length > 0) ? (
         <div className="main-commentary-scroll" ref={scrollRef}>
           <div
             className="main-commentary-list"
@@ -437,36 +577,50 @@ export const CommentaryView = memo(function CommentaryView({
               />
             ))}
             {!showBackToMain ? (
-              <RunWorkDisclosure detail={detail}>
+              <RunWorkDisclosure
+                detail={detail}
+                onExpand={() => {
+                  followLatestRef.current = false;
+                  pendingScrollAnchorRef.current = null;
+                  if (normalizedWindowStart > 0) {
+                    pendingScrollTopRef.current = listRef.current?.scrollTop ?? null;
+                    pendingScrollWindowStartRef.current = 0;
+                    setWindowStart(0);
+                  }
+                  loadOlderHistory();
+                }}
+              >
                 {() => (
                   <>
-                    {topSpacerHeight > 0 ? <div className="main-commentary-spacer" style={{ height: topSpacerHeight }} aria-hidden="true" /> : null}
+                    {topSpacerHeight > 0 ? <div className="main-commentary-spacer" ref={topSpacerRef} style={{ height: topSpacerHeight }} aria-hidden="true" /> : null}
                     {renderedMessages.map((message) => (
                       <CommentaryMessageRow
                         key={message.id}
                         message={message}
+                        windowed
                         searchHighlightQuery={searchHighlightQuery}
                         selected={false}
                         onRequestToolCallDetail={requestToolCallDetail}
                       />
                     ))}
-                    {bottomSpacerHeight > 0 ? <div className="main-commentary-spacer" style={{ height: bottomSpacerHeight }} aria-hidden="true" /> : null}
+                    {bottomSpacerHeight > 0 ? <div className="main-commentary-spacer" ref={bottomSpacerRef} style={{ height: bottomSpacerHeight }} aria-hidden="true" /> : null}
                   </>
                 )}
               </RunWorkDisclosure>
             ) : (
               <>
-                {topSpacerHeight > 0 ? <div className="main-commentary-spacer" style={{ height: topSpacerHeight }} aria-hidden="true" /> : null}
+                {topSpacerHeight > 0 ? <div className="main-commentary-spacer" ref={topSpacerRef} style={{ height: topSpacerHeight }} aria-hidden="true" /> : null}
                 {renderedMessages.map((message) => (
                   <CommentaryMessageRow
                     key={message.id}
                     message={message}
+                    windowed
                     searchHighlightQuery={searchHighlightQuery}
                     selected={false}
                     onRequestToolCallDetail={requestToolCallDetail}
                   />
                 ))}
-                {bottomSpacerHeight > 0 ? <div className="main-commentary-spacer" style={{ height: bottomSpacerHeight }} aria-hidden="true" /> : null}
+                {bottomSpacerHeight > 0 ? <div className="main-commentary-spacer" ref={bottomSpacerRef} style={{ height: bottomSpacerHeight }} aria-hidden="true" /> : null}
               </>
             )}
             {messageSections.trailing.map((message) => (
@@ -478,27 +632,22 @@ export const CommentaryView = memo(function CommentaryView({
                 onRequestToolCallDetail={requestToolCallDetail}
               />
             ))}
-            {postSessionContent}
           </div>
         </div>
       ) : null}
       {!showBackToMain && !loading ? (
         <MainSteerArea
           busy={busy}
-          dangerModeEnabled={dangerModeEnabled}
           detail={detail}
           providerModelCatalog={providerModelCatalog}
           providerModelDefaults={providerModelDefaults}
           initialModelSelection={initialModelSelection}
           collaboration={collaboration}
           initialSafetyMode={initialSafetyMode}
-          safetyModeOptions={safetyModeOptions}
           inputPlaceholder={inputPlaceholder}
           ariaLabel={ariaLabel}
           showCollaboration={showCollaboration}
-          showSafetyMode={showSafetyMode}
           runId={detail?.run.id ?? selectedRunId}
-          initialSuggestion={initialSuggestion}
           initialInstruction={initialInstruction}
           preComposerContent={preComposerContent}
           postComposerContent={postComposerContent}
@@ -549,7 +698,7 @@ export function commentaryMessageSections(
   };
 }
 
-function RunWorkDisclosure({ detail, children }: { detail: RunDetail; children: ReactNode | (() => ReactNode) }): JSX.Element {
+function RunWorkDisclosure({ detail, children, onExpand }: { detail: RunDetail; children: ReactNode | (() => ReactNode); onExpand?: () => void }): JSX.Element {
   const working = isRunWorkingStatus(detail.run.status);
   const [expanded, setExpanded] = useState(() => working);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -577,7 +726,10 @@ function RunWorkDisclosure({ detail, children }: { detail: RunDetail; children: 
             type="button"
             className="run-work-toggle"
             aria-expanded={expanded}
-            onClick={() => setExpanded((current) => !current)}
+            onClick={() => {
+              if (!expanded) onExpand?.();
+              setExpanded((current) => !current);
+            }}
           >
             <span>{label}</span>
             <ChevronRight className="run-work-chevron" size={14} aria-hidden="true" />
@@ -628,11 +780,13 @@ export function isRunWorkingStatus(status: RunDetail['run']['status']): boolean 
 
 export const CommentaryMessageRow = memo(function CommentaryMessageRow({
   message,
+  windowed = false,
   searchHighlightQuery,
   selected,
   onRequestToolCallDetail = returnToolCallWithoutLoading
 }: {
   message: CommentaryMessage;
+  windowed?: boolean;
   searchHighlightQuery: string;
   selected: boolean;
   onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall>;
@@ -648,6 +802,7 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
     <article
       className={`main-commentary-message kind-${message.kind} ${communicationClass} ${selected ? 'selected' : ''}`}
       data-commentary-event-id={message.id}
+      data-commentary-window-item={windowed ? '' : undefined}
       data-commentary-trace-id={message.traceEventId ?? undefined}
     >
       {message.kind === 'progress' ? (
@@ -682,6 +837,7 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
             ) : (
               renderTraceProseText(message.contentMarkdown, message.kind === 'commentary' ? 'reasoning' : 'agent_output')
             )}
+            {message.abortNotice ? <p className="main-commentary-abort-notice">{message.abortNotice}</p> : null}
           </div>
         </>
       )}
@@ -855,33 +1011,70 @@ export function commentaryWindowStartForIndex(messageCount: number, messageIndex
   return Math.max(0, Math.min(maxWindowStart, messageIndex - Math.floor(COMMENTARY_RENDER_WINDOW_SIZE / 3)));
 }
 
+export function commentaryMessageOffsets(
+  messages: readonly Pick<CommentaryMessage, 'id'>[],
+  measuredHeights: ReadonlyMap<string, number>,
+  estimatedHeight: number,
+  gap: number
+): number[] {
+  const offsets = [0];
+  for (const message of messages) {
+    offsets.push(offsets[offsets.length - 1] + (measuredHeights.get(message.id) ?? estimatedHeight) + gap);
+  }
+  return offsets;
+}
+
+export function commentarySpacerHeight(offsets: readonly number[], start: number, end: number, gap: number): number {
+  return end <= start ? 0 : offsets[end] - offsets[start] - gap;
+}
+
+export function commentaryWindowStartForOffset(offsets: readonly number[], offset: number, maxWindowStart: number): number {
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high + 1) / 2);
+    if (offsets[middle] <= offset) low = middle;
+    else high = middle - 1;
+  }
+  return Math.max(0, Math.min(maxWindowStart, low));
+}
+
+function commentaryEstimatedMessageHeight(measuredHeights: ReadonlyMap<string, number>): number {
+  if (measuredHeights.size < 4) return COMMENTARY_ESTIMATED_MESSAGE_HEIGHT;
+  const heights = [...measuredHeights.values()].sort((left, right) => left - right);
+  return Math.max(28, Math.min(160, heights[Math.floor(heights.length / 2)]));
+}
+
 function commentaryMessageNodes(list: HTMLDivElement): HTMLElement[] {
-  return Array.from(list.querySelectorAll<HTMLElement>('[data-commentary-event-id]'));
+  return Array.from(list.querySelectorAll<HTMLElement>('[data-commentary-window-item]'));
+}
+
+function commentaryNodeTop(list: HTMLDivElement, node: HTMLElement): number {
+  return list.scrollTop + node.getBoundingClientRect().top - list.getBoundingClientRect().top;
 }
 
 function captureCommentaryScrollAnchor(
   list: HTMLDivElement,
   options: CommentaryScrollAnchorOptions = {}
 ): CommentaryScrollAnchor | null {
-  const viewportTop = list.scrollTop;
-  const viewportBottom = viewportTop + list.clientHeight;
+  const viewport = list.getBoundingClientRect();
   for (const node of commentaryMessageNodes(list)) {
     const messageId = node.dataset.commentaryEventId;
     if (!messageId || (options.canUseMessageId && !options.canUseMessageId(messageId))) continue;
-    const nodeTop = node.offsetTop;
-    const nodeBottom = nodeTop + node.offsetHeight;
-    if (nodeBottom < viewportTop) continue;
-    if (nodeTop > viewportBottom) break;
-    return { messageId, offsetTop: nodeTop - viewportTop };
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom < viewport.top) continue;
+    if (rect.top > viewport.bottom) break;
+    return { messageId, offsetTop: rect.top - viewport.top };
   }
   return null;
 }
 
 function commentaryMessageRowPropsEqual(
-  left: { message: CommentaryMessage; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> },
-  right: { message: CommentaryMessage; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> }
+  left: { message: CommentaryMessage; windowed?: boolean; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> },
+  right: { message: CommentaryMessage; windowed?: boolean; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> }
 ): boolean {
   if (
+    left.windowed !== right.windowed ||
     left.searchHighlightQuery !== right.searchHighlightQuery ||
     left.selected !== right.selected ||
     left.onRequestToolCallDetail !== right.onRequestToolCallDetail
@@ -897,7 +1090,8 @@ function commentaryMessagesRenderEqual(left: CommentaryMessage, right: Commentar
     left.taskAction !== right.taskAction ||
     left.toolName !== right.toolName ||
     left.toolCount !== right.toolCount ||
-    left.contentMarkdown !== right.contentMarkdown
+    left.contentMarkdown !== right.contentMarkdown ||
+    left.abortNotice !== right.abortNotice
   ) return false;
   if (!stringArraysEqual(left.reasoningTraceLines, right.reasoningTraceLines)) return false;
   const leftCalls = left.toolCalls ?? [];

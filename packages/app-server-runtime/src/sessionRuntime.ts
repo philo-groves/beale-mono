@@ -38,7 +38,6 @@ import {
   createRunbookExecutor,
   createRunbookExecutionTool,
   createReportTools,
-  compileMemoryModelContext,
   discoverResearchAgentInstructions,
   createPiAgentExecutor,
   extractCompatiblePiAgentResumableState,
@@ -145,7 +144,6 @@ import type {
   MemoryNodeType,
   MemoryTypeDescriptions,
   MemoryTypeDescriptionsInput,
-  ResearchModelMemoryContextNode,
   CampaignGraphSummary,
   MemoryNodeSummary,
   ResearchProfile,
@@ -2223,7 +2221,6 @@ export async function main(
         workspaceRoot: args.workspaceRoot,
         workspaceContext: runtimeConfig.workspaceContext,
         agentInstructions,
-        memoryContext: runtimeConfig.memoryContext,
         campaignContext: createCampaignModelContext(runtimeConfig.campaignContext),
         continuityContext: runtimeConfig.continuityContext,
         ...inspectionState,
@@ -3684,7 +3681,6 @@ async function createRuntimeConfig(args: {
   skills: ResearchSkillDescriptor[];
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
-  memoryContext: readonly ResearchModelMemoryContextNode[];
   campaignContext: CampaignGraphSummary;
   continuityContext: Record<string, unknown>;
   getContinuityContext: () => Record<string, unknown>;
@@ -3955,14 +3951,6 @@ async function createRuntimeConfig(args: {
     toolDescriptors.push(...reportTools.map((tool) => tool.descriptor));
     cleanupCallbacks.push(async () => reports.close());
   }
-  const createCurrentMemoryContext = (): readonly ResearchModelMemoryContextNode[] => args.prompt && memoryActive
-    ? campaignTrackStore && activeCampaignTrackId
-      ? campaignTrackStore.recall({
-          investigationId: activeCampaignTrackId,
-          query: args.prompt,
-        }).nodes
-      : compileMemoryModelContext(memoryGraph, args.prompt)
-    : [];
   const createCurrentCampaignContext = (): CampaignGraphSummary => {
     const campaignMemoryNodes: MemoryNodeSummary[] = (memoryActive
       ? memoryGraph.search({ scope: "workspace", limit: 1_000 })
@@ -4070,12 +4058,10 @@ async function createRuntimeConfig(args: {
           ])],
         }
       : activeCampaignResources;
-  const memoryContext = createCurrentMemoryContext();
   const campaignContext = createCurrentCampaignContext();
   const getContinuityContext = (): Record<string, unknown> => createSessionContinuityContext(
     resolve(workspaceRoot),
     args.prompt ?? "",
-    memoryActive ? compileMemoryModelContext(memoryGraph, args.prompt ?? "", { maxNodes: 25 }) : [],
     createCurrentCampaignContext(),
     createCurrentActiveCampaignResources(),
   );
@@ -4276,18 +4262,17 @@ async function createRuntimeConfig(args: {
     const pluginId = managedToolPluginId(tool.descriptor.name);
     return pluginId === undefined || enabledPluginIds.includes(pluginId);
   });
+  const toolRegistry = enabledTools.length > 0
+    ? createResearchToolRegistry(enabledTools, { managedPlugins, paginateResults: true })
+    : undefined;
 
   return {
     events,
-    tools: enabledTools.map((tool) => tool.descriptor),
-    toolRegistry:
-      enabledTools.length > 0
-        ? createResearchToolRegistry(enabledTools, { managedPlugins })
-        : undefined,
+    tools: toolRegistry?.listDescriptors() ?? [],
+    toolRegistry,
     skills,
     governance,
     workspaceContext,
-    memoryContext,
     campaignContext,
     continuityContext: getContinuityContext(),
     getContinuityContext,
@@ -4300,7 +4285,7 @@ async function createRuntimeConfig(args: {
       families,
       args: runtimeArgs,
       memoryBackend: memoryBackend.id,
-      tools: enabledTools.map((tool) => tool.descriptor),
+      tools: toolRegistry?.listDescriptors() ?? [],
       skills,
       governance,
       workspaceContext,
@@ -4321,7 +4306,6 @@ async function createRuntimeConfig(args: {
 function createSessionContinuityContext(
   workspacePath: string,
   objective: string,
-  memories: readonly ResearchModelMemoryContextNode[],
   campaign: CampaignGraphSummary,
   linkedResources: Partial<Record<"memory" | "finding" | "runbook", readonly string[]>>,
 ): Record<string, unknown> {
@@ -4350,18 +4334,6 @@ function createSessionContinuityContext(
     workspacePath,
     objective: objective.trim(),
     activeInvestigation,
-    recentMemories: [...memories]
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .slice(0, 12)
-      .map((memory) => ({
-        id: memory.id,
-        type: memory.type,
-        title: memory.title,
-        summary: memory.summary.slice(0, 1_000),
-        status: memory.status,
-        updatedAt: memory.updatedAt,
-        revision: memory.revision,
-      })),
     recentLeads: newestNodes("lead"),
     recentFindings: newestNodes("finding"),
     updatedRunbooks: newestNodes("runbook"),

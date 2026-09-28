@@ -45,6 +45,7 @@ import {
 import {
   createAppServerSessionBoundary,
   getAppServerRunDetailForClient,
+  getAppServerRunHistoryPageForClient,
   getAppServerRunDetailUpdateForClient,
   getAppServerRunDetailVersionForClient,
   getAppServerRunTraceEventDetailsForClient,
@@ -120,7 +121,7 @@ import {
   SCOPE_ASSET_KINDS,
   scopeAssetLegacyKind
 } from '../shared/types';
-import { isCommentaryRunDetailProjection, isAppServerToolTraceEvent, projectRunDetailForRenderer } from '../shared/runDetailProjection';
+import { isCommentaryRunDetailProjection, isAppServerToolTraceEvent, projectRunDetailForRenderer, projectRunHistoryPageForRenderer } from '../shared/runDetailProjection';
 import type {
   ApprovalRecord,
   ActiveRepeatSchedule,
@@ -192,6 +193,7 @@ import type {
   RunDetailUpdate,
   RunDetailUpdateCursor,
   RunDetailVersion,
+  RunHistoryPage,
   RunMessageDetail,
   RunMessageDetailRequest,
   RunRecord,
@@ -3653,6 +3655,19 @@ export class WorkspaceService {
     this.runDetailMemoryRefreshedAt.set(runId, Date.now());
     this.runDetailMemoryRetryAfter.delete(runId);
     return projectRunDetailForRenderer(withMemory, projection);
+  }
+
+  public async getRunHistoryPageForClient(
+    runId: string,
+    beforeEventId: string,
+    signal?: AbortSignal,
+    projection: RunDetailProjection = 'full'
+  ): Promise<RunHistoryPage> {
+    const database = this.requireRuntimeForRunId(runId).db;
+    const page = await getAppServerRunHistoryPageForClient(database, runId, beforeEventId, signal);
+    if (!page) throw new Error('Older history is unavailable for this session.');
+    signal?.throwIfAborted();
+    return projectRunHistoryPageForRenderer(page, projection);
   }
 
   public getRunDetailVersion(runId: string): RunDetailVersion {

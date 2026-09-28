@@ -55,7 +55,8 @@ function operationRequiresResearchIndex(operation: AppServerProtocolOperation): 
     || operation.startsWith('runbook.')
     || operation.startsWith('report.')
     || operation.startsWith('artifact.')
-    || operation.startsWith('suggestion.')
+    || operation === 'suggestion.generate'
+    || operation === 'suggestion.select'
     || operation === 'prompt.expand';
 }
 
@@ -344,7 +345,7 @@ export class AppServerHostService {
     workspace: AppServerHostWorkspace,
     storage: AppServerHostStorage
   ): Record<string, unknown> {
-    if (!isRecord(input)) throw new Error('Research goal suggestion input is required.');
+    if (!isRecord(input)) throw new Error('Suggestion input is required.');
     if (operation === 'suggestion.select') {
       return {
         ...input,
@@ -352,7 +353,7 @@ export class AppServerHostService {
         databasePath: storage.databasePath
       };
     }
-    if (operation !== 'suggestion.generate') return { ...input };
+    if (operation !== 'suggestion.generate' && operation !== 'suggestion.steering') return { ...input };
     const settings = this.registry.providerSettings();
     const providerId = settings.defaultProviderId;
     if (!providerId) throw new Error('No Lead provider is configured for this Beale host.');
@@ -366,8 +367,9 @@ export class AppServerHostService {
       workspaceRoot: workspace.workspacePath,
       databasePath: storage.databasePath,
       artifactDirectoryPath: storage.artifactDirectoryPath,
-      researchProfileId: workspace.researchProfileId,
-      memoryEnabled: workspace.memoryBackend !== 'disabled',
+      ...(operation === 'suggestion.generate'
+        ? { researchProfileId: workspace.researchProfileId, memoryEnabled: workspace.memoryBackend !== 'disabled' }
+        : {}),
       provider: {
         id: providerId,
         ...(defaults?.smallModel ? { smallModel: defaults.smallModel } : {}),
@@ -1139,7 +1141,7 @@ export class AppServerHostService {
   public async sessionEvents(
     workspaceIdentifier: string,
     sessionId: string,
-    options: { stream?: string; afterEventId?: string; tail?: boolean; limit?: number; maxBytes?: number }
+    options: { stream?: string; afterEventId?: string; beforeEventId?: string; tail?: boolean; limit?: number; maxBytes?: number }
   ): Promise<BealeAppServerCanonicalResult> {
     const stream = options.stream === 'transcript' || options.stream === 'trace' || options.stream === 'commentary'
       ? options.stream
@@ -1148,6 +1150,7 @@ export class AppServerHostService {
       'session', 'events', '--session-id', sessionId,
       '--stream', stream,
       ...(options.afterEventId ? ['--after-event-id', options.afterEventId] : []),
+      ...(options.beforeEventId ? ['--before-event-id', options.beforeEventId] : []),
       ...(options.tail ? ['--tail'] : []),
       ...(options.limit ? ['--limit', String(boundedInteger(options.limit, 1, 2_000))] : []),
       ...(options.maxBytes ? ['--max-bytes', String(boundedInteger(options.maxBytes, 1, 4_000_000))] : [])

@@ -70,21 +70,6 @@ const PARAMETERS = {
       type: "boolean",
       description: "True only when meaningful progress requires user input or a change outside the current session and tools.",
     },
-    nextPromptSuggestions: {
-      type: "array",
-      minItems: 3,
-      maxItems: 3,
-      description: "Three distinct, concrete follow-up prompts derived from this session. These are captured with the final disposition and are not part of the visible final response.",
-      items: {
-        type: "object",
-        required: ["title", "promptMarkdown"],
-        properties: {
-          title: { type: "string", description: "Short action-oriented label for the follow-up." },
-          promptMarkdown: { type: "string", description: "Self-contained prompt that continues from this session without repeating completed work." },
-          rationale: { type: "string", description: "Brief reason this is a useful next step." },
-        },
-      },
-    },
   },
 };
 
@@ -115,7 +100,7 @@ export function createSessionDispositionTool(
     descriptor: {
       name: "session.disposition",
       transportName: "session_disposition",
-      description: "Record the root session's structured final disposition and three follow-up prompts exactly once before the final response. List concrete unresolved dependencies and mark externalStateRequired only when more in-session work cannot resolve them.",
+      description: "Record the root session's structured final disposition exactly once before the final response. List concrete unresolved dependencies and mark externalStateRequired only when more in-session work cannot resolve them.",
       actionClasses: ["synthesize", "respond"],
       sideEffects: "none",
       requiredPermissions: [],

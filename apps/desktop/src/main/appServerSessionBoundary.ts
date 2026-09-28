@@ -14,6 +14,7 @@ import type {
   RunDetailUpdate,
   RunDetailUpdateCursor,
   RunDetailVersion,
+  RunHistoryPage,
   RunRecord,
   RunRow,
   SessionNextPromptSuggestion,
@@ -35,6 +36,7 @@ import {
   beginAppServerSessionAttempt,
   createAppServerSession,
   getAppServerSession,
+  getAppServerSessionAsync,
   getAppServerSessionCollaborationState,
   getAppServerSessionEventPage,
   getAppServerSessionUpdate,
@@ -48,6 +50,7 @@ import {
   type AppServerSessionRecord,
   type AppServerSessionSummary,
   type AppServerSessionUpdate,
+  type AppServerSessionEventPage,
   type AppServerSessionStorage
 } from './appServerCliClient';
 import {
@@ -1095,12 +1098,45 @@ export async function getAppServerRunDetailForClient(
     durableSubagents.session,
     context.sessionWrites
   );
-  return sessionDetail(
-    session,
-    context.database,
-    Math.max(0, update.eventOffset - durableSubagents.prependedEventCount),
-    captures
-  );
+  return {
+    ...sessionDetail(
+      session,
+      context.database,
+      Math.max(0, update.eventOffset - durableSubagents.prependedEventCount),
+      captures
+    ),
+    historyCursor: {
+      beforeEventId: update.events[0]?.id ?? null,
+      hasEarlier: update.hasEarlier
+    }
+  };
+}
+
+export async function getAppServerRunHistoryPageForClient(
+  database: WorkspaceDatabase,
+  runId: string,
+  beforeEventId: string,
+  signal?: AbortSignal
+): Promise<RunHistoryPage | null> {
+  const context = BOUNDARY_CONTEXTS.get(database);
+  if (!context?.ownedRunIds.has(runId)) return null;
+  const record = requireExistingSessionAppServer();
+  const [page, summary] = await Promise.all([
+    fetchExistingAppServerCanonicalResult<AppServerSessionEventPage>(record, canonicalSessionPath(
+      context, runId, 'events', { beforeEventId, limit: 500, maxBytes: 2 * 1024 * 1024 }
+    ), { ...(signal ? { signal } : {}) }),
+    getAppServerSessionAsync(runId, context.storage, signal)
+  ]);
+  const detail = sessionDetail({ ...summary, status: 'active', finalResponse: null, events: page.events }, database, page.eventOffset);
+  return {
+    runId,
+    traceEvents: detail.traceEvents,
+    transcriptMessages: detail.transcriptMessages,
+    historyCursor: {
+      beforeEventId: page.events[0]?.id ?? null,
+      hasEarlier: page.hasEarlier
+    }
+  };
 }
 
 export async function getAppServerRunDetailVersionForClient(

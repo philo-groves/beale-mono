@@ -6,7 +6,6 @@ import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from '../wor
 import { ResearchSidePanel } from '../research/MemorySidePanel';
 import { CommentaryView } from '../commentary/CommentaryView';
 import { ConnectedDeviceCapture } from '../deviceCapture/ConnectedDeviceCapture';
-import { isEndedResearchRunStatus, SessionNextSteps, type ResearchGoalSeed } from './SessionNextSteps';
 import { EMPTY_SESSION_HEAT_PREFERENCES } from '../../view-models/sessionHeat';
 import type { SessionHeatPreferences } from '../../view-models/sessionHeat';
 import type { TraceDisplayEvent } from '../../view-models/traceDisplay';
@@ -43,7 +42,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   researchProfile,
   researchKitId = 'general',
   sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
-  sessionEndingSuggestionsEnabled = true,
   responseSuggestionsEnabled = true,
   researchSubjectName = '',
   workspaceId = '',
@@ -71,7 +69,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   searchHighlightQuery,
   shellApproval = null,
   shellApprovalBusy = false,
-  dangerModeEnabled = false,
   busy,
   connectedDeviceCaptureEnabled = false,
   workspaceDejunk = null,
@@ -104,7 +101,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onBackToReports = () => undefined,
   onBackToSubagents,
   onSelectSubagent,
-  onSelectNextStep,
+  onLoadOlderHistory,
   onShellApprovalDecision = () => undefined,
   onSessionAction,
   onSteerInstruction
@@ -121,7 +118,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   researchProfile: ResearchProfile | null;
   researchKitId?: ResearchKitId;
   sessionHeatPreferences?: SessionHeatPreferences;
-  sessionEndingSuggestionsEnabled?: boolean;
   responseSuggestionsEnabled?: boolean;
   researchSubjectName?: string;
   workspaceId?: string;
@@ -149,7 +145,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   searchHighlightQuery: string;
   shellApproval?: ApprovalRecord | null;
   shellApprovalBusy?: boolean;
-  dangerModeEnabled?: boolean;
   busy: boolean;
   connectedDeviceCaptureEnabled?: boolean;
   workspaceDejunk?: WorkspaceDejunkSummary | null;
@@ -182,7 +177,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onBackToReports?: () => void;
   onBackToSubagents: () => void;
   onSelectSubagent: (path: string) => void;
-  onSelectNextStep: (goal: ResearchGoalSeed) => void;
+  onLoadOlderHistory?: () => Promise<boolean>;
   onShellApprovalDecision?: (decision: PolicyReviewDecision) => void;
   onSessionAction: (action: SteeringAction) => void;
   onSteerInstruction: (runId: string, instruction: string, modelSelection: ResearchModelSelection) => void;
@@ -341,16 +336,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     ? expandedDeviceCapturePanelWidth(mainSessionSize.width, mainSessionSize.height, connectedDeviceAspectRatio)
     : null, [connectedDeviceAspectRatio, connectedDeviceCaptureExpanded, mainSessionSize.height, mainSessionSize.width]);
 
-  const postSessionContent = detail && shouldShowSessionNextSteps(detail.run.status, sessionEndingSuggestionsEnabled)
-    ? (
-        <SessionNextSteps
-          key={detail.run.id}
-          detail={detail}
-          onSelect={onSelectNextStep}
-        />
-      )
-    : null;
-
   return (
     <div
       ref={containerRef}
@@ -410,10 +395,10 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
       ) : (
         <CommentaryView
           busy={busy}
-          dangerModeEnabled={dangerModeEnabled}
           detail={detail}
           sessionSetupPending={sessionSetupPending}
           events={events}
+          onLoadOlderHistory={onLoadOlderHistory}
           activeScope={activeScope}
           providerModelCatalog={providerModelCatalog}
           providerModelDefaults={providerModelDefaults}
@@ -422,7 +407,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           searchHighlightQuery={searchHighlightQuery}
           shellApproval={shellApproval}
           shellApprovalBusy={shellApprovalBusy}
-          postSessionContent={postSessionContent}
           responseSuggestionsEnabled={responseSuggestionsEnabled}
           onBackToMain={() => undefined}
           onShellApprovalDecision={onShellApprovalDecision}
@@ -594,11 +578,4 @@ export function sessionContentAvailable(
 
 function isRunbookProofTarget(value: unknown): value is RunbookProofTarget {
   return value === 'localhost' || value === 'device' || value === 'vm' || value === 'web' || value === 'other';
-}
-
-export function shouldShowSessionNextSteps(
-  status: RunDetail['run']['status'] | null,
-  enabled = true
-): boolean {
-  return enabled && status !== null && isEndedResearchRunStatus(status);
 }

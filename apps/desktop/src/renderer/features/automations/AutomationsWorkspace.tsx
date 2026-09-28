@@ -34,7 +34,6 @@ export function AutomationsWorkspace({
   providerModelCatalog,
   shellApproval,
   shellApprovalBusy,
-  dangerModeEnabled,
   responseSuggestionsEnabled,
   busy,
   loading,
@@ -56,7 +55,6 @@ export function AutomationsWorkspace({
   providerModelCatalog: ResearchProviderModelCatalog[];
   shellApproval?: ApprovalRecord | null;
   shellApprovalBusy?: boolean;
-  dangerModeEnabled: boolean;
   responseSuggestionsEnabled: boolean;
   busy: boolean;
   loading: boolean;
@@ -92,7 +90,6 @@ export function AutomationsWorkspace({
         providerModelCatalog={providerModelCatalog}
         shellApproval={shellApproval}
         shellApprovalBusy={shellApprovalBusy}
-        dangerModeEnabled={dangerModeEnabled}
         responseSuggestionsEnabled={responseSuggestionsEnabled}
         busy={busy}
         onShellApprovalDecision={onShellApprovalDecision}
@@ -170,7 +167,6 @@ export function AutomationSessionWorkspace({
   providerModelCatalog,
   shellApproval = null,
   shellApprovalBusy = false,
-  dangerModeEnabled,
   responseSuggestionsEnabled,
   busy,
   onShellApprovalDecision,
@@ -185,7 +181,6 @@ export function AutomationSessionWorkspace({
   providerModelCatalog: ResearchProviderModelCatalog[];
   shellApproval?: ApprovalRecord | null;
   shellApprovalBusy?: boolean;
-  dangerModeEnabled: boolean;
   responseSuggestionsEnabled: boolean;
   busy: boolean;
   onShellApprovalDecision: (decision: PolicyReviewDecision) => void;
@@ -222,7 +217,6 @@ export function AutomationSessionWorkspace({
         <CommentaryView
           key={`${automation.workspaceId}:${automation.runId}`}
           busy={busy}
-          dangerModeEnabled={dangerModeEnabled}
           detail={commentaryDetail}
           sessionSetupPending={sessionSetupPending}
           events={events}

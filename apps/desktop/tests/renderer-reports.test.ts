@@ -117,7 +117,7 @@ describe('reports resource views', () => {
     expect(styles).toMatch(/\.quick-chat-card\.is-report-edit\s*\{[^}]*height:\s*clamp\(260px, calc\(100vh - 250px\), 570px\);/s);
   });
 
-  it('opens reports without starting an agent and offers a report-specific quick-chat suggestion', () => {
+  it('opens reports without starting an agent or inserting a canned Tab suggestion', () => {
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
     const reportSource = readFileSync(new URL('../src/renderer/features/reports/ReportsWorkspace.tsx', import.meta.url), 'utf8');
     const openHandler = appSource.slice(
@@ -127,7 +127,7 @@ describe('reports resource views', () => {
     expect(openHandler).not.toContain('startReportSession');
     const quickChatSource = readFileSync(new URL('../src/renderer/features/quick-chat/QuickChatDock.tsx', import.meta.url), 'utf8');
     expect(reportSource).not.toContain('<CommentaryView');
-    expect(quickChatSource).toContain("'Review and improve this report.'");
+    expect(quickChatSource).not.toContain("'Review and improve this report.'");
   });
 
   it('uses the default provider large model instead of the first catalog model', () => {
@@ -203,11 +203,12 @@ describe('reports resource views', () => {
     expect(appSource).toContain("if (!openWorkspaceId && !newResearchOpen && !automationsOpen && !reportsOpen && quickChats.length === 0 && !selectedRunId && !(settingsOpen && settingsSection === 'providers')) return;");
   });
 
-  it('enables the safety selector before the first report message and applies it when starting the run', () => {
+  it('starts report editing with Auto-Review', () => {
     const composerSource = readFileSync(new URL('../src/renderer/features/sessions/SessionComposer.tsx', import.meta.url), 'utf8');
+    const quickChatSource = readFileSync(new URL('../src/renderer/features/quick-chat/QuickChatDock.tsx', import.meta.url), 'utf8');
     const serviceSource = readFileSync(new URL('../src/main/workspaceService.ts', import.meta.url), 'utf8');
-    expect(composerSource).toContain("disabled={busy || status === 'paused' || (!runId && !onInitialInstruction)}");
-    expect(composerSource).toContain('onInitialInstruction?.(trimmedInstruction, modelSelection, shellSafetyMode)');
+    expect(composerSource).toContain('onInitialInstruction?.(trimmedInstruction, modelSelection, normalizeShellSafetyMode(initialSafetyMode))');
+    expect(quickChatSource).toContain("onReportInitialInstruction(instruction, modelSelection, 'auto_review')");
     expect(serviceSource).toContain('shellSafetyMode: normalizeShellSafetyMode(input.shellSafetyMode)');
   });
 

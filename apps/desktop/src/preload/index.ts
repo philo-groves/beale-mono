@@ -25,6 +25,7 @@ import type {
   MemoryTypeDescriptions,
   ShellOptions,
   GeneratedResearchGoalSuggestions,
+  SteeringSuggestionResult,
   GeneratedResearchPrompt,
   HostEnvironment,
   WorkspaceEditorCatalog,
@@ -87,6 +88,7 @@ import type {
   RunDetailProjection,
   RunDetailUpdate,
   RunMessageDetail,
+  RunHistoryPage,
   RunMessageDetailRequest,
   SessionTranscriptSearchInput,
   SessionTranscriptSearchResponse,
@@ -500,6 +502,9 @@ const api: BealeApi = {
   generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions> {
     return ipcRenderer.invoke(IPC_CHANNELS.generateResearchGoalSuggestions, input);
   },
+  generateSteeringSuggestion(runId: string): Promise<SteeringSuggestionResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.generateSteeringSuggestion, runId);
+  },
   selectResearchGoalSuggestion(input: ResearchGoalSuggestionSelectionInput): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.selectResearchGoalSuggestion, input);
   },
@@ -531,6 +536,9 @@ const api: BealeApi = {
   },
   getRunDetail(runId: string, projection: RunDetailProjection = 'full') {
     return invokeRunDetail<RunDetail>(IPC_CHANNELS.getRunDetail, runId, projection);
+  },
+  getRunHistoryPage(runId: string, beforeEventId: string, projection: RunDetailProjection = 'full') {
+    return ipcRenderer.invoke(IPC_CHANNELS.getRunHistoryPage, runId, beforeEventId, projection) as Promise<RunHistoryPage>;
   },
   getRunDetailVersion(runId: string) {
     return ipcRenderer.invoke(IPC_CHANNELS.getRunDetailVersion, runId);

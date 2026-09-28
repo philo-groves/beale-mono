@@ -24,6 +24,7 @@ import {
   getKnowledgeRunbook,
   expandStoredResearchPrompt,
   generateStoredResearchGoalSuggestions,
+  generateStoredSteeringSuggestion,
   getWorkspaceDejunkSummary,
   readWorkspaceProject,
   materializeGitRepositoryAsync,
@@ -145,6 +146,12 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
   if (operation === 'suggestion.generate') {
     return generateStoredResearchGoalSuggestions(
       requiredRecord(options.input, 'research goal suggestion input') as never,
+      options.signal ? { signal: options.signal } : {}
+    );
+  }
+  if (operation === 'suggestion.steering') {
+    return generateStoredSteeringSuggestion(
+      requiredRecord(options.input, 'steering suggestion input') as never,
       options.signal ? { signal: options.signal } : {}
     );
   }
@@ -338,6 +345,7 @@ function sessionOperation(operation: AppServerProtocolOperation, options: Invoke
       }
       case 'session.events': return store.getEventPage(required(sessionId, '--session-id'), {
         ...(option(options.args, '--after-event-id') ? { afterEventId: option(options.args, '--after-event-id')! } : {}),
+        ...(option(options.args, '--before-event-id') ? { beforeEventId: option(options.args, '--before-event-id')! } : {}),
         stream: eventStream(option(options.args, '--stream')), ...pageOptions(options.args), tail: options.args.includes('--tail')
       });
       case 'session.event_details': return store.getEventDetails(required(sessionId, '--session-id'), requiredMany(options.args, '--event-id'));

@@ -29,14 +29,13 @@ import { resolveGoalObjective } from '../../../shared/goalObjective';
 import { ensureDefaultResearchCollaborator, normalizeResearchCollaboration } from '../../../shared/collaboration';
 import { Modal } from '../../app/Modal';
 import { BealeWelcomeIcon } from '../../app/BealeWelcomeIcon';
-import { FloatingTextPicker } from '../../app/FloatingTextPicker';
 import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
 import { ModelSelectionPicker } from '../../app/ModelSelectionPicker';
 import { userFacingErrorMessage } from '../../lib/errors';
 import { researchModelNameLabel } from '../../lib/formatting';
 import { DEFAULT_RESEARCH_MODEL } from '../../../shared/modelDefaults';
 import { normalizeRepeatSchedule, repeatScheduleFor, repeatScheduleLabel } from '../../../shared/repeatSchedule';
-import { DEFAULT_SHELL_SAFETY_MODE, normalizeShellSafetyMode, SHELL_SAFETY_MODE_OPTIONS } from '../../../shared/shellSafety';
+import { DEFAULT_SHELL_SAFETY_MODE } from '../../../shared/shellSafety';
 import {
   clientRequestId,
   defaultRunInput
@@ -132,7 +131,6 @@ interface StartRunFormProps {
   snapshot: WorkspaceSnapshot;
   openAiStatus: OpenAiAccountStatus | null;
   defaultProviderId: ResearchModelProviderId | null | undefined;
-  dangerModeEnabled?: boolean;
   defaultShellSafetyMode?: ShellSafetyMode;
   providerModelDefaults: Partial<Record<ResearchModelProviderId, ProviderModelDefaults>> | undefined;
   providerPolicyRiskAcknowledgements?: ProviderSettings['cyberPolicyRiskAcknowledgements'];
@@ -159,7 +157,6 @@ export interface ResearchSettingsFormProps {
   workspaceName?: string;
   openAiStatus: OpenAiAccountStatus | null;
   defaultProviderId: ResearchModelProviderId | null | undefined;
-  dangerModeEnabled?: boolean;
   defaultShellSafetyMode?: ShellSafetyMode;
   providerModelDefaults: Partial<Record<ResearchModelProviderId, ProviderModelDefaults>> | undefined;
   providerPolicyRiskAcknowledgements?: ProviderSettings['cyberPolicyRiskAcknowledgements'];
@@ -322,7 +319,6 @@ export function ResearchSettingsForm({
   workspaceName = 'Workspace',
   openAiStatus,
   defaultProviderId,
-  dangerModeEnabled = false,
   defaultShellSafetyMode = DEFAULT_SHELL_SAFETY_MODE,
   providerModelDefaults,
   providerPolicyRiskAcknowledgements = undefined,
@@ -364,9 +360,6 @@ export function ResearchSettingsForm({
   );
   const providerSelectionInitializedRef = useRef(Boolean(initialInput?.provider));
   const modelSelectionInitializedRef = useRef(Boolean(initialInput?.model));
-  const shellSafetyModeOptions = SHELL_SAFETY_MODE_OPTIONS.filter((option) => (
-    option.value !== 'danger' || dangerModeEnabled || input.shellSafetyMode === 'danger'
-  ));
   const promptBoxRef = useRef<HTMLTextAreaElement | null>(null);
   const inputRef = useRef(input);
   const mountedRef = useRef(true);
@@ -941,7 +934,6 @@ export function ResearchSettingsForm({
         providerModelCatalog={configuredProviderModelCatalog}
         providerModelDefaults={providerModelDefaults}
         busy={busy || startingRun || generatingPrompt}
-        dangerModeEnabled={dangerModeEnabled}
         showBackToMain={false}
         searchHighlightQuery=""
         initialModelSelection={initialModelSelection}
@@ -950,7 +942,6 @@ export function ResearchSettingsForm({
         initialSafetyMode={input.shellSafetyMode}
         initialInstruction={input.promptMarkdown}
         inputPlaceholder={newResearchPromptPlaceholder(generateEnabled)}
-        safetyModeOptions={shellSafetyModeOptions}
         ariaLabel={title ?? 'Start new research'}
         emptyContent={(
           <NewResearchWelcome
@@ -1064,15 +1055,6 @@ export function ResearchSettingsForm({
               {generatingPrompt ? 'Adding useful context…' : generationError ? `Could not add context: ${generationError}` : ''}
             </div>
             <div className="new-research-composer-actions">
-              <FloatingTextPicker
-                className={`new-research-safety-picker main-steer-safety-mode-picker mode-${input.shellSafetyMode}`}
-                value={input.shellSafetyMode}
-                options={shellSafetyModeOptions}
-                title="Shell safety mode"
-                ariaLabel="Shell safety mode"
-                disabled={generatingPrompt}
-                onChange={(value) => update('shellSafetyMode', normalizeShellSafetyMode(value))}
-              />
               <RepeatSchedulePicker
                 value={repeatSchedule}
                 disabled={generatingPrompt}

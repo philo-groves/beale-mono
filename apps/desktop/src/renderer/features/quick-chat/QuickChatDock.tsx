@@ -56,7 +56,6 @@ export const QuickChatDock = memo(function QuickChatDock({
   reportShellApprovalBusy = false,
   reportBusy = false,
   reportResponseSuggestionsEnabled = true,
-  dangerModeEnabled = false,
   onReportInitialInstruction,
   onReportSessionAction,
   onReportShellApprovalDecision
@@ -70,7 +69,6 @@ export const QuickChatDock = memo(function QuickChatDock({
   reportShellApprovalBusy?: boolean;
   reportBusy?: boolean;
   reportResponseSuggestionsEnabled?: boolean;
-  dangerModeEnabled?: boolean;
   onReportInitialInstruction?: (
     instruction: string,
     modelSelection: ResearchModelSelection,
@@ -124,7 +122,6 @@ export const QuickChatDock = memo(function QuickChatDock({
           reportShellApprovalBusy={reportShellApprovalBusy}
           reportBusy={reportBusy}
           reportResponseSuggestionsEnabled={reportResponseSuggestionsEnabled}
-          dangerModeEnabled={dangerModeEnabled}
           onReportInitialInstruction={onReportInitialInstruction}
           onReportSessionAction={onReportSessionAction}
           onReportShellApprovalDecision={onReportShellApprovalDecision}
@@ -145,7 +142,6 @@ function QuickChatCard({
   reportShellApprovalBusy,
   reportBusy,
   reportResponseSuggestionsEnabled,
-  dangerModeEnabled,
   onReportInitialInstruction,
   onReportSessionAction,
   onReportShellApprovalDecision
@@ -160,7 +156,6 @@ function QuickChatCard({
   reportShellApprovalBusy: boolean;
   reportBusy: boolean;
   reportResponseSuggestionsEnabled: boolean;
-  dangerModeEnabled: boolean;
   onReportInitialInstruction?: (
     instruction: string,
     modelSelection: ResearchModelSelection,
@@ -346,7 +341,6 @@ function QuickChatCard({
           {error ? <div className="quick-chat-error" role="alert">{error}</div> : null}
           <CommentaryView
             busy={busy || (reportEditing && reportBusy)}
-            dangerModeEnabled={reportEditing && dangerModeEnabled}
             detail={runDetail}
             events={events}
             providerModelCatalog={providerModelCatalog}
@@ -355,7 +349,6 @@ function QuickChatCard({
             searchHighlightQuery=""
             initialModelSelection={initialModelSelection}
             initialSafetyMode="auto_review"
-            initialSuggestion={reportEditing && !runId ? 'Review and improve this report.' : undefined}
             emptyContent={(
               <div className="quick-chat-empty-state">
                 <BealeWelcomeIcon />
@@ -367,7 +360,6 @@ function QuickChatCard({
             shellApproval={reportEditing ? reportShellApproval : null}
             shellApprovalBusy={reportEditing && reportShellApprovalBusy}
             showCollaboration={false}
-            showSafetyMode={false}
             responseSuggestionsEnabled={reportEditing && reportResponseSuggestionsEnabled}
             onBackToMain={() => undefined}
             onInitialInstruction={(instruction, modelSelection) => {

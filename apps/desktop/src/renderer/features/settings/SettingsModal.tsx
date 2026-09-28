@@ -1556,18 +1556,6 @@ export function GeneralSettingsView({
           <div className="settings-form-control-list">
             <label className="settings-form-control-row">
               <span className="settings-form-control-copy">
-                <strong>Session Ending Suggestions</strong>
-                <small>Show generated follow-up research ideas after a session ends.</small>
-              </span>
-              <input
-                type="checkbox"
-                aria-label="Session Ending Suggestions"
-                checked={suggestionPreferences.sessionEndingSuggestionsEnabled}
-                onChange={(event) => onChangeSuggestionPreference('sessionEndingSuggestionsEnabled', event.currentTarget.checked)}
-              />
-            </label>
-            <label className="settings-form-control-row">
-              <span className="settings-form-control-copy">
                 <strong>Response Suggestions</strong>
                 <small>Show suggested responses in session and report composers.</small>
               </span>
@@ -1614,11 +1602,11 @@ export function GeneralSettingsView({
             </label>
             <label className="settings-form-control-row">
               <span className="settings-form-control-copy">
-                <strong>Default Permissions</strong>
+                <strong>Session Permissions</strong>
                 <small>Choose the permission mode applied when a research session starts.</small>
               </span>
               <select
-                aria-label="Default Permissions"
+                aria-label="Session Permissions"
                 value={defaultShellSafetyMode}
                 onChange={(event) => onChangeDefaultShellSafetyMode(normalizeShellSafetyMode(event.currentTarget.value))}
               >

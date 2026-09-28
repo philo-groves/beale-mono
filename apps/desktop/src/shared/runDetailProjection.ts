@@ -3,6 +3,7 @@ import type {
   RunDetailProjection,
   RunDetailUpdate,
   RunDetailUpdateCursor,
+  RunHistoryPage,
   SubagentPreviewRecord,
   TraceEventRecord,
   TranscriptMessageRecord
@@ -136,6 +137,25 @@ export function projectRunDetailForRenderer<TDetail extends RunDetail | RunDetai
       projectionCursor: projectedSourceCursor(detail, sourceCursor)
     })
   } as TDetail;
+}
+
+export function projectRunHistoryPageForRenderer(page: RunHistoryPage, projection: RunDetailProjection): RunHistoryPage {
+  if (projection === 'full') return page;
+  const targetedAgentPath = typeof projection === 'object' ? projection.agentPath : undefined;
+  const traceEvents = targetedAgentPath === undefined
+    ? page.traceEvents
+    : page.traceEvents.filter((event) => includedInAgentCommentaryProjection(event, targetedAgentPath));
+  const transcriptMessages = targetedAgentPath === undefined
+    ? page.transcriptMessages
+    : page.transcriptMessages.filter((message) => includedTranscriptInAgentCommentaryProjection(message, targetedAgentPath));
+  return {
+    ...page,
+    traceEvents: traceEvents.map((event) => projectCommentaryTraceEvent(
+      event,
+      targetedAgentPath !== undefined && isSubagentActivityEvent(event)
+    )),
+    transcriptMessages: transcriptMessages.map(projectCommentaryTranscriptMessage)
+  };
 }
 
 function projectedSubagentPreviews(

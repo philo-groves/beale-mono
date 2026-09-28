@@ -531,6 +531,7 @@ export function getAppServerSessionEventPage(
   options: {
     stream?: 'all' | 'transcript' | 'trace';
     afterEventId?: string;
+    beforeEventId?: string;
     tail?: boolean;
     limit?: number;
     maxBytes?: number;
@@ -542,6 +543,7 @@ export function getAppServerSessionEventPage(
       'session', 'events', '--session-id', sessionId,
       ...(options.stream ? ['--stream', options.stream] : []),
       ...(options.afterEventId ? ['--after-event-id', options.afterEventId] : []),
+      ...(options.beforeEventId ? ['--before-event-id', options.beforeEventId] : []),
       ...(options.tail ? ['--tail'] : []),
       ...(options.limit ? ['--limit', String(options.limit)] : []),
       ...(options.maxBytes ? ['--max-bytes', String(options.maxBytes)] : []),

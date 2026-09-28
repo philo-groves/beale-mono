@@ -483,7 +483,6 @@ describe('workspace dashboard', () => {
       onBackToRunbooks: () => undefined,
       onBackToSubagents: () => undefined,
       onSelectSubagent: () => undefined,
-      onSelectNextStep: () => undefined,
       onSessionAction: () => undefined,
       onSteerInstruction: () => undefined
     }));

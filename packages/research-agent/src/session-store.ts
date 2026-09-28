@@ -141,6 +141,7 @@ export type AppServerSessionEventStream = "all" | "transcript" | "trace" | "comm
 
 export interface AppServerSessionEventPageInput {
   afterEventId?: string | null;
+  beforeEventId?: string | null;
   limit?: number;
   maxBytes?: number;
   tail?: boolean;
@@ -887,7 +888,7 @@ export class AppServerSessionStore {
   public getUpdate(
     sessionId: string,
     afterEventId?: string | null,
-    input: Omit<AppServerSessionEventPageInput, "afterEventId" | "stream"> = {},
+    input: Omit<AppServerSessionEventPageInput, "afterEventId" | "beforeEventId" | "stream"> = {},
   ): AppServerSessionUpdate | null {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     if (this.normalizedEventStorage) {
@@ -947,11 +948,15 @@ export class AppServerSessionStore {
     const limit = boundedInteger(input.limit, 500, 1, 2_000);
     const maxBytes = boundedInteger(input.maxBytes, 2 * 1024 * 1024, 1_024, 8 * 1024 * 1024);
     const afterEventId = optionalString(input.afterEventId);
-    const cursorOffset = afterEventId ? this.eventOffsetForCursor(normalizedSessionId, afterEventId) : null;
-    const tail = input.tail === true && !afterEventId;
+    const beforeEventId = optionalString(input.beforeEventId);
+    if (afterEventId && beforeEventId) throw new Error("Choose either an after or before event cursor.");
+    const cursorOffset = afterEventId || beforeEventId
+      ? this.eventOffsetForCursor(normalizedSessionId, (afterEventId ?? beforeEventId)!)
+      : null;
+    const tail = (input.tail === true || Boolean(beforeEventId)) && !afterEventId;
     const filter = eventStreamSql(stream);
     const direction = tail ? "DESC" : "ASC";
-    const comparison = cursorOffset === null ? "" : "AND event_offset > ?";
+    const comparison = cursorOffset === null ? "" : beforeEventId ? "AND event_offset < ?" : "AND event_offset > ?";
     const query = this.database.prepare(`
       SELECT event_offset, event_json, content_hash FROM app_server_session_events
       WHERE session_id = ? ${comparison} ${filter}
@@ -1011,7 +1016,7 @@ export class AppServerSessionStore {
       sessionId: normalizedSessionId,
       stream,
       events,
-      eventOffset: firstOffset ?? (cursorOffset === null ? 0 : cursorOffset + 1),
+      eventOffset: firstOffset ?? (cursorOffset === null ? 0 : beforeEventId ? cursorOffset : cursorOffset + 1),
       nextAfterEventId: selected.length > 0
         ? decodeEventRow(selected.at(-1)!).id
         : afterEventId ?? null,

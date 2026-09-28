@@ -87,6 +87,7 @@ test("protocol describe exposes a runtime-bound v26 persistence, continuation, C
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("channel.share"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.generate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.select"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.steering"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("prompt.expand"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.list"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.revise_content"));

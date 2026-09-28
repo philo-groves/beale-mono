@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RunDetail, RunDetailUpdate, SubagentPreviewRecord, TraceEventRecord, TranscriptMessageRecord, WorkspaceSnapshot } from '@shared/types';
 import {
   mergeRunDetailUpdate,
+  mergeRunHistoryPage,
   runDetailMetricDetail,
   runDetailUpdateCursor,
   runDetailUpdateMetricDetail,
@@ -68,6 +69,27 @@ describe('renderer run detail update view model', () => {
 
     expect(merged.traceEvents.map((event) => `${event.id}:${event.summary}`)).toEqual(['trace_2:new', 'trace_3:summary', 'trace_4:summary']);
     expect(merged.transcriptMessages.map((message) => `${message.id}:${message.contentMarkdown}`)).toEqual(['message_a:content', 'message_b:new']);
+  });
+
+  it('prepends older history without losing newer rows or the paging cursor during live updates', () => {
+    const current = runDetail({
+      traceEvents: [traceEvent({ id: 'trace_2', sequence: 2 })],
+      transcriptMessages: [transcriptMessage({ id: 'message_2', createdAt: '2026-04-30T00:02:00.000Z' })]
+    });
+    current.historyCursor = { beforeEventId: 'event_2', hasEarlier: true };
+    const page = {
+      runId: current.run.id,
+      traceEvents: [traceEvent({ id: 'trace_1', sequence: 1 }), traceEvent({ id: 'trace_2', sequence: 2 })],
+      transcriptMessages: [transcriptMessage({ id: 'message_1', createdAt: '2026-04-30T00:01:00.000Z' })],
+      historyCursor: { beforeEventId: 'event_1', hasEarlier: false }
+    };
+
+    const merged = mergeRunHistoryPage(current, page);
+    expect(merged.traceEvents.map((event) => event.id)).toEqual(['trace_1', 'trace_2']);
+    expect(merged.transcriptMessages.map((message) => message.id)).toEqual(['message_1', 'message_2']);
+    expect(merged.historyCursor).toEqual(page.historyCursor);
+    expect(mergeRunDetailUpdate(merged, runDetailUpdate()).historyCursor).toEqual(page.historyCursor);
+    expect(mergeRunHistoryPage(current, { ...page, runId: 'other_run' })).toBe(current);
   });
 
   it('carries the source cursor through projected incremental merges', () => {

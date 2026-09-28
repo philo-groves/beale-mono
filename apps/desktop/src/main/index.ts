@@ -20,6 +20,7 @@ import type {
   WorkspaceOnboardingSkipInput,
   WorkspaceScopeDraft,
   GeneratedResearchGoalSuggestions,
+  SteeringSuggestionResult,
   ResearchGoalSuggestionInput,
   ResearchGoalSuggestionSelectionInput,
   ResearchPromptGenerationInput,
@@ -1012,6 +1013,16 @@ function registerIpc(): void {
       }
     }
   });
+  ipcMain.handle(IPC_CHANNELS.generateSteeringSuggestion, (_event, runId: string) => {
+    const workspaceId = workspaceService.getSnapshot()?.workspace.workspaceId;
+    if (!workspaceId) throw new Error('No Beale workspace is open');
+    return timedMainIpcAsync('generateSteeringSuggestion', {}, () =>
+      invokeAppServerOperation<SteeringSuggestionResult>({
+        operation: 'suggestion.steering',
+        input: { workspaceId, sessionId: runId }
+      })
+    );
+  });
   ipcMain.handle(IPC_CHANNELS.selectResearchGoalSuggestion, async (_event, input: ResearchGoalSuggestionSelectionInput) => {
     await timedMainIpcAsync('selectResearchGoalSuggestion', {}, () =>
       invokeAppServerOperation<{ selected: true }>({ operation: 'suggestion.select', input })
@@ -1044,6 +1055,12 @@ function registerIpc(): void {
       timedMainIpcAsync('getRunDetail', { run: shortMetricId(runId), projection: runDetailProjectionMetricLabel(normalizedProjection) }, () =>
         workspaceService.getRunDetailForClient(runId, signal, normalizedProjection)
       )
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.getRunHistoryPage, (_event, runId: string, beforeEventId: string, projection: RunDetailProjection = 'full') => {
+    const normalizedProjection = normalizedRunDetailProjection(projection);
+    return timedMainIpcAsync('getRunHistoryPage', { run: shortMetricId(runId), projection: runDetailProjectionMetricLabel(normalizedProjection) }, () =>
+      workspaceService.getRunHistoryPageForClient(runId, beforeEventId, undefined, normalizedProjection)
     );
   });
   ipcMain.handle(IPC_CHANNELS.getRunDetailVersion, (_event, runId: string) =>

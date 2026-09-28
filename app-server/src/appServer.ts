@@ -606,6 +606,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         sendJson(response, 200, await hostCall(() => hostService.sessionEvents(workspaceId, sessionId, {
           ...(url.searchParams.get('stream') ? { stream: url.searchParams.get('stream')! } : {}),
           ...(url.searchParams.get('afterEventId') ? { afterEventId: url.searchParams.get('afterEventId')! } : {}),
+          ...(url.searchParams.get('beforeEventId') ? { beforeEventId: url.searchParams.get('beforeEventId')! } : {}),
           tail: queryBoolean(url, 'tail'),
           limit: queryInteger(url, 'limit', 200),
           maxBytes: queryInteger(url, 'maxBytes', 1_000_000)

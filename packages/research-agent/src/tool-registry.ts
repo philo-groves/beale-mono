@@ -65,6 +65,12 @@ export interface ResearchToolExecutionResult {
    */
   modelOutput?: unknown;
   modelContent?: ToolResultMessage["content"];
+  pagination?: {
+    toolActionId: string;
+    totalCharacters: number;
+    omittedStart: number;
+    omittedEnd: number;
+  };
   rawOutputRef?: string;
   artifactRefs?: readonly ResearchArtifactRef[];
   followUpActions: readonly string[];
@@ -91,6 +97,10 @@ export interface ModelToolResultProjection {
 }
 
 const DEFAULT_MODEL_TOOL_RESULT_MAX_CHARS = 32_000;
+const RESULT_PAGE_MAX_CHARACTERS = 8_000;
+const RESULT_PAGE_STORE_MAX_ENTRY_CHARACTERS = 8_000_000;
+const RESULT_PAGE_STORE_MAX_CHARACTERS = 24_000_000;
+const RESULT_PAGE_STORE_MAX_ENTRIES = 64;
 const DEFAULT_TOOL_RUNTIME_BUDGET_MS = 120_000;
 const TOOL_RUNTIME_BUDGET_MS_BY_TOOL = new Map<string, number>([
   ["code.detect", 30_000],
@@ -98,6 +108,7 @@ const TOOL_RUNTIME_BUDGET_MS_BY_TOOL = new Map<string, number>([
   ["code.call_candidates", 30_000],
 ]);
 const MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL = new Map<string, number>([
+  ["tool_result.page", 64_000],
   ["history.search", 12_000],
   ["history.mark_duplicate", 12_000],
   ["history.undo_duplicate", 12_000],
@@ -142,6 +153,108 @@ export interface ExecuteToolCallOptions extends ResearchToolExecutionContext {
 export interface ResearchToolRegistryOptions {
   managedPlugins?: readonly ManagedToolPluginOption[];
   validationHooks?: ReadonlyMap<string, ResearchToolValidationHook> | Record<string, ResearchToolValidationHook>;
+  paginateResults?: boolean;
+  resultPageStore?: ToolResultPageStore;
+}
+
+interface StoredToolResultPage {
+  toolActionId: string;
+  toolName: string;
+  text: string;
+}
+
+/** Ephemeral, bounded pages of the same host-safe projection shown to the model. */
+export class ToolResultPageStore {
+  readonly #entries = new Map<string, StoredToolResultPage>();
+  #characters = 0;
+
+  retain(result: ResearchToolExecutionResult, agentId: string | undefined): ResearchToolExecutionResult {
+    if (!agentId || result.action.toolName === "tool_result.page") return result;
+    const projected = projectToolResult(result);
+    const output = "modelOutput" in projected ? projected.modelOutput : projected.output;
+    const text = serializeModelToolResult(projected, output);
+    const maxCharacters = modelToolResultMaxCharacters(projected.action.toolName);
+    if (text.length <= maxCharacters || text.length > RESULT_PAGE_STORE_MAX_ENTRY_CHARACTERS) return result;
+    const key = this.key(agentId, projected.action.id);
+    const previous = this.#entries.get(key);
+    if (previous) this.#characters -= previous.text.length;
+    this.#entries.delete(key);
+    this.#entries.set(key, { toolActionId: projected.action.id, toolName: projected.action.toolName, text });
+    this.#characters += text.length;
+    while (this.#entries.size > RESULT_PAGE_STORE_MAX_ENTRIES || this.#characters > RESULT_PAGE_STORE_MAX_CHARACTERS) {
+      const oldestKey = this.#entries.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.#characters -= this.#entries.get(oldestKey)!.text.length;
+      this.#entries.delete(oldestKey);
+    }
+    const half = Math.floor(maxCharacters / 2);
+    return {
+      ...result,
+      pagination: {
+        toolActionId: projected.action.id,
+        totalCharacters: text.length,
+        omittedStart: half,
+        omittedEnd: text.length - half,
+      },
+    };
+  }
+
+  page(agentId: string | undefined, toolActionId: string, offset: number, maxCharacters: number): Record<string, unknown> | null {
+    if (!agentId) return null;
+    const entry = this.#entries.get(this.key(agentId, toolActionId));
+    if (!entry || !Number.isSafeInteger(offset) || offset < 0 || offset >= entry.text.length
+      || !Number.isSafeInteger(maxCharacters) || maxCharacters < 1 || maxCharacters > RESULT_PAGE_MAX_CHARACTERS) return null;
+    const end = Math.min(entry.text.length, offset + maxCharacters);
+    return {
+      toolActionId: entry.toolActionId,
+      toolName: entry.toolName,
+      offset,
+      totalCharacters: entry.text.length,
+      text: entry.text.slice(offset, end),
+      ...(end < entry.text.length ? { nextOffset: end } : {}),
+    };
+  }
+
+  private key(agentId: string, toolActionId: string): string {
+    return `${agentId}\0${toolActionId}`;
+  }
+}
+
+function createToolResultPageTool(store: ToolResultPageStore): ResearchExecutableTool {
+  const parameters = {
+    type: "object",
+    required: ["toolActionId", "offset"],
+    additionalProperties: false,
+    properties: {
+      toolActionId: { type: "string", minLength: 1 },
+      offset: { type: "integer", minimum: 0 },
+      maxCharacters: { type: "integer", minimum: 1, maximum: RESULT_PAGE_MAX_CHARACTERS },
+    },
+  };
+  return {
+    descriptor: {
+      name: "tool_result.page",
+      transportName: "tool_result_page",
+      description: "Read a bounded page of a truncated tool result using its toolActionId and a character offset. Pages contain the same sanitized model-visible output as the initial preview. Use nextOffset to continue; a missing page means the result expired and the original tool should be rerun narrowly.",
+      actionClasses: ["inspect"],
+      sideEffects: "none",
+      requiredPermissions: [],
+      inputSchema: parameters,
+    },
+    parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
+    async execute(action, context) {
+      const startedAt = nowIso();
+      const toolActionId = action.input.toolActionId;
+      const offset = action.input.offset;
+      const maxCharacters = action.input.maxCharacters ?? RESULT_PAGE_MAX_CHARACTERS;
+      const page = typeof toolActionId === "string" && typeof offset === "number" && typeof maxCharacters === "number"
+        ? store.page(context?.agentId, toolActionId, offset, maxCharacters)
+        : null;
+      return page
+        ? { action, status: "complete", startedAt, completedAt: nowIso(), summary: "Read a page of the prior tool result.", output: page, followUpActions: [] }
+        : { action, status: "error", startedAt, completedAt: nowIso(), summary: "Tool result page unavailable or offset invalid. Re-run the original tool with narrower input if needed.", followUpActions: [] };
+    },
+  };
 }
 
 export class ResearchToolRegistry {
@@ -149,18 +262,21 @@ export class ResearchToolRegistry {
   readonly #toolsByName = new Map<string, ResearchExecutableTool>();
   readonly #toolsByTransportName = new Map<string, ResearchExecutableTool>();
   readonly #validationHooks = new Map<string, ResearchToolValidationHook>();
+  readonly #resultPageStore: ToolResultPageStore | undefined;
 
   constructor(
     tools: readonly ResearchExecutableTool[] = [],
     options: ResearchToolRegistryOptions = {},
   ) {
     this.managedPlugins = options.managedPlugins;
+    this.#resultPageStore = options.resultPageStore ?? (options.paginateResults ? new ToolResultPageStore() : undefined);
     for (const [name, hook] of readValidationHookEntries(options.validationHooks)) {
       this.#validationHooks.set(name, hook);
     }
     for (const tool of tools) {
       this.register(tool);
     }
+    if (this.#resultPageStore) this.register(createToolResultPageTool(this.#resultPageStore));
   }
 
   register(tool: ResearchExecutableTool): void {
@@ -180,6 +296,7 @@ export class ResearchToolRegistry {
     return new ResearchToolRegistry([...this.listTools(), ...additionalTools], {
       validationHooks: this.#validationHooks,
       ...(this.managedPlugins ? { managedPlugins: this.managedPlugins } : {}),
+      ...(this.#resultPageStore ? { resultPageStore: this.#resultPageStore } : {}),
     });
   }
 
@@ -270,7 +387,7 @@ export class ResearchToolRegistry {
       return createExecutionRecord(blocked, options);
     }
 
-    return createExecutionRecord(result, options);
+    return createExecutionRecord(this.#resultPageStore?.retain(result, options.agentId) ?? result, options);
   }
 
   async executeToolCall(
@@ -432,23 +549,23 @@ function createModelToolResultContent(
   output: unknown,
   bounded: boolean,
 ): ToolResultMessage["content"] {
-  const serialized = JSON.stringify(
-    {
-      status: result.status,
-      summary: result.summary,
-      output,
-      error: result.error,
-      followUpActions: result.followUpActions,
-    },
-    null,
-    2,
-  );
+  const serialized = serializeModelToolResult(result, output);
   const text = bounded
-    ? truncateModelToolResult(serialized, result.action.toolName)
+    ? truncateModelToolResult(serialized, result.action.toolName, result.pagination)
     : serialized;
   return result.modelContent?.length
     ? [{ type: "text", text }, ...result.modelContent]
     : [{ type: "text", text }];
+}
+
+function serializeModelToolResult(result: ResearchToolExecutionResult, output: unknown): string {
+  return JSON.stringify({
+    status: result.status,
+    summary: result.summary,
+    output,
+    error: result.error,
+    followUpActions: result.followUpActions,
+  }, null, 2);
 }
 
 function serializedContentCharacters(content: ToolResultMessage["content"]): number {
@@ -1041,14 +1158,23 @@ function projectShellToolOutput(output: unknown): unknown {
   return projected;
 }
 
-function truncateModelToolResult(text: string, toolName: string): string {
-  const maxCharacters = MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL.get(toolName)
-    ?? DEFAULT_MODEL_TOOL_RESULT_MAX_CHARS;
+function modelToolResultMaxCharacters(toolName: string): number {
+  return MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL.get(toolName) ?? DEFAULT_MODEL_TOOL_RESULT_MAX_CHARS;
+}
+
+function truncateModelToolResult(
+  text: string,
+  toolName: string,
+  pagination?: ResearchToolExecutionResult["pagination"],
+): string {
+  const maxCharacters = modelToolResultMaxCharacters(toolName);
   if (text.length <= maxCharacters) return text;
   const half = Math.floor(maxCharacters / 2);
   return [
     text.slice(0, half),
-    `\n\n[Tool result truncated for model context: ${text.length - maxCharacters} characters omitted. Re-run a narrower command if the omitted section is needed.]\n\n`,
+    pagination
+      ? `\n\n[Tool result truncated for model context: ${pagination.omittedEnd - pagination.omittedStart} characters omitted. Call tool_result_page with toolActionId=${JSON.stringify(pagination.toolActionId)} and offset=${pagination.omittedStart} to read the omitted text in bounded pages; continue with nextOffset.]\n\n`
+      : `\n\n[Tool result truncated for model context: ${text.length - maxCharacters} characters omitted. Re-run a narrower command if the omitted section is needed.]\n\n`,
     text.slice(-half),
   ].join("");
 }

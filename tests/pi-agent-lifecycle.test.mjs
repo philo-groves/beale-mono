@@ -764,6 +764,7 @@ test("direct Pi Agent executor runs app-server tools through lifecycle hooks", a
       materializedSourcePaths: [],
       projectNotes: [],
     },
+    // Legacy callers may still supply cards; startup must not inject them.
     memoryContext: [{
       id: "mem_fixture_parser",
       scope: {
@@ -842,9 +843,10 @@ test("direct Pi Agent executor runs app-server tools through lifecycle hooks", a
   assert.doesNotMatch(contexts[0].systemPrompt, /Use durable memory as a concise research graph/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Never use the \$HOME environment variable/);
   const initialMessage = contexts[0].messageContents.join("\n");
-  assert.match(initialMessage, /### memory/);
-  assert.match(initialMessage, /mem_fixture_parser/);
-  assert.match(initialMessage, /evidence_fixture_parser/);
+  assert.doesNotMatch(initialMessage, /### memory|mem_fixture_parser|evidence_fixture_parser/);
+  const contextEvent = result.events.find((event) => event.kind === "context.compiled");
+  assert.deepEqual(contextEvent.payload.memoryContext, []);
+  assert.equal(contextEvent.payload.contextMetrics.counts.memoryNodes, 0);
   assert.doesNotMatch(initialMessage, /### storage|### tool_policy|memory\.sqlite/);
 });
 

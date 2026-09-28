@@ -38,6 +38,9 @@ describe('renderer debugging settings', () => {
     expect(html).not.toContain('<strong>Commentary</strong>');
     expect(html).not.toContain('type="radio"');
     expect(html).toContain('<h2 id="permissions-settings-heading">Permissions</h2>');
+    expect(html).toContain('<strong>Session Permissions</strong>');
+    expect(html).toContain('aria-label="Session Permissions"');
+    expect(html).not.toContain('Default Permissions');
   });
 
   it('removes the trace timeline, filters, detail modal, and view preference', () => {
@@ -94,12 +97,10 @@ describe('renderer debugging settings', () => {
 
   it('renders and persists enabled-by-default suggestion controls', () => {
     expect(DEFAULT_SUGGESTION_PREFERENCES).toEqual({
-      sessionEndingSuggestionsEnabled: true,
       responseSuggestionsEnabled: true,
       newResearchPromptSuggestionsEnabled: true
     });
     expect(normalizeSuggestionPreferences({ responseSuggestionsEnabled: false })).toEqual({
-      sessionEndingSuggestionsEnabled: true,
       responseSuggestionsEnabled: false,
       newResearchPromptSuggestionsEnabled: true
     });
@@ -110,7 +111,6 @@ describe('renderer debugging settings', () => {
       setItem: (key: string, value: string) => values.set(key, value)
     };
     const preferences = {
-      sessionEndingSuggestionsEnabled: false,
       responseSuggestionsEnabled: true,
       newResearchPromptSuggestionsEnabled: false
     };
@@ -132,7 +132,7 @@ describe('renderer debugging settings', () => {
 
     expect(html).toContain('<h2 id="suggestions-settings-heading">Suggestions</h2>');
     expect(html).toMatch(/aria-label="Response Suggestions"[^>]*checked=""/u);
-    expect(html).not.toMatch(/aria-label="Session Ending Suggestions"[^>]*checked/u);
+    expect(html).not.toContain('Session Ending Suggestions');
     expect(html).not.toMatch(/aria-label="New Research Prompt Suggestions"[^>]*checked/u);
   });
 

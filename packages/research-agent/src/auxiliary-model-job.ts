@@ -4,6 +4,7 @@ export const AUXILIARY_MODEL_JOB_NAMES = [
   'sessionTitle',
   'promptGeneration',
   'goalSuggestions',
+  'steeringSuggestion',
   'memoryCuration',
   'shellReview',
 ] as const;

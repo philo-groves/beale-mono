@@ -12,6 +12,7 @@ import {
   createAppServerSessionBoundary,
   flushAppServerSessionWrites,
   getAppServerRunDetailForClient,
+  getAppServerRunHistoryPageForClient,
   getAppServerRunDetailUpdateForClient
 } from '../src/main/appServerSessionBoundary';
 import { WorkspaceService } from '../src/main/workspaceService';
@@ -162,6 +163,12 @@ describe('app-server session persistence boundary', () => {
         },
         activityCounts: { memorySearches: 1, memoryUpdates: 0 }
       });
+      const olderHistory = await getAppServerRunHistoryPageForClient(
+        database, context.run.id, 'event_canonical_history_search'
+      );
+      expect(olderHistory?.traceEvents.some((event) => event.summary === 'Model turn completed.')).toBe(true);
+      expect(olderHistory?.historyCursor.beforeEventId).toBeTruthy();
+      expect(olderHistory?.historyCursor.hasEarlier).toBe(false);
     } finally {
       database.close();
     }

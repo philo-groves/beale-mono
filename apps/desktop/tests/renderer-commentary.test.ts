@@ -5,14 +5,18 @@ import { readFileSync } from 'node:fs';
 import type { RunDetail, TraceEventRecord, WorkspaceScopeVersion } from '@shared/types';
 import {
   COMMENTARY_RENDER_WINDOW_SIZE,
+  CommentaryMessageRow,
   CommentaryView,
   commentaryFollowLatestAfterScroll,
   commentaryMessageIcon,
   commentaryMessageLabel,
+  commentaryMessageOffsets,
   commentaryMessageSections,
   commentaryScrollFadeClasses,
+  commentarySpacerHeight,
   commentaryToolValueText,
   commentaryWindowStartForIndex,
+  commentaryWindowStartForOffset,
   isRunWorkingStatus,
   runWorkingDurationMs
 } from '../src/renderer/features/commentary/CommentaryView';
@@ -22,6 +26,7 @@ import {
   commentaryToolUsageText
 } from '../src/renderer/view-models/commentary';
 import type { TraceDisplayEvent } from '../src/renderer/view-models/traceDisplay';
+import { buildTraceDisplayEventsForAgentPath } from '../src/renderer/view-models/traceDisplay';
 
 describe('renderer commentary projection', () => {
   it('renders the commentary session loading state with a spinner and no composer', () => {
@@ -697,14 +702,28 @@ describe('renderer commentary projection', () => {
   });
 
   it('centers selected history within a bounded commentary render window', () => {
-    expect(commentaryWindowStartForIndex(140, 0)).toBe(0);
-    expect(commentaryWindowStartForIndex(140, 70)).toBe(50);
-    expect(commentaryWindowStartForIndex(140, 139)).toBe(80);
+    expect(commentaryWindowStartForIndex(240, 0)).toBe(0);
+    expect(commentaryWindowStartForIndex(240, 70)).toBe(30);
+    expect(commentaryWindowStartForIndex(240, 239)).toBe(120);
+  });
+
+  it('uses measured message heights and gaps to locate history within spacers', () => {
+    const offsets = commentaryMessageOffsets(
+      [{ id: 'one' }, { id: 'two' }, { id: 'three' }, { id: 'four' }],
+      new Map([['one', 30], ['two', 80], ['three', 40]]), 100, 14
+    );
+    expect(offsets).toEqual([0, 44, 138, 192, 306]);
+    expect(commentarySpacerHeight(offsets, 0, 3, 14)).toBe(178);
+    expect(commentarySpacerHeight(offsets, 1, 4, 14)).toBe(248);
+    expect(commentarySpacerHeight(offsets, 2, 2, 14)).toBe(0);
+    expect(commentaryWindowStartForOffset(offsets, 45, 3)).toBe(1);
+    expect(commentaryWindowStartForOffset(offsets, 150, 3)).toBe(2);
+    expect(commentaryWindowStartForOffset(offsets, 1_000, 3)).toBe(3);
   });
 
   it('renders only the latest bounded window for long commentary histories', () => {
     const detail = runDetail('Review the target.');
-    const events = Array.from({ length: 100 }, (_, index) => displayEvent(`commentary-${index}`, {
+    const events = Array.from({ length: 180 }, (_, index) => displayEvent(`commentary-${index}`, {
       agentPath: '/root',
       transcriptRole: 'assistant',
       transcriptSource: 'app_server_commentary',
@@ -728,9 +747,40 @@ describe('renderer commentary projection', () => {
     );
 
     expect(html.match(/data-commentary-event-id=/g)).toHaveLength(COMMENTARY_RENDER_WINDOW_SIZE);
-    expect(html).toContain('Commentary message 99');
+    expect(html).toContain('Commentary message 179');
     expect(html).not.toContain('Commentary message 0<');
     expect(html).toContain('main-commentary-spacer');
+  });
+
+  it('excludes the leading prompt from scroll-window measurements', () => {
+    const detail = runDetail('Inspect the parser.');
+    detail.run.status = 'active';
+    detail.run.budget = { modelProvider: 'openai-codex' };
+    detail.run.model = 'gpt-5.6-sol';
+    detail.run.reasoningEffort = 'medium';
+    const events = Array.from({ length: 180 }, (_, index) => displayEvent(`commentary-${index}`, {
+        agentPath: '/root',
+        transcriptRole: 'assistant',
+        transcriptSource: 'app_server_commentary',
+        messagePhase: 'commentary',
+        text: `Checkpoint ${index}`
+      }, { sequence: index }));
+    const html = renderToStaticMarkup(createElement(CommentaryView, {
+      busy: false,
+      detail,
+      events,
+      providerModelCatalog: [],
+      selectedRunId: detail.run.id,
+      showBackToMain: false,
+      searchHighlightQuery: '',
+      onBackToMain: () => undefined,
+      onSessionAction: () => undefined,
+      onSteerInstruction: () => undefined
+    }));
+
+    expect(html.match(/data-commentary-window-item=""/g)).toHaveLength(COMMENTARY_RENDER_WINDOW_SIZE);
+    expect(html.match(/<article[^>]*data-commentary-event-id="run-prompt:run_commentary"[^>]*>/)?.[0])
+      .not.toContain('data-commentary-window-item');
   });
 
   it('shows user, native commentary, and final messages while suppressing paired reasoning fallback', () => {
@@ -788,6 +838,94 @@ describe('renderer commentary projection', () => {
     expect(messages.map(({ kind, contentMarkdown }) => [kind, contentMarkdown])).toEqual([
       ['error', 'Unexpected error']
     ]);
+  });
+
+  it('shows the latest root checkpoint as final output when a request aborts', () => {
+    const detail = runDetail('Inspect the parser.');
+    detail.run.status = 'failed';
+    const events = [
+      displayEvent('checkpoint', {
+        agentPath: '/root',
+        transcriptRole: 'assistant',
+        transcriptSource: 'app_server_commentary',
+        messagePhase: 'commentary',
+        text: 'The parser guard rejects the first malformed case; the second remains open.'
+      }, { createdAt: '2026-08-03T10:00:00.000Z' }),
+      displayEvent('subagent-checkpoint', {
+        agentPath: '/root/reviewer',
+        transcriptRole: 'assistant',
+        transcriptSource: 'app_server_commentary',
+        messagePhase: 'commentary',
+        text: 'A separate review is in progress.'
+      }, { createdAt: '2026-08-03T10:01:00.000Z' }),
+      displayEvent('abort', {
+        agentPath: '/root',
+        transcriptRole: 'assistant',
+        transcriptSource: 'app-server',
+        messagePhase: 'final_answer',
+        finalResultKind: 'error',
+        text: 'Request was aborted'
+      }, { createdAt: '2026-08-03T10:02:30.000Z' })
+    ];
+    const messages = commentaryMessagesForSession(detail, events, { includeInitialPrompt: false });
+    expect(messages.at(-1)).toMatchObject({
+      kind: 'final_answer',
+      contentMarkdown: 'The parser guard rejects the first malformed case; the second remains open.',
+      abortNotice: 'Request was aborted 2m 30s after the above checkpoint.'
+    });
+
+    const html = renderToStaticMarkup(createElement(CommentaryMessageRow, {
+      message: messages.at(-1)!,
+      searchHighlightQuery: '',
+      selected: false
+    }));
+    expect(html).toContain('class="main-commentary-abort-notice"');
+    expect(html).toContain('Request was aborted 2m 30s after the above checkpoint.');
+  });
+
+  it('uses the previous final answer for a paused session with each abort wording', () => {
+    for (const abortText of ['Request was aborted', 'The operation was aborted', 'This operation was aborted']) {
+      const detail = runDetail('Inspect the parser.');
+      detail.run.status = 'paused';
+      detail.transcriptMessages = [
+        {
+          id: 'checkpoint', runId: detail.run.id, attemptId: 'attempt_previous', traceEventId: null,
+          role: 'assistant', phase: 'final_answer', source: 'app-server',
+          contentMarkdown: 'The earlier parser check established the boundary.',
+          metadata: { agentPath: '/root' }, createdAt: '2026-08-03T10:00:00.000Z'
+        },
+        {
+          id: 'abort', runId: detail.run.id, attemptId: 'attempt_current', traceEventId: null,
+          role: 'assistant', phase: 'final_answer', source: 'app-server',
+          contentMarkdown: abortText,
+          metadata: { agentPath: '/root' }, createdAt: '2026-08-03T10:05:00.000Z'
+        }
+      ];
+      const messages = commentaryMessagesForSession(detail, buildTraceDisplayEventsForAgentPath(detail, null), {
+        includeInitialPrompt: false
+      });
+      expect(messages[0]?.kind).toBe('commentary');
+      expect(messages.at(-1)).toMatchObject({
+        kind: 'final_answer',
+        contentMarkdown: 'The earlier parser check established the boundary.',
+        abortNotice: 'Request was aborted 5m 0s after the above checkpoint.'
+      });
+    }
+  });
+
+  it('keeps the abort output when no previous agent checkpoint exists', () => {
+    const detail = runDetail('Inspect the parser.');
+    detail.run.status = 'paused';
+    const messages = commentaryMessagesForSession(detail, [
+      displayEvent('abort', {
+        agentPath: '/root',
+        transcriptRole: 'assistant',
+        transcriptSource: 'app-server',
+        messagePhase: 'final_answer',
+        text: 'The operation was aborted'
+      })
+    ], { includeInitialPrompt: false });
+    expect(messages.at(-1)).toMatchObject({ kind: 'final_answer', contentMarkdown: 'The operation was aborted' });
   });
 
   it('normalizes legacy terminated app-server final text as an unexpected error', () => {

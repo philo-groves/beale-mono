@@ -43,7 +43,7 @@ export const MANAGED_TOOL_PLUGINS = [
 export type ManagedToolPluginId = typeof MANAGED_TOOL_PLUGINS[number]["id"];
 export const MANAGED_TOOL_PLUGIN_IDS: readonly ManagedToolPluginId[] = MANAGED_TOOL_PLUGINS.map((plugin) => plugin.id);
 
-export const CORE_TOOL_NAMES = ["file.read", "file.write", "file.edit", "shell.run", "session.disposition"] as const;
+export const CORE_TOOL_NAMES = ["file.read", "file.write", "file.edit", "shell.run", "session.disposition", "tool_result.page"] as const;
 
 /** New host tools must explicitly join a plugin or the small core surface. */
 export function assertManagedToolOwnership(tools: readonly ResearchExecutableTool[]): void {

@@ -14,7 +14,8 @@ import type {
   ResearchChannelSharedResourceKind,
   ResearchChannelSharedResourceRecord,
   ResearchChannelSummary,
-  ResearchClaimRating
+  ResearchClaimRating,
+  SteeringSuggestionResult
 } from '@beale/app-server-runtime/protocol';
 
 export * from './researchProfile';
@@ -34,7 +35,8 @@ export type {
   ResearchChannelSharedResourceKind,
   ResearchChannelSharedResourceRecord,
   ResearchChannelSummary,
-  ResearchClaimRating
+  ResearchClaimRating,
+  SteeringSuggestionResult
 } from '@beale/app-server-runtime/protocol';
 
 export type ScopeAssetDirection = 'in_scope' | 'out_of_scope';
@@ -1880,9 +1882,9 @@ export interface SessionNextPromptSuggestion {
 export interface GeneratedResearchGoalSuggestions {
   phase: ResearchGoalPhase;
   suggestions: ResearchGoalSuggestionGroup;
-  /** Structured prompts captured during session finalization. Only present for session next steps. */
+  /** Legacy structured prompts from sessions finalized before run-end suggestions were removed. */
   promptSuggestions?: SessionNextPromptSuggestion[];
-  /** Present for workspace-level suggestions. Session next steps remain immutable session data. */
+  /** Present for workspace-level suggestions. */
   cacheStatus?: 'fresh' | 'stale';
   contextRevision?: string;
   generatedAt?: string;
@@ -2277,6 +2279,19 @@ export interface RunDetail {
   subagentPreviews?: SubagentPreviewRecord[];
   /** Source cursor retained when renderer projections omit agent-owned rows. */
   projectionCursor?: RunDetailUpdateCursor;
+  historyCursor?: RunHistoryCursor;
+}
+
+export interface RunHistoryCursor {
+  beforeEventId: string | null;
+  hasEarlier: boolean;
+}
+
+export interface RunHistoryPage {
+  runId: string;
+  traceEvents: TraceEventRecord[];
+  transcriptMessages: TranscriptMessageRecord[];
+  historyCursor: RunHistoryCursor;
 }
 
 export interface SubagentPreviewRecord {
@@ -2558,6 +2573,7 @@ export interface BealeApi {
   getAppServerToolingSummary(): Promise<AppServerToolingSummary>;
   updateAppServerToolingConfig(update: AppServerToolingConfigUpdate): Promise<AppServerToolingSummary>;
   generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions>;
+  generateSteeringSuggestion(runId: string): Promise<SteeringSuggestionResult>;
   selectResearchGoalSuggestion(input: ResearchGoalSuggestionSelectionInput): Promise<void>;
   generateResearchPrompt(input?: ResearchPromptGenerationInput): Promise<GeneratedResearchPrompt>;
   cancelResearchPromptGeneration(requestId: string): Promise<void>;
@@ -2568,6 +2584,7 @@ export interface BealeApi {
   startQuickChat(input: QuickChatStartInput): Promise<QuickChatStartResult>;
   exportWorkspaceBackup(note?: string): Promise<WorkspaceSnapshot>;
   getRunDetail(runId: string, projection?: RunDetailProjection): Promise<RunDetail>;
+  getRunHistoryPage(runId: string, beforeEventId: string, projection?: RunDetailProjection): Promise<RunHistoryPage>;
   getRunDetailVersion(runId: string): Promise<RunDetailVersion>;
   getRunDetailUpdate(runId: string, cursor: RunDetailUpdateCursor, projection?: RunDetailProjection): Promise<RunDetailUpdate>;
   getRunMessageDetail(input: RunMessageDetailRequest): Promise<RunMessageDetail>;

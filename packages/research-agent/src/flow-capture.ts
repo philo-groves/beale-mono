@@ -128,7 +128,7 @@ export function createResearchAgentFlowCapture(
     },
     context: {
       workspaceContext: result.modelWorkspaceContext,
-      memory: result.memoryContext,
+      memory: [],
       selectedSkills: result.modelSelectedSkills,
       availableTools: result.availableTools,
       collaborationTools: result.collaborationTools,

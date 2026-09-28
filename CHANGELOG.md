@@ -6,6 +6,13 @@
 
 #### Changed
 
+- Large tool results keep a bounded model preview and provide run-local `tool_result.page` reads for omitted text.
+- Research sessions no longer preload ranked memory cards into startup or continuity context. Agents retrieve relevant memories through research search and detail tools.
+- Expanded research details and channel summaries now occupy half the window width, with the commentary area shrinking to make room.
+- Session transcript scrolling measures rendered activity-row heights, keeps the visible message anchored as the display window changes or older pages load, and loads earlier canonical event pages through ended-run work history.
+- Aborted sessions show the latest root-agent checkpoint as the final output, with a muted elapsed-time notice beneath it, including paused runs and common abort message variants.
+- Ended sessions no longer show three follow-up cards or generate them during final disposition. The session composer now asks the configured small model for one fluent Tab suggestion.
+- Session permissions are selected in General settings; steering and New Research inputs no longer show a permission picker.
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
 - Workspace Board now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
 - New Research starts with Goal mode off by default; the Goal option remains available for individual prompts and saved settings retain their choice.
@@ -49,7 +56,7 @@
 - Workspace checkpoints now preserve the committed bytes and artifact mapping of completed execution evidence when a stable candidate path is revised, recover pinned-only evidence after an interrupted publication, and checkpoint a runbook once at whole-execution completion instead of after every terminal cell update.
 - Independent finding verification now permits the same provider and model while requiring a distinct reviewer subagent with no inherited parent or channel transcript. Host-attributed reviewer context prevents self-review and inherited-history review from satisfying the verification gate across supported agent providers.
 - Research workspaces now ignore unexpected top-level entries without hiding them from session enforcement. A filesystem-backed layout guard reactivates the root agent on every turn until misplaced material moves into an approved directory, while forced staging remains rejected by the commit guard.
-- Compaction and retry rehydration now reads the current memories, claims, runbooks, investigation binding, and campaign state at the recovery boundary instead of replaying the session-start snapshot. Workspace search includes schema-v2 canonical research files by default and keeps schema-v1 compatibility exports opt-in.
+- Compaction and retry rehydration now reads the current claims, runbooks, investigation binding, and campaign state at the recovery boundary instead of replaying the session-start snapshot. Workspace search includes schema-v2 canonical research files by default and keeps schema-v1 compatibility exports opt-in.
 - New research sessions now select their investigation after the root agent has oriented itself using workspace state and explicit candidate details. The agent must reason about the concrete question, mechanism, proof chain, and evidence outcome before making a one-time attach-or-create decision; keyword similarity, generic continuation language, and single-candidate fallbacks no longer assign sessions. Final disposition and normal completion reject an unassigned session, while compaction, recovery, checkpoints, and continuations reuse the immutable assignment.
 - Workspace checkpoint workers now broker every SQLite operation through the resident app-server and its transaction coordinator. File-authority checkpoints validate supported direct edits, reject record deletion or immutable-field forgery, refresh the derived query index, and republish before committing.
 - Manual Stop now addresses the app-server session even when Desktop is detached, waits for an in-flight launch to register, and surfaces host rejection before recording a stopped run. Failed stop requests remain retryable.
@@ -70,7 +77,7 @@
 - Intentional host stops now remain a first-class `stopped` agent and capture outcome. They produce neutral stop events and an inconclusive fallback disposition instead of transient research-failure events, summaries, or persisted failure state.
 - Research loops now distinguish evidence-producing activity from durable progress. After sustained new activity without a canonical memory, claim, runbook, or report update, Beale pauses further execution and session disposition until the agent converts useful results into canonical state. Investigation questions, experiments, observations, next actions, and resource inventory no longer clear this execution-progress checkpoint; investigations remain concise cross-session history and overview rather than the live research controller. The Lead tool capability check also recognizes the actual `lead.create` transport name, restoring canonical claim guidance.
 - Auto-Review again requires every proof command to originate from a recorded runbook cell, and agent guidance now establishes or reuses the runbook before the first claim-confirming experiment. Iterative proof code stays in a stable candidate artifact whose existing entry cell can be rerun, preserving execution observability without lifecycle wrappers, duplicate runbooks, or per-tweak append churn.
-- Research sessions now start directly with the deterministic workspace, memory, campaign, and instruction projections; the separate model-driven startup context selector and its fallback, events, and selected-context API have been removed.
+- Research sessions now start directly with the deterministic workspace, campaign, and instruction projections; the separate model-driven startup context selector and its fallback, events, and selected-context API have been removed.
 - MCP tools now expose a bounded per-call `bealeTimeoutMs` override up to 30 minutes. Beale removes the control field before provider dispatch and applies the selected timeout consistently across the research-tool budget, MCP wrapper, and stdio request transport so slow VM operations can complete.
 - Stop controls from Desktop, iOS, HTTP clients, and resident automation now share the app-server's bounded worker-termination fallback, preventing stopped sessions or continuations from remaining active when cooperative cancellation stalls.
 - Fresh subagents now inherit at most 16 recent channel messages plus a bounded shared-resource index, so durable channels no longer bypass opt-in parent history by replaying hundreds of messages into every child. Advanced discovery maintains multiple non-duplicative Discoverer scouts and replenishes completed coverage while meaningful unexplored surface remains; sequential chain or proof work retains lead-owned closure with bounded Prover or Reviewer assignments.
@@ -1145,6 +1152,7 @@
 
 #### Added
 
+- The hosted `suggestion.steering` operation generates a bounded suggestion from canonical session context using the configured small model; Desktop and app-server must be rebuilt together.
 - `runbook.prepare` now finds or creates a cohesive workflow and returns its investigations candidate path and entry cell before implementation. `runbook.edit` revises an existing code cell under an expected runbook revision while preserving its identity and invalidating old displayed output.
 - Research workspace commits now end with investigation and session ID trailers for history filtering. Automatic checkpoints resolve session attribution, and manual commits receive explicit `none` values when no attribution is supplied; existing history is preserved.
 - Host-owned Git checkpoints at creation, session boundaries, research milestones, periodic intervals, and canonical client edits. Staged-content guards protect layout, canonical exports, evidence, credentials, and size limits while preserving manual staging and failed-checkpoint work.
@@ -1167,6 +1175,7 @@
 
 #### Changed
 
+- Canonical session event reads now accept a backward cursor, allowing Desktop to load older transcript pages without transferring the full session at once. Desktop and app-server must be rebuilt together.
 - Campaign storage now enforces one immutable investigation assignment per session with a unique database constraint and recorded assignment rationale. Legacy duplicate links are reduced to the original session-origin or earliest assignment during migration; new sessions remain unassigned until the running root agent makes its reasoned one-time selection.
 - OpenAI server-side and local fallback compaction thresholds now scale from the selected model context window instead of imposing a 96k active-context ceiling.
 - Public history recall now supports paginated NVD/OSV, public GitHub issues/PRs and releases, and supplied document pages, retaining structured advisory applicability and explicit partial/error coverage. Provenance adds bounded `prior_art.fetch` with content-hash-checked pages and an explicit `repository.fetch_history` operation that preserves worktree files while fetching or deepening named remote history. Model search cards defer large details to source URLs; first-touch guidance now states actual source coverage.

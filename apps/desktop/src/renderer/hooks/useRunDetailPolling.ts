@@ -5,6 +5,7 @@ import { devInstrumentation, recordNextFrameTiming } from '../devInstrumentation
 import { errorMessage } from '../lib/errors';
 import {
   mergeRunDetailUpdate,
+  mergeRunHistoryPage,
   runDetailMetricDetail,
   runDetailUpdateCursor,
   runDetailUpdateMetricDetail,
@@ -32,6 +33,7 @@ export function useRunDetailPolling({
   sessionSetupPending: boolean;
   clearRunDetail: () => void;
   primeRunDetail: (run: RunRecord) => void;
+  loadOlderHistory: () => Promise<boolean>;
 } {
   const [runDetail, setRunDetail] = useState<RunDetail | null>(null);
   const [setupPendingRunId, setSetupPendingRunId] = useState<string | null>(null);
@@ -39,6 +41,7 @@ export function useRunDetailPolling({
   const versionRef = useRef<string | null>(null);
   const projectionRef = useRef<RunDetailProjection | null>(null);
   const detailRef = useRef<RunDetail | null>(null);
+  const historyRequestRef = useRef<string | null>(null);
 
   useEffect(() => {
     detailRef.current = runDetail;
@@ -48,6 +51,7 @@ export function useRunDetailPolling({
     versionRef.current = null;
     projectionRef.current = null;
     detailRef.current = null;
+    historyRequestRef.current = null;
     setRunDetail(null);
     setSetupPendingRunId(null);
   }, []);
@@ -59,9 +63,52 @@ export function useRunDetailPolling({
     versionRef.current = null;
     projectionRef.current = projection;
     detailRef.current = detail;
+    historyRequestRef.current = null;
     setRunDetail(detail);
     setSetupPendingRunId(run.id);
   }, [projection]);
+
+  const loadOlderHistory = useCallback(async (): Promise<boolean> => {
+    const current = detailRef.current;
+    const cursor = current?.historyCursor;
+    if (!selectedRunId || current?.run.id !== selectedRunId || !cursor?.hasEarlier || !cursor.beforeEventId) return false;
+    if (historyRequestRef.current) return false;
+    const beforeEventId = cursor.beforeEventId;
+    const requestSeq = requestSeqRef.current;
+    historyRequestRef.current = beforeEventId;
+    try {
+      let nextBeforeEventId: string | null = beforeEventId;
+      while (nextBeforeEventId) {
+        const page = await window.beale.getRunHistoryPage(selectedRunId, nextBeforeEventId, projection);
+        const latest = detailRef.current;
+        if (requestSeq !== requestSeqRef.current || latest?.run.id !== selectedRunId
+          || latest.historyCursor?.beforeEventId !== nextBeforeEventId) return false;
+        const merged = mergeRunHistoryPage(latest, page);
+        detailRef.current = merged;
+        if (merged.traceEvents.length > latest.traceEvents.length
+          || merged.transcriptMessages.length > latest.transcriptMessages.length
+          || !page.historyCursor.hasEarlier
+          || !page.historyCursor.beforeEventId
+          || page.historyCursor.beforeEventId === nextBeforeEventId) {
+          startTransition(() => setRunDetail(merged));
+          return true;
+        }
+        nextBeforeEventId = page.historyCursor.beforeEventId;
+      }
+      return false;
+    } catch (caught: unknown) {
+      if (requestSeq === requestSeqRef.current) {
+        const latest = detailRef.current;
+        if (latest?.run.id === selectedRunId && latest.historyCursor?.beforeEventId !== beforeEventId) {
+          startTransition(() => setRunDetail(latest));
+        }
+        onError(errorMessage(caught));
+      }
+      return false;
+    } finally {
+      if (historyRequestRef.current === beforeEventId) historyRequestRef.current = null;
+    }
+  }, [onError, projection, selectedRunId]);
 
   useEffect(() => {
     const requestSeq = ++requestSeqRef.current;
@@ -75,6 +122,7 @@ export function useRunDetailPolling({
       versionRef.current = null;
       projectionRef.current = projection;
       detailRef.current = null;
+      historyRequestRef.current = null;
       setRunDetail(null);
       setSetupPendingRunId(null);
     } else if (projectionRef.current !== projection) {
@@ -83,6 +131,7 @@ export function useRunDetailPolling({
       // the session workspace and right-sidenav navigation never unmount.
       versionRef.current = null;
       projectionRef.current = projection;
+      historyRequestRef.current = null;
       projectionRefreshPending = true;
     }
     let disposed = false;
@@ -122,10 +171,11 @@ export function useRunDetailPolling({
               await yieldToRenderer();
               if (disposed || requestSeq !== requestSeqRef.current) return null;
               const updateMetricDetail = runDetailUpdateMetricDetail(update);
-              const detail = devInstrumentation.time('trace.mergeRunDetailUpdate', () => mergeRunDetailUpdate(currentDetail, update), {
+              const mergeBase = detailRef.current?.run.id === selectedRunId ? detailRef.current : currentDetail;
+              const detail = devInstrumentation.time('trace.mergeRunDetailUpdate', () => mergeRunDetailUpdate(mergeBase, update), {
                 ...updateMetricDetail,
-                currentTraceEvents: currentDetail.traceEvents.length,
-                currentTranscripts: currentDetail.transcriptMessages.length
+                currentTraceEvents: mergeBase.traceEvents.length,
+                currentTranscripts: mergeBase.transcriptMessages.length
               });
               return { detail, version: update.version.version, update };
             });
@@ -197,7 +247,8 @@ export function useRunDetailPolling({
     runDetail,
     sessionSetupPending: setupPendingRunId === runDetail?.run.id,
     clearRunDetail,
-    primeRunDetail
+    primeRunDetail,
+    loadOlderHistory
   };
 }
 

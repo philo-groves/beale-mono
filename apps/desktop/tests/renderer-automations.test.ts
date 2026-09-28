@@ -214,7 +214,6 @@ function render(
     }],
     shellApproval: null,
     shellApprovalBusy: false,
-    dangerModeEnabled: false,
     responseSuggestionsEnabled: true,
     busy: false,
     loading,
@@ -295,7 +294,7 @@ describe('automation workspace', () => {
     expect(html).not.toContain('Old run commentary');
     expect(html).toContain('class="main-steer-input-row without-trace-filters"');
     expect(html).toContain('Review parser boundary changes.');
-    expect(html).toContain('aria-label="Shell safety mode"');
+    expect(html).not.toContain('aria-label="Shell safety mode"');
     expect(html).toContain('aria-label="Collaboration settings"');
     expect(html).toContain('aria-label="Model settings for the next agent turn"');
     expect(html).toContain('<span class="model-selection-picker-model">5.6 Sol</span>');

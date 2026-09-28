@@ -75,7 +75,6 @@ import type { WorkspaceConfigurationInput } from './features/workspaces/Workspac
 import { ReportsIndex, ReportSessionWorkspace } from './features/reports/ReportsWorkspace';
 import { AutomationsWorkspace } from './features/automations/AutomationsWorkspace';
 import { PluginManagerWorkspace } from './features/plugins/PluginManagerWorkspace';
-import type { ResearchGoalSeed } from './features/sessions/SessionNextSteps';
 import {
   isInlineApproval,
   pendingShellApproval,
@@ -309,9 +308,7 @@ export function App(): JSX.Element {
   const [workspaceDashboardViewName, setWorkspaceDashboardViewName] = useState('Campaign');
   const [sessionOverviewOpen, setSessionOverviewOpen] = useState(false);
   const [newResearchOpen, setNewResearchOpen] = useState(false);
-  const [newResearchInitialGoal, setNewResearchInitialGoal] = useState<ResearchGoalSeed | null>(null);
   const closeNewResearch = useCallback((): void => {
-    setNewResearchInitialGoal(null);
     setNewResearchOpen(false);
   }, []);
   const [pluginsOpen, setPluginsOpen] = useState(false);
@@ -411,7 +408,7 @@ export function App(): JSX.Element {
     return `${selected.status}:${selected.shellSafetyMode}:${pendingApprovalIds}:${reportsOpen ? reportSessionRefreshVersion : 0}`;
   }, [reportSessionRefreshVersion, reportsOpen, selectedRunId, snapshot?.pendingShellApprovals, snapshot?.runs]);
   const handleRunDetailError = useCallback((message: string) => setError(message), []);
-  const { runDetail, sessionSetupPending, clearRunDetail, primeRunDetail } = useRunDetailPolling({
+  const { runDetail, sessionSetupPending, clearRunDetail, primeRunDetail, loadOlderHistory } = useRunDetailPolling({
     selectedRunId,
     selectedRunState,
     projection: runDetailProjection,
@@ -2166,7 +2163,6 @@ export function App(): JSX.Element {
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
-    setNewResearchInitialGoal(null);
     setNewResearchOpen(true);
   }, [clearRunDetail, closeWorkspaceOnboarding, reportsOpen, setSelectedRunId]);
   const startNewResearchForWorkspace = useCallback((workspace: WorkspaceRegistryEntry): void => {
@@ -2182,15 +2178,10 @@ export function App(): JSX.Element {
       startNewResearch();
     }, { reloadRegistry: false, missingDirectoryWorkspace: workspace });
   }, [applySnapshot, clearRunDetail, runWorkspaceAction, setSelectedRunId, snapshot?.workspace.workspacePath, startNewResearch]);
-  const startNewResearchFromSuggestion = useCallback((goal: ResearchGoalSeed) => {
-    setNewResearchInitialGoal(goal);
-    setNewResearchOpen(true);
-  }, []);
   const handleResearchStarted = useCallback(
     (run: RunRecord): void => {
       primeRunDetail(run);
       setSelectedRunId(run.id);
-      setNewResearchInitialGoal(null);
       setNewResearchOpen(false);
     },
     [primeRunDetail, setSelectedRunId]
@@ -2249,7 +2240,6 @@ export function App(): JSX.Element {
       snapshot={snapshot}
       openAiStatus={snapshot.openAi ?? openAiStatus}
       defaultProviderId={providerSettings?.defaultProviderId}
-      dangerModeEnabled={permissionSettings.dangerModeEnabled}
       defaultShellSafetyMode={permissionSettings.defaultShellSafetyMode}
       providerModelDefaults={providerSettings?.modelDefaults}
       providerPolicyRiskAcknowledgements={providerSettings?.cyberPolicyRiskAcknowledgements}
@@ -2258,7 +2248,6 @@ export function App(): JSX.Element {
       researchGoalSuggestions={researchGoalSuggestionState.suggestions}
       researchGoalSuggestionsLoading={researchGoalSuggestionState.loading}
       researchGoalSuggestionErrors={researchGoalSuggestionState.errors}
-      initialGoal={newResearchInitialGoal}
       showSuggestions={suggestionPreferences.newResearchPromptSuggestionsEnabled}
       busy={busy}
       runAction={runAction}
@@ -2490,7 +2479,6 @@ export function App(): JSX.Element {
                 providerModelCatalog={enabledResearchProviderModelCatalog}
                 shellApproval={inlineApproval}
                 shellApprovalBusy={Boolean(inlineApproval && (busy || shellApprovalDecisionInFlight === inlineApproval.id))}
-                dangerModeEnabled={permissionSettings.dangerModeEnabled}
                 responseSuggestionsEnabled={suggestionPreferences.responseSuggestionsEnabled}
                 busy={busy}
                 loading={automationsLoading}
@@ -2627,6 +2615,7 @@ export function App(): JSX.Element {
               detail={renderedRunDetail}
               sessionSetupPending={sessionSetupPending}
               events={mainSessionTraceEvents}
+              onLoadOlderHistory={loadOlderHistory}
               allEvents={activeTraceEvents}
               providerModelCatalog={enabledResearchProviderModelCatalog}
               providerModelDefaults={providerSettings?.modelDefaults}
@@ -2637,7 +2626,6 @@ export function App(): JSX.Element {
               researchKitId={snapshot.workspace.researchKitId}
               researchSubjectName={selectedRunId ? '' : snapshot?.researchSubject.name ?? ''}
               sessionHeatPreferences={sessionHeatPreferences}
-              sessionEndingSuggestionsEnabled={suggestionPreferences.sessionEndingSuggestionsEnabled}
               responseSuggestionsEnabled={suggestionPreferences.responseSuggestionsEnabled}
               workspacePath={selectedRunId ? '' : snapshot?.workspace.workspacePath ?? ''}
               workspaceDirectories={selectedRunId ? [] : snapshot?.workspace.workspaceDirectories}
@@ -2662,7 +2650,6 @@ export function App(): JSX.Element {
               searchHighlightQuery=""
               shellApproval={inlineApproval}
               shellApprovalBusy={Boolean(inlineApproval && (busy || shellApprovalDecisionInFlight === inlineApproval.id))}
-              dangerModeEnabled={permissionSettings.dangerModeEnabled}
               busy={busy}
               connectedDeviceCaptureEnabled={windowControlPlatform === 'darwin'}
               workspaceDejunk={selectedRunId ? null : snapshot?.workspace.dejunk ?? null}
@@ -2695,7 +2682,6 @@ export function App(): JSX.Element {
               onBackToReports={backToReports}
               onBackToSubagents={backToSubagents}
               onSelectSubagent={selectSubagent}
-              onSelectNextStep={startNewResearchFromSuggestion}
               onShellApprovalDecision={decideInlineShellApproval}
               onSessionAction={handleSessionAction}
               onSteerInstruction={handleSteerInstruction}
@@ -2718,7 +2704,6 @@ export function App(): JSX.Element {
         reportShellApprovalBusy={Boolean(inlineApproval && (busy || shellApprovalDecisionInFlight === inlineApproval.id))}
         reportBusy={busy}
         reportResponseSuggestionsEnabled={suggestionPreferences.responseSuggestionsEnabled}
-        dangerModeEnabled={permissionSettings.dangerModeEnabled}
         onReportInitialInstruction={startReportTurn}
         onReportSessionAction={applyReportSessionAction}
         onReportShellApprovalDecision={(decision) => {

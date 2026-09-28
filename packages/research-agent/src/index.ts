@@ -76,6 +76,7 @@ export * from "./session-title.js";
 export * from "./session-disposition-tool.js";
 export * from "./goal-runtime.js";
 export * from "./goal-suggestions.js";
+export * from "./steering-suggestion.js";
 export * from "./goal-suggestion-selection.js";
 export * from "./research-prompt-expansion.js";
 export * from "./research-profile.js";

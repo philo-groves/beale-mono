@@ -406,7 +406,7 @@ describe('renderer workspace display view models', () => {
       /const startNewResearch = useCallback[\s\S]*?const startNewResearchForWorkspace/u
     )?.[0] ?? '';
     const actionSource = appSource.match(
-      /const startNewResearchForWorkspace = useCallback[\s\S]*?const startNewResearchFromSuggestion/u
+      /const startNewResearchForWorkspace = useCallback[\s\S]*?const handleResearchStarted/u
     )?.[0] ?? '';
 
     expect(startActionSource).toContain('closeWorkspaceOnboarding();');

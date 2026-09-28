@@ -1,5 +1,4 @@
 export interface SuggestionPreferences {
-  sessionEndingSuggestionsEnabled: boolean;
   responseSuggestionsEnabled: boolean;
   newResearchPromptSuggestionsEnabled: boolean;
 }
@@ -8,7 +7,6 @@ export type SuggestionPreferenceKey = keyof SuggestionPreferences;
 
 export const SUGGESTION_PREFERENCES_STORAGE_KEY = 'beale.suggestionPreferences';
 export const DEFAULT_SUGGESTION_PREFERENCES: SuggestionPreferences = Object.freeze({
-  sessionEndingSuggestionsEnabled: true,
   responseSuggestionsEnabled: true,
   newResearchPromptSuggestionsEnabled: true
 });
@@ -19,7 +17,6 @@ export function normalizeSuggestionPreferences(value: unknown): SuggestionPrefer
   }
   const record = value as Record<string, unknown>;
   return {
-    sessionEndingSuggestionsEnabled: booleanPreference(record.sessionEndingSuggestionsEnabled),
     responseSuggestionsEnabled: booleanPreference(record.responseSuggestionsEnabled),
     newResearchPromptSuggestionsEnabled: booleanPreference(record.newResearchPromptSuggestionsEnabled)
   };

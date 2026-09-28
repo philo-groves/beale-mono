@@ -6,7 +6,7 @@ import type { AppServerMemoryNodeSummary, ResearchCollaborationProviderPreferenc
 import { BottomSheet, Modal } from '../src/renderer/app/Modal';
 import { ModelSelectionPicker } from '../src/renderer/app/ModelSelectionPicker';
 import { MemoryDetailView } from '../src/renderer/features/research/MemorySidePanel';
-import { expandedDeviceCapturePanelWidth, isIosDeviceOs, latestOverallRunbookExecution, mainSessionViewState, sessionContentAvailable, shouldShowSessionNextSteps } from '../src/renderer/features/sessions/MainSessionWorkspace';
+import { expandedDeviceCapturePanelWidth, isIosDeviceOs, latestOverallRunbookExecution, mainSessionViewState, sessionContentAvailable } from '../src/renderer/features/sessions/MainSessionWorkspace';
 import {
   enableCollaboratorAtTop,
   newResearchPromptPlaceholder,
@@ -14,7 +14,7 @@ import {
   ResearchGoalChooser,
   StartRunForm
 } from '../src/renderer/features/sessions/StartRunForm';
-import { SessionNextSteps, SessionNextStepsWidget } from '../src/renderer/features/sessions/SessionNextSteps';
+import { SessionNextStepsWidget } from '../src/renderer/features/sessions/SessionNextSteps';
 import { WorkspaceCreationView } from '../src/renderer/features/workspaces/WorkspaceCreationView';
 import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollbarActivation';
 import { applyResearchKit, emptyWorkspaceOnboardingForm, onboardingFormFromDefaults } from '../src/renderer/view-models/workspaceOnboarding';
@@ -300,8 +300,7 @@ describe('renderer dialog surfaces', () => {
     expect(html).toMatch(/<label class="new-research-goal-toggle"[^>]*><input type="checkbox"\/><span>Goal<\/span><\/label>/);
     expect(html).toContain('<span>Goal</span>');
     expect(html).toContain('<span>Add Context</span>');
-    expect(html).toContain('aria-label="Shell safety mode"');
-    expect(html).toContain('Auto-Review');
+    expect(html).not.toContain('aria-label="Shell safety mode"');
     expect(html).toContain('aria-label="Suggestion lanes"');
     expect(html).toContain('aria-label="Lead model settings"');
     expect(html).toContain('class="research-model-squircle research-lead-model-picker model-selection-picker');
@@ -374,7 +373,7 @@ describe('renderer dialog surfaces', () => {
     expect(html.indexOf('new-research-options-tray')).toBeLessThan(html.indexOf('class="main-steer-input-row without-trace-filters"'));
     expect(html.match(/class="new-research-goal-toggle"/g)).toHaveLength(1);
     expect(html.match(/class="new-research-generate-toggle"/g)).toHaveLength(1);
-    expect(html).toContain('aria-label="Shell safety mode"');
+    expect(html).not.toContain('aria-label="Shell safety mode"');
     expect(html).toContain('aria-label="Model settings for the next agent turn"');
     expect(html).toContain('aria-label="Send steering instruction"');
     expect(html).toContain('placeholder="Write a full research prompt"');
@@ -512,23 +511,14 @@ describe('renderer dialog surfaces', () => {
     const composerRowStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\s*\{([^}]*)\}/)?.[1] ?? '';
     const inlineModelStyles = styles.match(/(?:^|\n)\.main-steer-input-row\.without-trace-filters \.main-steer-model-selection-picker\s*\{([^}]*)\}/)?.[1] ?? '';
     const inlineCollaborationStyles = styles.match(/\.main-steer-input-row\.without-trace-filters \.main-steer-collaboration-selector\s*\{([^}]*)\}/)?.[1] ?? '';
-    const inlineSafetyStyles = styles.match(/\.main-steer-input-row\.without-trace-filters \.main-steer-safety-mode-picker\s*\{([^}]*)\}/)?.[1] ?? '';
     const withoutCollaborationRowStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\.without-collaboration\s*\{([^}]*)\}/)?.[1] ?? '';
-    const withoutCollaborationSafetyStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\.without-collaboration \.main-steer-safety-mode-picker\s*\{([^}]*)\}/)?.[1] ?? '';
     const withoutCollaborationContextStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\.without-collaboration \.main-steer-context-usage\s*\{([^}]*)\}/)?.[1] ?? '';
     const withoutCollaborationSendStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\.without-collaboration \.main-steer-send\s*\{([^}]*)\}/)?.[1] ?? '';
-    const withoutCollaborationOrSafetyRowStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\.without-collaboration\.without-safety-mode\s*\{([^}]*)\}/)?.[1] ?? '';
-    const withoutCollaborationOrSafetyContextStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\.without-collaboration\.without-safety-mode \.main-steer-context-usage\s*\{([^}]*)\}/)?.[1] ?? '';
-    const withoutCollaborationOrSafetySendStyles = styles.match(/\.main-steer-input-row\.without-trace-filters\.without-collaboration\.without-safety-mode \.main-steer-send\s*\{([^}]*)\}/)?.[1] ?? '';
     const contextUsageStyles = styles.match(/(?:^|\n)\.main-steer-context-usage\s*\{([^}]*)\}/)?.[1] ?? '';
     const composerModelTriggerStyles = styles.match(/\.main-steer-model-selection-picker \.model-selection-picker-trigger\s*\{([^}]*)\}/)?.[1] ?? '';
     const composerModelHoverStyles = styles.match(/\.main-steer-model-selection-picker \.model-selection-picker-trigger:hover:not\(:disabled\),[\s\S]*?\.main-steer-model-selection-picker\.is-open \.model-selection-picker-trigger\s*\{([^}]*)\}/)?.[1] ?? '';
     const composerModelTextHoverStyles = styles.match(/\.main-steer-model-selection-picker \.model-selection-picker-trigger:hover:not\(:disabled\) :is\([\s\S]*?\.main-steer-model-selection-picker\.is-open \.model-selection-picker-trigger :is\([\s\S]*?\)\s*\{([^}]*)\}/)?.[1] ?? '';
-    const composerSafetyTriggerStyles = styles.match(/\.main-steer-safety-mode-picker \.floating-text-picker-trigger\s*\{([^}]*)\}/)?.[1] ?? '';
-    const composerSafetyHoverStyles = styles.match(/\.main-steer-safety-mode-picker \.floating-text-picker-trigger:hover:not\(:disabled\),[\s\S]*?\.main-steer-safety-mode-picker\.is-open \.floating-text-picker-trigger\s*\{([^}]*)\}/)?.[1] ?? '';
-    const composerDisabledTriggerStyles = styles.match(/\.main-steer-model-selection-picker \.model-selection-picker-trigger:disabled,\s*\.main-steer-collaboration-trigger:disabled,\s*\.main-steer-safety-mode-picker \.floating-text-picker-trigger:disabled\s*\{([^}]*)\}/)?.[1] ?? '';
-    const autoReviewLabelStyles = styles.match(/\.main-steer-safety-mode-picker\.mode-auto_review \.floating-text-picker-label\s*\{([^}]*)\}/)?.[1] ?? '';
-    const autoReviewLabelHoverStyles = styles.match(/\.main-steer-safety-mode-picker\.mode-auto_review \.floating-text-picker-trigger:hover:not\(:disabled\) \.floating-text-picker-label,[\s\S]*?\.main-steer-safety-mode-picker\.mode-auto_review\.is-open \.floating-text-picker-label\s*\{([^}]*)\}/)?.[1] ?? '';
+    const composerDisabledTriggerStyles = styles.match(/\.main-steer-model-selection-picker \.model-selection-picker-trigger:disabled,\s*\.main-steer-collaboration-trigger:disabled\s*\{([^}]*)\}/)?.[1] ?? '';
     const collaborationLabelStyles = styles.match(/\.main-steer-collaboration-label\s*\{([^}]*)\}/)?.[1] ?? '';
     const composerModelLabelStyles = styles.match(/\.main-steer-model-selection-picker \.model-selection-picker-model\s*\{([^}]*)\}/)?.[1] ?? '';
     const collaborationModeStyles = styles.match(/\.main-steer-collaboration-mode,\s*\.main-steer-collaboration-chevron\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -596,34 +586,24 @@ describe('renderer dialog surfaces', () => {
     expect(collaborationTriggerStyles).toContain('padding: 0');
     expect(collaborationTriggerHoverStyles).toContain('background: transparent');
     expect(collaborationTextHoverStyles).toContain('color: var(--text)');
-    expect(composerRowStyles).toContain('grid-template-columns: auto auto auto minmax(0, 1fr) 31px 35px');
+    expect(composerRowStyles).toContain('grid-template-columns: auto auto minmax(0, 1fr) 31px 35px');
     expect(composerRowStyles).toContain('column-gap: 9px');
     expect(inlineModelStyles).toContain('grid-column: 1');
     expect(inlineModelStyles).toContain('margin-left: 12px');
     expect(inlineCollaborationStyles).toContain('grid-column: 2');
-    expect(inlineSafetyStyles).toContain('grid-column: 3');
-    expect(withoutCollaborationRowStyles).toContain('grid-template-columns: auto auto minmax(0, 1fr) 31px 35px');
-    expect(withoutCollaborationSafetyStyles).toContain('grid-column: 2');
-    expect(withoutCollaborationContextStyles).toContain('grid-column: 4');
-    expect(withoutCollaborationSendStyles).toContain('grid-column: 5');
-    expect(withoutCollaborationOrSafetyRowStyles).toContain('grid-template-columns: auto minmax(0, 1fr) 31px 35px');
-    expect(withoutCollaborationOrSafetyContextStyles).toContain('grid-column: 3');
-    expect(withoutCollaborationOrSafetySendStyles).toContain('grid-column: 4');
-    expect(contextUsageStyles).toContain('grid-column: 5');
+    expect(withoutCollaborationRowStyles).toContain('grid-template-columns: auto minmax(0, 1fr) 31px 35px');
+    expect(withoutCollaborationContextStyles).toContain('grid-column: 3');
+    expect(withoutCollaborationSendStyles).toContain('grid-column: 4');
+    expect(contextUsageStyles).toContain('grid-column: 4');
     expect(contextUsageStyles).toContain('width: 31px');
     expect(contextUsageStyles).toContain('height: 31px');
     expect(contextUsageStyles).toContain('place-items: center');
-    for (const triggerStyles of [composerModelTriggerStyles, composerSafetyTriggerStyles]) {
-      expect(triggerStyles).toContain('border: 0');
-      expect(triggerStyles).toContain('border-radius: 0');
-      expect(triggerStyles).toContain('padding: 0');
-    }
+    expect(composerModelTriggerStyles).toContain('border: 0');
+    expect(composerModelTriggerStyles).toContain('border-radius: 0');
+    expect(composerModelTriggerStyles).toContain('padding: 0');
     expect(composerModelHoverStyles).toContain('background: transparent');
     expect(composerModelTextHoverStyles).toContain('color: var(--text)');
-    expect(composerSafetyHoverStyles).toContain('background: transparent');
     expect(composerDisabledTriggerStyles).toContain('background: transparent');
-    expect(autoReviewLabelStyles).toContain('color: var(--muted)');
-    expect(autoReviewLabelHoverStyles).toContain('color: var(--text)');
     expect(collaborationLabelStyles).toContain('color: var(--muted-strong)');
     expect(composerModelLabelStyles).toContain('color: var(--muted-strong)');
     expect(collaborationModeStyles).toContain('color: var(--muted)');
@@ -736,66 +716,6 @@ describe('renderer dialog surfaces', () => {
     expect(html).toContain('class="session-next-steps-back"');
     expect(html).toContain('Categories');
     expect(html.match(/class="session-next-step-button"/g)).toHaveLength(4);
-  });
-
-  it('loads missing suggestions for every ended session view', () => {
-    const emptyHtml = renderToStaticMarkup(createElement(SessionNextStepsWidget, {
-      loading: false,
-      suggestions: [],
-      error: null,
-      onSelect: () => undefined
-    }));
-
-    expect(emptyHtml).toContain('No suggestions to show.');
-    expect(emptyHtml).not.toContain('Regenerate suggestions');
-    expect(shouldShowSessionNextSteps('completed', true)).toBe(true);
-    expect(shouldShowSessionNextSteps('completed', false)).toBe(false);
-
-    const detail = {
-      run: {
-        id: 'run_complete',
-        status: 'completed',
-        endedAt: '2026-08-12T12:00:00.000Z',
-        summary: 'Completed bounded research.',
-        finalDisposition: null,
-        budget: { researchWorkflowId: 'discovery' }
-      },
-      nextStepSuggestions: null
-    } as unknown as RunDetail;
-    const revisitHtml = renderToStaticMarkup(createElement(SessionNextSteps, {
-      detail,
-      onSelect: () => undefined
-    }));
-    expect(revisitHtml).toContain('aria-busy="true"');
-    expect(revisitHtml.match(/session-next-step-skeleton/g)).toHaveLength(3);
-  });
-
-  it('renders persisted session next steps immediately without a loading state', () => {
-    const suggestions = [
-      'Verify the strongest unresolved boundary from the completed session.',
-      'Generalize the session result to the nearest related research case.',
-      'Stress-test the key conclusion against a materially different construction.'
-    ];
-    const detail = {
-      run: {
-        id: 'run_complete',
-        endedAt: '2026-08-12T12:00:00.000Z',
-        summary: 'Completed bounded research.',
-        finalDisposition: null,
-        budget: { researchWorkflowId: 'discovery' }
-      },
-      nextStepSuggestions: { phase: 'discovery', suggestions }
-    } as unknown as RunDetail;
-
-    const html = renderToStaticMarkup(createElement(SessionNextSteps, {
-      detail,
-      onSelect: () => undefined
-    }));
-
-    expect(html).toContain('aria-busy="false"');
-    expect(html.match(/class="session-next-step-button"/g)).toHaveLength(3);
-    expect(html).not.toContain('session-next-step-skeleton');
-    for (const suggestion of suggestions) expect(html).toContain(suggestion);
   });
 
   it('seeds the shared New Research composer from a session suggestion', () => {
