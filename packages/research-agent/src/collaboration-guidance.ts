@@ -18,18 +18,18 @@ export function createCollaborationSystemGuidance(
   const lead = options.lead ?? true;
   return [
     "Active collaboration settings:",
-    `- Collaboration mode is ${config.mode}; subagent mode is ${config.subagentMode}; intensity is ${config.intensity}. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model} (${(provider.roles?.length ? provider.roles : ALL_SUBAGENT_ROLES).join(", ")})`).join("; ") || "none"}.`,
+    `Collaboration mode is ${config.mode}; subagent mode is ${config.subagentMode}; intensity is ${config.intensity}. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model} (${(provider.roles?.length ? provider.roles : ALL_SUBAGENT_ROLES).join(", ")})`).join("; ") || "none"}.`,
     "",
     "Context and review:",
-    ...runtimeGuidance(config).map((instruction) => `- ${instruction}`),
-    "- Startup context is bounded. Query relevant memory, claims, runbooks, reports, and workspace history as needed.",
+    ...runtimeGuidance(config),
+    "Startup context is bounded. Query relevant memory, claims, runbooks, reports, and workspace history as needed.",
     ...(lead ? [
-      "- Before recording session disposition or sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot.",
+      "Before recording session disposition or sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot.",
     ] : []),
     "",
     "Subagent workflow:",
-    ...subagentModeGuidance(config.subagentMode, lead, workflowId).map((instruction) => `- ${instruction}`),
-    ...(lead ? ["", "Collaboration mode policy:", ...modeGuidance(config.mode).map((instruction) => `- ${instruction}`)] : []),
+    ...subagentModeGuidance(config.subagentMode, lead, workflowId),
+    ...(lead ? ["", "Collaboration mode policy:", ...modeGuidance(config.mode)] : []),
   ].join("\n");
 }
 

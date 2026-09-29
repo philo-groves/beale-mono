@@ -81,10 +81,6 @@ export class WorkspaceRegistry {
     validateResearchSystemPromptTemplate(template);
     return createResearchSystemPrompt({
       hasTools: true,
-      hasMemoryTools: true,
-      hasFindingTools: true,
-      hasRunbookTools: true,
-      hasReportTools: true,
       hasSessionDispositionTool: !agentPath,
       hasCollaborationTools: true,
       goalEnabled: !agentPath,

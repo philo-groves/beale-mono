@@ -27,6 +27,14 @@ describe('prompt template settings', () => {
       expect(pluginPreview).not.toContain('Inspect synthetic records.');
       expect(pluginPreview).not.toContain('Example Plugin');
       expect(pluginPreview).not.toContain('Example Skill');
+      const conditionalTemplate = '{{boundary}}\n{{memory}}\n{{claims}}\n{{runbooks}}\n{{reports}}';
+      const knowledgeOnly = registry.previewPromptTemplate('security-research', conditionalTemplate, undefined, [{
+        id: 'beale-knowledge', name: 'Knowledge', mcpServers: [], skills: []
+      }]);
+      expect(knowledgeOnly).toContain('Use durable memory as a concise research graph');
+      expect(knowledgeOnly).not.toContain('Use one canonical, evidence-gated research claim ledger');
+      expect(knowledgeOnly).not.toContain('Use runbooks as durable executable research artifacts');
+      expect(knowledgeOnly).not.toContain('Use reports as durable Markdown artifacts');
       expect(registry.getPromptTemplateSettings('mathematics').overridden).toBe(false);
       registry.close();
 

@@ -10,6 +10,8 @@
 
 #### Changed
 
+- The default agent prompt includes memory, claims, and runbook guidance only while their corresponding plugins are enabled. Report guidance is removed from the prompt template; saved templates containing `{{reports}}` remain valid and render it empty.
+- The default agent prompt now presents guidance as plain lines across its sections; plugin and memory-type catalogs retain bullets.
 - The Introspection and Terminator Agent Plugin packages now live under `managed-plugins`; their built-in registration and enabled defaults are preserved.
 - The default agent prompt now has a `{{plugins}}` catalog of plugin IDs, descriptions, and tool and skill counts. `plugins.preview` returns tool names and skill use cases on demand, with a 12,000-character budget for skill descriptions. The settings preview discovers enabled MCP tool counts through the app-server. `plugins.load` returns full skill instructions and exposes tool schemas on the next turn; Pi, Claude, and ZCode use the same path.
 - Collaboration prompt guidance now groups delegation, channel use, profile rules, and active runtime policy without repeating channel protocol instructions.

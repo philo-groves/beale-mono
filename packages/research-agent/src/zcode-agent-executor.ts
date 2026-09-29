@@ -193,9 +193,6 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
       const visibleTools = (): ZCodeTool[] => [...registryTools(), ...agentTools];
       const systemPrompt = createResearchSystemPrompt({
         hasTools: registryTools().length > 0,
-        hasMemoryTools: hasTool(options.toolRegistry, "history_search"),
-        hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
-        hasReportTools: hasTool(options.toolRegistry, "report_list"),
         hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
         hasCollaborationTools: agentTools.length > 0,
         ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id) } : {}),

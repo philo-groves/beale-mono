@@ -812,7 +812,7 @@ export function AppearanceSettingsView({
 }
 
 const PROMPT_VARIABLES = [
-  'identity', 'style', 'boundary', 'tools', 'plugins', 'collaboration', 'goal', 'memory', 'claims', 'runbooks', 'reports',
+  'identity', 'style', 'boundary', 'tools', 'plugins', 'collaboration', 'goal', 'memory', 'claims', 'runbooks',
   'profile.id', 'profile.name'
 ] as const;
 

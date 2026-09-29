@@ -18,6 +18,8 @@ import {
   runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
 
+const pluginCatalog = (...ids) => ids.map((id) => ({ id, name: id, mcpServers: [], skills: [] }));
+
 test("prompt templates render profile sections and require the authorization boundary", () => {
   const profile = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
   const options = { hasTools: true, hasMemoryTools: true, researchProfile: profile };
@@ -28,6 +30,7 @@ test("prompt templates render profile sections and require the authorization bou
   assert.ok(custom.includes("Profile: Mathematics"));
   assert.ok(custom.includes(profile.agent.role));
   assert.match(defaultResearchSystemPromptTemplate(), /\{\{tools\}\}\n\n\{\{plugins\}\}\n\n\{\{collaboration\}\}/);
+  assert.doesNotMatch(defaultResearchSystemPromptTemplate(), /\{\{reports\}\}/);
   const withPlugins = createResearchSystemPrompt({ ...options, pluginCatalog: [{
     id: "example-plugin", name: "Example Plugin", mcpServers: [],
     skills: [{ id: "example-skill", name: "Example Skill", useWhen: "Inspect synthetic data.", path: "example.md",
@@ -44,6 +47,31 @@ test("prompt templates render profile sections and require the authorization bou
   assert.throws(() => validateResearchSystemPromptTemplate("{{boundary}}\n{{unknown}}"), /Unknown prompt variable/);
 });
 
+test("default prompt uses plain guidance lines and bullets only for catalogs", () => {
+  const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  const prompt = createResearchSystemPrompt({
+    hasTools: true,
+    hasMemoryTools: true,
+    hasFindingTools: true,
+    hasRunbookTools: true,
+    hasCollaborationTools: true,
+    hasSessionDispositionTool: true,
+    goalEnabled: true,
+    researchProfile: profile,
+    pluginCatalog: [...pluginCatalog("beale-knowledge", "beale-claims", "beale-runbooks"), ...pluginCatalog("example-plugin")],
+  });
+  const bulletLines = prompt.split("\n").filter((line) => line.startsWith("- "));
+  assert.ok(bulletLines.some((line) => line.startsWith("- example-plugin (plugin;")));
+  assert.ok(bulletLines.some((line) => line.startsWith("- asset (Asset):")));
+  assert.ok(bulletLines.every((line) =>
+    line.includes(" (plugin;")
+    || profile.memory.types.some((type) => line.startsWith(`- ${type.id} (`))
+  ));
+  assert.match(prompt, /Scope and authority:\nThe host-supplied workspace context/);
+  assert.match(prompt, /Tool routing:\nProfile-recognized material kinds/);
+  assert.match(prompt, /Use one canonical, evidence-gated research claim ledger[^\n]*\nThe active profile declares/);
+});
+
 test("the default prompt keeps boundary guidance focused on scope and host safeguards", () => {
   const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const template = defaultResearchSystemPromptTemplate().split("\n");
@@ -54,7 +82,7 @@ test("the default prompt keeps boundary guidance focused on scope and host safeg
   const boundary = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}" });
   const style = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\n{{style}}" });
   const goal = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\n{{goal}}" });
-  const memory = createResearchSystemPrompt({ ...options, hasMemoryTools: true, promptTemplate: "{{boundary}}\n{{memory}}" });
+  const memory = createResearchSystemPrompt({ ...options, hasMemoryTools: true, pluginCatalog: pluginCatalog("beale-knowledge"), promptTemplate: "{{boundary}}\n{{memory}}" });
   const tools = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\n{{tools}}" });
   const toolsSection = tools.slice(boundary.length + 1);
   const defaultPrompt = createResearchSystemPrompt(options);
@@ -94,11 +122,11 @@ test("goal guidance separates session work, Goal mode, and disposition", () => {
   const regular = createResearchSystemPrompt(options);
   const persistent = createResearchSystemPrompt({ ...options, goalEnabled: true });
 
-  assert.match(regular, /Session progress:\n- Treat existing records/);
-  assert.match(regular, /- At evidence checkpoints/);
-  assert.match(regular, /Session disposition:\n- Before the root final response/);
+  assert.match(regular, /Session progress:\nTreat existing records/);
+  assert.match(regular, /At evidence checkpoints/);
+  assert.match(regular, /Session disposition:\nBefore the root final response/);
   assert.doesNotMatch(regular, /Persistent Goal mode:|objective_achieved/);
-  assert.match(persistent, /Persistent Goal mode:\n- Continue researching/);
+  assert.match(persistent, /Persistent Goal mode:\nContinue researching/);
   assert.ok(persistent.indexOf("Persistent Goal mode:") < persistent.indexOf("Session disposition:"));
   assert.doesNotMatch(persistent, /\n{3,}/);
 });
@@ -109,22 +137,22 @@ test("collaboration guidance separates delegation, channels, profile protocol, a
     hasCollaborationTools: true,
     researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
     promptTemplate: "{{boundary}}\n{{collaboration}}",
-    collaborationGuidance: "Active collaboration settings:\n- Collaboration mode is adaptive.",
+    collaborationGuidance: "Active collaboration settings:\nCollaboration mode is adaptive.",
   };
   const prompt = createResearchSystemPrompt(options);
   const withoutTools = createResearchSystemPrompt({ ...options, hasCollaborationTools: false, collaborationGuidance: undefined });
   const subagent = createResearchSystemPrompt({ ...options, hasCollaborationTools: false, agentPath: "example-agent", collaborationGuidance: undefined });
 
-  assert.match(prompt, /Delegation:\n- Delegate distinct, bounded work/);
-  assert.match(prompt, /Research channels:\n- Use channel_list/);
-  assert.match(prompt, /Profile collaboration protocol:\n- Keep exploit claims/);
-  assert.match(prompt, /Active collaboration settings:\n- Collaboration mode is adaptive/);
+  assert.match(prompt, /Delegation:\nDelegate distinct, bounded work/);
+  assert.match(prompt, /Research channels:\nUse channel_list/);
+  assert.match(prompt, /Profile collaboration protocol:\nKeep exploit claims/);
+  assert.match(prompt, /Active collaboration settings:\nCollaboration mode is adaptive/);
   assert.ok(prompt.indexOf("Delegation:") < prompt.indexOf("Research channels:"));
   assert.ok(prompt.indexOf("Research channels:") < prompt.indexOf("Profile collaboration protocol:"));
   assert.ok(prompt.indexOf("Profile collaboration protocol:") < prompt.indexOf("Active collaboration settings:"));
   assert.doesNotMatch(prompt, /\n{3,}/);
   assert.doesNotMatch(withoutTools, /Delegation:|Research channels:|Active collaboration settings:/);
-  assert.match(subagent, /Subagent assignment:\n- You are subagent example-agent/);
+  assert.match(subagent, /Subagent assignment:\nYou are subagent example-agent/);
 });
 
 test("research profiles normalize to immutable, deterministic snapshots", () => {
@@ -167,17 +195,27 @@ test("bundled profiles separate claim classifications from knowledge memory and 
     ["mathematics.conjecture", "mathematics.theorem", "mathematics.counterexample"]);
 });
 
-test("bundled profiles give reports domain-specific share-readiness guidance", () => {
-  const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasReportTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE });
-  const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasReportTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE });
-  assert.match(securityPrompt, /Do not create a report from leads or unverified findings/);
-  assert.match(securityPrompt, /sourceFindingId to report\.create/);
-  assert.match(securityPrompt, /Impact summary; How the affected system works; Vulnerability chain/);
-  assert.match(securityPrompt, /triager who has never worked on the affected subsystem/);
-  assert.match(securityPrompt, /pass submissionPacketPath to report\.create/);
-  assert.match(securityPrompt, /one exact entry command/);
-  assert.match(mathematicsPrompt, /mathematical breakthrough is ready to share with the greater community/);
-  assert.match(mathematicsPrompt, /casual, blog-like language/);
+test("memory, claims, and runbook prompt sections follow enabled plugins", () => {
+  const template = "{{boundary}}\n{{memory}}\n{{claims}}\n{{runbooks}}";
+  const options = { hasTools: true, hasMemoryTools: true, hasFindingTools: true, hasRunbookTools: true,
+    researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, promptTemplate: template };
+  const guidance = [
+    ["beale-knowledge", /Use durable memory as a concise research graph/],
+    ["beale-claims", /Use one canonical, evidence-gated research claim ledger/],
+    ["beale-runbooks", /Use runbooks as durable executable research artifacts/],
+  ];
+  for (const [enabledId] of guidance) {
+    const prompt = createResearchSystemPrompt({ ...options, pluginCatalog: pluginCatalog(enabledId) });
+    for (const [id, pattern] of guidance) {
+      if (id === enabledId) assert.match(prompt, pattern);
+      else assert.doesNotMatch(prompt, pattern);
+    }
+  }
+  const disabled = createResearchSystemPrompt({ ...options, pluginCatalog: pluginCatalog("beale-reporting") });
+  for (const [, pattern] of guidance) assert.doesNotMatch(disabled, pattern);
+  assert.doesNotMatch(disabled, /Use reports as durable Markdown artifacts/);
+  const legacy = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\n{{reports}}", pluginCatalog: pluginCatalog("beale-reporting") });
+  assert.doesNotMatch(legacy, /Use reports as durable Markdown artifacts|\{\{reports\}\}/);
 });
 
 test("bundled profiles gate collaboration recipes by domain and workflow", () => {
@@ -194,6 +232,7 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
     hasTools: true,
     hasMemoryTools: true,
     hasRunbookTools: true,
+    pluginCatalog: pluginCatalog("beale-knowledge", "beale-runbooks"),
     researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
   });
   assert.match(securityPrompt, /- flow-endpoint \(Flow Endpoint\)/);
@@ -375,7 +414,7 @@ test("custom profiles replace domain language without weakening host invariants"
     hasTools: true,
     hasMemoryTools: true,
     hasRunbookTools: true,
-    hasReportTools: true,
+    pluginCatalog: pluginCatalog("beale-knowledge", "beale-runbooks"),
     researchProfile: profile,
     workflowId: "explore",
   });
@@ -390,7 +429,7 @@ test("custom profiles replace domain language without weakening host invariants"
   assert.match(prompt, /Stay within the recorded materials and systems/);
   assert.match(prompt, /Never expose host credentials/);
   assert.doesNotMatch(prompt, /Never use the \$HOME environment variable/);
-  assert.match(prompt, /casual, blog-like language/);
+  assert.doesNotMatch(prompt, /casual, blog-like language/);
 });
 
 test("the general-research example is a valid non-security profile", async () => {

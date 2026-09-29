@@ -361,9 +361,6 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                   append: appendClaudeAgentProgressGuidance(
                     createResearchSystemPrompt({
                       hasTools: mcpTools.length > 0,
-                      hasMemoryTools: hasTool(options.toolRegistry, "history_search"),
-                      hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
-                      hasReportTools: hasTool(options.toolRegistry, "report_list"),
                       hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
                       hasCollaborationTools: collaborationMcpTools.length > 0,
                       ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id) } : {}),
@@ -457,9 +454,6 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 append: appendClaudeAgentProgressGuidance(
                   createResearchSystemPrompt({
                     hasTools: mcpTools.length > 0,
-                    hasMemoryTools: hasTool(options.toolRegistry, "history_search"),
-                    hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
-                    hasReportTools: hasTool(options.toolRegistry, "report_list"),
                     hasSessionDispositionTool: !options.agentIdentity && hasTool(options.toolRegistry, "session_disposition"),
                     hasCollaborationTools: collaborationMcpTools.length > 0,
                     ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id) } : {}),

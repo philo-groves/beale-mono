@@ -684,7 +684,7 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
   assert.match(contexts[0].systemPrompt, /Attribute only work completed in this session to this session/i);
   assert.match(contexts[0].systemPrompt, /an unchanged artifact cannot satisfy a request for new work/i);
-  assert.match(contexts[0].systemPrompt, /Delegation:\n- Delegate distinct, bounded work/);
+  assert.match(contexts[0].systemPrompt, /Delegation:\nDelegate distinct, bounded work/);
   assert.match(contexts[0].systemPrompt, /expected evidence gain justifies the context and coordination cost/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use collaboration tools for independent work/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Preferred profile collaboration recipe/);
@@ -713,7 +713,8 @@ test("direct Pi Agent appends workspace instructions after a custom system promp
 });
 
 test("research system prompt keeps workflow phases behind runbook feature tags without per-tweak churn", () => {
-  const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true });
+  const prompt = createResearchSystemPrompt({ hasTools: true, hasRunbookTools: true,
+    pluginCatalog: [{ id: "beale-runbooks", name: "Runbooks", mcpServers: [], skills: [] }] });
   assert.match(prompt, /Use runbooks as durable executable research artifacts/);
   assert.match(prompt, /Keep setup, runtime, and cleanup in the same runbook/);
   assert.match(prompt, /feature tags to activate the cells needed for a run/);
@@ -729,7 +730,8 @@ test("research system prompt keeps workflow phases behind runbook feature tags w
 });
 
 test("research system prompt allows same-model review only from a fresh distinct subagent", () => {
-  const prompt = createResearchSystemPrompt({ hasTools: true, hasFindingTools: true });
+  const prompt = createResearchSystemPrompt({ hasTools: true, hasFindingTools: true,
+    pluginCatalog: [{ id: "beale-claims", name: "Claims", mcpServers: [], skills: [] }] });
   assert.match(prompt, /same provider and model/);
   assert.match(prompt, /distinct reviewer subagent spawned with fork_turns=none/);
   assert.match(prompt, /without an inherited channel transcript/);
@@ -741,6 +743,7 @@ test("memory prompt gives root agents and subagents direct persistence ownership
     const prompt = createResearchSystemPrompt({
       hasTools: true,
       hasMemoryTools: true,
+      pluginCatalog: [{ id: "beale-knowledge", name: "Knowledge", mcpServers: [], skills: [] }],
       ...(agentPath ? { agentPath } : {}),
     });
     assert.match(prompt, /Use durable memory as a concise research graph/);
@@ -754,6 +757,7 @@ test("research-agent memory guidance uses the supplied authoritative type descri
   const prompt = createResearchSystemPrompt({
     hasTools: true,
     hasMemoryTools: true,
+    pluginCatalog: [{ id: "beale-knowledge", name: "Knowledge", mcpServers: [], skills: [] }],
     memoryTypeDescriptions: {
       ...DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
       trajectory: "CUSTOM_AGENT_TRAJECTORY: a workspace-defined reusable research path.",
@@ -883,7 +887,7 @@ test("direct Pi Agent executor runs app-server tools through lifecycle hooks", a
   assert.doesNotMatch(initialMessage, /### storage|### tool_policy|memory\.sqlite/);
 });
 
-test("Pi Agent adds research guidance when durable memory tools are available", async () => {
+test("Pi Agent adds research guidance when the knowledge plugin is enabled", async () => {
   const contexts = [];
   const memoryTool = createFixtureInspectTool([]);
   memoryTool.descriptor = {
@@ -913,7 +917,9 @@ test("Pi Agent adds research guidance when durable memory tools are available", 
       models: createScriptedModels([
         assistant("## Result\nTarget orientation complete."),
       ], contexts),
-      toolRegistry: createResearchToolRegistry([memoryTool, searchTool, linkTool]),
+      toolRegistry: createResearchToolRegistry([memoryTool, searchTool, linkTool], {
+        managedPlugins: managedToolPluginOptions([memoryTool, searchTool, linkTool], ["beale-knowledge"]),
+      }),
     }),
   });
 
@@ -949,7 +955,9 @@ test("Pi Agent recognizes lead.create as the canonical claim-creation tool", asy
       models: createScriptedModels([
         assistant("## Result\nCandidate assessed."),
       ], contexts),
-      toolRegistry: createResearchToolRegistry(tools),
+      toolRegistry: createResearchToolRegistry(tools, {
+        managedPlugins: managedToolPluginOptions(tools, ["beale-claims"]),
+      }),
     }),
   });
 

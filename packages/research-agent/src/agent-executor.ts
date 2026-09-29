@@ -892,11 +892,6 @@ export function createPiAgentExecutor(
           {
             systemPrompt: createResearchSystemPrompt({
               hasTools: tools.length > 0,
-              hasMemoryTools,
-              hasFindingTools,
-              hasDurableProgressTools,
-              hasRunbookTools,
-              hasReportTools,
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
               ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_channel" || tool.name === "channel_post"),

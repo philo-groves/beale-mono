@@ -72,10 +72,10 @@ test("collaboration config preserves validated Advanced compatible roles", () =>
 test("adaptive collaboration guidance makes delegation evidence-driven", () => {
   const guidance = createCollaborationSystemGuidance(BASE_CONFIG, "discovery");
 
-  assert.match(guidance, /^Active collaboration settings:\n- Collaboration mode is adaptive/);
-  assert.match(guidance, /\n\nContext and review:\n- Parent transcript inheritance/);
-  assert.match(guidance, /\n\nSubagent workflow:\n- Simple subagent mode/);
-  assert.match(guidance, /\n\nCollaboration mode policy:\n- Adaptive mode/);
+  assert.match(guidance, /^Active collaboration settings:\nCollaboration mode is adaptive/);
+  assert.match(guidance, /\n\nContext and review:\nParent transcript inheritance/);
+  assert.match(guidance, /\n\nSubagent workflow:\nSimple subagent mode/);
+  assert.match(guidance, /\n\nCollaboration mode policy:\nAdaptive mode/);
   assert.doesNotMatch(guidance, /Channel communication is intentionally lax/);
   assert.match(guidance, /makes collaboration available, not required/);
   assert.match(guidance, /materially better evidence than continuing in the lead/);
