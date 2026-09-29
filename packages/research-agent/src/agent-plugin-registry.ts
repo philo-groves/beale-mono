@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { materializeGitRepositoryAsync, normalizeSourceRepositoryUrl } from './source-materializer.js';
 import { isManagedToolPluginId } from './managed-tool-plugins.js';
+import type { PluginSkillResourceCounts, ResearchPluginCatalogEntry } from './managed-tool-plugins.js';
 
 export type AgentPluginSourceKind = 'filesystem' | 'repository' | 'builtin';
 export type AgentPluginStatus = 'ready' | 'invalid';
@@ -20,6 +21,7 @@ export interface AgentPluginSkillSummary {
   directoryName: string;
   relativePath: string;
   description: string | null;
+  resourceCounts: PluginSkillResourceCounts;
 }
 
 export interface AgentPluginMcpServerSummary {
@@ -106,6 +108,8 @@ export interface AgentPluginRegistryOptions {
 export interface AgentPluginAppServerRuntime {
   managedPluginIds?: string[];
   runtimeDirectory: string;
+  pluginCatalogPath: string;
+  pluginCatalog: ResearchPluginCatalogEntry[];
   skillDirs: string[];
   selectedSkillIds: string[];
   mcpConfigPath: string | null;
@@ -156,6 +160,21 @@ export class AgentPluginRegistry {
     const allowedMcpServers: string[] = [];
     const warnings: string[] = [];
     const usedMcpNames = new Set<string>();
+    const catalog: ResearchPluginCatalogEntry[] = state.plugins
+      .filter((plugin) => plugin.enabled && plugin.status === 'ready')
+      .map((plugin) => ({
+        id: plugin.source.kind === 'builtin' && isManagedToolPluginId(plugin.name) ? plugin.name : plugin.id,
+        name: plugin.name,
+        ...(plugin.description ? { description: plugin.description } : {}),
+        skills: plugin.skills.map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          useWhen: skill.description ?? skill.name,
+          path: containedPath(plugin.source.path, `skills/${skill.directoryName}/SKILL.md`),
+          resourceCounts: skill.resourceCounts,
+        })),
+        mcpServers: [],
+      }));
 
     for (const plugin of state.plugins) {
       if (!plugin.enabled || plugin.status !== 'ready') continue;
@@ -185,6 +204,8 @@ export class AgentPluginRegistry {
         const runtimeName = uniqueRuntimeMcpServerName(plugin.name, serverName, usedMcpNames);
         mcpServers[runtimeName] = runtimeConfig;
         allowedMcpServers.push(runtimeName);
+        const catalogEntry = catalog.find((entry) => entry.id === (plugin.source.kind === 'builtin' && isManagedToolPluginId(plugin.name) ? plugin.name : plugin.id));
+        if (catalogEntry) (catalogEntry.mcpServers as string[]).push(runtimeName);
       }
     }
 
@@ -210,9 +231,14 @@ export class AgentPluginRegistry {
       ? managedPlugins.filter((plugin) => plugin.enabled && plugin.status === 'ready').map((plugin) => plugin.name)
       : undefined;
     if (managedPluginIds !== undefined) args.push('--managed-plugins', managedPluginIds.join(',') || 'none');
+    const pluginCatalogPath = join(this.runtimePath, 'plugin-catalog.json');
+    writeFileSync(pluginCatalogPath, `${JSON.stringify(catalog, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    args.push('--plugin-catalog', pluginCatalogPath);
     return {
       ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
       runtimeDirectory: this.runtimePath,
+      pluginCatalogPath,
+      pluginCatalog: catalog,
       skillDirs: dedupeSorted(skillDirs),
       selectedSkillIds: dedupeSorted(selectedSkillIds),
       mcpConfigPath,
@@ -458,10 +484,27 @@ function scanSkills(pluginRoot: string, warnings: string[]): AgentPluginSkillSum
         name: metadata.name ?? entry.name,
         directoryName: entry.name,
         relativePath: `./skills/${entry.name}/SKILL.md`,
-        description: metadata.description
+        description: metadata.description,
+        resourceCounts: countSkillResources(skillPath)
       }];
     })
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function countSkillResources(skillPath: string): PluginSkillResourceCounts {
+  const countFiles = (path: string): number => {
+    if (!existsSync(path) || !lstatSync(path).isDirectory()) return 0;
+    return readdirSync(path, { withFileTypes: true }).reduce((count, entry) => {
+      if (entry.isFile()) return count + 1;
+      if (entry.isDirectory()) return count + countFiles(join(path, entry.name));
+      return count;
+    }, 0);
+  };
+  return {
+    scripts: countFiles(join(skillPath, 'scripts')),
+    references: countFiles(join(skillPath, 'references')),
+    assets: countFiles(join(skillPath, 'assets'))
+  };
 }
 
 function scanMcpServers(pluginRoot: string, pluginDataRoot: string, warnings: string[], pluginErrors: string[]): AgentPluginMcpServerSummary[] {

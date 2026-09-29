@@ -53,7 +53,12 @@ test("app-server owns auxiliary routes, sources, plugins, and retained maintenan
     const registry = new AgentPluginRegistry(join(root, "registry"), { builtinPlugins: [] });
     const installed = registry.addFromFilesystem(pluginRoot);
     assert.equal(installed.plugins[0].name, "boundary-plugin");
-    assert.deepEqual(registry.getAppServerRuntime().selectedSkillIds, ["recon"]);
+    const pluginRuntime = registry.getAppServerRuntime();
+    assert.deepEqual(pluginRuntime.selectedSkillIds, ["recon"]);
+    const catalog = JSON.parse(await readFile(pluginRuntime.pluginCatalogPath, "utf8"));
+    assert.deepEqual(catalog.map((plugin) => ({ id: plugin.id, name: plugin.name, skills: plugin.skills.map((skill) => ({ id: skill.id, useWhen: skill.useWhen })) })), [
+      { id: installed.plugins[0].id, name: "boundary-plugin", skills: [{ id: "recon", useWhen: "Inspect sources." }] },
+    ]);
 
     const disabledBuiltinRegistry = new AgentPluginRegistry(join(root, "builtin-registry"), {
       builtinPlugins: [{

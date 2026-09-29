@@ -5,6 +5,7 @@ import {
 import { createResearchWorkspaceContext } from "./workspace-context.js";
 import { createToolBudget } from "./tool-policy.js";
 import { selectResearchSkills } from "./skills.js";
+import { managedToolPluginId, type ResearchPluginCatalogEntry } from "./managed-tool-plugins.js";
 import { createResearchTraceEvents } from "./research-trace.js";
 import { discoverResearchAgentInstructions } from "./agent-instructions.js";
 import {
@@ -53,6 +54,7 @@ export interface RunResearchAgentInput {
   events?: readonly ResearchEvent[];
   tools?: readonly ResearchToolDescriptor[];
   skills?: readonly ResearchSkillDescriptor[];
+  pluginCatalog?: readonly ResearchPluginCatalogEntry[];
   selectedSkillIds?: readonly string[];
   resolvedResearchProfile?: ResolvedResearchProfile;
   workflowId?: string;
@@ -127,9 +129,14 @@ export async function runResearchAgent(
     });
   const events: ResearchEvent[] = [...(input.events ?? [])];
   const tools = input.tools ?? [];
+  const initiallyVisibleTools = input.pluginCatalog
+    ? tools.filter((tool) => !managedToolPluginId(tool.name)
+      && !input.pluginCatalog!.some((plugin) => plugin.mcpServers.some((server) => tool.name.startsWith(`mcp.${server}.`))))
+    : tools;
+  const pluginSkillIds = new Set(input.pluginCatalog?.flatMap((plugin) => plugin.skills.map((skill) => skill.id)) ?? []);
   const selectedSkills = selectResearchSkills({
     prompt: input.prompt,
-    skills: input.skills ?? [],
+    skills: (input.skills ?? []).filter((skill) => !pluginSkillIds.has(skill.id)),
     ...(input.selectedSkillIds ? { requestedSkillIds: input.selectedSkillIds } : {}),
   });
   const toolBudget = createToolBudget(input.governance, tools);
@@ -138,7 +145,7 @@ export async function runResearchAgent(
     workingDirectory: workspaceContext.workspaceRoot,
   });
   const modelWorkspaceContext = input.modelWorkspaceContext ?? createModelWorkspaceContext(workspaceContext);
-  const availableTools = createAvailableToolContext(tools);
+  const availableTools = createAvailableToolContext(initiallyVisibleTools);
   const modelSelectedSkills = createModelSkillContext(selectedSkills);
   const contextMetrics = compiledContextMetrics({
     prompt: input.prompt,
@@ -153,12 +160,13 @@ export async function runResearchAgent(
       workspaceVocabulary: resolvedResearchProfile.profile.workspace,
     },
     researchIntent: input.researchIntent,
-    tools,
+    tools: initiallyVisibleTools,
     collaborationTools,
     agentInstructions,
   });
   const modelInput = {
     prompt: input.prompt,
+    ...(input.pluginCatalog ? { pluginCatalog: input.pluginCatalog } : {}),
     contextSections: [
       { label: "workspace", content: modelWorkspaceContext },
       ...(input.campaignContext ? [{ label: "campaign", content: input.campaignContext }] : []),

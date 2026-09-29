@@ -15,6 +15,7 @@ import {
   MANAGED_TOOL_PLUGIN_IDS,
   managedToolPluginId,
   managedToolPluginOptions,
+  decodeResearchPluginCatalog,
   assertManagedToolOwnership,
   parseManagedToolPluginIds,
   createAnalysisTool,
@@ -40,6 +41,7 @@ import {
   createReportTools,
   discoverResearchAgentInstructions,
   createPiAgentExecutor,
+  validateResearchSystemPromptTemplate,
   extractCompatiblePiAgentResumableState,
   createClaudeAgentExecutor,
   createZCodeAgentExecutor,
@@ -153,6 +155,7 @@ import type {
   ResearchToolConfigPreference,
   ResolvedResearchModelConfig,
   ResearchSkillDescriptor,
+  ResearchPluginCatalogEntry,
   ResearchToolDescriptor,
   ResearchToolSideEffect,
   ResearchToolRegistry,
@@ -195,6 +198,7 @@ type CliToolExecutionMode = "sequential" | "parallel";
 
 interface RuntimeToolConfig {
   managedPluginIds?: readonly string[];
+  pluginCatalogPath?: string;
   toolFamilies: readonly ToolFamily[];
   disabledToolFamilies: readonly ToolFamily[];
   profileToolFamilyCeiling: readonly ToolFamily[];
@@ -290,6 +294,7 @@ interface ParsedArgs {
   resolvedResearchProfilePath: string | undefined;
   researchProfileId: string | undefined;
   researchProfileHash: string | undefined;
+  promptTemplatePath: string | undefined;
   workflowId: string | undefined;
   investigationId: string | undefined;
   maxTokens: number | undefined;
@@ -317,6 +322,7 @@ interface ParsedArgs {
 
 interface ParsedToolsArgs {
   command: string | undefined;
+  mcpOnly: boolean;
   runtimeTools: RuntimeToolConfig;
   workspaceRoot: string;
   inspectRoots: string[];
@@ -409,6 +415,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let resolvedResearchProfilePath: string | undefined;
   let researchProfileId: string | undefined;
   let researchProfileHash: string | undefined;
+  let promptTemplatePath: string | undefined;
   let workflowId: string | undefined;
   let investigationId: string | undefined;
   let executor: CliExecutorKind = "agent";
@@ -440,6 +447,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
   let managedPluginIds: string[] | undefined;
+  let pluginCatalogPath: string | undefined;
   let experimentConfigPath: string | undefined;
   let shellOptionsPath: string | undefined;
   const selectedSkillIds: string[] = [];
@@ -633,6 +641,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--managed-plugins") {
       managedPluginIds = parseManagedToolPluginIds(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--plugin-catalog") {
+      pluginCatalogPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--mcp-timeout-ms") {
       mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
       index += 1;
@@ -670,6 +681,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     } else if (arg === "--research-profile-hash") {
       researchProfileHash = readOptionValue(argv, index, arg);
+      index += 1;
+    } else if (arg === "--prompt-template-file") {
+      promptTemplatePath = readOptionValue(argv, index, arg);
       index += 1;
     } else if (arg === "--workflow") {
       workflowId = readOptionValue(argv, index, arg);
@@ -764,6 +778,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     resolvedResearchProfilePath,
     researchProfileId,
     researchProfileHash,
+    promptTemplatePath,
     workflowId,
     investigationId,
     maxTokens,
@@ -790,6 +805,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
+      ...(pluginCatalogPath ? { pluginCatalogPath } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
       ...(shellOptionsPath ? { shellOptionsPath } : {}),
       selectedSkillIds,
@@ -1089,6 +1105,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   const command = firstArg && !firstArg.startsWith("-") ? firstArg : undefined;
   let json = false;
   let help = false;
+  let mcpOnly = false;
   let workspaceRoot = process.cwd();
   let inspectAction: LocalInspectionAction = "read_text";
   let inspectBytes: number | undefined;
@@ -1108,6 +1125,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
   let mcpConfigPath: string | undefined;
   let mcpTimeoutMs: number | undefined;
   let managedPluginIds: string[] | undefined;
+  let pluginCatalogPath: string | undefined;
   let experimentConfigPath: string | undefined;
   let shellOptionsPath: string | undefined;
   const selectedSkillIds: string[] = [];
@@ -1201,9 +1219,14 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
     } else if (arg === "--managed-plugins") {
       managedPluginIds = parseManagedToolPluginIds(readOptionValue(argv, index, arg));
       index += 1;
+    } else if (arg === "--plugin-catalog") {
+      pluginCatalogPath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--mcp-timeout-ms") {
       mcpTimeoutMs = parsePositiveIntegerOption(argv, index, arg);
       index += 1;
+    } else if (arg === "--mcp-only") {
+      mcpOnly = true;
     } else if (arg === "--experiment-config") {
       experimentConfigPath = readOptionValue(argv, index, arg);
       index += 1;
@@ -1229,6 +1252,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
 
   return {
     command,
+    mcpOnly,
     runtimeTools: {
       toolFamilies,
       disabledToolFamilies,
@@ -1245,6 +1269,7 @@ function parseToolsArgs(argv: readonly string[]): ParsedToolsArgs {
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(mcpTimeoutMs ? { mcpTimeoutMs } : {}),
       ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
+      ...(pluginCatalogPath ? { pluginCatalogPath } : {}),
       ...(experimentConfigPath ? { experimentConfigPath } : {}),
       ...(shellOptionsPath ? { shellOptionsPath } : {}),
       selectedSkillIds,
@@ -1594,6 +1619,7 @@ function usage(): string {
     "  --resolved-research-profile <path> Exact normalized research profile JSON supplied by a host",
     "  --research-profile-id <id> Require the stored research profile to match this id",
     "  --research-profile-hash <hash> Require the resolved profile to match this SHA-256 hash",
+    "  --prompt-template-file <path> Use a host-snapshotted prompt template for this run",
     "  --workflow <id>        Select a workflow from the resolved research profile",
     "  --investigation-id <id> Assert the immutable investigation already assigned to this session",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
@@ -1617,6 +1643,7 @@ function usage(): string {
     "  --mcp-config <path>    JSON MCP stdio server config",
     "  --mcp-timeout-ms <n>   MCP request timeout in milliseconds",
     "  --managed-plugins <ids> Enabled managed plugin IDs (comma-separated, or none)",
+    "  --plugin-catalog <path> Host-generated plugin and skill summary catalog",
     "  --experiment-config <p> JSON allowlisted experiment config",
     "  --skill-dir <path>     Load local skills from child directories containing SKILL.md",
     "  --skill <id>           Request a loaded skill by id",
@@ -2173,6 +2200,8 @@ export async function main(
         workingDirectory: runtimeConfig.workspaceContext.workspaceRoot,
       });
       let agentExecutor: ResearchAgentExecutor;
+      const promptTemplate = args.promptTemplatePath ? await readFile(args.promptTemplatePath, "utf8") : undefined;
+      if (promptTemplate !== undefined) validateResearchSystemPromptTemplate(promptTemplate);
       hostOptions.reportStartupPhase?.("executor", "Preparing the model session.");
       if (args.mock) {
         agentExecutor = createDeterministicAgentExecutor();
@@ -2198,6 +2227,7 @@ export async function main(
           collaborationConfig,
           channelContext,
           runtimeConfig.getContinuityContext,
+          promptTemplate,
         );
       }
       const sessionTitleRoute = args.mock
@@ -2226,6 +2256,7 @@ export async function main(
         ...inspectionState,
         ...(runtimeConfig.tools.length > 0 ? { tools: runtimeConfig.tools } : {}),
         ...(runtimeConfig.skills.length > 0 ? { skills: runtimeConfig.skills } : {}),
+        ...(runtimeConfig.pluginCatalog.length > 0 ? { pluginCatalog: runtimeConfig.pluginCatalog } : {}),
         // Passing an explicit (possibly empty) host selection makes the CLI's
         // skill authority visible at the runResearchAgent boundary.
         selectedSkillIds: runtimeConfig.runtimeTools.selectedSkillIds,
@@ -2386,6 +2417,7 @@ function createRealAgentExecutor(
   collaboration?: ResearchCollaborationConfig,
   channelContext?: SubagentChannelContext,
   getContinuityContext?: () => unknown,
+  promptTemplate?: string,
 ): ResearchAgentExecutor {
   const authenticationPreferences = readProviderAuthenticationPreferences();
   const providerSessionId = args.sessionId?.trim() || resumableState?.providerSessionId;
@@ -2407,6 +2439,7 @@ function createRealAgentExecutor(
         authenticationPreferences,
         toolRegistry,
         ...(getContinuityContext ? { getContinuityContext } : {}),
+        ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       })
     : undefined;
   const subagentRuntimeFactory = collaboration && collaboration.mode !== "solo"
@@ -2424,6 +2457,7 @@ function createRealAgentExecutor(
       ...(args.maxTokens ? { maxTokens: args.maxTokens } : {}),
       ...(toolRegistry ? { toolRegistry } : {}),
       researchProfile: resolvedResearchProfile.profile,
+      ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       workflowId,
       authenticationPreferences,
       ...(collaboration ? { collaboration } : {}),
@@ -2451,6 +2485,7 @@ function createRealAgentExecutor(
       ...(modelConfig.effort ? { reasoning: modelConfig.effort } : {}),
       ...(toolRegistry ? { toolRegistry } : {}),
       researchProfile: resolvedResearchProfile.profile,
+      ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       workflowId,
       ...(collaboration ? { collaboration } : {}),
       ...(channelContext ? { channelContext } : {}),
@@ -2485,6 +2520,7 @@ function createRealAgentExecutor(
       : {}),
     ...(args.toolExecution ? { toolExecution: args.toolExecution } : {}),
     researchProfile: resolvedResearchProfile.profile,
+    ...(promptTemplate !== undefined ? { promptTemplate } : {}),
     workflowId,
     authenticationPreferences,
     ...(getContinuityContext ? { getContinuityContext } : {}),
@@ -2523,6 +2559,7 @@ function createProviderNeutralSubagentRunner({
   toolRegistry,
   authenticationPreferences,
   getContinuityContext,
+  promptTemplate,
 }: {
   workspaceRoot: string;
   resolvedResearchProfile: ResolvedResearchProfile;
@@ -2530,6 +2567,7 @@ function createProviderNeutralSubagentRunner({
   toolRegistry: ResearchToolRegistry | undefined;
   authenticationPreferences: ReturnType<typeof readProviderAuthenticationPreferences>;
   getContinuityContext?: () => unknown;
+  promptTemplate?: string;
 }): (request: SubagentRunRequest, rootInput: ResearchAgentExecutionInput) => Promise<SubagentRunResult> {
   return async (request, rootInput) => {
     const identity = {
@@ -2560,6 +2598,7 @@ function createProviderNeutralSubagentRunner({
           ...(request.reasoning ? { reasoning: request.reasoning } : {}),
           ...(toolRegistry ? { toolRegistry } : {}),
           researchProfile: resolvedResearchProfile.profile,
+          ...(promptTemplate !== undefined ? { promptTemplate } : {}),
           workflowId,
           subagents: false,
           collaborationTools: request.collaborationTools,
@@ -2574,6 +2613,7 @@ function createProviderNeutralSubagentRunner({
             ...(request.reasoning ? { reasoning: request.reasoning } : {}),
             ...(toolRegistry ? { toolRegistry } : {}),
             researchProfile: resolvedResearchProfile.profile,
+            ...(promptTemplate !== undefined ? { promptTemplate } : {}),
             workflowId,
             subagents: false,
             collaborationTools: request.collaborationTools,
@@ -2586,6 +2626,7 @@ function createProviderNeutralSubagentRunner({
           ...(request.reasoning ? { reasoning: request.reasoning } : {}),
           ...(toolRegistry ? { toolRegistry } : {}),
           researchProfile: resolvedResearchProfile.profile,
+          ...(promptTemplate !== undefined ? { promptTemplate } : {}),
           workflowId,
           subagents: false,
           collaborationTools: request.collaborationTools,
@@ -2921,6 +2962,17 @@ async function handleToolsConfigCommand(argv: readonly string[]): Promise<void> 
 }
 
 async function executeToolsList(args: ParsedToolsArgs): Promise<Record<string, unknown>> {
+  if (args.mcpOnly) {
+    const executableTools: ResearchExecutableTool[] = [];
+    const descriptors: ResearchToolDescriptor[] = [];
+    const cleanupCallbacks: (() => Promise<void>)[] = [];
+    try {
+      await configureRuntimeMcpTools({ runtimeTools: args.runtimeTools, executableTools, toolDescriptors: descriptors, cleanupCallbacks });
+      return { tools: descriptors.map((descriptor) => ({ name: descriptor.name })) };
+    } finally {
+      await Promise.all(cleanupCallbacks.map((cleanup) => cleanup()));
+    }
+  }
   const runtime = await createRuntimeConfig(args);
   try {
     return runtime.capture;
@@ -3462,7 +3514,9 @@ function toolsUsage(): string {
     "  --allow-mcp-server <name>   Record an allowed MCP server name",
     "  --mcp-config <path>         JSON MCP stdio server config",
     "  --mcp-timeout-ms <n>        MCP request timeout in milliseconds",
+    "  --mcp-only                 Discover only configured MCP tools without opening workspace storage",
     "  --managed-plugins <ids>     Enabled managed plugin IDs (comma-separated, or none)",
+    "  --plugin-catalog <path>     Host-generated plugin and skill summary catalog",
     "  --experiment-config <path>  JSON allowlisted experiment config",
     "  --skill-dir <path>          Load local skills from child directories containing SKILL.md",
     "  --skill <id>                Request a loaded skill by id",
@@ -3679,6 +3733,7 @@ async function createRuntimeConfig(args: {
   tools: ResearchToolDescriptor[];
   toolRegistry: ResearchToolRegistry | undefined;
   skills: ResearchSkillDescriptor[];
+  pluginCatalog: ResearchPluginCatalogEntry[];
   governance: ResearchGovernancePolicy | undefined;
   workspaceContext: ResearchWorkspaceContext;
   campaignContext: CampaignGraphSummary;
@@ -3711,6 +3766,9 @@ async function createRuntimeConfig(args: {
     ...(args.sessionId ? { sessionId: args.sessionId } : {}),
   });
   const { resolvedRuntimeTools, runtimeTools, workspaceContext } = preparedRuntimeConfig;
+  const pluginCatalog = runtimeTools.pluginCatalogPath
+    ? decodeResearchPluginCatalog(JSON.parse(await readFile(runtimeTools.pluginCatalogPath, "utf8")) as unknown)
+    : [];
   const memoryBackend = resolveResearchMemoryBackend(args.memoryBackend);
   const memoryActive = memoryBackend.enabled
     && resolvedResearchProfile.profile.capabilities.memoryEnabled;
@@ -4271,6 +4329,7 @@ async function createRuntimeConfig(args: {
     tools: toolRegistry?.listDescriptors() ?? [],
     toolRegistry,
     skills,
+    pluginCatalog,
     governance,
     workspaceContext,
     campaignContext,
@@ -4490,6 +4549,8 @@ function mergeRuntimeToolConfig(
   return {
     ...(cli.managedPluginIds !== undefined ? { managedPluginIds: cli.managedPluginIds }
       : persisted.managedPluginIds !== undefined ? { managedPluginIds: persisted.managedPluginIds } : {}),
+    ...(cli.pluginCatalogPath || persisted.pluginCatalogPath
+      ? { pluginCatalogPath: cli.pluginCatalogPath ?? persisted.pluginCatalogPath } : {}),
     toolFamilies: uniqueRuntimeStrings([
       ...persisted.toolFamilies,
       ...cli.toolFamilies,

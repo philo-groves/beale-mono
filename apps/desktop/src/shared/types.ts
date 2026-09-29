@@ -1396,6 +1396,7 @@ export interface AgentPluginSkillSummary {
   directoryName: string;
   relativePath: string;
   description: string | null;
+  resourceCounts: { scripts: number; references: number; assets: number };
 }
 
 export interface AgentPluginMcpServerSummary {
@@ -2490,6 +2491,10 @@ export interface BealeApi {
   listTicketingTargets(providerId: TicketingProviderId): Promise<TicketingTarget[]>;
   setTicketingTarget(providerId: TicketingProviderId, target: TicketingTarget): Promise<TicketingSettings>;
   getResearchProfiles(): Promise<ResolvedResearchProfile[]>;
+  getPromptTemplateSettings(profileId: ResearchProfileId): Promise<{ template: string; defaultTemplate: string; overridden: boolean }>;
+  setPromptTemplate(profileId: ResearchProfileId, template: string): Promise<void>;
+  resetPromptTemplate(profileId: ResearchProfileId): Promise<void>;
+  previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string): Promise<string>;
   getAgentPlugins(): Promise<AgentPluginRegistryState>;
   addAgentPluginFromFilesystem(): Promise<AgentPluginRegistryState>;
   addAgentPluginFromRepository(repositoryUrl: string): Promise<AgentPluginRegistryState>;

@@ -68,6 +68,15 @@ export class AppServerHostRegistry {
     this.shellOptionsPath = join(this.registryDirectory, 'shell-options.json');
   }
 
+  public promptTemplateOverride(profileId: string): string | null {
+    if (!PROFILE_ID_PATTERN.test(profileId)) throw new Error('Invalid research profile ID.');
+    return this.withDatabase((database) => {
+      if (!tableExists(database, 'registry_meta')) return null;
+      const row = database.prepare('SELECT value FROM registry_meta WHERE key = ?').get(`prompt_template_${profileId}`) as SqlRow | undefined;
+      return typeof row?.value === 'string' ? row.value : null;
+    }, null);
+  }
+
   public listWorkspaces(): BealeAppServerWorkspaceSummary[] {
     return this.listHostWorkspaces().map(({ workspacePath: _workspacePath, workspaceDirectories: _workspaceDirectories, memoryBackend: _memoryBackend, ...summary }) => summary);
   }

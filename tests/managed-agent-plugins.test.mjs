@@ -11,6 +11,32 @@ const pluginRoot = resolve('managed-plugins/apple-security-devices');
 const serverPath = join(pluginRoot, 'server.mjs');
 const targetFlagsPluginRoot = resolve('managed-plugins/apple-target-flags');
 
+test('managed Introspection and Terminator packages remain discoverable', () => {
+  const registryRoot = mkdtempSync(join(tmpdir(), 'beale-managed-bundled-plugins-'));
+  try {
+    const registry = new AgentPluginRegistry(registryRoot, { builtinPlugins: [] });
+    for (const name of ['beale-introspection', 'beale-terminator']) {
+      const root = resolve('managed-plugins', name);
+      assert.equal(existsSync(join(root, 'server.mjs')), true);
+      const state = registry.addFromFilesystem(root);
+      const plugin = state.plugins.find((candidate) => candidate.name === name);
+      assert.equal(plugin?.status, 'ready');
+      assert.equal(plugin?.mcpServers.length, 1);
+      assert.equal(plugin?.mcpServers[0].valid, true);
+      const input = [
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
+        { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
+      ].map((message) => JSON.stringify(message)).join('\n') + '\n';
+      const result = spawnSync(process.execPath, [join(root, 'server.mjs')], { input, encoding: 'utf8', timeout: 5_000 });
+      assert.equal(result.status, 0, result.stderr);
+      const messages = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
+      assert.ok(messages[1]?.result?.tools?.length > 0);
+    }
+  } finally {
+    rmSync(registryRoot, { recursive: true, force: true });
+  }
+});
+
 test('managed apple-target-flags is importable as a guidance-only Agent Plugin', () => {
   const registryRoot = mkdtempSync(join(tmpdir(), 'beale-managed-target-flags-plugin-'));
   try {
@@ -20,6 +46,7 @@ test('managed apple-target-flags is importable as a guidance-only Agent Plugin',
     assert.equal(state.plugins[0].name, 'apple-target-flags');
     assert.equal(state.plugins[0].status, 'ready');
     assert.deepEqual(state.plugins[0].skills.map((skill) => skill.id), ['apple-target-flags']);
+    assert.deepEqual(state.plugins[0].skills[0].resourceCounts, { scripts: 0, references: 1, assets: 0 });
     assert.deepEqual(state.plugins[0].mcpServers, []);
 
     const runtime = registry.getAppServerRuntime();
@@ -41,6 +68,7 @@ test('managed apple-security-devices is importable through the Beale Agent Plugi
     assert.equal(state.plugins[0].status, 'ready');
     assert.equal(state.plugins[0].enabled, true);
     assert.deepEqual(state.plugins[0].skills.map((skill) => skill.id), ['apple-security-devices']);
+    assert.deepEqual(state.plugins[0].skills[0].resourceCounts, { scripts: 0, references: 3, assets: 0 });
     assert.deepEqual(state.plugins[0].mcpServers.map((server) => ({
       name: server.name,
       transport: server.transport,

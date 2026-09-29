@@ -2,7 +2,7 @@
 
 A standalone app-server execution host and client-neutral control plane. It runs each app-server session in an app-server worker and carries events, controls, and private synchronous storage requests directly over worker messages. Workers never open SQLite themselves: the resident app-server owns every database connection and restricts each worker to its session's registered database. There is no child app-server CLI process or private loopback WebSocket. Beale Desktop and iOS use the same authenticated HTTP and WebSocket surface.
 
-The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Its bundled agent-plugin resources live under `app-server/resources/agent-plugins`.
+The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Host-backed plugin manifests live under `app-server/resources/agent-plugins`; the Introspection and Terminator packages live under `managed-plugins`.
 
 ## Workspace change management
 
@@ -30,7 +30,7 @@ Workspace creation installs a local pre-commit hook using the host's Node/Electr
 
 ## Managed tool plugins
 
-Seven host-backed plugins are enabled by default and appear in Agent Plugins settings. Every session advertises each plugin with a short usage description, including disabled plugins and plugins whose tools are unavailable under the current profile or configuration.
+Seven host-backed plugins are enabled by default and appear in Agent Plugins settings. Available plugins appear in the agent's `{{plugins}}` catalog with short usage descriptions.
 
 | Plugin | When to use |
 | --- | --- |
@@ -44,7 +44,7 @@ Seven host-backed plugins are enabled by default and appear in Agent Plugins set
 
 `file.read`, `file.write`, `file.edit`, and `shell.run` remain core tools, alongside session and collaboration controls. Existing profile, configuration, and governance limits still apply. File writes create candidate files; replacing an existing file requires the SHA-256 `contentHash` returned by `file.read` as `expectedHash`. File edits require one exact literal match, preserve UTF-8 bytes outside that match, and accept an optional hash check. Both mutations have a 1 MiB ceiling and honor lower host byte budgets.
 
-Enabled plugins are available for discovery. Pi agents initially receive core tools and `plugins.load`; requesting plugin IDs adds only those tool schemas on the next turn. Loaded IDs are isolated per agent and retained in compatible continuation captures. Claude uses its SDK's native `ToolSearch` with deferred plugin tools and always-loaded core tools. ZCode currently uses a fixed MCP tool list, so its enabled tool schemas remain eager. External MCP plugins retain their existing loading behavior.
+Pi, Claude, and ZCode agents initially receive core tools, `plugins.preview`, and `plugins.load`. Preview returns one plugin's tool names and bounded skill use cases without changing visibility. Load returns full skill instructions and makes that plugin's tool schemas available on the next model turn. Loaded IDs are isolated per agent and retained in compatible continuation captures. The host still discovers configured MCP capabilities for policy and execution, while model-visible schemas remain deferred until plugin load.
 
 Plugin toggles take effect on subsequent session launches and continuations, including Quick Chat. The app-server projects the current selection through `--managed-plugins <comma-separated IDs>`; `none` explicitly disables all seven. A settings-read failure stops the launch instead of silently restoring defaults. Loading a schema does not enable a disabled plugin or change host policy, canonical storage, or execution privileges.
 

@@ -302,6 +302,7 @@ export interface ResearchAgentModelInput {
   contextSections: readonly ResearchAgentContextSection[];
   toolBudget: ResearchToolBudget;
   agentInstructions?: ResearchAgentInstructions;
+  pluginCatalog?: readonly import("./managed-tool-plugins.js").ResearchPluginCatalogEntry[];
 }
 
 export interface ResearchCollaborationProviderPreference {

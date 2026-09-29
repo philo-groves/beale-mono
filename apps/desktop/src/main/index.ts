@@ -28,6 +28,7 @@ import type {
   ResearchProviderId,
   QuickChatStartInput,
   ResearchModelProviderId,
+  ResearchProfileId,
   ProviderModelDefaults,
   ProviderAuthenticationMethod,
   ProviderContextSize,
@@ -720,6 +721,10 @@ function registerIpc(): void {
     ticketingService.setTarget(providerId, target)
   );
   ipcMain.handle(IPC_CHANNELS.getResearchProfiles, () => workspaceService.getResearchProfiles());
+  ipcMain.handle(IPC_CHANNELS.getPromptTemplateSettings, (_event, profileId: ResearchProfileId) => workspaceService.getPromptTemplateSettings(profileId));
+  ipcMain.handle(IPC_CHANNELS.setPromptTemplate, (_event, profileId: ResearchProfileId, template: string) => workspaceService.setPromptTemplate(profileId, template));
+  ipcMain.handle(IPC_CHANNELS.resetPromptTemplate, (_event, profileId: ResearchProfileId) => workspaceService.resetPromptTemplate(profileId));
+  ipcMain.handle(IPC_CHANNELS.previewPromptTemplate, (_event, profileId: ResearchProfileId, template: string, agentPath?: string) => workspaceService.previewPromptTemplate(profileId, template, agentPath));
   ipcMain.handle(IPC_CHANNELS.getAgentPlugins, () => workspaceService.getAgentPlugins());
   ipcMain.handle(IPC_CHANNELS.addAgentPluginFromFilesystem, async () => {
     const result = await dialog.showOpenDialog({

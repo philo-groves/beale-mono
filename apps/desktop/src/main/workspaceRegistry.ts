@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import type { ResearchPluginCatalogEntry } from '@beale/research-agent';
 import type {
   AppServerSessionSummary,
 } from './appServerCliClient';
@@ -81,6 +82,22 @@ export class WorkspaceRegistry {
   }
 
   public close(): void {}
+
+  public getPromptTemplateSettings(profileId: ResearchProfileId): { template: string; defaultTemplate: string; overridden: boolean } {
+    return this.invoke('getPromptTemplateSettings', [profileId]);
+  }
+
+  public setPromptTemplate(profileId: ResearchProfileId, template: string): void {
+    this.invoke('setPromptTemplate', [profileId, template]);
+  }
+
+  public resetPromptTemplate(profileId: ResearchProfileId): void {
+    this.invoke('resetPromptTemplate', [profileId]);
+  }
+
+  public previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string, pluginCatalog?: readonly ResearchPluginCatalogEntry[]): Promise<string> {
+    return this.invokeAsync('previewPromptTemplate', [profileId, template, agentPath, pluginCatalog]);
+  }
 
   public getState(): WorkspaceRegistryState {
     return this.state;

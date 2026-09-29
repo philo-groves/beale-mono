@@ -71,12 +71,12 @@ function defaultBuiltinPlugins(): AppServerBuiltinPlugin[] {
     })),
     {
       id: 'beale-introspection-builtin',
-      path: defaultBuiltinPluginPath('beale-introspection'),
+      path: defaultManagedPluginPath('beale-introspection'),
       installedAt: '2026-08-14T00:00:00.000Z'
     },
     {
       id: 'beale-terminator-builtin',
-      path: defaultBuiltinPluginPath('beale-terminator'),
+      path: defaultManagedPluginPath('beale-terminator'),
       installedAt: '2026-08-17T00:00:00.000Z',
       enabledByDefault: false
     }
@@ -94,6 +94,21 @@ function defaultBuiltinPluginPath(directoryName: string): string {
       : []),
     resolve(process.cwd(), '..', '..', 'app-server', 'resources', 'agent-plugins', directoryName),
     resolve(__dirname, '..', '..', '..', '..', 'app-server', 'resources', 'agent-plugins', directoryName)
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates.at(-1)!;
+}
+
+function defaultManagedPluginPath(directoryName: string): string {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const candidates = [
+    ...(resourcesPath
+      ? [
+          resolve(resourcesPath, 'managed-plugins', directoryName),
+          resolve(resourcesPath, 'app-server', 'resources', 'managed-plugins', directoryName)
+        ]
+      : []),
+    resolve(process.cwd(), '..', '..', 'managed-plugins', directoryName),
+    resolve(__dirname, '..', '..', '..', '..', 'managed-plugins', directoryName)
   ];
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates.at(-1)!;
 }

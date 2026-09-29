@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   BEALE_APP_SERVER_CONTROL_VERSION,
@@ -20,7 +20,7 @@ import {
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
-import { CampaignTrackStore } from '@beale/research-agent';
+import { CampaignTrackStore, validateResearchSystemPromptTemplate } from '@beale/research-agent';
 import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
@@ -89,6 +89,7 @@ interface AppServerSessionUpdateProjection {
 
 interface AppServerPluginRuntimeProjection {
   managedPluginIds?: unknown;
+  pluginCatalogPath?: unknown;
   skillDirs?: unknown;
   selectedSkillIds?: unknown;
   mcpConfigPath?: unknown;
@@ -485,6 +486,22 @@ export class AppServerHostService {
     const fileStem = continuation ? `${sessionId}.${attemptId}` : sessionId;
     const capturePath = join(runDirectory, `${fileStem}.capture.json`);
     await mkdir(runDirectory, { recursive: true });
+    const promptTemplate = this.registry.promptTemplateOverride(profileId);
+    if (promptTemplate !== null) validateResearchSystemPromptTemplate(promptTemplate);
+    const promptTemplatePath = promptTemplate !== null
+      ? join(this.registry.registryDirectory, 'prompt-templates', `${createHash('sha256').update(promptTemplate).digest('hex')}.txt`)
+      : undefined;
+    if (promptTemplatePath && promptTemplate !== null) {
+      await mkdir(join(this.registry.registryDirectory, 'prompt-templates'), { recursive: true, mode: 0o700 });
+      try {
+        await writeFile(promptTemplatePath, promptTemplate, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+        if (readFileSync(promptTemplatePath, 'utf8') !== promptTemplate) {
+          throw new Error('Stored prompt template snapshot does not match its content hash.');
+        }
+      }
+    }
     const collaborationConfigPath = request.launch.collaboration
       ? join(runDirectory, `${fileStem}.collaboration.json`)
       : undefined;
@@ -588,6 +605,7 @@ export class AppServerHostService {
         shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
         ...(existsSync(this.registry.shellOptionsPath) ? { shellOptionsPath: this.registry.shellOptionsPath } : {}),
         ...(collaborationConfigPath ? { collaborationConfigPath } : {}),
+        ...(promptTemplatePath ? { promptTemplatePath } : {}),
         ...(resumeCapturePath ? { resumeCapturePath } : {}),
         ...(resumeFallbackPromptPath ? { resumeFallbackPromptPath } : {}),
         ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
@@ -1279,6 +1297,7 @@ export class AppServerHostService {
       });
       return {
         ...(Array.isArray(runtime.managedPluginIds) ? { managedPluginIds: stringArray(runtime.managedPluginIds) } : {}),
+        ...(nonEmpty(runtime.pluginCatalogPath) ? { pluginCatalogPath: nonEmpty(runtime.pluginCatalogPath)! } : {}),
         skillDirectories: stringArray(runtime.skillDirs),
         selectedSkillIds: stringArray(runtime.selectedSkillIds),
         ...(nonEmpty(runtime.mcpConfigPath) ? { mcpConfigPath: nonEmpty(runtime.mcpConfigPath)! } : {}),
@@ -1290,7 +1309,7 @@ export class AppServerHostService {
   }
 
   private async loadIntrospectionPluginRuntime(): Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> {
-    const plugin = builtinPlugin('beale-introspection-builtin', 'beale-introspection', false);
+    const plugin = builtinPlugin('beale-introspection-builtin', 'beale-introspection', false, 'managed');
     if (!existsSync(plugin.path)) {
       throw new Error('Beale introspection plugin is unavailable for Quick Chat.');
     }
@@ -1308,6 +1327,7 @@ export class AppServerHostService {
     const managedPluginIds = (await this.resolvePluginRuntime())?.managedPluginIds;
     return {
       ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
+      ...(nonEmpty(runtime.pluginCatalogPath) ? { pluginCatalogPath: nonEmpty(runtime.pluginCatalogPath)! } : {}),
       skillDirectories: stringArray(runtime.skillDirs),
       selectedSkillIds: stringArray(runtime.selectedSkillIds),
       mcpConfigPath,
@@ -1703,36 +1723,49 @@ async function writePrivateJson(path: string, value: unknown): Promise<void> {
 function defaultBuiltinPlugins(): Array<{ id: string; path: string; installedAt: string; enabledByDefault?: boolean }> {
   return [
     ...MANAGED_TOOL_PLUGIN_IDS.map((id) => builtinPlugin(`${id}-builtin`, id, false)),
-    builtinPlugin('beale-introspection-builtin', 'beale-introspection', false),
-    builtinPlugin('beale-terminator-builtin', 'beale-terminator', true)
+    builtinPlugin('beale-introspection-builtin', 'beale-introspection', false, 'managed'),
+    builtinPlugin('beale-terminator-builtin', 'beale-terminator', true, 'managed')
   ].flatMap((plugin) => existsSync(plugin.path) ? [plugin] : []);
 }
 
 function builtinPlugin(
   id: string,
   directory: string,
-  disabledByDefault: boolean
+  disabledByDefault: boolean,
+  source: 'bundled' | 'managed' = 'bundled'
 ): { id: string; path: string; installedAt: string; enabledByDefault?: boolean } {
   return {
     id,
-    path: builtinPluginPath(directory),
+    path: builtinPluginPath(directory, source),
     installedAt: '2026-08-21T00:00:00.000Z',
     ...(disabledByDefault ? { enabledByDefault: false } : {})
   };
 }
 
-function builtinPluginPath(directory: string): string {
+function builtinPluginPath(directory: string, source: 'bundled' | 'managed'): string {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const candidates = [
-    ...(resourcesPath
-      ? [
-          resolve(resourcesPath, 'agent-plugins', directory),
-          resolve(resourcesPath, 'resources', 'agent-plugins', directory)
-        ]
-      : []),
-    fileURLToPath(new URL(`../resources/agent-plugins/${directory}`, import.meta.url)),
-    resolve(process.cwd(), 'resources', 'agent-plugins', directory)
-  ];
+  const candidates = source === 'managed'
+    ? [
+        ...(resourcesPath
+          ? [
+              resolve(resourcesPath, 'managed-plugins', directory),
+              resolve(resourcesPath, 'app-server', 'resources', 'managed-plugins', directory)
+            ]
+          : []),
+        fileURLToPath(new URL(`../../managed-plugins/${directory}`, import.meta.url)),
+        resolve(process.cwd(), '..', 'managed-plugins', directory),
+        resolve(process.cwd(), 'managed-plugins', directory)
+      ]
+    : [
+        ...(resourcesPath
+          ? [
+              resolve(resourcesPath, 'agent-plugins', directory),
+              resolve(resourcesPath, 'resources', 'agent-plugins', directory)
+            ]
+          : []),
+        fileURLToPath(new URL(`../resources/agent-plugins/${directory}`, import.meta.url)),
+        resolve(process.cwd(), 'resources', 'agent-plugins', directory)
+      ];
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates.at(-1)!;
 }
 

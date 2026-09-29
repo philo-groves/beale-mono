@@ -28,7 +28,8 @@ describe('AgentPluginRegistry', () => {
         name: 'Recon helper',
         directoryName: 'recon',
         relativePath: './skills/recon/SKILL.md',
-        description: 'Find promising reconnaissance paths.'
+        description: 'Find promising reconnaissance paths.',
+        resourceCounts: { scripts: 0, references: 0, assets: 0 }
       }
     ]);
     expect(installed.plugins[0].mcpServers).toMatchObject([
@@ -162,9 +163,11 @@ describe('AgentPluginRegistry', () => {
     expect(plugin).toBeTruthy();
     expect(plugin?.enabled).toBe(true);
     expect(plugin?.source.kind).toBe('builtin');
+    expect(plugin?.source.path).toContain(join('managed-plugins', 'beale-introspection'));
     expect(terminator).toBeTruthy();
     expect(terminator?.enabled).toBe(false);
     expect(terminator?.source.kind).toBe('builtin');
+    expect(terminator?.source.path).toContain(join('managed-plugins', 'beale-terminator'));
     expect(plugin?.mcpServers).toMatchObject([
       {
         name: 'beale',
@@ -373,7 +376,7 @@ function validPluginRoot(name: string): string {
 }
 
 function builtinPluginServerPath(name: string): string {
-  return join(process.cwd(), '..', '..', 'app-server', 'resources', 'agent-plugins', name, 'server.mjs');
+  return join(process.cwd(), '..', '..', 'managed-plugins', name, 'server.mjs');
 }
 
 function tempDir(prefix: string): string {

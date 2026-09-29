@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createId, nowIso } from "./ids.js";
-import { formatManagedToolPluginCatalog } from "./managed-tool-plugins.js";
+import { ManagedToolPluginSession, mergeResearchPluginCatalog } from "./managed-tool-plugins.js";
 import { createCollaborationSystemGuidance } from "./collaboration-guidance.js";
 import { researchProfileHash, researchProfileWorkflow, type ResearchProfile } from "./research-profile.js";
 import {
@@ -37,6 +37,7 @@ export interface ZCodeAgentResumableState {
   providerSessionId: string;
   researchProfileHash: string;
   workflowId: string;
+  loadedPluginIds?: readonly string[];
 }
 
 export interface CreateZCodeAgentExecutorOptions {
@@ -45,6 +46,7 @@ export interface CreateZCodeAgentExecutorOptions {
   reasoning?: string;
   toolRegistry?: ResearchToolRegistry;
   researchProfile: ResearchProfile;
+  promptTemplate?: string;
   workflowId?: string;
   resumableState?: ZCodeAgentResumableState;
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<readonly string[]>;
@@ -96,6 +98,8 @@ export function extractCompatibleZCodeAgentResumableState(
     providerSessionId: state.providerSessionId,
     researchProfileHash: expected.researchProfileHash,
     workflowId: expected.workflowId,
+    ...(Array.isArray(state.loadedPluginIds) && state.loadedPluginIds.every((id: unknown) => typeof id === "string")
+      ? { loadedPluginIds: state.loadedPluginIds as string[] } : {}),
   };
 }
 
@@ -112,24 +116,33 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
 
       const toolEvents: ResearchEvent[] = [];
       let toolCallCount = 0;
-      const registryTools: ZCodeTool[] = (options.toolRegistry?.listTools() ?? [])
+      const pluginCatalog = mergeResearchPluginCatalog(input.modelInput.pluginCatalog, options.toolRegistry?.managedPlugins, options.toolRegistry?.listTools());
+      const pluginSession = pluginCatalog.length > 0
+        ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], options.resumableState?.loadedPluginIds, pluginCatalog)
+        : undefined;
+      const agentToolRegistry = pluginSession ? options.toolRegistry?.fork([
+        pluginSession.createPreviewer(options.toolRegistry.listTools()), pluginSession.createLoader(),
+      ]) : options.toolRegistry;
+      const registryTools = (): ZCodeTool[] => (agentToolRegistry?.listTools() ?? [])
+        .filter((candidate) => !pluginSession || pluginSession.visible(candidate.descriptor.name))
         .filter((candidate) => candidate.parameters)
         .map((candidate) => ({
           name: getToolTransportName(candidate),
           description: candidate.descriptor.description,
           inputSchema: candidate.parameters as Record<string, unknown>,
           execute: async (args, signal) => {
-            const record = await options.toolRegistry!.executeToolCall({
+            const isPluginControl = candidate.descriptor.name === "plugins.load" || candidate.descriptor.name === "plugins.preview";
+            const record = await agentToolRegistry!.executeToolCall({
               id: createId("zcode_tool"),
               name: getToolTransportName(candidate),
               arguments: args,
             }, {
-              toolCallCount: toolCallCount += 1,
+              toolCallCount: isPluginControl ? 0 : (toolCallCount += 1),
               agentId: options.agentIdentity?.id ?? "root",
               modelAuthor: { provider: "zai", model: options.model },
               freshSubagentContext: options.agentIdentity?.freshSubagentContext === true,
               defaultActionClass: candidate.descriptor.actionClasses[0] ?? "analyze",
-              ...(input.governance ? { governance: input.governance } : {}),
+              ...(!isPluginControl && input.governance ? { governance: input.governance } : {}),
               signal,
             });
             toolEvents.push(...record.events);
@@ -177,9 +190,9 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
           return { content: result.content as unknown[] };
         },
       }));
-      const tools = [...registryTools, ...agentTools];
+      const visibleTools = (): ZCodeTool[] => [...registryTools(), ...agentTools];
       const systemPrompt = createResearchSystemPrompt({
-        hasTools: registryTools.length > 0,
+        hasTools: registryTools().length > 0,
         hasMemoryTools: hasTool(options.toolRegistry, "history_search"),
         hasRunbookTools: hasTool(options.toolRegistry, "runbook_list"),
         hasReportTools: hasTool(options.toolRegistry, "report_list"),
@@ -190,20 +203,20 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
         goalEnabled: false,
         ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
         researchProfile: options.researchProfile,
+        ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
+        ...(options.promptTemplate !== undefined ? { promptTemplate: options.promptTemplate } : {}),
         workflowId: workflow.id,
         ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
       });
-      // The ZCode bridge currently has a fixed tools/list surface. Preserve
-      // provider compatibility while still presenting every plugin option.
-      const pluginCatalog = options.toolRegistry?.managedPlugins;
-      const prompt = formatZCodePrompt([systemPrompt, ...(pluginCatalog ? [formatManagedToolPluginCatalog(pluginCatalog)] : [])].join("\n\n"), input.modelInput);
+      const prompt = formatZCodePrompt(systemPrompt, input.modelInput);
 
       try {
+        let loadedBefore = pluginSession?.snapshot().join(",") ?? "";
         let result = await runZCodeSession({
           workspaceRoot: options.workspaceRoot,
           model: options.model,
           prompt,
-          tools,
+          tools: visibleTools(),
           signal: abortController.signal,
           ...(options.reasoning ? { reasoning: options.reasoning } : {}),
           ...(input.eventSink ? { eventSink: input.eventSink } : {}),
@@ -215,6 +228,22 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
             ? { waitForSteeringMessages: options.waitForSteeringMessages }
             : {}),
         });
+        for (let count = 0; pluginSession && count < pluginCatalog.length; count += 1) {
+          const loadedNow = pluginSession.snapshot().join(",");
+          if (loadedNow === loadedBefore) break;
+          loadedBefore = loadedNow;
+          result = await runZCodeSession({
+            workspaceRoot: options.workspaceRoot,
+            model: options.model,
+            prompt: "The requested plugin is loaded. Continue the current task with its newly available resources.",
+            tools: visibleTools(),
+            signal: abortController.signal,
+            ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+            ...(input.eventSink ? { eventSink: input.eventSink } : {}),
+            ...(options.agentIdentity ? { identity: options.agentIdentity } : {}),
+            resumeSessionId: result.sessionId,
+          });
+        }
         await collaborationManager?.settle();
         let collaborationFollowUp = collaborationManager?.collaborationFollowUp("root") ?? [];
         const maxCollaborationContinuations = Math.max(
@@ -233,7 +262,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
             prompt: collaborationFollowUp
               .map((message) => isRecord(message) && typeof message.content === "string" ? message.content : JSON.stringify(message))
               .join("\n\n"),
-            tools,
+            tools: visibleTools(),
             signal: abortController.signal,
             ...(options.reasoning ? { reasoning: options.reasoning } : {}),
             ...(input.eventSink ? { eventSink: input.eventSink } : {}),
@@ -264,6 +293,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
               providerSessionId: result.sessionId,
               researchProfileHash: profileHash,
               workflowId: workflow.id,
+              ...(pluginSession ? { loadedPluginIds: pluginSession.snapshot() } : {}),
             } satisfies ZCodeAgentResumableState,
           },
         };

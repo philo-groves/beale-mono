@@ -66,6 +66,7 @@ export interface ResolvedAppServerSessionLaunch {
   shellSafetyMode: string;
   shellOptionsPath?: string;
   collaborationConfigPath?: string;
+  promptTemplatePath?: string;
   resumeCapturePath?: string;
   resumeFallbackPromptPath?: string;
   workflowId?: string;
@@ -75,6 +76,7 @@ export interface ResolvedAppServerSessionLaunch {
   memoryBackend: AppServerMemoryBackendId;
   pluginRuntime?: {
     managedPluginIds?: readonly string[];
+    pluginCatalogPath?: string;
     skillDirectories?: readonly string[];
     selectedSkillIds?: readonly string[];
     mcpConfigPath?: string;
@@ -159,6 +161,7 @@ export function appServerSessionArgs(
   if (launch.provider.daybreakBlue) args.push('--daybreak-blue');
 
   if (launch.researchProfileId) args.push('--research-profile-id', launch.researchProfileId);
+  if (launch.promptTemplatePath) args.push('--prompt-template-file', launch.promptTemplatePath);
   if (launch.researchProfileHash) args.push('--research-profile-hash', launch.researchProfileHash);
   if (launch.workflowId) args.push('--workflow', launch.workflowId);
   if (launch.investigationId) args.push('--investigation-id', launch.investigationId);
@@ -231,6 +234,7 @@ function appendPluginRuntimeArgs(args: string[], launch: ResolvedAppServerSessio
   const runtime = launch.pluginRuntime;
   if (!runtime) return;
   if (runtime.managedPluginIds !== undefined) args.push('--managed-plugins', runtime.managedPluginIds.join(',') || 'none');
+  if (runtime.pluginCatalogPath) args.push('--plugin-catalog', runtime.pluginCatalogPath);
   for (const path of runtime.skillDirectories ?? []) args.push('--skill-dir', path);
   for (const skillId of runtime.selectedSkillIds ?? []) args.push('--skill', skillId);
   if (runtime.mcpConfigPath) args.push('--mcp-config', runtime.mcpConfigPath);

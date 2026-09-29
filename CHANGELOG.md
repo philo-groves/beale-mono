@@ -6,6 +6,11 @@
 
 #### Changed
 
+- The Introspection and Terminator Agent Plugin packages now live under `managed-plugins`; their built-in registration and enabled defaults are preserved.
+- The default agent prompt now has a `{{plugins}}` catalog of plugin IDs, descriptions, and tool and skill counts. `plugins.preview` returns tool names and skill use cases on demand, with a 12,000-character budget for skill descriptions. The settings preview discovers enabled MCP tool counts through the app-server. `plugins.load` returns full skill instructions and exposes tool schemas on the next turn; Pi, Claude, and ZCode use the same path.
+- Collaboration prompt guidance now groups delegation, channel use, profile rules, and active runtime policy without repeating channel protocol instructions.
+- The default agent prompt separates sections with a blank line and opens style with "Persona style:". Style follows identity; boundary guidance groups scope and safeguards, while shorter tool guidance groups search routing, resource first touch, execution dependencies, and shell fallback. Goal guidance separates session progress, investigation assignment, persistent goals, and disposition.
+- Agent Settings now offers a per-profile prompt template editor with a rendered preview and reset to default. The app-server persists overrides and snapshots them when sessions launch; this requires a rebuilt app-server.
 - Large tool results keep a bounded model preview and provide run-local `tool_result.page` reads for omitted text.
 - Research sessions no longer preload ranked memory cards into startup or continuity context. Agents retrieve relevant memories through research search and detail tools.
 - Expanded research details and channel summaries now occupy half the window width, with the commentary area shrinking to make room.
@@ -27,6 +32,7 @@
 
 #### Fixed
 
+- Desktop builds now keep `tree-sitter-wasm` external so its manifest and parser assets resolve from the installed package instead of a nonexistent path beside the bundled main process.
 - Auto-Review now permits bounded vulnerability experiments and read-only research artifacts outside the workspace directory without a runbook cell. It reserves human overrides for concrete destructive or clearly out-of-scope commands, and shell approvals no longer expire under the default two-minute tool budget. Runbooks remain the path to reproduction-grade evidence.
 - Session commentary Markdown links now reveal local files, including workspace files referenced through localhost URLs, in the file explorer and open web pages in the default browser.
 - App-server now completes an interrupted file-authority publication before checking for direct research edits, so a partially published claim or memory cannot reject the next session at startup.

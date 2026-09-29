@@ -30,6 +30,7 @@ The project is under heavy development. The agent is not ready for real use; exp
 | `apps/ios` | Native SwiftUI app-server client and Xcode project |
 | `packages/app-server-runtime` | Shared protocol, app-server session runtime, and optional app-server client |
 | `app-server` | `@beale/app-server` — standalone tray-resident app-server execution host and control plane |
+| `managed-plugins` | Portable Agent Plugin packages, including Beale Introspection and Terminator |
 | `integrations/beale-codex` | Codex plugin with a Beale research skill and local stdio MCP server |
 | `packages/research-agent` | `@beale/research-agent` — workspace context, durable memory, tools, and the Pi-backed agent runtime |
 | `tests` | app-server test suite (`node:test`, runs against built packages) |

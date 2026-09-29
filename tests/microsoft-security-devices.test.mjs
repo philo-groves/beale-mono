@@ -37,6 +37,7 @@ test('Microsoft device guidance is an optional portable plugin with no model-fac
   assert.deepEqual(plugin.errors, []);
   assert.deepEqual(plugin.warnings, []);
   assert.deepEqual(plugin.skills.map((skill) => skill.id), ['microsoft-security-devices']);
+  assert.deepEqual(plugin.skills[0].resourceCounts, { scripts: 1, references: 2, assets: 0 });
   assert.deepEqual(plugin.mcpServers, []);
   const runtime = registry.getAppServerRuntime();
   assert.deepEqual(runtime.selectedSkillIds, ['microsoft-security-devices']);

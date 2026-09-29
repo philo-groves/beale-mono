@@ -2456,6 +2456,8 @@ test("quick-chat launches receive an isolated authenticated Beale introspection 
   });
   assert.equal(pluginCall.options.input.registryDirectory, join(directory, "quick-chat-plugin-runtime"));
   assert.equal(pluginCall.options.input.runtimeEnvironment, undefined);
+  assert.equal(pluginCall.options.input.builtinPlugins[0].path.endsWith(join("managed-plugins", "beale-introspection")), true);
+  assert.equal(existsSync(join(pluginCall.options.input.builtinPlugins[0].path, "server.mjs")), true);
 });
 
 test("workspace launches retain the standard plugin runtime while authenticating introspection", async () => {
@@ -2493,6 +2495,11 @@ test("workspace launches retain the standard plugin runtime while authenticating
   const pluginCall = calls.find((call) => call.operation === "plugin.runtime");
 
   assert.equal(pluginCall.options.input.registryDirectory, directory);
+  for (const name of ["beale-introspection", "beale-terminator"]) {
+    const plugin = pluginCall.options.input.builtinPlugins.find((candidate) => candidate.id === `${name}-builtin`);
+    assert.equal(plugin?.path.endsWith(join("managed-plugins", name)), true);
+    assert.equal(existsSync(join(plugin.path, "server.mjs")), true);
+  }
   assert.deepEqual(prepared.launch.pluginRuntime.allowedMcpServers, [
     "beale-introspection.beale",
     "example.tools",
@@ -3693,6 +3700,7 @@ function hostRegistryFixture(directory, options = {}) {
       authenticationPreferences: {},
       riskAcknowledgements: [],
     }),
+    promptTemplateOverride: () => null,
     memoryTypeDescriptions: () => null,
     storageForProfile: () => ({
       databasePath: join(directory, "memory.sqlite"),

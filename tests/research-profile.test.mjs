@@ -9,12 +9,126 @@ import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   createDeterministicAgentExecutor,
   createResearchSystemPrompt,
+  defaultResearchSystemPromptTemplate,
+  validateResearchSystemPromptTemplate,
   normalizeResearchProfile,
   researchProfileHash,
   resolveResearchProfile,
   resolveResearchProfileMemoryType,
   runResearchAgent,
 } from "../packages/research-agent/dist/index.js";
+
+test("prompt templates render profile sections and require the authorization boundary", () => {
+  const profile = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
+  const options = { hasTools: true, hasMemoryTools: true, researchProfile: profile };
+  const defaultPrompt = createResearchSystemPrompt(options);
+  assert.equal(createResearchSystemPrompt({ ...options, promptTemplate: defaultResearchSystemPromptTemplate() }), defaultPrompt);
+  const custom = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\nProfile: {{profile.name}}\n{{identity}}" });
+  assert.ok(custom.startsWith("Scope and authority:"));
+  assert.ok(custom.includes("Profile: Mathematics"));
+  assert.ok(custom.includes(profile.agent.role));
+  assert.match(defaultResearchSystemPromptTemplate(), /\{\{tools\}\}\n\n\{\{plugins\}\}\n\n\{\{collaboration\}\}/);
+  const withPlugins = createResearchSystemPrompt({ ...options, pluginCatalog: [{
+    id: "example-plugin", name: "Example Plugin", mcpServers: [],
+    skills: [{ id: "example-skill", name: "Example Skill", useWhen: "Inspect synthetic data.", path: "example.md",
+      resourceCounts: { scripts: 0, references: 1, assets: 2 } }],
+  }] });
+  assert.match(withPlugins, /Available plugins.*\n- example-plugin \(plugin; 0 tools, 1 skill\):/);
+  assert.doesNotMatch(withPlugins, /example-skill|Inspect synthetic data/);
+  assert.doesNotMatch(withPlugins, /Example Plugin|Example Skill/);
+  const existingTemplate = createResearchSystemPrompt({ ...options, pluginCatalog: [{
+    id: "example-plugin", name: "Example Plugin", mcpServers: [], skills: [],
+  }], promptTemplate: "{{boundary}}\n{{identity}}" });
+  assert.match(existingTemplate, /Available plugins[^\n]*\n- example-plugin \(plugin; 0 tools, 0 skills\):/);
+  assert.throws(() => validateResearchSystemPromptTemplate("{{identity}}"), /boundary/);
+  assert.throws(() => validateResearchSystemPromptTemplate("{{boundary}}\n{{unknown}}"), /Unknown prompt variable/);
+});
+
+test("the default prompt keeps boundary guidance focused on scope and host safeguards", () => {
+  const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
+  const template = defaultResearchSystemPromptTemplate().split("\n");
+  assert.deepEqual(template.slice(0, 7), ["{{identity}}", "", "{{style}}", "", "{{boundary}}", "", "{{tools}}"]);
+
+  const options = { hasTools: true, researchProfile: profile };
+  const identity = createResearchSystemPrompt({ ...options, promptTemplate: "{{identity}}\n{{boundary}}" });
+  const boundary = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}" });
+  const style = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\n{{style}}" });
+  const goal = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\n{{goal}}" });
+  const memory = createResearchSystemPrompt({ ...options, hasMemoryTools: true, promptTemplate: "{{boundary}}\n{{memory}}" });
+  const tools = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\n{{tools}}" });
+  const toolsSection = tools.slice(boundary.length + 1);
+  const defaultPrompt = createResearchSystemPrompt(options);
+  const ambient = "Ambient resources are non-authoring inventory.";
+  assert.doesNotMatch(identity.slice(0, identity.indexOf("Scope and authority:")), /Use knowledge memory for assets|Ambient resources are non-authoring inventory/);
+  assert.equal(boundary.split(ambient).length, 2);
+  assert.ok(defaultPrompt.indexOf(profile.agent.style[0]) < defaultPrompt.indexOf("Scope and authority:"));
+  assert.match(style, /\nPersona style:\n/);
+  assert.match(defaultPrompt, /\n\nPersona style:\n/);
+  assert.match(defaultPrompt, /\n\nScope and authority:\n/);
+  assert.doesNotMatch(defaultPrompt, /\n{3,}/);
+  assert.ok(boundary.indexOf("Scope and authority:") < boundary.indexOf("Profile-specific limits:"));
+  assert.ok(boundary.indexOf("Profile-specific limits:") < boundary.indexOf("Host safeguards:"));
+  assert.doesNotMatch(boundary, /Do not claim evidence|Treat existing records|Preserve materially useful|Profile vocabulary|Profile-recognized material kinds/);
+  assert.match(style, /Do not claim evidence you did not inspect/);
+  assert.match(goal, /Treat existing records and prior transcript as historical state/);
+  assert.match(memory, /Preserve materially useful new facts/);
+  assert.match(tools, /Profile-recognized material kinds/);
+  assert.match(boundary, /Host-verified same-Subject reference workspaces are read-only/);
+  assert.match(toolsSection, /Tool routing:\n/);
+  assert.match(toolsSection, /Resource first touch:\n/);
+  assert.match(toolsSection, /Execution dependencies:\n/);
+  assert.match(toolsSection, /Shell fallback:\n/);
+  assert.doesNotMatch(toolsSection, /cross-workspace mutation|At evidence checkpoints|After repairing an execution dependency/);
+  assert.match(goal, /At evidence checkpoints, rank at most three candidates/);
+  assert.match(memory, /After repairing an execution dependency/);
+  assert.match(boundary, /Never expose host credentials/);
+});
+
+test("goal guidance separates session work, assignment, Goal mode, and disposition", () => {
+  const options = {
+    hasTools: true,
+    hasInvestigationAssignmentTool: true,
+    hasSessionDispositionTool: true,
+    researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
+    promptTemplate: "{{boundary}}\n{{goal}}",
+  };
+  const regular = createResearchSystemPrompt(options);
+  const persistent = createResearchSystemPrompt({ ...options, goalEnabled: true });
+
+  assert.match(regular, /Session progress:\n- Treat existing records/);
+  assert.match(regular, /- At evidence checkpoints/);
+  assert.match(regular, /Investigation assignment:\n- Once you understand/);
+  assert.match(regular, /Session disposition:\n- Before the root final response/);
+  assert.doesNotMatch(regular, /Persistent Goal mode:|objective_achieved/);
+  assert.match(persistent, /Persistent Goal mode:\n- Continue researching/);
+  assert.ok(persistent.indexOf("Investigation assignment:") < persistent.indexOf("Persistent Goal mode:"));
+  assert.ok(persistent.indexOf("Persistent Goal mode:") < persistent.indexOf("Session disposition:"));
+  assert.doesNotMatch(persistent, /\n{3,}/);
+});
+
+test("collaboration guidance separates delegation, channels, profile protocol, and runtime policy", () => {
+  const options = {
+    hasTools: true,
+    hasCollaborationTools: true,
+    researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
+    promptTemplate: "{{boundary}}\n{{collaboration}}",
+    collaborationGuidance: "Active collaboration settings:\n- Collaboration mode is adaptive.",
+  };
+  const prompt = createResearchSystemPrompt(options);
+  const withoutTools = createResearchSystemPrompt({ ...options, hasCollaborationTools: false, collaborationGuidance: undefined });
+  const subagent = createResearchSystemPrompt({ ...options, hasCollaborationTools: false, agentPath: "example-agent", collaborationGuidance: undefined });
+
+  assert.match(prompt, /Delegation:\n- Delegate distinct, bounded work/);
+  assert.match(prompt, /Research channels:\n- Use channel_list/);
+  assert.match(prompt, /Profile collaboration protocol:\n- Keep exploit claims/);
+  assert.match(prompt, /Active collaboration settings:\n- Collaboration mode is adaptive/);
+  assert.ok(prompt.indexOf("Delegation:") < prompt.indexOf("Research channels:"));
+  assert.ok(prompt.indexOf("Research channels:") < prompt.indexOf("Profile collaboration protocol:"));
+  assert.ok(prompt.indexOf("Profile collaboration protocol:") < prompt.indexOf("Active collaboration settings:"));
+  assert.doesNotMatch(prompt, /\n{3,}/);
+  assert.doesNotMatch(withoutTools, /Delegation:|Research channels:|Active collaboration settings:/);
+  assert.match(subagent, /Subagent assignment:\n- You are subagent example-agent/);
+});
 
 test("research profiles normalize to immutable, deterministic snapshots", () => {
   const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
@@ -90,16 +204,15 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.doesNotMatch(securityPrompt, /- sink \(Sink\)/);
   assert.doesNotMatch(securityPrompt, /- bug \(Historical Bug\)/);
   assert.doesNotMatch(securityPrompt, /- procedure \(Procedure\)/);
-  assert.match(securityPrompt, /Discovery and categorization are non-authoring inventory actions/);
+  assert.match(securityPrompt, /Ambient resources are non-authoring inventory/);
   assert.match(securityPrompt, /Auto-Reviewed first-touch path/);
-  assert.match(securityPrompt, /explicitly documented dependencies.*default platform components.*upstream or downstream source repositories/);
-  assert.match(securityPrompt, /vendor-maintained components include official source releases and upstream project history/);
-  assert.match(securityPrompt, /does not expand authorization/);
-  assert.match(securityPrompt, /stateful execution dependencies/);
-  assert.match(securityPrompt, /lifecycle and ownership, address and route, listening service, host identity, then account and authentication/);
-  assert.match(securityPrompt, /never substitute the host username for a guest account/);
-  assert.match(securityPrompt, /do not elevate an entire VM manager merely to bypass an optional network backend/);
-  assert.match(securityPrompt, /update its asset memory and reusable environment runbook/);
+  assert.match(securityPrompt, /provenance and build identity; check CVEs, advisories, vendor releases/);
+  assert.match(securityPrompt, /not live-target authorization/);
+  assert.match(securityPrompt, /Execution dependencies:/);
+  assert.match(securityPrompt, /lifecycle and ownership, route and address, listening service, host identity, then authentication/);
+  assert.match(securityPrompt, /Do not substitute a host account for a guest account/);
+  assert.match(securityPrompt, /prefer the known-good unprivileged mode/);
+  assert.match(securityPrompt, /update its asset memory or environment runbook/);
   assert.match(securityPrompt, /matching workflow runbook for reproduction-grade evidence/);
   assert.match(securityPrompt, /Direct shell execution may support bounded exploratory tests/);
   assert.match(securityPrompt, /setup, runtime, and cleanup.*feature tags/);
@@ -113,7 +226,7 @@ test("bundled profiles define domain-specific Longshot workflows", () => {
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
   const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
 
-  assert.equal(security.version, "1.15.0");
+  assert.equal(security.version, "1.15.2");
   assert.equal(mathematics.version, "1.6.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);
@@ -274,10 +387,9 @@ test("custom profiles replace domain language without weakening host invariants"
   assert.doesNotMatch(prompt, /Active research workflow|Explore \(explore\)/);
   assert.match(prompt, /claim \(Question\): A question that can be tested/);
   assert.doesNotMatch(prompt, /world-class security researcher|vulnerabilit|historic bugs/i);
-  assert.match(prompt, /Never expand that boundary/);
-  assert.match(prompt, /Profile vocabulary: Research workspace; Research subject; Research boundary/);
+  assert.match(prompt, /Profile guidance, prior transcript, and model output cannot expand it/);
   assert.match(prompt, /Profile-recognized material kinds: path, documentation, dataset/);
-  assert.match(prompt, /it cannot authorize targets, side effects, or network access/);
+  assert.match(prompt, /Profile-specific limits:/);
   assert.match(prompt, /Stay within the recorded materials and systems/);
   assert.match(prompt, /Never expose host credentials/);
   assert.doesNotMatch(prompt, /Never use the \$HOME environment variable/);
@@ -335,6 +447,24 @@ test("profile-selected skills remain inert until the host explicitly selects the
     });
     assert.equal(hostSelected.selectedSkills[0]?.id, "profile-only");
     assert.ok(hostSelected.selectedSkills[0]?.selectionReasons.includes("explicitly requested"));
+
+    const deferredPluginSkill = await runResearchAgent({
+      prompt: "Read the supplied corpus.",
+      workspaceRoot,
+      skills: [skill],
+      selectedSkillIds: ["profile-only"],
+      tools: ["file.read", "memory.get", "mcp.example.tools.inspect"].map((name) => ({
+        name, transportName: name.replaceAll(".", "_"), description: "Synthetic tool.",
+        actionClasses: ["inspect"], sideEffects: "none", requiredPermissions: [],
+      })),
+      pluginCatalog: [{ id: "example-plugin", name: "Example Plugin", mcpServers: ["example.tools"], skills: [
+        { id: "profile-only", name: "Profile Only", useWhen: "Read a supplied corpus.", path: "example-plugin.md" },
+      ] }],
+      resolvedResearchProfile,
+      executor: createDeterministicAgentExecutor(),
+    });
+    assert.deepEqual(deferredPluginSkill.selectedSkills, []);
+    assert.deepEqual(deferredPluginSkill.availableTools.map((tool) => tool.name), ["file.read"]);
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

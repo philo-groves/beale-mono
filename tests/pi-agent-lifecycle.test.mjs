@@ -154,11 +154,11 @@ test("Pi loads only requested plugin schemas on the next turn and preserves them
     }),
   });
   assert.equal(result.agentRun.status, "complete", result.response);
-  assert.deepEqual(contexts[0].toolNames, ["plugins_load"]);
+  assert.deepEqual(contexts[0].toolNames, ["plugins_preview", "plugins_load"]);
   assert.ok(contexts[1].toolNames.includes("memory_get"));
   assert.equal(contexts[1].toolNames.includes("repository_search"), false);
-  assert.deepEqual(contexts[2].toolNames, ["plugins_load"]);
-  assert.deepEqual(contexts[3].toolNames, ["plugins_load"], "loading must not reactivate tools after budget exhaustion");
+  assert.deepEqual(contexts[2].toolNames, ["plugins_preview", "plugins_load"]);
+  assert.deepEqual(contexts[3].toolNames, ["plugins_preview", "plugins_load"], "loading must not reactivate tools after budget exhaustion");
   assert.deepEqual(calls, [{ path: "example.txt" }], "loading does not consume research tool budget");
   const state = extractCompatiblePiAgentResumableState(result.agentRun.output.raw, "faux", "faux-model");
   assert.deepEqual(state.loadedPluginIds, ["beale-knowledge", "beale-source"]);
@@ -175,6 +175,51 @@ test("Pi loads only requested plugin schemas on the next turn and preserves them
   });
   assert.ok(resumedContexts[0].toolNames.includes("memory_get"));
   assert.equal(resumedContexts[0].toolNames.includes("repository_search"), false);
+});
+
+test("Pi defers an external plugin's MCP schema and skill body until plugins.load", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-plugin-pi-example-"));
+  try {
+    const skillPath = join(directory, "SKILL.md");
+    writeFileSync(skillPath, "Apply the synthetic parser review procedure.");
+    const calls = [];
+    const mcpTool = createFixtureInspectTool(calls);
+    mcpTool.descriptor.name = "mcp.example.tools.inspect";
+    mcpTool.descriptor.transportName = "mcp_example_tools_inspect";
+    const pluginCatalog = [{
+      id: "example-plugin", name: "Example Plugin", mcpServers: ["example.tools"],
+      skills: [{ id: "example-skill", name: "Example Skill", useWhen: "Inspect a synthetic parser.", path: skillPath,
+        resourceCounts: { scripts: 0, references: 0, assets: 0 } }],
+    }];
+    const contexts = [];
+    const result = await runResearchAgent({
+      prompt: "Inspect the synthetic parser.",
+      pluginCatalog,
+      tools: [mcpTool.descriptor],
+      executor: createPiAgentExecutor({
+        provider: "faux", model: "faux-model", subagents: false,
+        toolRegistry: createResearchToolRegistry([mcpTool]),
+        models: createScriptedModels([
+          assistant(toolCall("plugins_preview", { plugin: "example-plugin" }, "preview_plugin"), "toolUse"),
+          assistant(toolCall("plugins_load", { plugins: ["example-plugin"] }, "load_plugin"), "toolUse"),
+          assistant(toolCall("mcp_example_tools_inspect", { path: "example.c" }, "inspect_example"), "toolUse"),
+          assistant("Synthetic inspection complete."),
+        ], contexts),
+      }),
+    });
+    assert.equal(result.agentRun.status, "complete");
+    assert.deepEqual(contexts[0].toolNames, ["plugins_preview", "plugins_load"]);
+    assert.doesNotMatch(contexts[0].systemPrompt, /example-skill|Inspect a synthetic parser/);
+    assert.doesNotMatch(contexts[0].systemPrompt, /Apply the synthetic parser review procedure/);
+    assert.equal(contexts[1].toolNames.includes("mcp_example_tools_inspect"), false);
+    assert.ok(contexts[1].messageContents.join("\n").includes("Inspect a synthetic parser."));
+    assert.doesNotMatch(contexts[1].messageContents.join("\n"), /Apply the synthetic parser review procedure/);
+    assert.ok(contexts[2].toolNames.includes("mcp_example_tools_inspect"));
+    assert.ok(contexts[2].messageContents.join("\n").includes("Apply the synthetic parser review procedure"));
+    assert.deepEqual(calls, [{ path: "example.c" }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("agent context compacts old bulky tool results while preserving the task and latest result", () => {
@@ -629,19 +674,19 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   );
   assert.match(contexts[0].systemPrompt, /^You are a world-class security researcher/);
   assert.match(contexts[0].systemPrompt, /do not prematurely narrow broad research to confirming or rejecting the first plausible hypothesis/);
-  assert.match(contexts[0].systemPrompt, /a genuinely refuted path should redirect exploration within the relevant subsystem, not end it/i);
-  assert.match(contexts[0].systemPrompt, /positive proof obligations/i);
+  assert.match(contexts[0].systemPrompt, /evidence that would genuinely contradict or narrow a necessary link/i);
+  assert.match(contexts[0].systemPrompt, /positive proof obligation/i);
   assert.match(contexts[0].systemPrompt, /incomplete proof.*open obligation/i);
   assert.match(contexts[0].systemPrompt, /sharp, curious research collaborator/);
   assert.match(contexts[0].systemPrompt, /Do not narrate routine memory updates unless they materially affect the conclusion/);
   assert.match(contexts[0].systemPrompt, /use the commentary channel for short, concrete, user-visible progress updates/);
-  assert.match(contexts[0].systemPrompt, /Repository checkouts live at the host-supplied known repository or materialized-source paths in the user-global repository store, not beneath workspaceRoot/);
+  assert.match(contexts[0].systemPrompt, /Checkouts live at host-supplied repository or materialized-source paths outside workspaceRoot/);
   assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
-  assert.match(contexts[0].systemPrompt, /unchanged record does not make it work produced by the current session/i);
-  assert.match(contexts[0].systemPrompt, /unchanged preexisting artifact or lifecycle status cannot satisfy/i);
-  assert.match(contexts[0].systemPrompt, /host binding as authoritative.*stale identifier embedded in historical prompt text/i);
-  assert.match(contexts[0].systemPrompt, /Collaboration is optional/);
-  assert.match(contexts[0].systemPrompt, /expected evidence gain justifies the added context and coordination cost/);
+  assert.match(contexts[0].systemPrompt, /Attribute only work completed in this session to this session/i);
+  assert.match(contexts[0].systemPrompt, /an unchanged artifact cannot satisfy a request for new work/i);
+  assert.match(contexts[0].systemPrompt, /Host-bound campaign and investigation identities override conflicting prompt prose/i);
+  assert.match(contexts[0].systemPrompt, /Delegation:\n- Delegate distinct, bounded work/);
+  assert.match(contexts[0].systemPrompt, /expected evidence gain justifies the context and coordination cost/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use collaboration tools for independent work/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Preferred profile collaboration recipe/);
   assert.match(contexts[0].systemPrompt, /use the Tart VM with SIP enabled/);
@@ -675,11 +720,11 @@ test("research system prompt keeps workflow phases behind runbook feature tags w
   assert.match(prompt, /feature tags to activate the cells needed for a run/);
   assert.match(prompt, /Split only for a genuinely unrelated objective/);
   assert.doesNotMatch(prompt, /4–12 purposeful cells|medium-sized runbooks/);
-  assert.match(prompt, /matching workflow runbook for reproduction-grade evidence/);
-  assert.match(prompt, /Direct shell execution may support bounded exploratory tests/);
-  assert.match(prompt, /Use runbook\.run for repeatable proof procedures and reproduction-grade evidence/);
+  assert.match(prompt, /Reuse or create the matching workflow runbook before executing the first claim-confirming experiment/);
+  assert.match(prompt, /Direct shell execution is for bounded source inspection/);
+  assert.match(prompt, /Execute every proof-of-concept.*through runbook\.run/);
   assert.match(prompt, /Before implementing a candidate proof, call runbook\.prepare/);
-  assert.match(prompt, /revision-checked runbook\.edit.*rerun the same cell.*do not create lifecycle wrappers/);
+  assert.match(prompt, /revision-checked runbook\.edit.*rerun the same cell/);
   assert.match(prompt, /Start a sibling runbook only for a genuinely unrelated objective/);
   assert.doesNotMatch(prompt, /proof development.*shell\.run/);
 });
@@ -691,8 +736,7 @@ test("research system prompt keeps investigations as cross-session overview stat
     hasFindingTools: true,
     hasRunbookTools: true,
   });
-  assert.match(prompt, /Investigation records provide a concise cross-session history and overview/);
-  assert.match(prompt, /must not be used as the live controller for step-by-step research/);
+  assert.match(prompt, /Investigations summarize cross-session work rather than replace evidence or executable procedures/);
 });
 
 test("research system prompt allows same-model review only from a fresh distinct subagent", () => {

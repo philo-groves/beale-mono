@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { ResearchExecutableTool } from "./tool-registry.js";
 import { nowIso } from "./ids.js";
 
@@ -42,6 +43,93 @@ export const MANAGED_TOOL_PLUGINS = [
 
 export type ManagedToolPluginId = typeof MANAGED_TOOL_PLUGINS[number]["id"];
 export const MANAGED_TOOL_PLUGIN_IDS: readonly ManagedToolPluginId[] = MANAGED_TOOL_PLUGINS.map((plugin) => plugin.id);
+
+export interface PluginSkillResourceCounts {
+  scripts: number;
+  references: number;
+  assets: number;
+}
+
+export interface ResearchPluginCatalogEntry {
+  id: string;
+  name: string;
+  description?: string;
+  toolCount?: number;
+  skills: readonly { id: string; name: string; useWhen: string; path: string; resourceCounts?: PluginSkillResourceCounts }[];
+  mcpServers: readonly string[];
+}
+
+export interface PluginPreviewOutput {
+  pluginId: string;
+  loaded: boolean;
+  tools: string[];
+  skills: { id: string; useWhen: string; resourceCounts?: PluginSkillResourceCounts }[];
+}
+
+export function decodeResearchPluginCatalog(value: unknown): ResearchPluginCatalogEntry[] {
+  if (!Array.isArray(value) || value.length > 256) throw new Error("Plugin catalog must be an array of at most 256 plugins.");
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid plugin catalog entry.");
+    const plugin = item as Record<string, unknown>;
+    if (typeof plugin.id !== "string" || typeof plugin.name !== "string" || !Array.isArray(plugin.skills) || !Array.isArray(plugin.mcpServers)) {
+      throw new Error("Invalid plugin catalog entry.");
+    }
+    if (plugin.skills.length > 1_000 || !plugin.mcpServers.every((server: unknown) => typeof server === "string")) {
+      throw new Error("Invalid plugin catalog resources.");
+    }
+    if (plugin.toolCount !== undefined && (!Number.isSafeInteger(plugin.toolCount) || (plugin.toolCount as number) < 0)) {
+      throw new Error("Invalid plugin tool count.");
+    }
+    const skills = plugin.skills.map((item: unknown) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid plugin skill.");
+      const skill = item as Record<string, unknown>;
+      if (typeof skill.id !== "string" || typeof skill.name !== "string" || typeof skill.useWhen !== "string" || typeof skill.path !== "string") {
+        throw new Error("Invalid plugin skill.");
+      }
+      const counts = skill.resourceCounts;
+      if (counts !== undefined && (!counts || typeof counts !== "object" || Array.isArray(counts)
+        || !(["scripts", "references", "assets"] as const).every((kind) => {
+          const count = (counts as Record<string, unknown>)[kind];
+          return Number.isSafeInteger(count) && (count as number) >= 0;
+        }))) throw new Error("Invalid plugin skill resource counts.");
+      return { id: skill.id, name: skill.name, useWhen: skill.useWhen, path: skill.path,
+        ...(counts ? { resourceCounts: counts as PluginSkillResourceCounts } : {}) };
+    });
+    return { id: plugin.id, name: plugin.name, ...(typeof plugin.description === "string" ? { description: plugin.description } : {}),
+      ...(typeof plugin.toolCount === "number" ? { toolCount: plugin.toolCount } : {}), skills, mcpServers: plugin.mcpServers as string[] };
+  });
+}
+
+export function formatResearchPluginCatalog(plugins: readonly ResearchPluginCatalogEntry[]): string {
+  if (plugins.length === 0) return "No plugins are available in this session.";
+  return [
+    "Available plugins (use plugins.preview for tool and skill summaries; plugins.load returns skill instructions and makes tool schemas available):",
+    ...plugins.map((plugin) =>
+      `- ${plugin.id} (plugin; ${plugin.toolCount ?? (plugin.mcpServers.length > 0 ? "?" : 0)} ${plugin.toolCount === 1 ? "tool" : "tools"}, ${plugin.skills.length} ${plugin.skills.length === 1 ? "skill" : "skills"}):${plugin.description ? ` ${plugin.description.replace(/\s+/gu, " ").trim().slice(0, 240)}` : ""}`),
+  ].join("\n");
+}
+
+function boundedSkillUseWhen(skills: ResearchPluginCatalogEntry["skills"]): string[] {
+  const descriptions = skills.map((skill) => [...skill.useWhen.replace(/\s+/gu, " ").trim()]);
+  const lengths = descriptions.map((description) => description.length);
+  const limit = 12_000;
+  let low = 0;
+  let high = lengths.reduce((maximum, length) => Math.max(maximum, length), 0);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (lengths.reduce((sum, length) => sum + Math.min(length, middle), 0) <= limit) low = middle;
+    else high = middle - 1;
+  }
+  const allocations = lengths.map((length) => Math.min(length, low));
+  let remaining = limit - allocations.reduce((sum, length) => sum + length, 0);
+  for (let index = 0; index < allocations.length && remaining > 0; index += 1) {
+    if (allocations[index]! < lengths[index]!) {
+      allocations[index]! += 1;
+      remaining -= 1;
+    }
+  }
+  return descriptions.map((description, index) => description.slice(0, allocations[index]!).join(""));
+}
 
 export const CORE_TOOL_NAMES = ["file.read", "file.write", "file.edit", "shell.run", "session.disposition", "tool_result.page"] as const;
 
@@ -89,31 +177,98 @@ export function managedToolPluginOptions(tools: readonly ResearchExecutableTool[
   }));
 }
 
+export function managedToolPluginCatalog(options: readonly ManagedToolPluginOption[]): ResearchPluginCatalogEntry[] {
+  return options.filter((option) => option.enabled && option.availableToolCount > 0)
+    .map((option) => ({ id: option.id, name: option.name, description: option.description, toolCount: option.availableToolCount, skills: [], mcpServers: [] }));
+}
+
+export function mergeResearchPluginCatalog(
+  catalog: readonly ResearchPluginCatalogEntry[] | undefined,
+  managed: readonly ManagedToolPluginOption[] | undefined,
+  tools?: readonly ResearchExecutableTool[],
+): ResearchPluginCatalogEntry[] {
+  const entries = (catalog ?? []).filter((entry) => {
+    if (!isManagedToolPluginId(entry.id)) return true;
+    const option = managed?.find((candidate) => candidate.id === entry.id);
+    return option?.enabled === true && (option.availableToolCount > 0 || entry.skills.length > 0 || entry.mcpServers.length > 0);
+  });
+  for (const plugin of managedToolPluginCatalog(managed ?? [])) {
+    if (!entries.some((entry) => entry.id === plugin.id)) entries.push(plugin);
+  }
+  return entries.map((entry) => {
+    const managedCount = managed?.find((option) => option.id === entry.id)?.availableToolCount ?? 0;
+    if (!tools) return managedCount > 0 ? { ...entry, toolCount: managedCount } : entry;
+    const mcpNames = new Set(tools.filter((tool) => entry.mcpServers.some((server) => tool.descriptor.name.startsWith(`mcp.${server}.`)))
+      .map((tool) => tool.descriptor.name));
+    return { ...entry, toolCount: managedCount + mcpNames.size };
+  });
+}
+
 /** Context-only state, scoped to one agent; loading grants no new host capability. */
 export class ManagedToolPluginSession {
-  private readonly loaded = new Set<ManagedToolPluginId>();
-  constructor(readonly options: readonly ManagedToolPluginOption[], restored: readonly string[] = []) {
-    for (const id of restored) if (this.available(id)) this.loaded.add(id as ManagedToolPluginId);
+  private readonly loaded = new Set<string>();
+  constructor(readonly options: readonly ManagedToolPluginOption[], restored: readonly string[] = [], readonly catalog: readonly ResearchPluginCatalogEntry[] = []) {
+    for (const id of restored) if (this.available(id)) this.loaded.add(id);
   }
 
   private available(id: string): boolean {
-    return this.options.some((option) => option.id === id && option.enabled && option.availableToolCount > 0);
+    if (isManagedToolPluginId(id)) {
+      const option = this.options.find((candidate) => candidate.id === id);
+      return option?.enabled === true && (option.availableToolCount > 0 || this.catalog.some((plugin) => plugin.id === id && (plugin.skills.length > 0 || plugin.mcpServers.length > 0)));
+    }
+    return this.catalog.some((plugin) => plugin.id === id);
   }
 
-  snapshot(): ManagedToolPluginId[] { return [...this.loaded].sort(); }
+  snapshot(): string[] { return [...this.loaded].sort(); }
 
   visible(toolName: string): boolean {
     const id = managedToolPluginId(toolName);
-    return id === undefined || this.loaded.has(id);
+    if (id) return this.loaded.has(id);
+    const plugin = this.catalog.find((entry) => entry.mcpServers.some((server) => toolName.startsWith(`mcp.${server}.`)));
+    return !plugin || this.loaded.has(plugin.id);
+  }
+
+  private availableIds(): string[] {
+    return [...new Set([...this.options.filter((option) => this.available(option.id)).map((option) => option.id),
+      ...this.catalog.filter((plugin) => this.available(plugin.id)).map((plugin) => plugin.id)])];
+  }
+
+  createPreviewer(tools: readonly ResearchExecutableTool[]): ResearchExecutableTool {
+    const ids = this.availableIds();
+    const parameters = { type: "object", required: ["plugin"], additionalProperties: false, properties: {
+      plugin: { type: "string", enum: ids },
+    } };
+    return {
+      descriptor: { name: "plugins.preview", transportName: "plugins_preview",
+        description: "Preview one available plugin's tool names and skill use cases without loading its schemas or instructions.",
+        actionClasses: ["recall"], sideEffects: "none", requiredPermissions: [], inputSchema: parameters },
+      parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
+      execute: async (action) => {
+        const startedAt = nowIso();
+        const id = action.input.plugin;
+        if (typeof id !== "string" || !this.available(id)) {
+          return { action, status: "blocked", startedAt, completedAt: nowIso(), summary: "Choose an available plugin from the catalog.", followUpActions: [] };
+        }
+        const plugin = this.catalog.find((entry) => entry.id === id);
+        const names = tools.filter((tool) => managedToolPluginId(tool.descriptor.name) === id
+          || plugin?.mcpServers.some((server) => tool.descriptor.name.startsWith(`mcp.${server}.`)))
+          .map((tool) => tool.descriptor.transportName ?? tool.descriptor.name);
+        const boundedUseWhen = boundedSkillUseWhen(plugin?.skills ?? []);
+        const output: PluginPreviewOutput = { pluginId: id, loaded: this.loaded.has(id), tools: [...new Set(names)].sort(),
+          skills: (plugin?.skills ?? []).map((skill, index) => ({ id: skill.id,
+            useWhen: boundedUseWhen[index]!, ...(skill.resourceCounts ? { resourceCounts: skill.resourceCounts } : {}) })) };
+        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: "Plugin preview available.", output, followUpActions: [] };
+      },
+    };
   }
 
   createLoader(): ResearchExecutableTool {
     const description = [
       "Load an available plugin's tool schemas into this agent's context before calling its tools. Loading is idempotent and preserves existing host policy.",
-      formatManagedToolPluginCatalog(this.options),
     ].join("\n");
+    const ids = this.availableIds();
     const parameters = { type: "object", required: ["plugins"], additionalProperties: false, properties: {
-      plugins: { type: "array", minItems: 1, maxItems: MANAGED_TOOL_PLUGINS.length, uniqueItems: true, items: { type: "string", enum: MANAGED_TOOL_PLUGIN_IDS } },
+      plugins: { type: "array", minItems: 1, maxItems: ids.length, uniqueItems: true, items: { type: "string", enum: ids } },
     } };
     return {
       descriptor: { name: "plugins.load", transportName: "plugins_load", description, actionClasses: ["recall"], sideEffects: "none", requiredPermissions: [], inputSchema: parameters },
@@ -121,11 +276,13 @@ export class ManagedToolPluginSession {
       execute: async (action) => {
         const startedAt = nowIso();
         const requested = action.input.plugins;
-        if (!Array.isArray(requested) || requested.length === 0 || requested.length > MANAGED_TOOL_PLUGINS.length || requested.some((id) => typeof id !== "string" || !this.available(id))) {
+        if (!Array.isArray(requested) || requested.length === 0 || requested.length > ids.length || requested.some((id) => typeof id !== "string" || !this.available(id))) {
           return { action, status: "blocked", startedAt, completedAt: nowIso(), summary: "Choose enabled plugins with available tools from the catalog.", followUpActions: [] };
         }
-        for (const id of requested) this.loaded.add(id as ManagedToolPluginId);
-        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: "Plugin tools are available for the next model turn.", output: { loadedPluginIds: this.snapshot() }, followUpActions: [] };
+        const skills = requested.flatMap((id) => this.catalog.find((plugin) => plugin.id === id)?.skills ?? [])
+          .map((skill) => ({ id: skill.id, name: skill.name, instructions: readFileSync(skill.path, "utf8") }));
+        for (const id of requested) this.loaded.add(id as string);
+        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: "Plugin resources are available for the next model turn.", output: { loadedPluginIds: this.snapshot(), skills }, followUpActions: [] };
       },
     };
   }

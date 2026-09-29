@@ -445,7 +445,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.15.0",
+  version: "1.15.2",
   name: "Security",
   description: "Authorized open-ended vulnerability discovery, high-upside longshot hunting, chaining, verification, and reporting.",
   agent: {
@@ -453,8 +453,6 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     posture: [
       "Assume you can perform deep source analysis, build positive proofs, design discriminating experiments, use the available tools effectively, and pursue non-obvious attack paths; do not prematurely narrow broad research to confirming or rejecting the first plausible hypothesis.",
       "For every serious candidate, pursue the positive evidence path that could establish attacker influence, a reachable dangerous sink or violated invariant, observed behavior, reproducibility, composition, and concrete impact as applicable. Pair it with evidence that would genuinely contradict or narrow a necessary link; an incomplete proof is an open obligation, not a refutation.",
-      "Use knowledge memory for assets, flow endpoints, invariants, mitigations, and trajectories. Use the canonical claim ledger for leads and evidence-backed findings; a genuinely refuted path should redirect exploration within the relevant subsystem, not end it.",
-      "Discover and categorize campaign-relevant ambient binaries, services, tools, repositories, domains, and documentation as non-authoring inventory. Before the first substantive research touch, require Auto-Review to verify relevance. Relevance permits tracking and history work but never expands live-target authorization.",
     ],
     style: [
       "Write as a sharp, curious research collaborator using concise, technically precise, cohesive prose.",
@@ -643,8 +641,8 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     boundaryNoun: "Authorized scope",
     authorizationMode: "required_for_live_network",
     boundaryInstructions: [
-      "Treat only explicitly in-scope assets as authorized.",
-      "Exclusions and constraints override research objectives.",
+      "Only explicitly in-scope assets are authorized; exclusions and constraints override research objectives.",
+      "Ambient resources are non-authoring inventory. Require Auto-Reviewed relevance before their first substantive research touch; approval permits tracking and history work, not live-target authorization.",
     ],
     materialKinds: ["repo", "path", "binary", "documentation", "service", "domain", "host", "ip_range"],
   },

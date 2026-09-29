@@ -17,14 +17,20 @@ export function createCollaborationSystemGuidance(
   const enabled = config.providers.filter((provider) => provider.enabled);
   const lead = options.lead ?? true;
   return [
-    `Collaboration mode is ${config.mode}; subagent mode is ${config.subagentMode}; intensity is ${config.intensity}. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model} (${(provider.roles?.length ? provider.roles : ALL_SUBAGENT_ROLES).join(", ")})`).join("; ") || "none"}.`,
-    ...runtimeGuidance(config),
-    "Startup context contains only a bounded campaign-state projection. Query the specific memory, finding, runbook, report, or investigation catalog needed for the assignment instead of assuming the full campaign was injected.",
-    "Channel communication is intentionally lax: post useful work as it becomes available, preserve dissent, and do not wait for a quorum or protocol phase.",
-    ...(lead ? ["Before recording session disposition or sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot."] : []),
-    ...subagentModeGuidance(config.subagentMode, lead, workflowId),
-    ...(lead ? modeGuidance(config.mode) : []),
-  ].join(" ");
+    "Active collaboration settings:",
+    `- Collaboration mode is ${config.mode}; subagent mode is ${config.subagentMode}; intensity is ${config.intensity}. Enabled collaborator routes: ${enabled.map((provider) => `${provider.provider}/${provider.model} (${(provider.roles?.length ? provider.roles : ALL_SUBAGENT_ROLES).join(", ")})`).join("; ") || "none"}.`,
+    "",
+    "Context and review:",
+    ...runtimeGuidance(config).map((instruction) => `- ${instruction}`),
+    "- Startup context contains only a bounded campaign-state projection. Query the specific memory, finding, runbook, report, or investigation catalog needed for the assignment instead of assuming the full campaign was injected.",
+    ...(lead ? [
+      "- Before recording session disposition or sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot.",
+    ] : []),
+    "",
+    "Subagent workflow:",
+    ...subagentModeGuidance(config.subagentMode, lead, workflowId).map((instruction) => `- ${instruction}`),
+    ...(lead ? ["", "Collaboration mode policy:", ...modeGuidance(config.mode).map((instruction) => `- ${instruction}`)] : []),
+  ].join("\n");
 }
 
 function runtimeGuidance(config: ResearchCollaborationConfig): readonly string[] {
@@ -54,7 +60,7 @@ function subagentModeGuidance(
     ];
   }
   return [
-    "Simple subagent mode exposes direct spawning, messaging, follow-up, interruption, waiting, and channel collaboration with the established behavior.",
+    "Simple subagent mode permits direct delegation and channel collaboration.",
   ];
 }
 

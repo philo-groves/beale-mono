@@ -10,7 +10,7 @@ import {
 import { z, type ZodType } from "zod";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createId, nowIso } from "./ids.js";
-import { formatManagedToolPluginCatalog, managedToolPluginId } from "./managed-tool-plugins.js";
+import { ManagedToolPluginSession, mergeResearchPluginCatalog } from "./managed-tool-plugins.js";
 import {
   ProviderAuthenticationRouter,
   type ProviderAuthenticationPreferences,
@@ -46,6 +46,7 @@ export interface ClaudeAgentResumableState {
   providerSessionId: string;
   researchProfileHash: string;
   workflowId: string;
+  loadedPluginIds?: readonly string[];
 }
 
 export interface CreateClaudeAgentExecutorOptions {
@@ -55,6 +56,7 @@ export interface CreateClaudeAgentExecutorOptions {
   maxTokens?: number;
   toolRegistry?: ResearchToolRegistry;
   researchProfile: ResearchProfile;
+  promptTemplate?: string;
   workflowId?: string;
   resumableState?: ClaudeAgentResumableState;
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<readonly string[]>;
@@ -201,6 +203,8 @@ export function extractCompatibleClaudeAgentResumableState(
     providerSessionId: state.providerSessionId,
     researchProfileHash: expected.researchProfileHash,
     workflowId: expected.workflowId,
+    ...(Array.isArray(state.loadedPluginIds) && state.loadedPluginIds.every((id: unknown) => typeof id === "string")
+      ? { loadedPluginIds: state.loadedPluginIds as string[] } : {}),
   };
 }
 
@@ -222,27 +226,34 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
     async execute(input) {
       const toolEvents: ResearchEvent[] = [];
       let toolCallCount = 0;
-      const managedPlugins = options.toolRegistry?.managedPlugins;
-      const mcpTools = (options.toolRegistry?.listTools() ?? [])
+      const pluginCatalog = mergeResearchPluginCatalog(input.modelInput.pluginCatalog, options.toolRegistry?.managedPlugins, options.toolRegistry?.listTools());
+      const pluginSession = pluginCatalog.length > 0
+        ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], options.resumableState?.loadedPluginIds, pluginCatalog)
+        : undefined;
+      const agentToolRegistry = pluginSession ? options.toolRegistry?.fork([
+        pluginSession.createPreviewer(options.toolRegistry.listTools()), pluginSession.createLoader(),
+      ]) : options.toolRegistry;
+      const mcpTools = (agentToolRegistry?.listTools() ?? [])
         .filter((candidate) => candidate.parameters)
-        .map((candidate) => tool(
+        .map((candidate) => ({ candidate, sdkTool: tool(
           getToolTransportName(candidate),
           candidate.descriptor.description,
           jsonObjectShape(candidate.parameters),
           async (args) => {
             const toolCallId = createId("claude_tool");
-            toolCallCount += 1;
-            const record = await options.toolRegistry!.executeToolCall({
+            const isPluginControl = candidate.descriptor.name === "plugins.load" || candidate.descriptor.name === "plugins.preview";
+            if (!isPluginControl) toolCallCount += 1;
+            const record = await agentToolRegistry!.executeToolCall({
               id: toolCallId,
               name: getToolTransportName(candidate),
               arguments: isRecord(args) ? args : {},
             }, {
-              toolCallCount,
+              toolCallCount: isPluginControl ? 0 : toolCallCount,
               agentId: options.agentIdentity?.id ?? "root",
               modelAuthor: { provider: "anthropic", model: options.model },
               freshSubagentContext: options.agentIdentity?.freshSubagentContext === true,
               defaultActionClass: candidate.descriptor.actionClasses[0] ?? "analyze",
-              ...(input.governance ? { governance: input.governance } : {}),
+              ...(!isPluginControl && input.governance ? { governance: input.governance } : {}),
               ...(input.signal ? { signal: input.signal } : {}),
             });
             toolEvents.push(...record.events);
@@ -253,8 +264,8 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               isError: projection.isError,
             };
           },
-          ...(managedPlugins ? [{ alwaysLoad: managedToolPluginId(candidate.descriptor.name) === undefined }] : []),
-        ));
+          { alwaysLoad: true },
+        ) }));
       const abortController = new AbortController();
       const abort = () => abortController.abort(input.signal?.reason);
       if (input.signal?.aborted) abort();
@@ -290,15 +301,23 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
         ...(collaborationManager?.createTools("root") ?? []),
         ...(options.collaborationTools ?? []),
       ].map((candidate) => agentToolAsSdkTool(candidate, abortController.signal));
-      const allMcpTools = [...mcpTools, ...collaborationMcpTools];
-      const mcpToolAccess = claudeAgentMcpToolAccess(allMcpTools.map((candidate) => candidate.name));
-      const allMcpServer = createSdkMcpServer({
-        name: mcpToolAccess.serverName,
-        version: "1.0.0",
-        instructions: "These are app-server's governed tools. Use ToolSearch to load deferred tools as needed.",
-        tools: allMcpTools,
-        alwaysLoad: !managedPlugins,
-      });
+      const activeMcpSurface = () => {
+        const activeTools = [
+          ...mcpTools.filter(({ candidate }) => !pluginSession || pluginSession.visible(candidate.descriptor.name)).map(({ sdkTool }) => sdkTool),
+          ...collaborationMcpTools,
+        ];
+        const access = claudeAgentMcpToolAccess(activeTools.map((candidate) => candidate.name));
+        return {
+          access,
+          server: createSdkMcpServer({
+            name: access.serverName,
+            version: "1.0.0",
+            instructions: "These are app-server's currently loaded, governed tools.",
+            tools: activeTools,
+            alwaysLoad: true,
+          }),
+        };
+      };
 
       let sessionId = options.resumableState?.providerSessionId;
       let result: SDKResultMessage | undefined;
@@ -309,11 +328,16 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
         finishInput = resolvePromise;
       });
       try {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
+        let loadedBefore = pluginSession?.snapshot().join(",") ?? "";
+        let pluginContinuationCount = 0;
+        for (let attempt = 0; attempt < 2 + pluginCatalog.length; attempt += 1) {
           result = undefined;
+          const activeSurface = activeMcpSurface();
           try {
             const stream = query({
-              prompt: options.waitForSteeringMessages
+              prompt: pluginContinuationCount > 0
+                ? "The requested plugin is loaded. Continue the current task with its newly available resources."
+                : options.waitForSteeringMessages
                 ? streamUserMessages(
                     formatModelInput(input.modelInput),
                     options.waitForSteeringMessages,
@@ -325,10 +349,10 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 abortController,
                 cwd: options.workspaceRoot,
                 model: options.model,
-                ...(options.resumableState ? { resume: options.resumableState.providerSessionId } : {}),
-                mcpServers: { [mcpToolAccess.serverName]: allMcpServer },
-                tools: managedPlugins ? ["ToolSearch"] : [],
-                allowedTools: [...(managedPlugins ? ["ToolSearch"] : []), ...mcpToolAccess.allowedTools],
+                ...(sessionId ? { resume: sessionId } : {}),
+                mcpServers: { [activeSurface.access.serverName]: activeSurface.server },
+                tools: [],
+                allowedTools: activeSurface.access.allowedTools,
                 permissionMode: "dontAsk",
                 settingSources: [],
                 systemPrompt: {
@@ -347,9 +371,11 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                       goalEnabled: false,
                       ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
                       researchProfile: options.researchProfile,
+                      ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
+                      ...(options.promptTemplate !== undefined ? { promptTemplate: options.promptTemplate } : {}),
                       workflowId: workflow.id,
                       ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
-                    }) + (managedPlugins ? `\n\nUse ToolSearch to load plugin tools as needed.\n${formatManagedToolPluginCatalog(managedPlugins)}` : ""),
+                    }),
                   ),
                 },
                 includePartialMessages: true,
@@ -357,7 +383,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                 ...(effort ? { effort } : {}),
                 ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
                 ...(options.maxTokens ? { taskBudget: { total: options.maxTokens } } : {}),
-                env: { ...authenticationRouter.claudeEnvironment(), ...(managedPlugins ? { ENABLE_TOOL_SEARCH: "true" } : {}) },
+                env: authenticationRouter.claudeEnvironment(),
               },
             });
             for await (const message of stream) {
@@ -384,7 +410,14 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             && assistantText.length === 0
             && Boolean(errors)
             && authenticationRouter.tryFallback("anthropic", errors);
-          if (!canRetryWithAlternateAuthentication) break;
+          if (canRetryWithAlternateAuthentication) continue;
+          const loadedNow = pluginSession?.snapshot().join(",") ?? "";
+          if (loadedNow !== loadedBefore && pluginContinuationCount < pluginCatalog.length) {
+            loadedBefore = loadedNow;
+            pluginContinuationCount += 1;
+            continue;
+          }
+          break;
         }
         assertSuccessfulClaudeResult(result);
         sessionId = result.session_id || sessionId;
@@ -406,6 +439,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             .map((message) => isRecord(message) && typeof message.content === "string" ? message.content : JSON.stringify(message))
             .join("\n\n");
           result = undefined;
+          const activeSurface = activeMcpSurface();
           const stream = query({
             prompt: continuationPrompt,
             options: {
@@ -413,9 +447,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               cwd: options.workspaceRoot,
               model: options.model,
               resume: sessionId,
-              mcpServers: { [mcpToolAccess.serverName]: allMcpServer },
-              tools: managedPlugins ? ["ToolSearch"] : [],
-              allowedTools: [...(managedPlugins ? ["ToolSearch"] : []), ...mcpToolAccess.allowedTools],
+              mcpServers: { [activeSurface.access.serverName]: activeSurface.server },
+              tools: [],
+              allowedTools: activeSurface.access.allowedTools,
               permissionMode: "dontAsk",
               settingSources: [],
               systemPrompt: {
@@ -434,9 +468,11 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                     goalEnabled: false,
                     ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
                     researchProfile: options.researchProfile,
+                    ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
+                    ...(options.promptTemplate !== undefined ? { promptTemplate: options.promptTemplate } : {}),
                     workflowId: workflow.id,
                     ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
-                  }) + (managedPlugins ? `\n\nUse ToolSearch to load plugin tools as needed.\n${formatManagedToolPluginCatalog(managedPlugins)}` : ""),
+                  }),
                 ),
               },
               includePartialMessages: true,
@@ -444,7 +480,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               ...(effort ? { effort } : {}),
               ...(options.reasoning === "off" ? { thinking: { type: "disabled" as const } } : {}),
               ...(options.maxTokens ? { taskBudget: { total: options.maxTokens } } : {}),
-              env: { ...authenticationRouter.claudeEnvironment(), ...(managedPlugins ? { ENABLE_TOOL_SEARCH: "true" } : {}) },
+              env: authenticationRouter.claudeEnvironment(),
             },
           });
           for await (const message of stream) {
@@ -485,6 +521,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
               providerSessionId: sessionId,
               researchProfileHash: profileHash,
               workflowId: workflow.id,
+              ...(pluginSession ? { loadedPluginIds: pluginSession.snapshot() } : {}),
             } satisfies ClaudeAgentResumableState,
           },
         };

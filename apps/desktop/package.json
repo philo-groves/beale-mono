@@ -42,6 +42,7 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "typescript": "^5.9.3",
+    "tree-sitter-wasm": "1.1.1",
     "ws": "^8.21.3"
   },
   "devDependencies": {

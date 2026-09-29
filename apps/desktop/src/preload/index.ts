@@ -4,6 +4,7 @@ import type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   BealeApi,
+  ResearchProfileId,
   ComputerUsePermissionMode,
   ComputerUseSettings,
   DebuggingSettings,
@@ -240,6 +241,18 @@ const api: BealeApi = {
   },
   getResearchProfiles(): Promise<ResolvedResearchProfile[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.getResearchProfiles);
+  },
+  getPromptTemplateSettings(profileId: ResearchProfileId): Promise<{ template: string; defaultTemplate: string; overridden: boolean }> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getPromptTemplateSettings, profileId);
+  },
+  setPromptTemplate(profileId: ResearchProfileId, template: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.setPromptTemplate, profileId, template);
+  },
+  resetPromptTemplate(profileId: ResearchProfileId): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.resetPromptTemplate, profileId);
+  },
+  previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string): Promise<string> {
+    return ipcRenderer.invoke(IPC_CHANNELS.previewPromptTemplate, profileId, template, agentPath);
   },
   getAgentPlugins(): Promise<AgentPluginRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.getAgentPlugins);

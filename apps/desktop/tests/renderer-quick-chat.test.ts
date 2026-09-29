@@ -91,7 +91,7 @@ describe('quick chats', () => {
   });
 
   it('bundles explicit current-or-selected workspace query and edit tools', () => {
-    const server = readFileSync(new URL('../../../app-server/resources/agent-plugins/beale-introspection/server.mjs', import.meta.url), 'utf8');
+    const server = readFileSync(new URL('../../../managed-plugins/beale-introspection/server.mjs', import.meta.url), 'utf8');
     expect(server).toContain("name: 'get_workspace'");
     expect(server).toContain("name: 'edit_workspace'");
     expect(server).toContain('current or selected registered Beale workspace');

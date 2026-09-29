@@ -18229,3 +18229,36 @@ button.research-goal-choice:focus-visible {
 .resource-history-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.85rem; max-height: 440px; overflow-y: auto; padding: 12px; background: var(--panel-raised); }
 .resource-history-record { border-top: 1px solid var(--panel-border); padding-block: 12px; }
 .resource-history-detail details { margin-block: 12px; }
+.prompt-settings {
+  width: min(100%, 900px);
+  display: grid;
+  gap: 14px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.prompt-settings-profile, .prompt-settings-actions, .prompt-settings-tabs, .prompt-settings-variables {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prompt-settings select, .prompt-settings button, .prompt-settings textarea {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font: inherit;
+}
+
+.prompt-settings select, .prompt-settings button { padding: 6px 10px; }
+.prompt-settings button { cursor: pointer; }
+.prompt-settings button:disabled { cursor: default; opacity: .5; }
+.prompt-settings-tabs button[aria-selected='true'] { background: var(--panel); font-weight: 600; }
+.prompt-settings textarea { width: 100%; min-height: 340px; padding: 12px; resize: vertical; font-family: ui-monospace, monospace; line-height: 1.5; }
+.prompt-settings-variables button { font-family: ui-monospace, monospace; font-size: 12px; }
+.prompt-settings-note { color: var(--muted); margin: 0; }
+.prompt-settings-preview { max-height: 55vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-strong); font-size: 13px; line-height: 1.5; }
+.prompt-settings-actions { justify-content: flex-end; }
+.prompt-settings-actions span { margin-right: auto; color: var(--muted); }

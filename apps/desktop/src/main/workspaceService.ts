@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { isManagedToolPluginId, MANAGED_TOOL_PLUGINS, type ResearchPluginCatalogEntry } from '@beale/research-agent';
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
 import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
@@ -60,6 +61,7 @@ import {
   applyAppServerMemoryDreaming,
   getAppServerMemorySummary,
   getAppServerMemorySummaryAsync,
+  invokeAppServerCliProtocolAsync,
   getAppServerProviderSemantics,
   getAppServerReportDocument,
   getAppServerRunbookDocument,
@@ -678,6 +680,11 @@ export class WorkspaceService {
   );
   private workspaceRegistry: WorkspaceRegistry | null = null;
   private agentPluginRegistry: AgentPluginRegistry | null = null;
+  private pluginPreviewDiscovery: {
+    key: string;
+    expiresAt: number;
+    promise: Promise<{ catalog: ResearchPluginCatalogEntry[]; toolCounts: Map<string, number> }>;
+  } | null = null;
   private workspacePath: string | null = null;
   private openedAt: string | null = null;
   private lastRecovery: WorkspaceRecoveryReport | null = null;
@@ -903,6 +910,74 @@ export class WorkspaceService {
     return Promise.all(
       RESEARCH_PROFILE_IDS.map((profileId) => this.researchProfileService.resolveAsync(workspacePath, profileId))
     );
+  }
+
+  public getPromptTemplateSettings(profileId: ResearchProfileId): { template: string; defaultTemplate: string; overridden: boolean } {
+    return this.getWorkspaceRegistry().getPromptTemplateSettings(profileId);
+  }
+
+  public setPromptTemplate(profileId: ResearchProfileId, template: string): void {
+    this.getWorkspaceRegistry().setPromptTemplate(profileId, template);
+  }
+
+  public resetPromptTemplate(profileId: ResearchProfileId): void {
+    this.getWorkspaceRegistry().resetPromptTemplate(profileId);
+  }
+
+  public async previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string): Promise<string> {
+    const plugins = this.getAgentPluginRegistry().getState().plugins;
+    const fallbackCatalog: ResearchPluginCatalogEntry[] = plugins
+      .filter((plugin) => plugin.enabled && plugin.status === 'ready')
+      .map((plugin) => ({
+        id: plugin.source.kind === 'builtin' && isManagedToolPluginId(plugin.name) ? plugin.name : plugin.id,
+        name: plugin.name,
+        ...(plugin.description ? { description: plugin.description } : {}),
+        ...(plugin.source.kind === 'builtin' && isManagedToolPluginId(plugin.name)
+          ? { toolCount: MANAGED_TOOL_PLUGINS.find((managed) => managed.id === plugin.name)?.tools.length ?? 0 } : {}),
+        skills: plugin.skills.map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          useWhen: skill.description ?? skill.name,
+          path: '',
+          resourceCounts: skill.resourceCounts,
+        })),
+        mcpServers: plugin.mcpServers.filter((server) => server.valid).map((server) => server.name),
+      }));
+    const key = JSON.stringify(plugins.map((plugin) => [plugin.id, plugin.enabled, plugin.status, plugin.version, plugin.source.path,
+      plugin.skills.map((skill) => [skill.id, skill.description, skill.resourceCounts]), plugin.mcpServers.map((server) => [server.name, server.valid])]));
+    if (!this.pluginPreviewDiscovery || this.pluginPreviewDiscovery.key !== key || this.pluginPreviewDiscovery.expiresAt <= Date.now()) {
+      const promise = this.discoverPluginPreviewTools(fallbackCatalog);
+      this.pluginPreviewDiscovery = { key, expiresAt: Date.now() + 60_000, promise };
+    }
+    const discoveryRequest = this.pluginPreviewDiscovery;
+    let pluginCatalog = fallbackCatalog;
+    try {
+      const discovery = await discoveryRequest.promise;
+      pluginCatalog = discovery.catalog.map((plugin) => {
+        const managed = isManagedToolPluginId(plugin.id)
+          ? MANAGED_TOOL_PLUGINS.find((candidate) => candidate.id === plugin.id)?.tools.length ?? 0 : 0;
+        return { ...plugin, toolCount: managed + (discovery.toolCounts.get(plugin.id) ?? 0) };
+      });
+    } catch {
+      if (this.pluginPreviewDiscovery === discoveryRequest) this.pluginPreviewDiscovery = null;
+    }
+    return this.getWorkspaceRegistry().previewPromptTemplate(profileId, template, agentPath, pluginCatalog);
+  }
+
+  private async discoverPluginPreviewTools(fallbackCatalog: ResearchPluginCatalogEntry[]): Promise<{
+    catalog: ResearchPluginCatalogEntry[];
+    toolCounts: Map<string, number>;
+  }> {
+    const runtime = this.getAgentPluginRegistry().getAppServerRuntime();
+    const catalog = runtime.pluginCatalog ?? fallbackCatalog;
+    if (!runtime.mcpConfigPath || runtime.allowedMcpServers.length === 0) return { catalog, toolCounts: new Map() };
+    const result = await invokeAppServerCliProtocolAsync<{ tools: { name: string }[] }>('tools.list', [
+      'tools', 'list', '--mcp-only', '--mcp-config', runtime.mcpConfigPath, '--mcp-timeout-ms', '5000',
+      ...runtime.allowedMcpServers.flatMap((server) => ['--allow-mcp-server', server])
+    ], { timeoutMs: 15_000 });
+    const names = result.result.tools.map((tool) => tool.name);
+    return { catalog, toolCounts: new Map(catalog.map((plugin) => [plugin.id,
+      names.filter((name) => plugin.mcpServers.some((server) => name.startsWith(`mcp.${server}.`))).length])) };
   }
 
   public getAgentPlugins(): AgentPluginRegistryState {

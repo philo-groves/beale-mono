@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { resolveAppServerProtocolInvocation } from './appServerInvocation';
 import { invokeAppServerOperation } from './bealeAppServerClient';
 import { appServerProtocolSuccess, type AppServerProtocolOperation } from '@beale/app-server-runtime/protocol';
+import type { ResearchPluginCatalogEntry } from '@beale/research-agent';
 import {
   compatibleExistingPath,
   PRE_BEALE_DATA_DIRECTORY_NAME,
@@ -336,6 +337,8 @@ export interface AppServerMaintenanceRunResult {
 
 export interface AppServerAgentPluginRuntime {
   managedPluginIds?: string[];
+  pluginCatalogPath?: string;
+  pluginCatalog?: ResearchPluginCatalogEntry[];
   runtimeDirectory: string;
   skillDirs: string[];
   selectedSkillIds: string[];

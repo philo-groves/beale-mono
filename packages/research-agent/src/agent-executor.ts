@@ -29,7 +29,7 @@ import {
   type ProviderAuthenticationPreferences,
 } from "./auth-routing.js";
 import { createId, nowIso } from "./ids.js";
-import { ManagedToolPluginSession, isManagedToolPluginId } from "./managed-tool-plugins.js";
+import { ManagedToolPluginSession, mergeResearchPluginCatalog } from "./managed-tool-plugins.js";
 import {
   createToolRequestedEvent,
   getToolTransportName,
@@ -121,6 +121,7 @@ export interface CreatePiAgentExecutorOptions {
   resumableState?: PiAgentResumableState;
   memoryTypeDescriptions?: MemoryTypeDescriptionsInput;
   researchProfile?: ResearchProfile;
+  promptTemplate?: string;
   workflowId?: string;
   authenticationPreferences?: ProviderAuthenticationPreferences;
   openAiContextSize?: OpenAiContextSize;
@@ -137,7 +138,7 @@ const RECENT_TOOL_RESULTS_TO_KEEP = 8;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
 const MAX_TRANSIENT_MODEL_RETRIES = 4;
-const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition", "plugins_load"]);
+const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition", "plugins_preview", "plugins_load"]);
 
 export interface PiAgentResumableState {
   loadedPluginIds?: readonly string[];
@@ -278,7 +279,7 @@ export function extractCompatiblePiAgentResumableState(
     api: state.api,
     ...(providerSessionId ? { providerSessionId } : {}),
     messages: state.messages,
-    ...(Array.isArray(state.loadedPluginIds) && state.loadedPluginIds.every(isManagedToolPluginId)
+    ...(Array.isArray(state.loadedPluginIds) && state.loadedPluginIds.every((id: unknown) => typeof id === "string" && /^[a-z0-9._-]{1,128}$/u.test(id))
       ? { loadedPluginIds: state.loadedPluginIds } : {}),
     ...(goal ? { goal } : {}),
     ...(researchFocus ? { researchFocus } : {}),
@@ -591,11 +592,12 @@ export function createPiAgentExecutor(
           toolCallCount += 1;
           return next;
         };
-        const pluginSession = options.toolRegistry?.managedPlugins
-          ? new ManagedToolPluginSession(options.toolRegistry.managedPlugins, request.root ? options.resumableState?.loadedPluginIds : [])
+        const pluginCatalog = mergeResearchPluginCatalog(input.modelInput.pluginCatalog, options.toolRegistry?.managedPlugins, options.toolRegistry?.listTools());
+        const pluginSession = pluginCatalog.length > 0
+          ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], request.root ? options.resumableState?.loadedPluginIds : [], pluginCatalog)
           : undefined;
         const agentToolRegistry = pluginSession
-          ? options.toolRegistry!.fork([pluginSession.createLoader()])
+          ? options.toolRegistry!.fork([pluginSession.createPreviewer(options.toolRegistry!.listTools()), pluginSession.createLoader()])
           : options.toolRegistry;
         let getModelAuthor = () => ({ provider: sessionModel.provider, model: sessionModel.id });
         const researchTools = createAgentTools({
@@ -636,7 +638,7 @@ export function createPiAgentExecutor(
           ...researchTools.filter((tool) => request.root || tool.name !== "session_disposition"),
           ...collaborationTools,
         ];
-        const visibleTools = () => tools.filter((tool) => !pluginSession || pluginSession.visible(tool.name));
+        const visibleTools = () => tools.filter((tool) => !pluginSession || pluginSession.visible(agentToolRegistry?.find(tool.name)?.descriptor.name ?? tool.name));
         const providerSessionId = providerSessionIdForAgent(rootProviderSessionId, request.id, request.root === true);
         const activeModelSelection = (): { model: NonNullable<ReturnType<Models["getModel"]>>; reasoningEffort?: ModelThinkingLevel; daybreakBlue?: boolean } => {
           const selection = request.root ? options.getModelSelection?.() : undefined;
@@ -901,8 +903,10 @@ export function createPiAgentExecutor(
               ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
               hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_channel" || tool.name === "channel_post"),
               ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id, { lead: request.root === true }) } : {}),
+              ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
               goalEnabled: request.root === true && goalRuntime !== null,
               researchProfile,
+              ...(options.promptTemplate !== undefined ? { promptTemplate: options.promptTemplate } : {}),
               workflowId: workflow.id,
               ...(agentInstructions ? { agentInstructions } : {}),
             }),
@@ -921,6 +925,9 @@ export function createPiAgentExecutor(
                 subagents?.captureContext(request.id, toolCall.id, hookContext.context.messages);
               }
               const researchTool = agentToolRegistry?.find(toolCall.name);
+              if (researchTool && pluginSession && !pluginSession.visible(researchTool.descriptor.name)) {
+                return { block: true, reason: "Load the tool's plugin with plugins.load before calling it." };
+              }
               const runtimeControlTool = RUNTIME_CONTROL_TOOL_NAMES.has(toolCall.name);
               const preflight = researchTool
                 ? agentToolRegistry?.preflightToolCall(toolCall, {

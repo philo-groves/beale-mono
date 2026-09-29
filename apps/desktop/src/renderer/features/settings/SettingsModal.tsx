@@ -5,7 +5,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   DEFAULT_RESEARCH_REASONING_EFFORT
 } from '../../../shared/modelDefaults';
-import { Archive, ArchiveRestore, ArrowLeft, Hash, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, FileText, Hash, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
 import type {
   AgentPluginRegistryState,
   AppServerRemoteAccessSettings,
@@ -21,6 +21,7 @@ import type {
   ProviderContextSize,
   ProviderModelDefaults,
   ResearchProfile,
+  ResearchProfileId,
   ResearchProfileMemoryType,
   ResearchProfileSessionHeatPalette,
   ResolvedResearchProfile,
@@ -82,9 +83,9 @@ import {
   type SessionHeatTheme
 } from '../../view-models/sessionHeat';
 
-export type SettingsSection = 'general' | 'appearance' | 'remote' | 'providers' | 'ticketing' | 'profile' | 'computer-use' | 'archive';
+export type SettingsSection = 'general' | 'appearance' | 'remote' | 'providers' | 'ticketing' | 'profile' | 'prompt' | 'computer-use' | 'archive';
 
-const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'appearance', 'remote', 'providers', 'ticketing', 'profile', 'computer-use', 'archive'];
+const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'appearance', 'remote', 'providers', 'ticketing', 'profile', 'prompt', 'computer-use', 'archive'];
 
 export function SettingsSidebar({
   collapsed,
@@ -139,6 +140,8 @@ export function SettingsSidebar({
                     <Ticket size={15} aria-hidden="true" />
                   ) : item === 'profile' ? (
                     <UserRoundCog size={15} aria-hidden="true" />
+                  ) : item === 'prompt' ? (
+                    <FileText size={15} aria-hidden="true" />
                   ) : (
                     <Settings size={15} aria-hidden="true" />
                   )}
@@ -418,6 +421,8 @@ export function SettingsView({
             onSetSessionHeatPreference={onSetSessionHeatPreference}
             onSetSessionHeatPalettePreference={onSetSessionHeatPalettePreference}
           />
+        ) : activeSection === 'prompt' ? (
+          <PromptSettingsView />
         ) : (
           <ComputerUseSettingsView
             platform={computerUsePlatform}
@@ -804,6 +809,123 @@ export function AppearanceSettingsView({
       </section>
     </div>
   );
+}
+
+const PROMPT_VARIABLES = [
+  'identity', 'style', 'boundary', 'tools', 'plugins', 'collaboration', 'goal', 'memory', 'claims', 'runbooks', 'reports',
+  'profile.id', 'profile.name'
+] as const;
+
+export function PromptSettingsView(): JSX.Element {
+  const [profileId, setProfileId] = useState<ResearchProfileId>('security-research');
+  const [saved, setSaved] = useState('');
+  const [defaultTemplate, setDefaultTemplate] = useState('');
+  const [draft, setDraft] = useState('');
+  const [overridden, setOverridden] = useState(false);
+  const [tab, setTab] = useState<'template' | 'preview'>('template');
+  const [agentPath, setAgentPath] = useState('');
+  const [preview, setPreview] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const editor = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    setError(null);
+    window.beale.getPromptTemplateSettings(profileId).then((settings) => {
+      if (cancelled) return;
+      setSaved(settings.template);
+      setDraft(settings.template);
+      setDefaultTemplate(settings.defaultTemplate);
+      setOverridden(settings.overridden);
+    }).catch((cause: unknown) => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+    }).finally(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, [profileId]);
+
+  useEffect(() => {
+    if (!draft) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      window.beale.previewPromptTemplate(profileId, draft, agentPath || undefined)
+        .then((value) => { if (!cancelled) { setPreview(value); setError(null); } })
+        .catch((cause: unknown) => { if (!cancelled) { setPreview(''); setError(cause instanceof Error ? cause.message : String(cause)); } });
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [profileId, draft, agentPath]);
+
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await window.beale.setPromptTemplate(profileId, draft);
+      setSaved(draft);
+      setOverridden(true);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally { setBusy(false); }
+  };
+  const reset = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await window.beale.resetPromptTemplate(profileId);
+      setSaved(defaultTemplate);
+      setDraft(defaultTemplate);
+      setOverridden(false);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally { setBusy(false); }
+  };
+  const insertVariable = (name: string): void => {
+    const field = editor.current;
+    const start = field?.selectionStart ?? draft.length;
+    const end = field?.selectionEnd ?? draft.length;
+    const inserted = `{{${name}}}`;
+    setDraft(`${draft.slice(0, start)}${inserted}${draft.slice(end)}`);
+    requestAnimationFrame(() => {
+      field?.focus();
+      field?.setSelectionRange(start + inserted.length, start + inserted.length);
+    });
+  };
+
+  return <div className="prompt-settings">
+    <div className="settings-form-heading"><h2>Agent Prompt</h2><p>Edit the template used when a new session starts. Variables expand from the selected research profile and run capabilities.</p></div>
+    <label className="prompt-settings-profile">Profile <select value={profileId} onChange={(event) => {
+      if (draft !== saved && !window.confirm('Discard unsaved prompt changes?')) return;
+      setProfileId(event.target.value as ResearchProfileId);
+      setDraft('');
+      setPreview('');
+    }}>
+      <option value="security-research">Security</option><option value="mathematics">Mathematics</option>
+    </select></label>
+    <div className="prompt-settings-tabs" role="tablist" aria-label="Prompt view">
+      <button type="button" role="tab" aria-selected={tab === 'template'} onClick={() => setTab('template')}>Template</button>
+      <button type="button" role="tab" aria-selected={tab === 'preview'} onClick={() => setTab('preview')}>Preview</button>
+    </div>
+    {tab === 'template' ? <>
+      <textarea ref={editor} aria-label="Agent prompt template" spellCheck={false} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy} />
+      <div className="prompt-settings-variables" aria-label="Prompt variables">{PROMPT_VARIABLES.map((name) =>
+        <button key={name} type="button" onClick={() => insertVariable(name)}>{`{{${name}}}`}</button>
+      )}</div>
+      <p className="prompt-settings-note">The authorization boundary is required. Workspace instructions are appended by the host. A new session captures the saved template at launch.</p>
+    </> : <>
+      <label className="prompt-settings-profile">Preview as <select value={agentPath} onChange={(event) => setAgentPath(event.target.value)}>
+        <option value="">Lead</option><option value="lead/example-subagent">Subagent</option>
+      </select></label>
+      <p className="prompt-settings-note">This shows a sample with research tools enabled. Run capabilities and workspace instructions can change the final prompt.</p>
+      <pre className="prompt-settings-preview">{preview}</pre>
+    </>}
+    {error ? <div className="error-box" role="alert">{error}</div> : null}
+    <div className="prompt-settings-actions">
+      <span>{draft !== saved ? 'Unsaved changes' : overridden ? 'Custom template' : 'Default template'}</span>
+      <button type="button" onClick={() => setDraft(saved)} disabled={busy || draft === saved}>Discard</button>
+      <button type="button" onClick={() => void reset()} disabled={busy || (!overridden && draft === defaultTemplate)}>Reset to Default</button>
+      <button type="button" onClick={() => void save()} disabled={busy || !draft || draft === saved}>Save</button>
+    </div>
+  </div>;
 }
 
 export function ProfileSettingsView({
@@ -3138,6 +3260,8 @@ export function settingsSectionLabel(section: SettingsSection): string {
       return 'Ticketing';
     case 'profile':
       return 'Profiles';
+    case 'prompt':
+      return 'Prompt';
     case 'archive':
       return 'Archive';
     default:
@@ -3158,6 +3282,8 @@ export function settingsSectionHeaderIcon(section: SettingsSection): AppHeaderVi
     case 'ticketing':
       return 'settings-ticketing';
     case 'profile':
+      return 'settings-profiles';
+    case 'prompt':
       return 'settings-profiles';
     case 'archive':
       return 'settings-archive';
