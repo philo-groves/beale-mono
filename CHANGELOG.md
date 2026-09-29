@@ -10,6 +10,7 @@
 
 #### Changed
 
+- Prompt settings show an approximate token count for saved custom templates, estimated from the rendered preview at four characters per token.
 - The default agent prompt includes memory, claims, and runbook guidance only while their corresponding plugins are enabled. Report guidance is removed from the prompt template; saved templates containing `{{reports}}` remain valid and render it empty.
 - The default agent prompt now presents guidance as plain lines across its sections; plugin and memory-type catalogs retain bullets.
 - The Introspection and Terminator Agent Plugin packages now live under `managed-plugins`; their built-in registration and enabled defaults are preserved.

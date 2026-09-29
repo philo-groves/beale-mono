@@ -828,6 +828,7 @@ export function PromptSettingsView(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const estimatedTokens = Math.ceil((preview || draft).length / 4);
 
   useEffect(() => {
     let cancelled = false;
@@ -920,7 +921,7 @@ export function PromptSettingsView(): JSX.Element {
     </>}
     {error ? <div className="error-box" role="alert">{error}</div> : null}
     <div className="prompt-settings-actions">
-      <span>{draft !== saved ? 'Unsaved changes' : overridden ? 'Custom template' : 'Default template'}</span>
+      <span>{draft !== saved ? 'Unsaved changes' : overridden ? `${estimatedTokens.toLocaleString()} estimated tokens` : 'Default template'}</span>
       <button type="button" onClick={() => setDraft(saved)} disabled={busy || draft === saved}>Discard</button>
       <button type="button" onClick={() => void reset()} disabled={busy || (!overridden && draft === defaultTemplate)}>Reset to Default</button>
       <button type="button" onClick={() => void save()} disabled={busy || !draft || draft === saved}>Save</button>
