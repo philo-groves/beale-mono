@@ -69,7 +69,6 @@ const TOOLS = [
   tool('beale_list_research_tools', 'List the exact in-Beale durable research tools enabled by a workspace profile.', {
     workspaceId: stringField('Beale workspace id.'),
     sessionId: stringField('Optional Beale session association for new records.'),
-    investigationId: stringField('Optional campaign track id; includes track-scoped tools when present.'),
     objective: stringField('Optional bounded campaign objective for resource relevance.')
   }, readOnly(), ['workspaceId']),
   tool('beale_read_research', 'Invoke one read-only in-Beale research tool against canonical workspace state.', researchCallProperties(), readOnly(), ['workspaceId', 'toolName', 'toolInput']),
@@ -218,7 +217,6 @@ function researchOperation(operation, args) {
       input: {
         workspaceId: required(args, 'workspaceId'),
         ...(args.sessionId ? { sessionId: args.sessionId } : {}),
-        ...(args.investigationId ? { investigationId: args.investigationId } : {}),
         ...(args.objective ? { objective: args.objective } : {}),
         ...(toolName ? { toolName } : {}),
         ...(toolInput ? { toolInput } : {}),
@@ -323,7 +321,6 @@ function researchCallProperties() {
   return {
     workspaceId: stringField('Beale workspace id.'),
     sessionId: stringField('Optional Beale session association for authored records.'),
-    investigationId: stringField('Optional active campaign track id.'),
     objective: stringField('Optional bounded campaign objective.'),
     toolName: stringField('Canonical research tool name returned by beale_list_research_tools.'),
     toolInput: { type: 'object', additionalProperties: true }

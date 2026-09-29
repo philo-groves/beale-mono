@@ -84,10 +84,9 @@ test("the default prompt keeps boundary guidance focused on scope and host safeg
   assert.match(boundary, /Never expose host credentials/);
 });
 
-test("goal guidance separates session work, assignment, Goal mode, and disposition", () => {
+test("goal guidance separates session work, Goal mode, and disposition", () => {
   const options = {
     hasTools: true,
-    hasInvestigationAssignmentTool: true,
     hasSessionDispositionTool: true,
     researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE,
     promptTemplate: "{{boundary}}\n{{goal}}",
@@ -97,11 +96,9 @@ test("goal guidance separates session work, assignment, Goal mode, and dispositi
 
   assert.match(regular, /Session progress:\n- Treat existing records/);
   assert.match(regular, /- At evidence checkpoints/);
-  assert.match(regular, /Investigation assignment:\n- Once you understand/);
   assert.match(regular, /Session disposition:\n- Before the root final response/);
   assert.doesNotMatch(regular, /Persistent Goal mode:|objective_achieved/);
   assert.match(persistent, /Persistent Goal mode:\n- Continue researching/);
-  assert.ok(persistent.indexOf("Investigation assignment:") < persistent.indexOf("Persistent Goal mode:"));
   assert.ok(persistent.indexOf("Persistent Goal mode:") < persistent.indexOf("Session disposition:"));
   assert.doesNotMatch(persistent, /\n{3,}/);
 });
@@ -217,7 +214,7 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.match(securityPrompt, /Direct shell execution may support bounded exploratory tests/);
   assert.match(securityPrompt, /setup, runtime, and cleanup.*feature tags/);
   assert.match(securityPrompt, /successful runIds.*phases they prove/);
-  assert.match(securityPrompt, /investigation remains a cross-session overview rather than the live execution controller/);
+  assert.match(securityPrompt, /workspace history search to recover prior work across sessions/);
 });
 
 test("bundled profiles define domain-specific Longshot workflows", () => {

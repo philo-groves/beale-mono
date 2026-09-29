@@ -828,16 +828,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (existing) {
       sessions.delete(sessionId);
     }
-    const { investigationId: _requestedInvestigationId, ...unassignedLaunch } = request.launch;
-    const effectiveRequest = {
-      ...request,
-      launch: {
-        ...unassignedLaunch,
-        ...(prepared.launch.investigationId
-          ? { investigationId: prepared.launch.investigationId }
-          : {})
-      }
-    };
+    const effectiveRequest = request;
     const runtime = createSessionRuntime(effectiveRequest, prepared);
     sessions.set(sessionId, runtime);
     evictOldestTerminalSessions();
@@ -1005,7 +996,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         const nextReason = runtime.checkpointReason;
         runtime.checkpointReason = null;
         try {
-          const result = await hostService.checkpointSession?.(runtime.request.launch.workspaceId, runtime.sessionId, nextReason, cleanupScratch, runtime.request.launch.investigationId);
+          const result = await hostService.checkpointSession?.(runtime.request.launch.workspaceId, runtime.sessionId, nextReason, cleanupScratch);
           if (result?.status === 'failed') throw new Error(result.error ?? 'Workspace checkpoint failed.');
         } catch (error) {
           const message = `Workspace checkpoint failed; working files were preserved. ${error instanceof Error ? error.message : String(error)}`;
@@ -1070,7 +1061,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         const payload = event.payload;
         const toolName = typeof payload.toolName === 'string' ? payload.toolName : '';
         if ((event.kind === 'tool.observed' && payload.status === 'complete' || payload.type === 'tool_execution_end' || payload.eventType === 'tool_execution_end') && payload.isError !== true
-          && /^(?:claim|finding|investigation|memory|runbook|report)[._]/u.test(toolName)
+          && /^(?:claim|finding|memory|runbook|report)[._]/u.test(toolName)
           && !/^runbook[._](?:run|execute)$/u.test(toolName)
           && /(?:create|revise|transition|save|correct|append|configure|run|execute|question|experiment|observe|next_action|review|consolidat)/u.test(toolName)) {
           void checkpointRuntime(runtime, 'Research milestone');

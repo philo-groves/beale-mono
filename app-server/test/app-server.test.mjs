@@ -26,7 +26,7 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
   MANAGED_TOOL_PLUGIN_IDS,
 } from "@beale/app-server-runtime/protocol";
-import { AppServerSessionStore, CampaignTrackStore, WORKSPACE_DIRECTORIES } from "../../packages/research-agent/dist/index.js";
+import { AppServerSessionStore, WORKSPACE_DIRECTORIES } from "../../packages/research-agent/dist/index.js";
 import {
   AppServerWorkerDatabaseBroker,
   AppServerWorkerDatabaseCoordinator,
@@ -111,18 +111,17 @@ test('research checkpoints are host-owned and a pending milestone does not delay
   const hostService = testHostService(directory);
   const reasons = [];
   let releaseMilestone;
-  hostService.checkpointSession = async (_workspaceId, sessionId, reason, _cleanupScratch, investigationId) => {
+  hostService.checkpointSession = async (_workspaceId, sessionId, reason, _cleanupScratch) => {
     assert.equal(sessionId, 'session-checkpoint-example');
-    assert.equal(investigationId, 'investigation-example');
     reasons.push(reason);
     if (reason === 'Research milestone') await new Promise((resolve) => { releaseMilestone = resolve; });
     return { status: 'unchanged', reason };
   };
   const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
   servers.push(server);
-  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example', investigationId: 'investigation-example' }));
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example' }));
   assert.deepEqual(reasons, ['Before research session']);
-  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'investigation.observe', status: 'complete' } });
+  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'claim.revise', status: 'complete' } });
   await waitFor(() => Boolean(releaseMilestone));
   server.stopSession('session-checkpoint-example');
   assert.equal(upstream.stopCalls(), 1);
@@ -693,37 +692,6 @@ test("owns Desktop workspace and registry persistence behind allowlisted operati
   assert.equal(synchronized.lastKnownWorkspace.workspaceId, workspace.workspaceId);
 });
 
-test("routes campaign-track operations through registered workspace storage", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-campaign-operation-"));
-  temporaryDirectories.push(directory);
-  const calls = [];
-  const service = new AppServerHostService({
-    registry: hostRegistryFixture(directory, { memoryBackend: "app-server" }),
-    invokeProtocol: async (operation, options) => {
-      calls.push({ operation, options });
-      return [{ id: "investigation_one" }];
-    },
-  });
-
-  const result = await service.executeOperation({
-    operation: "investigation.list",
-    input: { workspaceId: "workspace-test" },
-  });
-
-  assert.deepEqual(result, [{ id: "investigation_one" }]);
-  assert.equal(calls[0].operation, "investigation.list");
-  assert.equal(calls[0].options.storage.databasePath, join(directory, "memory.sqlite"));
-
-  const disabled = new AppServerHostService({
-    registry: hostRegistryFixture(directory, { memoryBackend: "disabled" }),
-    invokeProtocol: async () => [],
-  });
-  await assert.rejects(
-    disabled.executeOperation({ operation: "investigation.replay", input: { workspaceId: "workspace-test" } }),
-    /memory disabled/,
-  );
-});
-
 test("routes Codex research tools through canonical workspace identity and storage", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-codex-tools-"));
   temporaryDirectories.push(directory);
@@ -1271,7 +1239,6 @@ test("keeps SQLite construction out of the app-server runtime worker", () => {
 
   const researchSourceRoot = new URL("../../packages/research-agent/src/", import.meta.url);
   for (const file of [
-    "campaign-tracks.ts",
     "channels.ts",
     "findings.ts",
     "goal-suggestions.ts",
@@ -1782,21 +1749,6 @@ test("app-server preserves OpenAI Fast mode and Daybreak Blue through restart me
     ...providerSettings,
     contextSizes: { "openai-codex": "large" },
   });
-  const tracks = new CampaignTrackStore({
-    databasePath: join(directory, "memory.sqlite"),
-    context: {
-      workspaceId: "workspace-test",
-      workspaceName: "Test workspace",
-      subjectId: "subject-example",
-      subjectName: "Example",
-    },
-  });
-  const assigned = tracks.create({
-    title: "Existing proof",
-    objective: "Continue the existing proof.",
-    originSessionId: "session-fast-mode",
-  });
-  tracks.close();
   const service = new AppServerHostService({
     registry,
     invokeProtocol: async (operation, options) => {
@@ -1817,7 +1769,6 @@ test("app-server preserves OpenAI Fast mode and Daybreak Blue through restart me
     },
   });
   const request = sessionLaunchRequest(directory, { sessionId: "session-fast-mode" });
-  request.launch.investigationId = assigned.id;
   request.launch.provider = {
     id: "openai-codex",
     model: "gpt-5.6-sol",
@@ -1832,7 +1783,6 @@ test("app-server preserves OpenAI Fast mode and Daybreak Blue through restart me
   assert.equal(prepared.launch.provider.daybreakBlue, true);
   assert.equal(prepared.launch.provider.contextSize, "large");
   assert.equal(appServerSessionEnvironment(prepared.launch, {}).APP_SERVER_OPENAI_CONTEXT_SIZE, "large");
-  assert.equal(prepared.launch.investigationId, assigned.id);
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--fast-mode"));
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes("--daybreak-blue"));
   const createCall = calls.find((call) => call.operation === "session.create");
@@ -1843,10 +1793,6 @@ test("app-server preserves OpenAI Fast mode and Daybreak Blue through restart me
   assert.equal(
     createCall.options.input.metadata.appServerRestartLaunch.launch.provider.daybreakBlue,
     true,
-  );
-  assert.equal(
-    createCall.options.input.metadata.appServerRestartLaunch.launch.investigationId,
-    assigned.id,
   );
 
   await assert.rejects(
@@ -2047,7 +1993,8 @@ test("app-server owns built-in plugins and pins canonical session profile identi
   assert.deepEqual(prepared.launch.pluginRuntime.managedPluginIds, MANAGED_TOOL_PLUGIN_IDS);
   assert.ok(appServerSessionArgs(prepared.launch, {}).includes(MANAGED_TOOL_PLUGIN_IDS.join(',')));
   assert.ok(pluginCall.options.input.builtinPlugins.every((plugin) =>
-    plugin.path.includes(join("app-server", "resources", "agent-plugins")) && existsSync(plugin.path)
+    (plugin.path.includes(join("app-server", "resources", "agent-plugins"))
+      || plugin.path.includes(join("managed-plugins"))) && existsSync(plugin.path)
   ));
   const createCall = calls.find((call) => call.operation === "session.create");
   assert.deepEqual(createCall.options.input.profile, { id: "security-research", hash });
@@ -2645,7 +2592,6 @@ test("control-plane shutdown cannot interrupt an active research session", async
 test("expands typed session intent into app-server-owned runtime policy", () => {
   const request = sessionLaunchRequest("C:\\workspace", {
     sessionId: "session-compose",
-    investigationId: "investigation-example",
     researchProfile: {
       id: "security-research",
       hash: "a".repeat(64),
@@ -2657,7 +2603,6 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
     workspaceContextPath: "C:\\workspace\\workspace-context.json",
     researchProfileHash: request.launch.researchProfileHash,
     workflowId: request.launch.workflowId,
-    investigationId: request.launch.investigationId,
   });
   const args = appServerSessionArgs({
     ...launch,
@@ -2689,7 +2634,7 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
     subjectId: "subject-example",
   });
   assert.equal(args[args.indexOf("--attempt-id") + 1], "attempt-test");
-  assert.equal(args[args.indexOf("--investigation-id") + 1], "investigation-example");
+  assert.equal(args.includes("--investigation-id"), false);
   assert.equal(args[args.indexOf("--memory-backend") + 1], "app-server");
   assert.ok(args.includes("--no-default-tool-config"));
   assert.ok(args.includes("--fast-mode"));
@@ -3560,7 +3505,6 @@ function sessionLaunchRequest(directory, options = {}) {
     sessionId: options.sessionId ?? "session-test",
     launch: {
       workspaceId: "workspace-test",
-      ...(options.investigationId ? { investigationId: options.investigationId } : {}),
       promptMarkdown: options.promptMarkdown ?? "Test the typed app-server launch contract.",
       provider: {
         id: "openai-codex",
@@ -3577,7 +3521,6 @@ function resolvedSessionLaunch(directory, options = {}) {
   return {
     workspaceRoot: directory,
     workspaceDirectories: [directory],
-    ...(options.investigationId ? { investigationId: options.investigationId } : {}),
     capturePath: options.capturePath ?? join(directory, "capture.json"),
     ...(options.workspaceContextPath ? { workspaceContextPath: options.workspaceContextPath } : {}),
     attemptId: "attempt-test",
@@ -3645,8 +3588,7 @@ function testHostService(directory, options = {}) {
           capturePath: options.capturePath,
           workspaceContextPath: existsSync(workspaceContextPath) ? workspaceContextPath : undefined,
           promptMarkdown: request.launch.promptMarkdown,
-          investigationId: request.launch.investigationId,
-          researchProfileHash: request.launch.researchProfileHash,
+                researchProfileHash: request.launch.researchProfileHash,
           workflowId: request.launch.workflowId,
           memoryBackend: options.memoryBackend,
         }),

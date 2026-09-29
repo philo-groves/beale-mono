@@ -1360,7 +1360,7 @@ export function decodeAppServerMemorySummary(value: unknown): AppServerMemorySum
     || !Array.isArray(value.findings)
     || !value.findings.every(validFindingSummary)
     || !validCampaignGraph(value.campaign)) {
-    throw new Error('app-server returned an invalid memory summary v12 payload.');
+    throw new Error('app-server returned an invalid memory summary v13 payload.');
   }
   return value as unknown as AppServerMemorySummary;
 }
@@ -1574,80 +1574,9 @@ function validCampaignGraph(value: unknown): boolean {
     && isPlainRecord(value.counts)
     && nonNegativeNumber(value.counts.leads)
     && nonNegativeNumber(value.counts.findings)
-    && nonNegativeNumber(value.counts.coverageGaps)
-    && (value.tracks === undefined || (Array.isArray(value.tracks) && value.tracks.every(validCampaignTrack)))
-    && (value.activeTrackId === undefined || value.activeTrackId === null || nonEmptyText(value.activeTrackId))
-    && (value.replayMetrics === undefined || validCampaignReplayMetrics(value.replayMetrics));
+    && nonNegativeNumber(value.counts.coverageGaps);
 }
 
-function validCampaignTrack(value: unknown): boolean {
-  if (!isPlainRecord(value) || !isPlainRecord(value.counts)) return false;
-  const counts = value.counts;
-  return nonEmptyText(value.id)
-    && nonEmptyText(value.title)
-    && typeof value.objective === 'string'
-    && ['active', 'blocked', 'complete', 'archived'].includes(String(value.status))
-    && ['orienting', 'exploring', 'testing', 'reproducing', 'verifying', 'reporting', 'complete', 'blocked'].includes(String(value.stage))
-    && ['runtime', 'shadow', 'replay', 'manual'].includes(String(value.source))
-    && Array.isArray(value.sessionIds) && value.sessionIds.every(nonEmptyText)
-    && nonEmptyText(value.updatedAt)
-    && nonNegativeNumber(value.revision)
-    && Array.isArray(value.questions) && value.questions.every(validCampaignQuestion)
-    && Array.isArray(value.experiments) && value.experiments.every(validCampaignExperiment)
-    && Array.isArray(value.observations) && value.observations.every(validCampaignObservation)
-    && ['questions', 'openQuestions', 'experiments', 'observations', 'openNextActions', 'memoryNodes', 'evidenceRefs', 'findings', 'runbooks', 'reports']
-      .every((field) => nonNegativeNumber(counts[field]));
-}
-
-function validCampaignQuestion(value: unknown): boolean {
-  return isPlainRecord(value)
-    && nonEmptyText(value.id)
-    && nonEmptyText(value.investigationId)
-    && nonEmptyText(value.text)
-    && ['open', 'answered', 'blocked', 'superseded'].includes(String(value.status))
-    && ['critical', 'high', 'medium', 'low'].includes(String(value.priority))
-    && typeof value.answer === 'string'
-    && nonEmptyText(value.updatedAt)
-    && nonNegativeNumber(value.revision);
-}
-
-function validCampaignExperiment(value: unknown): boolean {
-  return isPlainRecord(value)
-    && nonEmptyText(value.id)
-    && nonEmptyText(value.investigationId)
-    && (value.questionId === null || nonEmptyText(value.questionId))
-    && (value.runbookId === null || nonEmptyText(value.runbookId))
-    && nonEmptyText(value.title)
-    && ['planned', 'running', 'succeeded', 'failed', 'inconclusive', 'blocked'].includes(String(value.status))
-    && typeof value.resultSummary === 'string'
-    && (value.startedAt === null || nonEmptyText(value.startedAt))
-    && (value.completedAt === null || nonEmptyText(value.completedAt))
-    && nonEmptyText(value.updatedAt)
-    && nonNegativeNumber(value.revision);
-}
-
-function validCampaignObservation(value: unknown): boolean {
-  return isPlainRecord(value)
-    && nonEmptyText(value.id)
-    && nonEmptyText(value.investigationId)
-    && (value.experimentId === null || nonEmptyText(value.experimentId))
-    && ['source', 'runtime', 'artifact', 'verifier', 'human', 'historical'].includes(String(value.kind))
-    && ['supports', 'refutes', 'narrows', 'neutral'].includes(String(value.outcome))
-    && nonEmptyText(value.summary)
-    && nonEmptyText(value.createdAt);
-}
-
-function validCampaignReplayMetrics(value: unknown): boolean {
-  return isPlainRecord(value)
-    && value.schemaVersion === 1
-    && ['historical', 'shadow', 'active'].includes(String(value.mode))
-    && nonEmptyText(value.workspaceId)
-    && ['sessionCount', 'generatedTrackCount', 'linkedMemoryNodeCount', 'repeatedMemoryCandidateCount', 'rejectedHypothesisResurrectionCount']
-      .every((field) => nonNegativeNumber(value[field]))
-    && unitInterval(value.environmentTaggedNodeRate)
-    && unitInterval(value.crossSessionReuseRate)
-    && (value.medianMinutesToFirstEvidence === null || nonNegativeNumber(value.medianMinutesToFirstEvidence));
-}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

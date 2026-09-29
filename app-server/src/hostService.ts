@@ -20,7 +20,7 @@ import {
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
-import { CampaignTrackStore, validateResearchSystemPromptTemplate } from '@beale/research-agent';
+import { validateResearchSystemPromptTemplate } from '@beale/research-agent';
 import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
@@ -51,7 +51,6 @@ function operationRequiresResearchIndex(operation: AppServerProtocolOperation): 
     || operation.startsWith('dreaming.')
     || operation.startsWith('history.')
     || operation.startsWith('claim.')
-    || operation.startsWith('investigation.')
     || operation.startsWith('runbook.')
     || operation.startsWith('report.')
     || operation.startsWith('artifact.')
@@ -221,7 +220,6 @@ export class AppServerHostService {
     }
     if (workspace?.memoryBackend === 'disabled'
       && (request.operation.startsWith('dreaming.')
-        || request.operation.startsWith('investigation.')
         || request.operation.startsWith('claim.'))) {
       throw new Error(`Workspace ${workspace.workspaceId} has memory disabled.`);
     }
@@ -297,7 +295,6 @@ export class AppServerHostService {
       const mutation = isRecord(operationInput) ? operationInput : {};
       await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage,
         ...(nonEmpty(mutation.sessionId) ? { sessionId: nonEmpty(mutation.sessionId)! } : {}),
-        ...(nonEmpty(mutation.investigationId) ? { investigationId: nonEmpty(mutation.investigationId)! } : {}),
       }, 'Canonical research updated', undefined, undefined, this.databaseCoordinator);
     }
     if (workspace?.memoryBackend !== 'disabled') return result;
@@ -332,7 +329,6 @@ export class AppServerHostService {
       memoryBackend: workspace.memoryBackend,
       ...(workspaceReferences?.length ? { workspaceReferences } : {}),
       ...(nonEmpty(requested.sessionId) ? { sessionId: nonEmpty(requested.sessionId)! } : {}),
-      ...(nonEmpty(requested.investigationId) ? { investigationId: nonEmpty(requested.investigationId)! } : {}),
       ...(nonEmpty(requested.objective) ? { objective: nonEmpty(requested.objective)! } : {}),
       ...(nonEmpty(requested.toolName) ? { toolName: nonEmpty(requested.toolName)! } : {}),
       ...(isRecord(requested.toolInput) ? { toolInput } : {}),
@@ -471,14 +467,6 @@ export class AppServerHostService {
         defaults.smallModel ? [[id, defaults.smallModel] as const] : []
       )))
     };
-    const investigationId = await this.resolveExistingSessionInvestigation({
-      sessionId,
-      workspace,
-      storage,
-      ...(request.launch.investigationId
-        ? { requestedInvestigationId: request.launch.investigationId }
-        : {})
-    });
     const runDirectory = readWorkspaceProject(workspace.workspacePath)
       ? join(workspace.workspacePath, 'traces', sessionId, 'outputs')
       : join(workspace.workspacePath, '.beale', 'app-server-runs');
@@ -545,8 +533,7 @@ export class AppServerHostService {
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(fastMode ? { fastMode: true } : {}),
       ...(daybreakBlue ? { daybreakBlue: true } : {}),
-      profileId,
-      ...(investigationId ? { investigationId } : {})
+      profileId
     });
     await this.ensureCanonicalSession({
       sessionId,
@@ -573,7 +560,6 @@ export class AppServerHostService {
         workspaceRoot: workspace.workspacePath,
         workspaceDirectories: [workspace.workspacePath],
         ...(workspaceReferences.length > 0 ? { workspaceReferences } : {}),
-        ...(investigationId ? { investigationId } : {}),
         capturePath,
         attemptId,
         promptMarkdown: request.launch.promptMarkdown,
@@ -627,50 +613,6 @@ export class AppServerHostService {
     };
   }
 
-  private async resolveExistingSessionInvestigation(input: {
-    sessionId: string;
-    workspace: AppServerHostWorkspace;
-    storage: AppServerHostStorage;
-    requestedInvestigationId?: string;
-  }): Promise<string | undefined> {
-    if (input.workspace.memoryBackend === 'disabled') return undefined;
-    const assigned = await this.databaseCoordinator.runWhenAvailable(
-      input.storage.databasePath,
-      () => this.withCampaignTrackStore(
-        input.workspace,
-        input.storage,
-        (store) => store.getForSession(input.sessionId)
-      )
-    );
-    if (assigned && input.requestedInvestigationId && input.requestedInvestigationId !== assigned.id) {
-      throw new Error(
-        `Session ${input.sessionId} is already assigned to investigation ${assigned.id}; investigation assignment is immutable.`
-      );
-    }
-    return assigned?.id;
-  }
-
-  private withCampaignTrackStore<T>(
-    workspace: AppServerHostWorkspace,
-    storage: AppServerHostStorage,
-    operation: (store: CampaignTrackStore) => T
-  ): T {
-    const store = new CampaignTrackStore({
-      databasePath: storage.databasePath,
-      context: {
-        workspaceId: workspace.workspaceId,
-        workspaceName: workspace.name,
-        subjectId: `subject_workspace:${workspace.workspaceId}`,
-        subjectName: workspace.name
-      }
-    });
-    try {
-      return operation(store);
-    } finally {
-      store.close();
-    }
-  }
-
   private async sameSubjectWorkspaceReferences(
     current: AppServerHostWorkspace,
     storage: AppServerHostStorage
@@ -712,18 +654,10 @@ export class AppServerHostService {
     });
   }
 
-  public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false, investigationId?: string): Promise<WorkspaceCheckpointResult> {
+  public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false): Promise<WorkspaceCheckpointResult> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
     if (!readWorkspaceProject(workspace.workspacePath)) return { status: 'unmanaged', reason };
     const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
-    const resolvedInvestigationId = investigationId ?? await this.databaseCoordinator.runWhenAvailable(
-      storage.databasePath,
-      () => this.withCampaignTrackStore(
-        workspace,
-        storage,
-        (store) => store.getForSession(sessionId)?.id
-      )
-    );
     const key = workspaceOperationKey(workspace.workspacePath);
     const anotherSessionIsActive = [...this.workspaceWriters.entries()].some(([activeSessionId, root]) => activeSessionId !== sessionId && workspaceOperationKey(root) === key);
     const releaseResearchIndex = cleanupScratch && !anotherSessionIsActive && workspaceResearchAuthority(workspace.workspacePath) === 'files';
@@ -731,7 +665,6 @@ export class AppServerHostService {
       workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId,
       databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
       sessionId,
-      ...(resolvedInvestigationId ? { investigationId: resolvedInvestigationId } : {}),
     }, reason, undefined, cleanupScratch ? sessionId : undefined, this.databaseCoordinator,
     releaseResearchIndex ? { researchIndexAction: 'release' } : undefined);
     if (result.status === 'committed' || result.status === 'failed') {
@@ -1491,9 +1424,6 @@ function withoutWorkspaceMemory(value: unknown): unknown {
       coverageGaps: [],
       contradictions: [],
       nextActions: [],
-      tracks: [],
-      activeTrackId: null,
-      replayMetrics: undefined,
       momentum: { state: 'empty', reason: 'Workspace memory is disabled.', supportingNodeIds: [] },
       counts: { leads: 0, findings: 0, verifiedFindings: 0, disclosedFindings: 0, coverageGaps: 0, contradictions: 0 }
     },
@@ -1806,7 +1736,6 @@ function restartLaunchDescriptor(
     fastMode?: boolean;
     daybreakBlue?: boolean;
     profileId: string;
-    investigationId?: string;
   }
 ): StoredRestartLaunchDescriptor {
   return {
@@ -1826,7 +1755,6 @@ function restartLaunchDescriptor(
       },
       shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
       ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
-      ...(resolved.investigationId ? { investigationId: resolved.investigationId } : {}),
       researchProfileId: request.launch.researchProfileId?.trim() || resolved.profileId,
       ...(request.launch.researchProfileHash
         ? { researchProfileHash: request.launch.researchProfileHash }

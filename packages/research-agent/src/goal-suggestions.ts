@@ -504,10 +504,10 @@ function createSuggestionGrounding(
   workflowId: string,
 ): ResearchGoalSuggestionGrounding[] {
   const limits = workflowId === "chaining" || workflowId === "reporting"
-    ? { resources: 40, sessions: 10, memories: 12, findings: 24, leads: 6, runbooks: 8, reports: 8, tracks: 12 }
+    ? { resources: 40, sessions: 10, memories: 12, findings: 24, leads: 6, runbooks: 8, reports: 8 }
     : workflowId === "discovery"
-      ? { resources: 40, sessions: 10, memories: 24, findings: 12, leads: 8, runbooks: 4, reports: 4, tracks: 8 }
-      : { resources: 40, sessions: 10, memories: 20, findings: 16, leads: 8, runbooks: 5, reports: 5, tracks: 10 };
+      ? { resources: 40, sessions: 10, memories: 24, findings: 12, leads: 8, runbooks: 4, reports: 4 }
+      : { resources: 40, sessions: 10, memories: 20, findings: 16, leads: 8, runbooks: 5, reports: 5 };
   const grounding = new Map<string, ResearchGoalSuggestionGrounding>();
   const add = (
     kind: ResearchGoalSuggestionGrounding["kind"],
@@ -564,9 +564,6 @@ function createSuggestionGrounding(
   }
   for (const report of memory?.reports.slice(0, limits.reports) ?? []) {
     add("report", report.id, report.title, report.summary, `${report.status}:${report.triageStatus}`);
-  }
-  for (const track of memory?.campaign.tracks?.slice(0, limits.tracks) ?? []) {
-    add("track", track.id, track.title, track.objective, `${track.status}:${track.stage}`);
   }
   return [...grounding.values()];
 }

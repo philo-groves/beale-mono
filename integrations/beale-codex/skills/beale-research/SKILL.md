@@ -1,6 +1,6 @@
 ---
 name: beale-research
-description: Work with canonical Beale research from Codex. Use when a task asks to inspect, continue, verify, or update research in a Beale workspace; coordinate with a Beale agent; or persist Codex evidence, leads, findings, runbooks, reports, and campaign state back to Beale.
+description: Work with canonical Beale research from Codex. Use when a task asks to inspect, continue, verify, or update research in a Beale workspace; coordinate with a Beale agent; or persist Codex evidence, leads, findings, runbooks, and reports back to Beale.
 ---
 
 # Beale Research
@@ -13,7 +13,6 @@ Use the `beale` MCP server as the durable research boundary. Use Codex-native fi
 2. Read recent work with `beale_list_sessions`, `beale_get_session`, and relevant channels.
 3. Call `beale_list_research_tools` before research reads or writes. Tool availability and schemas follow the workspace's active research profile.
 4. Use `history.search`, through `beale_read_research`, before creating a memory, lead, finding, runbook, or report.
-5. When continuing a campaign track, pass its `investigationId` while listing and calling research tools so track-scoped tools are available.
 
 ## Investigate and persist
 

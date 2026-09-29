@@ -25,7 +25,7 @@ const compatibleDescriptor = {
   protocolVersion: 1,
   contractVersion: APP_SERVER_CONTRACT_VERSION,
   runtime: { name: 'app-server', version: '0.1.0', buildId: 'fixture-build', nodeVersion: process.version },
-  schemas: { protocol: 1, session: 1, memorySummary: 12, finding: 5, campaignGraph: 4, goalSuggestions: 1 },
+  schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 5, campaignGraph: 5, goalSuggestions: 1 },
   capabilities: [...APP_SERVER_PROTOCOL_CAPABILITIES],
   operations: ['protocol.describe'],
   transports: {
@@ -145,7 +145,7 @@ describe('app-server protocol client', () => {
     expect(envelope.result.text).toHaveLength(3 * 1024 * 1024);
   });
 
-  it('rejects incompatible runtime descriptors and malformed memory summary v12 payloads', () => {
+  it('rejects incompatible runtime descriptors and malformed memory summary v13 payloads', () => {
     const directory = mkdtempSync(join(tmpdir(), 'beale-app-server-incompatible-'));
     createdDirectories.push(directory);
     const fixture = join(directory, 'protocol-fixture.mjs');
@@ -159,7 +159,7 @@ describe('app-server protocol client', () => {
     process.env.BEALE_APP_SERVER_PROTOCOL_COMMAND = process.execPath;
     process.env.BEALE_APP_SERVER_PROTOCOL_ARGS_JSON = JSON.stringify([fixture]);
     expect(() => getAppServerProtocolDescriptor()).toThrow(new RegExp(`incompatible with Beale contract v${APP_SERVER_CONTRACT_VERSION}`));
-    expect(() => decodeAppServerMemorySummary({ nodes: [], edges: [], runbooks: [], leads: [], findings: [], campaign: {} })).toThrow(/memory summary v12/);
+    expect(() => decodeAppServerMemorySummary({ nodes: [], edges: [], runbooks: [], leads: [], findings: [], campaign: {} })).toThrow(/memory summary v13/);
     expect(() => decodeAppServerMemorySummary({
       nodeCount: 0,
       edgeCount: 0,
@@ -171,100 +171,9 @@ describe('app-server protocol client', () => {
       campaign: {
         nodes: [], edges: [], coverageGaps: [], contradictions: [], nextActions: [],
         momentum: { state: 'empty', reason: 'No campaign work.', supportingNodeIds: [] },
-        counts: { findings: 0, coverageGaps: 0 },
-        tracks: [{ id: 'unbounded-cast' }]
+        counts: { findings: 0, coverageGaps: 0 }
       }
-    })).toThrow(/memory summary v12/);
-  });
-
-  it('validates bounded question, experiment, and observation summaries in campaign tracks', () => {
-    const experiment = {
-      id: 'experiment_one',
-      investigationId: 'investigation_one',
-      questionId: 'question_one',
-      runbookId: null,
-      title: 'Exercise resolver transition',
-      status: 'succeeded',
-      resultSummary: 'Observed the expected transition.',
-      startedAt: '2026-08-26T10:00:00.000Z',
-      completedAt: '2026-08-26T10:15:00.000Z',
-      updatedAt: '2026-08-26T10:15:00.000Z',
-      revision: 1
-    };
-    const question = {
-      id: 'question_one',
-      investigationId: 'investigation_one',
-      text: 'Is the transition reachable?',
-      status: 'answered',
-      priority: 'high',
-      answer: 'Yes.',
-      updatedAt: '2026-08-26T10:15:00.000Z',
-      revision: 2
-    };
-    const observation = {
-      id: 'observation_one',
-      investigationId: 'investigation_one',
-      experimentId: 'experiment_one',
-      kind: 'runtime',
-      outcome: 'supports',
-      summary: 'Observed the expected transition.',
-      createdAt: '2026-08-26T10:14:00.000Z'
-    };
-    const track = {
-      id: 'investigation_one',
-      title: 'Resolver transitions',
-      objective: 'Determine whether the transition is reachable.',
-      status: 'active',
-      stage: 'testing',
-      source: 'runtime',
-      sessionIds: ['session_one'],
-      updatedAt: '2026-08-26T10:15:00.000Z',
-      revision: 1,
-      questions: [question],
-      experiments: [experiment],
-      observations: [observation],
-      counts: { questions: 1, openQuestions: 0, experiments: 1, observations: 1, openNextActions: 0, memoryNodes: 0, evidenceRefs: 1, findings: 0, runbooks: 0, reports: 0 }
-    };
-    const summary = {
-      nodeCount: 0,
-      edgeCount: 0,
-      nodes: [],
-      edges: [],
-      runbooks: [],
-      leads: [],
-      findings: [],
-      campaign: {
-        nodes: [], edges: [], coverageGaps: [], contradictions: [], nextActions: [],
-        momentum: { state: 'testing', reason: 'An experiment completed.', supportingNodeIds: [] },
-        counts: { leads: 0, findings: 0, coverageGaps: 0 },
-        tracks: [track]
-      }
-    };
-
-    expect(decodeAppServerMemorySummary(summary).campaign.tracks?.[0]).toMatchObject({
-      questions: [question],
-      experiments: [experiment],
-      observations: [observation]
-    });
-    const { questions: _questions, ...questionlessTrack } = track;
-    expect(() => decodeAppServerMemorySummary({
-      ...summary,
-      campaign: { ...summary.campaign, tracks: [questionlessTrack] }
-    })).toThrow(/memory summary v12/);
-    const { experiments: _experiments, ...countOnlyTrack } = track;
-    expect(() => decodeAppServerMemorySummary({
-      ...summary,
-      campaign: { ...summary.campaign, tracks: [countOnlyTrack] }
-    })).toThrow(/memory summary v12/);
-    const { observations: _observations, ...observationlessTrack } = track;
-    expect(() => decodeAppServerMemorySummary({
-      ...summary,
-      campaign: { ...summary.campaign, tracks: [observationlessTrack] }
-    })).toThrow(/memory summary v12/);
-    expect(() => decodeAppServerMemorySummary({
-      ...summary,
-      campaign: { ...summary.campaign, tracks: [{ ...track, experiments: [{ ...experiment, status: 'unknown' }] }] }
-    })).toThrow(/memory summary v12/);
+    })).toThrow(/memory summary v13/);
   });
 
   it('batches multiple workspace summary catalogs into one app-server operation', async () => {

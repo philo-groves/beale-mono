@@ -43,7 +43,7 @@ describe('workspace dashboard', () => {
     const campaignTrailLayoutStyles = styles.match(/\.campaign-trail-layout\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignTrailHeadingStyles = styles.match(/\.campaign-trail-section-heading\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityListStyles = styles.match(/\.campaign-priority-claim-list\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignPriorityScrollStyles = styles.match(/\.campaign-priority-claim-scroll,\s*\.campaign-trail-scroll-frame\s*\{([^}]*)\}/)?.[1] ?? '';
+    const campaignPriorityScrollStyles = styles.match(/\.campaign-priority-claim-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityClaimStyles = styles.match(/\.campaign-priority-claim\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignBoardLaneStyles = styles.match(/\.campaign-board-lanes\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignBoardHeaderStyles = styles.match(/\.campaign-board-header\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -51,25 +51,7 @@ describe('workspace dashboard', () => {
     const campaignBoardLaneListStyles = styles.match(/\.campaign-board-lane-list\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignBoardEmptyStyles = styles.match(/\.campaign-board-lane-list > \.campaign-trail-section-empty\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignBoardCardStyles = styles.match(/\.campaign-board-card\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTrailHierarchyStyles = styles.match(/\.campaign-trail-hierarchy\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTrailScrollStyles = styles.match(/\.campaign-trail-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignVerticalFadeStyles = styles.match(/\.campaign-trail-scroll-frame::before\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignHorizontalFadeStyles = styles.match(/\.campaign-priority-claim-scroll::before\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeSummaryStyles = styles.match(/\.campaign-tree-summary\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeBridgeStyles = styles.match(/\.campaign-tree-track\[open\] > \.campaign-tree-summary::after,\s*\.campaign-tree-question\[open\] > \.campaign-tree-summary::after\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeQuestionBridgeStyles = [...styles.matchAll(/\.campaign-tree-question\[open\] > \.campaign-tree-summary::after\s*\{([^}]*)\}/g)].at(-1)?.[1] ?? '';
-    const campaignTrailTreeStyles = styles.match(/\.campaign-trail-tree\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeTrackSummaryStyles = styles.match(/\.campaign-tree-track-summary\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeChildrenStyles = styles.match(/\.campaign-tree-children\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeConnectorStyles = styles.match(/\.campaign-tree-children > \.campaign-tree-node::before\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeNestedConnectorStyles = styles.match(/\.campaign-tree-question > \.campaign-tree-children > \.campaign-tree-node::before,\s*\.campaign-tree-experiment-branch > \.campaign-tree-children > \.campaign-tree-node::before\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeObservationChildrenStyles = styles.match(/\.campaign-tree-experiment-branch > \.campaign-tree-children\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeContinuationStyles = styles.match(/\.campaign-tree-children > \.campaign-tree-node:not\(:last-child\)::after\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeItemCopyStyles = styles.match(/\.campaign-tree-item-copy\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeBranchCopyStyles = styles.match(/\.campaign-tree-branch-copy\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeItemStyles = styles.match(/\.campaign-tree-item\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeItemTypeStyles = styles.match(/\.campaign-tree-item-type\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTreeTrackConnectorStyles = styles.match(/\.campaign-tree-track > \.campaign-tree-children > \.campaign-tree-node::before\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignSessionProjectionStyles = styles.match(/\.campaign-session-projection\s*\{([^}]*)\}/)?.[1] ?? '';
     const sharedPanelStyles = styles.match(/\.workspace-dashboard-panel\s*\{([^}]*)\}/)?.[1] ?? '';
     const overviewStyles = styles.match(/\.workspace-overview\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -154,7 +136,7 @@ describe('workspace dashboard', () => {
     expect(workspaceHeadingDescriptionStyles).toContain('font-size: 14px');
     expect(campaignPanelStyles).toContain('grid-template-rows: auto minmax(0, 1fr)');
     expect(campaignPanelStyles).toContain('overflow: hidden');
-    expect(campaignTrailLayoutStyles).toContain('grid-template-rows: auto minmax(0, 1fr)');
+    expect(campaignTrailLayoutStyles).toContain('grid-template-rows: minmax(0, 1fr)');
     expect(campaignTrailLayoutStyles).toContain('gap: 0');
     expect(campaignTrailHeadingStyles).toContain('border-bottom: 1px solid var(--panel-border)');
     expect(campaignPriorityListStyles).toContain('display: flex');
@@ -201,39 +183,6 @@ describe('workspace dashboard', () => {
     expect(campaignPriorityClaimFadeStyles).toContain('linear-gradient(to right, transparent, var(--campaign-priority-claim-surface) 82%)');
     expect(INSET_SCROLLBAR_SELECTOR).toContain('.campaign-priority-claim-list');
     expect(INSET_SCROLLBAR_SELECTOR).toContain('.campaign-board-lane-list');
-    expect(INSET_SCROLLBAR_SELECTOR).toContain('.campaign-trail-scroll');
-    expect(campaignTrailHierarchyStyles).toContain('grid-template-rows: auto minmax(0, 1fr)');
-    expect(campaignTrailScrollStyles).toContain('overflow: auto');
-    expect(campaignTrailScrollStyles).toContain('height: 100%');
-    expect(campaignVerticalFadeStyles).toContain('linear-gradient(to bottom');
-    expect(styles).toMatch(/\.campaign-priority-claim-scroll\.has-left-fade::before,[\s\S]*\.campaign-trail-scroll-frame\.has-bottom-fade::after\s*\{[^}]*opacity: 1/u);
-    expect(campaignTreeSummaryStyles).toContain('grid-template-columns: 20px minmax(0, 1fr) auto');
-    expect(campaignTreeBridgeStyles).toContain('bottom: 0');
-    expect(campaignTreeBridgeStyles).toContain('left: 9px');
-    expect(campaignTreeQuestionBridgeStyles).toContain('left: 17px');
-    expect(campaignTrailTreeStyles).toContain('user-select: none');
-    expect(campaignTreeTrackSummaryStyles).toContain('padding-left: 0');
-    expect(campaignTreeChildrenStyles).not.toContain('border-left:');
-    expect(campaignTreeConnectorStyles).toContain('border-left: 1px solid var(--line-strong)');
-    expect(campaignTreeConnectorStyles).toContain('border-bottom: 1px solid var(--line-strong)');
-    expect(campaignTreeNestedConnectorStyles).toContain('border-bottom-left-radius: 0');
-    expect(campaignTreeObservationChildrenStyles).toContain('margin-top: -3px');
-    expect(campaignTreeContinuationStyles).toContain('top: 17px');
-    expect(campaignTreeContinuationStyles).toContain('bottom: 0');
-    expect(campaignTreeItemCopyStyles).toContain('grid-template-columns: max-content minmax(0, 1fr)');
-    expect(campaignTreeItemCopyStyles).toContain('gap: 0');
-    expect(campaignTreeItemCopyStyles).toContain('margin-right: 3px');
-    expect(campaignTreeBranchCopyStyles).toContain('grid-template-columns: 13px max-content minmax(0, 1fr)');
-    expect(campaignTreeBranchCopyStyles).toContain('gap: 5px');
-    expect(campaignTreeItemStyles).toContain('grid-template-columns: 13px minmax(0, 1fr) auto');
-    expect(campaignTreeItemStyles).toContain('gap: 5px');
-    expect(campaignTreeItemTypeStyles).toContain('margin-right: 8px');
-    expect(campaignTreeItemTypeStyles).toContain('font-weight: 400');
-    expect(campaignTreeItemTypeStyles).toContain('text-transform: capitalize');
-    expect(campaignTreeTrackConnectorStyles).toContain('top: 17px');
-    expect(campaignTreeTrackConnectorStyles).toContain('width: 20px');
-    expect(campaignTreeTrackConnectorStyles).toContain('border-left: 0');
-    expect(campaignTreeTrackConnectorStyles).toContain('border-bottom-left-radius: 0');
     expect(campaignSessionProjectionStyles).toContain('height: 18px');
     expect(sharedPanelStyles).toContain('min-height: 0');
     expect(sharedPanelStyles).toContain('height: 100%');
@@ -569,7 +518,7 @@ describe('workspace dashboard', () => {
     expect(html).not.toContain('>Dream Now</button>');
   });
 
-  it('opens existing workspaces on Campaign Trail with Campaign sub-views and Settings last', () => {
+  it('opens existing workspaces on Campaign Highlights with Campaign sub-views and Settings last', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
       memoryDreamingInProgress: false,
@@ -583,19 +532,19 @@ describe('workspace dashboard', () => {
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-subviews" aria-selected="true"');
     expect(html).toContain('id="workspace-dashboard-campaign-subviews" role="tabpanel"');
     expect(html).toContain('role="tablist" aria-label="Campaign views"');
-    expect(html).toContain('<span>Trail</span>');
+    expect(html).toContain('<span>Highlights</span>');
     expect(html).toContain('<span>Board</span>');
     expect(html).not.toContain('<span>Activity</span>');
     expect(html).toContain('<span>Claims</span>');
     expect(html).toContain('<span>Memories</span>');
     expect(html).toContain('<span>Runbooks</span>');
     expect(html.match(/class="research-side-view-tab provider-settings-tab workspace-campaign-subview-tab(?: active)?"/g)).toHaveLength(5);
-    expect(html.indexOf('<span>Trail</span>')).toBeLessThan(html.indexOf('<span>Board</span>'));
+    expect(html.indexOf('<span>Highlights</span>')).toBeLessThan(html.indexOf('<span>Board</span>'));
     expect(html.indexOf('<span>Board</span>')).toBeLessThan(html.indexOf('<span>Claims</span>'));
     expect(html.indexOf('<span>Claims</span>')).toBeLessThan(html.indexOf('<span>Memories</span>'));
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-trail-panel" aria-selected="true"');
     expect(html).toContain('id="workspace-dashboard-campaign-trail-panel"');
-    expect(html).toContain('<h2 class="campaign-view-title" id="workspace-campaign-heading">Parser Workspace Trail</h2>');
+    expect(html).toContain('<h2 class="campaign-view-title" id="workspace-campaign-heading">Parser Workspace Highlights</h2>');
     expect(html).not.toContain('Research campaign');
     expect(html).not.toContain('The harness prioritizes uncovered or weakly supported territory');
     expect(html.indexOf('<span>Campaign</span>')).toBeLessThan(html.indexOf('<span>Resources</span>'));
@@ -1024,34 +973,7 @@ describe('workspace dashboard', () => {
     expect(projection.segments[0]?.widthPercent).toBeCloseTo(40);
     expect(projection.segments[1]?.widthPercent).toBeCloseTo(60);
     expect(projection.memoryMarkers[0]?.leftPercent).toBeCloseTo(60);
-    memory.campaign.tracks = [{
-      id: 'track_parser',
-      title: 'Parser investigation',
-      objective: 'Exercise parser state transitions.',
-      status: 'active',
-      stage: 'testing',
-      source: 'runtime',
-      sessionIds: ['run_one'],
-      updatedAt: '2026-08-12T12:00:00.000Z',
-      revision: 1,
-      questions: [],
-      experiments: [{
-        id: 'experiment_parser',
-        investigationId: 'track_parser',
-        questionId: null,
-        runbookId: 'runbook_one',
-        title: 'Exercise parser state transition',
-        status: 'succeeded',
-        resultSummary: 'Observed the expected transition.',
-        startedAt: '2026-08-12T10:00:00.000Z',
-        completedAt: '2026-08-12T11:30:00.000Z',
-        updatedAt: '2026-08-12T11:30:00.000Z',
-        revision: 1
-      }],
-      observations: [],
-      counts: { questions: 0, openQuestions: 0, experiments: 1, observations: 0, openNextActions: 0, memoryNodes: 1, evidenceRefs: 0, findings: 0, runbooks: 1, reports: 1 }
-    }];
-    memory.campaign.activeTrackId = 'track_parser';
+
 
     const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
@@ -1078,9 +1000,7 @@ describe('workspace dashboard', () => {
     expect(html).not.toContain('<span>Activity</span>');
     expect(html).not.toContain('Recent session');
     expect(html).not.toContain('class="campaign-session-projection"');
-    expect(html).toContain('1 experiment');
-    expect(html).toContain('<span class="campaign-tree-item-type">experiment</span><span class="campaign-tree-item-name">Exercise parser state transition</span>');
-    expect(html).toContain('<span class="campaign-tree-item-status">succeeded</span>');
+    expect(html).not.toContain('campaign-tree-track');
   });
 
   it('shows workspace sources with session, memory, and recency coverage', () => {
@@ -1348,7 +1268,7 @@ describe('workspace dashboard', () => {
     expect(resultMarkerStyles).not.toContain('box-shadow:');
   });
 
-  it('records session results while legacy Activity links open Campaign Trail', () => {
+  it('records session results while legacy Activity links open Campaign Highlights', () => {
     const interval: Array<[string, string | null]> = [['2026-08-12T08:00:00.000Z', '2026-08-12T09:00:00.000Z']];
     const natural = runRow('run_natural', interval, { status: 'completed' });
     const unexpected = runRow('run_unexpected', interval, { status: 'failed' });

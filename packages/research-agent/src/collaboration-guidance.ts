@@ -22,7 +22,7 @@ export function createCollaborationSystemGuidance(
     "",
     "Context and review:",
     ...runtimeGuidance(config).map((instruction) => `- ${instruction}`),
-    "- Startup context contains only a bounded campaign-state projection. Query the specific memory, finding, runbook, report, or investigation catalog needed for the assignment instead of assuming the full campaign was injected.",
+    "- Startup context is bounded. Query relevant memory, claims, runbooks, reports, and workspace history as needed.",
     ...(lead ? [
       "- Before recording session disposition or sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot.",
     ] : []),

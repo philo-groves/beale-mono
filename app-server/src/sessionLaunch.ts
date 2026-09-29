@@ -45,7 +45,6 @@ export interface ResolvedAppServerSessionLaunch {
     workspaceRoot: string;
     subjectId: string;
   }[];
-  investigationId?: string;
   capturePath: string;
   workspaceContextPath?: string;
   attemptId: string;
@@ -164,7 +163,6 @@ export function appServerSessionArgs(
   if (launch.promptTemplatePath) args.push('--prompt-template-file', launch.promptTemplatePath);
   if (launch.researchProfileHash) args.push('--research-profile-hash', launch.researchProfileHash);
   if (launch.workflowId) args.push('--workflow', launch.workflowId);
-  if (launch.investigationId) args.push('--investigation-id', launch.investigationId);
   args.push('--memory-backend', launch.memoryBackend);
 
   args.push(...additionalRuntimeArgs(environment));

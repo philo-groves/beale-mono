@@ -414,7 +414,6 @@ export function WorkspaceUnderstandingView({
         providerModelCatalog={providerModelCatalog}
         workspaceName={activeScope?.workspaceName || workspaceName}
         onOpenClaim={onOpenClaim}
-        onOpenRunbook={onOpenRunbook}
       /> : null}
 
       {campaignActive && activeCampaignView === 'board' ? <CampaignBoardView
@@ -513,6 +512,7 @@ function workspaceCampaignView(initialView: WorkspaceDashboardView): WorkspaceCa
 
 function workspaceCampaignViewLabel(view: WorkspaceCampaignView): string {
   if (view === 'memory') return 'Memories';
+  if (view === 'trail') return 'Highlights';
   return view.charAt(0).toUpperCase() + view.slice(1);
 }
 

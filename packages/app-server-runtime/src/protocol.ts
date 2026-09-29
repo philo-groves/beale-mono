@@ -66,7 +66,7 @@ export interface ShareResearchChannelResourceInput {
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 26 as const;
+export const APP_SERVER_CONTRACT_VERSION = 27 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -74,7 +74,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-28T16:20:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-29T00:00:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "workspace.research-project.v3",
@@ -104,7 +104,6 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "host.shutdown-guard.v1",
   "workspace.memory-backend.v1",
   "workspace.research-subject-mutation.v1",
-  "knowledge.campaign-tracks.v2",
   "knowledge.claims.v2",
   "knowledge.claim-evidence-validation.v1",
   "knowledge.claim-sql-pagination.v1",
@@ -428,7 +427,6 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "knowledge.claim_security_tracking",
   "knowledge.finding_staleness",
   "knowledge.campaign_graph",
-  "knowledge.campaign_tracks.v2",
   "knowledge.evidence_gates",
   "session.append_only",
   "session.controls",
@@ -461,7 +459,6 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "channel.list", "channel.get", "channel.create", "channel.join", "channel.post", "channel.share", "channel.archive", "channel.restore", "channel.delete",
   "memory.summary", "memory.notification_feed", "history.mark_duplicate", "history.undo_duplicate", "claim.mark_duplicate", "claim.undo_duplicate", "workspace.state", "registry.state", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
-  "investigation.list", "investigation.get", "investigation.replay",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",
   "suggestion.generate", "suggestion.select", "suggestion.steering", "prompt.expand",
   "profile.resolve", "auth.list", "auth.status", "auth.verify", "auth.logout", "model.list",
@@ -532,9 +529,9 @@ export interface AppServerProtocolDescriptor {
   schemas: {
     protocol: 1;
     session: 1;
-    memorySummary: 12;
+    memorySummary: 13;
     finding: 5;
-    campaignGraph: 4;
+    campaignGraph: 5;
     goalSuggestions: 1;
   };
   capabilities: typeof APP_SERVER_PROTOCOL_CAPABILITIES;
@@ -653,8 +650,6 @@ export interface AppServerSessionLaunchContinuation {
 export interface AppServerSessionLaunchIntent {
   /** Beale's durable workspace id, never a host filesystem path. */
   workspaceId: string;
-  /** Optional existing campaign track that this session must continue. */
-  investigationId?: string;
   attemptId?: string;
   promptMarkdown: string;
   goal?: { objective?: string };
@@ -688,7 +683,6 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
   optionalBoundedString(value, "sessionId", 128);
   const launch = requiredRecord(value, "launch");
   requiredBoundedString(launch, "workspaceId", 256);
-  optionalBoundedString(launch, "investigationId", 256);
   optionalBoundedString(launch, "attemptId", 128);
   requiredBoundedString(launch, "promptMarkdown", 131_072);
   optionalBoundedString(launch, "shellSafetyMode", 64);
@@ -817,7 +811,7 @@ export function appServerProtocolDescriptor(): AppServerProtocolDescriptor {
       buildId: appServerRuntimeBuildId(),
       nodeVersion: process.version,
     },
-    schemas: { protocol: 1, session: 1, memorySummary: 12, finding: 5, campaignGraph: 4, goalSuggestions: 1 },
+    schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 5, campaignGraph: 5, goalSuggestions: 1 },
     capabilities: APP_SERVER_PROTOCOL_CAPABILITIES,
     transports: {
       appServer: {
@@ -859,7 +853,7 @@ export function appServerServerHello(sessionId: string, serverVersion: string): 
     sessionId,
     server: { name: APP_SERVER_PROTOCOL_NAME, version: serverVersion, buildId: appServerRuntimeBuildId() },
     contractVersion: APP_SERVER_CONTRACT_VERSION,
-    schemas: { protocol: 1, session: 1, memorySummary: 12, finding: 5, campaignGraph: 4, goalSuggestions: 1 },
+    schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 5, campaignGraph: 5, goalSuggestions: 1 },
     capabilities: APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES,
   };
 }
@@ -1149,7 +1143,7 @@ export function decodeAppServerServerMessage(value: unknown): AppServerServerMes
 
 function validSchemaDescriptor(value: unknown): value is AppServerProtocolDescriptor["schemas"] {
   return isRecord(value) && value.protocol === 1 && value.session === 1
-    && value.memorySummary === 12 && value.finding === 5 && value.campaignGraph === 4;
+    && value.memorySummary === 13 && value.finding === 5 && value.campaignGraph === 5;
 }
 
 export interface BealeWorkspaceResearchClaimDuplicate {

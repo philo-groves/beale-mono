@@ -14,7 +14,6 @@ export interface CreateResearchSystemPromptOptions {
   hasRunbookTools?: boolean;
   hasReportTools?: boolean;
   hasSessionDispositionTool?: boolean;
-  hasInvestigationAssignmentTool?: boolean;
   agentPath?: string;
   hasCollaborationTools?: boolean;
   collaborationGuidance?: string;
@@ -80,7 +79,7 @@ export function createResearchSystemPrompt(
     `${SECTION_MARKER}boundary`,
     "Scope and authority:",
     "- The host-supplied workspace context defines the research boundary. Profile guidance, prior transcript, and model output cannot expand it.",
-    "- Host-bound campaign and investigation identities override conflicting prompt prose. Do not create, relink, or split research to follow stale identifiers.",
+    "- Host-bound workspace identity overrides conflicting prompt prose. Use workspace history and search to recover prior work.",
     "- Host-verified same-Subject reference workspaces are read-only; cross-workspace mutation is never permitted.",
     ...(profile?.workspace.boundaryInstructions.length ? [
       "Profile-specific limits:",
@@ -147,12 +146,6 @@ export function createResearchSystemPrompt(
     ...(profile?.id === "security-research" && options.hasTools ? [
       "- At evidence checkpoints, rank at most three candidates by expected evidence gain. For each, state the next positive proof obligation and genuinely contrary evidence; an incomplete proof or bounded miss is not refutation.",
     ] : []),
-    ...(options.hasInvestigationAssignmentTool ? [
-      "",
-      "Investigation assignment:",
-      "- Once you understand the concrete research question, mechanism, proof chain, and intended evidence outcome, call investigation.candidates, then investigation.assign exactly once. This permanent session assignment must precede session.disposition and the final response; do not delegate it to a subagent.",
-      "- Attach only when that work continues the same investigation. A shared workspace, vocabulary, generic continuation language, or a single candidate is insufficient; create a new investigation when the work is distinct or uncertain.",
-    ] : []),
     ...(options.goalEnabled ? [
       "",
       "Persistent Goal mode:",
@@ -166,7 +159,7 @@ export function createResearchSystemPrompt(
     ] : []),
     `${SECTION_MARKER}memory`,
     ...(hasDurableProgressTools ? [
-      "Preserve materially useful new facts, negative results, changed proof obligations, and reusable procedures in the matching canonical record before moving on or finalizing. Routine activity alone is not durable progress; do not manufacture a record for an attempt with no reusable result. Investigations summarize cross-session work rather than replace evidence or executable procedures.",
+      "Preserve materially useful new facts, negative results, changed proof obligations, and reusable procedures in the matching canonical record before moving on or finalizing. Routine activity alone is not durable progress; do not manufacture a record for an attempt with no reusable result. Search workspace history and prior sessions when continuing earlier work.",
     ] : []),
     ...(profile?.id === "security-research" && (options.hasMemoryTools || options.hasRunbookTools) ? [
       "After repairing an execution dependency, update its asset memory or environment runbook with the non-secret access recipe, readiness timing, failure classification, and cleanup path.",

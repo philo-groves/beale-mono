@@ -206,30 +206,12 @@ function parseExpandedPrompt(text: string): string {
 
 function compactCampaignState(campaign: CampaignGraphSummary | null): Record<string, unknown> | null {
   if (!campaign) return null;
-  const activeTrack = campaign.activeTrackId
-    ? campaign.tracks?.find((track) => track.id === campaign.activeTrackId) ?? null
-    : null;
-  const recentTracks = [...(campaign.tracks ?? [])]
-    .filter((track) => track.id !== activeTrack?.id)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-    .slice(0, 6);
-  const compactTrack = (track: NonNullable<CampaignGraphSummary["tracks"]>[number]) => ({
-    id: track.id,
-    title: boundedText(track.title, 240),
-    objective: boundedText(track.objective, 600),
-    status: track.status,
-    stage: track.stage,
-    updatedAt: track.updatedAt,
-    counts: track.counts,
-  });
   return {
     counts: campaign.counts,
     momentum: {
       state: campaign.momentum.state,
       reason: boundedText(campaign.momentum.reason, 500),
     },
-    activeTrack: activeTrack ? compactTrack(activeTrack) : null,
-    recentTracks: recentTracks.map(compactTrack),
     nextActions: campaign.nextActions.slice(0, 8).map((gap) => ({
       id: gap.id,
       kind: gap.kind,

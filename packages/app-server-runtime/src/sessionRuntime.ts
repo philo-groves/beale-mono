@@ -28,8 +28,6 @@ import {
   createMemoryGraphTools,
   createWorkspaceHistorySearchTool,
   createWorkspaceHistoryDuplicateTools,
-  createCampaignTrackTools,
-  createCampaignTrackAssignmentTools,
   createFindingTools,
   FindingStore,
   LEGACY_CLAIM_MEMORY_TYPES,
@@ -72,10 +70,6 @@ import {
   createResearchWorkspaceContext,
   createMcpResearchTools,
   MemoryGraphStore,
-  CampaignTrackStore,
-  campaignExperimentProjection,
-  campaignObservationProjection,
-  campaignQuestionProjection,
   resolveResearchMemoryBackend,
   RunbookStore,
   ReportStore,
@@ -296,7 +290,6 @@ interface ParsedArgs {
   researchProfileHash: string | undefined;
   promptTemplatePath: string | undefined;
   workflowId: string | undefined;
-  investigationId: string | undefined;
   maxTokens: number | undefined;
   reasoning: ResearchModelEffort | undefined;
   executor: CliExecutorKind;
@@ -417,7 +410,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let researchProfileHash: string | undefined;
   let promptTemplatePath: string | undefined;
   let workflowId: string | undefined;
-  let investigationId: string | undefined;
   let executor: CliExecutorKind = "agent";
   let toolExecution: CliToolExecutionMode | undefined;
   let maxTokens: number | undefined;
@@ -688,9 +680,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--workflow") {
       workflowId = readOptionValue(argv, index, arg);
       index += 1;
-    } else if (arg === "--investigation-id") {
-      investigationId = readOptionValue(argv, index, arg);
-      index += 1;
     } else if (arg === "--skill") {
       selectedSkillIds.push(readOptionValue(argv, index, arg));
       index += 1;
@@ -780,7 +769,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     researchProfileHash,
     promptTemplatePath,
     workflowId,
-    investigationId,
     maxTokens,
     reasoning,
     executor,
@@ -1621,7 +1609,6 @@ function usage(): string {
     "  --research-profile-hash <hash> Require the resolved profile to match this SHA-256 hash",
     "  --prompt-template-file <path> Use a host-snapshotted prompt template for this run",
     "  --workflow <id>        Select a workflow from the resolved research profile",
-    "  --investigation-id <id> Assert the immutable investigation already assigned to this session",
     "  --disable-tool-family <name> Disable a tool family after implicit/default enables",
     "  --profile-tool-family-ceiling <name> Let the active profile request this family within a host ceiling",
     "  --tool-config <path>   Runtime tool preference config (default: .beale/tools.json)",
@@ -2277,7 +2264,6 @@ export async function main(
         ...(controlStream ? { signal: controlStream.signal } : {}),
       });
       await sessionTitle;
-      if (result.agentRun.status === "complete") runtimeConfig.requireInvestigationAssignment();
 
       if (args.capturePath) {
         const writtenCapture = await writeFlowCapture(
@@ -3712,7 +3698,6 @@ async function prepareRuntimeConfigInputs(input: {
 async function createRuntimeConfig(args: {
   prompt?: string | undefined;
   sessionId?: string | undefined;
-  investigationId?: string | undefined;
   inspectRoots: string[];
   inspectPaths: string[];
   inspectAction: LocalInspectionAction;
@@ -3742,7 +3727,6 @@ async function createRuntimeConfig(args: {
   runtimeTools: RuntimeToolConfig;
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
-  requireInvestigationAssignment: () => void;
   memoryGraph: MemoryGraphStore;
   executeRunbook?: (request: {
     runbookId: string;
@@ -3788,20 +3772,8 @@ async function createRuntimeConfig(args: {
   );
   const governance = createCliGovernance(runtimeTools);
   const cleanupCallbacks: (() => Promise<void>)[] = [];
-  let campaignTrackStore: CampaignTrackStore | undefined;
-  let activeCampaignTrackId: string | null = null;
-  let activeCampaignResources: Partial<Record<"memory" | "finding" | "runbook", readonly string[]>> = {};
-  const requireInvestigationAssignment = (): void => {
-    if (memoryActive && args.sessionId && args.prompt && !activeCampaignTrackId) {
-      throw new Error(
-        "This session has not selected its investigation. Get oriented, then call investigation.assign before finishing.",
-      );
-    }
-  };
   const dispositionRecorder = new ResearchDispositionRecorder();
-  const dispositionTool = createSessionDispositionTool(dispositionRecorder, {
-    beforeRecord: requireInvestigationAssignment,
-  });
+  const dispositionTool = createSessionDispositionTool(dispositionRecorder);
   executableTools.push(dispositionTool);
   toolDescriptors.push(dispositionTool.descriptor);
   const storageLayout = createResearchStorageLayout({
@@ -3866,88 +3838,6 @@ async function createRuntimeConfig(args: {
   executableTools.push(...memoryTools);
   toolDescriptors.push(...memoryTools.map((tool) => tool.descriptor));
   const findingStore = new FindingStore(memoryGraph);
-  if (memoryActive) {
-    campaignTrackStore = new CampaignTrackStore({
-      databasePath: memoryGraph.databasePath,
-      context: memoryGraph.getContext(),
-      memoryGraph,
-      claimStore: findingStore,
-    });
-    campaignTrackStore.repairPlaceholderTracks();
-    if (campaignTrackStore.list({ includeArchived: true }).length === 0) {
-      campaignTrackStore.replayWorkspace({
-        persist: true,
-        mode: "active",
-        ...(args.sessionId ? { excludeSessionIds: [args.sessionId] } : {}),
-      });
-    }
-    if (args.sessionId && args.prompt) {
-      let assignedTrack = campaignTrackStore.getForSession(args.sessionId);
-      if (assignedTrack && args.investigationId && assignedTrack.id !== args.investigationId) {
-        throw new Error(
-          `Session ${args.sessionId} is already assigned to investigation ${assignedTrack.id}; investigation assignment is immutable.`,
-        );
-      }
-      if (!assignedTrack && args.mock) {
-        assignedTrack = campaignTrackStore.ensureForSession({
-          sessionId: args.sessionId,
-          objective: args.prompt,
-          source: "runtime",
-          sourceRevision: workspaceContext.sourceRevision ?? null,
-          environmentFingerprint: workspaceContext.environmentFingerprint ?? null,
-        });
-      }
-      if (assignedTrack) {
-        activeCampaignTrackId = assignedTrack.id;
-        activeCampaignResources = {
-          memory: campaignTrackStore.linkedResourceIds(assignedTrack.id, "memory"),
-          finding: campaignTrackStore.linkedResourceIds(assignedTrack.id, "finding"),
-          runbook: campaignTrackStore.linkedResourceIds(assignedTrack.id, "runbook"),
-        };
-      } else {
-        const assignmentTools = createCampaignTrackAssignmentTools(
-          campaignTrackStore,
-          args.sessionId,
-          args.prompt,
-          {
-            get: () => activeCampaignTrackId,
-            assign: (investigationId) => {
-              activeCampaignTrackId = investigationId;
-              activeCampaignResources = {
-                memory: campaignTrackStore!.linkedResourceIds(investigationId, "memory"),
-                finding: campaignTrackStore!.linkedResourceIds(investigationId, "finding"),
-                runbook: campaignTrackStore!.linkedResourceIds(investigationId, "runbook"),
-              };
-            },
-          },
-        );
-        executableTools.push(...assignmentTools);
-        toolDescriptors.push(...assignmentTools.map((tool) => tool.descriptor));
-      }
-      const investigationTools = createCampaignTrackTools(campaignTrackStore, () => {
-        if (!activeCampaignTrackId) {
-          throw new Error("Select the session investigation with investigation.assign first.");
-        }
-        return activeCampaignTrackId;
-      });
-      executableTools.push(...investigationTools);
-      toolDescriptors.push(...investigationTools.map((tool) => tool.descriptor));
-    }
-    cleanupCallbacks.push(async () => {
-      try {
-        if (activeCampaignTrackId) campaignTrackStore?.refreshFromLinkedResources(activeCampaignTrackId);
-        campaignTrackStore?.replayWorkspace({
-          record: true,
-          mode: "active",
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`beale: campaign track post-session refresh failed: ${message.slice(0, 500)}`);
-      } finally {
-        campaignTrackStore?.close();
-      }
-    });
-  }
   const findingTools = memoryActive
     ? createFindingTools(findingStore, {
         classifications: resolvedResearchProfile.profile.claims.classifications.map((classification) => classification.id),
@@ -4044,9 +3934,6 @@ async function createRuntimeConfig(args: {
       duplicateMemories: [...node.duplicateMemories],
       authors: [],
     }));
-    const campaignReplayMetrics = campaignTrackStore
-      ? campaignTrackStore.latestReplayMetrics()
-      : null;
     return buildCampaignGraph({
       nodes: campaignMemoryNodes,
       edges: (memoryActive
@@ -4082,46 +3969,13 @@ async function createRuntimeConfig(args: {
             ...workspaceContext.materializedSourcePaths,
           ]
         : [],
-      ...(campaignTrackStore
-        ? {
-            tracks: campaignTrackStore.list().map((track) => {
-              const detail = campaignTrackStore.detail(track.id);
-              return {
-                ...track,
-                questions: (detail?.questions ?? []).map(campaignQuestionProjection),
-                experiments: (detail?.experiments ?? []).map(campaignExperimentProjection),
-                observations: (detail?.observations ?? []).map(campaignObservationProjection),
-              };
-            }),
-            activeTrackId: activeCampaignTrackId,
-            ...(campaignReplayMetrics ? { replayMetrics: campaignReplayMetrics } : {}),
-          }
-        : {}),
     });
   };
-  const createCurrentActiveCampaignResources = (): Partial<Record<"memory" | "finding" | "runbook", readonly string[]>> =>
-    campaignTrackStore && activeCampaignTrackId
-      ? {
-          memory: [...new Set([
-            ...campaignTrackStore.linkedResourceIds(activeCampaignTrackId, "memory"),
-            ...(args.sessionId ? memoryGraph.search({ scope: "session", limit: 200 }).map((memory) => memory.id) : []),
-          ])],
-          finding: [...new Set([
-            ...campaignTrackStore.linkedResourceIds(activeCampaignTrackId, "finding"),
-            ...(args.sessionId ? findingStore.list().filter((finding) => finding.originSessionId === args.sessionId).map((finding) => finding.id) : []),
-          ])],
-          runbook: [...new Set([
-            ...campaignTrackStore.linkedResourceIds(activeCampaignTrackId, "runbook"),
-            ...(args.sessionId ? runbookStore?.list({ limit: 200 }).filter((runbook) => runbook.sessionId === args.sessionId).map((runbook) => runbook.id) ?? [] : []),
-          ])],
-        }
-      : activeCampaignResources;
   const campaignContext = createCurrentCampaignContext();
   const getContinuityContext = (): Record<string, unknown> => createSessionContinuityContext(
     resolve(workspaceRoot),
     args.prompt ?? "",
     createCurrentCampaignContext(),
-    createCurrentActiveCampaignResources(),
   );
   const mcpCapture = await configureRuntimeMcpTools({
     runtimeTools,
@@ -4337,7 +4191,6 @@ async function createRuntimeConfig(args: {
     getContinuityContext,
     runtimeTools,
     dispositionRecorder,
-    requireInvestigationAssignment,
     memoryGraph,
     ...(executeRunbook ? { executeRunbook } : {}),
     capture: createRuntimeCapture({
@@ -4366,19 +4219,10 @@ function createSessionContinuityContext(
   workspacePath: string,
   objective: string,
   campaign: CampaignGraphSummary,
-  linkedResources: Partial<Record<"memory" | "finding" | "runbook", readonly string[]>>,
 ): Record<string, unknown> {
-  const activeInvestigation = campaign.activeTrackId
-    ? campaign.tracks?.find((track) => track.id === campaign.activeTrackId) ?? null
-    : null;
   const newestNodes = (kind: "lead" | "finding" | "runbook") => {
-    const resourceKind = kind === "runbook" ? "runbook" : "finding";
-    const linkedIds = new Set(linkedResources[resourceKind] ?? []);
     const candidates = campaign.nodes.filter((node) => node.kind === kind);
-    const scoped = activeInvestigation
-      ? candidates.filter((node) => linkedIds.has(node.claimId ?? node.id.replace(/^[^:]+:/u, "")))
-      : candidates;
-    return scoped
+    return candidates
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, 12)
     .map((node) => ({
@@ -4392,7 +4236,6 @@ function createSessionContinuityContext(
     schemaVersion: 1,
     workspacePath,
     objective: objective.trim(),
-    activeInvestigation,
     recentLeads: newestNodes("lead"),
     recentFindings: newestNodes("finding"),
     updatedRunbooks: newestNodes("runbook"),

@@ -25,14 +25,9 @@ export const MANAGED_TOOL_PLUGINS = [
     tools: ["claim.get", "lead.list", "lead.create", "finding.list", "finding.revise", "finding.transition", "finding.completion_check"],
   },
   {
-    id: "beale-investigations", name: "Investigations",
-    description: "Use for investigation records, questions, observations, and configured experiments.",
-    tools: ["investigation.candidates", "investigation.assign", "investigation.status", "investigation.recall", "investigation.question", "investigation.experiment", "investigation.observe", "investigation.next_action", "investigation.review_claim", "investigation.consolidate", "investigation.review_consolidation", "experiment.run"],
-  },
-  {
     id: "beale-runbooks", name: "Runbooks",
     description: "Use for reusable procedure documents, their revisions, and recorded executions.",
-    tools: ["runbook.list", "runbook.get", "runbook.prepare", "runbook.create", "runbook.append", "runbook.edit", "runbook.configure", "runbook.run"],
+    tools: ["runbook.list", "runbook.get", "runbook.prepare", "runbook.create", "runbook.append", "runbook.edit", "runbook.configure", "runbook.run", "experiment.run"],
   },
   {
     id: "beale-reporting", name: "Reporting",

@@ -84,7 +84,7 @@ export function longSessionRecoveryFallbackPrompt(
     '',
     'The previous worker ended unexpectedly. Continue the same research task from the durable session state and prior attempt capture. Preserve established evidence, decisions, open hypotheses, and completed work. Do not restart the investigation or repeat prior work merely to reconstruct context.',
     '',
-    'The recovered worker will receive a deterministic continuity snapshot containing the objective, active investigation, recent memories, leads, findings, updated runbooks, and a bounded recent activity tail. Use that snapshot as the anchor, then inspect focused canonical records only when a refresh is needed.',
+    'The recovered worker will receive a deterministic continuity snapshot containing the objective, recent memories, leads, findings, updated runbooks, and a bounded recent activity tail. Use that snapshot as the anchor, then inspect focused canonical records only when a refresh is needed.',
     '',
     'If native provider state is unavailable, continue from the replayable retained reasoning and compacted Responses items plus canonical session history. Do not infer that a prompt-cache miss erased durable research state.',
     '',

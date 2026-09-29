@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
-  CampaignTrackStore,
   MemoryGraphStore,
   ResearchClaimStore,
   ResearchResourceCatalog,
   ReportStore,
   RunbookStore,
-  createCampaignTrackTools,
   createFindingTools,
   createMemoryGraphTools,
   createResearchResourceTool,
@@ -37,7 +35,6 @@ export interface AppServerResearchToolContext {
   researchProfileId: string;
   memoryBackend: 'app-server' | 'disabled';
   sessionId?: string;
-  investigationId?: string;
   objective?: string;
   modelAuthor?: ModelAuthor;
   workspaceReferences?: readonly {
@@ -219,20 +216,6 @@ async function createResearchToolBridgeRuntime(
       }));
     }
 
-    if (memoryActive && input.investigationId) {
-      const investigations = new CampaignTrackStore({
-        databasePath: storage.databasePath,
-        context,
-        memoryGraph,
-        claimStore: findingStore
-      });
-      if (!investigations.detail(input.investigationId)) {
-        investigations.close();
-        throw new Error(`Campaign track not found in this workspace: ${input.investigationId}`);
-      }
-      close.unshift(() => investigations.close());
-      tools.push(...createCampaignTrackTools(investigations, input.investigationId));
-    }
 
     const resources = new ResearchResourceCatalog({
       databasePath: storage.databasePath,

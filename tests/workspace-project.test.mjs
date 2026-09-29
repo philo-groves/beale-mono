@@ -27,7 +27,7 @@ test('creates a standalone local research repository with the explicit layout an
   assert.ok(existsSync(join(root, 'references', 'research-index.json')));
   assert.equal(git(root, 'remote').stdout, '');
   assert.equal(git(root, 'log', '--format=%s').stdout.trim(), 'Initialize research workspace');
-  assert.match(git(root, 'log', '-1', '--format=%B').stdout.trim(), /\n\nInvestigation-ID: none\nSession-ID: none$/u);
+  assert.match(git(root, 'log', '-1', '--format=%B').stdout.trim(), /\n\nSession-ID: none$/u);
   for (const directory of WORKSPACE_DIRECTORIES) assert.ok(existsSync(join(root, directory)));
   assert.equal(git(root, 'status', '--porcelain').stdout, '');
   assert.equal(checkpointWorkspace(root, 'No changes').status, 'unchanged');
@@ -336,12 +336,12 @@ test('creation resumes when the workspace marker exists before Git initializatio
   assert.equal(git(root, 'remote').stdout, '');
 });
 
-test('checkpoint messages end with filterable investigation and session trailers', () => {
+test('checkpoint messages end with a filterable session trailer', () => {
   const root = workspace();
   writeFileSync(join(root, 'investigations', 'example.md'), 'example research');
-  const result = checkpointWorkspace(root, 'Research milestone', undefined, { investigationId: 'investigation-example', sessionId: 'session-example' });
+  const result = checkpointWorkspace(root, 'Research milestone', undefined, { sessionId: 'session-example' });
   assert.equal(result.status, 'committed', result.error);
-  assert.equal(git(root, 'log', '-1', '--format=%B').stdout.trim(), 'Research milestone\n\nInvestigation-ID: investigation-example\nSession-ID: session-example');
+  assert.equal(git(root, 'log', '-1', '--format=%B').stdout.trim(), 'Research milestone\n\nSession-ID: session-example');
   assert.equal(git(root, 'log', '--format=%s', '--grep=^Session-ID: session-example$').stdout.trim(), 'Research milestone');
   writeFileSync(join(root, 'investigations', 'example.md'), 'new research');
   assert.equal(checkpointWorkspace(root, 'Invalid attribution', undefined, { sessionId: 'session-example\nInjected: value' }).status, 'failed');
@@ -353,10 +353,10 @@ test('manual commits receive trailers and retain explicitly supplied attribution
   git(root, 'add', 'investigations/example.md');
   assert.notEqual(git(root, 'commit', '--allow-empty-message', '-m', '').status, 0);
   assert.equal(git(root, 'commit', '-m', 'Operator edit').status, 0);
-  assert.match(git(root, 'log', '-1', '--format=%B').stdout.trim(), /Investigation-ID: none\nSession-ID: none$/u);
+  assert.match(git(root, 'log', '-1', '--format=%B').stdout.trim(), /Session-ID: none$/u);
   writeFileSync(join(root, 'investigations', 'example.md'), 'attributed edit');
   git(root, 'add', 'investigations/example.md');
-  const message = 'Research edit\n\nInvestigation-ID: investigation-example\nSession-ID: session-example';
+  const message = 'Research edit\n\nSession-ID: session-example';
   assert.equal(git(root, 'commit', '-m', message).status, 0);
   assert.equal(git(root, 'log', '-1', '--format=%B').stdout.trim(), message);
 });

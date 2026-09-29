@@ -315,82 +315,6 @@ export interface CampaignContradictionSummary {
   summary: string;
 }
 
-export interface CampaignTrackProjectionSummary {
-  id: string;
-  title: string;
-  objective: string;
-  status: "active" | "blocked" | "complete" | "archived";
-  stage: "orienting" | "exploring" | "testing" | "reproducing" | "verifying" | "reporting" | "complete" | "blocked";
-  source: "runtime" | "shadow" | "replay" | "manual";
-  sessionIds: string[];
-  updatedAt: string;
-  revision: number;
-  questions: CampaignQuestionProjectionSummary[];
-  experiments: CampaignExperimentProjectionSummary[];
-  observations: CampaignObservationProjectionSummary[];
-  counts: {
-    questions: number;
-    openQuestions: number;
-    experiments: number;
-    observations: number;
-    openNextActions: number;
-    memoryNodes: number;
-    evidenceRefs: number;
-    findings: number;
-    runbooks: number;
-    reports: number;
-  };
-}
-
-export interface CampaignQuestionProjectionSummary {
-  id: string;
-  investigationId: string;
-  text: string;
-  status: "open" | "answered" | "blocked" | "superseded";
-  priority: "critical" | "high" | "medium" | "low";
-  answer: string;
-  updatedAt: string;
-  revision: number;
-}
-
-export interface CampaignExperimentProjectionSummary {
-  id: string;
-  investigationId: string;
-  questionId: string | null;
-  runbookId: string | null;
-  title: string;
-  status: "planned" | "running" | "succeeded" | "failed" | "inconclusive" | "blocked";
-  resultSummary: string;
-  startedAt: string | null;
-  completedAt: string | null;
-  updatedAt: string;
-  revision: number;
-}
-
-export interface CampaignObservationProjectionSummary {
-  id: string;
-  investigationId: string;
-  experimentId: string | null;
-  kind: "source" | "runtime" | "artifact" | "verifier" | "human" | "historical";
-  outcome: "supports" | "refutes" | "narrows" | "neutral";
-  summary: string;
-  createdAt: string;
-}
-
-export interface CampaignReplayMetricsSummary {
-  schemaVersion: 1;
-  mode: "historical" | "shadow" | "active";
-  workspaceId: string;
-  sessionCount: number;
-  generatedTrackCount: number;
-  linkedMemoryNodeCount: number;
-  repeatedMemoryCandidateCount: number;
-  rejectedHypothesisResurrectionCount: number;
-  environmentTaggedNodeRate: number;
-  crossSessionReuseRate: number;
-  medianMinutesToFirstEvidence: number | null;
-}
-
 export type CampaignMomentumState =
   | "empty"
   | "exploring"
@@ -421,9 +345,6 @@ export interface CampaignGraphSummary {
     coverageGaps: number;
     contradictions: number;
   };
-  tracks?: CampaignTrackProjectionSummary[];
-  activeTrackId?: string | null;
-  replayMetrics?: CampaignReplayMetricsSummary;
 }
 
 /**
@@ -437,21 +358,13 @@ export interface CampaignModelContext {
   momentum: CampaignGraphSummary["momentum"];
   nextActions: CampaignCoverageGapSummary[];
   contradictions: CampaignContradictionSummary[];
-  activeTrack: CampaignModelTrackContext | null;
-  recentTracks: CampaignModelTrackContext[];
   omitted: {
     nodes: number;
     edges: number;
     coverageGaps: number;
     contradictions: number;
-    tracks: number;
   };
 }
-
-export type CampaignModelTrackContext = Pick<
-  CampaignTrackProjectionSummary,
-  "id" | "title" | "objective" | "status" | "stage" | "source" | "updatedAt" | "revision" | "counts"
->;
 
 export interface ArtifactRevisionSummary {
   revision: number;

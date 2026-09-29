@@ -374,7 +374,7 @@ export function createStructuredFileReadTool(
     name: "file.read",
     transportName: "file_read",
     description:
-      "Read a bounded byte range from a local file. Workspace context roots are audit hints, not access fences. Canonical research records must be read through claim, memory, runbook, report, investigation, or history tools; exported workspace projections are point-in-time files and may be stale.",
+      "Read a bounded byte range from a local file. Workspace context roots are audit hints, not access fences. Canonical research records must be read through claim, memory, runbook, report, or history tools; exported workspace projections are point-in-time files and may be stale.",
     actionClasses: ["inspect"],
     sideEffects: "read",
     requiredPermissions: ["filesystem:read"],

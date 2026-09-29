@@ -114,10 +114,10 @@ test("reproduction rejects setup-only runs, changed environments, and obsolete n
   assert.equal(recalled.status, "complete", recalled.error?.message);
   assert.equal(recalled.output.cells[0].source, "console.log('example assertion')");
   assert.equal(recalled.output.nextOffset, null);
-  assert.throws(() => f.runbooks.getExecution("another-runbook-example", full.runId), /not found in this workspace/);
+  assert.throws(() => f.runbooks.getExecution("another-runbook-example", full.runId), /not found in the selected workspace/);
   const otherBooks = new RunbookStore(f.graph.databasePath, ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot: f.root })),
     { ...f.context, workspaceId: "workspace-other-example" });
-  try { assert.throws(() => otherBooks.getExecution(f.book.id, full.runId), /not found in this workspace/); }
+  try { assert.throws(() => otherBooks.getExecution(f.book.id, full.runId), /not found in the selected workspace/); }
   finally { otherBooks.close(); }
   assert.throws(() => f.claims.readDetail(claim.id, "evidence", 1, 1, originalDetail.readRevision), /read revision changed/);
   claim = f.claims.get(claim.id);

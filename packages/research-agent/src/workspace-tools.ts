@@ -22,24 +22,6 @@ export {
   type WorkspaceHistoryRecordType,
 } from "./workspace-history-tools.js";
 export {
-  CampaignTrackStore,
-  readCampaignTrackSummaries,
-  readLatestCampaignTrackReplayMetrics,
-  type CampaignTrackDetail,
-  type CampaignTrackRecord,
-  type CampaignTrackStage,
-  type CampaignTrackSummary,
-  type ConsolidationCandidate,
-  type InvestigationReplayMetrics,
-  type InvestigationReplayResult,
-  type InvestigationQuestion,
-  type InvestigationExperiment,
-  type InvestigationObservation,
-  type InvestigationNextAction,
-  type StageAwareRecallResult,
-} from "./campaign-tracks.js";
-export { createCampaignTrackTools } from "./campaign-track-tools.js";
-export {
   RunbookStore,
   type RunbookCellInput,
   type RunbookPage,

@@ -325,7 +325,6 @@ function toolLabelInputKeys(toolName: string): readonly string[] {
   switch (toolName) {
     case 'finding.transition': return ['toStatus'];
     case 'finding.completion_check': return ['targetStatus'];
-    case 'investigation.recall':
     case 'finding.list': return ['query'];
     case 'channel_list': return [];
     case 'channel_read': return ['channel_name'];

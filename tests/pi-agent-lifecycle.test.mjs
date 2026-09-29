@@ -684,7 +684,6 @@ test("direct Pi Agent and executor use the shared research system prompt", async
   assert.match(contexts[0].systemPrompt, /send a final response only when the current task is complete/);
   assert.match(contexts[0].systemPrompt, /Attribute only work completed in this session to this session/i);
   assert.match(contexts[0].systemPrompt, /an unchanged artifact cannot satisfy a request for new work/i);
-  assert.match(contexts[0].systemPrompt, /Host-bound campaign and investigation identities override conflicting prompt prose/i);
   assert.match(contexts[0].systemPrompt, /Delegation:\n- Delegate distinct, bounded work/);
   assert.match(contexts[0].systemPrompt, /expected evidence gain justifies the context and coordination cost/);
   assert.doesNotMatch(contexts[0].systemPrompt, /Use collaboration tools for independent work/);
@@ -727,16 +726,6 @@ test("research system prompt keeps workflow phases behind runbook feature tags w
   assert.match(prompt, /revision-checked runbook\.edit.*rerun the same cell/);
   assert.match(prompt, /Start a sibling runbook only for a genuinely unrelated objective/);
   assert.doesNotMatch(prompt, /proof development.*shell\.run/);
-});
-
-test("research system prompt keeps investigations as cross-session overview state", () => {
-  const prompt = createResearchSystemPrompt({
-    hasTools: true,
-    hasMemoryTools: true,
-    hasFindingTools: true,
-    hasRunbookTools: true,
-  });
-  assert.match(prompt, /Investigations summarize cross-session work rather than replace evidence or executable procedures/);
 });
 
 test("research system prompt allows same-model review only from a fresh distinct subagent", () => {

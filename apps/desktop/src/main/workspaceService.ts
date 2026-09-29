@@ -5380,9 +5380,6 @@ export class WorkspaceService {
         contradictions: [],
         momentum: { state: 'empty', reason: 'Workspace memory is disabled.', supportingNodeIds: [] },
         nextActions: [],
-        tracks: [],
-        activeTrackId: null,
-        replayMetrics: undefined,
         counts: { leads: 0, findings: 0, verifiedFindings: 0, disclosedFindings: 0, coverageGaps: 0, contradictions: 0 }
       }
     };
@@ -7107,12 +7104,6 @@ function buildResearchGoalSuggestionGroundingContext(
   for (const contradiction of campaign?.contradictions.slice(0, 6) ?? []) {
     add(`campaign:contradiction:${contradiction.id}`, 'campaign-contradiction', contradiction.summary, contradiction.relation);
   }
-  for (const track of [...(campaign?.tracks ?? [])]
-    .sort((left, right) => Number(right.id === campaign?.activeTrackId) - Number(left.id === campaign?.activeTrackId)
-      || right.updatedAt.localeCompare(left.updatedAt))
-    .slice(0, 7)) {
-    add(`campaign:track:${track.id}`, `campaign-track:${track.stage}`, track.title, track.objective);
-  }
   const activeNodes = prepared.memory?.nodes
     .filter((node) => isResearchProfileMemoryStatusActive(profile, node.status))
     .sort((left, right) => workflowMemoryPriority(workflow, right) - workflowMemoryPriority(workflow, left)
@@ -7178,7 +7169,6 @@ function buildResearchGoalSuggestionGroundingContext(
       ...activeNodes.flatMap((node) => [node.title, node.summary]),
       ...activeClaims.flatMap((claim) => [claim.title, claim.summary, claim.impact]),
       ...(campaign?.nextActions.flatMap((gap) => [gap.title, gap.rationale]) ?? []),
-      ...(campaign?.tracks?.flatMap((track) => [track.title, track.objective]) ?? []),
       ...(coverage?.components.map((component) => component.component) ?? [])
     ]
   };
@@ -8163,21 +8153,12 @@ function buildSecurityResearchObjectiveInput(
 
 function compactCampaignGenerationState(campaign: AppServerMemorySummary['campaign'] | null): Record<string, unknown> | null {
   if (!campaign) return null;
-  const activeTrack = campaign.activeTrackId
-    ? campaign.tracks?.find((track) => track.id === campaign.activeTrackId) ?? null
-    : null;
-  const recentTracks = [...(campaign.tracks ?? [])]
-    .filter((track) => track.id !== activeTrack?.id)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-    .slice(0, 6);
   return {
     counts: campaign.counts,
     momentum: {
       state: campaign.momentum.state,
       reason: trimRedactedText(campaign.momentum.reason, 500)
     },
-    activeTrack: activeTrack ? compactCampaignTrackForGeneration(activeTrack) : null,
-    recentTracks: recentTracks.map(compactCampaignTrackForGeneration),
     nextActions: campaign.nextActions.slice(0, 8).map((gap) => ({
       id: gap.id,
       kind: gap.kind,
@@ -8195,23 +8176,8 @@ function compactCampaignGenerationState(campaign: AppServerMemorySummary['campai
       nodes: campaign.nodes.length,
       edges: campaign.edges.length,
       coverageGaps: Math.max(0, campaign.coverageGaps.length - 8),
-      contradictions: Math.max(0, campaign.contradictions.length - 6),
-      tracks: Math.max(0, (campaign.tracks?.length ?? 0) - recentTracks.length - (activeTrack ? 1 : 0))
+      contradictions: Math.max(0, campaign.contradictions.length - 6)
     }
-  };
-}
-
-function compactCampaignTrackForGeneration(
-  track: NonNullable<AppServerMemorySummary['campaign']['tracks']>[number]
-): Record<string, unknown> {
-  return {
-    id: track.id,
-    title: trimRedactedText(track.title, 240),
-    objective: trimRedactedText(track.objective, 600),
-    status: track.status,
-    stage: track.stage,
-    updatedAt: track.updatedAt,
-    counts: track.counts
   };
 }
 

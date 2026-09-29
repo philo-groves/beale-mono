@@ -5,7 +5,6 @@ import {
   stableResourceId,
   AgentPluginRegistry,
   BUNDLED_RESEARCH_PROFILE_IDS,
-  CampaignTrackStore,
   MemoryGraphStore,
   ResearchClaimStore,
   RunbookStore,
@@ -164,7 +163,6 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
   if (operation.startsWith('memory.') || operation.startsWith('dreaming.')
     || operation.startsWith('history.')
     || operation.startsWith('claim.')
-    || operation.startsWith('investigation.')
     || operation === 'runbook.get' || operation.startsWith('report.')
     || operation === 'artifact.resolve') {
     return knowledgeOperation(operation, options);
@@ -378,21 +376,6 @@ async function knowledgeOperation(operation: AppServerProtocolOperation, options
       const workspaceId = requiredText(input.workspaceId, 'workspaceId');
       migrateWorkspaceResearchClaims(layout.databasePath, workspaceId);
       const context = await resolveCanonicalMemoryContext(layout, input, workspaceId);
-      const campaignTracks = new CampaignTrackStore({
-        databasePath: layout.databasePath,
-        context: {
-          workspaceId,
-          workspaceName: optionalText(input.workspaceName) ?? workspaceId,
-          subjectId: context.subjectId ?? `subject_workspace:${workspaceId}`,
-          subjectName: optionalText(input.subjectName) ?? optionalText(input.workspaceName) ?? workspaceId,
-          ...(typeof input.sessionId === 'string' ? { sessionId: input.sessionId } : {})
-        }
-      });
-      try {
-        campaignTracks.repairPlaceholderTracks({ skipActiveSessions: true });
-      } finally {
-        campaignTracks.close();
-      }
       return getAppServerMemorySummary({
         databasePath: layout.databasePath, artifactDirectoryPath: layout.artifactDirectoryPath,
         workspaceId, subjectId: context.subjectId,
@@ -452,31 +435,6 @@ async function knowledgeOperation(operation: AppServerProtocolOperation, options
         claims?.close();
         runbooks?.close();
         graph.close();
-      }
-    }
-    case 'investigation.list':
-    case 'investigation.get':
-    case 'investigation.replay': {
-      const workspaceId = requiredText(input.workspaceId, 'workspaceId');
-      const store = new CampaignTrackStore({
-        databasePath: layout.databasePath,
-        context: {
-          workspaceId,
-          workspaceName: optionalText(input.workspaceName) ?? workspaceId,
-          subjectId: optionalText(input.subjectId) ?? `subject_workspace:${workspaceId}`,
-          subjectName: optionalText(input.subjectName) ?? optionalText(input.workspaceName) ?? workspaceId,
-          ...(typeof input.sessionId === 'string' ? { sessionId: input.sessionId } : {})
-        }
-      });
-      try {
-        store.repairPlaceholderTracks({ skipActiveSessions: true });
-        if (operation === 'investigation.list') return store.list({ includeArchived: input.includeArchived === true });
-        if (operation === 'investigation.replay') return store.replayWorkspace({ persist: input.persist === true });
-        const detail = store.detail(requiredText(input.investigationId, 'investigationId'));
-        if (!detail) throw new Error(`Campaign track not found: ${String(input.investigationId)}`);
-        return detail;
-      } finally {
-        store.close();
       }
     }
     case 'dreaming.prepare': return prepareMemoryDreamingRequest(input as never);

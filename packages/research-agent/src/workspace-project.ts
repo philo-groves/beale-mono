@@ -86,7 +86,6 @@ interface WorkspaceRawArtifactRegistry {
   artifacts: WorkspaceRawArtifactRegistryEntry[];
 }
 export interface WorkspaceCommitContext {
-  investigationId?: string;
   sessionId?: string;
 }
 
@@ -95,7 +94,7 @@ export interface WorkspaceResearchEdit {
   state: "created" | "modified" | "deleted";
 }
 
-/** Stable final trailers support git log --grep and Git's trailer filtering. */
+/** Stable session trailer supports git log --grep and Git's trailer filtering. */
 export function formatWorkspaceCommitMessage(message: string, context: WorkspaceCommitContext = {}): string {
   const body = message.trimEnd();
   const id = (value: string | undefined): string => {
@@ -103,11 +102,11 @@ export function formatWorkspaceCommitMessage(message: string, context: Workspace
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/u.test(value)) throw new Error('Commit attribution IDs must be nonempty single-line identifiers.');
     return value;
   };
-  const existing = /\n\nInvestigation-ID: ([a-zA-Z0-9][a-zA-Z0-9_.:-]*)\nSession-ID: ([a-zA-Z0-9][a-zA-Z0-9_.:-]*)$/u.exec(body);
+  const existing = /\n\n(?:Investigation-ID: [a-zA-Z0-9][a-zA-Z0-9_.:-]*\n)?Session-ID: ([a-zA-Z0-9][a-zA-Z0-9_.:-]*)$/u.exec(body);
   const subject = existing ? body.slice(0, existing.index) : body;
   if (!subject.trim()) throw new Error('A research commit requires a nonempty message before its attribution trailers.');
-  if (/^(?:Investigation-ID|Session-ID):/mu.test(subject)) throw new Error('Commit attribution must appear exactly once as the final Investigation-ID and Session-ID trailers.');
-  return `${subject}\n\nInvestigation-ID: ${id(context.investigationId ?? existing?.[1])}\nSession-ID: ${id(context.sessionId ?? existing?.[2])}\n`;
+  if (/^(?:Investigation-ID|Session-ID):/mu.test(subject)) throw new Error('Commit attribution must appear only as the final Session-ID trailer.');
+  return `${subject}\n\nSession-ID: ${id(context.sessionId ?? existing?.[1])}\n`;
 }
 export interface WorkspaceProjectHealth {
   fileCount: number;
@@ -346,7 +345,7 @@ Place generated candidate artifacts larger than 5 MiB beneath an evidence/ direc
 If an untracked investigation file exceeds the limit, Beale reports its path before staging and offers a previewed move into evidence/recovered/ followed by a checkpoint retry. Tracked or canonical oversized files require an explicit operator repair.
 Keep the workspace top level clean. Unexpected files and directories are ignored by Git but detected directly by app-server; the agent is reminded every turn until it moves them into an approved directory.
 App-server keeps its derived research index synchronized with these files and creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
-Every commit ends with Investigation-ID and Session-ID trailers. Supply the actual IDs for manual research commits; use none only when there is no associated investigation or session.
+Every commit ends with a Session-ID trailer. Supply the actual ID for manual research commits; use none when there is no associated session.
 Host commands retain the operator's privileges; these conventions are not filesystem isolation.
 `;
 

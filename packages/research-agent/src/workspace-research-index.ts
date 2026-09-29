@@ -275,25 +275,6 @@ function rebuild(database: DatabaseSync, options: WorkspacePublicationOptions, i
   affected += insertRows(database, "app_server_artifact_revisions", artifactDocuments.flatMap((document) => nested(document.row, "revisions")));
   affected += insertRows(database, "app_server_model_authorship", artifactDocuments.flatMap((document) => nested(document.row, "authorship")));
 
-  const investigations = canonicalPaths(index, /^investigations\/[^/]+\/record\.json$/u).map((path) => readJson(root, path, options.workspaceId));
-  const investigationChildren = ["sessions", "resources", "questions", "experiments", "observations", "nextActions", "memoryClaimReviews", "researchClaimReviews"];
-  affected += insertRows(database, "campaign_tracks", investigations.map((row) => baseRow(row, investigationChildren)));
-  affected += insertRows(database, "campaign_track_sessions", investigations.flatMap((row) => nested(row, "sessions")));
-  affected += insertRows(database, "campaign_track_resources", investigations.flatMap((row) => nested(row, "resources")));
-  affected += insertRows(database, "campaign_track_questions", investigations.flatMap((row) => nested(row, "questions")));
-  affected += insertRows(database, "campaign_track_experiments", investigations.flatMap((row) => nested(row, "experiments")));
-  const observations = investigations.flatMap((row) => nested(row, "observations")) as Row[];
-  affected += insertRows(database, "campaign_track_observations", observations.map((row) => baseRow(row, ["evidence"])));
-  affected += insertRows(database, "campaign_track_observation_evidence", observations.flatMap((row) => nested(row, "evidence")));
-  affected += insertRows(database, "campaign_track_next_actions", investigations.flatMap((row) => nested(row, "nextActions")));
-  affected += insertRows(database, "campaign_track_claim_reviews", investigations.flatMap((row) => nested(row, "memoryClaimReviews")));
-  affected += insertRows(database, "campaign_track_research_claim_reviews", investigations.flatMap((row) => nested(row, "researchClaimReviews")));
-
-  if (index.files["references/campaign-state.json"]) {
-    const state = readJson(root, "references/campaign-state.json", options.workspaceId);
-    affected += insertRows(database, "campaign_track_replay_runs", nested(state, "replayRuns"));
-    affected += insertRows(database, "campaign_track_consolidations", nested(state, "consolidations"));
-  }
   if (index.files["references/resources.json"]) {
     const resources = readJson(root, "references/resources.json", options.workspaceId);
     const rows = nested(resources, "resources") as Row[];

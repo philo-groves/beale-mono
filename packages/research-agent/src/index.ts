@@ -11,8 +11,6 @@ export * from "./workspace-history-tools.js";
 export * from "./findings.js";
 export * from "./finding-tools.js";
 export * from "./campaign-graph.js";
-export * from "./campaign-tracks.js";
-export * from "./campaign-track-tools.js";
 export * from "./runbooks.js";
 export * from "./runbook-tools.js";
 export * from "./runbook-execution.js";

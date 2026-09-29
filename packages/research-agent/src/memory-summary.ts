@@ -5,7 +5,6 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openResearchDatabase } from './database.js';
 import { modelAuthorsByResource } from './model-authorship.js';
 import { buildCampaignGraph, emptyCampaignGraph } from './campaign-graph.js';
-import { readCampaignTrackSummaries, readLatestCampaignTrackReplayMetrics } from './campaign-tracks.js';
 import { readFindings } from './findings.js';
 import {
   emptyMemoryDreamingSummary,
@@ -125,8 +124,6 @@ export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions
     const reports = tableExists(database, 'app_server_reports') ? readReports(database, workspaceId, artifactRevisions) : [];
     const leads = claims.filter((claim): claim is LeadSummary => claim.projection === 'lead');
     const findings = claims.filter((claim) => claim.projection === 'finding');
-    const tracks = readCampaignTrackSummaries(database, workspaceId);
-    const replayMetrics = readLatestCampaignTrackReplayMetrics(database, workspaceId);
     const campaign = buildCampaignGraph({
       nodes,
       edges,
@@ -134,11 +131,6 @@ export function getAppServerMemorySummary(options: AppServerMemorySummaryOptions
       runbooks,
       reports,
       ...(options.assetIds ? { assetIds: options.assetIds } : {}),
-      ...(tracks.length > 0 ? { tracks } : {}),
-      ...(replayMetrics ? { replayMetrics } : {}),
-      ...(options.sessionId
-        ? { activeTrackId: tracks.find((track) => track.sessionIds.includes(options.sessionId!))?.id ?? null }
-        : {}),
     });
     return {
       ...base,

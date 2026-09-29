@@ -11,13 +11,10 @@ import type {
   MemoryNodeSummary,
   ReportSummary,
   RunbookSummary,
-  CampaignReplayMetricsSummary,
-  CampaignTrackProjectionSummary,
 } from "./knowledge-types.js";
 
 const MODEL_CAMPAIGN_ACTION_LIMIT = 8;
 const MODEL_CAMPAIGN_CONTRADICTION_LIMIT = 6;
-const MODEL_CAMPAIGN_TRACK_LIMIT = 6;
 
 const CONTRADICTION_RELATIONS = new Set(["contradicts", "refutes", "conflicts_with", "invalidates"]);
 const SECURITY_RESEARCH_TYPES = new Set(["source", "sink", "flow-endpoint", "invariant", "trajectory"]);
@@ -29,9 +26,6 @@ export interface BuildCampaignGraphInput {
   runbooks: readonly RunbookSummary[];
   reports: readonly ReportSummary[];
   assetIds?: readonly string[];
-  tracks?: readonly CampaignTrackProjectionSummary[];
-  activeTrackId?: string | null;
-  replayMetrics?: CampaignReplayMetricsSummary;
 }
 
 export function buildCampaignGraph(input: BuildCampaignGraphInput): CampaignGraphSummary {
@@ -177,22 +171,10 @@ export function buildCampaignGraph(input: BuildCampaignGraphInput): CampaignGrap
       coverageGaps: coverageGaps.length,
       contradictions: contradictions.length,
     },
-    ...(input.tracks ? { tracks: [...input.tracks] } : {}),
-    ...(input.activeTrackId !== undefined ? { activeTrackId: input.activeTrackId } : {}),
-    ...(input.replayMetrics ? { replayMetrics: input.replayMetrics } : {}),
   };
 }
 
 export function createCampaignModelContext(campaign: CampaignGraphSummary): CampaignModelContext {
-  const activeTrackSummary = campaign.activeTrackId
-    ? campaign.tracks?.find((track) => track.id === campaign.activeTrackId) ?? null
-    : null;
-  const activeTrack = activeTrackSummary ? campaignModelTrack(activeTrackSummary) : null;
-  const recentTracks = [...(campaign.tracks ?? [])]
-    .filter((track) => track.id !== activeTrackSummary?.id)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-    .slice(0, MODEL_CAMPAIGN_TRACK_LIMIT)
-    .map(campaignModelTrack);
   return {
     schemaVersion: 1,
     counts: { ...campaign.counts },
@@ -205,29 +187,12 @@ export function createCampaignModelContext(campaign: CampaignGraphSummary): Camp
       relatedNodeIds: action.relatedNodeIds.slice(0, 12),
     })),
     contradictions: campaign.contradictions.slice(0, MODEL_CAMPAIGN_CONTRADICTION_LIMIT),
-    activeTrack,
-    recentTracks,
     omitted: {
       nodes: campaign.nodes.length,
       edges: campaign.edges.length,
       coverageGaps: Math.max(0, campaign.coverageGaps.length - MODEL_CAMPAIGN_ACTION_LIMIT),
       contradictions: Math.max(0, campaign.contradictions.length - MODEL_CAMPAIGN_CONTRADICTION_LIMIT),
-      tracks: Math.max(0, (campaign.tracks?.length ?? 0) - recentTracks.length - (activeTrack ? 1 : 0)),
     },
-  };
-}
-
-function campaignModelTrack(track: CampaignTrackProjectionSummary): CampaignModelContext["recentTracks"][number] {
-  return {
-    id: track.id,
-    title: track.title,
-    objective: track.objective,
-    status: track.status,
-    stage: track.stage,
-    source: track.source,
-    updatedAt: track.updatedAt,
-    revision: track.revision,
-    counts: { ...track.counts },
   };
 }
 

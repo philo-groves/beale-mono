@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, JSX, RefObject } from 'react';
-import { BadgeCheck, CircleHelp, Eye, FlaskConical, GitBranch, Lightbulb, Minus, Plus, Search } from 'lucide-react';
+import { BadgeCheck, Lightbulb, Search } from 'lucide-react';
 import type {
   AppServerFindingSummary,
   AppServerMemorySummary,
@@ -43,32 +43,25 @@ export function CampaignGraphView({
   memory,
   providerModelCatalog,
   workspaceName,
-  onOpenClaim,
-  onOpenRunbook
+  onOpenClaim
 }: {
   memory: AppServerMemorySummary | null;
   providerModelCatalog: readonly ResearchProviderModelCatalog[];
   workspaceName: string;
   onOpenClaim: (claimId: string) => void;
-  onOpenRunbook: (runbookId: string) => void;
 }): JSX.Element {
   const campaign = memory?.campaign;
   const priorityClaims = campaignPriorityClaims(memory);
   const loading = memory === null || memory.loading === true;
   const priorityScrollFades = useCampaignScrollFades(
-    'horizontal',
     priorityClaims.map((claim) => `${claim.id}:${claim.revision}`).join('|')
-  );
-  const trailScrollFades = useCampaignScrollFades(
-    'vertical',
-    (campaign?.tracks ?? []).map((track) => `${track.id}:${track.revision}:${track.questions.length}:${track.experiments.length}:${track.observations.length}`).join('|')
   );
 
   return (
     <section aria-labelledby="workspace-campaign-heading" className="workspace-dashboard-panel campaign-panel" id="workspace-dashboard-campaign-trail-panel" role="tabpanel">
       <header className="campaign-header">
         <div className="settings-form-heading campaign-view-heading">
-          <h2 className="campaign-view-title" id="workspace-campaign-heading">{workspaceName.trim() || 'Workspace'} Trail</h2>
+          <h2 className="campaign-view-title" id="workspace-campaign-heading">{workspaceName.trim() || 'Workspace'} Highlights</h2>
           <p>{loading ? 'Loading campaign…' : campaign?.momentum.reason ?? 'No campaign context available.'}</p>
         </div>
       </header>
@@ -89,19 +82,6 @@ export function CampaignGraphView({
                   providerModelCatalog={providerModelCatalog}
                 />
               ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="campaign-trail-section campaign-trail-hierarchy" aria-labelledby="campaign-trail-hierarchy-heading">
-          <h3 className="campaign-trail-section-heading" id="campaign-trail-hierarchy-heading">Campaign Trail</h3>
-          <div className="campaign-trail-scroll-frame" ref={trailScrollFades.frameRef}>
-            <div className="campaign-trail-scroll" onScroll={trailScrollFades.update} ref={trailScrollFades.scrollRef}>
-              <CampaignTrailHierarchy
-                activeTrackId={campaign?.activeTrackId ?? null}
-                memory={memory}
-                onOpenRunbook={onOpenRunbook}
-              />
             </div>
           </div>
         </section>
@@ -197,9 +177,7 @@ export function CampaignBoardView({
   );
 }
 
-type CampaignScrollAxis = 'horizontal' | 'vertical';
-
-function useCampaignScrollFades(axis: CampaignScrollAxis, contentKey: string): {
+function useCampaignScrollFades(contentKey: string): {
   frameRef: RefObject<HTMLDivElement | null>;
   scrollRef: RefObject<HTMLDivElement | null>;
   update: () => void;
@@ -211,15 +189,13 @@ function useCampaignScrollFades(axis: CampaignScrollAxis, contentKey: string): {
     const scroll = scrollRef.current;
     if (!frame || !scroll) return;
     const edges = campaignScrollFadeEdges({
-      scrollSize: axis === 'horizontal' ? scroll.scrollWidth : scroll.scrollHeight,
-      clientSize: axis === 'horizontal' ? scroll.clientWidth : scroll.clientHeight,
-      scrollOffset: axis === 'horizontal' ? scroll.scrollLeft : scroll.scrollTop
+      scrollSize: scroll.scrollWidth,
+      clientSize: scroll.clientWidth,
+      scrollOffset: scroll.scrollLeft
     });
-    const leadingClass = axis === 'horizontal' ? 'has-left-fade' : 'has-top-fade';
-    const trailingClass = axis === 'horizontal' ? 'has-right-fade' : 'has-bottom-fade';
-    frame.classList.toggle(leadingClass, edges.leading);
-    frame.classList.toggle(trailingClass, edges.trailing);
-  }, [axis]);
+    frame.classList.toggle('has-left-fade', edges.leading);
+    frame.classList.toggle('has-right-fade', edges.trailing);
+  }, []);
 
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -386,149 +362,6 @@ function CampaignClaimCard({
   );
 }
 
-function CampaignTrailHierarchy({
-  activeTrackId,
-  memory,
-  onOpenRunbook
-}: {
-  activeTrackId: string | null;
-  memory: AppServerMemorySummary | null;
-  onOpenRunbook: (runbookId: string) => void;
-}): JSX.Element {
-  const tracks = memory?.campaign.tracks ?? [];
-
-  return (
-    <section className="campaign-trail-tree" aria-label="Campaign trail">
-      {tracks.length === 0 ? <div className="campaign-trail-empty">No campaign tracks yet.</div> : tracks.map((track, trackIndex) => (
-        <details
-          className={track.id === activeTrackId ? 'campaign-tree-track active' : 'campaign-tree-track'}
-          key={track.id}
-          open={track.id === activeTrackId || (activeTrackId === null && trackIndex === 0)}
-        >
-          <summary className="campaign-tree-summary campaign-tree-track-summary">
-            <CampaignTreeToggle />
-            <span className="campaign-tree-item-copy campaign-tree-branch-copy">
-              <GitBranch aria-hidden="true" className="campaign-tree-item-icon" size={13} />
-              <span className="campaign-tree-item-type">investigation</span>
-              <span className="campaign-tree-item-name">{track.title}</span>
-            </span>
-            <span className="campaign-tree-summary-meta"><span>{track.counts.experiments} {track.counts.experiments === 1 ? 'experiment' : 'experiments'}</span><span>{track.stage}</span><span>{track.status}</span></span>
-          </summary>
-          <div className="campaign-tree-children">
-            <CampaignTrackChildren track={track} onOpenRunbook={onOpenRunbook} />
-          </div>
-        </details>
-      ))}
-    </section>
-  );
-}
-
-type CampaignTrack = NonNullable<AppServerMemorySummary['campaign']['tracks']>[number];
-type CampaignQuestion = CampaignTrack['questions'][number];
-type CampaignExperiment = CampaignTrack['experiments'][number];
-type CampaignObservation = CampaignTrack['observations'][number];
-
-function CampaignTrackChildren({
-  track,
-  onOpenRunbook
-}: {
-  track: CampaignTrack;
-  onOpenRunbook: (runbookId: string) => void;
-}): JSX.Element {
-  const knownQuestionIds = new Set(track.questions.map((question) => question.id));
-  const knownExperimentIds = new Set(track.experiments.map((experiment) => experiment.id));
-  const unlinkedExperiments = track.experiments.filter((experiment) => !experiment.questionId || !knownQuestionIds.has(experiment.questionId));
-  const unlinkedObservations = track.observations.filter((observation) => !observation.experimentId || !knownExperimentIds.has(observation.experimentId));
-  const hasChildren = track.questions.length > 0 || unlinkedExperiments.length > 0 || unlinkedObservations.length > 0;
-
-  if (!hasChildren) return <div className="campaign-tree-empty campaign-tree-node">No questions, experiments, or observations in this investigation.</div>;
-  return (
-    <>
-      {track.questions.map((question) => (
-        <CampaignQuestionNode
-          experiments={track.experiments.filter((experiment) => experiment.questionId === question.id)}
-          key={question.id}
-          observations={track.observations}
-          onOpenRunbook={onOpenRunbook}
-          question={question}
-        />
-      ))}
-      {unlinkedExperiments.map((experiment) => (
-        <CampaignExperimentNode
-          experiment={experiment}
-          key={experiment.id}
-          observations={track.observations.filter((observation) => observation.experimentId === experiment.id)}
-          onOpenRunbook={onOpenRunbook}
-        />
-      ))}
-      {unlinkedObservations.map((observation) => <CampaignObservationRow key={observation.id} observation={observation} />)}
-    </>
-  );
-}
-
-function CampaignQuestionNode({
-  experiments,
-  observations,
-  onOpenRunbook,
-  question
-}: {
-  experiments: CampaignExperiment[];
-  observations: CampaignObservation[];
-  onOpenRunbook: (runbookId: string) => void;
-  question: CampaignQuestion;
-}): JSX.Element {
-  return (
-    <details className="campaign-tree-question campaign-tree-node" open>
-      <summary className="campaign-tree-summary campaign-tree-question-summary">
-        <CampaignTreeToggle />
-        <span className="campaign-tree-item-copy campaign-tree-branch-copy">
-          <CircleHelp aria-hidden="true" className="campaign-tree-item-icon" size={13} />
-          <span className="campaign-tree-item-type">question</span>
-          <span className="campaign-tree-item-name">{question.text}</span>
-        </span>
-        <span className="campaign-tree-summary-meta"><span>{question.priority}</span><span>{question.status}</span></span>
-      </summary>
-      <div className="campaign-tree-children">
-        {experiments.length === 0
-          ? <div className="campaign-tree-empty campaign-tree-node">No experiments for this question.</div>
-          : experiments.map((experiment) => (
-              <CampaignExperimentNode
-                experiment={experiment}
-                key={experiment.id}
-                observations={observations.filter((observation) => observation.experimentId === experiment.id)}
-                onOpenRunbook={onOpenRunbook}
-              />
-            ))}
-      </div>
-    </details>
-  );
-}
-
-function CampaignExperimentNode({
-  experiment,
-  observations,
-  onOpenRunbook
-}: {
-  experiment: CampaignExperiment;
-  observations: CampaignObservation[];
-  onOpenRunbook: (runbookId: string) => void;
-}): JSX.Element {
-  return (
-    <div className="campaign-tree-experiment-branch campaign-tree-node">
-      <CampaignExperimentRow experiment={experiment} onOpenRunbook={onOpenRunbook} />
-      {observations.length > 0 ? (
-        <div className="campaign-tree-children">
-          {observations.map((observation) => <CampaignObservationRow key={observation.id} observation={observation} />)}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function CampaignTreeToggle(): JSX.Element {
-  return <span aria-hidden="true" className="campaign-tree-toggle"><Plus className="campaign-tree-toggle-collapsed" size={12} /><Minus className="campaign-tree-toggle-expanded" size={12} /></span>;
-}
-
 export function CampaignSessionProjection({
   memoryTypes,
   profileId,
@@ -592,32 +425,6 @@ export function CampaignSessionProjection({
         />
       ))}
     </span>
-  );
-}
-
-function CampaignExperimentRow({
-  experiment,
-  onOpenRunbook
-}: {
-  experiment: NonNullable<NonNullable<AppServerMemorySummary['campaign']['tracks']>[number]['experiments']>[number];
-  onOpenRunbook: (runbookId: string) => void;
-}): JSX.Element {
-  const content = <><FlaskConical aria-hidden="true" className="campaign-tree-item-icon" size={13} /><span className="campaign-tree-item-copy"><span className="campaign-tree-item-type">experiment</span><span className="campaign-tree-item-name">{experiment.title}</span></span><span className="campaign-tree-item-status">{experiment.status.replaceAll('_', ' ')}</span></>;
-  return experiment.runbookId
-    ? <button className="campaign-tree-item campaign-tree-item-experiment" onClick={() => onOpenRunbook(experiment.runbookId!)} title={experiment.resultSummary || experiment.title} type="button">{content}</button>
-    : <div className="campaign-tree-item campaign-tree-item-experiment" title={experiment.resultSummary || experiment.title}>{content}</div>;
-}
-
-function CampaignObservationRow({ observation }: { observation: CampaignObservation }): JSX.Element {
-  return (
-    <div className="campaign-tree-item campaign-tree-item-observation campaign-tree-node" title={`${observation.kind} observation`}>
-      <Eye aria-hidden="true" className="campaign-tree-item-icon" size={13} />
-      <span className="campaign-tree-item-copy">
-        <span className="campaign-tree-item-type">observation</span>
-        <span className="campaign-tree-item-name">{observation.summary}</span>
-      </span>
-      <span className="campaign-tree-item-status">{observation.outcome}</span>
-    </div>
   );
 }
 

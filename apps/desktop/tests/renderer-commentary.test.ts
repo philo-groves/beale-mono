@@ -612,9 +612,6 @@ describe('renderer commentary projection', () => {
     }))).toBe('Memorizing test strategy "Parser regression suite"');
     expect(toolMessage(pairedEvents('file.read', 'file-read', { path: 'src/parser.ts' }, { text: 'source' })))
       .toBe('Reading src/parser.ts');
-    expect(toolMessage(pairedEvents('investigation.recall', 'investigation-recall', {
-      query: 'parser confusion'
-    }, { nodes: [] }))).toBe('Recalling investigations by "parser confusion"');
     expect(toolMessage(pairedEvents('finding.list', 'finding-list', {
       query: 'memory safety'
     }, { findings: [] }))).toBe('Querying findings for "memory safety"');
@@ -632,9 +629,7 @@ describe('renderer commentary projection', () => {
     expect(toolMessage(pairedEvents('finding.completion_check', 'finding-completion', {
       id: 'finding_parser', targetStatus: 'verified'
     }, { targetStatus: 'verified', gaps: [] }))).toBe('Checking readiness for finding verified status');
-    expect(toolMessage(pairedEvents('investigation.status', 'investigation-status', {}, {
-      stage: 'testing'
-    }))).toBe('Checking investigation status');
+
   });
 
   it('keeps the latest grouped tool summary collapsed by default', () => {

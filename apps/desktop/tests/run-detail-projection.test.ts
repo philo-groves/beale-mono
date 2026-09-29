@@ -463,7 +463,6 @@ describe('run detail commentary projection', () => {
   it.each([
     ['finding.transition', { toStatus: 'report_ready', hidden: 'not rendered' }, { toStatus: 'report_ready' }],
     ['finding.completion_check', { targetStatus: 'verified', hidden: 'not rendered' }, { targetStatus: 'verified' }],
-    ['investigation.recall', { query: 'parser confusion', hidden: 'not rendered' }, { query: 'parser confusion' }],
     ['finding.list', { query: 'memory safety', hidden: 'not rendered' }, { query: 'memory safety' }],
     ['channel_read', { channel_name: 'parser-work', hidden: 'not rendered' }, { channel_name: 'parser-work' }],
     ['resource.catalog', { operation: 'discover', hidden: 'not rendered' }, { operation: 'discover' }]

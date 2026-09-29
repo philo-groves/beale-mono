@@ -86,7 +86,6 @@ export class WorkspaceRegistry {
       hasRunbookTools: true,
       hasReportTools: true,
       hasSessionDispositionTool: !agentPath,
-      hasInvestigationAssignmentTool: !agentPath,
       hasCollaborationTools: true,
       goalEnabled: !agentPath,
       ...(agentPath ? { agentPath } : {}),

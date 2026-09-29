@@ -571,8 +571,6 @@ const STRUCTURED_SINGULAR_TOOL_NAMES = new Set([
   'finding.completion_check',
   'finding.list',
   'finding.transition',
-  'investigation.recall',
-  'investigation.status',
   'lead.list',
   'list_agents',
   'memory.get',
@@ -697,11 +695,6 @@ function commentaryResearchCatalogCallLabel(toolName: string, inputValue: unknow
   if (toolName === 'finding.completion_check') {
     const status = firstStringValue(input, ['targetStatus']) ?? 'verified';
     return `Checking readiness for finding ${commentaryStatusLabel(status)} status`;
-  }
-  if (toolName === 'investigation.status') return 'Checking investigation status';
-  if (toolName === 'investigation.recall') {
-    const query = firstStringValue(input, ['query']);
-    return query ? `Recalling investigations by "${query}"` : 'Recalling investigations';
   }
   if (toolName === 'finding.list') {
     const query = firstStringValue(input, ['query']);

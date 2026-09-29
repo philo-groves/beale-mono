@@ -8,10 +8,60 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   initializeWorkspaceProject, checkpointWorkspaceResearch, importWorkspaceResearchFile,
   releaseWorkspaceResearchIndex, rebuildWorkspaceResearchIndex, listWorkspaceResearchEdits,
-  publishWorkspaceResearch, workspaceContentHash,
-  MemoryGraphStore, FindingStore, RunbookStore, ReportStore, CampaignTrackStore, ResearchResourceCatalog,
+  publishWorkspaceResearch, publishWorkspaceFiles, workspaceContentHash,
+  MemoryGraphStore, FindingStore, RunbookStore, ReportStore, ResearchResourceCatalog,
   createResearchStorageLayout, ensureResearchStorageLayout,
 } from '../packages/research-agent/dist/index.js';
+
+test('publication preserves legacy investigation records as searchable workspace files', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-publication-legacy-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const options = {
+    workspaceRoot,
+    workspaceId: 'workspace-example',
+    databasePath: join(directory, 'runtime', 'memory.sqlite'),
+    artifactDirectoryPath: join(directory, 'runtime', 'artifacts'),
+  };
+  mkdirSync(workspaceRoot);
+  initializeWorkspaceProject(workspaceRoot, options.workspaceId);
+  const graph = new MemoryGraphStore({
+    workspaceRoot,
+    databasePath: options.databasePath,
+    context: {
+      workspaceId: options.workspaceId,
+      workspaceName: 'Example Research',
+      subjectId: 'subject-example',
+      subjectName: 'Example Subject',
+    },
+  });
+  try {
+    publishWorkspaceResearch(options);
+    const indexPath = join(workspaceRoot, 'references', 'research-index.json');
+    const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const files = Object.fromEntries(Object.keys(index.files).map((path) => [
+      path, readFileSync(join(workspaceRoot, path), 'utf8')
+    ]));
+    const recordPath = 'investigations/investigation-example/record.json';
+    const statePath = 'references/campaign-state.json';
+    const legacyRecord = JSON.stringify({ id: 'investigation-example', title: 'Example prior work' });
+    const legacyState = JSON.stringify({ workspaceId: options.workspaceId, active: [] });
+    publishWorkspaceFiles(workspaceRoot, {
+      ...files,
+      [recordPath]: legacyRecord,
+      [statePath]: legacyState,
+    });
+
+    publishWorkspaceResearch(options);
+    const updated = JSON.parse(readFileSync(indexPath, 'utf8'));
+    assert.equal(readFileSync(join(workspaceRoot, recordPath), 'utf8'), legacyRecord);
+    assert.equal(readFileSync(join(workspaceRoot, statePath), 'utf8'), legacyState);
+    assert.equal(updated.files[recordPath], workspaceContentHash(legacyRecord));
+    assert.equal(updated.files[statePath], workspaceContentHash(legacyState));
+  } finally {
+    graph.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('publication splits and deduplicates large prior-art bodies and rebuilds their complete history', () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-publication-prior-art-example-'));
@@ -331,38 +381,18 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
     writeFileSync(join(workspaceRoot, runbookPath), JSON.stringify(notebook));
     importWorkspaceResearchFile(options, runbookPath, runbook.revision);
     assert.equal(runbooks.get(runbook.id).contentRevision, runbook.contentRevision + 1);
-    assert.equal(checkpointWorkspaceResearch(options, 'Imported procedure').status, 'committed');
-    const tracks = new CampaignTrackStore({ databasePath, context });
-    try {
-      const track = tracks.ensureForSession({ sessionId: 'session-example', objective: 'Example investigation', source: 'runtime' });
-      const attributed = checkpointWorkspaceResearch({ ...options, sessionId: 'session-example' }, 'Linked investigation checkpoint');
-      assert.equal(attributed.status, 'committed', attributed.error);
-      const investigation = JSON.parse(readFileSync(join(workspaceRoot, 'investigations', track.id, 'record.json'), 'utf8'));
-      assert.equal(investigation.schemaVersion, 2);
-      assert.deepEqual(investigation.sessions.map((entry) => entry.session_id), ['session-example']);
-      for (const field of ['resources', 'questions', 'experiments', 'observations', 'nextActions', 'memoryClaimReviews', 'researchClaimReviews']) {
-        assert.ok(Array.isArray(investigation[field]), field);
-      }
-      assert.ok(existsSync(join(workspaceRoot, 'references', 'campaign-state.json')));
-      const message = spawnSync('git', ['log', '-1', '--format=%B'], { cwd: workspaceRoot, encoding: 'utf8', windowsHide: true }).stdout.trim();
-      assert.equal(message, `Linked investigation checkpoint\n\nInvestigation-ID: ${track.id}\nSession-ID: session-example`);
-
-      const released = releaseWorkspaceResearchIndex(options);
-      assert.equal(released.state, 'released');
-      const releasedDatabase = new DatabaseSync(databasePath, { readOnly: true });
-      for (const table of ['memory_node_workspaces', 'app_server_research_claims', 'app_server_runbooks', 'app_server_reports', 'campaign_tracks']) {
-        const clause = table === 'memory_node_workspaces' ? 'workspace_id=?' : 'workspace_id=?';
-        assert.equal(releasedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${clause}`).get(options.workspaceId).count, 0, table);
-      }
-      releasedDatabase.close();
-      const rebuilt = rebuildWorkspaceResearchIndex(options);
-      assert.equal(rebuilt.state, 'ready');
-      assert.equal(graph.get(memory.id).body, 'Revised explanation.');
-      assert.equal(claims.get(claim.id).summary, exported.summary);
-      assert.match(reports.get(report.id).content, /Revised/);
-      assert.equal(runbooks.get(runbook.id).contentRevision, runbook.contentRevision + 1);
-      assert.equal(tracks.get(track.id).id, track.id);
-    } finally { tracks.close(); }
+    const attributed = checkpointWorkspaceResearch({ ...options, sessionId: 'session-example' }, 'Session checkpoint');
+    assert.equal(attributed.status, 'committed', attributed.error);
+    const message = spawnSync('git', ['log', '-1', '--format=%B'], { cwd: workspaceRoot, encoding: 'utf8', windowsHide: true }).stdout.trim();
+    assert.equal(message, 'Session checkpoint\n\nSession-ID: session-example');
+    const released = releaseWorkspaceResearchIndex(options);
+    assert.equal(released.state, 'released');
+    const rebuilt = rebuildWorkspaceResearchIndex(options);
+    assert.equal(rebuilt.state, 'ready');
+    assert.equal(graph.get(memory.id).body, 'Revised explanation.');
+    assert.equal(claims.get(claim.id).summary, exported.summary);
+    assert.match(reports.get(report.id).content, /Revised/);
+    assert.equal(runbooks.get(runbook.id).contentRevision, runbook.contentRevision + 1);
   } finally {
     reports.close(); runbooks.close(); claims.close(); graph.close(); other.close();
     rmSync(directory, { recursive: true, force: true });

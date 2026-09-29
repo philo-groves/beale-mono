@@ -13,7 +13,6 @@ export interface WorkspacePublicationOptions {
   databasePath: string;
   artifactDirectoryPath: string;
   sessionId?: string;
-  investigationId?: string;
 }
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
@@ -76,7 +75,6 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
   const rawFiles: Record<string, string> = {};
   const attribution: WorkspaceCommitContext = {
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-    ...(options.investigationId ? { investigationId: options.investigationId } : {}),
   };
   const referencedArtifacts = new Set<string>();
   const artifactPaths = new Map<string, string>();
@@ -119,11 +117,6 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       ? (database.prepare(`SELECT * FROM ${table} WHERE ${where}`).all(...parameters) as Row[])
         .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))) : [];
     const owned = (table: string) => rows(table, "workspace_id = ?");
-    if (!attribution.investigationId && options.sessionId && has('campaign_tracks') && has('campaign_track_sessions')) {
-      const track = database.prepare(`SELECT t.id FROM campaign_tracks t JOIN campaign_track_sessions s ON s.investigation_id = t.id
-        WHERE t.workspace_id = ? AND s.session_id = ? ORDER BY s.linked_at DESC, t.id LIMIT 1`).get(options.workspaceId, options.sessionId) as { id: string } | undefined;
-      if (track) attribution.investigationId = track.id;
-    }
     if (has('scope_versions')) files['references/scope.json'] = json({ schemaVersion: 1, workspaceId: options.workspaceId,
       scopes: owned('scope_versions').map((scope) => ({ ...scope, assets: rows('scope_assets', 'scope_version_id = ?', [String(scope.id)]).filter((asset) => asset.kind !== 'credential_ref') })),
       rules: owned('workspace_rules'), subject: owned('workspace_research_subjects'),
@@ -186,33 +179,17 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
         artifactPaths.set(path, `${category}/${fileId}/${category === "runbooks" ? "runbook" : "report"}.${extension}`);
       }
     }
-    for (const track of owned("campaign_tracks")) {
-      const investigationId = recordIdentifier(track.id);
-      const investigationFileId = fileIdentifier(investigationId);
-      const observations = rows("campaign_track_observations", "investigation_id = ?", [investigationId]);
-      files[`investigations/${investigationFileId}/record.json`] = json({
-        schemaVersion: 2,
-        ...track,
-        sessions: rows("campaign_track_sessions", "investigation_id = ?", [investigationId]),
-        resources: rows("campaign_track_resources", "investigation_id = ?", [investigationId]),
-        questions: rows("campaign_track_questions", "investigation_id = ?", [investigationId]),
-        experiments: rows("campaign_track_experiments", "investigation_id = ?", [investigationId]),
-        observations: observations.map((observation) => ({
-          ...observation,
-          evidence: rows("campaign_track_observation_evidence", "observation_id = ?", [String(observation.id)]),
-        })),
-        nextActions: rows("campaign_track_next_actions", "investigation_id = ?", [investigationId]),
-        memoryClaimReviews: rows("campaign_track_claim_reviews", "investigation_id = ?", [investigationId]),
-        researchClaimReviews: rows("campaign_track_research_claim_reviews", "investigation_id = ?", [investigationId]),
-      });
-    }
-    if (has('campaign_track_replay_runs') || has('campaign_track_consolidations')) {
-      files['references/campaign-state.json'] = json({
-        schemaVersion: 1,
-        workspaceId: options.workspaceId,
-        replayRuns: owned('campaign_track_replay_runs'),
-        consolidations: owned('campaign_track_consolidations'),
-      });
+    // Retain previously published investigation records as read-only history.
+    // They are no longer generated or loaded into the active research index.
+    const previousIndexPath = resolve(root, "references/research-index.json");
+    if (existsSync(previousIndexPath)) {
+      const previous = JSON.parse(readFileSync(previousIndexPath, "utf8")) as { files?: Record<string, string> };
+      for (const path of Object.keys(previous.files ?? {})) {
+        if (!/^investigations\/[^/]+\/record\.json$/u.test(path) && path !== "references/campaign-state.json") continue;
+        const absolute = resolve(root, path);
+        assertWorkspaceChild(root, absolute);
+        files[path] = readFileSync(absolute, "utf8");
+      }
     }
     if (has('app_server_research_resources') || has('resource_prior_art')) {
       const resources = owned('app_server_research_resources');

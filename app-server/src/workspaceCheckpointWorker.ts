@@ -58,7 +58,6 @@ try {
     ? checkpointWorkspaceResearch(input.options, input.reason, input.repairFingerprint)
     : checkpointWorkspace(input.options.workspaceRoot, input.reason, undefined, {
         ...(input.options.sessionId ? { sessionId: input.options.sessionId } : {}),
-        ...(input.options.investigationId ? { investigationId: input.options.investigationId } : {}),
       }, input.repairFingerprint);
   if (input.cleanupSession && (result.status === 'committed' || result.status === 'unchanged')) quarantineWorkspaceDisposable(input.options.workspaceRoot, input.cleanupSession);
   const researchIndex = input.researchIndexAction === 'release' && (result.status === 'committed' || result.status === 'unchanged')

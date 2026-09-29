@@ -116,7 +116,7 @@ test("goal mode continues one Pi session and keeps session disposition after res
   assert.ok(!contexts[1].toolNames.includes("fixture_inspect"));
   assert.ok(contexts.every((context) => !context.toolNames.includes("get_goal")));
   assert.ok(contexts.every((context) => !context.toolNames.includes("update_goal")));
-  assert.match(contexts[0].systemPrompt, /goal persistence and terminal state are handled by the host/);
+  assert.match(contexts[0].systemPrompt, /The host handles goal persistence and terminal state/);
   assert.match(
     contexts.flatMap((context) => context.messageContents).join("\n"),
     /Continue research toward: Verify the authorization boundary\./,

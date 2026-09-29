@@ -44,12 +44,10 @@ test("runtime assembly honors managed plugin selection while retaining core tool
   }
 });
 
-test("all seven bundled tool plugins have unique ownership and compact matching manifests", async () => {
-  assert.equal(MANAGED_TOOL_PLUGINS.length, 7);
+test("all six bundled tool plugins have unique ownership and compact matching manifests", async () => {
+  assert.equal(MANAGED_TOOL_PLUGINS.length, 6);
   const names = MANAGED_TOOL_PLUGINS.flatMap((plugin) => plugin.tools);
   assert.equal(new Set(names).size, names.length);
-  assert.equal(managedToolPluginId("investigation.candidates"), "beale-investigations");
-  assert.equal(managedToolPluginId("investigation.assign"), "beale-investigations");
   for (const plugin of MANAGED_TOOL_PLUGINS) {
     assert.match(plugin.description, /^Use for /);
     assert.ok(plugin.description.length < 160);
@@ -72,9 +70,9 @@ test("all seven bundled tool plugins have unique ownership and compact matching 
 test("plugin catalog stays complete; loading is atomic, isolated, and bounded", async () => {
   const tools = [stub("memory.get"), stub("repository.search"), stub("file.read")];
   const options = managedToolPluginOptions(tools, ["beale-knowledge"]);
-  assert.equal(options.length, 7);
+  assert.equal(options.length, 6);
   const catalog = formatManagedToolPluginCatalog(options);
-  assert.equal(catalog.split("\n").length, 7);
+  assert.equal(catalog.split("\n").length, 6);
   assert.match(catalog, /beale-source: .*Disabled by operator/);
   const session = new ManagedToolPluginSession(options);
   const other = new ManagedToolPluginSession(options);
@@ -255,7 +253,7 @@ test("bundled plugin defaults and disablement persist in launch arguments", asyn
   try {
     const builtinPlugins = MANAGED_TOOL_PLUGIN_IDS.map((id) => ({ id: `${id}-builtin`, path: resolve("app-server/resources/agent-plugins", id), installedAt: "2026-01-01T00:00:00.000Z", enabledByDefault: true }));
     const registry = new AgentPluginRegistry(directory, { builtinPlugins });
-    assert.equal(registry.getState().plugins.length, 7);
+    assert.equal(registry.getState().plugins.length, 6);
     assert.ok(registry.getState().plugins.every((plugin) => plugin.enabled && plugin.status === "ready"));
     assert.deepEqual(registry.getAppServerRuntime().managedPluginIds.sort(), [...MANAGED_TOOL_PLUGIN_IDS].sort());
     for (const id of MANAGED_TOOL_PLUGIN_IDS) registry.setEnabled(`${id}-builtin`, false);

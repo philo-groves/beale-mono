@@ -58,18 +58,18 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v26 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v27 persistence, continuation, Codex-tool, and workspace-history contract for app-server and WebSocket clients", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 26);
+  assert.equal(descriptor.contractVersion, 27);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
-  assert.equal(descriptor.schemas.memorySummary, 12);
+  assert.equal(descriptor.schemas.memorySummary, 13);
   assert.equal(descriptor.schemas.finding, 5);
-  assert.equal(descriptor.schemas.campaignGraph, 4);
+  assert.equal(descriptor.schemas.campaignGraph, 5);
   assert.equal(descriptor.schemas.goalSuggestions, 1);
   assert.ok(descriptor.capabilities.includes("knowledge.findings"));
   assert.ok(descriptor.capabilities.includes("knowledge.campaign_graph"));
-  assert.ok(descriptor.capabilities.includes("knowledge.campaign_tracks.v2"));
+  assert.ok(!descriptor.capabilities.includes("knowledge.campaign_tracks.v2"));
   assert.ok(descriptor.capabilities.includes("knowledge.claims.v2"));
   assert.ok(descriptor.capabilities.includes("knowledge.claim_security_tracking"));
   assert.ok(descriptor.capabilities.includes("knowledge.claim_deduplication"));
@@ -102,6 +102,7 @@ test("protocol describe exposes a runtime-bound v26 persistence, continuation, C
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("research.tools.list"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("research.tools.read"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("research.tools.mutate"));
+  assert.ok(!APP_SERVER_PROTOCOL_OPERATIONS.some((operation) => operation.startsWith("investigation.")));
   assert.ok(descriptor.capabilities.includes("knowledge.report-content-revise.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-triage-status.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-recording-replace.v1"));
@@ -113,7 +114,7 @@ test("protocol describe exposes a runtime-bound v26 persistence, continuation, C
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.event-identity.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.continuation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.prompt-expansion.v1"));
-  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.campaign-tracks.v2"));
+  assert.ok(!BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.campaign-tracks.v2"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("source.clone-modes.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("maintenance.repository-consolidation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("memory.notifications.v3"));
@@ -200,12 +201,11 @@ test("HTTP session control DTOs are bounded and correlated", () => {
   );
 });
 
-test("the typed session launch carries track binding, OpenAI Fast mode, and Daybreak Blue", () => {
+test("the typed session launch carries OpenAI Fast mode and Daybreak Blue", () => {
   const request = {
     launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
     launch: {
       workspaceId: "workspace-example",
-      investigationId: "investigation-example",
       promptMarkdown: "Inspect the parser boundary.",
       provider: { id: "openai-codex", model: "gpt-5.6-sol", fastMode: true, daybreakBlue: true },
     },
@@ -231,13 +231,6 @@ test("the typed session launch carries track binding, OpenAI Fast mode, and Dayb
       launch: { ...request.launch, provider: { id: "openrouter", model: "auto", daybreakBlue: false } },
     }),
     /daybreakBlue requires the openai-codex provider/,
-  );
-  assert.throws(
-    () => decodeAppServerSessionLaunchRequest({
-      ...request,
-      launch: { ...request.launch, investigationId: "x".repeat(257) },
-    }),
-    /investigationId/,
   );
 });
 

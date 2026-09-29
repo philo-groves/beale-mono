@@ -30,7 +30,7 @@ Workspace creation installs a local pre-commit hook using the host's Node/Electr
 
 ## Managed tool plugins
 
-Seven host-backed plugins are enabled by default and appear in Agent Plugins settings. Available plugins appear in the agent's `{{plugins}}` catalog with short usage descriptions.
+Six host-backed plugins are enabled by default and appear in Agent Plugins settings. Available plugins appear in the agent's `{{plugins}}` catalog with short usage descriptions.
 
 | Plugin | When to use |
 | --- | --- |
@@ -38,7 +38,6 @@ Seven host-backed plugins are enabled by default and appear in Agent Plugins set
 | Provenance (`beale-provenance`) | Repository revision history, public advisory references, and source provenance. |
 | Knowledge (`beale-knowledge`) | Reusable memory, workspace history, artifacts, local inspection, and resource inventory. |
 | Claims (`beale-claims`) | Leads, findings, their evidence, and canonical claim revisions. |
-| Investigations (`beale-investigations`) | Investigation records, questions, observations, and configured experiments. |
 | Runbooks (`beale-runbooks`) | Reusable procedure documents, feature-selected host or Tart VM cells, per-cell timeouts, explicit guest/root Tart execution, revisions, and recorded executions. |
 | Reporting (`beale-reporting`) | Report documents, revisions, and structured summaries of supported results. |
 
@@ -140,7 +139,7 @@ For iOS, the recommended deployment is a loopback listener behind Tailscale Serv
 - `GET /health` — liveness and compatibility probe; returns `ok`, the UTC control-contract timestamp, and the capability list. An older Desktop prompts for restart; a newer Desktop replaces an older app-server automatically.
 - `GET /v1/server` — authenticated, typed server descriptor with control/protocol versions, endpoints, capabilities, and payload/replay limits.
 - `GET /v1/providers` — authenticated, path-free model catalogs for providers connected in Desktop, including host Lead/subagent/reasoning defaults but no credentials or authentication metadata.
-- `POST /v1/operations` — execute an allowlisted canonical app-server operation inside the app-server host. Research clients can use `suggestion.generate` for profile-default workspace suggestions and `prompt.expand` for bounded model-assisted context expansion; the host supplies workspace storage, provider policy, and credentials. Campaign-track clients can use `investigation.list`, `investigation.get`, and `investigation.replay`; disabled-memory workspaces reject investigation and Dreaming operations. Codex integrations use `research.tools.list`, `research.tools.read`, and `research.tools.mutate` to discover and invoke the same profile-scoped durable research tools as hosted agents; the host replaces client-supplied paths and profile policy with registered workspace values and enforces read-versus-mutating routing.
+- `POST /v1/operations` — execute an allowlisted canonical app-server operation inside the app-server host. Research clients can use `suggestion.generate` for profile-default workspace suggestions and `prompt.expand` for bounded model-assisted context expansion; the host supplies workspace storage, provider policy, and credentials. Disabled-memory workspaces reject Dreaming operations. Codex integrations use `research.tools.list`, `research.tools.read`, and `research.tools.mutate` to discover and invoke the same profile-scoped durable research tools as hosted agents; the host replaces client-supplied paths and profile policy with registered workspace values and enforces read-versus-mutating routing.
 - `POST /v1/sessions` — launch a session. Body:
 
   ```json
