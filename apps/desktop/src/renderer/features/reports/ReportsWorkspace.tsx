@@ -55,7 +55,7 @@ export function ReportsIndex({
   return (
     <section className="reports-index" aria-label="Reporting">
       <div className="wide-content-container">
-        <div className="reports-index-tabs research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Report workspace scope">
+        <div className="reports-index-tabs research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label="Report workspace scope">
           {scopeTabs.map((scope) => {
             const selected = selectedWorkspaceId === scope.id;
             return (

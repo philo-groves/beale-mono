@@ -3404,25 +3404,6 @@ body.is-resizing-research-side .main-session-grid {
   margin: 10px 10px 0;
 }
 
-.workspace-dashboard :is(.workspace-dashboard-tab, .workspace-campaign-subview-tab) {
-  height: 40px;
-  border-radius: 999px;
-}
-
-.workspace-dashboard :is(.workspace-dashboard-tab, .workspace-campaign-subview-tab).provider-settings-tab:not(.active) {
-  background: transparent;
-}
-
-.workspace-dashboard :is(.workspace-dashboard-tab, .workspace-campaign-subview-tab).provider-settings-tab:not(.active):is(:hover, :focus-within) {
-  background: var(--panel-raised);
-  color: var(--text);
-}
-
-.workspace-dashboard :is(.workspace-dashboard-tab, .workspace-campaign-subview-tab) .research-side-view-tab-activate {
-  height: 40px;
-  padding: 0 16px;
-}
-
 .research-side-view-tab.workspace-dashboard-kit-tab {
   position: relative;
   overflow: visible;
@@ -5298,10 +5279,6 @@ body.is-resizing-research-side .main-session-grid {
   margin-bottom: 0;
 }
 
-.reports-index-tab.provider-settings-tab .research-side-view-tab-activate {
-  padding: 0 9px;
-}
-
 .reports-index-list {
   max-width: var(--session-content-max-width);
   margin-inline: auto;
@@ -6282,6 +6259,26 @@ button.session-summary-item:hover:not(:disabled),
 .research-side-view-tab.active {
   background: var(--panel-raised);
   color: var(--text);
+}
+
+.pill-view-tabs .research-side-view-tab {
+  height: 40px;
+  border-radius: 999px;
+}
+
+.pill-view-tabs .research-side-view-tab.provider-settings-tab:not(.active) {
+  background: transparent;
+}
+
+.pill-view-tabs .research-side-view-tab.provider-settings-tab:not(.active):is(:hover, :focus-within) {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+
+.pill-view-tabs .research-side-view-tab .research-side-view-tab-activate {
+  height: 40px;
+  padding: 0 16px;
+  font-size: 1rem;
 }
 
 .research-side-view-tab-activate,
@@ -12975,10 +12972,6 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
   margin-bottom: 0;
 }
 
-.automations-workspace-tab.provider-settings-tab .research-side-view-tab-activate {
-  padding: 0 9px;
-}
-
 .automations-workspace-content {
   min-width: 0;
   display: grid;
@@ -14296,7 +14289,7 @@ button.research-goal-choice:focus-visible {
 }
 
 .provider-settings-tab-header {
-  min-height: 32px;
+  min-height: 40px;
 }
 
 .provider-settings-tab:not(.active) {
@@ -14600,18 +14593,12 @@ button.research-goal-choice:focus-visible {
 .profile-settings-tab-row {
   min-width: 0;
   width: 100%;
-  min-height: 32px;
+  min-height: 40px;
   display: flex;
   align-items: center;
   gap: 5px;
   overflow-x: auto;
   padding: 0;
-}
-
-.profile-settings-tab .research-side-view-tab-activate {
-  min-height: 32px;
-  padding: 0 9px;
-  font-size: var(--profile-settings-font-size);
 }
 
 .profile-settings-profile-view {

@@ -51,7 +51,7 @@ describe('memory settings', () => {
     }));
 
     expect(html.match(/role="tablist"/gu)).toHaveLength(2);
-    expect(html.match(/profile-settings-tab-row(?: profile-settings-view-tab-row)? research-side-view-tabs research-side-view-tabs-scrollable/gu)).toHaveLength(2);
+    expect(html.match(/profile-settings-tab-row(?: profile-settings-view-tab-row)? research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs/gu)).toHaveLength(2);
     const profileTabsIndex = html.indexOf('aria-label="Research profiles"');
     const profileViewsIndex = html.indexOf('aria-label="Security profile views"');
     const profileDescriptionIndex = html.indexOf(resolved.profile.description);
@@ -78,13 +78,17 @@ describe('memory settings', () => {
 
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const viewTabRowStyles = styles.match(/\.profile-settings-view-tab-row\s*\{([^}]*)\}/)?.[1] ?? '';
-    const tabButtonStyles = styles.match(/\.profile-settings-tab \.research-side-view-tab-activate\s*\{([^}]*)\}/)?.[1] ?? '';
+    const tabRowStyles = styles.match(/\.profile-settings-tab-row\s*\{([^}]*)\}/)?.[1] ?? '';
+    const pillTabButtonStyles = styles.match(/\.pill-view-tabs \.research-side-view-tab \.research-side-view-tab-activate\s*\{([^}]*)\}/)?.[1] ?? '';
     const descriptionRowStyles =
       styles.match(/\.profile-basic-details-form \.profile-basic-details-description-row\s*\{([^}]*)\}/)?.[1] ?? '';
     const profilePageStyles = styles.match(/\.profile-settings-page\s*\{([^}]*)\}/)?.[1] ?? '';
     const profileFormStyles = styles.match(/\.general-settings-page \.settings-form,\s*\.profile-settings-page \.settings-form\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(viewTabRowStyles).toContain('padding-inline: 0');
-    expect(tabButtonStyles).toContain('padding: 0 9px');
+    expect(tabRowStyles).toContain('min-height: 40px');
+    expect(pillTabButtonStyles).toContain('height: 40px');
+    expect(pillTabButtonStyles).toContain('padding: 0 16px');
+    expect(pillTabButtonStyles).toContain('font-size: 1rem');
     expect(descriptionRowStyles).toContain('grid-template-columns: minmax(0, 1fr)');
     expect(profilePageStyles).toContain('--settings-view-font-size: 14px');
     expect(profilePageStyles).toContain('--profile-settings-font-size: var(--settings-view-font-size)');

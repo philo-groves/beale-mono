@@ -1002,7 +1002,7 @@ export function ProfileSettingsView({
   return (
     <div className="settings-page profile-settings-page">
       <div className="profile-settings-tab-stack">
-        <div className="profile-settings-tab-row research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Research profiles">
+        <div className="profile-settings-tab-row research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label="Research profiles">
           {profiles.map((profile) => {
             const selected = profile.profile.id === selectedProfile.profile.id;
             return (
@@ -1033,7 +1033,7 @@ export function ProfileSettingsView({
         role="tabpanel"
         aria-labelledby={`profile-settings-tab-${selectedProfile.profile.id}`}
       >
-        <div className="profile-settings-tab-row profile-settings-view-tab-row research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label={`${profileName} profile views`}>
+        <div className="profile-settings-tab-row profile-settings-view-tab-row research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label={`${profileName} profile views`}>
           <div className={`research-side-view-tab provider-settings-tab profile-settings-tab ${selectedMemoryType ? '' : 'active'}`.trim()}>
             <button
               className="research-side-view-tab-activate"
@@ -2589,7 +2589,7 @@ function ProviderSettingsTabs({
 
   return (
     <header className="research-side-view-header provider-settings-tab-header">
-      <div className="research-side-view-tabs" role="tablist" aria-label="Provider views">
+      <div className="research-side-view-tabs pill-view-tabs" role="tablist" aria-label="Provider views">
         {viewProviders.map((provider) => (
           <div
             className={`research-side-view-tab provider-settings-tab ${activeProviderId === provider.id ? 'active' : ''} ${provider.authenticationRunning ? 'authenticating' : ''}`.trim()}

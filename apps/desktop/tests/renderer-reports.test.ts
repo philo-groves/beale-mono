@@ -258,6 +258,7 @@ describe('reports resource views', () => {
     expect(html).toContain('class="wide-content-container"');
     expect(html).toContain('All Reports');
     expect(html).toContain('role="tablist"');
+    expect(html).toContain('class="reports-index-tabs research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs"');
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('>Parser</span>');
     expect(html).toContain('Parser boundary confusion');
@@ -280,12 +281,12 @@ describe('reports resource views', () => {
 
     expect(styles).toMatch(/\.reports-index\s*\{[^}]*width:\s*100%;[^}]*padding:\s*10px;/s);
     expect(styles).toMatch(/\.reports-index-tabs,[\s\S]*?\.reports-index-empty\s*\{[^}]*width:\s*100%;/s);
-    expect(styles).toMatch(/\.reports-index-tab\.provider-settings-tab \.research-side-view-tab-activate\s*\{[^}]*padding:\s*0 9px;/s);
+    expect(styles).toMatch(/\.pill-view-tabs \.research-side-view-tab \.research-side-view-tab-activate\s*\{[^}]*height:\s*40px;[^}]*padding:\s*0 16px;/s);
     expect(styles).toMatch(/\.resource-workspace-heading\s*\{[^}]*max-width:\s*var\(--session-content-max-width\);[^}]*margin-inline:\s*auto;/s);
     expect(styles).toMatch(/\.resource-workspace-heading h1\s*\{[^}]*font-size:\s*26px;[^}]*font-weight:\s*400;/s);
     expect(styles).toMatch(/\.settings-workspace\s*\{[^}]*background:\s*var\(--panel\);/s);
     expect(styles).toMatch(/\.settings-main-view\s*\{[^}]*padding:\s*10px;/s);
-    expect(styles).toMatch(/\.profile-settings-tab \.research-side-view-tab-activate\s*\{[^}]*padding:\s*0 9px;/s);
+    expect(styles).toMatch(/\.profile-settings-tab-row\s*\{[^}]*min-height:\s*40px;/s);
   });
 
   it('uses an Archived Sessions-style flat list with edit actions', () => {

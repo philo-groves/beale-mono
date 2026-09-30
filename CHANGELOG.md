@@ -12,6 +12,7 @@
 
 #### Changed
 
+- Automations, Reporting, Providers, and Profiles view tabs now share the workspace's larger pill styling and transparent idle state.
 - Campaign list headings in Highlights, Board, Memories, and Runbooks now share the Board's muted text and divider spacing.
 - Workspace and campaign view tabs now use larger pill-shaped active and hover states with transparent idle backgrounds.
 - Automations, Reporting, and Plugins catalogs now use the same centered wide container as workspace views.

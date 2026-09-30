@@ -102,7 +102,7 @@ export function AutomationsWorkspace({
   return (
     <section className="automations-workspace" aria-label="Automations" aria-busy={loading}>
       <div className="wide-content-container">
-        <div className="automations-workspace-tabs research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Automation workspace scope">
+        <div className="automations-workspace-tabs research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label="Automation workspace scope">
           {scopeTabs.map((scope) => {
             const selected = selectedWorkspaceId === scope.id;
             return (

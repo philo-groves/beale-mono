@@ -51,10 +51,10 @@ describe('workspace dashboard', () => {
     const dashboardStyles = styles.match(/\.workspace-dashboard\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignDashboardStyles = styles.match(/\.workspace-dashboard\.campaign-active\s*\{([^}]*)\}/)?.[1] ?? '';
     const tabsStyles = styles.match(/\.workspace-dashboard-tabs\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceViewTabStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\)\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceViewTabButtonStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\) \.research-side-view-tab-activate\s*\{([^}]*)\}/)?.[1] ?? '';
-    const idleWorkspaceViewTabStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\)\.provider-settings-tab:not\(\.active\)\s*\{([^}]*)\}/)?.[1] ?? '';
-    const hoveredWorkspaceViewTabStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\)\.provider-settings-tab:not\(\.active\):is\(:hover, :focus-within\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceViewTabStyles = styles.match(/\.pill-view-tabs \.research-side-view-tab\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceViewTabButtonStyles = styles.match(/\.pill-view-tabs \.research-side-view-tab \.research-side-view-tab-activate\s*\{([^}]*)\}/)?.[1] ?? '';
+    const idleWorkspaceViewTabStyles = styles.match(/\.pill-view-tabs \.research-side-view-tab\.provider-settings-tab:not\(\.active\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const hoveredWorkspaceViewTabStyles = styles.match(/\.pill-view-tabs \.research-side-view-tab\.provider-settings-tab:not\(\.active\):is\(:hover, :focus-within\)\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceDashboardKitTabStyles = styles.match(/\.research-side-view-tab\.workspace-dashboard-kit-tab\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceDashboardKitDividerStyles = styles.match(/\.workspace-dashboard-kit-tab::before\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignSubviewTabsStyles = styles.match(/\.workspace-campaign-subview-tabs\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -491,6 +491,7 @@ describe('workspace dashboard', () => {
     expect(html).toContain('class="workspace-dashboard wide-content-container"');
     expect(html.match(/class="workspace-dashboard-panel/g)).toHaveLength(1);
     expect(html).toContain('aria-label="Workspace dashboard views"');
+    expect(html).toContain('class="workspace-dashboard-tabs research-side-view-tabs pill-view-tabs"');
     expect(html).toContain('<span>Campaign</span>');
     expect(html).toContain('<span>Settings</span>');
     expect(html).toContain('<span>Resources</span>');
@@ -583,6 +584,7 @@ describe('workspace dashboard', () => {
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-subviews" aria-selected="true"');
     expect(html).toContain('id="workspace-dashboard-campaign-subviews" role="tabpanel"');
     expect(html).toContain('role="tablist" aria-label="Campaign views"');
+    expect(html).toContain('class="workspace-campaign-subview-tabs research-side-view-tabs pill-view-tabs"');
     expect(html).toContain('<span>Highlights</span>');
     expect(html).toContain('<span>Board</span>');
     expect(html).not.toContain('<span>Activity</span>');

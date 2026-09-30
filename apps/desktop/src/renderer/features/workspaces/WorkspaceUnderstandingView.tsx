@@ -296,7 +296,7 @@ export function WorkspaceUnderstandingView({
 
   return (
     <main className={`workspace-dashboard wide-content-container${campaignActive ? ' campaign-active' : ''}`} aria-label="Workspace dashboard">
-      <div className="workspace-dashboard-tabs research-side-view-tabs" role="tablist" aria-label="Workspace dashboard views">
+      <div className="workspace-dashboard-tabs research-side-view-tabs pill-view-tabs" role="tablist" aria-label="Workspace dashboard views">
         {dashboardViews.map((view) => {
           const selected = activeView === view;
           const ViewIcon = WORKSPACE_DASHBOARD_VIEW_ICONS[view];
@@ -321,7 +321,7 @@ export function WorkspaceUnderstandingView({
 
       {campaignActive ? (
         <div className="workspace-campaign-subview-navigation" id="workspace-dashboard-campaign-subviews" role="tabpanel">
-          <div className="workspace-campaign-subview-tabs research-side-view-tabs" role="tablist" aria-label="Campaign views">
+          <div className="workspace-campaign-subview-tabs research-side-view-tabs pill-view-tabs" role="tablist" aria-label="Campaign views">
             {WORKSPACE_CAMPAIGN_VIEWS.map((view) => {
               const selected = activeCampaignView === view;
               const ViewIcon = WORKSPACE_CAMPAIGN_VIEW_ICONS[view];

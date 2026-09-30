@@ -269,6 +269,7 @@ describe('automation workspace', () => {
     expect(html.indexOf('role="tablist"')).toBeLessThan(html.indexOf('<h1>All Automations</h1>'));
     expect(render(null, false, workspace.workspaceId)).toContain('<h1>Parser Automations</h1>');
     expect(html).toContain('role="tablist"');
+    expect(html).toContain('class="automations-workspace-tabs research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs"');
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('>Parser</span>');
     expect(html).toContain('Daily parser review');

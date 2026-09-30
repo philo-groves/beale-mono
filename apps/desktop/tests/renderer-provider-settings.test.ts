@@ -101,15 +101,18 @@ describe('renderer provider settings', () => {
     expect(pickerStyles).toContain('right: auto;');
   });
 
-  it('gives inactive provider tabs a contrasting surface', () => {
+  it('uses the shared pill styling for provider view tabs', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-    const inactiveTabStyles = styles.match(/\.provider-settings-tab:not\(\.active\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const inactiveTabStyles = styles.match(/\.pill-view-tabs \.research-side-view-tab\.provider-settings-tab:not\(\.active\)\s*\{([^}]*)\}/)?.[1] ?? '';
     const tabActivateStyles =
-      styles.match(/^\.provider-settings-tab \.research-side-view-tab-activate\s*\{([^}]*)\}/m)?.[1] ?? '';
+      styles.match(/\.pill-view-tabs \.research-side-view-tab \.research-side-view-tab-activate\s*\{([^}]*)\}/)?.[1] ?? '';
+    const tabHeaderStyles = styles.match(/\.provider-settings-tab-header\s*\{([^}]*)\}/)?.[1] ?? '';
     const providerContentStyles = styles.match(/\.provider-settings-page > \.provider-card\s*\{([^}]*)\}/)?.[1] ?? '';
 
-    expect(inactiveTabStyles).toContain('background: var(--panel-strong)');
-    expect(tabActivateStyles).toContain('padding-inline: 9px');
+    expect(inactiveTabStyles).toContain('background: transparent');
+    expect(tabActivateStyles).toContain('height: 40px');
+    expect(tabActivateStyles).toContain('padding: 0 16px');
+    expect(tabHeaderStyles).toContain('min-height: 40px');
     expect(providerContentStyles).toContain('border: 0');
     expect(providerContentStyles).toContain('border-radius: 0');
     expect(providerContentStyles).toContain('background: transparent');
@@ -259,6 +262,7 @@ describe('renderer provider settings', () => {
     }));
 
     expect(html).toContain('role="tablist" aria-label="Provider views"');
+    expect(html).toContain('class="research-side-view-tabs pill-view-tabs"');
     expect(html.match(/role="tab"/gu)).toHaveLength(2);
     expect(html.match(/class="provider-settings-tab-icon"/gu)).toHaveLength(2);
     expect(html).toContain('<span>OpenAI</span>');
