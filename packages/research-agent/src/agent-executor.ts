@@ -29,7 +29,7 @@ import {
   type ProviderAuthenticationPreferences,
 } from "./auth-routing.js";
 import { createId, nowIso } from "./ids.js";
-import { ManagedToolPluginSession, mergeResearchPluginCatalog } from "./managed-tool-plugins.js";
+import { ManagedToolPluginSession, isHarnessFeatureId, managedToolPluginId, mergeResearchPluginCatalog } from "./managed-tool-plugins.js";
 import {
   createToolRequestedEvent,
   getToolTransportName,
@@ -138,7 +138,7 @@ const RECENT_TOOL_RESULTS_TO_KEEP = 8;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
 const MAX_TRANSIENT_MODEL_RETRIES = 4;
-const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition", "plugins_preview", "plugins_load"]);
+const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition", "features_preview", "features_load", "plugins_preview", "plugins_load"]);
 
 export interface PiAgentResumableState {
   loadedPluginIds?: readonly string[];
@@ -596,7 +596,7 @@ export function createPiAgentExecutor(
           ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], request.root ? options.resumableState?.loadedPluginIds : [], pluginCatalog)
           : undefined;
         const agentToolRegistry = pluginSession
-          ? options.toolRegistry!.fork([pluginSession.createPreviewer(options.toolRegistry!.listTools()), pluginSession.createLoader()])
+          ? options.toolRegistry!.fork(pluginSession.createControlTools(options.toolRegistry!.listTools()))
           : options.toolRegistry;
         let getModelAuthor = () => ({ provider: sessionModel.provider, model: sessionModel.id });
         const researchTools = createAgentTools({
@@ -919,7 +919,12 @@ export function createPiAgentExecutor(
               }
               const researchTool = agentToolRegistry?.find(toolCall.name);
               if (researchTool && pluginSession && !pluginSession.visible(researchTool.descriptor.name)) {
-                return { block: true, reason: "Load the tool's plugin with plugins.load before calling it." };
+                const harnessFeature = managedToolPluginId(researchTool.descriptor.name)
+                  || pluginCatalog.some((entry) => isHarnessFeatureId(entry.id)
+                    && entry.mcpServers.some((server) => researchTool.descriptor.name.startsWith(`mcp.${server}.`)));
+                return { block: true, reason: harnessFeature
+                  ? "Load the tool's harness feature with features.load before calling it."
+                  : "Load the tool's plugin with plugins.load before calling it." };
               }
               const runtimeControlTool = RUNTIME_CONTROL_TOOL_NAMES.has(toolCall.name);
               const preflight = researchTool

@@ -92,6 +92,27 @@ describe('campaign graph projection', () => {
     expect(html.match(/class="workspace-campaign-list-heading campaign-board-lane-heading"/gu)).toHaveLength(4);
   });
 
+  it('makes finding cards draggable when a canonical board transition is available', () => {
+    const finding = {
+      id: 'finding-example-parser', projection: 'finding', maturity: 'observed',
+      title: 'Example parser boundary', rating: 'medium', classification: 'security.primitive',
+      authors: [], evidence: [], securityTracking: null, revision: 2
+    } as unknown as AppServerFindingSummary;
+    const props = {
+      memory: { findings: [finding] } as AppServerMemorySummary,
+      providerModelCatalog: [], workspaceName: 'Example Workspace',
+      onOpenClaim: () => undefined
+    };
+    const readOnly = renderToStaticMarkup(createElement(CampaignBoardView, props));
+    const editable = renderToStaticMarkup(createElement(CampaignBoardView, {
+      ...props,
+      onTransitionClaim: async () => undefined
+    }));
+    expect(readOnly).toContain('draggable="false"');
+    expect(editable).toContain('draggable="true"');
+    expect(editable).toContain('Drag findings between columns to change status.');
+  });
+
   it('filters Board findings by text alongside class and rating', () => {
     const parserClaim = {
       id: 'finding-example-parser',

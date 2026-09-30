@@ -231,7 +231,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
         ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], options.resumableState?.loadedPluginIds, pluginCatalog)
         : undefined;
       const agentToolRegistry = pluginSession ? options.toolRegistry?.fork([
-        pluginSession.createPreviewer(options.toolRegistry.listTools()), pluginSession.createLoader(),
+        ...pluginSession.createControlTools(options.toolRegistry.listTools()),
       ]) : options.toolRegistry;
       const mcpTools = (agentToolRegistry?.listTools() ?? [])
         .filter((candidate) => candidate.parameters)
@@ -241,7 +241,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
           jsonObjectShape(candidate.parameters),
           async (args) => {
             const toolCallId = createId("claude_tool");
-            const isPluginControl = candidate.descriptor.name === "plugins.load" || candidate.descriptor.name === "plugins.preview";
+            const isPluginControl = ["plugins.load", "plugins.preview", "features.load", "features.preview"].includes(candidate.descriptor.name);
             if (!isPluginControl) toolCallCount += 1;
             const record = await agentToolRegistry!.executeToolCall({
               id: toolCallId,
@@ -336,7 +336,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
           try {
             const stream = query({
               prompt: pluginContinuationCount > 0
-                ? "The requested plugin is loaded. Continue the current task with its newly available resources."
+                ? "The requested feature or plugin is loaded. Continue the current task with its newly available resources."
                 : options.waitForSteeringMessages
                 ? streamUserMessages(
                     formatModelInput(input.modelInput),

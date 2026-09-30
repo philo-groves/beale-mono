@@ -6,6 +6,9 @@
 
 #### Removed
 
+- Removed the default Browser Use plugin, its WebDriver BiDi server and Puppeteer dependency. Existing saved built-in Browser Use entries are pruned from the plugin registry.
+- Removed the built-in Terminator plugin, its settings toggle, and native SDK dependency. Existing saved Terminator entries are pruned.
+- Removed Computer Permissions settings and session-wide computer-action grants. External computer actions still require individual approval.
 - Removed the multi-workspace Reporting screen and its navigation rail destination. Reports are available within each workspace Campaign view.
 - Removed the earlier duplicate Campaign claims list; the maturity column view remains as Campaign Claims, with findings and leads also available in the research sidebar.
 - Removed the redundant Back to Agent button from the settings sidebar; Home remains available in the icon rail.
@@ -13,6 +16,14 @@
 
 #### Changed
 
+- Automations and Plugins now have dedicated left sidebars. Automations lists active scheduled jobs; Plugins lists installed packages and selects their catalog rows.
+- Managed plugin packages in `managed-plugins` now appear in Plugins automatically. Meta Skills retains its existing default; other packages, including Microsoft Security Devices, start disabled.
+- Source, Provenance, Knowledge, Claims, Runbooks, Reporting, and Introspection now appear as Optional Features in Agent Settings instead of Plugins. Agents see them under "Internal features" in `{{features}}` with `features.preview` and `features.load`; traditional plugins appear under "External Plugins" in `{{plugins}}` and use `plugins.preview`/`plugins.load`. Saved enabled states and registry IDs remain compatible. Quick Chat requires Introspection to be enabled.
+- Meta Skills now lives under `managed-plugins` and appears in session plugin catalogs only for workspaces using the Meta Bug Bounty Research Kit. Its Plugins toggle still controls whether eligible sessions can load it.
+- The collapsed sidebar header now keeps New Research and Quick Chat available without an open workspace; New Research opens a workspace picker from its header icon.
+- New Research remains available without an open workspace and offers an in-place workspace picker that opens the chosen workspace's research form.
+- Campaign Claims cards can be dragged between maturity columns. Human board moves bypass agent evidence prerequisites, retain revision checks, and record an operator override in claim history; agent transitions remain evidence-gated. Existing claim databases migrate automatically; app-server contract v30 requires rebuilt clients and host.
+- In open sessions, the composer recalls the initial prompt and sent steering messages with Up and Down while preserving multiline editing and unsent drafts.
 - Renamed Campaign Board to Claims and added a workspace-scoped Reports tab with report activity, a catalog, and access to the existing editor.
 - The Beale sidebar wordmark uses a lighter weight, and icon rail buttons show labels to their right on hover or keyboard focus.
 - The workspace sidebar now displays a muted Beale wordmark above New Research.
@@ -49,7 +60,7 @@
 - Prompt settings show an approximate token count for saved custom templates, estimated from the rendered preview at four characters per token.
 - The default agent prompt includes memory, claims, and runbook guidance only while their corresponding plugins are enabled. Report guidance is removed from the prompt template; saved templates containing `{{reports}}` remain valid and render it empty.
 - The default agent prompt now presents guidance as plain lines across its sections; plugin and memory-type catalogs retain bullets.
-- The Introspection and Terminator Agent Plugin packages now live under `managed-plugins`; their built-in registration and enabled defaults are preserved.
+- Introspection lives with the harness features under `app-server/resources/harness-features`.
 - The default agent prompt now has a `{{plugins}}` catalog of plugin IDs, descriptions, and tool and skill counts. `plugins.preview` returns tool names and skill use cases on demand, with a 12,000-character budget for skill descriptions. The settings preview discovers enabled MCP tool counts through the app-server. `plugins.load` returns full skill instructions and exposes tool schemas on the next turn; Pi, Claude, and ZCode use the same path.
 - Collaboration prompt guidance now groups delegation, channel use, profile rules, and active runtime policy without repeating channel protocol instructions.
 - The default agent prompt separates sections with a blank line and opens style with "Persona style:". Style follows identity; boundary guidance groups scope and safeguards, while shorter tool guidance groups search routing, resource first touch, execution dependencies, and shell fallback. Goal guidance separates session progress, persistent goals, and disposition.
@@ -63,8 +74,7 @@
 - Session permissions are selected in General settings; steering and New Research inputs no longer show a permission picker.
 #### Added
 
-- A default-enabled Browser Use plugin adds bounded tab navigation, page observation, element interaction, and screenshots through WebDriver BiDi. The plugin can be disabled in Plugins and launches a separate browser profile.
-- A bundled Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default but loads into sessions only for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
+- A Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
 
 #### Changed
 
@@ -83,6 +93,9 @@
 
 #### Fixed
 
+- Prompt settings always shows the current token estimate, including for the default template and unsaved edits.
+- The left icon rail keeps its 50px width and centered icons when the adjacent sidebar is collapsed.
+- Removed the 1px window-edge glow while preserving the selected background and session heat gradient.
 - Desktop builds now keep `tree-sitter-wasm` external so its manifest and parser assets resolve from the installed package instead of a nonexistent path beside the bundled main process.
 - Auto-Review now permits bounded vulnerability experiments and read-only research artifacts outside the workspace directory without a runbook cell. It reserves human overrides for concrete destructive or clearly out-of-scope commands, and shell approvals no longer expire under the default two-minute tool budget. Runbooks remain the path to reproduction-grade evidence.
 - Session commentary Markdown links now reveal local files, including workspace files referenced through localhost URLs, in the file explorer and open web pages in the default browser.
@@ -214,7 +227,7 @@
 
 #### Changed
 
-- Grouped native tools into six managed plugins enabled by default: Source, Provenance, Knowledge, Claims, Runbooks, and Reporting. Each has compact usage guidance; file operations and shell execution remain core tools. Pi loads plugin schemas on demand, Claude uses native tool search, and ZCode retains its fixed tool-list behavior.
+- Grouped native tools into six optional features enabled by default: Source, Provenance, Knowledge, Claims, Runbooks, and Reporting. Each has compact usage guidance; file operations and shell execution remain core tools. Agents load feature schemas on demand.
 - Added core candidate-file write and exact-text edit tools, with bounded output and hash checks for replacing existing files. File reads now return a content hash.
 - Desktop workspace and registry persistence now runs through allowlisted app-server operations. Beale retains synchronous compatibility facades and in-place database migration while no longer importing SQLite, issuing SQL, or owning database handles; the shared app-server contract advances to v16.
 - Agent Plugin stdio runtime materialization now expands standard plugin variables in arguments, provides reserved `PLUGIN_ROOT` and `PLUGIN_DATA` environment variables, and rejects plugin attempts to override them.
@@ -443,7 +456,6 @@
 - app-server context-compaction telemetry now uses provider-neutral language and reports the active model context window, so OpenAI-compatible providers such as xAI no longer inherit a misleading 200k context meter or OpenAI attribution.
 - Switching directly between sessions now retains the prior session heat and palette while the next detail loads, then transitions straight to the newly resolved heat without briefly resetting to the neutral background.
 - Completed sessions resumed after app recovery now show the successful terminal response instead of letting the historical recovery marker suppress an otherwise empty result area.
-- Detailed Windows computer-use observations no longer let Terminator SDK diagnostics corrupt the MCP JSON-RPC stdout stream and terminate the active research session.
 - Workspace registry loading now shows a compact spinner beside the Workspaces sidenav heading instead of adding a separate loading-text row to the workspace list.
 - Header context labels now follow the main content edge when the left sidenav resizes or collapses, while clamping after the measured application-menu controls so narrow windows and display zoom cannot overlap the labels.
 - Workspace opening now batches registry updates in one SQLite transaction, avoids re-synchronizing cached background workspaces or immediately reloading the just-updated registry, and mounts only the visible dashboard tab instead of eagerly building all hidden activity, resource, memory, runbook, and utility views.
@@ -501,11 +513,9 @@
 
 - Workspace and session views now provide a real interactive PTY terminal in a separate 250px bottom panel. The terminal opens in the active workspace's primary directory, streams through a typed host boundary, closes with its owning window or panel, and defaults to collapsed behind a context-matched header toggle with animated vertical transitions.
 - Workspace and session headers now open the active workspace's primary directory in a detected local editor. The compact control sits directly beside the details-sidenav button, prefers the system-configured editor when identifiable, falls back to Visual Studio Code, and lists only available editors with their native installed-app icons.
-- Agent Settings now includes a Computer Use view where Windows users can enable the built-in Terminator integration; other operating systems receive an availability notice instead of a feature toggle.
 
 - Added an iOS 27 ScreenCaptureKit companion for showing user-approved physical iPhone pixels in the available lower-right space below the compact session summary over an authenticated, loopback-only USB tunnel; Beale detects the wired device and establishes the channel automatically, the frameless stream can expand to fill the detailed sidenav, captured frames remain transient, and capture stops when the session workspace closes or the host disconnects.
 - Reports display attached app-server `submission.zip` metadata and can open the exact durable packet through a workspace-validated IPC boundary.
-- Added an installed-but-disabled built-in Terminator computer-use Agent Plugin for Windows, pinned to `@mediar-ai/terminator` 0.24.32 and limited to a curated UI Automation surface with screenshot support.
 - Reporting now has a dedicated workspace sidenav destination below Automations, uses the same active background as workspace rows, and opens reports from a flat settings-style list with the report title, workflow status, and a dedicated Edit action. A user's first report request starts a report-scoped agent session that stays out of the workspace session list, presents the normal commentary and tool transcript beside the report, and accepts both chat-based and inline section change requests.
 - Moved app-server session creation, attempt state, live events, capture import, lifecycle state, list/detail queries, and transcript queries behind the versioned app-server CLI protocol. Backend selection is per-session and never dual-writes the legacy Beale session tables.
 - Added a versioned app-server CLI protocol client and an architecture ratchet that prevents direct app-server memory storage access from spreading beyond the explicitly recorded migration debt.
@@ -514,7 +524,7 @@
 - Added a repeat schedule picker to New Research with a default No Repeat state and persisted repeat metadata on started runs.
 - Added minute and hour interval options to repeat schedules.
 - Added an Automations sidebar dialog for viewing and canceling scheduled repeat prompts.
-- Added a default Beale Introspection Agent Plugin with MCP tools to list and create workspaces, list sessions, launch sessions, and stop sessions; it appears in Plugins by default and can be disabled there.
+- Added Beale Introspection tools to list and create workspaces, list sessions, launch sessions, and stop sessions; they appear under Optional Features in Agent Settings and can be disabled there.
 - Added a first-class Agent Plugins manager with local/repository install paths, persistent enablement, removal, and v1 manifest/skill/MCP discovery surfaced from the left sidebar.
 - Enabled Agent Plugins now extend app-server runs and tooling discovery through generated skill-dir, selected-skill, MCP-config, and MCP server allow-list arguments, with plugin MCP paths rewritten into a Beale-owned runtime overlay.
 - Added Z.ai as a first-class provider with GLM-5.3 and GLM-5-Turbo model choices, official ZCode subscription sign-in/logout and execution, encrypted `ZAI_API_KEY` configuration, provider-specific authentication preference, provider marks, and a one-time policy-use acknowledgement for cybersecurity research.
@@ -931,7 +941,6 @@
 
 #### Security
 
-- Terminator UI mutations now require a correlated host decision, a fresh single-use target observation, exact window/element revalidation, and post-mutation lease invalidation. Sensitive Windows and agent surfaces and dangerous shortcuts are denied, and MCP screenshot bytes are omitted from model-invisible research audit events.
 - Updated the production WebSocket dependency to 8.21.x to include the upstream memory-disclosure and fragmented-message exhaustion fixes.
 - app-server-backed cybersecurity sessions and forks now require a recorded workspace authorization boundary before execution can begin.
 - Kept Auto-Review routing host-owned by always overriding profile-supplied shell-review models and effort at the Beale-to-app-server launch boundary.
@@ -1230,6 +1239,7 @@
 
 #### Changed
 
+- Built-in harness feature packages now live under `app-server/resources/harness-features`. Introspection uses feature discovery and loading while retaining its saved registry ID and enabled state; Quick Chat refuses to start when Introspection is disabled.
 - Canonical session event reads now accept a backward cursor, allowing Desktop to load older transcript pages without transferring the full session at once. Desktop and app-server must be rebuilt together.
 - OpenAI server-side and local fallback compaction thresholds now scale from the selected model context window instead of imposing a 96k active-context ceiling.
 - Public history recall now supports paginated NVD/OSV, public GitHub issues/PRs and releases, and supplied document pages, retaining structured advisory applicability and explicit partial/error coverage. Provenance adds bounded `prior_art.fetch` with content-hash-checked pages and an explicit `repository.fetch_history` operation that preserves worktree files while fetching or deepening named remote history. Model search cards defer large details to source URLs; first-touch guidance now states actual source coverage.

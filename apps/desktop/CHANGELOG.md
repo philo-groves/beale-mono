@@ -104,7 +104,6 @@
 - app-server context-compaction telemetry now uses provider-neutral language and reports the active model context window, so OpenAI-compatible providers such as xAI no longer inherit a misleading 200k context meter or OpenAI attribution.
 - Switching directly between sessions now retains the prior session heat and palette while the next detail loads, then transitions straight to the newly resolved heat without briefly resetting to the neutral background.
 - Completed sessions resumed after app recovery now show the successful terminal response instead of letting the historical recovery marker suppress an otherwise empty result area.
-- Detailed Windows computer-use observations no longer let Terminator SDK diagnostics corrupt the MCP JSON-RPC stdout stream and terminate the active research session.
 - Workspace registry loading now shows a compact spinner beside the Workspaces sidenav heading instead of adding a separate loading-text row to the workspace list.
 - Header context labels now follow the main content edge when the left sidenav resizes or collapses, while clamping after the measured application-menu controls so narrow windows and display zoom cannot overlap the labels.
 - Workspace opening now batches registry updates in one SQLite transaction, avoids re-synchronizing cached background workspaces or immediately reloading the just-updated registry, and mounts only the visible dashboard tab instead of eagerly building all hidden activity, resource, memory, runbook, and utility views.
@@ -162,11 +161,9 @@
 
 - Workspace and session views now provide a real interactive PTY terminal in a separate 250px bottom panel. The terminal opens in the active workspace's primary directory, streams through a typed host boundary, closes with its owning window or panel, and defaults to collapsed behind a context-matched header toggle with animated vertical transitions.
 - Workspace and session headers now open the active workspace's primary directory in a detected local editor. The compact control sits directly beside the details-sidenav button, prefers the system-configured editor when identifiable, falls back to Visual Studio Code, and lists only available editors with their native installed-app icons.
-- Agent Settings now includes a Computer Use view where Windows users can enable the built-in Terminator integration; other operating systems receive an availability notice instead of a feature toggle.
 
 - Added an iOS 27 ScreenCaptureKit companion for showing user-approved physical iPhone pixels in the available lower-right space below the compact session summary over an authenticated, loopback-only USB tunnel; Beale detects the wired device and establishes the channel automatically, the frameless stream can expand to fill the detailed sidenav, captured frames remain transient, and capture stops when the session workspace closes or the host disconnects.
 - Reports display attached app-server `submission.zip` metadata and can open the exact durable packet through a workspace-validated IPC boundary.
-- Added an installed-but-disabled built-in Terminator computer-use Agent Plugin for Windows, pinned to `@mediar-ai/terminator` 0.24.32 and limited to a curated UI Automation surface with screenshot support.
 - Reporting now has a dedicated workspace sidenav destination below Automations, uses the same active background as workspace rows, and opens a list of workspace reports. A user's first report request starts a report-scoped agent session that stays out of the workspace session list, presents the normal commentary and tool transcript beside the report, and accepts both chat-based and inline section change requests.
 - Moved app-server session creation, attempt state, live events, capture import, lifecycle state, list/detail queries, and transcript queries behind the versioned app-server CLI protocol. Backend selection is per-session and never dual-writes the legacy Beale session tables.
 - Added a versioned app-server CLI protocol client and an architecture ratchet that prevents direct app-server memory storage access from spreading beyond the explicitly recorded migration debt.
@@ -198,6 +195,8 @@
 
 ### Removed
 
+- Removed the built-in Terminator plugin, its settings toggle, and the native SDK dependency. Saved built-in entries are pruned.
+- Removed Computer Permissions settings and session-wide computer-action grants. External computer actions still require individual approval.
 - Removed the workspace-information and session-summary bottom sheets; workspace and session names in the application header are now plain, non-clickable labels.
 - Removed Beale's dormant project graph and local semantic-index stores, production fixture runtime, host tool/verifier executors, synthetic VM context model and schema, and duplicated Dreaming schema initialization.
 - Removed Beale's legacy app-server stdio event/control protocol and its test-only compatibility switch; active sessions now use the versioned app-server WebSocket boundary exclusively.
@@ -591,7 +590,6 @@
 
 ### Security
 
-- Terminator UI mutations now require a correlated host decision, a fresh single-use target observation, exact window/element revalidation, and post-mutation lease invalidation. Sensitive Windows and agent surfaces and dangerous shortcuts are denied, and MCP screenshot bytes are omitted from model-invisible research audit events.
 - Updated the production WebSocket dependency to 8.21.x to include the upstream memory-disclosure and fragmented-message exhaustion fixes.
 - app-server-backed cybersecurity sessions and forks now require a recorded workspace authorization boundary before execution can begin.
 - Kept Auto-Review routing host-owned by always overriding profile-supplied shell-review models and effort at the Beale-to-app-server launch boundary.

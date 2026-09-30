@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { JSX, MouseEvent } from 'react';
 import { ChevronDown, Code2, Minus, PanelBottomClose, PanelBottomOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Square, SquarePen, X, Zap } from 'lucide-react';
-import type { HostEnvironment, WorkspaceEditorCatalog, WorkspaceEditorId, WorkspaceEditorSummary, ZoomState } from '@shared/types';
+import type { HostEnvironment, WorkspaceEditorCatalog, WorkspaceEditorId, WorkspaceEditorSummary, WorkspaceRegistryEntry, ZoomState } from '@shared/types';
 import { useDevRenderProbe } from '../devInstrumentation';
 import { AppHeaderTitle, StaticAppHeaderTitle } from './AppHeaderTitle';
 import type { AppHeaderRun, AppHeaderViewIcon } from './AppHeaderTitle';
@@ -18,7 +18,7 @@ export function rightmostHeaderMenuControl(menuLeft: number, controlRights: read
   return Math.max(menuLeft, ...controlRights);
 }
 
-function WorkspaceEditorIcon({ editor, size = 16 }: { editor: WorkspaceEditorSummary; size?: number }): JSX.Element {
+function WorkspaceEditorIcon({ editor, size = 15 }: { editor: WorkspaceEditorSummary; size?: number }): JSX.Element {
   return editor.iconDataUrl
     ? <img className="workspace-editor-icon" src={editor.iconDataUrl} alt="" width={size} height={size} aria-hidden="true" />
     : <Code2 size={size} aria-hidden="true" />;
@@ -29,6 +29,8 @@ export const TopBar = memo(function TopBar({
   workspaceOpen,
   newResearchLabel,
   newResearchDisabled,
+  workspaces,
+  workspaceRegistryLoading,
   rightSidenavAvailable,
   rightSidenavExpanded,
   contextualTitleVisible,
@@ -50,12 +52,15 @@ export const TopBar = memo(function TopBar({
   onToggleRightSidenav,
   onToggleSidebar,
   onStartNewResearch,
+  onStartNewResearchForWorkspace,
   onOpenQuickChat
 }: {
   sidebarCollapsed: boolean;
   workspaceOpen: boolean;
   newResearchLabel: string;
   newResearchDisabled: boolean;
+  workspaces: readonly WorkspaceRegistryEntry[];
+  workspaceRegistryLoading: boolean;
   rightSidenavAvailable: boolean;
   rightSidenavExpanded: boolean;
   contextualTitleVisible: boolean;
@@ -77,6 +82,7 @@ export const TopBar = memo(function TopBar({
   onToggleRightSidenav: () => void;
   onToggleSidebar: () => void;
   onStartNewResearch: () => void;
+  onStartNewResearchForWorkspace: (workspace: WorkspaceRegistryEntry) => void;
   onOpenQuickChat: () => void;
 }): JSX.Element {
   useDevRenderProbe('topBar', () => ({ platform, sidebarCollapsed, profilingEnabled, workspaceName, run: activeRunDetail?.run.id ?? 'none' }));
@@ -84,13 +90,17 @@ export const TopBar = memo(function TopBar({
   const RightSidenavToggleIcon = rightSidenavExpanded ? PanelRightClose : PanelRightOpen;
   const BottomPanelToggleIcon = bottomPanelOpen ? PanelBottomClose : PanelBottomOpen;
   const isMac = platform === 'darwin';
-  const showCollapsedWorkspaceActions = sidebarCollapsed && workspaceOpen;
+  const showCollapsedWorkspaceActions = sidebarCollapsed;
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
   const [editorMenuOpen, setEditorMenuOpen] = useState(false);
+  const [newResearchPickerOpen, setNewResearchPickerOpen] = useState(false);
   const [zoomState, setZoomState] = useState<ZoomState>(() => ({ level: 0, percent: 100 }));
   const topBarRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLElement | null>(null);
   const editorMenuRef = useRef<HTMLDivElement | null>(null);
+  const newResearchPickerRef = useRef<HTMLDivElement | null>(null);
+  const newResearchButtonRef = useRef<HTMLButtonElement | null>(null);
+  const firstWorkspaceOptionRef = useRef<HTMLButtonElement | null>(null);
   const zoomOutShortcut = viewMenuShortcut(platform, 'zoom_out');
   const zoomInShortcut = viewMenuShortcut(platform, 'zoom_in');
 
@@ -120,7 +130,16 @@ export const TopBar = memo(function TopBar({
   }, [platform, showCollapsedWorkspaceActions]);
 
   useEffect(() => {
+    if (workspaceOpen || !sidebarCollapsed) setNewResearchPickerOpen(false);
+  }, [workspaceOpen, sidebarCollapsed]);
+
+  useEffect(() => {
+    if (newResearchPickerOpen) firstWorkspaceOptionRef.current?.focus();
+  }, [newResearchPickerOpen, workspaceRegistryLoading, workspaces.length]);
+
+  useEffect(() => {
     const closeFromPointer = (event: PointerEvent): void => {
+      if (!newResearchPickerRef.current?.contains(event.target as Node)) setNewResearchPickerOpen(false);
       if (menuRef.current?.contains(event.target as Node) || editorMenuRef.current?.contains(event.target as Node)) return;
       setOpenMenu(null);
       setEditorMenuOpen(false);
@@ -129,6 +148,11 @@ export const TopBar = memo(function TopBar({
       if (event.key === 'Escape') {
         setOpenMenu(null);
         setEditorMenuOpen(false);
+        if (newResearchPickerOpen) {
+          event.preventDefault();
+          setNewResearchPickerOpen(false);
+          newResearchButtonRef.current?.focus();
+        }
       }
     };
 
@@ -152,7 +176,7 @@ export const TopBar = memo(function TopBar({
       document.removeEventListener('keydown', closeFromEscape);
       if (platform !== 'darwin') window.removeEventListener('keydown', handleZoomShortcut);
     };
-  }, [platform]);
+  }, [platform, newResearchPickerOpen]);
 
   const preserveSelection = useCallback((event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -202,7 +226,7 @@ export const TopBar = memo(function TopBar({
   }, [onOpenWorkspaceInEditor]);
 
   return (
-    <header ref={topBarRef} className={`top-bar ${isMac ? 'top-bar-darwin' : 'top-bar-custom-controls'} ${profilingEnabled ? 'profiling-enabled' : ''} ${rightSidenavAvailable ? 'right-sidenav-available' : ''} ${defaultEditor ? 'editor-launch-available' : ''} ${openMenu || editorMenuOpen ? 'menu-open' : ''}`}>
+    <header ref={topBarRef} className={`top-bar ${isMac ? 'top-bar-darwin' : 'top-bar-custom-controls'} ${profilingEnabled ? 'profiling-enabled' : ''} ${rightSidenavAvailable ? 'right-sidenav-available' : ''} ${defaultEditor ? 'editor-launch-available' : ''} ${openMenu || editorMenuOpen || newResearchPickerOpen ? 'menu-open' : ''}`}>
       {isMac ? <div className="mac-window-control-spacer" aria-hidden="true" /> : null}
       <nav className="window-menu" aria-label={isMac ? 'Sidebar controls' : 'Application menu'} ref={menuRef}>
         <button
@@ -213,19 +237,60 @@ export const TopBar = memo(function TopBar({
           aria-pressed={!sidebarCollapsed}
           onClick={onToggleSidebar}
         >
-          <SidebarToggleIcon size={14} />
+          <SidebarToggleIcon size={15} />
         </button>
         {showCollapsedWorkspaceActions ? <>
-          <button
-            type="button"
-            className="header-sidebar-action-button"
-            title={`Start ${newResearchLabel.toLocaleLowerCase()}`}
-            aria-label={newResearchLabel}
-            disabled={newResearchDisabled}
-            onClick={onStartNewResearch}
-          >
-            <SquarePen size={15} aria-hidden="true" />
-          </button>
+          <div className="header-new-research-anchor" ref={newResearchPickerRef}>
+            <button
+              ref={newResearchButtonRef}
+              type="button"
+              className="header-sidebar-action-button"
+              title={`Start ${newResearchLabel.toLocaleLowerCase()}`}
+              aria-label={newResearchLabel}
+              aria-haspopup={!workspaceOpen ? 'menu' : undefined}
+              aria-expanded={!workspaceOpen ? newResearchPickerOpen : undefined}
+              disabled={newResearchDisabled}
+              onClick={() => {
+                if (workspaceOpen) {
+                  onStartNewResearch();
+                } else {
+                  setOpenMenu(null);
+                  setEditorMenuOpen(false);
+                  setNewResearchPickerOpen((open) => !open);
+                }
+              }}
+            >
+              <SquarePen size={15} aria-hidden="true" />
+            </button>
+            {newResearchPickerOpen && !workspaceOpen ? (
+              <div className="sidebar-new-research-menu header-new-research-menu" role="menu" aria-label="Choose workspace for new research">
+                {workspaceRegistryLoading ? (
+                  <div className="sidebar-new-research-menu-empty" role="status">Loading workspaces…</div>
+                ) : workspaces.length === 0 ? (
+                  <>
+                    <div className="sidebar-new-research-menu-empty">No workspaces yet.</div>
+                    <button ref={firstWorkspaceOptionRef} type="button" role="menuitem" onClick={() => {
+                      setNewResearchPickerOpen(false);
+                      onAddWorkspace();
+                    }}>Create Workspace</button>
+                  </>
+                ) : workspaces.map((workspace, index) => (
+                  <button
+                    key={workspace.id}
+                    ref={index === 0 ? firstWorkspaceOptionRef : undefined}
+                    type="button"
+                    role="menuitem"
+                    title={workspace.workspacePath}
+                    aria-label={`Start new research in ${workspace.workspaceName}`}
+                    onClick={() => {
+                      setNewResearchPickerOpen(false);
+                      onStartNewResearchForWorkspace(workspace);
+                    }}
+                  >{workspace.workspaceName}</button>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
             className="header-sidebar-action-button"
@@ -388,7 +453,7 @@ export const TopBar = memo(function TopBar({
               aria-pressed={bottomPanelOpen}
               onClick={onToggleBottomPanel}
             >
-              <BottomPanelToggleIcon size={14} aria-hidden="true" />
+              <BottomPanelToggleIcon size={15} aria-hidden="true" />
             </button>
           ) : null}
           {rightSidenavAvailable ? (
@@ -400,7 +465,7 @@ export const TopBar = memo(function TopBar({
               aria-pressed={rightSidenavExpanded}
               onClick={onToggleRightSidenav}
             >
-              <RightSidenavToggleIcon size={14} aria-hidden="true" />
+              <RightSidenavToggleIcon size={15} aria-hidden="true" />
             </button>
           ) : null}
           {!isMac ? (

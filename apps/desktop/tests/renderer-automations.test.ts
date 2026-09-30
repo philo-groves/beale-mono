@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { AutomationSummary, RunDetail, WorkspaceRegistryEntry } from '@shared/types';
 import {
   automationAttemptDetail,
+  AutomationsSidebar,
   AutomationsWorkspace,
   orderedAutomationAttempts
 } from '../src/renderer/features/automations/AutomationsWorkspace';
@@ -227,6 +228,25 @@ function render(
 }
 
 describe('automation workspace', () => {
+  it('lists enabled upcoming jobs in the automation sidebar', () => {
+    const html = renderToStaticMarkup(createElement(AutomationsSidebar, {
+      automations: [activeAutomation, inactiveAutomation],
+      selectedWorkspaceId: null,
+      selectedAutomation: activeAutomation,
+      collapsed: false,
+      loading: false,
+      error: null,
+      onSelectAutomation: () => undefined,
+      onResizePointerDown: () => undefined
+    }));
+
+    expect(html).toContain('aria-label="Automations sidebar"');
+    expect(html).toContain('Upcoming jobs');
+    expect(html).toContain('Daily parser review');
+    expect(html).not.toContain('Weekly regression review');
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain('aria-label="Resize sidebar"');
+  });
   it('uses the shared centered regular-weight loading state', () => {
     const html = render(null, true);
 

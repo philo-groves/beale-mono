@@ -10,8 +10,6 @@ import type {
   AppServerRemoteAccessSettings,
   AppServerRemoteAccessUpdate,
   AutomationSummary,
-  ComputerUsePermissionMode,
-  ComputerUseSettings,
   ProviderSettings,
   ProviderAuthenticationMethod,
   ProviderContextSize,
@@ -19,6 +17,8 @@ import type {
   AppServerRunbookDocument,
   AppServerReportDocument,
   AppServerReportSummary,
+  AppServerFindingSummary,
+  ClaimBoardMaturity,
   MemoryDreamingProgressUpdate,
   NotificationRecord,
   OpenAiOAuthStartResult,
@@ -74,8 +74,8 @@ import { StartRunForm } from './features/sessions/StartRunForm';
 import { workspaceScopeDraftForConfigurationUpdate } from './features/workspaces/WorkspaceUnderstandingView';
 import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from './features/workspaces/WorkspaceUnderstandingView';
 import { ReportSessionWorkspace } from './features/reports/ReportsWorkspace';
-import { AutomationsWorkspace } from './features/automations/AutomationsWorkspace';
-import { PluginManagerWorkspace } from './features/plugins/PluginManagerWorkspace';
+import { AutomationsSidebar, AutomationsWorkspace } from './features/automations/AutomationsWorkspace';
+import { PluginManagerWorkspace, PluginsSidebar } from './features/plugins/PluginManagerWorkspace';
 import {
   isInlineApproval,
   pendingShellApproval,
@@ -321,6 +321,7 @@ export function App(): JSX.Element {
     setNewResearchOpen(false);
   }, []);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [automationScopeWorkspaceId, setAutomationScopeWorkspaceId] = useState<string | null>(null);
   const [automations, setAutomations] = useState<AutomationSummary[]>([]);
@@ -333,7 +334,6 @@ export function App(): JSX.Element {
   const [reportSessionRunId, setReportSessionRunId] = useState<string | null>(null);
   const [reportSessionRefreshVersion, setReportSessionRefreshVersion] = useState(0);
   const [agentPluginState, setAgentPluginState] = useState<AgentPluginRegistryState | null>(null);
-  const [computerUseSettings, setComputerUseSettings] = useState<ComputerUseSettings | null>(null);
   const [ticketingSettings, setTicketingSettings] = useState<TicketingSettings | null>(null);
   const [ticketingTargets, setTicketingTargets] = useState<TicketingTarget[]>([]);
   const [ticketingLoading, setTicketingLoading] = useState(false);
@@ -714,19 +714,10 @@ export function App(): JSX.Element {
     }
   }, []);
 
-  const loadComputerUseSettings = useCallback(async (): Promise<void> => {
-    try {
-      setComputerUseSettings(await window.beale.getComputerUseSettings());
-    } catch (caught) {
-      setAgentPluginsError(errorMessage(caught));
-    }
-  }, []);
-
   useEffect(() => {
-    if (!settingsOpen || settingsSection !== 'computer-use' || hostEnvironment?.platform !== 'win32') return;
-    void loadAgentPlugins();
-    void loadComputerUseSettings();
-  }, [hostEnvironment?.platform, loadAgentPlugins, loadComputerUseSettings, settingsOpen, settingsSection]);
+    if (!settingsOpen) return;
+    if (settingsSection === 'optional-features') void loadAgentPlugins();
+  }, [loadAgentPlugins, settingsOpen, settingsSection]);
 
   const loadTicketingTargets = useCallback(async (providerId: TicketingProviderId): Promise<void> => {
     setTicketingLoading(true);
@@ -1012,6 +1003,7 @@ export function App(): JSX.Element {
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(true);
+    setSelectedPluginId(null);
     void loadAgentPlugins();
   }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, loadAgentPlugins, setSelectedRunId]);
 
@@ -1044,15 +1036,6 @@ export function App(): JSX.Element {
   const setAgentPluginEnabled = useCallback((pluginId: string, enabled: boolean): void => {
     void runAgentPluginAction(() => window.beale.setAgentPluginEnabled(pluginId, enabled));
   }, [runAgentPluginAction]);
-
-  const changeComputerUsePermissionMode = useCallback((permissionMode: ComputerUsePermissionMode): void => {
-    setAgentPluginsBusy(true);
-    setAgentPluginsError(null);
-    void window.beale.setComputerUsePermissionMode(permissionMode)
-      .then(setComputerUseSettings)
-      .catch((caught: unknown) => setAgentPluginsError(errorMessage(caught)))
-      .finally(() => setAgentPluginsBusy(false));
-  }, []);
 
   const removeAgentPlugin = useCallback((pluginId: string): void => {
     void runAgentPluginAction(() => window.beale.removeAgentPlugin(pluginId));
@@ -1140,6 +1123,22 @@ export function App(): JSX.Element {
     if (!workspaceId) return;
     void runAction(() => window.beale.undoHistoryDuplicate({ workspaceId, type, id, expectedRevision }));
   }, [runAction, snapshot?.workspace.workspaceId]);
+
+  const transitionClaimOnBoard = useCallback(async (claim: AppServerFindingSummary, targetMaturity: ClaimBoardMaturity): Promise<void> => {
+    const workspaceId = snapshot?.workspace.workspaceId;
+    if (!workspaceId) throw new Error('No Beale workspace is open.');
+    try {
+      applySnapshot(await window.beale.transitionClaimOnBoard({
+        workspaceId,
+        claimId: claim.id,
+        expectedRevision: claim.revision,
+        targetMaturity
+      }));
+    } catch (caught) {
+      await loadSnapshot().catch(() => undefined);
+      throw caught;
+    }
+  }, [applySnapshot, loadSnapshot, snapshot?.workspace.workspaceId]);
 
   const runWorkspaceDejunk = useCallback((): void => {
     setWorkspaceDejunkInProgress(true);
@@ -2130,6 +2129,7 @@ export function App(): JSX.Element {
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
+    setSettingsOpen(false);
     setNewResearchOpen(true);
   }, [clearRunDetail, closeWorkspaceOnboarding, reportsOpen, setSelectedRunId]);
   const startNewResearchForWorkspace = useCallback((workspace: WorkspaceRegistryEntry): void => {
@@ -2241,6 +2241,8 @@ export function App(): JSX.Element {
         workspaceOpen={Boolean(snapshot)}
         newResearchLabel={snapshot?.researchProfile.profile.presentation?.newResearchLabel ?? 'New Research'}
         newResearchDisabled={busy}
+        workspaces={workspaceRegistry?.workspaces ?? []}
+        workspaceRegistryLoading={startupPhase === 'shell' || startupPhase === 'registry'}
         rightSidenavAvailable={rightSidenavAvailable}
         rightSidenavExpanded={rightSidenavExpanded && (researchDetailsAvailable || topicSummaryAvailable)}
         contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !pluginsOpen}
@@ -2278,6 +2280,7 @@ export function App(): JSX.Element {
         onToggleRightSidenav={toggleRightSidenav}
         onToggleSidebar={toggleSidebar}
         onStartNewResearch={startNewResearch}
+        onStartNewResearchForWorkspace={startNewResearchForWorkspace}
         onOpenQuickChat={openQuickChat}
       />
       {sessionOverviewOpen && activeRunDetail && activeSessionOverviewRun ? (
@@ -2303,6 +2306,27 @@ export function App(): JSX.Element {
           section={settingsSection}
           error={error}
           onChangeSection={setSettingsSection}
+          onResizePointerDown={beginSidebarResize}
+        />
+      ) : pluginsOpen ? (
+        <PluginsSidebar
+          state={agentPluginState}
+          selectedPluginId={selectedPluginId}
+          collapsed={sidebarCollapsed}
+          loading={agentPluginsLoading}
+          error={agentPluginsError}
+          onSelectPlugin={setSelectedPluginId}
+          onResizePointerDown={beginSidebarResize}
+        />
+      ) : automationsOpen ? (
+        <AutomationsSidebar
+          automations={automations}
+          selectedWorkspaceId={automationScopeWorkspaceId}
+          selectedAutomation={selectedAutomation}
+          collapsed={sidebarCollapsed}
+          loading={automationsLoading}
+          error={automationsError}
+          onSelectAutomation={selectAutomation}
           onResizePointerDown={beginSidebarResize}
         />
       ) : (
@@ -2358,8 +2382,6 @@ export function App(): JSX.Element {
             researchProviderModelCatalog={researchProviderModelCatalog}
             providerSettings={providerSettings}
             providerStatusesLoaded={researchProviderStatusesLoaded}
-            computerUsePlatform={hostEnvironment?.platform ?? null}
-            computerUseSettings={computerUseSettings}
             appServerRemoteAccessSettings={appServerRemoteAccessSettings}
             appServerRemoteAccessBusy={appServerRemoteAccessBusy}
             ticketingSettings={ticketingSettings}
@@ -2399,7 +2421,6 @@ export function App(): JSX.Element {
             onSetProviderCyberPolicyRiskAcknowledged={setProviderCyberPolicyRiskAcknowledged}
             onSetProviderPreferredAuthenticationMethod={setProviderPreferredAuthenticationMethod}
             onSetAgentPluginEnabled={setAgentPluginEnabled}
-            onChangeComputerUsePermissionMode={changeComputerUsePermissionMode}
             onDetectAppServerRemoteAccess={detectAppServerRemoteAccess}
             onSetAppServerRemoteAccess={changeAppServerRemoteAccess}
             onSetTicketingProvider={changeTicketingProvider}
@@ -2432,6 +2453,7 @@ export function App(): JSX.Element {
             ) : pluginsOpen ? (
               <PluginManagerWorkspace
                 state={agentPluginState}
+                selectedPluginId={selectedPluginId}
                 loading={agentPluginsLoading}
                 busy={agentPluginsBusy}
                 error={agentPluginsError}
@@ -2639,6 +2661,7 @@ export function App(): JSX.Element {
               onRunMemoryDreaming={runMemoryDreaming}
               onMarkHistoryDuplicate={markHistoryDuplicate}
               onUndoHistoryDuplicate={undoHistoryDuplicate}
+              onTransitionClaim={transitionClaimOnBoard}
               onAddWorkspaceResource={addWorkspaceResource}
               onChangeWorkspaceResource={changeWorkspaceResource}
               onCloneWorkspaceRepository={cloneWorkspaceRepository}

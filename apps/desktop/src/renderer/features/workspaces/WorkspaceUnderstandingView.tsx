@@ -5,6 +5,8 @@ import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../sha
 import { researchKitDefinition, researchKitLabel, researchKitResourceKey } from '../../../shared/researchKits';
 import type {
   AppServerMemorySummary,
+  AppServerFindingSummary,
+  ClaimBoardMaturity,
   AppServerReportSummary,
   MemoryDreamingProgressPhase,
   MemoryDreamingProgressUpdate,
@@ -208,6 +210,7 @@ export function WorkspaceUnderstandingView({
   onChangeResearchSubject = async () => undefined,
   onRemoveWorkspace = async () => undefined,
   onOpenClaim = () => undefined,
+  onTransitionClaim,
   onOpenMemory = () => undefined,
   onOpenRunbook = () => undefined,
   onOpenReport = () => undefined,
@@ -255,6 +258,7 @@ export function WorkspaceUnderstandingView({
   onRemoveWorkspace?: () => Promise<void>;
   onOpenSession?: (runId: string) => void;
   onOpenClaim?: (claimId: string) => void;
+  onTransitionClaim?: (claim: AppServerFindingSummary, targetMaturity: ClaimBoardMaturity) => Promise<void>;
   onOpenMemory?: (nodeId: string) => void;
   onOpenRunbook?: (runbookId: string) => void;
   onOpenReport?: (report: AppServerReportSummary) => void;
@@ -414,6 +418,7 @@ export function WorkspaceUnderstandingView({
         providerModelCatalog={providerModelCatalog}
         workspaceName={activeScope?.workspaceName || workspaceName}
         onOpenClaim={onOpenClaim}
+        onTransitionClaim={onTransitionClaim}
       /> : null}
 
       {activeView === 'kit' && researchKit.refresh ? <WorkspaceResearchKitPanel

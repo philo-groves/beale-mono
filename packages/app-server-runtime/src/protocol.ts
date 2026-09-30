@@ -55,7 +55,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 28 as const;
+export const APP_SERVER_CONTRACT_VERSION = 30 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -63,7 +63,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-30T03:00:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-30T15:22:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "workspace.topics.v1",
@@ -99,6 +99,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "knowledge.claim-sql-pagination.v1",
   "runbook.execution-snapshots.v1",
   "knowledge.claim-deduplication.v1",
+  "knowledge.claim-board-transition.v1",
   "knowledge.history-deduplication.v1",
   "workspace.state.v1",
   "registry.state.v1",
@@ -408,6 +409,7 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "knowledge.findings",
   "knowledge.claims.v2",
   "knowledge.claim_deduplication",
+  "knowledge.claim_board_transition",
   "knowledge.history_deduplication",
   "workspace.state",
   "registry.state",
@@ -444,7 +446,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
   "topic.list", "topic.search", "topic.get", "topic.create", "topic.join", "topic.update_overview", "topic.page.save", "topic.page.delete", "topic.link", "topic.unlink", "topic.merge", "topic.unmerge", "topic.archive", "topic.restore", "topic.delete",
-  "memory.summary", "memory.notification_feed", "history.mark_duplicate", "history.undo_duplicate", "claim.mark_duplicate", "claim.undo_duplicate", "workspace.state", "registry.state", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
+  "memory.summary", "memory.notification_feed", "history.mark_duplicate", "history.undo_duplicate", "claim.mark_duplicate", "claim.undo_duplicate", "claim.board_transition", "workspace.state", "registry.state", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",
   "suggestion.generate", "suggestion.select", "suggestion.steering", "prompt.expand",
@@ -458,6 +460,33 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
 ] as const;
 
 export type AppServerProtocolOperation = (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number];
+
+export const CLAIM_BOARD_MATURITIES = ["refuted", "observed", "reproduced", "verified"] as const;
+export type ClaimBoardMaturity = (typeof CLAIM_BOARD_MATURITIES)[number];
+
+export interface ClaimBoardTransitionRequest {
+  workspaceId: string;
+  claimId: string;
+  expectedRevision: number;
+  targetMaturity: ClaimBoardMaturity;
+}
+
+export function decodeClaimBoardTransitionRequest(value: unknown): ClaimBoardTransitionRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Claim board transition input is required.");
+  const input = value as Record<string, unknown>;
+  if (typeof input.workspaceId !== "string" || !input.workspaceId.trim()) throw new Error("workspaceId is required.");
+  if (typeof input.claimId !== "string" || !input.claimId.trim()) throw new Error("claimId is required.");
+  if (!Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 1) throw new Error("expectedRevision must be a positive integer.");
+  if (typeof input.targetMaturity !== "string" || !(CLAIM_BOARD_MATURITIES as readonly string[]).includes(input.targetMaturity)) {
+    throw new Error("targetMaturity must name a Claims board column.");
+  }
+  return {
+    workspaceId: input.workspaceId,
+    claimId: input.claimId,
+    expectedRevision: Number(input.expectedRevision),
+    targetMaturity: input.targetMaturity as ClaimBoardMaturity,
+  };
+}
 
 export type WorkspaceProjectRequest =
   | { workspaceId: string; action: 'status' | 'checkpoint' | 'sync' | 'export' | 'rebuild-index' | 'release-index' | 'repair-preview' }
@@ -517,7 +546,7 @@ export interface AppServerProtocolDescriptor {
     protocol: 1;
     session: 1;
     memorySummary: 13;
-    finding: 5;
+    finding: 6;
     campaignGraph: 5;
     goalSuggestions: 1;
   };
@@ -798,7 +827,7 @@ export function appServerProtocolDescriptor(): AppServerProtocolDescriptor {
       buildId: appServerRuntimeBuildId(),
       nodeVersion: process.version,
     },
-    schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 5, campaignGraph: 5, goalSuggestions: 1 },
+    schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 6, campaignGraph: 5, goalSuggestions: 1 },
     capabilities: APP_SERVER_PROTOCOL_CAPABILITIES,
     transports: {
       appServer: {
@@ -840,7 +869,7 @@ export function appServerServerHello(sessionId: string, serverVersion: string): 
     sessionId,
     server: { name: APP_SERVER_PROTOCOL_NAME, version: serverVersion, buildId: appServerRuntimeBuildId() },
     contractVersion: APP_SERVER_CONTRACT_VERSION,
-    schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 5, campaignGraph: 5, goalSuggestions: 1 },
+    schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 6, campaignGraph: 5, goalSuggestions: 1 },
     capabilities: APP_SERVER_PROTOCOL_WEBSOCKET_CAPABILITIES,
   };
 }
@@ -1130,7 +1159,7 @@ export function decodeAppServerServerMessage(value: unknown): AppServerServerMes
 
 function validSchemaDescriptor(value: unknown): value is AppServerProtocolDescriptor["schemas"] {
   return isRecord(value) && value.protocol === 1 && value.session === 1
-    && value.memorySummary === 13 && value.finding === 5 && value.campaignGraph === 5;
+    && value.memorySummary === 13 && value.finding === 6 && value.campaignGraph === 5;
 }
 
 export interface BealeWorkspaceResearchClaimDuplicate {

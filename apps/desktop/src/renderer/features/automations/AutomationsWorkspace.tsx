@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { JSX } from 'react';
-import { CircleAlert, Pencil, Repeat2 } from 'lucide-react';
+import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
+import { CalendarClock, CircleAlert, Pencil, Repeat2 } from 'lucide-react';
 import type {
   ApprovalRecord,
   AttemptRecord,
@@ -17,10 +17,70 @@ import type {
   WorkspaceScopeVersion
 } from '@shared/types';
 import { CenteredLoadingState } from '../../app/CenteredLoadingState';
+import { CollectionSidebar } from '../../app/CollectionSidebar';
 import { formatSessionDateTime, traceLabel } from '../../lib/formatting';
 import { buildTraceDisplayEvents } from '../../view-models/traceDisplay';
 import { CommentaryView } from '../commentary/CommentaryView';
 import { repeatScheduleLabel } from '../../../shared/repeatSchedule';
+
+export function AutomationsSidebar({
+  automations,
+  selectedWorkspaceId,
+  selectedAutomation,
+  collapsed,
+  loading,
+  error,
+  onSelectAutomation,
+  onResizePointerDown
+}: {
+  automations: readonly AutomationSummary[];
+  selectedWorkspaceId: string | null;
+  selectedAutomation: AutomationSummary | null;
+  collapsed: boolean;
+  loading: boolean;
+  error: string | null;
+  onSelectAutomation: (automation: AutomationSummary | null) => void;
+  onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+}): JSX.Element {
+  const upcoming = automations
+    .filter((automation) => automation.enabled && (!selectedWorkspaceId || automation.workspaceId === selectedWorkspaceId))
+    .sort((left, right) => left.title.localeCompare(right.title));
+  return (
+    <CollectionSidebar
+      title="Automations"
+      label="Automations sidebar"
+      collapsed={collapsed}
+      error={error}
+      updateKey={`${selectedWorkspaceId ?? 'all'}:${upcoming.map((automation) => `${automation.workspaceId}:${automation.runId}`).join(',')}`}
+      onResizePointerDown={onResizePointerDown}
+    >
+      <nav className="collection-sidebar-list sidebar-list-scroll-content" aria-label="Automation jobs">
+        <div className={`workspace-item-row no-menu ${selectedAutomation ? '' : 'active'}`.trim()}>
+          <button type="button" className="workspace-item" aria-current={selectedAutomation ? undefined : 'page'} onClick={() => onSelectAutomation(null)}>
+            <CalendarClock size={15} aria-hidden="true" />
+            <span>All Automations</span>
+          </button>
+        </div>
+        <div className="collection-sidebar-list-heading">Upcoming jobs</div>
+        {loading ? <p className="collection-sidebar-empty">Loading jobs…</p> : upcoming.length === 0 ? (
+          <p className="collection-sidebar-empty">No upcoming jobs</p>
+        ) : upcoming.map((automation) => {
+          const selected = selectedAutomation?.runId === automation.runId && selectedAutomation.workspaceId === automation.workspaceId;
+          return (
+            <div className={`workspace-item-row no-menu ${selected ? 'active' : ''}`.trim()} key={`${automation.workspaceId}:${automation.runId}`}>
+              <button type="button" className="workspace-item collection-sidebar-item" aria-current={selected ? 'page' : undefined} onClick={() => onSelectAutomation(automation)}>
+                <span className="collection-sidebar-item-copy">
+                  <span>{automation.title}</span>
+                  <small>{repeatScheduleLabel(automation.schedule)} · {automation.workspaceName}</small>
+                </span>
+              </button>
+            </div>
+          );
+        })}
+      </nav>
+    </CollectionSidebar>
+  );
+}
 
 export function AutomationsWorkspace({
   automations,

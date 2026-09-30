@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, JSX, ReactNode } from 'react';
-import type { ApprovalRecord, AppServerMemorySummary, AppServerReportDocument, AppServerReportSummary, AppServerRunbookDocument, AppServerRunbookSummary, MemoryDreamingProgressUpdate, PolicyReviewDecision, ProviderModelDefaults, RepositoryCloneMode, ResearchKitId, ResearchKitRefreshInput, ResearchKitRefreshResult, ResearchModelProviderId, ResearchModelSelection, ResearchProfile, ResearchProviderModelCatalog, RunDetail, RunRow, RunbookExecutionSelection, RunbookProofTarget, RunbookProofTargetSelection, ScopeAssetInput, SteeringAction, TraceEventRecord, WorkspaceDejunkSummary, WorkspaceMemoryBackendId, WorkspaceRule, WorkspaceScopeVersion } from '@shared/types';
+import type { ApprovalRecord, AppServerFindingSummary, AppServerMemorySummary, AppServerReportDocument, AppServerReportSummary, AppServerRunbookDocument, AppServerRunbookSummary, ClaimBoardMaturity, MemoryDreamingProgressUpdate, PolicyReviewDecision, ProviderModelDefaults, RepositoryCloneMode, ResearchKitId, ResearchKitRefreshInput, ResearchKitRefreshResult, ResearchModelProviderId, ResearchModelSelection, ResearchProfile, ResearchProviderModelCatalog, RunDetail, RunRow, RunbookExecutionSelection, RunbookProofTarget, RunbookProofTargetSelection, ScopeAssetInput, SteeringAction, TraceEventRecord, WorkspaceDejunkSummary, WorkspaceMemoryBackendId, WorkspaceRule, WorkspaceScopeVersion } from '@shared/types';
 import { WorkspaceUnderstandingView } from '../workspaces/WorkspaceUnderstandingView';
 import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from '../workspaces/WorkspaceUnderstandingView';
 import { ResearchSidePanel } from '../research/MemorySidePanel';
@@ -81,6 +81,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onRunMemoryDreaming,
   onMarkHistoryDuplicate = () => undefined,
   onUndoHistoryDuplicate = () => undefined,
+  onTransitionClaim,
   onAddWorkspaceResource = async () => undefined,
   onChangeWorkspaceResource = async () => undefined,
   onCloneWorkspaceRepository = async () => undefined,
@@ -159,6 +160,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onRunMemoryDreaming: () => void;
   onMarkHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, parentId: string, expectedRevision: number) => void;
   onUndoHistoryDuplicate?: (type: 'claim' | 'memory' | 'runbook', id: string, expectedRevision: number) => void;
+  onTransitionClaim?: (claim: AppServerFindingSummary, targetMaturity: ClaimBoardMaturity) => Promise<void>;
   onAddWorkspaceResource?: (asset: ScopeAssetInput) => Promise<void>;
   onChangeWorkspaceResource?: (assetIds: string[], asset: ScopeAssetInput | null) => Promise<void>;
   onCloneWorkspaceRepository?: (assetId: string, cloneMode: RepositoryCloneMode) => Promise<void>;
@@ -393,6 +395,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           onActiveViewChange={onWorkspaceViewChange}
           onViewSelectionChange={onWorkspaceViewSelectionChange}
           onOpenClaim={openWorkspaceClaim}
+          onTransitionClaim={onTransitionClaim}
           onOpenMemory={openWorkspaceMemory}
           onOpenRunbook={openWorkspaceRunbook}
           onOpenReport={onOpenWorkspaceReport}

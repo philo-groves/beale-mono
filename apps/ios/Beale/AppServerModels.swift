@@ -58,7 +58,7 @@ enum BealeAppServerContract {
     static let controlVersion = 1
     static let sessionLaunchVersion = 2
     static let appServerProtocolVersion = 1
-    static let appServerContractVersion = 28
+    static let appServerContractVersion = 30
     static let memoryNotificationSchemaVersion = 3
     static let workspaceMemorySchemaVersion = 4
 
@@ -136,7 +136,7 @@ struct AppServerWebSocketSchemas: Decodable, Sendable {
         protocolSchema == 1
             && session == 1
             && memorySummary == 13
-            && finding == 5
+            && finding == 6
             && campaignGraph == 5
             && goalSuggestions == 1
     }
@@ -929,7 +929,6 @@ struct AppServerPendingApproval: Identifiable, Equatable, Sendable {
 
     var approvalKind: String? { requestedAction["approvalKind"]?.stringValue }
 
-    var permissionMode: String? { requestedAction["permissionMode"]?.stringValue }
 
     var reviewReason: String? { requestedAction["reviewReason"]?.stringValue }
 

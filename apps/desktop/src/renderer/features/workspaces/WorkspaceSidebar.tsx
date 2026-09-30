@@ -79,6 +79,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [workspaceAddMenuOpen, setWorkspaceAddMenuOpen] = useState(false);
+  const [newResearchPickerOpen, setNewResearchPickerOpen] = useState(false);
   const [activeList, setActiveList] = useState<'workspaces' | 'topics'>(() => selectedTopicId ? 'topics' : 'workspaces');
   const [topicSearchQuery, setTopicSearchQuery] = useState('');
   const [topicSearchResults, setTopicSearchResults] = useState<{ workspaceId: string; query: string; topics: ResearchTopicSummary[] } | null>(null);
@@ -88,6 +89,9 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   const [topicCreating, setTopicCreating] = useState(false);
   const [topicsExpanded, setTopicsExpanded] = useState(false);
   const workspaceAddMenuRef = useRef<HTMLDivElement | null>(null);
+  const newResearchPickerRef = useRef<HTMLDivElement | null>(null);
+  const newResearchButtonRef = useRef<HTMLButtonElement | null>(null);
+  const firstWorkspaceOptionRef = useRef<HTMLButtonElement | null>(null);
   const normalizedSessionSearchQuery = sessionSearchQuery.trim();
   const normalizedTopicSearchQuery = topicSearchQuery.trim().toLocaleLowerCase();
   const topicWorkspaceId = snapshot?.workspace?.workspaceId;
@@ -205,14 +209,84 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
     };
   }, [workspaceAddMenuOpen]);
 
+  useEffect(() => {
+    if (!newResearchPickerOpen) return undefined;
+    firstWorkspaceOptionRef.current?.focus();
+    const dismissOnOutsidePointer = (event: PointerEvent): void => {
+      if (!newResearchPickerRef.current?.contains(event.target as Node)) setNewResearchPickerOpen(false);
+    };
+    const dismissOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setNewResearchPickerOpen(false);
+      newResearchButtonRef.current?.focus();
+    };
+    document.addEventListener('pointerdown', dismissOnOutsidePointer);
+    document.addEventListener('keydown', dismissOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', dismissOnOutsidePointer);
+      document.removeEventListener('keydown', dismissOnEscape);
+    };
+  }, [newResearchPickerOpen, workspaces.length]);
+
+  useEffect(() => {
+    if (snapshot || collapsed) setNewResearchPickerOpen(false);
+  }, [snapshot, collapsed]);
+
   return (
     <aside className="sidebar" aria-hidden={collapsed} inert={collapsed}>
       <div className="sidebar-primary-actions">
         <div className="sidebar-wordmark">Beale</div>
-        <button type="button" className="sidebar-utility-button sidebar-new-research" title={`Start ${newResearchLabel.toLocaleLowerCase()}`} disabled={busy || !snapshot} onClick={onStartNewResearch}>
-          <SquarePen size={15} />
-          <span>{newResearchLabel}</span>
-        </button>
+        <div className="sidebar-new-research-anchor" ref={newResearchPickerRef}>
+          <button
+            ref={newResearchButtonRef}
+            type="button"
+            className="sidebar-utility-button sidebar-new-research"
+            title={`Start ${newResearchLabel.toLocaleLowerCase()}`}
+            aria-haspopup={!snapshot ? 'menu' : undefined}
+            aria-expanded={!snapshot ? newResearchPickerOpen : undefined}
+            disabled={busy}
+            onClick={() => {
+              if (snapshot) {
+                onStartNewResearch();
+              } else {
+                setWorkspaceAddMenuOpen(false);
+                setNewResearchPickerOpen((open) => !open);
+              }
+            }}
+          >
+            <SquarePen size={15} />
+            <span>{newResearchLabel}</span>
+          </button>
+          {newResearchPickerOpen && !snapshot ? (
+            <div className="sidebar-new-research-menu" role="menu" aria-label="Choose workspace for new research">
+              {workspaceRegistryLoading ? (
+                <div className="sidebar-new-research-menu-empty" role="status">Loading workspaces…</div>
+              ) : workspaces.length === 0 ? (
+                <>
+                  <div className="sidebar-new-research-menu-empty">No workspaces yet.</div>
+                  <button ref={firstWorkspaceOptionRef} type="button" role="menuitem" onClick={() => {
+                    setNewResearchPickerOpen(false);
+                    onAddWorkspace();
+                  }}>Create Workspace</button>
+                </>
+              ) : workspaces.map((workspace, index) => (
+                <button
+                  key={workspace.id}
+                  ref={index === 0 ? firstWorkspaceOptionRef : undefined}
+                  type="button"
+                  role="menuitem"
+                  title={workspace.workspacePath}
+                  aria-label={`Start new research in ${workspace.workspaceName}`}
+                  onClick={() => {
+                    setNewResearchPickerOpen(false);
+                    onStartNewResearchForWorkspace(workspace);
+                  }}
+                >{workspace.workspaceName}</button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <div className="sidebar-quick-actions">
           <button type="button" className="sidebar-utility-button sidebar-quick-chat" title="Open a quick chat" onClick={onOpenQuickChat}>
             <Zap size={15} />

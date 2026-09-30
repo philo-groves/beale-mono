@@ -2586,6 +2586,9 @@ export function CampaignClaimDetailView({
           </p>
         ) : null}
         {claim.staleReason ? <p className="memory-catalog-body"><strong>Stale reason:</strong> {claim.staleReason}</p> : null}
+        {claim.operatorOverride ? (
+          <p className="memory-catalog-body"><strong>Human override:</strong> The current status was set on the Claims board without requiring the agent transition prerequisites. Review the recorded evidence before relying on it.</p>
+        ) : null}
         {securityTracking && securityTracking.cvssAssessments.length > 0 ? (
           <section className="memory-catalog-subsection" aria-label="CVSS assessments">
             <h4>CVSS Assessments</h4>
@@ -2648,7 +2651,7 @@ export function CampaignClaimDetailView({
             <div className="memory-relationship-list">
               {[...claim.transitions].reverse().map((transition) => (
                 <article key={transition.id}>
-                  <span>{transition.fromStatus ? `${traceLabel(transition.fromStatus)} → ` : ''}{traceLabel(transition.toStatus)}</span>
+                  <span>{transition.fromStatus ? `${traceLabel(transition.fromStatus)} → ` : ''}{traceLabel(transition.toStatus)}{transition.operatorOverride ? ' · Human override' : ''}</span>
                   <strong>{transition.reason || `Update ${transition.revision}`}</strong>
                   <time dateTime={transition.createdAt}>{formatSessionDateTime(transition.createdAt)}</time>
                 </article>

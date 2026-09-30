@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { MANAGED_TOOL_PLUGIN_IDS } from '@beale/app-server-runtime/protocol';
 import type { AgentPluginRecord, AgentPluginRegistryState } from '@shared/types';
 import {
@@ -66,46 +66,42 @@ export class AgentPluginRegistry {
 function defaultBuiltinPlugins(): AppServerBuiltinPlugin[] {
   return [
     ...MANAGED_TOOL_PLUGIN_IDS.map((id) => ({
-      id: `${id}-builtin`, path: defaultBuiltinPluginPath(id),
+      id: `${id}-builtin`, path: defaultHarnessFeaturePath(id),
       installedAt: '2026-08-14T00:00:00.000Z', enabledByDefault: true
     })),
     {
       id: 'beale-introspection-builtin',
-      path: defaultManagedPluginPath('beale-introspection'),
+      path: defaultHarnessFeaturePath('beale-introspection'),
       installedAt: '2026-08-14T00:00:00.000Z'
     },
-    {
-      id: 'beale-browser-use-builtin',
-      path: defaultBuiltinPluginPath('beale-browser-use'),
-      installedAt: '2026-09-23T00:00:00.000Z',
-      enabledByDefault: true
-    },
-    {
-      id: 'meta-skills-builtin',
-      path: defaultBuiltinPluginPath('meta-skills'),
-      installedAt: '2026-09-23T00:00:00.000Z',
-      enabledByDefault: true
-    },
-    {
-      id: 'beale-terminator-builtin',
-      path: defaultManagedPluginPath('beale-terminator'),
-      installedAt: '2026-08-17T00:00:00.000Z',
-      enabledByDefault: false
-    }
+    ...bundledManagedPlugins(),
   ];
 }
 
-function defaultBuiltinPluginPath(directoryName: string): string {
+function bundledManagedPlugins(): AppServerBuiltinPlugin[] {
+  const root = defaultManagedPluginPath('');
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(root, entry.name, 'plugin.json')))
+    .map((entry) => ({
+      id: `${entry.name}-builtin`,
+      path: join(root, entry.name),
+      installedAt: '2026-09-23T00:00:00.000Z',
+      enabledByDefault: entry.name === 'meta-skills'
+    }));
+}
+
+function defaultHarnessFeaturePath(directoryName: string): string {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const candidates = [
     ...(resourcesPath
       ? [
-          resolve(resourcesPath, 'app-server', 'resources', 'agent-plugins', directoryName),
-          resolve(resourcesPath, 'agent-plugins', directoryName)
+          resolve(resourcesPath, 'app-server', 'resources', 'harness-features', directoryName),
+          resolve(resourcesPath, 'harness-features', directoryName)
         ]
       : []),
-    resolve(process.cwd(), '..', '..', 'app-server', 'resources', 'agent-plugins', directoryName),
-    resolve(__dirname, '..', '..', '..', '..', 'app-server', 'resources', 'agent-plugins', directoryName)
+    resolve(process.cwd(), '..', '..', 'app-server', 'resources', 'harness-features', directoryName),
+    resolve(__dirname, '..', '..', '..', '..', 'app-server', 'resources', 'harness-features', directoryName)
   ];
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates.at(-1)!;
 }

@@ -328,6 +328,41 @@ export class ResearchClaimStore {
     return this.get(id)!;
   }
 
+  /** Trusted host Claims board action; model-facing tools never call this path. */
+  public transitionByHuman(id: string, expectedRevision: number, toStatus: FindingStatus): FindingSummary {
+    if (!["observed", "reproduced", "verified", "rejected"].includes(toStatus)) {
+      throw new Error(`Claims board cannot move a finding to ${toStatus}.`);
+    }
+    const current = this.get(id);
+    if (!current || current.projection !== "finding") throw new Error("Finding not found in this workspace.");
+    requireCanonicalClaim(current);
+    if (current.revision !== expectedRevision) {
+      throw new Error(`Research claim revision conflict for ${id}: expected ${expectedRevision}, found ${current.revision}.`);
+    }
+    if (current.status === toStatus && current.freshness === "current") {
+      throw new Error("Finding is already in this Claims column.");
+    }
+    if (current.workspaceId !== this.memoryGraph.getContext().workspaceId) {
+      throw new Error("Finding is outside the active workspace.");
+    }
+    const now = new Date().toISOString();
+    const nextRevision = current.revision + 1;
+    const reason = `Human operator moved this finding to ${toStatus} on the Claims board. Normal agent transition prerequisites were not required; inspect evidence before relying on this status.`;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`UPDATE app_server_research_claims SET
+        status = ?, stale_from_status = NULL, stale_reason = NULL, updated_at = ?, revision = ?
+        WHERE id = ? AND revision = ?`).run(toStatus, now, nextRevision, id, current.revision);
+      if (Number(result.changes) !== 1) throw new Error(`Research claim revision conflict for ${id}.`);
+      this.insertTransition(id, nextRevision, current.status, toStatus, reason, "human-operator", [], now, true);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.get(id)!;
+  }
+
   public get(id: string): FindingSummary | null {
     const context = this.memoryGraph.getContext();
     const rows = readFindings(this.database, context.workspaceId, id);
@@ -659,13 +694,14 @@ export class ResearchClaimStore {
     actorId: string | null,
     evidenceIds: readonly string[],
     now: string,
+    operatorOverride = false,
   ): void {
     const sessionId = this.memoryGraph.getContext().sessionId ?? null;
     this.database.prepare(`INSERT INTO app_server_claim_transitions (
-      id, claim_id, claim_revision, from_status, to_status, reason, session_id, actor_id, evidence_ids_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, claim_id, claim_revision, from_status, to_status, reason, session_id, actor_id, evidence_ids_json, created_at, operator_override
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       `claim_transition_${randomUUID()}`, findingId, revision, fromStatus, toStatus, reason,
-      sessionId, actorId, stableJson([...evidenceIds]), now,
+      sessionId, actorId, stableJson([...evidenceIds]), now, operatorOverride ? 1 : 0,
     );
   }
 
@@ -1003,13 +1039,24 @@ export function initializeFindingSchema(database: DatabaseSync): void {
         db.exec("ALTER TABLE app_server_claim_evidence ADD COLUMN claim_binding_hash TEXT;");
       }
     },
+  }, {
+    version: 8,
+    name: "human_claim_transition_overrides",
+    up(db) {
+      if (!tableHasColumn(db, "app_server_claim_transitions", "operator_override")) {
+        db.exec("ALTER TABLE app_server_claim_transitions ADD COLUMN operator_override INTEGER NOT NULL DEFAULT 0 CHECK (operator_override IN (0,1));");
+      }
+    },
   }]);
 }
 
 export function readFindings(database: DatabaseSync, workspaceId: string, findingId?: string, options: ClaimReadOptions = {}): FindingSummary[] {
   if (!tableExists(database, "app_server_research_claims")) return [];
   const rows = [...pagedRows(database, `SELECT *,
-      (SELECT COUNT(*) FROM app_server_claim_evidence WHERE claim_id = claim.id) AS evidence_count
+      (SELECT COUNT(*) FROM app_server_claim_evidence WHERE claim_id = claim.id) AS evidence_count,
+      COALESCE((SELECT operator_override FROM app_server_claim_transitions
+        WHERE claim_id = claim.id AND (from_status IS NULL OR from_status != to_status)
+        ORDER BY claim_revision DESC LIMIT 1), 0) AS status_operator_override
     FROM app_server_research_claims claim
     WHERE workspace_id = ?${findingId ? " AND id = ?" : ""}
     ORDER BY updated_at DESC, id`, findingId ? [workspaceId, findingId] : [workspaceId])];
@@ -1041,6 +1088,7 @@ export function readFindings(database: DatabaseSync, workspaceId: string, findin
     impact: requiredSqlText(row.impact),
     securityTracking: findingSecurityTracking(row.security_tracking_json, classification),
     status,
+    operatorOverride: row.status_operator_override === 1,
     staleFromStatus,
     confidence: requiredSqlNumber(row.confidence),
     sourceRevision: optionalSqlText(row.source_revision),
@@ -1551,6 +1599,7 @@ function groupedTransitions(database: DatabaseSync, findingIds: ReadonlySet<stri
       reason: requiredSqlText(row.reason),
       sessionId: optionalSqlText(row.session_id),
       actorId: optionalSqlText(row.actor_id),
+      operatorOverride: row.operator_override === 1,
       evidenceIds: parseJsonStringArray(row.evidence_ids_json),
       createdAt: requiredSqlText(row.created_at),
     });

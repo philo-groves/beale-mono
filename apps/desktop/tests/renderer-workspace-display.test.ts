@@ -126,7 +126,7 @@ describe('renderer workspace display view models', () => {
     expect(html).toContain('<span class="sidebar-list-tab-divider" aria-hidden="true"></span>');
     expect(html).toContain('role="tab" aria-selected="false" class="">Topics</button>');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-    expect(styles).toMatch(/\.sidebar-wordmark\s*\{[^}]*color:\s*var\(--muted\);[^}]*font-size:\s*1\.5rem;[^}]*font-weight:\s*600;/s);
+    expect(styles).toMatch(/\.sidebar-wordmark\s*\{[^}]*color:\s*var\(--muted\);[^}]*font-size:\s*1\.5rem;[^}]*font-weight:\s*500;/s);
     expect(styles).toMatch(/\.sidebar-list-tab-divider\s*\{[^}]*width:\s*1px;[^}]*height:\s*16px;[^}]*background:\s*color-mix\(in srgb, var\(--text\) 34%, var\(--panel\)\);/s);
     expect(html).toContain('<div class="main-side-scroll sidebar-list-scroll-region">');
     expect(html).toContain('<div class="sidebar-list-scroll workspace-list-items">');
@@ -166,6 +166,33 @@ describe('renderer workspace display view models', () => {
     const menuButtonStyles = styles.match(/\.section-row \.workspace-list-add-menu button\s*\{([^}]*)\}/u)?.[1] ?? '';
     expect(menuButtonStyles).toContain('font-size: 1rem');
     expect(menuButtonStyles).toContain('font-weight: 400');
+  });
+
+  it('keeps New Research available without a selected workspace and routes picker choices through workspace opening', () => {
+    const registeredWorkspace = workspace('workspace_example', '/workspace/example');
+    const html = renderToStaticMarkup(createElement(WorkspaceSidebar, {
+      busy: false,
+      collapsed: false,
+      error: null,
+      workspaceRegistry: { registryPath: '/workspace/registry.json', workspaces: [registeredWorkspace], researchSessions: [] },
+      selectedRunId: null,
+      snapshot: null,
+      onAddWorkspace: () => undefined,
+      onImportWorkspace: () => undefined,
+      onOpenWorkspace: () => undefined,
+      onOpenResearchSession: () => undefined,
+      onResizePointerDown: () => undefined,
+      onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined
+    }));
+    const button = html.match(/<button[^>]*class="sidebar-utility-button sidebar-new-research"[^>]*>/u)?.[0] ?? '';
+    expect(button).toContain('aria-haspopup="menu"');
+    expect(button).toContain('aria-expanded="false"');
+    expect(button).not.toContain('disabled');
+
+    const source = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('onStartNewResearchForWorkspace(workspace);');
+    expect(source).toContain('role="menu" aria-label="Choose workspace for new research"');
   });
 
   it('limits sidebar scrolling to the workspace items viewport', () => {

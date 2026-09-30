@@ -26,7 +26,6 @@
   },
   "dependencies": {
     "@beale/research-agent": "workspace:*",
-    "@mediar-ai/terminator": "0.24.32",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "@beale/app-server-runtime": "workspace:*",

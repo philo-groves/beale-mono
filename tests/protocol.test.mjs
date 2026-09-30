@@ -22,6 +22,7 @@ import {
   decodeAppServerProtocolEnvelope,
   decodeAppServerSessionLaunchRequest,
   decodeWorkspaceProjectRequest,
+  decodeClaimBoardTransitionRequest,
   decodeBealeAppServerSessionControlRequest,
   decodeBealeAppServerSessionControlResult,
   decodeAppServerServerMessage,
@@ -46,6 +47,18 @@ test('research workspace operations require explicit revisions for canonical imp
   for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'invalid' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
 });
 
+test('claim board transitions accept only versioned finding moves to visible columns', () => {
+  const input = { workspaceId: 'workspace-example', claimId: 'claim-example', expectedRevision: 2, targetMaturity: 'refuted' };
+  assert.deepEqual(decodeClaimBoardTransitionRequest(input), input);
+  for (const invalid of [
+    { ...input, workspaceId: '' },
+    { ...input, claimId: '' },
+    { ...input, expectedRevision: 0 },
+    { ...input, expectedRevision: 1.5 },
+    { ...input, targetMaturity: 'proposed' },
+  ]) assert.throws(() => decodeClaimBoardTransitionRequest(invalid));
+});
+
 test("protocol envelopes are versioned, correlated, and strictly decoded", () => {
   const success = appServerProtocolSuccess("protocol.describe", { available: true }, "request-1");
   assert.deepEqual(decodeAppServerProtocolEnvelope(success), success);
@@ -58,13 +71,13 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v28 persistence, continuation, Codex-tool, and topic contract for app-server and WebSocket clients", () => {
+test("protocol describe exposes a runtime-bound v30 claim board, persistence, continuation, and topic contract", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 28);
+  assert.equal(descriptor.contractVersion, 30);
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 13);
-  assert.equal(descriptor.schemas.finding, 5);
+  assert.equal(descriptor.schemas.finding, 6);
   assert.equal(descriptor.schemas.campaignGraph, 5);
   assert.equal(descriptor.schemas.goalSuggestions, 1);
   assert.ok(descriptor.capabilities.includes("knowledge.findings"));
@@ -73,6 +86,7 @@ test("protocol describe exposes a runtime-bound v28 persistence, continuation, C
   assert.ok(descriptor.capabilities.includes("knowledge.claims.v2"));
   assert.ok(descriptor.capabilities.includes("knowledge.claim_security_tracking"));
   assert.ok(descriptor.capabilities.includes("knowledge.claim_deduplication"));
+  assert.ok(descriptor.capabilities.includes("knowledge.claim_board_transition"));
   assert.ok(descriptor.capabilities.includes("knowledge.history_deduplication"));
   assert.ok(descriptor.capabilities.includes("session.bounded_reads"));
   assert.ok(descriptor.capabilities.includes("session.targeted_details"));
@@ -98,6 +112,7 @@ test("protocol describe exposes a runtime-bound v28 persistence, continuation, C
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("report.replace_recording"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("claim.mark_duplicate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("claim.undo_duplicate"));
+  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("claim.board_transition"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("history.mark_duplicate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("history.undo_duplicate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("workspace.state"));
@@ -123,6 +138,7 @@ test("protocol describe exposes a runtime-bound v28 persistence, continuation, C
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("memory.notifications.v3"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.report-list.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.claim-deduplication.v1"));
+  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.claim-board-transition.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("knowledge.history-deduplication.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-subject-mutation.v1"));

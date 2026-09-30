@@ -25,7 +25,7 @@ const compatibleDescriptor = {
   protocolVersion: 1,
   contractVersion: APP_SERVER_CONTRACT_VERSION,
   runtime: { name: 'app-server', version: '0.1.0', buildId: 'fixture-build', nodeVersion: process.version },
-  schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 5, campaignGraph: 5, goalSuggestions: 1 },
+  schemas: { protocol: 1, session: 1, memorySummary: 13, finding: 6, campaignGraph: 5, goalSuggestions: 1 },
   capabilities: [...APP_SERVER_PROTOCOL_CAPABILITIES],
   operations: ['protocol.describe'],
   transports: {

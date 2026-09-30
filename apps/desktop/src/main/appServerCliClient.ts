@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { resolveAppServerProtocolInvocation } from './appServerInvocation';
 import { invokeAppServerOperation } from './bealeAppServerClient';
-import { appServerProtocolSuccess, type AppServerProtocolOperation } from '@beale/app-server-runtime/protocol';
+import { appServerProtocolSuccess, type AppServerProtocolOperation, type ClaimBoardTransitionRequest } from '@beale/app-server-runtime/protocol';
 import type { ResearchPluginCatalogEntry } from '@beale/research-agent';
 import {
   compatibleExistingPath,
@@ -838,6 +838,17 @@ export async function markAppServerHistoryDuplicate(
   });
 }
 
+export async function transitionAppServerClaimOnBoard(
+  input: ClaimBoardTransitionRequest & { workspaceName: string; subjectId: string; subjectName: string },
+  storage: AppServerSessionStorage
+): Promise<void> {
+  await invokeAppServerOperation({
+    operation: 'claim.board_transition',
+    input,
+    ...(storage.profileId ? { profileId: storage.profileId } : {})
+  });
+}
+
 export async function undoAppServerHistoryDuplicate(
   input: {
     workspaceId: string;
@@ -1436,6 +1447,7 @@ function validFindingSummary(value: unknown): boolean {
     && nonEmptyText(value.title)
     && (value.securityTracking === null || validFindingSecurityTracking(value.securityTracking))
     && nonEmptyText(value.status)
+    && typeof value.operatorOverride === 'boolean'
     && nonNegativeNumber(value.revision)
     && (value.duplicateOfClaimId === null || nonEmptyText(value.duplicateOfClaimId))
     && (value.duplicateMarkedAt === null || nonEmptyText(value.duplicateMarkedAt))

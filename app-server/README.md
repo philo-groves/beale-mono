@@ -2,7 +2,7 @@
 
 A standalone app-server execution host and client-neutral control plane. It runs each app-server session in an app-server worker and carries events, controls, and private synchronous storage requests directly over worker messages. Workers never open SQLite themselves: the resident app-server owns every database connection and restricts each worker to its session's registered database. There is no child app-server CLI process or private loopback WebSocket. Beale Desktop and iOS use the same authenticated HTTP and WebSocket surface.
 
-The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Host-backed plugin manifests live under `app-server/resources/agent-plugins`; the Introspection and Terminator packages live under `managed-plugins`.
+The app-server is the single host adapter for Desktop, iOS, and future clients. Clients submit typed session intent; the app-server resolves workspace identity, paths, provider policy, plugins, storage, capture and continuation state, hosts the engine, and executes canonical operations in-process. Built-in harness feature manifests and the Introspection runtime live under `app-server/resources/harness-features`; Meta Skills lives under `managed-plugins`.
 
 ## Workspace change management
 
@@ -28,11 +28,11 @@ The `workspace.checkpoint-repair.v1` capability adds `repair-preview` and `repai
 
 Workspace creation installs a local pre-commit hook using the host's Node/Electron runtime; it configures no remote. Reinstalling the guard preserves an existing non-Beale hook by reporting an integration error. The workspace's Git metadata contains publication, checkpoint, recovery, and quarantine journals; these are not model-facing database exports.
 
-## Managed tool plugins
+## Optional research features
 
-Six host-backed plugins are enabled by default and appear in Agent Plugins settings. Available plugins appear in the agent's `{{plugins}}` catalog with short usage descriptions.
+Seven harness features are enabled by default and appear under Optional Features in Agent Settings. Enabled features appear in the agent's `{{features}}` catalog under "Internal features" with short usage descriptions. Traditional plugins appear under "External Plugins" in `{{plugins}}`. Existing registry IDs and the six native tool groups' launch field retain saved toggle compatibility.
 
-| Plugin | When to use |
+| Feature | When to use |
 | --- | --- |
 | Source (`beale-source`) | Source search, code navigation, and structured text analysis. |
 | Provenance (`beale-provenance`) | Repository revision history, public advisory references, and source provenance. |
@@ -40,16 +40,17 @@ Six host-backed plugins are enabled by default and appear in Agent Plugins setti
 | Claims (`beale-claims`) | Leads, findings, their evidence, and canonical claim revisions. |
 | Runbooks (`beale-runbooks`) | Reusable procedure documents, feature-selected host or Tart VM cells, per-cell timeouts, explicit guest/root Tart execution, revisions, and recorded executions. |
 | Reporting (`beale-reporting`) | Report documents, revisions, and structured summaries of supported results. |
+| Introspection (`beale-introspection`) | Workspace and session inspection and control tools, including Quick Chat. |
 
 `file.read`, `file.write`, `file.edit`, and `shell.run` remain core tools, alongside session and collaboration controls. Existing profile, configuration, and governance limits still apply. File writes create candidate files; replacing an existing file requires the SHA-256 `contentHash` returned by `file.read` as `expectedHash`. File edits require one exact literal match, preserve UTF-8 bytes outside that match, and accept an optional hash check. Both mutations have a 1 MiB ceiling and honor lower host byte budgets.
 
-Pi, Claude, and ZCode agents initially receive core tools, `plugins.preview`, and `plugins.load`. Preview returns one plugin's tool names and bounded skill use cases without changing visibility. Load returns full skill instructions and makes that plugin's tool schemas available on the next model turn. Loaded IDs are isolated per agent and retained in compatible continuation captures. The host still discovers configured MCP capabilities for policy and execution, while model-visible schemas remain deferred until plugin load.
+Pi, Claude, and ZCode agents initially receive core tools and discovery controls for available resources. `features.preview` and `features.load` expose enabled internal tool groups on demand; `plugins.preview` and `plugins.load` do the same for traditional Agent Plugins, including bounded skill use cases and full instructions. Loaded IDs are isolated per agent and retained in compatible continuation captures. The host still discovers configured MCP capabilities for policy and execution, while model-visible schemas remain deferred until load.
 
-Plugin toggles take effect on subsequent session launches and continuations, including Quick Chat. The app-server projects the current selection through `--managed-plugins <comma-separated IDs>`; `none` explicitly disables all seven. A settings-read failure stops the launch instead of silently restoring defaults. Loading a schema does not enable a disabled plugin or change host policy, canonical storage, or execution privileges.
+Optional Feature and Plugin toggles take effect on subsequent session launches and continuations, including Quick Chat. Quick Chat requires Introspection to be enabled. The app-server retains the existing `--managed-plugins <comma-separated IDs>` launch field for the six native tool groups so saved selections and captured sessions remain compatible; `none` disables all six. A settings-read failure stops the launch instead of silently restoring defaults. Loading a schema does not enable a disabled feature or plugin or change host policy, canonical storage, or execution privileges.
 
-New native tools must be assigned in `packages/research-agent/src/managed-tool-plugins.ts` to a plugin or the explicit core list. Runtime assembly rejects unassigned host tools. Bundled manifests and the compact discovery catalog are checked together by boundary tests.
+New native tools must be assigned in `packages/research-agent/src/managed-tool-plugins.ts` to a harness feature or the explicit core list. Runtime assembly rejects unassigned host tools. Compatibility manifests and the compact discovery catalog are checked together by boundary tests.
 
-The Claims plugin provides `claim.get` for either a lead or finding ID. Its default response includes the stored overview and the first 10 evidence, transition, and duplicate rows; focused `section` reads omit unrelated sections. Follow each collection's `nextOffset`, passing the returned `readRevision` as `expectedReadRevision`; restart if the claim, its duplicate relationships, or its linked runbook changed. The numeric `revision` remains the version used for edits. Evidence retains its durable reference, hash, source session, actor, and metadata; transitions retain reasons and evidence links. Retained duplicate IDs expose their canonical parent. Reads default to the current workspace; a host-advertised same-Subject `workspaceId` enables full foreign detail without enabling mutation. `lead.list` and `finding.list` are summary catalogs with continuation offsets; `history.search` remains the search entry point.
+The Claims feature provides `claim.get` for either a lead or finding ID. Its default response includes the stored overview and the first 10 evidence, transition, and duplicate rows; focused `section` reads omit unrelated sections. Follow each collection's `nextOffset`, passing the returned `readRevision` as `expectedReadRevision`; restart if the claim, its duplicate relationships, or its linked runbook changed. The numeric `revision` remains the version used for edits. Evidence retains its durable reference, hash, source session, actor, and metadata; transitions retain reasons and evidence links. Retained duplicate IDs expose their canonical parent. Reads default to the current workspace; a host-advertised same-Subject `workspaceId` enables full foreign detail without enabling mutation. `lead.list` and `finding.list` are summary catalogs with continuation offsets; `history.search` remains the search entry point.
 
 `history.search` can target one exact host-advertised workspace by `workspaceId`. Its subject scope is limited to the current workspace and those registered references, so removed legacy workspace identities cannot reappear through retained database rows. Result labels come from the host reference catalog, while file-native reference material remains available through `workspace.search` with the same ID.
 
@@ -65,7 +66,7 @@ Workspace sessions require a `resourceId` from `resource.catalog` (or an active 
 
 Use `resource.catalog` with `operation: "history"` and `resourceId` to list compact saved observations; supply `historyId` and optional `offset` to read an archived observation offline. Search detail pages contain five records; document pages contain 8,000 characters and 20 links. For complete archived advisory fields deferred from model cards, supply `historyId`, `recordIndex`, and optional `textOffset` to read 8,000-character JSON pages. Source refresh still uses the Provenance tools and creates a new observation. Desktop resource rows open an inline editor and the saved-history view; Refresh saved history reloads storage without contacting public sources.
 
-The Provenance plugin includes `prior_art.search`, `prior_art.fetch`, `repository.history`, and `repository.fetch_history`.
+The Provenance harness feature includes `prior_art.search`, `prior_art.fetch`, `repository.history`, and `repository.fetch_history`.
 
 - `prior_art.search` supports NVD keyword queries, OSV package/version or commit lookups, public GitHub issue/PR search and releases for an explicit `owner/repository`, and literal searches of supplied document URLs. Supplying a repository or document URLs includes those sources by default; an explicit `sources` list narrows coverage. Document search covers only the supplied pages, not an entire website or the open web.
 - `nextCursor` continues unread records and provider pages with the same query inputs. Context pages contain at most 20 cards even if a larger limit is requested. Each source reports complete, partial, failed, or not-yet-searched coverage; rate limits, GitHub's search ceiling, and empty non-terminal pages are not no-match evidence. A changed buffered source page requires restarting the query. Earlier matches remain recorded in continuation disposition.

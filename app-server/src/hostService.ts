@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +20,7 @@ import {
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
-import { validateResearchSystemPromptTemplate } from '@beale/research-agent';
+import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate } from '@beale/research-agent';
 import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
@@ -287,7 +287,7 @@ export class AppServerHostService {
       ...(request.signal ? { signal: request.signal } : {})
     });
     const researchMutation = request.operation === 'research.tools.mutate'
-      || ['claim.mark_duplicate', 'claim.undo_duplicate', 'history.mark_duplicate', 'history.undo_duplicate', 'dreaming.apply', 'dreaming.restore', 'report.revise_content', 'report.update_triage_status', 'report.replace_packet', 'report.replace_recording'].includes(request.operation)
+      || ['claim.mark_duplicate', 'claim.undo_duplicate', 'claim.board_transition', 'history.mark_duplicate', 'history.undo_duplicate', 'dreaming.apply', 'dreaming.restore', 'report.revise_content', 'report.update_triage_status', 'report.replace_packet', 'report.replace_recording'].includes(request.operation)
       || request.operation === 'workspace.state' && isRecord(request.input) && ['saveScope', 'setResearchSubject', 'addWorkspaceRules', 'addWorkspaceRule'].includes(String(request.input.action));
     if (workspace && storage && researchMutation && readWorkspaceProject(workspace.workspacePath)) {
       // Canonical persistence has already succeeded. A checkpoint failure must
@@ -514,10 +514,21 @@ export class AppServerHostService {
     const loadedPluginRuntime = introspection?.runtimeMode === 'isolated'
       ? await this.loadIntrospectionPluginRuntime()
       : await this.resolvePluginRuntime();
-    const metaSkillDirectory = resolve(builtinPluginPath('meta-skills', 'bundled'), 'skills');
+    const metaSkillDirectory = resolve(builtinPluginPath('meta-skills', 'managed'), 'skills');
+    const sourcePluginCatalogPath = loadedPluginRuntime?.pluginCatalogPath;
+    const pluginCatalogPath = sourcePluginCatalogPath && (workspace.researchKitId !== 'meta-bug-bounty' || !introspection)
+      ? join(runDirectory, `${fileStem}.plugin-catalog.json`)
+      : sourcePluginCatalogPath;
+    if (pluginCatalogPath && sourcePluginCatalogPath && pluginCatalogPath !== sourcePluginCatalogPath) {
+      const catalog = decodeResearchPluginCatalog(JSON.parse(await readFile(sourcePluginCatalogPath, 'utf8')) as unknown);
+      await writePrivateJson(pluginCatalogPath, catalog.filter((plugin) =>
+        (workspace.researchKitId === 'meta-bug-bounty' || plugin.id !== 'meta-skills-builtin')
+        && (introspection || plugin.id !== 'beale-introspection-builtin')));
+    }
     const pluginRuntime = loadedPluginRuntime
       ? {
           ...loadedPluginRuntime,
+          ...(pluginCatalogPath ? { pluginCatalogPath } : {}),
           ...(workspace.researchKitId !== 'meta-bug-bounty'
             ? {
                 skillDirectories: (loadedPluginRuntime.skillDirectories ?? []).filter(
@@ -1267,9 +1278,13 @@ export class AppServerHostService {
   }
 
   private async loadIntrospectionPluginRuntime(): Promise<ResolvedAppServerSessionLaunch['pluginRuntime'] | null> {
-    const plugin = builtinPlugin('beale-introspection-builtin', 'beale-introspection', false, 'managed');
+    const plugin = builtinPlugin('beale-introspection-builtin', 'beale-introspection', false, 'feature');
     if (!existsSync(plugin.path)) {
-      throw new Error('Beale introspection plugin is unavailable for Quick Chat.');
+      throw new Error('Beale Introspection is unavailable for Quick Chat.');
+    }
+    const standardRuntime = await this.resolvePluginRuntime();
+    if (!standardRuntime?.allowedMcpServers?.includes('beale-introspection.beale')) {
+      throw new Error('Enable Introspection in Agent Settings > Optional Features to use Quick Chat.');
     }
     const runtime = await this.invokeProtocol<AppServerPluginRuntimeProjection>('plugin.runtime', {
       args: ['harness', 'plugin-runtime'],
@@ -1280,9 +1295,9 @@ export class AppServerHostService {
     });
     const mcpConfigPath = nonEmpty(runtime.mcpConfigPath);
     if (!mcpConfigPath || !stringArray(runtime.allowedMcpServers).includes('beale-introspection.beale')) {
-      throw new Error('Beale introspection plugin did not provide the Quick Chat tool runtime.');
+      throw new Error('Beale Introspection did not provide the Quick Chat tool runtime.');
     }
-    const managedPluginIds = (await this.resolvePluginRuntime())?.managedPluginIds;
+    const managedPluginIds = standardRuntime.managedPluginIds;
     return {
       ...(managedPluginIds !== undefined ? { managedPluginIds } : {}),
       ...(nonEmpty(runtime.pluginCatalogPath) ? { pluginCatalogPath: nonEmpty(runtime.pluginCatalogPath)! } : {}),
@@ -1677,19 +1692,27 @@ async function writePrivateJson(path: string, value: unknown): Promise<void> {
 
 function defaultBuiltinPlugins(): Array<{ id: string; path: string; installedAt: string; enabledByDefault?: boolean }> {
   return [
-    ...MANAGED_TOOL_PLUGIN_IDS.map((id) => builtinPlugin(`${id}-builtin`, id, false)),
-    builtinPlugin('beale-introspection-builtin', 'beale-introspection', false, 'managed'),
-    builtinPlugin('beale-terminator-builtin', 'beale-terminator', true, 'managed'),
-    builtinPlugin('beale-browser-use-builtin', 'beale-browser-use', false),
-    builtinPlugin('meta-skills-builtin', 'meta-skills', false)
+    ...MANAGED_TOOL_PLUGIN_IDS.map((id) => builtinPlugin(`${id}-builtin`, id, false, 'feature')),
+    builtinPlugin('beale-introspection-builtin', 'beale-introspection', false, 'feature'),
+    ...bundledManagedPlugins()
   ].flatMap((plugin) => existsSync(plugin.path) ? [plugin] : []);
+}
+
+function bundledManagedPlugins(): ReturnType<typeof builtinPlugin>[] {
+  const root = builtinPluginPath('', 'managed');
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(root, entry.name, 'plugin.json')))
+    .map((entry) => builtinPlugin(
+      `${entry.name}-builtin`, entry.name, entry.name !== 'meta-skills', 'managed'
+    ));
 }
 
 function builtinPlugin(
   id: string,
   directory: string,
   disabledByDefault: boolean,
-  source: 'bundled' | 'managed' = 'bundled'
+  source: 'managed' | 'feature'
 ): { id: string; path: string; installedAt: string; enabledByDefault?: boolean } {
   return {
     id,
@@ -1699,7 +1722,7 @@ function builtinPlugin(
   };
 }
 
-function builtinPluginPath(directory: string, source: 'bundled' | 'managed'): string {
+function builtinPluginPath(directory: string, source: 'managed' | 'feature'): string {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const candidates = source === 'managed'
     ? [
@@ -1716,12 +1739,12 @@ function builtinPluginPath(directory: string, source: 'bundled' | 'managed'): st
     : [
         ...(resourcesPath
           ? [
-              resolve(resourcesPath, 'agent-plugins', directory),
-              resolve(resourcesPath, 'resources', 'agent-plugins', directory)
+              resolve(resourcesPath, 'harness-features', directory),
+              resolve(resourcesPath, 'resources', 'harness-features', directory)
             ]
           : []),
-        fileURLToPath(new URL(`../resources/agent-plugins/${directory}`, import.meta.url)),
-        resolve(process.cwd(), 'resources', 'agent-plugins', directory)
+        fileURLToPath(new URL(`../resources/harness-features/${directory}`, import.meta.url)),
+        resolve(process.cwd(), 'resources', 'harness-features', directory)
       ];
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates.at(-1)!;
 }

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-const harness = fileURLToPath(new URL('../resources/agent-plugins/meta-skills/skills/meta-bug-bounty-tools/scripts/muse-vm-harness.mjs', import.meta.url));
+const harness = fileURLToPath(new URL('../../managed-plugins/meta-skills/skills/meta-bug-bounty-tools/scripts/muse-vm-harness.mjs', import.meta.url));
 
 function run(...args) {
   return spawnSync(process.execPath, [harness, ...args], { encoding: 'utf8' });

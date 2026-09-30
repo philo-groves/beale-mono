@@ -67,7 +67,6 @@ describe('renderer app shell view model', () => {
     const viewIcons: Array<[AppHeaderViewIcon, string]> = [
       ['settings', 'lucide-settings'],
       ['settings-appearance', 'lucide-palette'],
-      ['settings-computer-use', 'lucide-monitor'],
       ['settings-profiles', 'lucide-user-round-cog'],
       ['settings-providers', 'lucide-server-cog'],
       ['settings-remote', 'lucide-wifi'],
@@ -157,7 +156,7 @@ describe('renderer app shell view model', () => {
     expect(styles).toContain('--navigation-rail-width: 50px');
     expect(railStyles).toContain('padding: 4px');
     expect(railStyles).toContain('background: transparent');
-    expect(styles).toMatch(/\.app-shell\.sidebar-collapsed \.app-navigation-rail\s*\{[^}]*width: calc\(100% \+ 8px\);/u);
+    expect(styles).not.toMatch(/\.app-shell\.sidebar-collapsed \.app-navigation-rail\s*\{[^}]*width:/u);
     expect(topStyles).toContain('gap: 6px');
     expect(styles).toContain('.app-navigation-rail-top {\n  margin-top: 8px;');
     expect(styles).toContain('.app-navigation-rail-sections {\n  margin-top: 0;');
@@ -207,7 +206,7 @@ describe('renderer app shell view model', () => {
     expect(workbenchStyles).toContain('border-left: 1px solid var(--panel-border)');
     expect(workbenchStyles).toContain('border-radius: 0 var(--content-surface-radius) var(--content-surface-radius) 0');
     expect(sessionWorkbenchStyles).toContain('border-radius: 0 var(--content-surface-radius) var(--content-surface-radius) 0');
-    expect(collapsedWorkbenchStyles).toContain('margin-left: 8px');
+    expect(collapsedWorkbenchStyles).toContain('margin-left: 0');
     expect(collapsedWorkbenchStyles).toContain('border-left: 0');
     expect(collapsedWorkbenchStyles).toContain('border-radius: var(--content-surface-radius)');
   });
@@ -266,6 +265,8 @@ describe('renderer app shell view model', () => {
       workspaceOpen: true,
       newResearchLabel: 'New Research',
       newResearchDisabled: false,
+      workspaces: [],
+      workspaceRegistryLoading: false,
       rightSidenavAvailable: true,
       rightSidenavExpanded: false,
       contextualTitleVisible: false,
@@ -291,6 +292,7 @@ describe('renderer app shell view model', () => {
       onToggleRightSidenav: () => undefined,
       onToggleSidebar: () => undefined,
       onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined,
       onOpenQuickChat: () => undefined
     }));
 
@@ -303,12 +305,14 @@ describe('renderer app shell view model', () => {
     expect(header.indexOf('bottom-panel-toggle-button')).toBeLessThan(header.indexOf('right-sidenav-toggle-button'));
   });
 
-  it('shows workspace creation actions beside the sidebar toggle only when a workspace is open and the sidebar is collapsed', () => {
+  it('shows New Research and Quick Chat beside the sidebar toggle whenever the sidebar is collapsed', () => {
     const renderHeader = (sidebarCollapsed: boolean, workspaceOpen: boolean, newResearchDisabled = false): string => renderToStaticMarkup(createElement(TopBar, {
       sidebarCollapsed,
       workspaceOpen,
       newResearchLabel: 'New Research',
       newResearchDisabled,
+      workspaces: [],
+      workspaceRegistryLoading: false,
       rightSidenavAvailable: false,
       rightSidenavExpanded: false,
       contextualTitleVisible: false,
@@ -327,6 +331,7 @@ describe('renderer app shell view model', () => {
       onToggleRightSidenav: () => undefined,
       onToggleSidebar: () => undefined,
       onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined,
       onOpenQuickChat: () => undefined
     }));
 
@@ -337,7 +342,14 @@ describe('renderer app shell view model', () => {
     expect(collapsedHeader).toContain('lucide-zap');
     expect(renderHeader(true, true, true)).toMatch(/aria-label="New Research" disabled=""/u);
     expect(renderHeader(false, true)).not.toContain('header-sidebar-action-button');
-    expect(renderHeader(true, false)).not.toContain('header-sidebar-action-button');
+    const noWorkspaceHeader = renderHeader(true, false);
+    expect(noWorkspaceHeader).toContain('aria-label="New Research" aria-haspopup="menu" aria-expanded="false"');
+    expect(noWorkspaceHeader).toContain('aria-label="Quick Chat"');
+    expect(noWorkspaceHeader).not.toMatch(/aria-label="New Research"[^>]*disabled/u);
+    expect(renderHeader(false, false)).not.toContain('header-sidebar-action-button');
+    const topBarSource = readFileSync(new URL('../src/renderer/app/TopBar.tsx', import.meta.url), 'utf8');
+    expect(topBarSource).toContain('onStartNewResearchForWorkspace(workspace);');
+    expect(topBarSource).toContain('newResearchPickerOpen && !workspaceOpen');
   });
 
   it('limits both header research controls to workspace and session views', () => {
@@ -406,6 +418,8 @@ describe('renderer app shell view model', () => {
       workspaceOpen: true,
       newResearchLabel: 'New Research',
       newResearchDisabled: false,
+      workspaces: [],
+      workspaceRegistryLoading: false,
       rightSidenavAvailable: false,
       rightSidenavExpanded: false,
       contextualTitleVisible: false,
@@ -425,6 +439,7 @@ describe('renderer app shell view model', () => {
       onToggleRightSidenav: () => undefined,
       onToggleSidebar: () => undefined,
       onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined,
       onOpenQuickChat: () => undefined
     }));
     expect(header).not.toContain('bottom-panel-toggle-button');
@@ -437,6 +452,8 @@ describe('renderer app shell view model', () => {
       workspaceOpen: true,
       newResearchLabel: 'New Research',
       newResearchDisabled: false,
+      workspaces: [],
+      workspaceRegistryLoading: false,
       rightSidenavAvailable: true,
       rightSidenavExpanded: false,
       contextualTitleVisible: true,
@@ -457,6 +474,7 @@ describe('renderer app shell view model', () => {
       onToggleRightSidenav: () => undefined,
       onToggleSidebar: () => undefined,
       onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined,
       onOpenQuickChat: () => undefined
     }));
     expect(header).not.toContain('bottom-panel-toggle-button');

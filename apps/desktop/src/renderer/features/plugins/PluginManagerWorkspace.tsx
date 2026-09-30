@@ -1,10 +1,63 @@
-import type { FormEvent, JSX } from 'react';
+import { useEffect, useRef } from 'react';
+import type { FormEvent, JSX, PointerEvent as ReactPointerEvent } from 'react';
 import { FolderPlus, GitBranch, Power, PowerOff, Trash2 } from 'lucide-react';
 import type { AgentPluginRecord, AgentPluginRegistryState } from '@shared/types';
+import { isOptionalAgentFeaturePlugin } from '../../../shared/optionalAgentFeatures';
 import { CenteredLoadingState } from '../../app/CenteredLoadingState';
+import { CollectionSidebar } from '../../app/CollectionSidebar';
+
+export function PluginsSidebar({
+  state,
+  selectedPluginId,
+  collapsed,
+  loading,
+  error,
+  onSelectPlugin,
+  onResizePointerDown
+}: {
+  state: AgentPluginRegistryState | null;
+  selectedPluginId: string | null;
+  collapsed: boolean;
+  loading: boolean;
+  error: string | null;
+  onSelectPlugin: (pluginId: string) => void;
+  onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+}): JSX.Element {
+  const plugins = state?.plugins.filter((plugin) => !isOptionalAgentFeaturePlugin(plugin)) ?? [];
+  return (
+    <CollectionSidebar
+      title="Plugins"
+      label="Plugins sidebar"
+      collapsed={collapsed}
+      error={error}
+      updateKey={plugins.map((plugin) => `${plugin.id}:${plugin.enabled}:${plugin.status}`).join(',')}
+      onResizePointerDown={onResizePointerDown}
+    >
+      <nav className="collection-sidebar-list sidebar-list-scroll-content" aria-label="Installed plugins">
+        <div className="collection-sidebar-list-heading">Installed plugins</div>
+        {loading ? <p className="collection-sidebar-empty">Loading plugins…</p> : plugins.length === 0 ? (
+          <p className="collection-sidebar-empty">No plugins installed</p>
+        ) : plugins.map((plugin) => {
+          const selected = selectedPluginId === plugin.id;
+          return (
+            <div className={`workspace-item-row no-menu ${selected ? 'active' : ''}`.trim()} key={plugin.id}>
+              <button type="button" className="workspace-item collection-sidebar-item" aria-current={selected ? 'page' : undefined} onClick={() => onSelectPlugin(plugin.id)}>
+                <span className="collection-sidebar-item-copy">
+                  <span>{plugin.name}</span>
+                  <small>{plugin.status === 'invalid' ? 'Invalid' : plugin.enabled ? 'Enabled' : 'Disabled'}</small>
+                </span>
+              </button>
+            </div>
+          );
+        })}
+      </nav>
+    </CollectionSidebar>
+  );
+}
 
 export function PluginManagerWorkspace({
   state,
+  selectedPluginId = null,
   loading,
   busy,
   error,
@@ -16,6 +69,7 @@ export function PluginManagerWorkspace({
   onRemove
 }: {
   state: AgentPluginRegistryState | null;
+  selectedPluginId?: string | null;
   loading: boolean;
   busy: boolean;
   error: string | null;
@@ -26,8 +80,16 @@ export function PluginManagerWorkspace({
   onSetEnabled: (pluginId: string, enabled: boolean) => void;
   onRemove: (pluginId: string) => void;
 }): JSX.Element {
-  const plugins = state?.plugins ?? [];
+  const plugins = state?.plugins.filter((plugin) => !isOptionalAgentFeaturePlugin(plugin)) ?? [];
+  const listRef = useRef<HTMLDivElement | null>(null);
   const submittingDisabled = busy || loading || repositoryUrl.trim().length === 0;
+
+  useEffect(() => {
+    if (!selectedPluginId) return;
+    const selectedRow = [...listRef.current?.querySelectorAll<HTMLElement>('.plugin-manager-row') ?? []]
+      .find((row) => row.dataset.pluginId === selectedPluginId);
+    selectedRow?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedPluginId, state]);
 
   const submitRepository = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -64,7 +126,7 @@ export function PluginManagerWorkspace({
         {error ? <div className="plugin-manager-error">{error}</div> : null}
 
         <section className="plugin-manager-catalog" aria-label="Installed plugins">
-          <div className="plugin-manager-list">
+          <div className="plugin-manager-list" ref={listRef}>
             {loading ? (
               <CenteredLoadingState label="Loading plugins…" />
             ) : plugins.length > 0 ? (
@@ -72,6 +134,7 @@ export function PluginManagerWorkspace({
                 <PluginRow
                   key={plugin.id}
                   plugin={plugin}
+                  selected={plugin.id === selectedPluginId}
                   busy={busy}
                   onSetEnabled={onSetEnabled}
                   onRemove={onRemove}
@@ -92,11 +155,13 @@ export function PluginManagerWorkspace({
 
 function PluginRow({
   plugin,
+  selected,
   busy,
   onSetEnabled,
   onRemove
 }: {
   plugin: AgentPluginRecord;
+  selected: boolean;
   busy: boolean;
   onSetEnabled: (pluginId: string, enabled: boolean) => void;
   onRemove: (pluginId: string) => void;
@@ -111,7 +176,7 @@ function PluginRow({
   const statusDetail = [statusLabel, plugin.version, ...messages].filter(Boolean).join(' · ');
 
   return (
-    <article className={`plugin-manager-row ${invalid ? 'invalid' : ''}`}>
+    <article className={`plugin-manager-row ${invalid ? 'invalid' : ''} ${selected ? 'selected' : ''}`.trim()} data-plugin-id={plugin.id}>
       <span className="plugin-manager-row-copy">
         <strong>{plugin.name}</strong>
         <small title={statusDetail}>{statusDetail}</small>

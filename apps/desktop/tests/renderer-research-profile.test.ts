@@ -313,6 +313,7 @@ function claim(id: string, title: string): AppServerFindingSummary {
     impact: '',
     securityTracking: null,
     status: 'observed',
+    operatorOverride: false,
     staleFromStatus: null,
     confidence: 0.8,
     sourceRevision: null,

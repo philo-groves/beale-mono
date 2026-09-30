@@ -208,7 +208,7 @@ test("provenance migrations preserve old rows and do not backfill invented execu
       database.exec(`ALTER TABLE app_server_runbook_executions DROP COLUMN ${column}`);
     }
     database.exec("ALTER TABLE app_server_claim_evidence DROP COLUMN claim_binding_hash");
-    database.exec("DELETE FROM schema_migrations WHERE (component = 'app_server_core' AND version = 18) OR (component = 'app_server_research_claims' AND version = 7)");
+    database.exec("DELETE FROM schema_migrations WHERE (component = 'app_server_core' AND version = 18) OR (component = 'app_server_research_claims' AND version IN (7, 8))");
   } finally { database.close(); }
   try {
     graph = new MemoryGraphStore({ workspaceRoot: root, context });

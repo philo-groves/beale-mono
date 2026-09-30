@@ -30,7 +30,8 @@ The project is under heavy development. The agent is not ready for real use; exp
 | `apps/ios` | Native SwiftUI app-server client and Xcode project |
 | `packages/app-server-runtime` | Shared protocol, app-server session runtime, and optional app-server client |
 | `app-server` | `@beale/app-server` — standalone tray-resident app-server execution host and control plane |
-| `managed-plugins` | Portable Agent Plugin packages, including Beale Introspection and Terminator |
+| `app-server/resources/harness-features` | Built-in harness feature manifests and Introspection runtime |
+| `managed-plugins` | Portable Agent Plugin packages, including Meta Skills |
 | `integrations/beale-codex` | Codex plugin with a Beale research skill and local stdio MCP server |
 | `packages/research-agent` | `@beale/research-agent` — workspace context, durable memory, tools, and the Pi-backed agent runtime |
 | `tests` | app-server test suite (`node:test`, runs against built packages) |
@@ -99,7 +100,7 @@ Requirements: Node.js >= 22.19.0 and pnpm 11 (see `packageManager` in `package.j
 pnpm install
 ```
 
-Dependency build scripts are denied by default; `electron`, `node-pty`, and `@mediar-ai/terminator` are explicitly allowed because they need native install steps. See `pnpm-workspace.yaml`.
+Dependency build scripts are denied by default; `electron` and `node-pty` are explicitly allowed because they need native install steps. See `pnpm-workspace.yaml`.
 
 ### Research runtime and app-server
 

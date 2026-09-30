@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CSSProperties, JSX, RefObject } from 'react';
+import type { CSSProperties, DragEvent, JSX, RefObject } from 'react';
 import { BadgeCheck, Lightbulb, Search } from 'lucide-react';
 import type {
   AppServerFindingSummary,
   AppServerMemorySummary,
+  ClaimBoardMaturity,
   ResearchProfileMemoryType,
   ResearchProviderModelCatalog,
   ResearchClaimRating
@@ -20,8 +21,8 @@ import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
 import { memoryTypeClassName, memoryTypeLabel, memoryTypeStyle } from '../research/MemoryTypeLabel';
 
 const CAMPAIGN_PRIORITY_CLAIM_LIMIT = 8;
-const CAMPAIGN_BOARD_MATURITIES = ['refuted', 'observed', 'reproduced', 'verified'] as const;
-type CampaignBoardMaturity = typeof CAMPAIGN_BOARD_MATURITIES[number];
+const CAMPAIGN_BOARD_MATURITIES: readonly ClaimBoardMaturity[] = ['refuted', 'observed', 'reproduced', 'verified'];
+type CampaignBoardMaturity = ClaimBoardMaturity;
 type CampaignBoardRatingFilter = CampaignClaimRatingValue | 'all';
 const CAMPAIGN_BOARD_RATING_OPTIONS: Array<{ value: CampaignBoardRatingFilter; label: string }> = [
   { value: 'all', label: 'All Ratings' },
@@ -95,18 +96,43 @@ export function CampaignBoardView({
   memory,
   providerModelCatalog,
   workspaceName,
-  onOpenClaim
+  onOpenClaim,
+  onTransitionClaim
 }: {
   memory: AppServerMemorySummary | null;
   providerModelCatalog: readonly ResearchProviderModelCatalog[];
   workspaceName: string;
   onOpenClaim: (claimId: string) => void;
+  onTransitionClaim?: (claim: AppServerFindingSummary, targetMaturity: ClaimBoardMaturity) => Promise<void>;
 }): JSX.Element {
   const loading = memory === null || memory.loading === true;
   const [query, setQuery] = useState('');
   const [classificationFilter, setClassificationFilter] = useState('all');
   const [ratingFilter, setRatingFilter] = useState<CampaignBoardRatingFilter>('all');
+  const [draggedClaimId, setDraggedClaimId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<ClaimBoardMaturity | null>(null);
+  const [pendingClaimId, setPendingClaimId] = useState<string | null>(null);
+  const [transitionError, setTransitionError] = useState<string | null>(null);
   const classificationOptions = campaignBoardClassificationOptions(memory);
+
+  const dragClaim = (event: DragEvent<HTMLButtonElement>, claim: AppServerFindingSummary): void => {
+    if (pendingClaimId || !onTransitionClaim) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-beale-claim-board', 'claim');
+    setDraggedClaimId(claim.id);
+    setDropTarget(null);
+    setTransitionError(null);
+  };
+
+  const clearDrag = (): void => {
+    setDraggedClaimId(null);
+    setDropTarget(null);
+  };
+
+  const draggedClaim = memory?.findings.find((claim) => claim.id === draggedClaimId) ?? null;
 
   useEffect(() => {
     if (classificationFilter === 'all' || classificationOptions.some((option) => option.value === classificationFilter)) return;
@@ -118,7 +144,9 @@ export function CampaignBoardView({
       <header className="campaign-header campaign-board-header">
         <div className="settings-form-heading campaign-view-heading">
           <h2 className="campaign-view-title" id="workspace-campaign-board-heading">{workspaceName.trim() || 'Workspace'} Claims</h2>
-          <p>Findings grouped by maturity; proposed leads are excluded.</p>
+          <p>Drag findings between columns to change status. Human moves are recorded as overrides; proposed leads are excluded.</p>
+          {pendingClaimId ? <p className="campaign-board-transition-pending" role="status">Updating claim status…</p> : null}
+          {transitionError ? <p className="campaign-board-transition-error" role="alert">{transitionError}</p> : null}
         </div>
         <div className="campaign-board-filters" aria-label="Claims filters">
           <label className="campaign-board-search">
@@ -150,11 +178,31 @@ export function CampaignBoardView({
         </div>
       </header>
 
-      <div className="campaign-board-lanes">
+      <div className="campaign-board-lanes" aria-busy={pendingClaimId !== null}>
         {CAMPAIGN_BOARD_MATURITIES.map((maturity) => {
           const findings = campaignBoardFindings(memory, maturity, { classification: classificationFilter, rating: ratingFilter, query });
           return (
-            <section className={`campaign-board-lane maturity-${maturity}`} key={maturity} aria-labelledby={`campaign-board-${maturity}-heading`}>
+            <section
+              className={`campaign-board-lane maturity-${maturity}${dropTarget === maturity ? ' is-drop-target' : ''}`}
+              key={maturity}
+              aria-labelledby={`campaign-board-${maturity}-heading`}
+              onDragOver={(event) => {
+                if (!draggedClaim || draggedClaim.maturity === maturity || pendingClaimId) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                if (dropTarget !== maturity) setDropTarget(maturity);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                clearDrag();
+                if (!draggedClaim || draggedClaim.maturity === maturity || !onTransitionClaim || pendingClaimId) return;
+                setPendingClaimId(draggedClaim.id);
+                setTransitionError(null);
+                void onTransitionClaim(draggedClaim, maturity)
+                  .catch((error: unknown) => setTransitionError(error instanceof Error ? error.message : String(error)))
+                  .finally(() => setPendingClaimId(null));
+              }}
+            >
               <h3 className="workspace-campaign-list-heading campaign-board-lane-heading" id={`campaign-board-${maturity}-heading`}>{traceLabel(maturity)} ({findings.length.toLocaleString()})</h3>
               <MainSideScrollRegion
                 className="campaign-board-lane-scroll"
@@ -170,6 +218,10 @@ export function CampaignBoardView({
                     key={claim.id}
                     metadata={campaignBoardClaimMetadata(claim)}
                     onOpenClaim={onOpenClaim}
+                    onDragStart={onTransitionClaim ? (event) => dragClaim(event, claim) : undefined}
+                    onDragEnd={clearDrag}
+                    dragging={draggedClaimId === claim.id}
+                    dragDisabled={pendingClaimId !== null}
                     providerModelCatalog={providerModelCatalog}
                   />
                 ))}
@@ -343,16 +395,31 @@ function CampaignClaimCard({
   className = '',
   metadata,
   onOpenClaim,
+  onDragStart,
+  onDragEnd,
+  dragging = false,
+  dragDisabled = false,
   providerModelCatalog
 }: {
   claim: AppServerFindingSummary;
   className?: string;
   metadata: string;
   onOpenClaim: (claimId: string) => void;
+  onDragStart?: (event: DragEvent<HTMLButtonElement>) => void;
+  onDragEnd?: () => void;
+  dragging?: boolean;
+  dragDisabled?: boolean;
   providerModelCatalog: readonly ResearchProviderModelCatalog[];
 }): JSX.Element {
   return (
-    <button className={`campaign-priority-claim${className ? ` ${className}` : ''}`} onClick={() => onOpenClaim(claim.id)} type="button">
+    <button
+      className={`campaign-priority-claim${className ? ` ${className}` : ''}${dragging ? ' is-dragging' : ''}`}
+      draggable={Boolean(onDragStart) && !dragDisabled}
+      onClick={() => onOpenClaim(claim.id)}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      type="button"
+    >
       <strong className="campaign-priority-claim-title">
         {claim.projection === 'finding'
           ? <BadgeCheck aria-hidden="true" className={`campaign-claim-title-icon maturity-${claim.maturity}`} size={15} />

@@ -5,8 +5,6 @@ import type {
   ResourcePriorArtDetail,
   BealeApi,
   ResearchProfileId,
-  ComputerUsePermissionMode,
-  ComputerUseSettings,
   DebuggingSettings,
   DeveloperSettings,
   ProviderCredentialAccessRequest,
@@ -47,6 +45,7 @@ import type {
   MemoryDreamingProgressUpdate,
   MarkHistoryDuplicateInput,
   UndoHistoryDuplicateInput,
+  ClaimBoardTransitionRequest,
   AppServerRunbookDocument,
   AppServerReportDocument,
   AppServerReportLocator,
@@ -203,12 +202,6 @@ const api: BealeApi = {
   },
   setAppServerRemoteAccessSettings(update: AppServerRemoteAccessUpdate): Promise<AppServerRemoteAccessSettings> {
     return ipcRenderer.invoke(IPC_CHANNELS.setAppServerRemoteAccessSettings, update);
-  },
-  getComputerUseSettings(): Promise<ComputerUseSettings> {
-    return ipcRenderer.invoke(IPC_CHANNELS.getComputerUseSettings);
-  },
-  setComputerUsePermissionMode(permissionMode: ComputerUsePermissionMode): Promise<ComputerUseSettings> {
-    return ipcRenderer.invoke(IPC_CHANNELS.setComputerUsePermissionMode, permissionMode);
   },
   getProviderSettings(): Promise<ProviderSettings> {
     return ipcRenderer.invoke(IPC_CHANNELS.getProviderSettings);
@@ -528,6 +521,9 @@ const api: BealeApi = {
   },
   undoHistoryDuplicate(input: UndoHistoryDuplicateInput) {
     return ipcRenderer.invoke(IPC_CHANNELS.undoHistoryDuplicate, input);
+  },
+  transitionClaimOnBoard(input: ClaimBoardTransitionRequest): Promise<WorkspaceSnapshot> {
+    return ipcRenderer.invoke(IPC_CHANNELS.transitionClaimOnBoard, input);
   },
   getAppServerToolingSummary() {
     return ipcRenderer.invoke(IPC_CHANNELS.getAppServerToolingSummary);

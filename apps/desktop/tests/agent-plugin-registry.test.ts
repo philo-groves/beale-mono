@@ -159,21 +159,22 @@ describe('AgentPluginRegistry', () => {
     });
 
     const plugin = registry.getState().plugins.find((candidate) => candidate.name === 'beale-introspection');
-    const terminator = registry.getState().plugins.find((candidate) => candidate.name === 'beale-terminator');
-    const browser = registry.getState().plugins.find((candidate) => candidate.name === 'beale-browser-use');
     const metaSkills = registry.getState().plugins.find((candidate) => candidate.name === 'meta-skills');
+    const microsoftDevices = registry.getState().plugins.find((candidate) => candidate.name === 'microsoft-security-devices');
     expect(plugin).toBeTruthy();
     expect(plugin?.enabled).toBe(true);
     expect(plugin?.source.kind).toBe('builtin');
-    expect(plugin?.source.path).toContain(join('managed-plugins', 'beale-introspection'));
-    expect(terminator).toBeTruthy();
-    expect(terminator?.enabled).toBe(false);
-    expect(terminator?.source.kind).toBe('builtin');
-    expect(terminator?.source.path).toContain(join('managed-plugins', 'beale-terminator'));
-    expect(browser?.enabled).toBe(true);
-    expect(browser?.source.kind).toBe('builtin');
+    expect(plugin?.source.path).toContain(join('app-server', 'resources', 'harness-features', 'beale-introspection'));
     expect(metaSkills?.enabled).toBe(true);
+    expect(metaSkills?.source.path).toContain(join('managed-plugins', 'meta-skills'));
     expect(metaSkills?.skills.map((skill) => skill.id)).toEqual(['meta-bug-bounty-tools']);
+    expect(microsoftDevices).toMatchObject({
+      id: 'microsoft-security-devices-builtin',
+      enabled: false,
+      status: 'ready',
+      source: { kind: 'builtin' }
+    });
+    expect(microsoftDevices?.skills.map((skill) => skill.id)).toEqual(['microsoft-security-devices']);
     expect(plugin?.mcpServers).toMatchObject([
       {
         name: 'beale',
@@ -185,7 +186,7 @@ describe('AgentPluginRegistry', () => {
 
     const runtime = registry.getAppServerRuntime();
     expect(runtime.selectedSkillIds).toContain('meta-bug-bounty-tools');
-    expect(runtime.allowedMcpServers).toEqual(['beale-browser-use.browser-use', 'beale-introspection.beale']);
+    expect(runtime.allowedMcpServers).toEqual(['beale-introspection.beale']);
     expect(runtime.mcpConfigPath).toBeTruthy();
     const mcpConfig = JSON.parse(readFileSync(runtime.mcpConfigPath ?? '', 'utf8')) as {
       servers: Record<string, { env: Record<string, string> }>;
@@ -203,12 +204,6 @@ describe('AgentPluginRegistry', () => {
     expect(reloaded.getState().plugins.find((candidate) => candidate.id === plugin!.id)?.enabled).toBe(false);
     expect(() => registry.remove(plugin!.id)).toThrow('Built-in plugins cannot be removed.');
 
-    const terminatorEnabled = registry.setEnabled(terminator!.id, true);
-    expect(terminatorEnabled.plugins.find((candidate) => candidate.id === terminator!.id)?.enabled).toBe(true);
-    const computerRuntime = registry.getAppServerRuntime();
-    expect(computerRuntime.allowedMcpServers).toContain('beale-terminator.computer-use');
-    registry.setEnabled(browser!.id, false);
-    expect(registry.getAppServerRuntime().allowedMcpServers).not.toContain('beale-browser-use.browser-use');
     registry.setEnabled(metaSkills!.id, false);
     expect(registry.getAppServerRuntime().selectedSkillIds).not.toContain('meta-bug-bounty-tools');
   });
@@ -250,107 +245,7 @@ describe('AgentPluginRegistry', () => {
     expect(tools.map((tool) => tool.name)).not.toContain('create_workspace');
   });
 
-  it('exposes only the curated Terminator surface and denies blocked Windows processes', () => {
-    const serverPath = builtinPluginServerPath('beale-terminator');
-    const serverSource = readFileSync(serverPath, 'utf8');
-    const input = [
-      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
-      { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
-      {
-        jsonrpc: '2.0',
-        id: 3,
-        method: 'tools/call',
-        params: { name: 'capture', arguments: { process: 'cmd.exe', title: 'Command Prompt' } }
-      }
-    ].map((message) => JSON.stringify(message)).join('\n') + '\n';
-    const result = spawnSync(process.execPath, [serverPath], { input, encoding: 'utf8', timeout: 5_000 });
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(serverSource).toContain("new (terminator().Desktop)(false, false, 'off')");
-    expect(serverSource).not.toContain("new (terminator().Desktop)(false, false, 'warn')");
-    const responses = result.stdout.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
-    const tools = ((responses[1].result as { tools: Array<{
-      name: string;
-      annotations: Record<string, unknown>;
-    }> }).tools);
-    expect(tools.map((tool) => tool.name)).toEqual([
-      'observe', 'find', 'click', 'type', 'key', 'scroll', 'wait_for', 'capture'
-    ]);
-    expect(tools.map((tool) => tool.name)).not.toContain('run_command');
-    expect((tools.find((tool) => tool.name === 'click')?.annotations['beale.io/tool'] as Record<string, unknown>).confirmation).toBe('always');
-    expect(responses[2]).toMatchObject({
-      id: 3,
-      result: {
-        isError: true,
-        content: [{ type: 'text', text: expect.stringContaining('denies process') }]
-      }
-    });
-  });
 
-  it('keeps Terminator diagnostics off stdout during detailed observations', () => {
-    const fixtureRoot = tempDir('beale-terminator-fixture-');
-    const modulePath = join(fixtureRoot, 'terminator.cjs');
-    writeFileSync(modulePath, `
-class FixtureWindow {
-  isVisible() { return true; }
-  processName() { return 'fixture'; }
-  name() { return 'Fixture Window'; }
-  role() { return 'Window'; }
-  attributes() { return {}; }
-  processId() { return 42; }
-}
-class Desktop {
-  constructor(_useBackgroundApps, _activateApp, logLevel) {
-    this.logLevel = logLevel;
-    if (logLevel !== 'off') process.stdout.write('2026-08-18T22:32:03.372Z WARN fixture diagnostic\\n');
-  }
-  async windowsForApplication() { return [new FixtureWindow()]; }
-  async getWindowTreeResultAsync() {
-    return { pid: 42, elementCount: 1, formatted: 'logLevel=' + this.logLevel };
-  }
-}
-module.exports = {
-  Desktop,
-  PropertyLoadingMode: { Smart: 'Smart' },
-  TreeOutputFormat: { CompactYaml: 'CompactYaml' }
-};
-`, 'utf8');
-    const serverPath = builtinPluginServerPath('beale-terminator');
-    const input = [
-      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
-      {
-        jsonrpc: '2.0',
-        id: 2,
-        method: 'tools/call',
-        params: {
-          name: 'observe',
-          arguments: { process: 'fixture', title: 'Fixture Window', maxDepth: 12 }
-        }
-      }
-    ].map((message) => JSON.stringify(message)).join('\n') + '\n';
-    const result = spawnSync(process.execPath, [serverPath], {
-      input,
-      encoding: 'utf8',
-      timeout: 5_000,
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        BEALE_TERMINATOR_MODULE_PATH: modulePath,
-        BEALE_TERMINATOR_TEST_PLATFORM: 'win32'
-      }
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
-    const responses = result.stdout.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(responses).toHaveLength(2);
-    expect(responses[1]).toMatchObject({
-      id: 2,
-      result: {
-        content: [{ type: 'text', text: expect.stringContaining('logLevel=off') }]
-      }
-    });
-  });
 });
 
 function validPluginRoot(name: string): string {
@@ -387,7 +282,7 @@ function validPluginRoot(name: string): string {
 }
 
 function builtinPluginServerPath(name: string): string {
-  return join(process.cwd(), '..', '..', 'managed-plugins', name, 'server.mjs');
+  return join(process.cwd(), '..', '..', 'app-server', 'resources', 'harness-features', name, 'server.mjs');
 }
 
 function tempDir(prefix: string): string {

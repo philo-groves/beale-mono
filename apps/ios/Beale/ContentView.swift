@@ -1416,12 +1416,7 @@ private struct SessionApprovalComposer: View {
     let decide: (String) async -> Void
     let stop: () async -> Bool
 
-    private var grantsSession: Bool {
-        approval.isComputerUse && approval.permissionMode == "once_per_session" && approval.targetBinary != nil
-    }
-
     private var title: String {
-        if grantsSession { return "Allow \(approval.targetBinary!) for this session?" }
         if approval.isComputerUse { return "Approve this computer action?" }
         return approval.approvalKind == "auto_review_override"
             ? "Approve this command once?"
@@ -1429,7 +1424,6 @@ private struct SessionApprovalComposer: View {
     }
 
     private var detail: String {
-        if grantsSession { return "Allow this and later computer actions targeting \(approval.targetBinary!)." }
         if approval.isComputerUse {
             return "\(approval.toolName ?? "act") in \(approval.targetBinary ?? "the target application")."
         }
@@ -1458,7 +1452,7 @@ private struct SessionApprovalComposer: View {
                 .buttonStyle(.bordered)
                 .disabled(isSending || isStopping)
 
-                Button(grantsSession ? "Allow for Session" : approval.isComputerUse ? "Approve" : "Approve Once") {
+                Button("Approve Once") {
                     Task { await decide("approved") }
                 }
                 .buttonStyle(.borderedProminent)

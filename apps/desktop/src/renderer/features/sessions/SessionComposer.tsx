@@ -29,6 +29,7 @@ import {
   steeringInputTabAction,
   steeringSuggestionAutoVisible
 } from '../../view-models/steeringSuggestions';
+import { navigateSessionInputHistory, sessionInputHistory } from '../../view-models/sessionInputHistory';
 import { ShellApprovalQuestion } from './ShellApprovalModal';
 
 export const STEER_TEXTAREA_MAX_LINES = 7;
@@ -121,6 +122,19 @@ export const MainSteerArea = memo(function MainSteerArea({
   const postComposerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const focusedRunIdRef = useRef<string | null>(null);
+  const historyRunIdRef = useRef(runId);
+  const historyIndexRef = useRef<number | null>(null);
+  const historyDraftRef = useRef('');
+  const historyCaretRef = useRef<number | null>(null);
+  const sentMessagesByRunRef = useRef(new Map<string, string[]>());
+  const historyDetail = detail?.run.id === runId ? detail : null;
+  const historyEntries = runId
+    ? sessionInputHistory(
+        historyDetail?.run.promptMarkdown ?? '',
+        historyDetail?.transcriptMessages ?? [],
+        sentMessagesByRunRef.current.get(runId) ?? []
+      )
+    : [];
   const trimmedInstruction = instruction.trim();
   const disabled = busy || (!runId && !onInitialInstruction) || !trimmedInstruction || !selectedModelId;
   const status = detail?.run.status ?? null;
@@ -232,6 +246,20 @@ export const MainSteerArea = memo(function MainSteerArea({
   useEffect(() => {
     if (!detail) setInstruction(initialInstruction);
   }, [detail, initialInstruction]);
+  useEffect(() => {
+    if (historyRunIdRef.current === runId) return;
+    historyRunIdRef.current = runId;
+    historyIndexRef.current = null;
+    historyDraftRef.current = '';
+    historyCaretRef.current = null;
+    if (runId) setInstruction('');
+  }, [runId]);
+  useLayoutEffect(() => {
+    const caret = historyCaretRef.current;
+    if (caret === null) return;
+    historyCaretRef.current = null;
+    textareaRef.current?.setSelectionRange(caret, caret);
+  }, [instruction]);
 
   const resizeTextarea = useCallback((): void => {
     const textarea = textareaRef.current;
@@ -279,9 +307,19 @@ export const MainSteerArea = memo(function MainSteerArea({
 
   const submit = (): void => {
     if (disabled) return;
-    if (runId) onSteerInstruction(runId, trimmedInstruction, modelSelection);
-    else onInitialInstruction?.(trimmedInstruction, modelSelection, normalizeShellSafetyMode(initialSafetyMode));
+    if (runId) {
+      const sent = sentMessagesByRunRef.current;
+      const previous = sent.get(runId) ?? [];
+      sent.delete(runId);
+      sent.set(runId, [...previous.slice(-99), trimmedInstruction]);
+      if (sent.size > 8) sent.delete(sent.keys().next().value!);
+      onSteerInstruction(runId, trimmedInstruction, modelSelection);
+    } else {
+      onInitialInstruction?.(trimmedInstruction, modelSelection, normalizeShellSafetyMode(initialSafetyMode));
+    }
     setInstruction('');
+    historyIndexRef.current = null;
+    historyDraftRef.current = '';
     setTabSuggestionVisible(false);
   };
 
@@ -313,12 +351,46 @@ export const MainSteerArea = memo(function MainSteerArea({
           placeholder={placeholder}
           onChange={(event) => {
             setInstruction(event.target.value);
+            historyIndexRef.current = null;
+            historyDraftRef.current = '';
             setTabSuggestionVisible(false);
+          }}
+          onClick={() => {
+            historyIndexRef.current = null;
+            historyDraftRef.current = '';
           }}
           onKeyDown={(event) => {
             if (event.key === 'Escape' && onCancel) {
               event.preventDefault();
               onCancel();
+              return;
+            }
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+              historyIndexRef.current = null;
+              historyDraftRef.current = '';
+            }
+            const historyNavigation = runId ? navigateSessionInputHistory({
+              key: event.key,
+              value: instruction,
+              selectionStart: event.currentTarget.selectionStart,
+              selectionEnd: event.currentTarget.selectionEnd,
+              entries: historyEntries,
+              index: historyIndexRef.current,
+              draft: historyDraftRef.current,
+              modified: event.shiftKey || event.altKey || event.ctrlKey || event.metaKey,
+              composing: event.nativeEvent.isComposing
+            }) : null;
+            if (historyNavigation) {
+              event.preventDefault();
+              historyIndexRef.current = historyNavigation.index;
+              historyDraftRef.current = historyNavigation.draft;
+              if (historyNavigation.value === instruction) {
+                event.currentTarget.setSelectionRange(historyNavigation.caret, historyNavigation.caret);
+              } else {
+                historyCaretRef.current = historyNavigation.caret;
+                setInstruction(historyNavigation.value);
+              }
+              setTabSuggestionVisible(false);
               return;
             }
             if (event.key === 'Tab' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -333,6 +405,8 @@ export const MainSteerArea = memo(function MainSteerArea({
                 event.preventDefault();
                 if (action === 'accept_suggestion' && steeringSuggestion) {
                   setInstruction(steeringSuggestion);
+                  historyIndexRef.current = null;
+                  historyDraftRef.current = '';
                   setTabSuggestionVisible(false);
                 } else {
                   setTabSuggestionVisible(true);

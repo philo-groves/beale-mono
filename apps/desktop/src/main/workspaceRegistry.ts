@@ -7,8 +7,6 @@ import type {
 } from './appServerCliClient';
 import { invokeAppServerRegistryState, invokeAppServerRegistryStateAsync } from './appServerCliClient';
 import type {
-  ComputerUsePermissionMode,
-  ComputerUseSettings,
   DebuggingSettings,
   DeveloperSettings,
   MemorySettings,
@@ -37,7 +35,6 @@ interface RegistryBootstrap {
   memorySettings: MemorySettings;
   shellOptions: ShellOptions;
   debuggingSettings: DebuggingSettings;
-  computerUseSettings: ComputerUseSettings;
   lastKnownWorkspace: WorkspaceRegistryEntry | null;
 }
 
@@ -61,7 +58,6 @@ export class WorkspaceRegistry {
   private memorySettings: MemorySettings;
   private shellOptions: ShellOptions;
   private debuggingSettings: DebuggingSettings;
-  private computerUseSettings: ComputerUseSettings;
   private lastKnownWorkspace: WorkspaceRegistryEntry | null;
 
   public constructor(registryDirectory = defaultWorkspaceRegistryDirectory()) {
@@ -77,7 +73,6 @@ export class WorkspaceRegistry {
     this.memorySettings = bootstrap.memorySettings;
     this.shellOptions = bootstrap.shellOptions;
     this.debuggingSettings = bootstrap.debuggingSettings;
-    this.computerUseSettings = bootstrap.computerUseSettings;
     this.lastKnownWorkspace = bootstrap.lastKnownWorkspace;
   }
 
@@ -239,15 +234,6 @@ export class WorkspaceRegistry {
   public setTracesEnabled(enabled: boolean): DebuggingSettings {
     this.debuggingSettings = this.invoke<DebuggingSettings>('setTracesEnabled', [enabled]);
     return this.debuggingSettings;
-  }
-
-  public getComputerUseSettings(): ComputerUseSettings {
-    return this.computerUseSettings;
-  }
-
-  public setComputerUsePermissionMode(permissionMode: ComputerUsePermissionMode): ComputerUseSettings {
-    this.computerUseSettings = this.invoke<ComputerUseSettings>('setComputerUsePermissionMode', [permissionMode]);
-    return this.computerUseSettings;
   }
 
   public getWorkspaceByDirectory(path: string): WorkspaceRegistryEntry | null {

@@ -11,12 +11,12 @@ const pluginRoot = resolve('managed-plugins/apple-security-devices');
 const serverPath = join(pluginRoot, 'server.mjs');
 const targetFlagsPluginRoot = resolve('managed-plugins/apple-target-flags');
 
-test('managed Introspection and Terminator packages remain discoverable', () => {
+test('Introspection feature remains discoverable', () => {
   const registryRoot = mkdtempSync(join(tmpdir(), 'beale-managed-bundled-plugins-'));
   try {
     const registry = new AgentPluginRegistry(registryRoot, { builtinPlugins: [] });
-    for (const name of ['beale-introspection', 'beale-terminator']) {
-      const root = resolve('managed-plugins', name);
+    for (const name of ['beale-introspection']) {
+      const root = resolve('app-server/resources/harness-features', name);
       assert.equal(existsSync(join(root, 'server.mjs')), true);
       const state = registry.addFromFilesystem(root);
       const plugin = state.plugins.find((candidate) => candidate.name === name);
@@ -32,6 +32,29 @@ test('managed Introspection and Terminator packages remain discoverable', () => 
       const messages = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
       assert.ok(messages[1]?.result?.tools?.length > 0);
     }
+  } finally {
+    rmSync(registryRoot, { recursive: true, force: true });
+  }
+});
+
+test('managed Meta Skills package provides its skill and bundled scripts', () => {
+  const registryRoot = mkdtempSync(join(tmpdir(), 'beale-managed-meta-skills-'));
+  try {
+    const pluginRoot = resolve('managed-plugins/meta-skills');
+    const registry = new AgentPluginRegistry(registryRoot, {
+      builtinPlugins: [{
+        id: 'meta-skills-builtin', path: pluginRoot,
+        installedAt: '2026-01-01T00:00:00.000Z', enabledByDefault: true
+      }]
+    });
+    const plugin = registry.getState().plugins.find((candidate) => candidate.id === 'meta-skills-builtin');
+    assert.equal(plugin?.status, 'ready');
+    assert.equal(plugin?.enabled, true);
+    assert.deepEqual(plugin?.skills.map((skill) => skill.id), ['meta-bug-bounty-tools']);
+    assert.deepEqual(plugin?.skills[0].resourceCounts, { scripts: 2, references: 0, assets: 0 });
+    assert.deepEqual(registry.getAppServerRuntime().selectedSkillIds, ['meta-bug-bounty-tools']);
+    registry.setEnabled('meta-skills-builtin', false);
+    assert.deepEqual(registry.getAppServerRuntime().selectedSkillIds, []);
   } finally {
     rmSync(registryRoot, { recursive: true, force: true });
   }

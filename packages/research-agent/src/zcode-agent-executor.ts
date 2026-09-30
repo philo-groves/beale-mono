@@ -121,7 +121,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
         ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], options.resumableState?.loadedPluginIds, pluginCatalog)
         : undefined;
       const agentToolRegistry = pluginSession ? options.toolRegistry?.fork([
-        pluginSession.createPreviewer(options.toolRegistry.listTools()), pluginSession.createLoader(),
+        ...pluginSession.createControlTools(options.toolRegistry.listTools()),
       ]) : options.toolRegistry;
       const registryTools = (): ZCodeTool[] => (agentToolRegistry?.listTools() ?? [])
         .filter((candidate) => !pluginSession || pluginSession.visible(candidate.descriptor.name))
@@ -131,7 +131,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
           description: candidate.descriptor.description,
           inputSchema: candidate.parameters as Record<string, unknown>,
           execute: async (args, signal) => {
-            const isPluginControl = candidate.descriptor.name === "plugins.load" || candidate.descriptor.name === "plugins.preview";
+            const isPluginControl = ["plugins.load", "plugins.preview", "features.load", "features.preview"].includes(candidate.descriptor.name);
             const record = await agentToolRegistry!.executeToolCall({
               id: createId("zcode_tool"),
               name: getToolTransportName(candidate),
@@ -231,7 +231,7 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
           result = await runZCodeSession({
             workspaceRoot: options.workspaceRoot,
             model: options.model,
-            prompt: "The requested plugin is loaded. Continue the current task with its newly available resources.",
+            prompt: "The requested feature or plugin is loaded. Continue the current task with its newly available resources.",
             tools: visibleTools(),
             signal: abortController.signal,
             ...(options.reasoning ? { reasoning: options.reasoning } : {}),

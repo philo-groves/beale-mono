@@ -62,6 +62,7 @@ import {
 } from '@beale/app-server-runtime/runtime-services';
 import {
   appServerProtocolDescriptor,
+  decodeClaimBoardTransitionRequest,
   type BealeMemoryNotificationFeed,
   type AppServerProtocolOperation
 } from '@beale/app-server-runtime/protocol';
@@ -380,6 +381,30 @@ async function knowledgeOperation(operation: AppServerProtocolOperation, options
       });
     }
     case 'memory.notification_feed': return memoryNotificationFeed(layout, input);
+    case 'claim.board_transition': {
+      const request = decodeClaimBoardTransitionRequest(input);
+      const workspaceName = optionalText(input.workspaceName) ?? request.workspaceId;
+      const graph = new MemoryGraphStore({
+        databasePath: layout.databasePath,
+        context: {
+          workspaceId: request.workspaceId,
+          workspaceName,
+          subjectId: optionalText(input.subjectId) ?? `subject_workspace:${request.workspaceId}`,
+          subjectName: optionalText(input.subjectName) ?? workspaceName,
+        }
+      });
+      const claims = new ResearchClaimStore(graph);
+      try {
+        const claim = claims.get(request.claimId);
+        if (!claim || claim.projection !== 'finding') throw new Error('Finding not found in this workspace.');
+        if (claim.maturity === request.targetMaturity) throw new Error('Finding is already in this Claims column.');
+        const toStatus = request.targetMaturity === 'refuted' ? 'rejected' : request.targetMaturity;
+        return claims.transitionByHuman(request.claimId, request.expectedRevision, toStatus);
+      } finally {
+        claims.close();
+        graph.close();
+      }
+    }
     case 'history.mark_duplicate':
     case 'history.undo_duplicate':
     case 'claim.mark_duplicate':
@@ -642,7 +667,7 @@ const REGISTRY_STATE_ACTIONS = new Set([
   'setProviderPreferredAuthenticationMethod', 'getMemorySettings', 'setMemoryTypeDescriptions',
   'setWorkspaceMemoryBackend', 'getShellOptions', 'setShellOptions', 'getShellOptionsPath',
   'inspectDirectory', 'getWorkspace', 'getWorkspaceByPath', 'getDebuggingSettings', 'setTracesEnabled',
-  'getComputerUseSettings', 'setComputerUsePermissionMode', 'getWorkspaceByDirectory',
+  'getWorkspaceByDirectory',
   'setWorkspaceDirectories', 'getLastKnownWorkspace', 'rememberWorkspaceOpened',
   'removeRegisteredWorkspace', 'syncWorkspace', 'syncWorkspaceFromStorage', 'syncResearchSession', 'touchResearchSessionActivity',
   'reconcileAppServerSessions', 'markAppServerSessionsInterrupted',
@@ -664,7 +689,6 @@ function registryStateOperation(options: InvokeAppServerProtocolOptions): unknow
         memorySettings: registry.getMemorySettings(),
         shellOptions: registry.getShellOptions(),
         debuggingSettings: registry.getDebuggingSettings(),
-        computerUseSettings: registry.getComputerUseSettings(),
         lastKnownWorkspace: registry.getLastKnownWorkspace(),
       };
     }

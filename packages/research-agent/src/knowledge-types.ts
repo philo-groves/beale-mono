@@ -143,6 +143,7 @@ export interface FindingTransitionSummary {
   reason: string;
   sessionId: string | null;
   actorId: string | null;
+  operatorOverride: boolean;
   evidenceIds: string[];
   createdAt: string;
 }
@@ -246,6 +247,8 @@ export interface FindingSummary {
   impact: string;
   securityTracking: FindingSecurityTracking | null;
   status: FindingStatus;
+  /** Current status was set by a human without agent transition prerequisites. */
+  operatorOverride: boolean;
   staleFromStatus: FindingStatus | null;
   confidence: number;
   sourceRevision: string | null;

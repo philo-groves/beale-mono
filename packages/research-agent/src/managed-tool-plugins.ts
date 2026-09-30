@@ -38,6 +38,11 @@ export const MANAGED_TOOL_PLUGINS = [
 
 export type ManagedToolPluginId = typeof MANAGED_TOOL_PLUGINS[number]["id"];
 export const MANAGED_TOOL_PLUGIN_IDS: readonly ManagedToolPluginId[] = MANAGED_TOOL_PLUGINS.map((plugin) => plugin.id);
+export const INTROSPECTION_HARNESS_FEATURE_ID = "beale-introspection-builtin";
+
+export function isHarnessFeatureId(value: unknown): boolean {
+  return isManagedToolPluginId(value) || value === INTROSPECTION_HARNESS_FEATURE_ID;
+}
 
 export interface PluginSkillResourceCounts {
   scripts: number;
@@ -96,11 +101,22 @@ export function decodeResearchPluginCatalog(value: unknown): ResearchPluginCatal
 }
 
 export function formatResearchPluginCatalog(plugins: readonly ResearchPluginCatalogEntry[]): string {
-  if (plugins.length === 0) return "No plugins are available in this session.";
+  const traditionalPlugins = plugins.filter((plugin) => !isHarnessFeatureId(plugin.id));
+  if (traditionalPlugins.length === 0) return "No external plugins are available in this session.";
   return [
-    "Available plugins (use plugins.preview for tool and skill summaries; plugins.load returns skill instructions and makes tool schemas available):",
-    ...plugins.map((plugin) =>
+    "External Plugins (use plugins.preview for tool and skill summaries; plugins.load returns skill instructions and makes tool schemas available):",
+    ...traditionalPlugins.map((plugin) =>
       `- ${plugin.id} (plugin; ${plugin.toolCount ?? (plugin.mcpServers.length > 0 ? "?" : 0)} ${plugin.toolCount === 1 ? "tool" : "tools"}, ${plugin.skills.length} ${plugin.skills.length === 1 ? "skill" : "skills"}):${plugin.description ? ` ${plugin.description.replace(/\s+/gu, " ").trim().slice(0, 240)}` : ""}`),
+  ].join("\n");
+}
+
+export function formatHarnessFeatureCatalog(features: readonly ResearchPluginCatalogEntry[]): string {
+  const harnessFeatures = features.filter((feature) => isHarnessFeatureId(feature.id));
+  if (harnessFeatures.length === 0) return "";
+  return [
+    "Internal features (use features.preview for tool names; features.load makes their tool schemas available):",
+    ...harnessFeatures.map((feature) =>
+      `- ${feature.id} (feature; ${feature.toolCount ?? 0} ${feature.toolCount === 1 ? "tool" : "tools"}):${feature.description ? ` ${feature.description.replace(/\s+/gu, " ").trim().slice(0, 240)}` : ""}`),
   ].join("\n");
 }
 
@@ -128,12 +144,12 @@ function boundedSkillUseWhen(skills: ResearchPluginCatalogEntry["skills"]): stri
 
 export const CORE_TOOL_NAMES = ["file.read", "file.write", "file.edit", "shell.run", "session.disposition", "tool_result.page"] as const;
 
-/** New host tools must explicitly join a plugin or the small core surface. */
+/** New host tools must explicitly join a harness feature or the small core surface. */
 export function assertManagedToolOwnership(tools: readonly ResearchExecutableTool[]): void {
   for (const { descriptor } of tools) {
     if (descriptor.metadata?.provider === "mcp") continue;
     if (CORE_TOOL_NAMES.some((name) => name === descriptor.name)) continue;
-    if (!managedToolPluginId(descriptor.name)) throw new Error(`Assign host tool ${descriptor.name} to a managed plugin before exposing it.`);
+    if (!managedToolPluginId(descriptor.name)) throw new Error(`Assign host tool ${descriptor.name} to a harness feature before exposing it.`);
   }
 }
 
@@ -223,26 +239,34 @@ export class ManagedToolPluginSession {
     return !plugin || this.loaded.has(plugin.id);
   }
 
-  private availableIds(): string[] {
+  private availableIds(kind: "all" | "features" | "plugins" = "all"): string[] {
     return [...new Set([...this.options.filter((option) => this.available(option.id)).map((option) => option.id),
-      ...this.catalog.filter((plugin) => this.available(plugin.id)).map((plugin) => plugin.id)])];
+      ...this.catalog.filter((plugin) => this.available(plugin.id)).map((plugin) => plugin.id)])]
+      .filter((id) => kind === "all" || (isHarnessFeatureId(id) === (kind === "features")));
   }
 
-  createPreviewer(tools: readonly ResearchExecutableTool[]): ResearchExecutableTool {
-    const ids = this.availableIds();
-    const parameters = { type: "object", required: ["plugin"], additionalProperties: false, properties: {
-      plugin: { type: "string", enum: ids },
+  createControlTools(tools: readonly ResearchExecutableTool[]): ResearchExecutableTool[] {
+    return (["features", "plugins"] as const).flatMap((kind) => this.availableIds(kind).length > 0
+      ? [this.createPreviewer(tools, kind), this.createLoader(kind)] : []);
+  }
+
+  createPreviewer(tools: readonly ResearchExecutableTool[], kind: "all" | "features" | "plugins" = "all"): ResearchExecutableTool {
+    const ids = this.availableIds(kind);
+    const feature = kind === "features";
+    const field = feature ? "feature" : "plugin";
+    const parameters = { type: "object", required: [field], additionalProperties: false, properties: {
+      [field]: { type: "string", enum: ids },
     } };
     return {
-      descriptor: { name: "plugins.preview", transportName: "plugins_preview",
-        description: "Preview one available plugin's tool names and skill use cases without loading its schemas or instructions.",
+      descriptor: { name: feature ? "features.preview" : "plugins.preview", transportName: feature ? "features_preview" : "plugins_preview",
+        description: feature ? "Preview one available harness feature's tool names without loading its schemas." : "Preview one available plugin's tool names and skill use cases without loading its schemas or instructions.",
         actionClasses: ["recall"], sideEffects: "none", requiredPermissions: [], inputSchema: parameters },
       parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
       execute: async (action) => {
         const startedAt = nowIso();
-        const id = action.input.plugin;
-        if (typeof id !== "string" || !this.available(id)) {
-          return { action, status: "blocked", startedAt, completedAt: nowIso(), summary: "Choose an available plugin from the catalog.", followUpActions: [] };
+        const id = action.input[field];
+        if (typeof id !== "string" || !ids.includes(id)) {
+          return { action, status: "blocked", startedAt, completedAt: nowIso(), summary: `Choose an available ${feature ? "harness feature" : "plugin"} from the catalog.`, followUpActions: [] };
         }
         const plugin = this.catalog.find((entry) => entry.id === id);
         const names = tools.filter((tool) => managedToolPluginId(tool.descriptor.name) === id
@@ -252,32 +276,34 @@ export class ManagedToolPluginSession {
         const output: PluginPreviewOutput = { pluginId: id, loaded: this.loaded.has(id), tools: [...new Set(names)].sort(),
           skills: (plugin?.skills ?? []).map((skill, index) => ({ id: skill.id,
             useWhen: boundedUseWhen[index]!, ...(skill.resourceCounts ? { resourceCounts: skill.resourceCounts } : {}) })) };
-        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: "Plugin preview available.", output, followUpActions: [] };
+        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: feature ? "Harness feature preview available." : "Plugin preview available.", output: feature ? { featureId: output.pluginId, loaded: output.loaded, tools: output.tools } : output, followUpActions: [] };
       },
     };
   }
 
-  createLoader(): ResearchExecutableTool {
+  createLoader(kind: "all" | "features" | "plugins" = "all"): ResearchExecutableTool {
+    const feature = kind === "features";
     const description = [
-      "Load an available plugin's tool schemas into this agent's context before calling its tools. Loading is idempotent and preserves existing host policy.",
+      feature ? "Load a harness feature's tool schemas into this agent's context before calling its tools. Loading preserves existing host policy." : "Load an available plugin's tool schemas into this agent's context before calling its tools. Loading is idempotent and preserves existing host policy.",
     ].join("\n");
-    const ids = this.availableIds();
-    const parameters = { type: "object", required: ["plugins"], additionalProperties: false, properties: {
-      plugins: { type: "array", minItems: 1, maxItems: ids.length, uniqueItems: true, items: { type: "string", enum: ids } },
+    const ids = this.availableIds(kind);
+    const field = feature ? "features" : "plugins";
+    const parameters = { type: "object", required: [field], additionalProperties: false, properties: {
+      [field]: { type: "array", minItems: 1, maxItems: ids.length, uniqueItems: true, items: { type: "string", enum: ids } },
     } };
     return {
-      descriptor: { name: "plugins.load", transportName: "plugins_load", description, actionClasses: ["recall"], sideEffects: "none", requiredPermissions: [], inputSchema: parameters },
+      descriptor: { name: feature ? "features.load" : "plugins.load", transportName: feature ? "features_load" : "plugins_load", description, actionClasses: ["recall"], sideEffects: "none", requiredPermissions: [], inputSchema: parameters },
       parameters: parameters as NonNullable<ResearchExecutableTool["parameters"]>,
       execute: async (action) => {
         const startedAt = nowIso();
-        const requested = action.input.plugins;
-        if (!Array.isArray(requested) || requested.length === 0 || requested.length > ids.length || requested.some((id) => typeof id !== "string" || !this.available(id))) {
-          return { action, status: "blocked", startedAt, completedAt: nowIso(), summary: "Choose enabled plugins with available tools from the catalog.", followUpActions: [] };
+        const requested = action.input[field];
+        if (!Array.isArray(requested) || requested.length === 0 || requested.length > ids.length || requested.some((id) => typeof id !== "string" || !ids.includes(id))) {
+          return { action, status: "blocked", startedAt, completedAt: nowIso(), summary: `Choose enabled ${feature ? "harness features" : "plugins"} with available tools from the catalog.`, followUpActions: [] };
         }
         const skills = requested.flatMap((id) => this.catalog.find((plugin) => plugin.id === id)?.skills ?? [])
           .map((skill) => ({ id: skill.id, name: skill.name, instructions: readFileSync(skill.path, "utf8") }));
         for (const id of requested) this.loaded.add(id as string);
-        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: "Plugin resources are available for the next model turn.", output: { loadedPluginIds: this.snapshot(), skills }, followUpActions: [] };
+        return { action, status: "complete", startedAt, completedAt: nowIso(), summary: feature ? "Harness feature tools are available for the next model turn." : "Plugin resources are available for the next model turn.", output: feature ? { loadedFeatureIds: requested, skills } : { loadedPluginIds: this.snapshot(), skills }, followUpActions: [] };
       },
     };
   }

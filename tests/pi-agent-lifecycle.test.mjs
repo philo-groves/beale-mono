@@ -128,7 +128,7 @@ test("workspace layout guard reactivates the root agent every turn until misplac
     "the current reminder must replace its prior copy instead of accumulating context");
 });
 
-test("Pi loads only requested plugin schemas on the next turn and preserves them across resume", async () => {
+test("Pi loads only requested optional feature schemas on the next turn and preserves them across resume", async () => {
   const calls = [];
   const knowledge = createFixtureInspectTool(calls);
   knowledge.descriptor.name = "memory.get";
@@ -148,19 +148,19 @@ test("Pi loads only requested plugin schemas on the next turn and preserves them
     executor: createPiAgentExecutor({
       provider: "faux", model: "faux-model", subagents: false, toolRegistry: registry,
       models: createScriptedModels([
-        assistant(toolCall("plugins_load", { plugins: ["beale-knowledge"] }, "load_example"), "toolUse"),
+        assistant(toolCall("features_load", { features: ["beale-knowledge"] }, "load_example"), "toolUse"),
         assistant(toolCall("memory_get", { path: "example.txt" }, "read_example"), "toolUse"),
-        assistant(toolCall("plugins_load", { plugins: ["beale-source"] }, "load_after_budget"), "toolUse"),
+        assistant(toolCall("features_load", { features: ["beale-source"] }, "load_after_budget"), "toolUse"),
         assistant("Example read complete."),
       ], contexts),
     }),
   });
   assert.equal(result.agentRun.status, "complete", result.response);
-  assert.deepEqual(contexts[0].toolNames, ["plugins_preview", "plugins_load"]);
+  assert.deepEqual(contexts[0].toolNames, ["features_preview", "features_load"]);
   assert.ok(contexts[1].toolNames.includes("memory_get"));
   assert.equal(contexts[1].toolNames.includes("repository_search"), false);
-  assert.deepEqual(contexts[2].toolNames, ["plugins_preview", "plugins_load"]);
-  assert.deepEqual(contexts[3].toolNames, ["plugins_preview", "plugins_load"], "loading must not reactivate tools after budget exhaustion");
+  assert.deepEqual(contexts[2].toolNames, ["features_preview", "features_load"]);
+  assert.deepEqual(contexts[3].toolNames, ["features_preview", "features_load"], "loading must not reactivate tools after budget exhaustion");
   assert.deepEqual(calls, [{ path: "example.txt" }], "loading does not consume research tool budget");
   const state = extractCompatiblePiAgentResumableState(result.agentRun.output.raw, "faux", "faux-model");
   assert.deepEqual(state.loadedPluginIds, ["beale-knowledge", "beale-source"]);

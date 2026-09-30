@@ -6,7 +6,7 @@ import test from "node:test";
 import {
   AgentPluginRegistry, CORE_TOOL_NAMES, MANAGED_TOOL_PLUGINS, MANAGED_TOOL_PLUGIN_IDS,
   ManagedToolPluginSession, assertManagedToolOwnership, createResearchToolRegistry, decodeResearchPluginCatalog,
-  formatManagedToolPluginCatalog, formatResearchPluginCatalog, managedToolPluginId, managedToolPluginOptions,
+  formatManagedToolPluginCatalog, formatHarnessFeatureCatalog, formatResearchPluginCatalog, managedToolPluginId, managedToolPluginOptions,
   mergeResearchPluginCatalog, parseManagedToolPluginIds,
 } from "../packages/research-agent/dist/index.js";
 import { executeHostedUtilityOperation } from "../packages/app-server-runtime/dist/sessionRuntime.js";
@@ -44,14 +44,14 @@ test("runtime assembly honors managed plugin selection while retaining core tool
   }
 });
 
-test("all six bundled tool plugins have unique ownership and compact matching manifests", async () => {
+test("all six internal optional features have unique tool ownership and compatibility manifests", async () => {
   assert.equal(MANAGED_TOOL_PLUGINS.length, 6);
   const names = MANAGED_TOOL_PLUGINS.flatMap((plugin) => plugin.tools);
   assert.equal(new Set(names).size, names.length);
   for (const plugin of MANAGED_TOOL_PLUGINS) {
     assert.match(plugin.description, /^Use for /);
     assert.ok(plugin.description.length < 160);
-    const manifest = JSON.parse(await readFile(resolve("app-server/resources/agent-plugins", plugin.id, "plugin.json"), "utf8"));
+    const manifest = JSON.parse(await readFile(resolve("app-server/resources/harness-features", plugin.id, "plugin.json"), "utf8"));
     assert.equal(manifest.name, plugin.id);
     assert.equal(manifest.description, plugin.description);
     for (const name of plugin.tools) {
@@ -61,7 +61,7 @@ test("all six bundled tool plugins have unique ownership and compact matching ma
   }
   for (const name of CORE_TOOL_NAMES) assert.equal(managedToolPluginId(name), undefined);
   assertManagedToolOwnership([...names, ...CORE_TOOL_NAMES].map(stub));
-  assert.throws(() => assertManagedToolOwnership([stub("example.unassigned")]), /Assign host tool/);
+  assert.throws(() => assertManagedToolOwnership([stub("example.unassigned")]), /Assign host tool .* to a harness feature/);
   const external = stub("mcp.example.lookup");
   external.descriptor.metadata = { provider: "mcp" };
   assert.doesNotThrow(() => assertManagedToolOwnership([external]));
@@ -132,9 +132,47 @@ test("plugin catalog reports tools available in this session and skill counts", 
     ], mcpServers: ["example.tools"] },
   ];
   const result = mergeResearchPluginCatalog(catalog, managed, tools);
-  assert.match(formatResearchPluginCatalog(result), /beale-knowledge \(plugin; 1 tool, 0 skills\):/);
+  assert.match(formatHarnessFeatureCatalog(result), /beale-knowledge \(feature; 1 tool\):/);
+  assert.doesNotMatch(formatResearchPluginCatalog(result), /beale-knowledge/);
   assert.match(formatResearchPluginCatalog(result), /example-plugin \(plugin; 2 tools, 1 skill\):/);
   assert.match(formatResearchPluginCatalog(catalog), /example-plugin \(plugin; \? tools, 1 skill\):/);
+});
+
+test("optional feature controls and traditional plugin controls accept only their own catalog entries", async () => {
+  const tools = [stub("memory.get"), stub("mcp.example.tools.read")];
+  const managed = managedToolPluginOptions(tools, ["beale-knowledge"]);
+  const catalog = [{ id: "example-plugin", name: "Example Plugin", skills: [], mcpServers: ["example.tools"] }];
+  const session = new ManagedToolPluginSession(managed, [], catalog);
+  const controls = session.createControlTools(tools);
+  assert.deepEqual(controls.map((tool) => tool.descriptor.name), ["features.preview", "features.load", "plugins.preview", "plugins.load"]);
+  const featurePreviewer = controls.find((tool) => tool.descriptor.name === "features.preview");
+  const featureLoader = controls.find((tool) => tool.descriptor.name === "features.load");
+  const pluginLoader = controls.find((tool) => tool.descriptor.name === "plugins.load");
+  const featurePreview = await featurePreviewer.execute({ id: "preview-feature", toolName: "features.preview", actionClass: "recall", input: { feature: "beale-knowledge" } });
+  assert.deepEqual(featurePreview.output, { featureId: "beale-knowledge", loaded: false, tools: ["memory_get"] });
+  assert.equal((await featureLoader.execute({ id: "load-plugin-as-feature", toolName: "features.load", actionClass: "recall", input: { features: ["example-plugin"] } })).status, "blocked");
+  assert.equal((await pluginLoader.execute(loadAction(["beale-knowledge"]))).status, "blocked");
+  assert.equal((await featureLoader.execute({ id: "load-feature", toolName: "features.load", actionClass: "recall", input: { features: ["beale-knowledge"] } })).status, "complete");
+  assert.equal(session.visible("memory.get"), true);
+  assert.equal(session.visible("mcp.example.tools.read"), false);
+  assert.equal((await pluginLoader.execute(loadAction(["example-plugin"]))).status, "complete");
+  assert.equal(session.visible("mcp.example.tools.read"), true);
+});
+
+test("Introspection is presented and loaded as a harness feature", async () => {
+  const catalog = [{ id: "beale-introspection-builtin", name: "beale-introspection", description: "Workspace and session tools.", skills: [], mcpServers: ["beale-introspection.beale"], toolCount: 1 }];
+  const tool = stub("mcp.beale-introspection.beale.workspace_list");
+  const session = new ManagedToolPluginSession([], [], catalog);
+  const controls = session.createControlTools([tool]);
+  assert.deepEqual(controls.map(({ descriptor }) => descriptor.name), ["features.preview", "features.load"]);
+  assert.match(formatHarnessFeatureCatalog(catalog), /Internal features/);
+  assert.doesNotMatch(formatResearchPluginCatalog(catalog), /beale-introspection/);
+  assert.equal(session.visible(tool.descriptor.name), false);
+  const preview = await controls[0].execute({ id: "preview-introspection", toolName: "features.preview", actionClass: "recall", input: { feature: catalog[0].id } });
+  assert.deepEqual(preview.output, { featureId: catalog[0].id, loaded: false, tools: [tool.descriptor.transportName] });
+  const load = await controls[1].execute({ id: "load-introspection", toolName: "features.load", actionClass: "recall", input: { features: [catalog[0].id] } });
+  assert.equal(load.status, "complete");
+  assert.equal(session.visible(tool.descriptor.name), true);
 });
 
 test("plugin skill resource counts include nested files in standard resource directories", async () => {
@@ -173,13 +211,10 @@ test("plugin skill resource counts include nested files in standard resource dir
 test("MCP-only discovery supplies exact bundled plugin counts without workspace storage", async () => {
   const directory = await mkdtemp(join(tmpdir(), "beale-plugin-counts-example-"));
   try {
-    const registry = new AgentPluginRegistry(directory, { builtinPlugins: [], runtimeEnvironment: () => ({
+    const registry = new AgentPluginRegistry(directory, { builtinPlugins: [{ id: "beale-introspection-builtin", path: resolve("app-server/resources/harness-features/beale-introspection"), installedAt: "2026-01-01T00:00:00.000Z", enabledByDefault: true }], runtimeEnvironment: () => ({
       BEALE_INTROSPECTION_URL: "http://127.0.0.1:12345", BEALE_INTROSPECTION_TOKEN: "example-token",
-      BEALE_TERMINATOR_MODULE_PATH: "/example/module",
     }) });
-    for (const name of ["apple-security-devices", "beale-introspection", "beale-terminator"]) {
-      registry.addFromFilesystem(resolve("managed-plugins", name));
-    }
+    registry.addFromFilesystem(resolve("managed-plugins/apple-security-devices"));
     const runtime = registry.getAppServerRuntime();
     const capture = await executeHostedUtilityOperation("tools.list", [
       "tools", "list", "--mcp-only", "--mcp-config", runtime.mcpConfigPath,
@@ -188,8 +223,8 @@ test("MCP-only discovery supplies exact bundled plugin counts without workspace 
     const catalog = mergeResearchPluginCatalog(runtime.pluginCatalog, [], capture.tools.map(({ name }) => stub(name)));
     const formatted = formatResearchPluginCatalog(catalog);
     assert.match(formatted, /\(plugin; 19 tools, 1 skill\): Realistic Apple security-research environments/);
-    assert.match(formatted, /\(plugin; 12 tools, 0 skills\): Default Beale tools/);
-    assert.match(formatted, /\(plugin; 8 tools, 0 skills\): Optional Windows computer-use tools/);
+    assert.match(formatHarnessFeatureCatalog(catalog), /\(feature; 12 tools\): Default Beale tools/);
+    assert.doesNotMatch(formatted, /beale-introspection/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -251,7 +286,7 @@ test("registry forks retain validation hooks when adding plugin discovery", asyn
 test("bundled plugin defaults and disablement persist in launch arguments", async () => {
   const directory = await mkdtemp(join(tmpdir(), "beale-plugin-catalog-"));
   try {
-    const builtinPlugins = MANAGED_TOOL_PLUGIN_IDS.map((id) => ({ id: `${id}-builtin`, path: resolve("app-server/resources/agent-plugins", id), installedAt: "2026-01-01T00:00:00.000Z", enabledByDefault: true }));
+    const builtinPlugins = MANAGED_TOOL_PLUGIN_IDS.map((id) => ({ id: `${id}-builtin`, path: resolve("app-server/resources/harness-features", id), installedAt: "2026-01-01T00:00:00.000Z", enabledByDefault: true }));
     const registry = new AgentPluginRegistry(directory, { builtinPlugins });
     assert.equal(registry.getState().plugins.length, 6);
     assert.ok(registry.getState().plugins.every((plugin) => plugin.enabled && plugin.status === "ready"));
@@ -264,6 +299,45 @@ test("bundled plugin defaults and disablement persist in launch arguments", asyn
     assert.deepEqual(JSON.parse(await readFile(disabledRuntime.pluginCatalogPath, "utf8")), []);
     reloaded.setEnabled("beale-knowledge-builtin", true);
     assert.deepEqual(reloaded.getAppServerRuntime().managedPluginIds, ["beale-knowledge"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Introspection migration retains the saved enabled state and updates its builtin path", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-introspection-migration-example-"));
+  const id = "beale-introspection-builtin";
+  const installedAt = "2026-01-01T00:00:00.000Z";
+  try {
+    const previous = new AgentPluginRegistry(directory, { builtinPlugins: [{ id, path: resolve("managed-plugins/beale-introspection"), installedAt }] });
+    previous.setEnabled(id, false);
+    const nextPath = resolve("app-server/resources/harness-features/beale-introspection");
+    const current = new AgentPluginRegistry(directory, { builtinPlugins: [{ id, path: nextPath, installedAt }] });
+    const feature = current.getState().plugins.find((plugin) => plugin.id === id);
+    assert.equal(feature?.source.path, nextPath);
+    assert.equal(feature?.enabled, false);
+    assert.equal(feature?.status, "ready");
+    assert.doesNotMatch(formatHarnessFeatureCatalog(current.getAppServerRuntime().pluginCatalog), /beale-introspection/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("retired Browser Use and Terminator builtins are removed from saved plugin settings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-retired-plugin-example-"));
+  const registryPath = join(directory, "agent-plugins.json");
+  try {
+    const installedAt = "2026-01-01T00:00:00.000Z";
+    const introspectionPath = resolve("app-server/resources/harness-features/beale-introspection");
+    await writeFile(registryPath, JSON.stringify({ version: 1, plugins: [
+      { id: "beale-browser-use-builtin", source: { kind: "builtin", path: join(directory, "retired-browser") }, enabled: true, installedAt },
+      { id: "beale-terminator-builtin", source: { kind: "builtin", path: join(directory, "retired-computer-use") }, enabled: false, installedAt },
+      { id: "beale-introspection-builtin", source: { kind: "builtin", path: introspectionPath }, enabled: false, installedAt },
+    ] }));
+    const registry = new AgentPluginRegistry(directory, { builtinPlugins: [{ id: "beale-introspection-builtin", path: introspectionPath, installedAt }] });
+    assert.deepEqual(registry.getState().plugins.map((plugin) => [plugin.id, plugin.enabled]), [["beale-introspection-builtin", false]]);
+    assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).plugins.map((plugin) => [plugin.id, plugin.enabled]), [["beale-introspection-builtin", false]]);
+    assert.deepEqual(registry.getAppServerRuntime().allowedMcpServers, []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -76,8 +76,7 @@ describe('app-server live event deduplication', () => {
       queuedContinuations: new Map(),
       shellApprovalRecords: new Map([['request_one', 'approval_one']]),
       shellApprovalDecisionsInFlight: new Map(),
-      toolApprovalRequestIds: new Set(),
-      toolApprovalSessionGrantTargets: new Map()
+      toolApprovalRequestIds: new Set()
     };
 
     expect(() => engine.finalizePendingControls(active, 'engine_disposed')).not.toThrow();

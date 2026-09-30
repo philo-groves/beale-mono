@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { MANAGED_TOOL_PLUGINS } from '@beale/app-server-runtime/protocol';
 import { AgentPluginRegistry } from '../src/main/agentPluginRegistry';
@@ -22,6 +22,12 @@ describe('managed tool plugin settings boundary', () => {
       const manifest = JSON.parse(readFileSync(resolve(builtin.path, 'plugin.json'), 'utf8'));
       expect(manifest.description).toBe(plugin.description);
     }
+    for (const id of ['apple-security-devices', 'apple-target-flags', 'microsoft-security-devices']) {
+      const builtin = defaults.find((candidate) => candidate.id === `${id}-builtin`);
+      expect(builtin?.enabledByDefault).toBe(false);
+      expect(builtin?.path).toContain(join('managed-plugins', id));
+    }
+    expect(defaults.find((candidate) => candidate.id === 'meta-skills-builtin')?.enabledByDefault).toBe(true);
     expect(defaults.some((plugin) => /workspace|execution/.test(plugin.id))).toBe(false);
     expect(registry.getAppServerRuntime().managedPluginIds).toEqual([]);
     expect(getAppServerPluginRuntime).toHaveBeenCalledWith(expect.objectContaining({ builtinPlugins: defaults }));

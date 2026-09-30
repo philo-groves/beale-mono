@@ -2,9 +2,47 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { PluginManagerWorkspace } from '../src/renderer/features/plugins/PluginManagerWorkspace';
+import { PluginManagerWorkspace, PluginsSidebar } from '../src/renderer/features/plugins/PluginManagerWorkspace';
 
 describe('plugin manager workspace', () => {
+  it('lists installed plugins in the dedicated sidebar', () => {
+    const plugin = {
+      id: 'microsoft-security-devices-builtin',
+      name: 'microsoft-security-devices',
+      version: '0.1.0',
+      description: 'Windows environment guidance.',
+      enabled: false,
+      status: 'ready' as const,
+      source: { kind: 'builtin' as const, path: 'C:\\plugins\\microsoft-security-devices' },
+      installedAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:00.000Z',
+      skills: [],
+      mcpServers: [],
+      warnings: [],
+      errors: []
+    };
+    const html = renderToStaticMarkup(createElement(PluginsSidebar, {
+      state: {
+        registryPath: 'C:\\plugins.json',
+        pluginStorePath: 'C:\\plugins',
+        specVersion: '1.0.0',
+        plugins: [plugin, { ...plugin, id: 'beale-source-builtin', name: 'beale-source' }]
+      },
+      selectedPluginId: plugin.id,
+      collapsed: false,
+      loading: false,
+      error: null,
+      onSelectPlugin: () => undefined,
+      onResizePointerDown: () => undefined
+    }));
+
+    expect(html).toContain('aria-label="Plugins sidebar"');
+    expect(html).toContain('microsoft-security-devices');
+    expect(html).toContain('Disabled');
+    expect(html).not.toContain('beale-source');
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain('aria-label="Resize sidebar"');
+  });
   it('uses the shared centered regular-weight loading state', () => {
     const html = renderToStaticMarkup(createElement(PluginManagerWorkspace, {
       state: null,
@@ -60,13 +98,13 @@ describe('plugin manager workspace', () => {
         pluginStorePath: 'C:\\plugins',
         specVersion: '1.0.0',
         plugins: [{
-          id: 'beale-introspection-builtin',
-          name: 'beale-introspection',
+          id: 'meta-skills-builtin',
+          name: 'meta-skills',
           version: '0.1.0',
           description: 'Built-in tools.',
           enabled: true,
           status: 'ready',
-          source: { kind: 'builtin', path: 'C:\\plugins\\beale-introspection' },
+          source: { kind: 'builtin', path: 'C:\\plugins\\meta-skills' },
           installedAt: '2026-08-17T00:00:00.000Z',
           updatedAt: '2026-08-17T00:00:00.000Z',
           skills: [],
@@ -86,7 +124,7 @@ describe('plugin manager workspace', () => {
       onRemove: () => undefined
     }));
 
-    expect(html).toContain('<strong>beale-introspection</strong>');
+    expect(html).toContain('<strong>meta-skills</strong>');
     expect(html).toContain('<small title="Enabled · 0.1.0">Enabled · 0.1.0</small>');
     expect(html).toContain('<span>Disable</span>');
     expect(html).not.toContain('<span>Remove</span>');

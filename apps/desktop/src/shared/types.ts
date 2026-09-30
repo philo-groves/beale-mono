@@ -17,6 +17,8 @@ import type {
   ResearchTopicLinkRecord,
   ResearchTopicLinkKind,
   ResearchClaimRating,
+  ClaimBoardTransitionRequest,
+  ClaimBoardMaturity,
   SteeringSuggestionResult
 } from '@beale/app-server-runtime/protocol';
 
@@ -40,6 +42,8 @@ export type {
   ResearchTopicLinkRecord,
   ResearchTopicLinkKind,
   ResearchClaimRating,
+  ClaimBoardTransitionRequest,
+  ClaimBoardMaturity,
   SteeringSuggestionResult
 } from '@beale/app-server-runtime/protocol';
 
@@ -700,6 +704,7 @@ export interface AppServerFindingTransitionSummary {
   reason: string;
   sessionId: string | null;
   actorId: string | null;
+  operatorOverride: boolean;
   evidenceIds: string[];
   createdAt: string;
 }
@@ -778,6 +783,7 @@ export interface AppServerFindingSummary {
   impact: string;
   securityTracking: AppServerFindingSecurityTracking | null;
   status: AppServerFindingStatus;
+  operatorOverride: boolean;
   staleFromStatus: AppServerFindingStatus | null;
   confidence: number;
   sourceRevision: string | null;
@@ -1379,12 +1385,6 @@ export interface AppServerRemoteAccessSettings {
 export interface AppServerRemoteAccessUpdate {
   enabled: boolean;
   magicDnsName?: string;
-}
-
-export type ComputerUsePermissionMode = 'once_per_session' | 'every_action';
-
-export interface ComputerUseSettings {
-  permissionMode: ComputerUsePermissionMode;
 }
 
 export interface ProviderSettings {
@@ -2407,8 +2407,6 @@ export interface BealeApi {
   setTracesEnabled(enabled: boolean): Promise<DebuggingSettings>;
   getAppServerRemoteAccessSettings(detect?: boolean): Promise<AppServerRemoteAccessSettings>;
   setAppServerRemoteAccessSettings(update: AppServerRemoteAccessUpdate): Promise<AppServerRemoteAccessSettings>;
-  getComputerUseSettings(): Promise<ComputerUseSettings>;
-  setComputerUsePermissionMode(permissionMode: ComputerUsePermissionMode): Promise<ComputerUseSettings>;
   getProviderSettings(): Promise<ProviderSettings>;
   setDefaultProviderId(providerId: ResearchModelProviderId | null): Promise<ProviderSettings>;
   setProviderModelDefaults(providerId: ResearchModelProviderId, defaults: ProviderModelDefaults): Promise<ProviderSettings>;
@@ -2508,6 +2506,7 @@ export interface BealeApi {
   restoreMemoryDreamingChange(changeId: string): Promise<WorkspaceSnapshot>;
   markHistoryDuplicate(input: MarkHistoryDuplicateInput): Promise<WorkspaceSnapshot>;
   undoHistoryDuplicate(input: UndoHistoryDuplicateInput): Promise<WorkspaceSnapshot>;
+  transitionClaimOnBoard(input: ClaimBoardTransitionRequest): Promise<WorkspaceSnapshot>;
   getAppServerToolingSummary(): Promise<AppServerToolingSummary>;
   updateAppServerToolingConfig(update: AppServerToolingConfigUpdate): Promise<AppServerToolingSummary>;
   generateResearchGoalSuggestions(input: ResearchGoalSuggestionInput): Promise<GeneratedResearchGoalSuggestions>;

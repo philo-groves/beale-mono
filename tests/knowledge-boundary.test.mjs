@@ -86,6 +86,88 @@ test("app-server exposes reversible canonical claim deduplication", async () => 
   }
 });
 
+test("Claims board moves record human overrides while agent transitions remain evidence-gated", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-claim-board-boundary-"));
+  const databasePath = join(root, "memory.sqlite");
+  const artifactDirectoryPath = join(root, "artifacts");
+  const context = {
+    workspaceId: "workspace_board_example",
+    workspaceName: "Board example",
+    subjectId: "subject_board_example",
+    subjectName: "Board example",
+  };
+  const graph = new MemoryGraphStore({ databasePath, context });
+  const claims = new ResearchClaimStore(graph);
+  try {
+    const lead = claims.create({ title: "Example parser branch", classification: "security.primitive", rating: "medium" });
+    const input = { ...context, claimId: lead.id, expectedRevision: lead.revision, targetMaturity: "observed" };
+    await assert.rejects(invokeAppServerProtocol("claim.board_transition", {
+      args: [], input, storage: { databasePath, artifactDirectoryPath },
+    }), /Finding not found/);
+
+    const observed = claims.transition(lead.id, {
+      expectedRevision: lead.revision,
+      toStatus: "observed",
+      reason: "A synthetic source review records the branch.",
+      evidence: [{ kind: "code", referenceId: "src/example-parser.ts:12", summary: "The example branch is reachable." }],
+    });
+    assert.equal(observed.operatorOverride, false);
+    assert.throws(() => claims.transition(lead.id, {
+      expectedRevision: observed.revision,
+      toStatus: "reproduced",
+      reason: "Agent attempt without a runbook.",
+    }, undefined, "human-operator"), /Reproduced findings require a successful runbook/);
+    const reproduced = await invokeAppServerProtocol("claim.board_transition", {
+      args: [], input: { ...input, expectedRevision: observed.revision, targetMaturity: "reproduced" },
+      storage: { databasePath, artifactDirectoryPath },
+    });
+    assert.equal(reproduced.status, "reproduced");
+    assert.equal(reproduced.operatorOverride, true);
+    assert.equal(reproduced.transitions.at(-1).operatorOverride, true);
+    assert.equal(reproduced.transitions.at(-1).actorId, "human-operator");
+    assert.deepEqual(reproduced.transitions.at(-1).evidenceIds, []);
+    assert.match(reproduced.transitions.at(-1).reason, /Normal agent transition prerequisites were not required/);
+
+    const verified = await invokeAppServerProtocol("claim.board_transition", {
+      args: [], input: { ...input, expectedRevision: reproduced.revision, targetMaturity: "verified" },
+      storage: { databasePath, artifactDirectoryPath },
+    });
+    assert.equal(verified.status, "verified");
+    assert.equal(verified.operatorOverride, true);
+    assert.equal(verified.evidence.length, observed.evidence.length);
+
+    const refuted = await invokeAppServerProtocol("claim.board_transition", {
+      args: [], input: { ...input, expectedRevision: verified.revision, targetMaturity: "refuted" },
+      storage: { databasePath, artifactDirectoryPath },
+    });
+    assert.equal(refuted.status, "rejected");
+    assert.equal(refuted.maturity, "refuted");
+    assert.equal(refuted.revision, verified.revision + 1);
+    assert.equal(refuted.operatorOverride, true);
+    const summary = await invokeAppServerProtocol("memory.summary", {
+      args: [], input: context, storage: { databasePath, artifactDirectoryPath },
+    });
+    assert.equal(summary.findings.find((finding) => finding.id === lead.id)?.maturity, "refuted");
+    assert.equal(summary.findings.find((finding) => finding.id === lead.id)?.operatorOverride, true);
+    assert.equal(claims.readDetail(lead.id, "overview", 0, 10).claim.operatorOverride, true);
+    const revised = claims.revise(lead.id, {
+      expectedRevision: refuted.revision,
+      reason: "Clarified the synthetic claim title.",
+      title: "Example parser branch after review",
+    });
+    assert.equal(revised.operatorOverride, true);
+    assert.equal(revised.transitions.at(-1).operatorOverride, false);
+    await assert.rejects(invokeAppServerProtocol("claim.board_transition", {
+      args: [], input: { ...input, expectedRevision: observed.revision, targetMaturity: "reproduced" },
+      storage: { databasePath, artifactDirectoryPath },
+    }), /revision conflict/);
+  } finally {
+    claims.close();
+    graph.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("app-server exposes unified memory and runbook deduplication", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-history-deduplication-boundary-"));
   const databasePath = join(root, "memory.sqlite");

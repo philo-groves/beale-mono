@@ -72,7 +72,7 @@ describe('renderer shell approval modal', () => {
     expect(html).not.toContain('class="modal-overlay"');
   });
 
-  it('explains that Once Per Session approval is bound to the target binary', () => {
+  it('asks once even for an older pending session-grant approval', () => {
     const approval = approvalRecord({
       permissionMode: 'once_per_session',
       targetBinary: 'calculator',
@@ -84,9 +84,9 @@ describe('renderer shell approval modal', () => {
       onDecision: () => undefined
     }));
 
-    expect(html).toContain('Allow calculator for this session?');
-    expect(html).toContain('later computer actions targeting calculator.');
-    expect(html).toContain('>Allow for Session</button>');
+    expect(html).toContain('Approve this computer action?');
+    expect(html).toContain('click in calculator.');
+    expect(html).toContain('>Approve Once</button>');
   });
 
   it('surfaces pending approvals only while their session is active', () => {

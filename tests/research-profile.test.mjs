@@ -29,25 +29,36 @@ test("prompt templates render profile sections and require the authorization bou
   assert.ok(custom.startsWith("Scope and authority:"));
   assert.ok(custom.includes("Profile: Mathematics"));
   assert.ok(custom.includes(profile.agent.role));
-  assert.match(defaultResearchSystemPromptTemplate(), /\{\{tools\}\}\n\n\{\{plugins\}\}\n\n\{\{collaboration\}\}/);
+  assert.match(defaultResearchSystemPromptTemplate(), /\{\{tools\}\}\n\n\{\{features\}\}\n\n\{\{plugins\}\}\n\n\{\{collaboration\}\}/);
   assert.doesNotMatch(defaultResearchSystemPromptTemplate(), /\{\{reports\}\}/);
   const withPlugins = createResearchSystemPrompt({ ...options, pluginCatalog: [{
     id: "example-plugin", name: "Example Plugin", mcpServers: [],
     skills: [{ id: "example-skill", name: "Example Skill", useWhen: "Inspect synthetic data.", path: "example.md",
       resourceCounts: { scripts: 0, references: 1, assets: 2 } }],
   }] });
-  assert.match(withPlugins, /Available plugins.*\n- example-plugin \(plugin; 0 tools, 1 skill\):/);
+  assert.match(withPlugins, /External Plugins.*\n- example-plugin \(plugin; 0 tools, 1 skill\):/);
   assert.doesNotMatch(withPlugins, /example-skill|Inspect synthetic data/);
   assert.doesNotMatch(withPlugins, /Example Plugin|Example Skill/);
   const existingTemplate = createResearchSystemPrompt({ ...options, pluginCatalog: [{
     id: "example-plugin", name: "Example Plugin", mcpServers: [], skills: [],
   }], promptTemplate: "{{boundary}}\n{{identity}}" });
-  assert.match(existingTemplate, /Available plugins[^\n]*\n- example-plugin \(plugin; 0 tools, 0 skills\):/);
+  assert.match(existingTemplate, /External Plugins[^\n]*\n- example-plugin \(plugin; 0 tools, 0 skills\):/);
+  const existingFeatureTemplate = createResearchSystemPrompt({ ...options, pluginCatalog: [{
+    id: "beale-knowledge", name: "Knowledge", description: "Inspect synthetic workspace history.", toolCount: 3,
+    mcpServers: [], skills: [],
+  }, {
+    id: "beale-introspection-builtin", name: "Introspection", description: "Inspect synthetic workspaces and sessions.", toolCount: 2,
+    mcpServers: ["beale-introspection.beale"], skills: [],
+  }], promptTemplate: "{{boundary}}\n{{identity}}" });
+  assert.match(existingFeatureTemplate, /Internal features[^\n]*\n- beale-knowledge \(feature; 3 tools\):/);
+  assert.match(existingFeatureTemplate, /- beale-introspection-builtin \(feature; 2 tools\):/);
+  assert.doesNotMatch(existingFeatureTemplate, /External Plugins/);
+  assert.doesNotMatch(existingFeatureTemplate, /Optional features/);
   assert.throws(() => validateResearchSystemPromptTemplate("{{identity}}"), /boundary/);
   assert.throws(() => validateResearchSystemPromptTemplate("{{boundary}}\n{{unknown}}"), /Unknown prompt variable/);
 });
 
-test("default prompt uses plain guidance lines and bullets only for catalogs", () => {
+test("default prompt uses plain guidance lines and bullets only for feature and plugin catalogs", () => {
   const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const prompt = createResearchSystemPrompt({
     hasTools: true,
@@ -62,9 +73,10 @@ test("default prompt uses plain guidance lines and bullets only for catalogs", (
   });
   const bulletLines = prompt.split("\n").filter((line) => line.startsWith("- "));
   assert.ok(bulletLines.some((line) => line.startsWith("- example-plugin (plugin;")));
+  assert.ok(bulletLines.some((line) => line.startsWith("- beale-knowledge (feature;")));
   assert.ok(bulletLines.some((line) => line.startsWith("- asset (Asset):")));
   assert.ok(bulletLines.every((line) =>
-    line.includes(" (plugin;")
+    line.includes(" (plugin;") || line.includes(" (feature;")
     || profile.memory.types.some((type) => line.startsWith(`- ${type.id} (`))
   ));
   assert.match(prompt, /Scope and authority:\nThe host-supplied workspace context/);
@@ -195,7 +207,7 @@ test("bundled profiles separate claim classifications from knowledge memory and 
     ["mathematics.conjecture", "mathematics.theorem", "mathematics.counterexample"]);
 });
 
-test("memory, claims, and runbook prompt sections follow enabled plugins", () => {
+test("memory, claims, and runbook prompt sections follow enabled optional features", () => {
   const template = "{{boundary}}\n{{memory}}\n{{claims}}\n{{runbooks}}";
   const options = { hasTools: true, hasMemoryTools: true, hasFindingTools: true, hasRunbookTools: true,
     researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, promptTemplate: template };

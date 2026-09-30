@@ -214,7 +214,11 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
     const findingRegistry = createResearchToolRegistry(createFindingTools(findings));
     const reviseTool = findingRegistry.listTools().find((tool) => tool.descriptor.name === "finding.revise");
     const createTool = findingRegistry.listTools().find((tool) => tool.descriptor.name === "lead.create");
+    const transitionTool = findingRegistry.listTools().find((tool) => tool.descriptor.name === "finding.transition");
     assert.ok(reviseTool);
+    assert.ok(transitionTool);
+    assert.equal("operatorOverride" in transitionTool.parameters.properties, false);
+    assert.equal(findingRegistry.listTools().some((tool) => tool.descriptor.name === "claim.board_transition"), false);
     assert.ok(createTool.parameters.required.includes("rating"));
     assert.deepEqual(createTool.parameters.properties.rating.enum, ["informational", "low", "medium", "high", "critical"]);
     assert.equal("riskTreatment" in reviseTool.parameters.properties.securityTracking.properties, false);
@@ -556,11 +560,26 @@ test("claim schema initializes before a workspace has any knowledge-memory table
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_server_research_claims").get().count, 0);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'security_tracking_json'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'rating'").get().count, 1);
-      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 7);
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 8);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'session_id'").get().count, 1);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'operator_override'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'app_server_findings'").get().count, 0);
     } finally {
       database.close();
+    }
+    const oldDatabase = new DatabaseSync(databasePath);
+    try {
+      oldDatabase.exec("ALTER TABLE app_server_claim_transitions DROP COLUMN operator_override");
+      oldDatabase.exec("DELETE FROM schema_migrations WHERE component = 'app_server_research_claims' AND version = 8");
+    } finally {
+      oldDatabase.close();
+    }
+    migrateWorkspaceResearchClaims(databasePath, "workspace_empty");
+    const upgraded = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      assert.equal(upgraded.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'operator_override'").get().count, 1);
+    } finally {
+      upgraded.close();
     }
   } finally {
     await rm(directory, { recursive: true, force: true });

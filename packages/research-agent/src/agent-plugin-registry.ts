@@ -118,6 +118,8 @@ export interface AgentPluginAppServerRuntime {
   warnings: string[];
 }
 
+const RETIRED_BUILTIN_PLUGIN_IDS = new Set(['beale-browser-use-builtin', 'beale-terminator-builtin']);
+
 export class AgentPluginRegistry {
   private readonly registryPath: string;
   private readonly pluginStorePath: string;
@@ -393,16 +395,19 @@ export class AgentPluginRegistry {
 
   private readRegistryFile(): AgentPluginRegistryFile {
     if (!existsSync(this.registryPath)) return { version: 1, plugins: [] };
+    let plugins: StoredAgentPlugin[];
     try {
       const parsed = JSON.parse(readFileSync(this.registryPath, 'utf8')) as unknown;
       if (!parsed || typeof parsed !== 'object') return { version: 1, plugins: [] };
-      const plugins = Array.isArray((parsed as { plugins?: unknown }).plugins)
+      plugins = Array.isArray((parsed as { plugins?: unknown }).plugins)
         ? (parsed as { plugins: unknown[] }).plugins.map(normalizeStoredPlugin).filter((plugin): plugin is StoredAgentPlugin => Boolean(plugin))
         : [];
-      return { version: 1, plugins };
     } catch {
       return { version: 1, plugins: [] };
     }
+    const active = plugins.filter((plugin) => plugin.source.kind !== 'builtin' || !RETIRED_BUILTIN_PLUGIN_IDS.has(plugin.id));
+    if (active.length !== plugins.length) this.writeRegistryFile({ version: 1, plugins: active });
+    return { version: 1, plugins: active };
   }
 
   private readRegistryWithBuiltins(): AgentPluginRegistryFile {

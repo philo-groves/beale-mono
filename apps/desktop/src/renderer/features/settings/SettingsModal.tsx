@@ -5,14 +5,12 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   DEFAULT_RESEARCH_REASONING_EFFORT
 } from '../../../shared/modelDefaults';
-import { Archive, ArchiveRestore, FileText, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
+import { Archive, ArchiveRestore, FileText, KeyRound, MessageSquare, Palette, Plus, RefreshCw, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
+import { OPTIONAL_AGENT_FEATURES } from '../../../shared/optionalAgentFeatures';
 import type {
   AgentPluginRegistryState,
   AppServerRemoteAccessSettings,
   AppServerRemoteAccessUpdate,
-  ComputerUsePermissionMode,
-  ComputerUseSettings,
-  HostEnvironment,
   OpenAiAccountStatus,
   OpenAiAuthReadiness,
   OpenAiOAuthStartResult,
@@ -83,9 +81,9 @@ import {
   type SessionHeatTheme
 } from '../../view-models/sessionHeat';
 
-export type SettingsSection = 'general' | 'appearance' | 'remote' | 'providers' | 'ticketing' | 'profile' | 'prompt' | 'computer-use' | 'archive';
+export type SettingsSection = 'general' | 'appearance' | 'remote' | 'providers' | 'ticketing' | 'profile' | 'prompt' | 'optional-features' | 'archive';
 
-const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'appearance', 'remote', 'providers', 'ticketing', 'profile', 'prompt', 'computer-use', 'archive'];
+const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'appearance', 'remote', 'providers', 'ticketing', 'profile', 'prompt', 'optional-features', 'archive'];
 
 export function SettingsSidebar({
   collapsed,
@@ -105,7 +103,7 @@ export function SettingsSidebar({
   return (
     <aside className="sidebar settings-sidebar" aria-hidden={collapsed} inert={collapsed}>
       <div className="sidebar-section settings-sidebar-section">
-        <div className="workspace-list-title">Settings</div>
+        <div className="sidebar-wordmark">Agent Settings</div>
         <MainSideScrollRegion
           className="sidebar-list-scroll-region"
           listClassName="sidebar-list-scroll"
@@ -122,8 +120,6 @@ export function SettingsSidebar({
                 >
                   {item === 'archive' ? (
                     <Archive size={15} aria-hidden="true" />
-                  ) : item === 'computer-use' ? (
-                    <Monitor size={15} aria-hidden="true" />
                   ) : item === 'appearance' ? (
                     <Palette size={15} aria-hidden="true" />
                   ) : item === 'remote' ? (
@@ -136,6 +132,8 @@ export function SettingsSidebar({
                     <UserRoundCog size={15} aria-hidden="true" />
                   ) : item === 'prompt' ? (
                     <FileText size={15} aria-hidden="true" />
+                  ) : item === 'optional-features' ? (
+                    <SlidersHorizontal size={15} aria-hidden="true" />
                   ) : (
                     <Settings size={15} aria-hidden="true" />
                   )}
@@ -172,8 +170,6 @@ export function SettingsView({
   researchProviderModelCatalog,
   providerSettings,
   providerStatusesLoaded,
-  computerUsePlatform,
-  computerUseSettings,
   appServerRemoteAccessSettings = null,
   appServerRemoteAccessBusy = false,
   ticketingSettings = null,
@@ -213,7 +209,6 @@ export function SettingsView({
   onSetProviderCyberPolicyRiskAcknowledged = async () => undefined,
   onSetProviderPreferredAuthenticationMethod = async () => undefined,
   onSetAgentPluginEnabled,
-  onChangeComputerUsePermissionMode,
   onDetectAppServerRemoteAccess = async () => undefined,
   onSetAppServerRemoteAccess = async () => undefined,
   onSetTicketingProvider = async () => undefined,
@@ -247,8 +242,6 @@ export function SettingsView({
   researchProviderModelCatalog: ResearchProviderModelCatalog[];
   providerSettings: ProviderSettings | null;
   providerStatusesLoaded: boolean;
-  computerUsePlatform: HostEnvironment['platform'] | null;
-  computerUseSettings: ComputerUseSettings | null;
   appServerRemoteAccessSettings?: AppServerRemoteAccessSettings | null;
   appServerRemoteAccessBusy?: boolean;
   ticketingSettings?: TicketingSettings | null;
@@ -301,7 +294,6 @@ export function SettingsView({
     method: ProviderAuthenticationMethod
   ) => Promise<void>;
   onSetAgentPluginEnabled: (pluginId: string, enabled: boolean) => void;
-  onChangeComputerUsePermissionMode: (permissionMode: ComputerUsePermissionMode) => void;
   onDetectAppServerRemoteAccess?: () => Promise<void>;
   onSetAppServerRemoteAccess?: (update: AppServerRemoteAccessUpdate) => Promise<void>;
   onSetTicketingProvider?: (providerId: TicketingMode) => Promise<void>;
@@ -418,15 +410,12 @@ export function SettingsView({
         ) : activeSection === 'prompt' ? (
           <PromptSettingsView />
         ) : (
-          <ComputerUseSettingsView
-            platform={computerUsePlatform}
-            settings={computerUseSettings}
+          <OptionalFeaturesSettingsView
             pluginState={agentPluginState}
             loading={agentPluginsLoading}
             busy={agentPluginsBusy}
             error={agentPluginsError}
             onSetEnabled={onSetAgentPluginEnabled}
-            onChangePermissionMode={onChangeComputerUsePermissionMode}
           />
         )}
       </section>
@@ -806,7 +795,7 @@ export function AppearanceSettingsView({
 }
 
 const PROMPT_VARIABLES = [
-  'identity', 'style', 'boundary', 'tools', 'plugins', 'collaboration', 'goal', 'memory', 'claims', 'runbooks',
+  'identity', 'style', 'boundary', 'tools', 'features', 'plugins', 'collaboration', 'goal', 'memory', 'claims', 'runbooks',
   'profile.id', 'profile.name'
 ] as const;
 
@@ -915,7 +904,7 @@ export function PromptSettingsView(): JSX.Element {
     </>}
     {error ? <div className="error-box" role="alert">{error}</div> : null}
     <div className="prompt-settings-actions">
-      <span>{draft !== saved ? 'Unsaved changes' : overridden ? `${estimatedTokens.toLocaleString()} estimated tokens` : 'Default template'}</span>
+      <span>{estimatedTokens.toLocaleString()} estimated tokens{draft !== saved ? ' · Unsaved changes' : ''}</span>
       <button type="button" onClick={() => setDraft(saved)} disabled={busy || draft === saved}>Discard</button>
       <button type="button" onClick={() => void reset()} disabled={busy || (!overridden && draft === defaultTemplate)}>Reset to Default</button>
       <button type="button" onClick={() => void save()} disabled={busy || !draft || draft === saved}>Save</button>
@@ -1127,108 +1116,55 @@ export function ProfileSettingsView({
   );
 }
 
-export function ComputerUseSettingsView({
-  platform,
-  settings,
+export function OptionalFeaturesSettingsView({
   pluginState,
   loading,
   busy,
   error,
-  onSetEnabled,
-  onChangePermissionMode
+  onSetEnabled
 }: {
-  platform: HostEnvironment['platform'] | null;
-  settings: ComputerUseSettings | null;
   pluginState: AgentPluginRegistryState | null;
   loading: boolean;
   busy: boolean;
   error: string | null;
   onSetEnabled: (pluginId: string, enabled: boolean) => void;
-  onChangePermissionMode: (permissionMode: ComputerUsePermissionMode) => void;
 }): JSX.Element {
-  const terminator = pluginState?.plugins.find((plugin) => (
-    plugin.id === 'beale-terminator-builtin' || plugin.name === 'beale-terminator'
-  )) ?? null;
-  const resolving = platform === null || (platform === 'win32' && (loading || pluginState === null || settings === null));
-
   return (
-    <div className="settings-page general-settings-page computer-use-settings-page">
-      <section className="settings-form computer-use-settings-form" aria-busy={resolving || busy}>
+    <div className="settings-page general-settings-page optional-features-settings-page">
+      <section className="settings-form" aria-busy={loading || busy}>
         <header className="settings-form-heading">
-          <h2 id="computer-use-settings-heading">Terminator</h2>
-          <p>Control whether Beale can use Terminator for computer interaction.</p>
+          <h2>Optional Features</h2>
+          <p>Choose which built-in research capabilities are available to new sessions and continuations.</p>
         </header>
-        <fieldset className="settings-form-squircle computer-use-settings" aria-labelledby="computer-use-settings-heading">
-          {resolving ? (
-            <CenteredLoadingState label="Loading computer use…" />
-          ) : platform !== 'win32' ? (
-            <p className="computer-use-settings-message">Computer use is not available on this operating system.</p>
-          ) : error ? (
-            <p className="computer-use-settings-message state-error">{error}</p>
-          ) : terminator ? (
-            <div className="settings-form-control-list">
-              <label className="settings-form-control-row">
-                <span className="settings-form-control-copy">
-                  <strong>Enable Terminator</strong>
-                  <small>Allow research sessions to interact with the Windows desktop through Terminator.</small>
-                </span>
-                <input
-                  aria-label="Enable Terminator"
-                  type="checkbox"
-                  checked={terminator.enabled}
-                  disabled={busy || terminator.status === 'invalid'}
-                  onChange={(event) => onSetEnabled(terminator.id, event.currentTarget.checked)}
-                />
-              </label>
-            </div>
+        <fieldset className="settings-form-squircle" aria-label="Optional features">
+          {!pluginState && !error ? (
+            <CenteredLoadingState label="Loading optional features…" />
           ) : (
-            <p className="computer-use-settings-message state-error">Terminator is not available.</p>
+            <div className="settings-form-control-list">
+              {OPTIONAL_AGENT_FEATURES.map((feature) => {
+                const plugin = pluginState?.plugins.find((candidate) => candidate.id === `${feature.id}-builtin`);
+                const unavailable = !plugin || plugin.status !== 'ready';
+                return (
+                  <label className="settings-form-control-row" key={feature.id}>
+                    <span className="settings-form-control-copy">
+                      <strong>{feature.name}</strong>
+                      <small>{unavailable ? `${feature.description} Unavailable in this installation.` : feature.description}</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      aria-label={`Enable ${feature.name}`}
+                      checked={plugin?.enabled ?? false}
+                      disabled={loading || busy || unavailable}
+                      onChange={(event) => plugin && onSetEnabled(plugin.id, event.currentTarget.checked)}
+                    />
+                  </label>
+                );
+              })}
+            </div>
           )}
+          {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
         </fieldset>
       </section>
-      {platform === 'win32' && settings ? (
-        <section className="settings-form computer-permissions-settings-form" aria-busy={busy}>
-          <header className="settings-form-heading">
-            <h2 id="computer-permissions-settings-heading">Computer Permissions</h2>
-            <p>Choose how often Beale asks before changing an application.</p>
-          </header>
-          <fieldset
-            className="settings-form-squircle computer-permissions-settings"
-            aria-labelledby="computer-permissions-settings-heading"
-          >
-            <div className="settings-form-radio-list">
-              <label className="settings-form-control-row">
-                <span className="settings-form-control-copy">
-                  <strong>Every Action</strong>
-                  <small>Ask before every computer action. This is the safer default.</small>
-                </span>
-                <input
-                  type="radio"
-                  name="computer-use-permission-mode"
-                  aria-label="Every Action"
-                  checked={settings.permissionMode === 'every_action'}
-                  disabled={busy}
-                  onChange={() => onChangePermissionMode('every_action')}
-                />
-              </label>
-              <label className="settings-form-control-row">
-                <span className="settings-form-control-copy">
-                  <strong>Once Per Session</strong>
-                  <small>Ask once for each target binary, then allow later actions against that binary for the session.</small>
-                </span>
-                <input
-                  type="radio"
-                  name="computer-use-permission-mode"
-                  aria-label="Once Per Session"
-                  checked={settings.permissionMode === 'once_per_session'}
-                  disabled={busy}
-                  onChange={() => onChangePermissionMode('once_per_session')}
-                />
-              </label>
-            </div>
-          </fieldset>
-        </section>
-      ) : null}
     </div>
   );
 }
@@ -3245,8 +3181,8 @@ export function settingsSectionLabel(section: SettingsSection): string {
   switch (section) {
     case 'appearance':
       return 'Appearance';
-    case 'computer-use':
-      return 'Computer Use';
+    case 'optional-features':
+      return 'Features';
     case 'remote':
       return 'Remote';
     case 'providers':
@@ -3268,8 +3204,8 @@ export function settingsSectionHeaderIcon(section: SettingsSection): AppHeaderVi
   switch (section) {
     case 'appearance':
       return 'settings-appearance';
-    case 'computer-use':
-      return 'settings-computer-use';
+    case 'optional-features':
+      return 'settings-optional-features';
     case 'remote':
       return 'settings-remote';
     case 'providers':

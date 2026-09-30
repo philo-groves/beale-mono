@@ -8,7 +8,6 @@ import { installUndiciTypeOfServiceCompatibility } from '@beale/app-server-runti
 import { IPC_CHANNELS } from '@shared/ipc';
 import { runDetailProjectionMetricLabel } from '../shared/runDetailProjection';
 import type {
-  ComputerUsePermissionMode,
   AppServerMemoryDirectorySummary,
   AutomationUpdateInput,
   AppServerRemoteAccessUpdate,
@@ -46,6 +45,7 @@ import type {
   MemoryTypeDescriptions,
   MarkHistoryDuplicateInput,
   UndoHistoryDuplicateInput,
+  ClaimBoardTransitionRequest,
   ShellOptions,
   StartRunInput,
   SteeringAction,
@@ -716,11 +716,6 @@ function registerIpc(): void {
     await restartBealeAppServer();
     return settings;
   });
-  ipcMain.handle(IPC_CHANNELS.getComputerUseSettings, () => workspaceService.getComputerUseSettings());
-  ipcMain.handle(IPC_CHANNELS.setComputerUsePermissionMode, (
-    _event,
-    permissionMode: ComputerUsePermissionMode
-  ) => workspaceService.setComputerUsePermissionMode(permissionMode));
   ipcMain.handle(IPC_CHANNELS.getProviderSettings, () => workspaceService.getProviderSettings());
   ipcMain.handle(IPC_CHANNELS.setDefaultProviderId, (_event, providerId: ResearchModelProviderId | null) => workspaceService.setDefaultProviderId(providerId));
   ipcMain.handle(IPC_CHANNELS.setProviderModelDefaults, (_event, providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) =>
@@ -1035,6 +1030,11 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.undoHistoryDuplicate, (_event, input: UndoHistoryDuplicateInput) =>
     timedMainIpcAsync('undoHistoryDuplicate', { type: input.type, record: shortMetricId(input.id) }, () =>
       workspaceService.undoHistoryDuplicate(input)
+    )
+  );
+  ipcMain.handle(IPC_CHANNELS.transitionClaimOnBoard, (_event, input: ClaimBoardTransitionRequest) =>
+    timedMainIpcAsync('transitionClaimOnBoard', { record: shortMetricId(input?.claimId) }, () =>
+      workspaceService.transitionClaimOnBoard(input)
     )
   );
   ipcMain.handle(IPC_CHANNELS.getAppServerToolingSummary, () =>

@@ -4,7 +4,7 @@ import {
   type MemoryTypeDescriptionsInput,
 } from "./memory-taxonomy.js";
 import type { ResearchProfile } from "./research-profile.js";
-import { formatResearchPluginCatalog, type ResearchPluginCatalogEntry } from "./managed-tool-plugins.js";
+import { formatHarnessFeatureCatalog, formatResearchPluginCatalog, isHarnessFeatureId, type ResearchPluginCatalogEntry } from "./managed-tool-plugins.js";
 
 export interface CreateResearchSystemPromptOptions {
   hasTools: boolean;
@@ -21,7 +21,7 @@ export interface CreateResearchSystemPromptOptions {
   pluginCatalog?: readonly ResearchPluginCatalogEntry[];
 }
 
-const PROMPT_SECTIONS = ["identity", "style", "boundary", "tools", "plugins", "collaboration", "goal", "memory", "claims", "runbooks"] as const;
+const PROMPT_SECTIONS = ["identity", "style", "boundary", "tools", "features", "plugins", "collaboration", "goal", "memory", "claims", "runbooks"] as const;
 type PromptSection = typeof PROMPT_SECTIONS[number];
 const SECTION_MARKER = "\u0000beale-prompt-section:";
 const DEFAULT_PROMPT_TEMPLATE = PROMPT_SECTIONS.map((section) => `{{${section}}}`).join("\n\n");
@@ -109,7 +109,9 @@ export function createResearchSystemPrompt(
       "If a utility is unavailable, do not repeat the same command. Follow workspace runtime instructions; never auto-trust repository-controlled toolchain configuration to make it run.",
     ] : ["No tools are available in this session."]),
     `${SECTION_MARKER}plugins`,
-    ...(options.pluginCatalog?.length ? [formatResearchPluginCatalog(options.pluginCatalog)] : []),
+    ...(options.pluginCatalog?.some((plugin) => !isHarnessFeatureId(plugin.id)) ? [formatResearchPluginCatalog(options.pluginCatalog)] : []),
+    `${SECTION_MARKER}features`,
+    ...(options.pluginCatalog?.length ? [formatHarnessFeatureCatalog(options.pluginCatalog)] : []),
     `${SECTION_MARKER}style`,
     "Persona style:",
     ...(profile?.agent.style ?? ["Write as a sharp, curious research collaborator using concise, technically precise, cohesive prose. Do not narrate routine memory updates unless they materially affect the conclusion."]),
@@ -177,6 +179,7 @@ export function createResearchSystemPrompt(
       "Use one canonical, evidence-gated research claim ledger, separate from knowledge memory:",
       `The active profile declares these classifications: ${profile?.claims.classifications.map((classification) => `${classification.id} (${classification.name}${classification.composite ? ", composite" : ""})`).join(", ") ?? "general.result"}.`,
       "Search claims with history.search, then use claim.get for a lead or finding's evidence, provenance, transition reasons, and duplicate relationships. Catalogs are summaries; follow detail pages before drawing conclusions from missing evidence or history.",
+      "A claim marked operatorOverride had its current status set by a human without agent transition prerequisites. Treat that status as an operator disposition, inspect its actual evidence, and never infer missing proof or verification from the status alone. Your finding.transition calls remain evidence-gated.",
       "When history or list results expose duplicate claims, memories, or runbooks, coalesce the weaker or redundant record with history.mark_duplicate and keep the strongest record as the canonical parent. Use history.undo_duplicate to correct a mistaken match. Do not coalesce related components, distinct affected conditions, reusable variants, or claims that can compose into a chain.",
       "Create only through lead.create. Direct observation promotes that same stable claim ID into the finding view through finding.transition; never copy it into a new finding or memory node.",
       "Append new evidence to an existing claim with finding.transition and its current status as toStatus. This preserves its maturity and identity while recording a new revision; never create a duplicate claim merely to retain same-maturity evidence.",
@@ -223,9 +226,10 @@ export function createResearchSystemPrompt(
   const renderedPrompt = template === DEFAULT_PROMPT_TEMPLATE
     ? PROMPT_SECTIONS.map((name) => variables[name]).filter(Boolean).join("\n\n")
     : renderResearchSystemPromptTemplate(template, variables);
-  const systemPrompt = variables.plugins && !/\{\{\s*plugins\s*\}\}/u.test(template)
-    ? `${renderedPrompt}\n\n${variables.plugins}`
-    : renderedPrompt;
+  const missingCatalogs = (["features", "plugins"] as const)
+    .filter((name) => variables[name] && !new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, "u").test(template))
+    .map((name) => variables[name]);
+  const systemPrompt = [renderedPrompt, ...missingCatalogs].filter(Boolean).join("\n\n");
   return appendResearchAgentInstructions(systemPrompt, options.agentInstructions);
 }
 

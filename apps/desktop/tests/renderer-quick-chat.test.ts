@@ -21,7 +21,7 @@ describe('quick chats', () => {
     expect(source.slice(quickChat)).toContain('<Zap size={15} />');
     expect(source.slice(quickChat)).toContain('<span>Quick Chat</span>');
     expect(source).not.toContain('title="Automations"');
-    expect(rail).toContain('title="Automations"');
+    expect(rail).toContain('data-tooltip="Automations"');
     expect(styles).not.toMatch(/\.sidebar-new-research\s*\{/u);
     expect(styles).toMatch(/\.sidebar-primary-actions\s*\{[^}]*gap: 0;[^}]*margin-top: 12px;/u);
     expect(styles).not.toContain('.sidebar-quick-chat {\n  margin-top:');
@@ -101,7 +101,7 @@ describe('quick chats', () => {
   });
 
   it('bundles explicit current-or-selected workspace query and edit tools', () => {
-    const server = readFileSync(new URL('../../../managed-plugins/beale-introspection/server.mjs', import.meta.url), 'utf8');
+    const server = readFileSync(new URL('../../../app-server/resources/harness-features/beale-introspection/server.mjs', import.meta.url), 'utf8');
     expect(server).toContain("name: 'get_workspace'");
     expect(server).toContain("name: 'edit_workspace'");
     expect(server).toContain('current or selected registered Beale workspace');

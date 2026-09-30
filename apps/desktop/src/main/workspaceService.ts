@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, release, tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -10,7 +9,7 @@ import { isManagedToolPluginId, MANAGED_TOOL_PLUGINS, type ResearchPluginCatalog
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
 import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
-import type { ResourcePriorArtPage, ResourcePriorArtDetail, ResourcePriorArtListInput, WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
+import { decodeClaimBoardTransitionRequest, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -80,6 +79,7 @@ import {
   restoreAppServerMemoryDreamingChange,
   markAppServerHistoryDuplicate,
   undoAppServerHistoryDuplicate,
+  transitionAppServerClaimOnBoard,
   type AppServerSessionSummary,
   type MemoryDreamingProfileInput,
   type MemoryDreamingPlan,
@@ -131,8 +131,6 @@ import type {
   AutomationUpdateInput,
   AttemptRecord,
   ArtifactRecord,
-  ComputerUsePermissionMode,
-  ComputerUseSettings,
   DeveloperSettings,
   DebuggingSettings,
   ProviderCredentialAccessRequest,
@@ -153,6 +151,7 @@ import type {
   MemoryDreamingProgressUpdate,
   MarkHistoryDuplicateInput,
   UndoHistoryDuplicateInput,
+  ClaimBoardTransitionRequest,
   MemorySettings,
   MemoryTypeDescriptions,
   NotificationRecord,
@@ -244,7 +243,6 @@ import type {
   ShellSafetyMode
 } from '@shared/types';
 
-const requireFromWorkspaceService = createRequire(import.meta.url);
 const EXECUTION_POSTURE_LABEL = 'app-server host-process execution. Use an external VM or container when OS isolation is required.';
 const UNBOUNDED_RUN_MINUTES = 999_999;
 const UNBOUNDED_RUN_ATTEMPTS = 999_999;
@@ -828,14 +826,6 @@ export class WorkspaceService {
     return this.getWorkspaceRegistry().setTracesEnabled(enabled);
   }
 
-  public getComputerUseSettings(): ComputerUseSettings {
-    return this.getWorkspaceRegistry().getComputerUseSettings();
-  }
-
-  public setComputerUsePermissionMode(permissionMode: ComputerUsePermissionMode): ComputerUseSettings {
-    return this.getWorkspaceRegistry().setComputerUsePermissionMode(permissionMode);
-  }
-
   public getProviderSettings(): ProviderSettings {
     return this.getWorkspaceRegistry().getProviderSettings();
   }
@@ -1040,7 +1030,7 @@ export class WorkspaceService {
         this.requireForegroundIntrospectionWorkspace(args);
         signal?.throwIfAborted();
         const runId = requiredToolString(args, 'runId');
-        const note = optionalToolString(args, 'note') ?? 'Stopped by Beale Introspection plugin.';
+        const note = optionalToolString(args, 'note') ?? 'Stopped by Beale Introspection feature.';
         return this.steerRun({ type: 'stop', runId, note });
       }
       case 'run_dejunk': {
@@ -2030,6 +2020,21 @@ export class WorkspaceService {
       type: input.type,
       id: input.id,
       expectedRevision: input.expectedRevision
+    }, this.appServerStorage(runtime));
+    this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
+    return this.requireSnapshot();
+  }
+
+  public async transitionClaimOnBoard(value: ClaimBoardTransitionRequest): Promise<WorkspaceSnapshot> {
+    const input = decodeClaimBoardTransitionRequest(value);
+    const runtime = this.requireHistoryWorkspace(input.workspaceId, 'claim');
+    const scope = runtime.db.getActiveScope();
+    const subject = runtime.db.getResearchSubject();
+    await transitionAppServerClaimOnBoard({
+      ...input,
+      workspaceName: scope.workspaceName,
+      subjectId: subject.id,
+      subjectName: subject.name,
     }, this.appServerStorage(runtime));
     this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
     return this.requireSnapshot();
@@ -4781,8 +4786,7 @@ export class WorkspaceService {
         researchProfile,
         appServerEngine: new AppServerRunEngine(
           sessionDatabase,
-          (change) => this.emitRuntimeChange(workspacePath, change),
-          () => this.getWorkspaceRegistry().getComputerUseSettings()
+          (change) => this.emitRuntimeChange(workspacePath, change)
         )
       };
     } catch (error) {
@@ -5036,11 +5040,6 @@ export class WorkspaceService {
     if (!this.agentPluginRegistry) {
       this.agentPluginRegistry = new AgentPluginRegistry(dirname(this.getWorkspaceRegistry().registryPath), {
         runtimeEnvironment: (plugin) => {
-          if (plugin.source.kind === 'builtin' && plugin.name === 'beale-terminator') {
-            return {
-              BEALE_TERMINATOR_MODULE_PATH: requireFromWorkspaceService.resolve('@mediar-ai/terminator')
-            };
-          }
           if (plugin.source.kind !== 'builtin' || plugin.name !== 'beale-introspection') {
             return {} as Record<string, string>;
           }
