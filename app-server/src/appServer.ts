@@ -532,59 +532,92 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       )));
       return;
     }
-    const workspaceChannelsMatch = /^\/v1\/workspaces\/([^/]+)\/channels$/.exec(url.pathname);
-    if (workspaceChannelsMatch) {
-      const workspaceId = pathPart(workspaceChannelsMatch, 1);
+    const workspaceTopicsMatch = /^\/v1\/workspaces\/([^/]+)\/topics$/.exec(url.pathname);
+    if (workspaceTopicsMatch) {
+      const workspaceId = pathPart(workspaceTopicsMatch, 1);
       if (request.method === 'GET') {
-        sendJson(response, 200, await hostCall(() => hostService.workspaceChannels(
-          workspaceId,
-          queryInteger(url, 'limit', 200),
-          queryBoolean(url, 'archived')
-        )));
+        const query = url.searchParams.get('query')?.trim();
+        sendJson(response, 200, await hostCall(() => query
+          ? hostService.searchWorkspaceTopics(workspaceId, query, queryInteger(url, 'limit', 50))
+          : hostService.workspaceTopics(workspaceId, queryInteger(url, 'limit', 200), queryBoolean(url, 'archived'))));
         return;
       }
       if (request.method === 'POST') {
         const body = await readJsonBody(request);
-        sendJson(response, 201, await hostCall(() => hostService.createWorkspaceChannel(
+        sendJson(response, 201, await hostCall(() => hostService.createWorkspaceTopic(
           workspaceId,
           isRecord(body) ? body : {}
         )));
         return;
       }
     }
-    const workspaceChannelArchiveMatch = /^\/v1\/workspaces\/([^/]+)\/channels\/([^/]+)\/(archive|restore)$/.exec(url.pathname);
-    if (workspaceChannelArchiveMatch && request.method === 'POST') {
-      const workspaceId = pathPart(workspaceChannelArchiveMatch, 1);
-      const channel = pathPart(workspaceChannelArchiveMatch, 2);
-      const action = workspaceChannelArchiveMatch[3];
-      sendJson(response, 200, await hostCall(() => action === 'archive'
-        ? hostService.archiveWorkspaceChannel(workspaceId, channel)
-        : hostService.restoreWorkspaceChannel(workspaceId, channel)));
+    const workspaceTopicActionMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)\/(overview|pages|links)(?:\/([^/]+))?$/.exec(url.pathname);
+    if (workspaceTopicActionMatch) {
+      const workspaceId = pathPart(workspaceTopicActionMatch, 1);
+      const topic = pathPart(workspaceTopicActionMatch, 2);
+      const section = workspaceTopicActionMatch[3];
+      const itemId = workspaceTopicActionMatch[4] ? pathPart(workspaceTopicActionMatch, 4) : null;
+      if (request.method === 'PATCH' && section === 'overview' && !itemId) {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.update_overview', isRecord(body) ? body : {})));
+        return;
+      }
+      if (request.method === 'PUT' && section === 'pages' && !itemId) {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.page.save', isRecord(body) ? body : {})));
+        return;
+      }
+      if (request.method === 'DELETE' && section === 'pages' && itemId) {
+        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.page.delete', { pageId: itemId })));
+        return;
+      }
+      if (request.method === 'POST' && section === 'links' && !itemId) {
+        const body = await readJsonBody(request);
+        sendJson(response, 201, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.link', isRecord(body) ? body : {})));
+        return;
+      }
+      if (request.method === 'DELETE' && section === 'links' && itemId) {
+        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.unlink', { linkId: itemId })));
+        return;
+      }
+    }
+    const workspaceTopicMergeMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)\/(merge|unmerge)$/.exec(url.pathname);
+    if (workspaceTopicMergeMatch && request.method === 'POST') {
+      const workspaceId = pathPart(workspaceTopicMergeMatch, 1);
+      const sourceTopic = pathPart(workspaceTopicMergeMatch, 2);
+      if (workspaceTopicMergeMatch[3] === 'merge') {
+        const body = await readJsonBody(request);
+        const targetTopic = isRecord(body) && typeof body.targetTopic === 'string' ? body.targetTopic : '';
+        sendJson(response, 200, await hostCall(() => hostService.mergeWorkspaceTopic(workspaceId, sourceTopic, targetTopic)));
+      } else {
+        sendJson(response, 200, await hostCall(() => hostService.unmergeWorkspaceTopic(workspaceId, sourceTopic)));
+      }
       return;
     }
-    const workspaceChannelMatch = /^\/v1\/workspaces\/([^/]+)\/channels\/([^/]+)$/.exec(url.pathname);
-    if (workspaceChannelMatch) {
-      const workspaceId = pathPart(workspaceChannelMatch, 1);
-      const channel = pathPart(workspaceChannelMatch, 2);
+    const workspaceTopicArchiveMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)\/(archive|restore)$/.exec(url.pathname);
+    if (workspaceTopicArchiveMatch && request.method === 'POST') {
+      const workspaceId = pathPart(workspaceTopicArchiveMatch, 1);
+      const topic = pathPart(workspaceTopicArchiveMatch, 2);
+      const action = workspaceTopicArchiveMatch[3];
+      sendJson(response, 200, await hostCall(() => action === 'archive'
+        ? hostService.archiveWorkspaceTopic(workspaceId, topic)
+        : hostService.restoreWorkspaceTopic(workspaceId, topic)));
+      return;
+    }
+    const workspaceTopicMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)$/.exec(url.pathname);
+    if (workspaceTopicMatch) {
+      const workspaceId = pathPart(workspaceTopicMatch, 1);
+      const topic = pathPart(workspaceTopicMatch, 2);
       if (request.method === 'GET') {
-        sendJson(response, 200, await hostCall(() => hostService.workspaceChannel(
+        sendJson(response, 200, await hostCall(() => hostService.workspaceTopic(
           workspaceId,
-          channel,
-          queryInteger(url, 'messageLimit', 500)
-        )));
-        return;
-      }
-      if (request.method === 'POST') {
-        const body = await readJsonBody(request);
-        sendJson(response, 201, await hostCall(() => hostService.postWorkspaceChannelMessage(
-          workspaceId,
-          channel,
-          isRecord(body) ? body : {}
+          topic,
+          queryBoolean(url, 'includeHistory') ? queryInteger(url, 'messageLimit', 500) : 0
         )));
         return;
       }
       if (request.method === 'DELETE') {
-        sendJson(response, 200, await hostCall(() => hostService.deleteWorkspaceChannel(workspaceId, channel)));
+        sendJson(response, 200, await hostCall(() => hostService.deleteWorkspaceTopic(workspaceId, topic)));
         return;
       }
     }

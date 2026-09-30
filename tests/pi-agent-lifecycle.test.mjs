@@ -64,19 +64,21 @@ const FAUX_MODEL = {
   maxTokens: 4096,
 };
 const COLLABORATION_TOOL_NAMES = [
-  "create_channel",
+  "create_topic",
   "spawn_agent",
   "send_message",
   "followup_task",
   "interrupt_agent",
   "list_agents",
   "wait_agent",
-  "channel_list",
-  "channel_read",
-  "join_channel",
-  "channel_post",
-  "channel_share",
-  "delete_channel",
+  "topic_list",
+  "topic_search",
+  "topic_read",
+  "topic_page_read",
+  "join_topic",
+  "topic_update",
+  "topic_page_save",
+  "topic_link",
 ];
 const WORKSPACE_AGENT_INSTRUCTIONS = agentInstructions(
   "Security workspace guidance: use the Tart VM with SIP enabled for target execution.",
@@ -734,7 +736,7 @@ test("research system prompt allows same-model review only from a fresh distinct
     pluginCatalog: [{ id: "beale-claims", name: "Claims", mcpServers: [], skills: [] }] });
   assert.match(prompt, /same provider and model/);
   assert.match(prompt, /distinct reviewer subagent spawned with fork_turns=none/);
-  assert.match(prompt, /without an inherited channel transcript/);
+  assert.match(prompt, /without inherited topic context/);
   assert.doesNotMatch(prompt, /independent evidence outside the originating session/);
 });
 

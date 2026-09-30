@@ -64,7 +64,7 @@ export const advancedSubagentRuntimeFactory: SubagentRuntimeFactory = {
           enabled: preference.enabled,
         })),
       } : {}),
-      ...(options.channelContext ? { channelContext: options.channelContext } : {}),
+      ...(options.topicContext ? { topicContext: options.topicContext } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       run: options.run,
       ...(options.onActivity ? { onActivity: options.onActivity } : {}),

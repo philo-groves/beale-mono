@@ -566,8 +566,8 @@ function commentaryToolMessageUsageText(
 }
 
 const STRUCTURED_SINGULAR_TOOL_NAMES = new Set([
-  'channel_list',
-  'channel_read',
+  'topic_list',
+  'topic_read',
   'finding.completion_check',
   'finding.list',
   'finding.transition',
@@ -700,10 +700,10 @@ function commentaryResearchCatalogCallLabel(toolName: string, inputValue: unknow
     const query = firstStringValue(input, ['query']);
     return query ? `Querying findings for "${query}"` : 'Querying findings';
   }
-  if (toolName === 'channel_list') return 'Listing channels';
-  if (toolName === 'channel_read') {
-    const channelName = firstStringValue(input, ['channel_name']);
-    return channelName ? `Perusing channel #${channelName}` : 'Perusing a channel';
+  if (toolName === 'topic_list') return 'Listing topics';
+  if (toolName === 'topic_read') {
+    const topicName = firstStringValue(input, ['topic_name']);
+    return topicName ? `Perusing topic #${topicName}` : 'Perusing a topic';
   }
   if (toolName === 'resource.catalog') {
     const operation = firstStringValue(input, ['operation']);

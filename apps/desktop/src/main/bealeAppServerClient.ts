@@ -346,7 +346,7 @@ export async function fetchAppServerSession(
 export async function fetchAppServerCanonicalResult<T>(
   record: BealeAppServerDiscovery,
   path: string,
-  options: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {}
 ): Promise<T> {
   if (!path.startsWith('/v1/')) throw new Error('Canonical app-server paths must start with /v1/.');
   const response = await fetch(`${appServerControlUrl(record)}${path}`, {
@@ -376,7 +376,7 @@ export async function fetchAppServerCanonicalResult<T>(
 export async function fetchAppServerCanonicalResultWithRecovery<T>(
   record: BealeAppServerDiscovery,
   path: string,
-  options: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {}
 ): Promise<T> {
   try {
     return await fetchAppServerCanonicalResult<T>(record, path, options);
@@ -396,7 +396,7 @@ export async function fetchAppServerCanonicalResultWithRecovery<T>(
 export async function fetchExistingAppServerCanonicalResult<T>(
   record: BealeAppServerDiscovery,
   path: string,
-  options: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; signal?: AbortSignal } = {}
 ): Promise<T> {
   if ((options.method ?? 'GET') !== 'GET') return fetchAppServerCanonicalResult<T>(record, path, options);
   return retryExistingAppServerRead(record, 'session.read', options.signal, (current, signal) =>

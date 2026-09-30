@@ -1007,6 +1007,12 @@ function listManagedResearchRecordPaths(root: string): string[] {
   nested('investigations', ['record.json']);
   nested('traces', ['summary.md']);
   for (const name of ['scope.json', 'campaign-state.json']) if (existsSync(join(root, 'references', name))) paths.push(`references/${name}`);
+  const topicsDirectory = join(root, 'references', 'topics');
+  if (existsSync(topicsDirectory)) {
+    for (const entry of readdirSync(topicsDirectory, { withFileTypes: true })) {
+      if (entry.isFile() && /^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.json$/u.test(entry.name)) paths.push(`references/topics/${entry.name}`);
+    }
+  }
   return paths;
 }
 

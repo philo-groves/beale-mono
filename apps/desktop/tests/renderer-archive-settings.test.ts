@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { ResearchChannelSummary, ResearchSessionSummary, WorkspaceRegistryEntry } from '@shared/types';
+import type { ResearchTopicSummary, ResearchSessionSummary, WorkspaceRegistryEntry } from '@shared/types';
 import {
   ArchiveSettingsView,
   SettingsSidebar,
@@ -11,7 +11,7 @@ import {
 } from '../src/renderer/features/settings/SettingsModal';
 
 describe('renderer archive settings', () => {
-  it('adds Archive to Agent Settings and renders restorable sessions, Quick Chats, and channels', () => {
+  it('adds Archive to Agent Settings and renders restorable sessions, Quick Chats, and topics', () => {
     const sidebar = renderToStaticMarkup(createElement(SettingsSidebar, {
       collapsed: false,
       section: 'archive',
@@ -21,12 +21,12 @@ describe('renderer archive settings', () => {
     }));
     const view = renderToStaticMarkup(createElement(ArchiveSettingsView, {
       sessions: [session],
-      channels: [channel],
+      topics: [topic],
       quickChats: [quickChat],
       workspaces: [workspace],
       loading: false,
       onRestoreSession: async () => undefined,
-      onRestoreChannel: async () => undefined,
+      onRestoreTopic: async () => undefined,
       onResumeQuickChat: async () => undefined
     }));
 
@@ -35,11 +35,11 @@ describe('renderer archive settings', () => {
     expect(sidebar).toContain('lucide-archive');
     expect(sidebar).toContain('<span>Archive</span>');
     expect(view).toContain('Archived Sessions');
-    expect(view).toContain('Archived Channels');
+    expect(view).toContain('Archived Topics');
     expect(view).toContain('Archived Quick Chats');
     expect(view).toContain('Parser investigation');
     expect(view).toContain('Review the latest parser results');
-    expect(view).toContain('parser-review');
+    expect(view).toContain('Parser Review');
     expect(view).toContain('Example Workspace');
     expect(view.match(/>Restore</gu)).toHaveLength(2);
     expect(view.match(/>Resume</gu)).toHaveLength(1);
@@ -47,10 +47,10 @@ describe('renderer archive settings', () => {
 
   it('requires confirmation before sidebar archive callbacks run', () => {
     const source = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
-    expect(source).toContain('window.confirm(`Archive #${channel.name}?');
+    expect(source).toContain('window.confirm(`Archive ${topic.title}?');
     expect(source).toContain('window.confirm(`Archive “${promptSessionTitle(session)}”?');
-    expect(source.indexOf('window.confirm(`Archive #${channel.name}?'))
-      .toBeLessThan(source.indexOf('void onArchiveChannel(channel)'));
+    expect(source.indexOf('window.confirm(`Archive ${topic.title}?'))
+      .toBeLessThan(source.indexOf('void onArchiveTopic(topic)'));
     expect(source.indexOf('window.confirm(`Archive “${promptSessionTitle(session)}”?'))
       .toBeLessThan(source.indexOf('void onArchiveSession(session)'));
   });
@@ -84,9 +84,9 @@ const quickChat = {
   archivedAt: null
 } satisfies ResearchSessionSummary;
 
-const channel = {
-  id: 'channel_parser', workspaceId: workspace.workspaceId, name: 'parser-review', title: 'Parser Review', topic: 'Review parser.',
+const topic = {
+  id: 'topic_parser', workspaceId: workspace.workspaceId, name: 'parser-review', title: 'Parser Review', topic: 'Review parser.', overviewMarkdown: 'Review ExampleCo parser work.',
   createdBySessionId: session.id, createdByAgentPath: '/root', createdAt: '2026-08-24T00:00:00.000Z',
   updatedAt: '2026-08-24T00:00:00.000Z', archivedAt: '2026-08-24T01:00:00.000Z', memberCount: 1,
   messageCount: 2, latestMessagePreview: 'Done.'
-} satisfies ResearchChannelSummary;
+} satisfies ResearchTopicSummary;

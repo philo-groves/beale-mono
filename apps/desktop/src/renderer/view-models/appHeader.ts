@@ -4,12 +4,8 @@ export function displayWorkspaceHeaderName(workspaceName: string | null | undefi
   return normalized;
 }
 
-export function displayChannelTitle(title: string | null | undefined): string {
-  const normalized = (title ?? '')
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/gu, '-')
-    .replace(/^-+|-+$/gu, '');
-  if (!normalized) return 'Channel';
+export function displayTopicTitle(title: string | null | undefined): string {
+  const normalized = (title ?? '').trim().replace(/\s+/gu, ' ');
+  if (!normalized) return 'Topic';
   return normalized;
 }

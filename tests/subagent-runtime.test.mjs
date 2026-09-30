@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
   createPiAgentExecutor,
   createSubagentRuntime,
   decodeResearchCollaborationConfig,
-  ResearchChannelStore,
+  ResearchTopicStore,
   subagentRuntimeFactoryForMode,
   SubagentManager,
 } from "../packages/research-agent/dist/index.js";
@@ -83,11 +87,11 @@ test("advanced subagent mode retains direct controls and requires explicit deleg
     ["discoverer", "prover", "reviewer", "reporter"],
   );
   assert.deepEqual(
-    tools.create_channel.parameters.properties.members.items.required,
+    tools.create_topic.parameters.properties.members.items.required,
     ["task_name", "message", "role"],
   );
   assert.deepEqual(
-    tools.create_channel.parameters.properties.members.items.properties.role.enum,
+    tools.create_topic.parameters.properties.members.items.properties.role.enum,
     ["discoverer", "prover", "reviewer", "reporter"],
   );
 
@@ -173,10 +177,10 @@ test("advanced delegation rejects missing or unsupported roles while Simple rema
   const simpleTools = Object.fromEntries(simple.createTools("root").map((tool) => [tool.name, tool]));
   assert.deepEqual(simpleTools.spawn_agent.parameters.required, ["task_name", "message"]);
   assert.equal(simpleTools.spawn_agent.parameters.properties.role, undefined);
-  assert.equal(simpleTools.join_channel.parameters.properties.role, undefined);
-  assert.equal(simpleTools.create_channel.parameters.properties.members.items.properties.role, undefined);
+  assert.equal(simpleTools.join_topic.parameters.properties.role, undefined);
+  assert.equal(simpleTools.create_topic.parameters.properties.members.items.properties.role, undefined);
   assert.deepEqual(
-    simpleTools.create_channel.parameters.properties.members.items.required,
+    simpleTools.create_topic.parameters.properties.members.items.required,
     ["task_name", "message"],
   );
   await simpleTools.spawn_agent.execute("simple_spawn", {
@@ -367,7 +371,7 @@ test("subagents inherit no parent transcript unless fork_turns is explicit", asy
   assert.equal(requests[1].freshSubagentContext, false);
 });
 
-test("single-worker delegation does not advertise an invalid free-form channel role", async () => {
+test("single-worker delegation does not advertise an invalid free-form topic role", async () => {
   const activities = [];
   const manager = new SubagentManager({
     rootProvider: "openai",
@@ -442,148 +446,60 @@ test("subagent concurrency releases capacity without a lifetime invocation budge
   assert.equal(requests.length, 4);
 });
 
-test("subagent runtime reuses durable channels without member barriers", async () => {
+test("subagents inherit bounded topic orientation without historical activity", async () => {
   const requests = [];
-  const releases = [];
-  const store = new ResearchChannelStore({ databasePath: ":memory:" });
+  const databasePath = join(mkdtempSync(join(tmpdir(), "beale-topic-context-")), "memory.sqlite");
+  const store = new ResearchTopicStore({ databasePath });
+  const topic = store.create({
+    workspaceId: "workspace_one", name: "parser-review", title: "Parser review", topic: "Example parser boundaries."
+  });
+  const current = store.updateOverview("workspace_one", topic.id, "Current overview cites claim_example_001.", topic.updatedAt);
+  store.link("workspace_one", topic.id, { kind: "claim", resourceId: "claim_example_001", title: "Example hypothesis" });
+  const legacyHistory = new DatabaseSync(databasePath);
+  legacyHistory.prepare(`INSERT INTO app_server_topic_messages
+    (id, topic_id, session_id, attempt_id, member_id, sender_agent_path, kind,
+     content_markdown, evidence_refs_json, metadata_json, created_at)
+    VALUES (?, ?, ?, NULL, NULL, ?, 'message', ?, '[]', '{}', ?)`)
+    .run("message_example", topic.id, "historical_session", "/historical", "Do not inherit this old transcript marker.", "2026-08-01T00:00:00.000Z");
+  legacyHistory.close();
   const manager = new SubagentManager({
-    rootProvider: "openai", rootModel: "gpt-5.6-sol", maxConcurrentRooms: 1, maxMembersPerRoom: 3, peerChallengeRounds: 1,
-    channelContext: { store, workspaceId: "workspace_one", sessionId: "session_one", attemptId: "attempt_one" },
-    providerPreferences: [
-      { provider: "openai", model: "gpt-5.6-sol", reasoning: "high", enabled: true },
-      { provider: "anthropic", model: "claude-opus-5", reasoning: "high", enabled: true },
-    ],
-    run(request) {
-      requests.push(request);
-      return new Promise((resolve, reject) => releases.push(() => {
-        if (request.provider === "anthropic") reject(new Error("provider rate limited"));
-        else resolve(resultFor(request, `completed ${request.provider}`));
-      }));
-    },
-  });
-  const rootTools = toolsByName(manager, "root");
-  assert.deepEqual((await rootTools.channel_list.execute("channels_before_create", {})).details.channels, []);
-  const created = await rootTools.create_channel.execute("create_parser_channel", {
-    channel_name: "parser-review", channel_title: "Parser review",
-    topic: "Inspect and challenge the parser boundary across sessions.",
-    members: [
-      { task_name: "explorer", message: "Trace the boundary.", fork_turns: "none", provider: "openai", model: "gpt-5.6-sol" },
-      { task_name: "skeptic", message: "Challenge the boundary.", fork_turns: "none", provider: "anthropic", model: "claude-opus-5" },
-      { task_name: "unavailable", message: "This route is unavailable.", fork_turns: "none", provider: "anthropic", model: "claude-disabled" },
-    ],
-  });
-  assert.equal(created.details.channel.name, "parser-review");
-  assert.equal(created.details.member_failures.length, 1);
-  assert.deepEqual(requests.map((request) => request.provider), ["openai", "anthropic"]);
-  assert.deepEqual(requests.map((request) => request.role), ["researcher", "researcher"]);
-  assert.ok(requests.every((request) => request.channelName === "parser-review" && request.collaborationTools.some((tool) => tool.name === "channel_post")));
-
-  const explorer = toolsFromRequest(requests[0]);
-  const skeptic = toolsFromRequest(requests[1]);
-  await assert.rejects(explorer.channel_post.execute("oversized_channel_post", {
-    content: "x".repeat(601),
-  }), /at most 600 characters/);
-  await explorer.channel_post.execute("explorer_evidence", {
-    kind: "evidence", content: "Length reaches the allocation.", evidence_refs: ["code:parser:41"],
-  });
-  const sharedRunbook = await explorer.channel_share.execute("share_reproducer", {
-    kind: "runbook", resource_id: "runbook_parser_repro", title: "Parser reproducer",
-    note: "The bounded reproducer is ready.",
-  });
-  assert.equal(sharedRunbook.details.resource.kind, "runbook");
-  const immediatelyVisible = await skeptic.channel_read.execute("read_without_barrier", { channel_name: "parser-review" });
-  assert.equal(immediatelyVisible.details.messages.length, 2);
-  assert.equal(immediatelyVisible.details.messages[0].contentMarkdown, "Length reaches the allocation.");
-  assert.equal(immediatelyVisible.details.shared_resources[0].resourceId, "runbook_parser_repro");
-  releases.forEach((release) => release());
-  await manager.settle();
-  const completedMessages = store.get("workspace_one", "parser-review").messages;
-  assert.equal(completedMessages.length, 4);
-  assert.match(completedMessages.find((message) => message.kind === "system").contentMarkdown, /rate limited/);
-  const memberStatuses = store.get("workspace_one", "parser-review").members
-    .filter((member) => member.agentPath !== "/root")
-    .map((member) => member.status)
-    .sort();
-  assert.deepEqual(memberStatuses, ["completed", "errored"]);
-
-  const inheritedRequests = [];
-  const laterManager = new SubagentManager({
     rootProvider: "openai", rootModel: "gpt-5.6-sol",
-    channelContext: { store, workspaceId: "workspace_one", sessionId: "session_two", attemptId: "attempt_two" },
-    async run(request) {
-      inheritedRequests.push(request);
-      return resultFor(request, "later session result");
-    },
-  });
-  const laterTools = toolsByName(laterManager, "root");
-  assert.equal((await laterTools.channel_list.execute("reuse_list", {})).details.channels[0].name, "parser-review");
-  await laterTools.spawn_agent.execute("reuse_spawn", {
-    task_name: "variant_review", message: "Continue the parser review.", fork_turns: "none", channel_name: "parser-review",
-  });
-  await laterManager.settle();
-  assert.match(inheritedRequests[0].inheritedMessages.at(-1).content, /Length reaches the allocation/);
-  assert.match(inheritedRequests[0].inheritedMessages.at(-1).content, /runbook_parser_repro/);
-  assert.equal(store.get("workspace_one", "parser-review").messages.at(-1).contentMarkdown, "later session result");
-  store.close();
-});
-
-test("subagent channel inheritance stays bounded independently of parent history", async () => {
-  const store = new ResearchChannelStore({ databasePath: ":memory:" });
-  store.create({
-    workspaceId: "workspace_one",
-    name: "long-running-channel",
-    title: "Long running channel",
-    topic: "Preserve durable coordination without replaying the full transcript.",
-  });
-  for (let index = 0; index < 40; index += 1) {
-    store.append({
-      workspaceId: "workspace_one",
-      channel: "long-running-channel",
-      sessionId: "historical_session",
-      agentPath: "/historical",
-      contentMarkdown: `historical-marker-${index} ${"x".repeat(500)}`,
-    });
-  }
-  store.share({
-    workspaceId: "workspace_one",
-    channel: "long-running-channel",
-    sessionId: "historical_session",
-    agentPath: "/historical",
-    kind: "runbook",
-    resourceId: "runbook_current_proof",
-    title: "Current proof procedure",
-  });
-
-  const requests = [];
-  const manager = new SubagentManager({
-    rootProvider: "openai",
-    rootModel: "gpt-5.6-sol",
-    channelContext: { store, workspaceId: "workspace_one", sessionId: "current_session", attemptId: "attempt_one" },
-    async run(request) {
-      requests.push(request);
-      return resultFor(request, "bounded result");
-    },
+    topicContext: { store, workspaceId: "workspace_one", sessionId: "current_session", attemptId: "attempt_one" },
+    async run(request) { requests.push(request); return resultFor(request, "bounded result"); },
   });
   const tools = toolsByName(manager, "root");
-  const spawned = await tools.spawn_agent.execute("bounded_channel_spawn", {
-    task_name: "bounded_channel",
-    message: "Continue from durable state.",
-    fork_turns: "none",
-    channel_name: "long-running-channel",
+  assert.equal((await tools.topic_list.execute("list_topics", {})).details.topics[0].id, topic.id);
+  assert.equal((await tools.topic_search.execute("search_topics", { query: "Example hypothesis" })).details.topics[0].id, topic.id);
+  const read = await tools.topic_read.execute("read_topic", { topic_name: topic.name });
+  assert.equal(read.details.topic.overviewMarkdown, current.overviewMarkdown);
+  assert.equal(read.details.links[0].resourceId, "claim_example_001");
+  assert.equal(read.details.messages, undefined);
+  const savedPage = await tools.topic_page_save.execute("save_page", {
+    topic_name: topic.name, title: "Open questions", content_markdown: "Synthetic unresolved parser question."
   });
+  const pageId = savedPage.details.page.id;
+  const indexed = await tools.topic_read.execute("read_topic_again", { topic_name: topic.name });
+  assert.equal(indexed.details.pages[0].id, pageId);
+  assert.equal(indexed.details.pages[0].contentMarkdown, undefined);
+  const page = await tools.topic_page_read.execute("read_page", { topic_name: topic.name, page_id: pageId });
+  assert.match(page.details.page.contentMarkdown, /Synthetic unresolved/);
+  await tools.spawn_agent.execute("spawn_topic", { task_name: "variant_review", message: "Continue.", fork_turns: "none", topic_name: topic.name });
   await manager.settle();
-
-  assert.equal(spawned.details.inherited_channel_messages, 16);
-  assert.equal(requests[0].inheritedMessages.length, 1);
-  assert.equal(requests[0].freshSubagentContext, false);
-  const inherited = requests[0].inheritedMessages[0].content;
-  assert.match(inherited, /bounded recent transcript \(at most 16 messages\)/);
-  assert.match(inherited, /historical-marker-39/);
-  assert.doesNotMatch(inherited, /historical-marker-0\b/);
-  assert.match(inherited, /runbook_current_proof/);
-  assert.ok(inherited.length < 16_000);
+  const inherited = requests[0].inheritedMessages.at(-1).content;
+  assert.match(inherited, /claim_example_001/);
+  assert.doesNotMatch(inherited, /old transcript marker/);
+  assert.equal(store.get("workspace_one", topic.id, 500).messages.length, 1);
+  await assert.rejects(() => tools.topic_update.execute("stale_update", {
+    topic_name: topic.name, content_markdown: "Stale version", expected_updated_at: topic.updatedAt
+  }), /changed since it was opened/);
+  const updated = await tools.topic_update.execute("update_topic", {
+    topic_name: topic.name, content_markdown: "Revised overview cites claim_example_001.",
+    expected_updated_at: store.get("workspace_one", topic.id).topic.updatedAt
+  });
+  assert.match(updated.details.topic.overviewMarkdown, /Revised overview/);
   store.close();
 });
+
 test("subagent runtime normalizes exact routes and validates same-provider models", async () => {
   const requests = [];
   const manager = new SubagentManager({

@@ -5,7 +5,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   DEFAULT_RESEARCH_REASONING_EFFORT
 } from '../../../shared/modelDefaults';
-import { Archive, ArchiveRestore, FileText, Hash, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
+import { Archive, ArchiveRestore, FileText, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
 import type {
   AgentPluginRegistryState,
   AppServerRemoteAccessSettings,
@@ -35,7 +35,7 @@ import type {
   ResearchProviderReadiness,
   ResearchProviderStatus,
   ShellSafetyMode,
-  ResearchChannelSummary,
+  ResearchTopicSummary,
   ResearchSessionSummary,
   WorkspaceRegistryEntry,
   TicketingMode,
@@ -186,7 +186,7 @@ export function SettingsView({
   agentPluginsError,
   sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
   archivedSessions = [],
-  archivedChannels = [],
+  archivedTopics = [],
   archivedQuickChats = [],
   archiveWorkspaces = [],
   archiveLoading = false,
@@ -225,7 +225,7 @@ export function SettingsView({
   onSetSessionHeatPreference = () => undefined,
   onSetSessionHeatPalettePreference = () => undefined,
   onRestoreResearchSession = async () => undefined,
-  onRestoreResearchChannel = async () => undefined,
+  onRestoreResearchTopic = async () => undefined,
   onResumeQuickChat = async () => undefined
 }: {
   section: SettingsSection;
@@ -261,7 +261,7 @@ export function SettingsView({
   agentPluginsError: string | null;
   sessionHeatPreferences?: SessionHeatPreferences;
   archivedSessions?: readonly ResearchSessionSummary[];
-  archivedChannels?: readonly ResearchChannelSummary[];
+  archivedTopics?: readonly ResearchTopicSummary[];
   archivedQuickChats?: readonly ResearchSessionSummary[];
   archiveWorkspaces?: readonly WorkspaceRegistryEntry[];
   archiveLoading?: boolean;
@@ -318,7 +318,7 @@ export function SettingsView({
     color: string | null
   ) => void;
   onRestoreResearchSession?: (session: ResearchSessionSummary) => Promise<void>;
-  onRestoreResearchChannel?: (channel: ResearchChannelSummary) => Promise<void>;
+  onRestoreResearchTopic?: (topic: ResearchTopicSummary) => Promise<void>;
   onResumeQuickChat?: (session: ResearchSessionSummary) => Promise<void>;
 }): JSX.Element {
   const activeSection = activeSettingsSection(section);
@@ -329,12 +329,12 @@ export function SettingsView({
         {activeSection === 'archive' ? (
           <ArchiveSettingsView
             sessions={archivedSessions}
-            channels={archivedChannels}
+            topics={archivedTopics}
             quickChats={archivedQuickChats}
             workspaces={archiveWorkspaces}
             loading={archiveLoading}
             onRestoreSession={onRestoreResearchSession}
-            onRestoreChannel={onRestoreResearchChannel}
+            onRestoreTopic={onRestoreResearchTopic}
             onResumeQuickChat={onResumeQuickChat}
           />
         ) : activeSection === 'general' ? (
@@ -1741,21 +1741,21 @@ export function GeneralSettingsView({
 
 export function ArchiveSettingsView({
   sessions,
-  channels,
+  topics,
   quickChats,
   workspaces,
   loading,
   onRestoreSession,
-  onRestoreChannel,
+  onRestoreTopic,
   onResumeQuickChat
 }: {
   sessions: readonly ResearchSessionSummary[];
-  channels: readonly ResearchChannelSummary[];
+  topics: readonly ResearchTopicSummary[];
   quickChats: readonly ResearchSessionSummary[];
   workspaces: readonly WorkspaceRegistryEntry[];
   loading: boolean;
   onRestoreSession: (session: ResearchSessionSummary) => Promise<void>;
-  onRestoreChannel: (channel: ResearchChannelSummary) => Promise<void>;
+  onRestoreTopic: (topic: ResearchTopicSummary) => Promise<void>;
   onResumeQuickChat: (session: ResearchSessionSummary) => Promise<void>;
 }): JSX.Element {
   const workspaceName = (workspaceId: string): string => (
@@ -1813,25 +1813,25 @@ export function ArchiveSettingsView({
       </section>
       <section className="settings-form">
         <header className="settings-form-heading">
-          <h2 id="archived-channels-settings-heading">Archived Channels</h2>
-          <p>Channels remain available to restore with their messages and shared research intact.</p>
+          <h2 id="archived-topics-settings-heading">Archived Topics</h2>
+          <p>Archived and merged topics keep their overviews, pages, and references.</p>
         </header>
-        <fieldset className="settings-form-squircle" aria-labelledby="archived-channels-settings-heading">
+        <fieldset className="settings-form-squircle" aria-labelledby="archived-topics-settings-heading">
           <div className="settings-form-control-list archive-settings-list">
-            {channels.map((channel) => (
-              <div className="settings-form-control-row archive-settings-row" key={channel.id}>
+            {topics.map((topic) => (
+              <div className="settings-form-control-row archive-settings-row" key={topic.id}>
                 <span className="settings-form-control-copy">
-                  <strong className="archive-settings-item-name"><Hash size={14} aria-hidden="true" />{channel.name}</strong>
-                  <small>{workspaceName(channel.workspaceId)}</small>
+                  <strong className="archive-settings-item-name"><FileText size={14} aria-hidden="true" />{topic.title}</strong>
+                  <small>{workspaceName(topic.workspaceId)}</small>
                 </span>
-                <button type="button" disabled={loading} onClick={() => void onRestoreChannel(channel)}>
+                <button type="button" disabled={loading} onClick={() => void onRestoreTopic(topic)}>
                   <ArchiveRestore size={14} aria-hidden="true" />
-                  <span>Restore</span>
+                  <span>{topic.mergedIntoTopicId ? 'Undo merge' : 'Restore'}</span>
                 </button>
               </div>
             ))}
-            {!loading && channels.length === 0 ? <p className="archive-settings-empty">No archived channels.</p> : null}
-            {loading && channels.length === 0 ? <p className="archive-settings-empty">Loading archived channels…</p> : null}
+            {!loading && topics.length === 0 ? <p className="archive-settings-empty">No archived topics.</p> : null}
+            {loading && topics.length === 0 ? <p className="archive-settings-empty">Loading archived topics…</p> : null}
           </div>
         </fieldset>
       </section>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TraceEventRecord } from '@shared/types';
 import { providerIconKind } from '../src/renderer/app/ProviderIcon';
-import { activeSubagentCount, filterSubagentSummaries, subagentCatalogGroups, subagentChannelLabel, subagentDisplayName, subagentOverviewForEvents, subagentOverviewFromSummaries, subagentOverviewStatusCountSummary, subagentStatusCountSummary, subagentStatusIconKind, subagentStatusLabel, subagentSummaries, traceEventsForSubagent } from '../src/renderer/view-models/subagents';
+import { activeSubagentCount, filterSubagentSummaries, subagentCatalogGroups, subagentTopicLabel, subagentDisplayName, subagentOverviewForEvents, subagentOverviewFromSummaries, subagentOverviewStatusCountSummary, subagentStatusCountSummary, subagentStatusIconKind, subagentStatusLabel, subagentSummaries, traceEventsForSubagent } from '../src/renderer/view-models/subagents';
 
 describe('subagent trace view models', () => {
   it('maps supported provider and model identifiers to provider marks', () => {
@@ -56,7 +56,7 @@ describe('subagent trace view models', () => {
         id: 'spawn',
         sequence: 2,
         createdAt: '2026-07-20T10:00:00.000Z',
-        payload: { type: 'subagent.activity', action: 'spawned', agentId: 'agent_one', agentPath: '/root/parser_review', provider: 'anthropic', model: 'claude-opus-4-8', channelName: 'parser-work', status: 'running', message: 'Inspect parser.' }
+        payload: { type: 'subagent.activity', action: 'spawned', agentId: 'agent_one', agentPath: '/root/parser_review', provider: 'anthropic', model: 'claude-opus-4-8', topicName: 'parser-work', status: 'running', message: 'Inspect parser.' }
       }),
       traceEvent({
         id: 'output',
@@ -79,16 +79,16 @@ describe('subagent trace view models', () => {
         name: 'parser_review',
         provider: 'anthropic',
         model: 'claude-opus-4-8',
-        channelName: 'parser-work',
+        topicName: 'parser-work',
         status: 'completed',
         latestMessage: 'Parser review complete.',
         createdAt: '2026-07-20T10:00:00.000Z',
         lastActiveAt: '2026-07-20T10:04:00.000Z'
       }
     ]);
-    expect(subagentChannelLabel('parser-work')).toBe('#parser-work');
-    expect(subagentChannelLabel('#parser-work')).toBe('#parser-work');
-    expect(subagentChannelLabel(null)).toBe('No Channels');
+    expect(subagentTopicLabel('parser-work')).toBe('#parser-work');
+    expect(subagentTopicLabel('#parser-work')).toBe('#parser-work');
+    expect(subagentTopicLabel(null)).toBe('No Topics');
   });
 
   it('applies bounded projected previews to active subagent list rows', () => {

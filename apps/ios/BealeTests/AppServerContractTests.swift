@@ -330,13 +330,13 @@ final class AppServerContractTests: XCTestCase {
                 "version": "0.1.0",
                 "buildId": "build-current"
               },
-              "contractVersion": 26,
+              "contractVersion": 28,
               "schemas": {
                 "protocol": 1,
                 "session": 1,
-                "memorySummary": 12,
+                "memorySummary": 13,
                 "finding": 5,
-                "campaignGraph": 4,
+                "campaignGraph": 5,
                 "goalSuggestions": 1
               },
               "capabilities": [
@@ -365,13 +365,13 @@ final class AppServerContractTests: XCTestCase {
                 "version": "0.1.0",
                 "buildId": "build-old"
               },
-              "contractVersion": 25,
+              "contractVersion": 27,
               "schemas": {
                 "protocol": 1,
                 "session": 1,
-                "memorySummary": 12,
+                "memorySummary": 13,
                 "finding": 5,
-                "campaignGraph": 4,
+                "campaignGraph": 5,
                 "goalSuggestions": 1
               },
               "capabilities": ["session.events", "session.controls"]
@@ -1007,7 +1007,7 @@ final class AppServerContractTests: XCTestCase {
                       "provider": "openai-codex",
                       "model": "gpt-5.6-sol",
                       "status": "running",
-                      "channelName": "parser-review"
+                      "topicName": "parser-review"
                     }
                   },
                   {
@@ -1052,7 +1052,7 @@ final class AppServerContractTests: XCTestCase {
         XCTAssertEqual(summaries[0].latestMessage, "Confirmed the downstream parser consumer.")
         XCTAssertEqual(summaries[0].provider, "openai-codex")
         XCTAssertEqual(summaries[0].model, "gpt-5.6-sol")
-        XCTAssertEqual(summaries[0].channelName, "parser-review")
+        XCTAssertEqual(summaries[0].topicName, "parser-review")
     }
 
     func testDecodesPathFreeHeatBearingMemoryFeed() throws {

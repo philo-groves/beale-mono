@@ -514,7 +514,7 @@ export class AppServerHostService {
     const loadedPluginRuntime = introspection?.runtimeMode === 'isolated'
       ? await this.loadIntrospectionPluginRuntime()
       : await this.resolvePluginRuntime();
-    const metaSkillDirectory = resolve(builtinPluginPath('meta-skills'), 'skills');
+    const metaSkillDirectory = resolve(builtinPluginPath('meta-skills', 'bundled'), 'skills');
     const pluginRuntime = loadedPluginRuntime
       ? {
           ...loadedPluginRuntime,
@@ -1018,65 +1018,78 @@ export class AppServerHostService {
     return canonicalResult(workspace, result);
   }
 
-  public async workspaceChannels(
+  public async workspaceTopics(
     workspaceIdentifier: string,
     limit = 200,
     archived = false
   ): Promise<BealeAppServerCanonicalResult> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
-    const result = await this.invokeProtocol<unknown>('channel.list', {
-      args: ['channel', 'list', '--workspace-id', workspace.workspaceId, '--limit', String(boundedInteger(limit, 1, 500))],
+    const result = await this.invokeProtocol<unknown>('topic.list', {
+      args: ['topic', 'list', '--workspace-id', workspace.workspaceId, '--workspace-root', workspace.workspacePath, '--limit', String(boundedInteger(limit, 1, 500))],
       input: { workspaceId: workspace.workspaceId, archived },
       storage: this.registry.storageForProfile(workspace.researchProfileId)
     });
     return canonicalResult(workspace, result);
   }
 
-  public async workspaceChannel(
+  public async searchWorkspaceTopics(workspaceIdentifier: string, query: string, limit = 50): Promise<BealeAppServerCanonicalResult> {
+    return this.topicOperation(workspaceIdentifier, 'topic.search', null, { query }, ['--limit', String(boundedInteger(limit, 1, 500))]);
+  }
+
+  public async mutateWorkspaceTopic(
     workspaceIdentifier: string,
-    channel: string,
-    messageLimit = 500
+    topic: string,
+    operation: 'topic.update_overview' | 'topic.page.save' | 'topic.page.delete' | 'topic.link' | 'topic.unlink',
+    input: Record<string, unknown>
   ): Promise<BealeAppServerCanonicalResult> {
-    return this.channelOperation(workspaceIdentifier, 'channel.get', channel, {
-      channel,
+    return this.topicOperation(workspaceIdentifier, operation, topic, { ...input, topic });
+  }
+
+  public async workspaceTopic(
+    workspaceIdentifier: string,
+    topic: string,
+    messageLimit = 0
+  ): Promise<BealeAppServerCanonicalResult> {
+    return this.topicOperation(workspaceIdentifier, 'topic.get', topic, {
+      topic,
       messageLimit
-    }, ['--message-limit', String(boundedInteger(messageLimit, 1, 2_000))]);
+    }, messageLimit > 0 ? ['--message-limit', String(boundedInteger(messageLimit, 1, 2_000))] : []);
   }
 
-  public async createWorkspaceChannel(
+  public async createWorkspaceTopic(
     workspaceIdentifier: string,
     input: Record<string, unknown>
   ): Promise<BealeAppServerCanonicalResult> {
-    return this.channelOperation(workspaceIdentifier, 'channel.create', null, input);
+    return this.topicOperation(workspaceIdentifier, 'topic.create', null, input);
   }
 
-  public async postWorkspaceChannelMessage(
+  public async deleteWorkspaceTopic(
     workspaceIdentifier: string,
-    channel: string,
-    input: Record<string, unknown>
+    topic: string
   ): Promise<BealeAppServerCanonicalResult> {
-    return this.channelOperation(workspaceIdentifier, 'channel.post', channel, { ...input, channel });
+    return this.topicOperation(workspaceIdentifier, 'topic.delete', topic, { topic });
   }
 
-  public async deleteWorkspaceChannel(
+  public async archiveWorkspaceTopic(
     workspaceIdentifier: string,
-    channel: string
+    topic: string
   ): Promise<BealeAppServerCanonicalResult> {
-    return this.channelOperation(workspaceIdentifier, 'channel.delete', channel, { channel });
+    return this.topicOperation(workspaceIdentifier, 'topic.archive', topic, { topic });
   }
 
-  public async archiveWorkspaceChannel(
+  public async restoreWorkspaceTopic(
     workspaceIdentifier: string,
-    channel: string
+    topic: string
   ): Promise<BealeAppServerCanonicalResult> {
-    return this.channelOperation(workspaceIdentifier, 'channel.archive', channel, { channel });
+    return this.topicOperation(workspaceIdentifier, 'topic.restore', topic, { topic });
   }
 
-  public async restoreWorkspaceChannel(
-    workspaceIdentifier: string,
-    channel: string
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.channelOperation(workspaceIdentifier, 'channel.restore', channel, { channel });
+  public async mergeWorkspaceTopic(workspaceIdentifier: string, sourceTopic: string, targetTopic: string): Promise<BealeAppServerCanonicalResult> {
+    return this.topicOperation(workspaceIdentifier, 'topic.merge', sourceTopic, { topic: sourceTopic, targetTopic });
+  }
+
+  public async unmergeWorkspaceTopic(workspaceIdentifier: string, sourceTopic: string): Promise<BealeAppServerCanonicalResult> {
+    return this.topicOperation(workspaceIdentifier, 'topic.unmerge', sourceTopic, { topic: sourceTopic });
   }
 
   public async sessionUpdate(
@@ -1169,21 +1182,22 @@ export class AppServerHostService {
     return canonicalResult(workspace, result);
   }
 
-  private async channelOperation(
+  private async topicOperation(
     workspaceIdentifier: string,
     operation: AppServerProtocolOperation,
-    channel: string | null,
+    topic: string | null,
     input: Record<string, unknown>,
     extraArgs: readonly string[] = []
   ): Promise<BealeAppServerCanonicalResult> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
     const result = await this.invokeProtocol<unknown>(operation, {
       args: [
-        'channel', operation.slice('channel.'.length), '--workspace-id', workspace.workspaceId,
-        ...(channel ? ['--channel', channel] : []),
+        'topic', operation.slice('topic.'.length), '--workspace-id', workspace.workspaceId,
+        '--workspace-root', workspace.workspacePath,
+        ...(topic ? ['--topic', topic] : []),
         ...extraArgs
       ],
-      input: { ...input, workspaceId: workspace.workspaceId, ...(channel ? { channel } : {}) },
+      input: { ...input, workspaceId: workspace.workspaceId, ...(topic ? { topic } : {}) },
       storage: this.registry.storageForProfile(workspace.researchProfileId)
     });
     return canonicalResult(workspace, result);
@@ -1667,8 +1681,7 @@ function defaultBuiltinPlugins(): Array<{ id: string; path: string; installedAt:
     builtinPlugin('beale-introspection-builtin', 'beale-introspection', false, 'managed'),
     builtinPlugin('beale-terminator-builtin', 'beale-terminator', true, 'managed'),
     builtinPlugin('beale-browser-use-builtin', 'beale-browser-use', false),
-    builtinPlugin('meta-skills-builtin', 'meta-skills', false),
-    builtinPlugin('beale-terminator-builtin', 'beale-terminator', true)
+    builtinPlugin('meta-skills-builtin', 'meta-skills', false)
   ].flatMap((plugin) => existsSync(plugin.path) ? [plugin] : []);
 }
 

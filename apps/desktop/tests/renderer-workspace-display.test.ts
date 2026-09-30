@@ -122,7 +122,7 @@ describe('renderer workspace display view models', () => {
     expect(html).toContain('<div class="workspace-list-title sidebar-list-tabs" role="tablist" aria-label="Sidebar list">');
     expect(html).toContain('role="tab" aria-selected="true" class="active">Workspaces</button>');
     expect(html).toContain('<span class="sidebar-list-tab-divider" aria-hidden="true"></span>');
-    expect(html).toContain('role="tab" aria-selected="false" class="">Channels</button>');
+    expect(html).toContain('role="tab" aria-selected="false" class="">Topics</button>');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     expect(styles).toMatch(/\.sidebar-list-tab-divider\s*\{[^}]*width:\s*1px;[^}]*height:\s*16px;[^}]*background:\s*color-mix\(in srgb, var\(--text\) 34%, var\(--panel\)\);/s);
     expect(html).toContain('<div class="main-side-scroll sidebar-list-scroll-region">');
@@ -188,7 +188,7 @@ describe('renderer workspace display view models', () => {
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-bottom-fade \.sidebar-list-scroll\s*\{[^}]*mask-image: linear-gradient/u);
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-top-fade\.has-bottom-fade \.sidebar-list-scroll\s*\{[^}]*mask-image: linear-gradient/u);
     expect(styles).not.toMatch(/\.sidebar-list-scroll-region::(?:before|after)\s*\{[^}]*background:/u);
-    expect(styles).toMatch(/\.sidebar-list-scroll \.workspace-item-row,\s*\.sidebar-list-scroll \.sidebar-channel-item,\s*\.sidebar-list-scroll \.workspace-session-item\s*\{[^}]*width: 100%;[^}]*margin-inline: 0;/u);
+    expect(styles).toMatch(/\.sidebar-list-scroll \.workspace-item-row,\s*\.sidebar-list-scroll \.sidebar-topic-item,\s*\.sidebar-list-scroll \.workspace-session-item\s*\{[^}]*width: 100%;[^}]*margin-inline: 0;/u);
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-overflow \.sidebar-list-scroll:where\(:hover, :focus, :focus-within, \.scrollbar-active\)/u);
     expect(INSET_SCROLLBAR_SELECTOR).toContain('.sidebar-list-scroll');
     expect(INSET_SCROLLBAR_SELECTOR).not.toContain('.sidebar,');

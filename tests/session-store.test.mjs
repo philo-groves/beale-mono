@@ -10,167 +10,127 @@ import test from "node:test";
 import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   AppServerSessionStore,
-  ResearchChannelStore,
+  ResearchTopicStore,
+  initializeWorkspaceProject,
   normalizeResearchProfile,
   researchProfileHash,
 } from "../packages/research-agent/dist/index.js";
 import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolClient.js";
 
-test("workspace channels retain cross-session transcripts until explicitly deleted", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "app-server-channels-"));
+test("topics retain canonical pages and links in workspace files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-topics-"));
+  const workspaceRoot = join(directory, "workspace");
+  initializeWorkspaceProject(workspaceRoot, "workspace_example");
   const databasePath = join(directory, "memory.sqlite");
-  const first = new ResearchChannelStore({ databasePath });
-  const channel = first.create({
-    workspaceId: "workspace_channels",
-    name: "parser-review",
-    title: "Parser review",
-    topic: "Carry parser boundary research across sessions.",
-    createdBySessionId: "session_one",
-    createdByAgentPath: "/root",
-  });
-  first.append({
-    workspaceId: "workspace_channels",
-    channel: channel.id,
-    sessionId: "session_one",
-    attemptId: "attempt_one",
-    agentId: "agent_one",
-    agentPath: "/root/parser",
-    provider: "openai-codex",
-    model: "gpt-5.6-sol",
-    role: "reviewer",
-    status: "completed",
-    kind: "evidence",
-    contentMarkdown: "The allocation omits a terminator.",
-    evidenceRefs: ["code:parser:44"],
-  });
-  const shared = first.share({
-    workspaceId: "workspace_channels",
-    channel: channel.id,
-    sessionId: "session_one",
-    agentId: "agent_one",
-    agentPath: "/root/parser",
-    role: "reviewer",
-    status: "completed",
-    kind: "runbook",
-    resourceId: "runbook_parser_repro",
-    title: "Parser reproducer",
-    note: "The bounded reproducer is ready.",
-  });
-  assert.equal(shared.message.contentMarkdown, "The bounded reproducer is ready.");
+  const first = new ResearchTopicStore({ databasePath, workspaceRoot });
+  const topic = first.create({ workspaceId: "workspace_example", name: "parser-review", title: "Parser review", topic: "Track ExampleCo parser boundaries." });
+  const updated = first.updateOverview("workspace_example", topic.id, "Current understanding cites claim_example_001.", topic.updatedAt);
+  const page = first.savePage("workspace_example", topic.id, { title: "Open questions", contentMarkdown: "Which input sizes remain untested?" });
+  const link = first.link("workspace_example", topic.id, { kind: "claim", resourceId: "claim_example_001", title: "Example parser hypothesis" });
+  const related = first.create({ workspaceId: "workspace_example", name: "related-work", topic: "Related example work." });
+  assert.equal(first.link("workspace_example", topic.id, { kind: "topic", resourceId: related.name, title: related.title }).resourceId, related.id);
+  assert.throws(() => first.link("workspace_example", topic.id, { kind: "topic", resourceId: topic.name, title: topic.title }), /cannot link to itself/);
+  assert.throws(() => first.link("workspace_example", topic.id, { kind: "file", resourceId: "../outside.txt", title: "Outside" }), /Invalid linked workspace path/);
+  assert.throws(() => first.link("workspace_example", topic.id, { kind: "file", resourceId: "references/missing.txt", title: "Missing" }), /does not exist/);
+  assert.equal(first.search("workspace_example", "untested")[0].id, topic.id);
+  assert.equal(first.search("workspace_example", "hypothesis")[0].id, topic.id);
+  const canonical = new DatabaseSync(databasePath);
+  canonical.exec("CREATE TABLE app_server_research_claims (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL);");
+  canonical.prepare("INSERT INTO app_server_research_claims (id, workspace_id) VALUES (?, ?)").run("claim_other_workspace", "workspace_other");
+  canonical.close();
+  assert.throws(() => first.link("workspace_example", topic.id, { kind: "claim", resourceId: "claim_other_workspace", title: "Foreign claim" }), /must belong to this workspace/);
+  assert.throws(() => first.updateOverview("workspace_example", topic.id, "Stale edit", topic.updatedAt), /changed since it was opened/);
   first.close();
 
-  const later = new ResearchChannelStore({ databasePath });
+  const later = new ResearchTopicStore({ databasePath: join(directory, "rebuilt-memory.sqlite"), workspaceRoot });
   try {
-    const detail = later.get("workspace_channels", "parser-review");
-    assert.equal(detail.channel.id, channel.id);
-    assert.equal(detail.messages[0].sessionId, "session_one");
-    assert.equal(detail.messages[0].contentMarkdown, "The allocation omits a terminator.");
-    assert.equal(detail.members[0].status, "completed");
-    assert.equal(detail.sharedResources[0].kind, "runbook");
-    assert.equal(detail.sharedResources[0].resourceId, "runbook_parser_repro");
-    assert.equal(detail.sharedResources[0].messageId, shared.message.id);
-    assert.equal(later.list("workspace_channels")[0].messageCount, 2);
-    const archived = later.archive("workspace_channels", channel.id, "2026-08-24T12:00:00.000Z");
-    assert.equal(archived.archivedAt, "2026-08-24T12:00:00.000Z");
-    assert.deepEqual(later.list("workspace_channels"), []);
-    assert.equal(later.list("workspace_channels", 200, true)[0].messageCount, 2);
-    assert.equal(later.get("workspace_channels", channel.id).sharedResources[0].resourceId, "runbook_parser_repro");
-    assert.equal(later.restore("workspace_channels", channel.id).archivedAt, null);
-    assert.equal(later.list("workspace_channels")[0].id, channel.id);
-    assert.deepEqual(later.list("another_workspace"), []);
-    assert.deepEqual(later.delete("workspace_channels", channel.id), { channelId: channel.id, deleted: true });
-    assert.equal(later.get("workspace_channels", channel.id), null);
+    const detail = later.get("workspace_example", topic.id);
+    assert.equal(detail.topic.overviewMarkdown, updated.overviewMarkdown);
+    assert.equal(detail.pages[0].id, page.id);
+    assert.ok(detail.links.some((reference) => reference.id === link.id));
+    assert.equal(detail.messages.length, 0);
+    assert.equal(later.list("another_workspace").length, 0);
+    assert.equal(later.archive("workspace_example", topic.id).archivedAt !== null, true);
+    assert.deepEqual(later.list("workspace_example").map((entry) => entry.id), [related.id]);
+    assert.equal(later.restore("workspace_example", topic.id).archivedAt, null);
   } finally {
     later.close();
   }
+  const snapshot = JSON.parse(await readFile(join(workspaceRoot, "references", "topics", `${topic.id}.json`), "utf8"));
+  assert.equal(snapshot.workspaceId, "workspace_example");
+  assert.equal(snapshot.pages[0].id, page.id);
 });
 
-test("workspace channel names use at most three lowercase dash-separated words", () => {
-  const store = new ResearchChannelStore({ databasePath: ":memory:" });
+test("topic merges retain source content, resolve aliases, and can be undone after file hydration", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-topic-merge-"));
+  const workspaceRoot = join(directory, "workspace");
+  initializeWorkspaceProject(workspaceRoot, "workspace_example");
+  const first = new ResearchTopicStore({ databasePath: join(directory, "first.sqlite"), workspaceRoot });
+  const source = first.create({ workspaceId: "workspace_example", name: "parser-notes", topic: "Synthetic parser notes." });
+  const target = first.create({ workspaceId: "workspace_example", name: "parser-research", topic: "Synthetic parser research." });
+  const page = first.savePage("workspace_example", source.id, { title: "Old note", contentMarkdown: "Preserved synthesis." });
+  const merged = first.merge("workspace_example", source.id, target.id);
+  assert.equal(merged.source.mergedIntoTopicId, target.id);
+  assert.equal(first.get("workspace_example", source.name).topic.id, target.id);
+  assert.equal(first.search("workspace_example", "parser-notes")[0].id, target.id);
+  assert.equal(first.get("workspace_example", source.id).pages[0].id, page.id);
+  assert.equal(first.get("workspace_example", target.id).mergedTopics[0].id, source.id);
+  const laterTarget = first.create({ workspaceId: "workspace_example", name: "parser-summary", topic: "Synthetic summary." });
+  assert.throws(() => first.merge("workspace_example", target.id, laterTarget.id), /Undo dependent topic merges/);
+  assert.throws(() => first.archive("workspace_example", target.id), /Undo dependent topic merges/);
+  assert.throws(() => first.restore("workspace_example", source.id), /Undo the merge/);
+  first.close();
+
+  const rebuilt = new ResearchTopicStore({ databasePath: join(directory, "rebuilt.sqlite"), workspaceRoot });
   try {
-    const channel = store.create({
-      workspaceId: "workspace_channels",
-      name: " Parser / Boundary Review ",
-      topic: "Carry parser boundary research across sessions.",
-    });
-    assert.equal(channel.name, "parser-boundary-review");
-    assert.throws(() => store.create({
-      workspaceId: "workspace_channels",
-      name: "parser boundary review notes",
-      topic: "This name has too many words.",
-    }), /at most 3 words/);
-  } finally {
-    store.close();
-  }
+    assert.equal(rebuilt.get("workspace_example", source.name).topic.id, target.id);
+    assert.equal(rebuilt.get("workspace_example", source.id).pages[0].contentMarkdown, "Preserved synthesis.");
+    assert.equal(rebuilt.unmerge("workspace_example", source.id).mergedIntoTopicId, null);
+    assert.equal(rebuilt.get("workspace_example", source.name).topic.id, source.id);
+    assert.deepEqual(new Set(rebuilt.list("workspace_example").map((entry) => entry.id)), new Set([source.id, target.id, laterTarget.id]));
+  } finally { rebuilt.close(); }
 });
 
-test("hosted channel operations publish typed shared resources", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "app-server-channel-share-"));
-  const storage = {
-    databasePath: join(directory, "memory.sqlite"),
-    artifactDirectoryPath: join(directory, "artifacts"),
-  };
-  const created = await invokeAppServerProtocol("channel.create", {
-    args: [],
-    storage,
-    input: {
-      workspaceId: "workspace_channels",
-      name: "shared-review",
-      topic: "Share durable research artifacts.",
-    },
-  });
-  const shared = await invokeAppServerProtocol("channel.share", {
-    args: [],
-    storage,
-    input: {
-      workspaceId: "workspace_channels",
-      channel: created.id,
-      sessionId: "session_one",
-      agentPath: "/root/reviewer",
-      kind: "memory",
-      resourceId: "memory_parser_boundary",
-      title: "Parser boundary",
-    },
-  });
-  const detail = await invokeAppServerProtocol("channel.get", {
-    args: [],
-    storage,
-    input: { workspaceId: "workspace_channels", channel: created.id },
-  });
-  assert.equal(shared.resource.kind, "memory");
-  assert.equal(shared.message.contentMarkdown, "Shared a memory.");
-  assert.equal(detail.sharedResources[0].resourceId, "memory_parser_boundary");
-});
-
-test("workspace channel migration retains legacy members with unknown status", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "app-server-channel-status-"));
+test("existing channel records import as topic history and links", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-topic-import-"));
   const databasePath = join(directory, "memory.sqlite");
-  const original = new ResearchChannelStore({ databasePath });
-  const channel = original.create({
-    workspaceId: "workspace_channels",
-    name: "legacy-research",
-    topic: "Retain legacy channel members.",
-  });
-  original.join({
-    workspaceId: "workspace_channels",
-    channel: channel.id,
-    sessionId: "session_legacy",
-    agentPath: "/root/legacy",
-  });
-  original.close();
-
-  const legacyDatabase = new DatabaseSync(databasePath);
-  legacyDatabase.exec("ALTER TABLE app_server_channel_members DROP COLUMN status;");
-  legacyDatabase.prepare("DELETE FROM schema_migrations WHERE component = ? AND version >= 2")
-    .run("app_server_channels");
-  legacyDatabase.close();
-
-  const migrated = new ResearchChannelStore({ databasePath });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE app_server_channels (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL, created_by_session_id TEXT, created_by_agent_path TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT);
+    CREATE TABLE app_server_channel_members (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT, agent_path TEXT NOT NULL, provider TEXT, model TEXT, role TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, status TEXT NOT NULL);
+    CREATE TABLE app_server_channel_messages (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, session_id TEXT, attempt_id TEXT, member_id TEXT, sender_agent_path TEXT NOT NULL, kind TEXT NOT NULL, content_markdown TEXT NOT NULL, evidence_refs_json TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE app_server_channel_shared_resources (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, session_id TEXT, member_id TEXT, message_id TEXT NOT NULL, sender_agent_path TEXT NOT NULL, resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    INSERT INTO app_server_channels VALUES ('channel_example', 'workspace_example', 'parser-review', 'Parser review', 'Legacy purpose', NULL, '/root', '2026-08-01', '2026-08-02', NULL);
+    INSERT INTO app_server_channel_members VALUES ('member_example', 'channel_example', 'session_example', NULL, '/root', NULL, NULL, 'researcher', '2026-08-01', '2026-08-02', 'completed');
+    INSERT INTO app_server_channel_messages VALUES ('message_example', 'channel_example', 'session_example', NULL, 'member_example', '/root', 'evidence', 'Historical observation', '[]', '{}', '2026-08-02');
+    INSERT INTO app_server_channel_shared_resources VALUES ('shared_example', 'channel_example', 'session_example', 'member_example', 'message_example', '/root', 'memory', 'memory_example', 'Example memory', '2026-08-02', '2026-08-02');
+  `);
+  legacy.close();
+  const store = new ResearchTopicStore({ databasePath });
   try {
-    assert.equal(migrated.get("workspace_channels", channel.id).members[0].status, "unknown");
-  } finally {
-    migrated.close();
-  }
+    assert.equal(store.get("workspace_example", "parser-review").messages.length, 0);
+    const detail = store.get("workspace_example", "parser-review", 500);
+    assert.equal(detail.topic.overviewMarkdown, "Legacy purpose");
+    assert.equal(detail.messages[0].contentMarkdown, "Historical observation");
+    assert.equal(detail.links[0].resourceId, "memory_example");
+  } finally { store.close(); }
+});
+
+test("hosted topic operations update pages and canonical links", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-topic-protocol-"));
+  const storage = { databasePath: join(directory, "memory.sqlite"), artifactDirectoryPath: join(directory, "artifacts") };
+  const created = await invokeAppServerProtocol("topic.create", { args: [], storage, input: {
+    workspaceId: "workspace_example", name: "parser-review", topic: "Example parser work"
+  } });
+  const page = await invokeAppServerProtocol("topic.page.save", { args: [], storage, input: {
+    workspaceId: "workspace_example", topic: created.id, title: "Questions", contentMarkdown: "What remains unknown?"
+  } });
+  const link = await invokeAppServerProtocol("topic.link", { args: [], storage, input: {
+    workspaceId: "workspace_example", topic: created.id, kind: "memory", resourceId: "memory_example", title: "Example memory"
+  } });
+  const detail = await invokeAppServerProtocol("topic.get", { args: [], storage, input: { workspaceId: "workspace_example", topic: created.id } });
+  assert.equal(detail.pages[0].id, page.id);
+  assert.equal(detail.links[0].id, link.id);
 });
 
 test("session store owns creation, lifecycle, capture import, and queries as one revisioned aggregate", () => {

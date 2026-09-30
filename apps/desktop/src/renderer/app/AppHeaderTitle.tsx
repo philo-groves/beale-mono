@@ -4,7 +4,7 @@ import { Archive, CalendarClock, FileText, Folder, Monitor, Palette, Plug, Serve
 import type { RunRecord } from '@shared/types';
 import { displaySessionTitle } from '../../shared/sessionTitle';
 import { useDevRenderProbe } from '../devInstrumentation';
-import { displayChannelTitle, displayWorkspaceHeaderName } from '../view-models/appHeader';
+import { displayTopicTitle, displayWorkspaceHeaderName } from '../view-models/appHeader';
 
 export type AppHeaderViewIcon =
   | 'automations'
@@ -27,13 +27,13 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
   workspaceName,
   workspaceViewTitle,
   detail,
-  channelTitle,
+  topicTitle,
   onOpenSessionOverview
 }: {
   workspaceName: string;
   workspaceViewTitle?: string | null;
   detail: AppHeaderRun | null;
-  channelTitle?: string | null;
+  topicTitle?: string | null;
   onOpenSessionOverview?: () => void;
 }): JSX.Element {
   const workspaceLabel = displayWorkspaceHeaderName(workspaceName);
@@ -41,19 +41,19 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
   const sessionTitle = !workspaceViewLabel && detail
     ? displaySessionTitle(detail.run.title, detail.run.promptMarkdown)
     : null;
-  const channelLabel = !workspaceViewLabel && channelTitle
-    ? displayChannelTitle(channelTitle)
+  const topicLabel = !workspaceViewLabel && topicTitle
+    ? displayTopicTitle(topicTitle)
     : null;
   const headerSegments = [
     workspaceLabel,
     ...(workspaceViewLabel ? [workspaceViewLabel] : []),
     ...(sessionTitle ? [sessionTitle] : []),
-    ...(channelLabel ? [channelLabel] : [])
+    ...(topicLabel ? [topicLabel] : [])
   ];
   useDevRenderProbe('appHeaderTitle', () => ({
     workspace: workspaceLabel,
     run: detail?.run.id ?? 'none',
-    channel: channelLabel ?? 'none'
+    topic: topicLabel ?? 'none'
   }));
 
   return (
@@ -88,9 +88,9 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
             )}
           </>
         ) : null}
-        {channelLabel ? (
-          <span className="app-header-channel-title app-header-static-title" title={channelLabel}>
-            <span>{channelLabel}</span>
+        {topicLabel ? (
+          <span className="app-header-topic-title app-header-static-title" title={topicLabel}>
+            <span>{topicLabel}</span>
           </span>
         ) : null}
       </div>

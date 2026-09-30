@@ -23,7 +23,7 @@ describe('renderer app shell view model', () => {
       workspaceName: 'ExampleCo iOS Parser',
       workspaceViewTitle: 'Memory',
       detail: null,
-      channelTitle: null
+      topicTitle: null
     }));
     expect(workspaceHeader).toContain('lucide-folder');
     expect(workspaceHeader).toContain('aria-label="ExampleCo iOS Parser, Memory"');
@@ -34,32 +34,32 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: 'New Research',
       detail: { run: { id: 'run_old', title: 'Old Session', promptMarkdown: 'Old prompt' } } as RunDetail,
-      channelTitle: 'Old Channel'
+      topicTitle: 'Old Topic'
     }));
     expect(newResearchHeader).toContain('aria-label="Parser, New Research"');
     expect(newResearchHeader).not.toContain('Old Session');
-    expect(newResearchHeader).not.toContain('Old Channel');
+    expect(newResearchHeader).not.toContain('Old Topic');
 
-    const channelHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
+    const topicHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       detail: null,
-      channelTitle: 'parser review'
+      topicTitle: 'parser review'
     }));
-    expect(channelHeader).toContain('aria-label="Parser, parser-review"');
-    expect(channelHeader).toContain('class="app-header-channel-title app-header-static-title"');
+    expect(topicHeader).toContain('aria-label="Parser, parser review"');
+    expect(topicHeader).toContain('class="app-header-topic-title app-header-static-title"');
 
     const sessionHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       detail: { run: { id: 'run_current', title: 'Inspect parser states', promptMarkdown: 'Inspect parser states' } } as RunDetail,
-      channelTitle: null,
+      topicTitle: null,
       onOpenSessionOverview: () => undefined
     }));
     expect(sessionHeader).toContain('class="app-header-session-title app-header-session-overview-button"');
     expect(sessionHeader).toContain('aria-label="Open Session Overview for Inspect parser states"');
     const mainTitle = 'class="app-header-workspace-title app-header-static-title"';
-    for (const header of [workspaceHeader, newResearchHeader, channelHeader, sessionHeader]) {
+    for (const header of [workspaceHeader, newResearchHeader, topicHeader, sessionHeader]) {
       expect(header.indexOf('class="app-header-divider"')).toBeLessThan(header.indexOf(mainTitle));
       expect(header.match(/class="app-header-divider"/gu)).toHaveLength(1);
     }
@@ -162,7 +162,7 @@ describe('renderer app shell view model', () => {
     expect(styles).toContain('.app-navigation-rail-sections {\n  margin-top: 0;');
   });
 
-  it('keeps a navigation destination active as sessions and channels open', () => {
+  it('keeps a navigation destination active as sessions and topics open', () => {
     const base = { settingsOpen: false, reportsOpen: false, automationsOpen: false, pluginsOpen: false };
     expect(resolveAppNavigationDestination(base)).toBe('home');
     expect(resolveAppNavigationDestination({ ...base, reportsOpen: true })).toBe('reporting');
@@ -226,7 +226,7 @@ describe('renderer app shell view model', () => {
 
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const workspaceLabelStyles = styles.match(/\.app-header-workspace-title\s*\{([^}]*)\}/u)?.[1] ?? '';
-    const secondaryLabelStyles = styles.match(/\.app-header-session-title,\s*\.app-header-channel-title\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const secondaryLabelStyles = styles.match(/\.app-header-session-title,\s*\.app-header-topic-title\s*\{([^}]*)\}/u)?.[1] ?? '';
     expect(styles).toContain('--main-content-inline-start: calc(var(--navigation-rail-width) + var(--sidebar-width))');
     expect(styles).toMatch(/\.window-menu \.sidebar-toggle-button\s*\{[^}]*margin-left: 6px;/u);
     expect(styles).toMatch(/\.app-shell\.sidebar-collapsed\s*\{\s*--main-content-inline-start: var\(--navigation-rail-width\);/u);
@@ -259,7 +259,7 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       activeRunDetail: null,
-      activeChannelTitle: null,
+      activeTopicTitle: null,
       profilingEnabled: false,
       bottomPanelOpen: true,
       workspaceEditors: {
@@ -301,7 +301,7 @@ describe('renderer app shell view model', () => {
       platform: 'darwin',
       workspaceName: 'Example Workspace',
       activeRunDetail: null,
-      activeChannelTitle: null,
+      activeTopicTitle: null,
       profilingEnabled: false,
       bottomPanelOpen: false,
       workspaceEditors: null,
@@ -399,7 +399,7 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       activeRunDetail: null,
-      activeChannelTitle: null,
+      activeTopicTitle: null,
       profilingEnabled: false,
       bottomPanelOpen: false,
       workspaceEditors: null,
@@ -416,7 +416,7 @@ describe('renderer app shell view model', () => {
     expect(header).not.toContain('right-sidenav-toggle-button');
   });
 
-  it('keeps the channel summary toggle without exposing the session bottom panel', () => {
+  it('keeps the topic summary toggle without exposing the session bottom panel', () => {
     const header = renderToStaticMarkup(createElement(TopBar, {
       sidebarCollapsed: false,
       workspaceOpen: true,
@@ -430,7 +430,7 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       activeRunDetail: null,
-      activeChannelTitle: 'parser-review',
+      activeTopicTitle: 'parser-review',
       profilingEnabled: false,
       bottomPanelAvailable: false,
       bottomPanelOpen: false,

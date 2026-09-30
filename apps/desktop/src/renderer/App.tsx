@@ -33,8 +33,9 @@ import type {
   ResearchKitRefreshResult,
   ResolvedResearchProfile,
   ResearchProviderStatus,
-  ResearchChannelSummary,
-  ResearchChannelDetail,
+  ResearchTopicSummary,
+  ResearchTopicDetail,
+  ResearchTopicLinkKind,
   ResearchSessionSummary,
   RunDetailProjection,
   RunRecord,
@@ -63,7 +64,7 @@ import { AppNavigationRail, resolveAppNavigationDestination } from './app/AppNav
 import { TopBar } from './app/TopBar';
 import { NotificationStack, type WorkspaceAlert } from './features/notifications/Notifications';
 import { WorkspaceSidebar } from './features/workspaces/WorkspaceSidebar';
-import { ChannelWorkspace } from './features/channels/ChannelWorkspace';
+import { TopicWorkspace } from './features/topics/TopicWorkspace';
 import { QuickChatDock, type QuickChatDescriptor } from './features/quick-chat/QuickChatDock';
 import { WorkspaceStartupView } from './features/workspaces/WorkspaceStartupView';
 import { WorkspaceCreationView } from './features/workspaces/WorkspaceCreationView';
@@ -340,20 +341,20 @@ export function App(): JSX.Element {
   const [activeNotification, setActiveNotification] = useState<NotificationRecord | null>(null);
   const [workspaceAlerts, setWorkspaceAlerts] = useState<WorkspaceAlert[]>([]);
   const [selectedSubagentPath, setSelectedSubagentPath] = useState<string | null>(null);
-  const [researchChannels, setResearchChannels] = useState<ResearchChannelSummary[]>([]);
-  const [archivedResearchChannels, setArchivedResearchChannels] = useState<ResearchChannelSummary[]>([]);
+  const [researchTopics, setResearchTopics] = useState<ResearchTopicSummary[]>([]);
+  const [archivedResearchTopics, setArchivedResearchTopics] = useState<ResearchTopicSummary[]>([]);
   const [archivedQuickChats, setArchivedQuickChats] = useState<ResearchSessionSummary[]>([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const closedQuickChats = useMemo(() => {
     const openRunIds = new Set(quickChats.flatMap((chat) => chat.runId ? [chat.runId] : []));
     return archivedQuickChats.filter((session) => !openRunIds.has(session.runId));
   }, [archivedQuickChats, quickChats]);
-  const [researchChannelsLoading, setResearchChannelsLoading] = useState(false);
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
-  const [selectedChannelDetail, setSelectedChannelDetail] = useState<ResearchChannelDetail | null>(null);
-  const [channelLoading, setChannelLoading] = useState(false);
-  const [channelPosting, setChannelPosting] = useState(false);
-  const [channelError, setChannelError] = useState<string | null>(null);
+  const [researchTopicsLoading, setResearchTopicsLoading] = useState(false);
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  const [selectedTopicDetail, setSelectedTopicDetail] = useState<ResearchTopicDetail | null>(null);
+  const [topicLoading, setTopicLoading] = useState(false);
+  const [topicSaving, setTopicSaving] = useState(false);
+  const [topicError, setTopicError] = useState<string | null>(null);
   const [selectedRunbookId, setSelectedRunbookId] = useState<string | null>(null);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [selectedReportWorkspaceId, setSelectedReportWorkspaceId] = useState<string | null>(null);
@@ -427,30 +428,30 @@ export function App(): JSX.Element {
   useInsetScrollbarActivation();
 
   useEffect(() => {
-    setSelectedChannelId(null);
-    setSelectedChannelDetail(null);
-    setChannelError(null);
+    setSelectedTopicId(null);
+    setSelectedTopicDetail(null);
+    setTopicError(null);
   }, [snapshot?.workspace.workspaceId]);
 
   useEffect(() => {
     const workspaceId = snapshot?.workspace.workspaceId;
     if (!workspaceId) {
-      setResearchChannels([]);
-      setResearchChannelsLoading(false);
+      setResearchTopics([]);
+      setResearchTopicsLoading(false);
       return undefined;
     }
     let cancelled = false;
     const load = async (): Promise<void> => {
       try {
-        const channels = await window.beale.listResearchChannels(workspaceId);
-        if (!cancelled) setResearchChannels(channels);
+        const topics = await window.beale.listResearchTopics(workspaceId);
+        if (!cancelled) setResearchTopics(topics);
       } catch (caught: unknown) {
-        if (!cancelled) setChannelError(errorMessage(caught));
+        if (!cancelled) setTopicError(errorMessage(caught));
       } finally {
-        if (!cancelled) setResearchChannelsLoading(false);
+        if (!cancelled) setResearchTopicsLoading(false);
       }
     };
-    setResearchChannelsLoading(true);
+    setResearchTopicsLoading(true);
     const initialLoadTimer = window.setTimeout(() => void load(), selectedRunId ? 750 : 0);
     const interval = window.setInterval(() => void load(), 5_000);
     return () => {
@@ -462,29 +463,29 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     const workspaceId = snapshot?.workspace.workspaceId;
-    if (!workspaceId || !selectedChannelId) return undefined;
+    if (!workspaceId || !selectedTopicId) return undefined;
     let cancelled = false;
     const load = async (): Promise<void> => {
       try {
-        const detail = await window.beale.getResearchChannel(workspaceId, selectedChannelId);
+        const detail = await window.beale.getResearchTopic(workspaceId, selectedTopicId);
         if (!cancelled) {
-          setSelectedChannelDetail(detail);
-          setChannelError(null);
+          setSelectedTopicDetail(detail);
+          setTopicError(null);
         }
       } catch (caught: unknown) {
-        if (!cancelled) setChannelError(errorMessage(caught));
+        if (!cancelled) setTopicError(errorMessage(caught));
       } finally {
-        if (!cancelled) setChannelLoading(false);
+        if (!cancelled) setTopicLoading(false);
       }
     };
-    setChannelLoading(true);
+    setTopicLoading(true);
     void load();
     const interval = window.setInterval(() => void load(), 3_000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [selectedChannelId, snapshot?.workspace.workspaceId]);
+  }, [selectedTopicId, snapshot?.workspace.workspaceId]);
 
   useEffect(() => {
     if (memoryDreamingProgressClearTimerRef.current !== null) {
@@ -837,17 +838,17 @@ export function App(): JSX.Element {
     setError(null);
   }, []);
 
-  const refreshResearchChannels = useCallback(async (): Promise<void> => {
+  const refreshResearchTopics = useCallback(async (): Promise<void> => {
     const workspaceId = snapshot?.workspace.workspaceId;
     if (!workspaceId) return;
-    setResearchChannelsLoading(true);
+    setResearchTopicsLoading(true);
     try {
-      setResearchChannels(await window.beale.listResearchChannels(workspaceId));
-      setChannelError(null);
+      setResearchTopics(await window.beale.listResearchTopics(workspaceId));
+      setTopicError(null);
     } catch (caught: unknown) {
-      setChannelError(errorMessage(caught));
+      setTopicError(errorMessage(caught));
     } finally {
-      setResearchChannelsLoading(false);
+      setResearchTopicsLoading(false);
     }
   }, [snapshot?.workspace.workspaceId]);
 
@@ -855,13 +856,13 @@ export function App(): JSX.Element {
     const workspaces = workspaceRegistry?.workspaces ?? [];
     setArchiveLoading(true);
     try {
-      const [channels, quickChatSessions] = await Promise.all([
+      const [topics, quickChatSessions] = await Promise.all([
         Promise.all(workspaces.map((workspace) => (
-          window.beale.listArchivedResearchChannels(workspace.workspaceId)
+          window.beale.listArchivedResearchTopics(workspace.workspaceId)
         ))),
         window.beale.listArchivedQuickChats()
       ]);
-      setArchivedResearchChannels(channels.flat());
+      setArchivedResearchTopics(topics.flat());
       setArchivedQuickChats(quickChatSessions);
     } catch (caught: unknown) {
       setError(errorMessage(caught));
@@ -898,43 +899,44 @@ export function App(): JSX.Element {
     }
   }, [setWorkspaceRegistry]);
 
-  const archiveResearchChannel = useCallback(async (channel: ResearchChannelSummary): Promise<void> => {
+  const archiveResearchTopic = useCallback(async (topic: ResearchTopicSummary): Promise<void> => {
     try {
-      await window.beale.archiveResearchChannel(channel.workspaceId, channel.id);
-      if (selectedChannelId === channel.id) {
-        setSelectedChannelId(null);
-        setSelectedChannelDetail(null);
+      await window.beale.archiveResearchTopic(topic.workspaceId, topic.id);
+      if (selectedTopicId === topic.id) {
+        setSelectedTopicId(null);
+        setSelectedTopicDetail(null);
       }
-      await refreshResearchChannels();
+      await refreshResearchTopics();
     } catch (caught: unknown) {
-      setChannelError(errorMessage(caught));
+      setTopicError(errorMessage(caught));
     }
-  }, [refreshResearchChannels, selectedChannelId]);
+  }, [refreshResearchTopics, selectedTopicId]);
 
-  const restoreResearchChannel = useCallback(async (channel: ResearchChannelSummary): Promise<void> => {
+  const restoreResearchTopic = useCallback(async (topic: ResearchTopicSummary): Promise<void> => {
     try {
-      await window.beale.restoreResearchChannel(channel.workspaceId, channel.id);
-      await Promise.all([loadArchiveCatalog(), refreshResearchChannels()]);
+      if (topic.mergedIntoTopicId) await window.beale.unmergeResearchTopic(topic.workspaceId, topic.id);
+      else await window.beale.restoreResearchTopic(topic.workspaceId, topic.id);
+      await Promise.all([loadArchiveCatalog(), refreshResearchTopics()]);
     } catch (caught: unknown) {
       setError(errorMessage(caught));
     }
-  }, [loadArchiveCatalog, refreshResearchChannels]);
+  }, [loadArchiveCatalog, refreshResearchTopics]);
 
-  const refreshSelectedChannel = useCallback(async (): Promise<void> => {
+  const refreshSelectedTopic = useCallback(async (): Promise<void> => {
     const workspaceId = snapshot?.workspace.workspaceId;
-    if (!workspaceId || !selectedChannelId) return;
-    setChannelLoading(true);
+    if (!workspaceId || !selectedTopicId) return;
+    setTopicLoading(true);
     try {
-      setSelectedChannelDetail(await window.beale.getResearchChannel(workspaceId, selectedChannelId));
-      setChannelError(null);
+      setSelectedTopicDetail(await window.beale.getResearchTopic(workspaceId, selectedTopicId));
+      setTopicError(null);
     } catch (caught: unknown) {
-      setChannelError(errorMessage(caught));
+      setTopicError(errorMessage(caught));
     } finally {
-      setChannelLoading(false);
+      setTopicLoading(false);
     }
-  }, [selectedChannelId, snapshot?.workspace.workspaceId]);
+  }, [selectedTopicId, snapshot?.workspace.workspaceId]);
 
-  const openResearchChannel = useCallback((channel: ResearchChannelSummary): void => {
+  const openResearchTopic = useCallback((topic: ResearchTopicSummary): void => {
     closeWorkspaceOnboarding();
     closeNewResearch();
     clearRunDetail();
@@ -944,56 +946,56 @@ export function App(): JSX.Element {
     setAutomationsOpen(false);
     setPluginsOpen(false);
     setSettingsOpen(false);
-    setChannelError(null);
+    setTopicError(null);
     setRightSidenavExpanded(false);
-    setSelectedChannelId(channel.id);
-    setSelectedChannelDetail(null);
+    setSelectedTopicId(topic.id);
+    setSelectedTopicDetail(null);
   }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId]);
 
-  const createResearchChannel = useCallback(async (input: { name: string; topic: string }): Promise<void> => {
+  const createResearchTopic = useCallback(async (input: { name: string; title: string; topic: string }): Promise<void> => {
     const workspaceId = snapshot?.workspace.workspaceId;
-    if (!workspaceId) throw new Error('Open a workspace before creating a channel.');
+    if (!workspaceId) throw new Error('Open a workspace before creating a topic.');
     try {
-      const channel = await window.beale.createResearchChannel(workspaceId, input);
-      await refreshResearchChannels();
-      openResearchChannel({ ...channel, memberCount: 0, messageCount: 0, latestMessagePreview: null });
+      const topic = await window.beale.createResearchTopic(workspaceId, input);
+      await refreshResearchTopics();
+      openResearchTopic({ ...topic, memberCount: 0, messageCount: 0, latestMessagePreview: null });
     } catch (caught: unknown) {
       const message = errorMessage(caught);
-      setChannelError(message);
+      setTopicError(message);
       throw new Error(message);
     }
-  }, [openResearchChannel, refreshResearchChannels, snapshot?.workspace.workspaceId]);
+  }, [openResearchTopic, refreshResearchTopics, snapshot?.workspace.workspaceId]);
 
-  const postResearchChannelMessage = useCallback(async (contentMarkdown: string): Promise<void> => {
+  const mutateSelectedTopic = useCallback(async (action: (workspaceId: string, topicId: string) => Promise<unknown>): Promise<void> => {
     const workspaceId = snapshot?.workspace.workspaceId;
-    if (!workspaceId || !selectedChannelId) return;
-    setChannelPosting(true);
+    if (!workspaceId || !selectedTopicId) return;
+    setTopicSaving(true);
     try {
-      await window.beale.postResearchChannelMessage(workspaceId, selectedChannelId, { contentMarkdown });
-      await Promise.all([refreshSelectedChannel(), refreshResearchChannels()]);
+      await action(workspaceId, selectedTopicId);
+      await Promise.all([refreshSelectedTopic(), refreshResearchTopics()]);
     } catch (caught: unknown) {
       const message = errorMessage(caught);
-      setChannelError(message);
+      setTopicError(message);
       throw new Error(message);
     } finally {
-      setChannelPosting(false);
+      setTopicSaving(false);
     }
-  }, [refreshResearchChannels, refreshSelectedChannel, selectedChannelId, snapshot?.workspace.workspaceId]);
+  }, [refreshResearchTopics, refreshSelectedTopic, selectedTopicId, snapshot?.workspace.workspaceId]);
 
-  const deleteSelectedResearchChannel = useCallback(async (): Promise<void> => {
+  const deleteSelectedResearchTopic = useCallback(async (): Promise<void> => {
     const workspaceId = snapshot?.workspace.workspaceId;
-    if (!workspaceId || !selectedChannelId) return;
+    if (!workspaceId || !selectedTopicId) return;
     try {
-      await window.beale.deleteResearchChannel(workspaceId, selectedChannelId);
-      setSelectedChannelId(null);
-      setSelectedChannelDetail(null);
-      await refreshResearchChannels();
+      await window.beale.deleteResearchTopic(workspaceId, selectedTopicId);
+      setSelectedTopicId(null);
+      setSelectedTopicDetail(null);
+      await refreshResearchTopics();
     } catch (caught: unknown) {
       const message = errorMessage(caught);
-      setChannelError(message);
+      setTopicError(message);
       throw new Error(message);
     }
-  }, [refreshResearchChannels, selectedChannelId, snapshot?.workspace.workspaceId]);
+  }, [refreshResearchTopics, selectedTopicId, snapshot?.workspace.workspaceId]);
 
   const openPlugins = useCallback((): void => {
     closeWorkspaceOnboarding();
@@ -1001,7 +1003,7 @@ export function App(): JSX.Element {
     setSettingsOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
-    setSelectedChannelId(null);
+    setSelectedTopicId(null);
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(true);
@@ -1679,8 +1681,8 @@ export function App(): JSX.Element {
   const openWorkspaceFromSidebar = useCallback((workspace: WorkspaceRegistryEntry): void => {
     closeWorkspaceOnboarding();
     closeNewResearch();
-    setSelectedChannelId(null);
-    setSelectedChannelDetail(null);
+    setSelectedTopicId(null);
+    setSelectedTopicDetail(null);
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
@@ -1692,8 +1694,8 @@ export function App(): JSX.Element {
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
-    setSelectedChannelId(null);
-    setSelectedChannelDetail(null);
+    setSelectedTopicId(null);
+    setSelectedTopicDetail(null);
     openResearchSession(workspace, session);
   }, [closeNewResearch, closeWorkspaceOnboarding, openResearchSession]);
   const importWorkspace = useCallback((): void => {
@@ -1792,7 +1794,7 @@ export function App(): JSX.Element {
     : snapshot?.researchProfile.profile ?? null;
   const activeResearchFeatures = researchProfileFeatureAvailability(activeResearchProfile);
   const researchDetailsAvailable = !newResearchOpen
-    && !selectedChannelId
+    && !selectedTopicId
     && (selectedRunId ? activeRunDetail !== null : snapshot !== null)
     && (selectedRunId
       ? hasResearchProfileDetailFeatures(activeResearchProfile)
@@ -2096,12 +2098,12 @@ export function App(): JSX.Element {
     automationsOpen,
     pluginsOpen
   });
-  const channelSummaryAvailable = Boolean(selectedChannelId)
+  const topicSummaryAvailable = Boolean(selectedTopicId)
     && !settingsOpen
     && !reportsOpen
     && !automationsOpen
     && !pluginsOpen;
-  const rightSidenavAvailable = headerResearchControlsAvailable || channelSummaryAvailable;
+  const rightSidenavAvailable = headerResearchControlsAvailable || topicSummaryAvailable;
   const bottomPanelVisible = bottomPanelOpen && headerResearchControlsAvailable;
   useEffect(() => {
     if (!headerResearchControlsAvailable) setBottomPanelOpen(false);
@@ -2130,7 +2132,7 @@ export function App(): JSX.Element {
     () => reportsForReportingScope(reportingReports, reportingScopeWorkspaceId),
     [reportingReports, reportingScopeWorkspaceId]
   );
-  const activeChannelTitle = selectedChannelDetail?.channel.name ?? null;
+  const activeTopicTitle = selectedTopicDetail?.topic.title ?? null;
   const openSettings = useCallback(() => {
     closeWorkspaceOnboarding();
     closeNewResearch();
@@ -2142,8 +2144,8 @@ export function App(): JSX.Element {
     closeNewResearch();
     clearRunDetail();
     setSelectedRunId(null);
-    setSelectedChannelId(null);
-    setSelectedChannelDetail(null);
+    setSelectedTopicId(null);
+    setSelectedTopicDetail(null);
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
@@ -2166,7 +2168,7 @@ export function App(): JSX.Element {
   const closeProfiling = useCallback(() => setProfilingOpen(false), []);
   const startNewResearch = useCallback(() => {
     closeWorkspaceOnboarding();
-    setSelectedChannelId(null);
+    setSelectedTopicId(null);
     if (reportsOpen) {
       clearRunDetail();
       setSelectedRunId(null);
@@ -2290,7 +2292,7 @@ export function App(): JSX.Element {
         newResearchLabel={snapshot?.researchProfile.profile.presentation?.newResearchLabel ?? 'New Research'}
         newResearchDisabled={busy}
         rightSidenavAvailable={rightSidenavAvailable}
-        rightSidenavExpanded={rightSidenavExpanded && (researchDetailsAvailable || channelSummaryAvailable)}
+        rightSidenavExpanded={rightSidenavExpanded && (researchDetailsAvailable || topicSummaryAvailable)}
         contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !pluginsOpen}
         staticContextTitle={settingsOpen
           ? { primary: 'Agent Settings', secondary: settingsSectionLabel(settingsSection), icon: settingsSectionHeaderIcon(settingsSection) }
@@ -2311,9 +2313,9 @@ export function App(): JSX.Element {
         workspaceName={workspaceDraft && !newResearchOpen ? 'New Workspace' : currentWorkspaceName}
         workspaceViewTitle={newResearchOpen
           ? snapshot?.researchProfile.profile.presentation?.newResearchLabel ?? 'New Research'
-          : workspaceDraft ? workspaceDashboardViewName : (snapshot && !selectedRunId && !selectedChannelId ? workspaceDashboardViewName : null)}
+          : workspaceDraft ? workspaceDashboardViewName : (snapshot && !selectedRunId && !selectedTopicId ? workspaceDashboardViewName : null)}
         activeRunDetail={activeRunHeaderDetail}
-        activeChannelTitle={activeChannelTitle}
+        activeTopicTitle={activeTopicTitle}
         profilingEnabled={profilingState?.enabled ?? false}
         bottomPanelAvailable={headerResearchControlsAvailable}
         bottomPanelOpen={bottomPanelVisible}
@@ -2368,17 +2370,17 @@ export function App(): JSX.Element {
           reportsActive={reportsOpen}
           pluginsActive={pluginsOpen}
           snapshot={snapshot}
-          channels={researchChannels}
-          channelsLoading={researchChannelsLoading}
-          selectedChannelId={selectedChannelId}
+          topics={researchTopics}
+          topicsLoading={researchTopicsLoading}
+          selectedTopicId={selectedTopicId}
           onAddWorkspace={beginWorkspaceCreation}
           onImportWorkspace={importWorkspace}
           onOpenWorkspace={openWorkspaceFromSidebar}
           onOpenResearchSession={openResearchSessionFromSidebar}
-          onOpenChannel={openResearchChannel}
+          onOpenTopic={openResearchTopic}
           onArchiveSession={archiveResearchSession}
-          onArchiveChannel={archiveResearchChannel}
-          onCreateChannel={createResearchChannel}
+          onArchiveTopic={archiveResearchTopic}
+          onCreateTopic={createResearchTopic}
           onResizePointerDown={beginSidebarResize}
           onStartNewResearch={startNewResearch}
           onOpenQuickChat={openQuickChat}
@@ -2422,7 +2424,7 @@ export function App(): JSX.Element {
             agentPluginsError={agentPluginsError}
             sessionHeatPreferences={sessionHeatPreferences}
             archivedSessions={workspaceRegistry?.archivedResearchSessions ?? []}
-            archivedChannels={archivedResearchChannels}
+            archivedTopics={archivedResearchTopics}
             archivedQuickChats={closedQuickChats}
             archiveWorkspaces={workspaceRegistry?.workspaces ?? []}
             archiveLoading={archiveLoading}
@@ -2461,7 +2463,7 @@ export function App(): JSX.Element {
             onSetSessionHeatPreference={setSessionHeatPreference}
             onSetSessionHeatPalettePreference={setSessionHeatPalettePreference}
             onRestoreResearchSession={restoreResearchSession}
-            onRestoreResearchChannel={restoreResearchChannel}
+            onRestoreResearchTopic={restoreResearchTopic}
             onResumeQuickChat={resumeQuickChat}
           />
         ) : (
@@ -2621,20 +2623,33 @@ export function App(): JSX.Element {
                   onOpenReport={openReportSession}
                 />
               )
-            ) : selectedChannelId ? (
-              <ChannelWorkspace
-                detail={selectedChannelDetail}
-                loading={channelLoading}
-                error={channelError}
-                posting={channelPosting}
-                providerModelCatalog={researchProviderModelCatalog}
-                summaryExpanded={rightSidenavExpanded && channelSummaryAvailable}
-                onSummaryExpandedChange={setRightSidenavExpanded}
+            ) : selectedTopicId ? (
+              <TopicWorkspace
+                detail={selectedTopicDetail}
+                loading={topicLoading}
+                error={topicError}
+                saving={topicSaving}
                 onRefresh={() => {
-                  void Promise.all([refreshSelectedChannel(), refreshResearchChannels()]);
+                  void Promise.all([refreshSelectedTopic(), refreshResearchTopics()]);
                 }}
-                onPost={postResearchChannelMessage}
-                onDelete={deleteSelectedResearchChannel}
+                onUpdateOverview={(content, expectedUpdatedAt) => mutateSelectedTopic((workspaceId, topicId) => window.beale.updateResearchTopicOverview(workspaceId, topicId, content, expectedUpdatedAt))}
+                onSavePage={(input) => mutateSelectedTopic((workspaceId, topicId) => window.beale.saveResearchTopicPage(workspaceId, topicId, input))}
+                onDeletePage={(pageId) => mutateSelectedTopic((workspaceId, topicId) => window.beale.deleteResearchTopicPage(workspaceId, topicId, pageId))}
+                onLink={(input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }) => mutateSelectedTopic((workspaceId, topicId) => window.beale.linkResearchTopicResource(workspaceId, topicId, input))}
+                onUnlink={(linkId) => mutateSelectedTopic((workspaceId, topicId) => window.beale.unlinkResearchTopicResource(workspaceId, topicId, linkId))}
+                onArchive={() => mutateSelectedTopic(async (workspaceId, topicId) => {
+                  await window.beale.archiveResearchTopic(workspaceId, topicId);
+                  setSelectedTopicId(null);
+                  setSelectedTopicDetail(null);
+                })}
+                availableTopics={researchTopics}
+                onMerge={async (targetTopicId) => {
+                  await mutateSelectedTopic((workspaceId, sourceTopicId) => window.beale.mergeResearchTopic(workspaceId, sourceTopicId, targetTopicId));
+                  setSelectedTopicId(targetTopicId);
+                  setSelectedTopicDetail(null);
+                }}
+                onUnmerge={(sourceTopicId) => mutateSelectedTopic((workspaceId) => window.beale.unmergeResearchTopic(workspaceId, sourceTopicId))}
+                onOpenTopic={(topicId) => { setSelectedTopicId(topicId); setSelectedTopicDetail(null); }}
               />
             ) : snapshot ? <MainSessionWorkspace
               workspaceId={snapshot.workspace.workspaceId}

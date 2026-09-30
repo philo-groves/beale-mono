@@ -1849,12 +1849,12 @@ private struct SubagentListRow: View {
         return "\(providerName) · \(modelName)"
     }
 
-    private var channelLabel: String {
-        guard let channel = agent.channelName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !channel.isEmpty else {
-            return "No Channels"
+    private var topicLabel: String {
+        guard let topic = agent.topicName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !topic.isEmpty else {
+            return "No Topic"
         }
-        return "#\(channel.trimmingCharacters(in: CharacterSet(charactersIn: "#")))"
+        return topic.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
     }
 
     private var createdAt: Date? {
@@ -1882,7 +1882,7 @@ private struct SubagentListRow: View {
                 .lineLimit(2)
 
             HStack(spacing: 8) {
-                Text(channelLabel)
+                Text(topicLabel)
                     .lineLimit(1)
                 Spacer()
                 Image(systemName: "cpu")

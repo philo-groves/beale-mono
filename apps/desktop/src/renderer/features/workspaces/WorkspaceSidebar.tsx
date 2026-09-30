@@ -1,14 +1,14 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
-import { Archive, Folder, FolderInput, FolderPlus, Hash, LoaderCircle, Plus, RefreshCw, Search, SquarePen, X, Zap } from 'lucide-react';
-import type { WorkspaceRegistryEntry, WorkspaceRegistryState, ResearchChannelSummary, ResearchSessionSummary, RunStatus, WorkspaceSnapshot } from '@shared/types';
+import { Archive, BookOpen, Folder, FolderInput, FolderPlus, LoaderCircle, Plus, RefreshCw, Search, SquarePen, X, Zap } from 'lucide-react';
+import type { WorkspaceRegistryEntry, WorkspaceRegistryState, ResearchTopicSummary, ResearchSessionSummary, RunStatus, WorkspaceSnapshot } from '@shared/types';
 import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
 import { useDevRenderProbe } from '../../devInstrumentation';
-import { canonicalResearchChannelName, normalizeResearchChannelNameDraft } from '../../view-models/researchChannels';
+import { canonicalResearchTopicName } from '../../view-models/researchTopics';
 import { promptSessionTitle, researchSessionsForWorkspace, shortRelativeAge } from '../../view-models/workspaceDisplay';
 
 const SIDEBAR_SESSION_LIMIT = 4;
-const SIDEBAR_CHANNEL_LIMIT = 4;
+const SIDEBAR_TOPIC_LIMIT = 4;
 
 export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   busy,
@@ -23,17 +23,17 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   reportsActive = false,
   pluginsActive = false,
   snapshot,
-  channels = [],
-  channelsLoading = false,
-  selectedChannelId = null,
+  topics = [],
+  topicsLoading = false,
+  selectedTopicId = null,
   onAddWorkspace,
   onImportWorkspace,
   onOpenWorkspace,
   onOpenResearchSession,
-  onOpenChannel = () => undefined,
+  onOpenTopic = () => undefined,
   onArchiveSession = async () => undefined,
-  onArchiveChannel = async () => undefined,
-  onCreateChannel = async () => undefined,
+  onArchiveTopic = async () => undefined,
+  onCreateTopic = async () => undefined,
   onResizePointerDown,
   onStartNewResearch,
   onOpenQuickChat = () => undefined,
@@ -51,17 +51,17 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   reportsActive?: boolean;
   pluginsActive?: boolean;
   snapshot: WorkspaceSnapshot | null;
-  channels?: ResearchChannelSummary[];
-  channelsLoading?: boolean;
-  selectedChannelId?: string | null;
+  topics?: ResearchTopicSummary[];
+  topicsLoading?: boolean;
+  selectedTopicId?: string | null;
   onAddWorkspace: () => void;
   onImportWorkspace: () => void;
   onOpenWorkspace: (workspace: WorkspaceRegistryEntry) => void;
   onOpenResearchSession: (workspace: WorkspaceRegistryEntry, session: ResearchSessionSummary) => void;
-  onOpenChannel?: (channel: ResearchChannelSummary) => void;
+  onOpenTopic?: (topic: ResearchTopicSummary) => void;
   onArchiveSession?: (session: ResearchSessionSummary) => Promise<void>;
-  onArchiveChannel?: (channel: ResearchChannelSummary) => Promise<void>;
-  onCreateChannel?: (input: { name: string; topic: string }) => Promise<void>;
+  onArchiveTopic?: (topic: ResearchTopicSummary) => Promise<void>;
+  onCreateTopic?: (input: { name: string; title: string; topic: string }) => Promise<void>;
   onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onStartNewResearch: () => void;
   onOpenQuickChat?: () => void;
@@ -81,23 +81,44 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [workspaceAddMenuOpen, setWorkspaceAddMenuOpen] = useState(false);
-  const [activeList, setActiveList] = useState<'workspaces' | 'channels'>(() => selectedChannelId ? 'channels' : 'workspaces');
-  const [channelSearchQuery, setChannelSearchQuery] = useState('');
-  const [channelCreateOpen, setChannelCreateOpen] = useState(false);
-  const [channelName, setChannelName] = useState('');
-  const [channelTopic, setChannelTopic] = useState('');
-  const [channelCreating, setChannelCreating] = useState(false);
-  const [channelsExpanded, setChannelsExpanded] = useState(false);
+  const [activeList, setActiveList] = useState<'workspaces' | 'topics'>(() => selectedTopicId ? 'topics' : 'workspaces');
+  const [topicSearchQuery, setTopicSearchQuery] = useState('');
+  const [topicSearchResults, setTopicSearchResults] = useState<{ workspaceId: string; query: string; topics: ResearchTopicSummary[] } | null>(null);
+  const [topicCreateOpen, setTopicCreateOpen] = useState(false);
+  const [topicName, setTopicName] = useState('');
+  const [topicTopic, setTopicTopic] = useState('');
+  const [topicCreating, setTopicCreating] = useState(false);
+  const [topicsExpanded, setTopicsExpanded] = useState(false);
   const workspaceAddMenuRef = useRef<HTMLDivElement | null>(null);
   const normalizedSessionSearchQuery = sessionSearchQuery.trim();
-  const normalizedChannelSearchQuery = channelSearchQuery.trim().toLocaleLowerCase();
-  const visibleChannels = normalizedChannelSearchQuery
-    ? channels.filter((channel) => [channel.name, channel.title, channel.topic, channel.latestMessagePreview ?? '']
-      .join('\n').toLocaleLowerCase().includes(normalizedChannelSearchQuery))
-    : channels;
-  const filteringChannels = normalizedChannelSearchQuery.length > 0;
-  const primaryChannels = filteringChannels ? visibleChannels : visibleChannels.slice(0, SIDEBAR_CHANNEL_LIMIT);
-  const hiddenChannels = filteringChannels ? [] : visibleChannels.slice(SIDEBAR_CHANNEL_LIMIT);
+  const normalizedTopicSearchQuery = topicSearchQuery.trim().toLocaleLowerCase();
+  const topicWorkspaceId = snapshot?.workspace?.workspaceId;
+  useEffect(() => {
+    if (!topicWorkspaceId || !normalizedTopicSearchQuery) {
+      setTopicSearchResults(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      void window.beale.searchResearchTopics(topicWorkspaceId, normalizedTopicSearchQuery)
+        .then((found) => {
+          if (!cancelled) setTopicSearchResults({ workspaceId: topicWorkspaceId, query: normalizedTopicSearchQuery, topics: found });
+        })
+        .catch(() => {
+          if (!cancelled) setTopicSearchResults(null);
+        });
+    }, 200);
+    return () => { cancelled = true; window.clearTimeout(timeout); };
+  }, [topicWorkspaceId, normalizedTopicSearchQuery]);
+  const visibleTopics = normalizedTopicSearchQuery
+    ? topicSearchResults !== null && topicSearchResults.workspaceId === topicWorkspaceId && topicSearchResults.query === normalizedTopicSearchQuery
+      ? topicSearchResults.topics
+      : topics.filter((topic) => [topic.name, topic.title, topic.topic, topic.overviewMarkdown]
+        .join('\n').toLocaleLowerCase().includes(normalizedTopicSearchQuery))
+    : topics;
+  const filteringTopics = normalizedTopicSearchQuery.length > 0;
+  const primaryTopics = filteringTopics ? visibleTopics : visibleTopics.slice(0, SIDEBAR_TOPIC_LIMIT);
+  const hiddenTopics = filteringTopics ? [] : visibleTopics.slice(SIDEBAR_TOPIC_LIMIT);
   const filteringSessions = normalizedSessionSearchQuery.length > 0;
   const workspaceRows = workspaces
     .map((workspace) => {
@@ -121,35 +142,35 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
     [...expandedWorkspaceIds].sort().join(','),
     normalizedSessionSearchQuery,
     activeList,
-    channels.length,
-    channelsExpanded,
-    visibleChannels.map((channel) => `${channel.id}:${channel.updatedAt}`).join(',')
+    topics.length,
+    topicsExpanded,
+    visibleTopics.map((topic) => `${topic.id}:${topic.updatedAt}`).join(',')
   ].join(':');
   const closeSessionSearch = (): void => {
     setSessionSearchOpen(false);
     setSessionSearchQuery('');
-    setChannelSearchQuery('');
+    setTopicSearchQuery('');
   };
-  const renderChannel = (channel: ResearchChannelSummary): JSX.Element => (
-    <div className="sidebar-channel-row" key={channel.id}>
+  const renderTopic = (topic: ResearchTopicSummary): JSX.Element => (
+    <div className="sidebar-topic-row" key={topic.id}>
       <button
         type="button"
-        className={`sidebar-channel-item${selectedChannelId === channel.id ? ' active' : ''}`}
-        aria-current={selectedChannelId === channel.id ? 'page' : undefined}
-        onClick={() => onOpenChannel(channel)}
+        className={`sidebar-topic-item${selectedTopicId === topic.id ? ' active' : ''}`}
+        aria-current={selectedTopicId === topic.id ? 'page' : undefined}
+        onClick={() => onOpenTopic(topic)}
       >
-        <span className="sidebar-channel-indent" aria-hidden="true" />
-        <span className="sidebar-channel-name">{channel.name}</span>
-        <span className="workspace-session-age">{shortRelativeAge(channel.updatedAt)}</span>
+        <span className="sidebar-topic-indent" aria-hidden="true" />
+        <span className="sidebar-topic-name">{topic.title}</span>
+        <span className="workspace-session-age">{shortRelativeAge(topic.updatedAt)}</span>
       </button>
       <button
         type="button"
         className="sidebar-row-archive-button"
-        title={`Archive channel ${channel.name}`}
-        aria-label={`Archive channel ${channel.name}`}
+        title={`Archive topic ${topic.title}`}
+        aria-label={`Archive topic ${topic.title}`}
         onClick={() => {
-          if (!window.confirm(`Archive #${channel.name}? You can restore it from Agent Settings > Archive.`)) return;
-          void onArchiveChannel(channel);
+          if (!window.confirm(`Archive ${topic.title}? You can restore it from Agent Settings > Archive.`)) return;
+          void onArchiveTopic(topic);
         }}
       >
         <Archive size={13} aria-hidden="true" />
@@ -158,11 +179,11 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   );
 
   useEffect(() => {
-    if (selectedChannelId) setActiveList('channels');
-  }, [selectedChannelId]);
+    if (selectedTopicId) setActiveList('topics');
+  }, [selectedTopicId]);
 
   useEffect(() => {
-    setChannelsExpanded(false);
+    setTopicsExpanded(false);
   }, [snapshot?.workspace?.workspaceId]);
 
   useEffect(() => {
@@ -207,12 +228,12 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
               <Search className="workspace-list-search-icon" aria-hidden="true" size={13} />
               <input
                 autoFocus
-                value={activeList === 'workspaces' ? sessionSearchQuery : channelSearchQuery}
-                aria-label={activeList === 'workspaces' ? 'Search sessions' : 'Search channels'}
-                placeholder={activeList === 'workspaces' ? 'Search sessions' : 'Search channels'}
+                value={activeList === 'workspaces' ? sessionSearchQuery : topicSearchQuery}
+                aria-label={activeList === 'workspaces' ? 'Search sessions' : 'Search topics'}
+                placeholder={activeList === 'workspaces' ? 'Search sessions' : 'Search topics'}
                 onChange={(event) => activeList === 'workspaces'
                   ? setSessionSearchQuery(event.target.value)
-                  : setChannelSearchQuery(event.target.value)}
+                  : setTopicSearchQuery(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Escape') closeSessionSearch();
                 }}
@@ -225,17 +246,17 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
             <div className="workspace-list-title sidebar-list-tabs" role="tablist" aria-label="Sidebar list">
               <button type="button" role="tab" aria-selected={activeList === 'workspaces'} className={activeList === 'workspaces' ? 'active' : ''} onClick={() => {
                 closeSessionSearch();
-                setChannelCreateOpen(false);
+                setTopicCreateOpen(false);
                 setActiveList('workspaces');
               }}>Workspaces</button>
               <span className="sidebar-list-tab-divider" aria-hidden="true" />
-              <button type="button" role="tab" aria-selected={activeList === 'channels'} className={activeList === 'channels' ? 'active' : ''} onClick={() => {
+              <button type="button" role="tab" aria-selected={activeList === 'topics'} className={activeList === 'topics' ? 'active' : ''} onClick={() => {
                 closeSessionSearch();
                 setWorkspaceAddMenuOpen(false);
-                setActiveList('channels');
-              }}>Channels</button>
-              {(activeList === 'workspaces' ? workspaceRegistryLoading : channelsLoading) ? (
-                <span className="workspace-list-title-loading" role="status" aria-label={activeList === 'workspaces' ? 'Loading workspaces' : 'Loading channels'}>
+                setActiveList('topics');
+              }}>Topics</button>
+              {(activeList === 'workspaces' ? workspaceRegistryLoading : topicsLoading) ? (
+                <span className="workspace-list-title-loading" role="status" aria-label={activeList === 'workspaces' ? 'Loading workspaces' : 'Loading topics'}>
                   <LoaderCircle aria-hidden="true" size={13} />
                 </span>
               ) : null}
@@ -243,9 +264,9 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
           )}
           <div className="workspace-list-header-actions">
             {!sessionSearchOpen ? (
-              <button type="button" title={activeList === 'workspaces' ? 'Search sessions' : 'Search channels'} aria-label={activeList === 'workspaces' ? 'Search sessions' : 'Search channels'} onClick={() => {
+              <button type="button" title={activeList === 'workspaces' ? 'Search sessions' : 'Search topics'} aria-label={activeList === 'workspaces' ? 'Search sessions' : 'Search topics'} onClick={() => {
                 setWorkspaceAddMenuOpen(false);
-                setChannelCreateOpen(false);
+                setTopicCreateOpen(false);
                 setSessionSearchOpen(true);
               }}>
                 <Search size={15} />
@@ -286,12 +307,12 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
             </div> : (
               <button
                 type="button"
-                className={`workspace-list-add-button${channelCreateOpen ? ' active' : ''}`}
-                title="Create channel"
-                aria-label="Create channel"
-                aria-expanded={channelCreateOpen}
+                className={`workspace-list-add-button${topicCreateOpen ? ' active' : ''}`}
+                title="Create topic"
+                aria-label="Create topic"
+                aria-expanded={topicCreateOpen}
                 disabled={busy || !snapshot}
-                onClick={() => setChannelCreateOpen((current) => !current)}
+                onClick={() => setTopicCreateOpen((current) => !current)}
               ><Plus size={15} /></button>
             )}
           </div>
@@ -302,68 +323,68 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
           updateKey={listUpdateKey}
         >
           <div className="sidebar-list-scroll-content">
-            {activeList === 'channels' ? (
+            {activeList === 'topics' ? (
               <>
-                {channelCreateOpen ? (
-                  <form className="sidebar-channel-create" onSubmit={(event) => {
+                {topicCreateOpen ? (
+                  <form className="sidebar-topic-create" onSubmit={(event) => {
                     event.preventDefault();
-                    const name = canonicalResearchChannelName(channelName);
-                    const topic = channelTopic.trim();
-                    if (!name || !topic || channelCreating) return;
-                    setChannelCreating(true);
-                    void onCreateChannel({ name, topic })
+                    const name = canonicalResearchTopicName(topicName);
+                    const topic = topicTopic.trim();
+                    if (!name || !topic || topicCreating) return;
+                    setTopicCreating(true);
+                    void onCreateTopic({ name, title: topicName.trim(), topic })
                       .then(() => {
-                        setChannelName('');
-                        setChannelTopic('');
-                        setChannelCreateOpen(false);
+                        setTopicName('');
+                        setTopicTopic('');
+                        setTopicCreateOpen(false);
                       })
                       .catch(() => undefined)
-                      .finally(() => setChannelCreating(false));
+                      .finally(() => setTopicCreating(false));
                   }}>
                     <input
-                      value={channelName}
-                      placeholder="channel-name"
-                      aria-label="Channel name"
-                      title="Use up to three words; names are lowercase and dash-separated."
+                      value={topicName}
+                      placeholder="Topic title"
+                      aria-label="Topic title"
+                      title="Use a short descriptive title."
                       autoFocus
                       maxLength={64}
-                      onChange={(event) => setChannelName(normalizeResearchChannelNameDraft(event.target.value))}
+                      onChange={(event) => setTopicName(event.target.value)}
                     />
-                    <textarea value={channelTopic} placeholder="What research belongs here?" aria-label="Channel topic" rows={2} onChange={(event) => setChannelTopic(event.target.value)} />
+                    <textarea value={topicTopic} placeholder="What does this topic cover?" aria-label="Topic purpose" rows={2} onChange={(event) => setTopicTopic(event.target.value)} />
                     <div>
-                      <button type="button" onClick={() => setChannelCreateOpen(false)}>Cancel</button>
-                      <button type="submit" disabled={channelCreating || !channelName.trim() || !channelTopic.trim()}>{channelCreating ? 'Creating…' : 'Create'}</button>
+                      <button type="button" onClick={() => setTopicCreateOpen(false)}>Cancel</button>
+                      <button type="submit" disabled={topicCreating || !topicName.trim() || !topicTopic.trim()}>{topicCreating ? 'Creating…' : 'Create'}</button>
                     </div>
                   </form>
                 ) : null}
-                <div className="sidebar-channel-group" role="group" aria-label="All Channels">
-                  <div className="sidebar-channel-group-heading">
-                    <Hash size={15} aria-hidden="true" />
-                    <span>All Channels</span>
+                <div className="sidebar-topic-group" role="group" aria-label="All Topics">
+                  <div className="sidebar-topic-group-heading">
+                    <BookOpen size={15} aria-hidden="true" />
+                    <span>All Topics</span>
                   </div>
-                  <div className="sidebar-channel-list">
-                    {!snapshot ? <span className="workspace-session-empty">Open a workspace to view its channels.</span> : null}
-                    {snapshot && !channelsLoading && channels.length === 0 ? <span className="workspace-session-empty">No Channels Yet...</span> : null}
-                    {snapshot && !channelsLoading && channels.length > 0 && visibleChannels.length === 0 ? <span className="workspace-session-empty">No matching channels.</span> : null}
-                    {primaryChannels.map(renderChannel)}
-                    {hiddenChannels.length > 0 ? (
+                  <div className="sidebar-topic-list">
+                    {!snapshot ? <span className="workspace-session-empty">Open a workspace to view its topics.</span> : null}
+                    {snapshot && !topicsLoading && topics.length === 0 ? <span className="workspace-session-empty">No Topics Yet...</span> : null}
+                    {snapshot && !topicsLoading && topics.length > 0 && visibleTopics.length === 0 ? <span className="workspace-session-empty">No matching topics.</span> : null}
+                    {primaryTopics.map(renderTopic)}
+                    {hiddenTopics.length > 0 ? (
                       <>
                         <div
-                          className={`workspace-session-overflow ${channelsExpanded ? 'expanded' : ''}`.trim()}
-                          aria-hidden={!channelsExpanded}
-                          inert={!channelsExpanded}
+                          className={`workspace-session-overflow ${topicsExpanded ? 'expanded' : ''}`.trim()}
+                          aria-hidden={!topicsExpanded}
+                          inert={!topicsExpanded}
                         >
                           <div className="workspace-session-overflow-inner">
-                            {hiddenChannels.map(renderChannel)}
+                            {hiddenTopics.map(renderTopic)}
                           </div>
                         </div>
                         <button
                           type="button"
                           className="session-memory-type-toggle"
-                          aria-expanded={channelsExpanded}
-                          onClick={() => setChannelsExpanded((expanded) => !expanded)}
+                          aria-expanded={topicsExpanded}
+                          onClick={() => setTopicsExpanded((expanded) => !expanded)}
                         >
-                          {channelsExpanded ? 'Show less' : `Show ${hiddenChannels.length} more`}
+                          {topicsExpanded ? 'Show less' : `Show ${hiddenTopics.length} more`}
                         </button>
                       </>
                     ) : null}
@@ -381,7 +402,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
             {workspaceRows.map(({ workspace, sessions }) => {
               const workspaceLoaded = snapshot?.workspace.workspacePath === workspace.workspacePath;
               const newResearchSessionActive = workspaceLoaded && newResearchActive && !workspaceCreationActive;
-              const dashboardActive = workspaceLoaded && selectedRunId === null && !selectedChannelId && !workspaceCreationActive && !newResearchActive && !automationsActive && !reportsActive && !pluginsActive;
+              const dashboardActive = workspaceLoaded && selectedRunId === null && !selectedTopicId && !workspaceCreationActive && !newResearchActive && !automationsActive && !reportsActive && !pluginsActive;
               const sessionsExpanded = expandedWorkspaceIds.has(workspace.id);
               const visibleSessions = filteringSessions ? sessions : sessions.slice(0, SIDEBAR_SESSION_LIMIT);
               const hiddenSessions = filteringSessions ? [] : sessions.slice(SIDEBAR_SESSION_LIMIT);

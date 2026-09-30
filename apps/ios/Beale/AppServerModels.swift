@@ -58,7 +58,7 @@ enum BealeAppServerContract {
     static let controlVersion = 1
     static let sessionLaunchVersion = 2
     static let appServerProtocolVersion = 1
-    static let appServerContractVersion = 26
+    static let appServerContractVersion = 28
     static let memoryNotificationSchemaVersion = 3
     static let workspaceMemorySchemaVersion = 4
 
@@ -135,9 +135,9 @@ struct AppServerWebSocketSchemas: Decodable, Sendable {
     var isCompatible: Bool {
         protocolSchema == 1
             && session == 1
-            && memorySummary == 12
+            && memorySummary == 13
             && finding == 5
-            && campaignGraph == 4
+            && campaignGraph == 5
             && goalSuggestions == 1
     }
 }
@@ -739,7 +739,7 @@ struct AppServerSubagentSummary: Identifiable, Equatable, Sendable {
     let name: String
     let provider: String?
     let model: String?
-    let channelName: String?
+    let topicName: String?
     let status: String
     let latestMessage: String
     let createdAt: String
@@ -778,9 +778,11 @@ enum AppServerSubagentProjection {
                 name: path.split(separator: "/").last.map(String.init) ?? path,
                 provider: event.payload.string("provider") ?? prior?.provider,
                 model: event.payload.string("model") ?? prior?.model,
-                channelName: event.payload.string("channelName")
+                topicName: event.payload.string("topicName")
+                    ?? event.payload.string("topic_name")
+                    ?? event.payload.string("channelName")
                     ?? event.payload.string("channel_name")
-                    ?? prior?.channelName,
+                    ?? prior?.topicName,
                 status: projectedStatus,
                 latestMessage: message ?? prior?.latestMessage ?? "",
                 createdAt: earlier(prior?.createdAt, eventTime),
@@ -799,7 +801,7 @@ enum AppServerSubagentProjection {
                 name: summary.name,
                 provider: summary.provider,
                 model: summary.model,
-                channelName: summary.channelName,
+                topicName: summary.topicName,
                 status: "interrupted",
                 latestMessage: summary.latestMessage,
                 createdAt: summary.createdAt,

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
@@ -189,6 +189,20 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
         const absolute = resolve(root, path);
         assertWorkspaceChild(root, absolute);
         files[path] = readFileSync(absolute, "utf8");
+      }
+    }
+    const topicDirectory = resolve(root, 'references', 'topics');
+    if (existsSync(topicDirectory)) {
+      for (const entry of readdirSync(topicDirectory, { withFileTypes: true })) {
+        if (!entry.isFile() || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.json$/u.test(entry.name)) continue;
+        const path = `references/topics/${entry.name}`;
+        const absolute = resolve(root, path);
+        assertWorkspaceChild(root, absolute);
+        const content = readFileSync(absolute, 'utf8');
+        const snapshot = JSON.parse(content) as { schemaVersion?: unknown; workspaceId?: unknown; topic?: { id?: unknown } };
+        if (snapshot.schemaVersion !== 1 || snapshot.workspaceId !== options.workspaceId
+          || snapshot.topic?.id !== entry.name.slice(0, -5)) throw new Error(`${path}: invalid canonical topic snapshot.`);
+        files[path] = content;
       }
     }
     if (has('app_server_research_resources') || has('resource_prior_art')) {

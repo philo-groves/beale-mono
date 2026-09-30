@@ -1,6 +1,6 @@
 import {
   AppServerSessionStore,
-  ResearchChannelStore,
+  ResearchTopicStore,
   ResourcePriorArtStore,
   stableResourceId,
   AgentPluginRegistry,
@@ -114,7 +114,7 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
     );
   }
   if (operation.startsWith('session.')) return sessionOperation(operation, options);
-  if (operation.startsWith('channel.')) return channelOperation(operation, options);
+  if (operation.startsWith('topic.')) return topicOperation(operation, options);
   if (operation === 'resource.prior_art.list' || operation === 'resource.prior_art.get') {
     const input = requiredRecord(options.input, 'resource prior art input');
     const workspaceId = requiredText(input.workspaceId, 'workspaceId');
@@ -187,35 +187,40 @@ async function researchToolOperation(
   );
 }
 
-function channelOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): unknown {
+function topicOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): unknown {
   const storage = requiredStorage(options.storage);
-  const store = new ResearchChannelStore({ databasePath: storage.databasePath });
+  const store = new ResearchTopicStore({
+    databasePath: storage.databasePath,
+    ...(option(options.args, '--workspace-root') ? { workspaceRoot: option(options.args, '--workspace-root')! } : {})
+  });
   try {
     const input = isRecord(options.input) ? options.input : {};
     const workspaceId = requiredText(input.workspaceId ?? option(options.args, '--workspace-id'), 'workspaceId');
-    const channel = optionalText(input.channel ?? option(options.args, '--channel'));
+    const topic = optionalText(input.topic ?? option(options.args, '--topic'));
     switch (operation) {
-      case 'channel.list': return store.list(
+      case 'topic.list': return store.list(
         workspaceId,
         integerOption(options.args, '--limit') ?? 200,
         input.archived === true || option(options.args, '--archived') === 'true'
       );
-      case 'channel.get': {
-        const detail = store.get(workspaceId, requiredText(channel, 'channel'), integerOption(options.args, '--message-limit') ?? 500);
-        if (!detail) throw new Error(`Channel not found in workspace: ${String(channel)}`);
+      case 'topic.search': return store.search(workspaceId, requiredText(input.query, 'query'), integerOption(options.args, '--limit') ?? 50);
+      case 'topic.get': {
+        const detail = store.get(workspaceId, requiredText(topic, 'topic'), integerOption(options.args, '--message-limit') ?? 0);
+        if (!detail) throw new Error(`Topic not found in workspace: ${String(topic)}`);
         return detail;
       }
-      case 'channel.create': return store.create({
+      case 'topic.create': return store.create({
         workspaceId,
         name: requiredText(input.name, 'name'),
         ...(optionalText(input.title) ? { title: optionalText(input.title)! } : {}),
         topic: requiredText(input.topic, 'topic'),
+        ...(typeof input.overviewMarkdown === 'string' ? { overviewMarkdown: input.overviewMarkdown } : {}),
         createdBySessionId: optionalText(input.sessionId),
         createdByAgentPath: optionalText(input.agentPath) ?? '/human'
       });
-      case 'channel.join': return store.join({
+      case 'topic.join': return store.join({
         workspaceId,
-        channel: requiredText(channel, 'channel'),
+        topic: requiredText(topic, 'topic'),
         sessionId: optionalText(input.sessionId),
         agentId: optionalText(input.agentId),
         agentPath: requiredText(input.agentPath, 'agentPath'),
@@ -223,40 +228,29 @@ function channelOperation(operation: AppServerProtocolOperation, options: Invoke
         model: optionalText(input.model),
         role: optionalText(input.role) ?? 'researcher'
       });
-      case 'channel.post': return store.append({
-        workspaceId,
-        channel: requiredText(channel, 'channel'),
-        sessionId: optionalText(input.sessionId),
-        attemptId: optionalText(input.attemptId),
-        agentId: optionalText(input.agentId),
-        agentPath: optionalText(input.agentPath) ?? '/human',
-        provider: optionalText(input.provider),
-        model: optionalText(input.model),
-        role: optionalText(input.role) ?? (optionalText(input.agentPath) ? 'researcher' : 'human'),
-        kind: input.kind as never,
-        contentMarkdown: requiredText(input.contentMarkdown, 'contentMarkdown'),
-        evidenceRefs: Array.isArray(input.evidenceRefs) ? input.evidenceRefs as string[] : [],
-        metadata: isRecord(input.metadata) ? input.metadata : {}
+      case 'topic.update_overview': return store.updateOverview(
+        workspaceId, requiredText(topic, 'topic'), requiredStringContent(input.contentMarkdown, 'contentMarkdown'),
+        optionalText(input.expectedUpdatedAt) ?? undefined
+      );
+      case 'topic.page.save': return store.savePage(workspaceId, requiredText(topic, 'topic'), {
+        ...(optionalText(input.id) ? { id: optionalText(input.id)! } : {}),
+        title: requiredText(input.title, 'title'),
+        contentMarkdown: requiredStringContent(input.contentMarkdown, 'contentMarkdown'),
+        ...(optionalText(input.expectedUpdatedAt) ? { expectedUpdatedAt: optionalText(input.expectedUpdatedAt)! } : {})
       });
-      case 'channel.share': return store.share({
-        workspaceId,
-        channel: requiredText(channel, 'channel'),
-        sessionId: optionalText(input.sessionId),
-        attemptId: optionalText(input.attemptId),
-        agentId: optionalText(input.agentId),
-        agentPath: optionalText(input.agentPath) ?? '/human',
-        provider: optionalText(input.provider),
-        model: optionalText(input.model),
-        role: optionalText(input.role) ?? (optionalText(input.agentPath) ? 'researcher' : 'human'),
+      case 'topic.page.delete': return store.deletePage(workspaceId, requiredText(topic, 'topic'), requiredText(input.pageId, 'pageId'));
+      case 'topic.link': return store.link(workspaceId, requiredText(topic, 'topic'), {
         kind: input.kind as never,
         resourceId: requiredText(input.resourceId, 'resourceId'),
-        title: requiredText(input.title, 'title'),
-        ...(optionalText(input.note) ? { note: optionalText(input.note)! } : {})
+        title: requiredText(input.title, 'title')
       });
-      case 'channel.archive': return store.archive(workspaceId, requiredText(channel, 'channel'));
-      case 'channel.restore': return store.restore(workspaceId, requiredText(channel, 'channel'));
-      case 'channel.delete': return store.delete(workspaceId, requiredText(channel, 'channel'));
-      default: throw new Error(`Unsupported app-server channel operation: ${operation}`);
+      case 'topic.unlink': return store.unlink(workspaceId, requiredText(topic, 'topic'), requiredText(input.linkId, 'linkId'));
+      case 'topic.merge': return store.merge(workspaceId, requiredText(topic, 'topic'), requiredText(input.targetTopic, 'targetTopic'));
+      case 'topic.unmerge': return store.unmerge(workspaceId, requiredText(topic, 'topic'));
+      case 'topic.archive': return store.archive(workspaceId, requiredText(topic, 'topic'));
+      case 'topic.restore': return store.restore(workspaceId, requiredText(topic, 'topic'));
+      case 'topic.delete': return store.delete(workspaceId, requiredText(topic, 'topic'));
+      default: throw new Error(`Unsupported app-server topic operation: ${operation}`);
     }
   } finally {
     store.close();
@@ -914,6 +908,7 @@ function eventStream(value: string | undefined): 'all' | 'transcript' | 'trace' 
 }
 function requiredRecord(value: unknown, name: string): Record<string, unknown> { if (!isRecord(value)) throw new Error(`${name} must be an object.`); return value; }
 function requiredText(value: unknown, name: string): string { if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} must be a non-empty string.`); return value.trim(); }
+function requiredStringContent(value: unknown, name: string): string { if (typeof value !== 'string') throw new Error(`${name} must be a string.`); return value; }
 function optionalText(value: unknown): string | null { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 function repositoryCloneMode(value: unknown): 'deep' | 'shallow' {
   if (value === undefined || value === null || value === 'deep') return 'deep';

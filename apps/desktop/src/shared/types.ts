@@ -3,17 +3,19 @@ import type { ResearchKitId } from './researchKits';
 import type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
-  CreateResearchChannelInput,
-  PostResearchChannelMessageInput,
-  ResearchChannelDetail,
-  ResearchChannelMemberRecord,
-  ResearchChannelMemberStatus,
-  ResearchChannelMessageKind,
-  ResearchChannelMessageRecord,
-  ResearchChannelRecord,
-  ResearchChannelSharedResourceKind,
-  ResearchChannelSharedResourceRecord,
-  ResearchChannelSummary,
+  CreateResearchTopicInput,
+  ResearchTopicDetail,
+  ResearchTopicMemberRecord,
+  ResearchTopicMemberStatus,
+  ResearchTopicMessageKind,
+  ResearchTopicMessageRecord,
+  ResearchTopicRecord,
+  ResearchTopicSharedResourceKind,
+  ResearchTopicSharedResourceRecord,
+  ResearchTopicSummary,
+  ResearchTopicPageRecord,
+  ResearchTopicLinkRecord,
+  ResearchTopicLinkKind,
   ResearchClaimRating,
   SteeringSuggestionResult
 } from '@beale/app-server-runtime/protocol';
@@ -24,17 +26,19 @@ export type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   ResourcePriorArtSummary,
-  CreateResearchChannelInput,
-  PostResearchChannelMessageInput,
-  ResearchChannelDetail,
-  ResearchChannelMemberRecord,
-  ResearchChannelMemberStatus,
-  ResearchChannelMessageKind,
-  ResearchChannelMessageRecord,
-  ResearchChannelRecord,
-  ResearchChannelSharedResourceKind,
-  ResearchChannelSharedResourceRecord,
-  ResearchChannelSummary,
+  CreateResearchTopicInput,
+  ResearchTopicDetail,
+  ResearchTopicMemberRecord,
+  ResearchTopicMemberStatus,
+  ResearchTopicMessageKind,
+  ResearchTopicMessageRecord,
+  ResearchTopicRecord,
+  ResearchTopicSharedResourceKind,
+  ResearchTopicSharedResourceRecord,
+  ResearchTopicSummary,
+  ResearchTopicPageRecord,
+  ResearchTopicLinkRecord,
+  ResearchTopicLinkKind,
   ResearchClaimRating,
   SteeringSuggestionResult
 } from '@beale/app-server-runtime/protocol';
@@ -2378,15 +2382,22 @@ export interface BealeApi {
   selectWorkspace(mode: WorkspacePickerMode): Promise<WorkspacePickerResult>;
   selectWorkspaceDirectory(): Promise<WorkspaceDirectorySelection>;
   getWorkspaceRegistry(): Promise<WorkspaceRegistryState>;
-  listResearchChannels(workspaceId: string): Promise<ResearchChannelSummary[]>;
-  listArchivedResearchChannels(workspaceId: string): Promise<ResearchChannelSummary[]>;
+  listResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]>;
+  listArchivedResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]>;
   listArchivedQuickChats(): Promise<ResearchSessionSummary[]>;
-  getResearchChannel(workspaceId: string, channelId: string): Promise<ResearchChannelDetail>;
-  createResearchChannel(workspaceId: string, input: CreateResearchChannelInput): Promise<ResearchChannelRecord>;
-  postResearchChannelMessage(workspaceId: string, channelId: string, input: PostResearchChannelMessageInput): Promise<ResearchChannelMessageRecord>;
-  deleteResearchChannel(workspaceId: string, channelId: string): Promise<void>;
-  archiveResearchChannel(workspaceId: string, channelId: string): Promise<ResearchChannelRecord>;
-  restoreResearchChannel(workspaceId: string, channelId: string): Promise<ResearchChannelRecord>;
+  getResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicDetail>;
+  createResearchTopic(workspaceId: string, input: CreateResearchTopicInput): Promise<ResearchTopicRecord>;
+  searchResearchTopics(workspaceId: string, query: string): Promise<ResearchTopicSummary[]>;
+  updateResearchTopicOverview(workspaceId: string, topicId: string, contentMarkdown: string, expectedUpdatedAt?: string): Promise<ResearchTopicRecord>;
+  saveResearchTopicPage(workspaceId: string, topicId: string, input: { id?: string; title: string; contentMarkdown: string; expectedUpdatedAt?: string }): Promise<ResearchTopicPageRecord>;
+  deleteResearchTopicPage(workspaceId: string, topicId: string, pageId: string): Promise<void>;
+  linkResearchTopicResource(workspaceId: string, topicId: string, input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }): Promise<ResearchTopicLinkRecord>;
+  unlinkResearchTopicResource(workspaceId: string, topicId: string, linkId: string): Promise<void>;
+  mergeResearchTopic(workspaceId: string, sourceTopicId: string, targetTopicId: string): Promise<{ source: ResearchTopicRecord; target: ResearchTopicRecord }>;
+  unmergeResearchTopic(workspaceId: string, sourceTopicId: string): Promise<ResearchTopicRecord>;
+  deleteResearchTopic(workspaceId: string, topicId: string): Promise<void>;
+  archiveResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord>;
+  restoreResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord>;
   archiveResearchSession(sessionId: string): Promise<WorkspaceRegistryState>;
   restoreResearchSession(sessionId: string): Promise<WorkspaceRegistryState>;
   markResearchSessionViewed(sessionId: string): Promise<WorkspaceRegistryState>;

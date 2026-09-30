@@ -296,7 +296,7 @@ describe('run detail commentary projection', () => {
           agentPath: '/root/reviewer',
           provider: 'openai-codex',
           model: 'gpt-5.6-sol',
-          channel_name: 'parser-work',
+          topic_name: 'parser-work',
           status: 'completed',
           message: 'Review complete.',
           privateDiagnostic: 'not rendered'
@@ -314,26 +314,26 @@ describe('run detail commentary projection', () => {
         agentPath: '/root/reviewer',
         provider: 'openai-codex',
         model: 'gpt-5.6-sol',
-        channel_name: 'parser-work',
+        topic_name: 'parser-work',
         status: 'completed',
         message: 'Review complete.'
       }
     });
-    expect(subagentSummaries([projected])[0]?.channelName).toBe('parser-work');
+    expect(subagentSummaries([projected])[0]?.topicName).toBe('parser-work');
   });
 
-  it('retains direct subagent channel participation in the commentary projection', () => {
-    const projected = projectCommentaryTraceEvent(traceEvent('subagent-channel', {
+  it('retains direct subagent topic participation in the commentary projection', () => {
+    const projected = projectCommentaryTraceEvent(traceEvent('subagent-topic', {
       source: 'system',
       type: 'model_message',
       payload: {
         type: 'subagent.activity',
-        action: 'channel_joined',
+        action: 'topic_joined',
         agentId: 'agent_reviewer',
         agentPath: '/root/reviewer',
         provider: 'openai-codex',
         model: 'gpt-5.6-sol',
-        channelName: 'parser-work',
+        topicName: 'parser-work',
         status: 'completed',
         privateDiagnostic: 'not rendered'
       }
@@ -341,14 +341,14 @@ describe('run detail commentary projection', () => {
 
     expect(projected.payload).toEqual({
       type: 'subagent.activity',
-      action: 'channel_joined',
+      action: 'topic_joined',
       agentId: 'agent_reviewer',
       agentPath: '/root/reviewer',
       provider: 'openai-codex',
       model: 'gpt-5.6-sol',
-      channelName: 'parser-work'
+      topicName: 'parser-work'
     });
-    expect(subagentSummaries([projected])[0]?.channelName).toBe('parser-work');
+    expect(subagentSummaries([projected])[0]?.topicName).toBe('parser-work');
   });
 
   it('defers tool input/output until the paired records are requested', () => {
@@ -464,7 +464,7 @@ describe('run detail commentary projection', () => {
     ['finding.transition', { toStatus: 'report_ready', hidden: 'not rendered' }, { toStatus: 'report_ready' }],
     ['finding.completion_check', { targetStatus: 'verified', hidden: 'not rendered' }, { targetStatus: 'verified' }],
     ['finding.list', { query: 'memory safety', hidden: 'not rendered' }, { query: 'memory safety' }],
-    ['channel_read', { channel_name: 'parser-work', hidden: 'not rendered' }, { channel_name: 'parser-work' }],
+    ['topic_read', { topic_name: 'parser-work', hidden: 'not rendered' }, { topic_name: 'parser-work' }],
     ['resource.catalog', { operation: 'discover', hidden: 'not rendered' }, { operation: 'discover' }]
   ])('retains %s inputs needed for collapsed commentary labels', (toolName, inputs, expectedInputs) => {
     const projected = projectCommentaryTraceEvent(toolEvent('request', 'tool.requested', {

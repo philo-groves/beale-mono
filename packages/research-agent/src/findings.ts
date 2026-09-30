@@ -1309,7 +1309,7 @@ function validateTransitionEvidence(
   }
   if (["verified", "report_ready", "disclosed"].includes(input.toStatus)) {
     if (!evidence.some((item) => validIndependentEvidence(database, current, item))) {
-      throw new Error("Verified findings require an independent reviewer with host-recorded actor/session identity, a fresh subagent context without inherited parent/channel history (or a human operator), and a reference to a qualifying successful runbook execution.");
+      throw new Error("Verified findings require an independent reviewer with host-recorded actor/session identity, a fresh subagent context without inherited parent/topic history (or a human operator), and a reference to a qualifying successful runbook execution.");
     }
   }
   if (input.toStatus === "report_ready") {

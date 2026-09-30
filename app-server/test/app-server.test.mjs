@@ -1240,7 +1240,7 @@ test("keeps SQLite construction out of the app-server runtime worker", () => {
 
   const researchSourceRoot = new URL("../../packages/research-agent/src/", import.meta.url);
   for (const file of [
-    "channels.ts",
+    "topics.ts",
     "findings.ts",
     "goal-suggestions.ts",
     "knowledge-artifacts.ts",
@@ -1272,8 +1272,8 @@ test("serves host workspaces and canonical app-server reads from one authenticat
     ["memory", "memory"],
     ["memory-notifications", "memory-notifications"],
     ["sessions", "sessions"],
-    ["channels", "channels"],
-    ["channels/channel-test", "channel"],
+    ["topics", "topics"],
+    ["topics/topic-test", "topic"],
     ["sessions/session-test/update", "update"],
     ["sessions/session-test/events?stream=trace&tail=true", "events"],
     ["sessions/session-test/collaboration", "collaboration"],
@@ -1296,25 +1296,43 @@ test("serves host workspaces and canonical app-server reads from one authenticat
   assert.equal(details.status, 200);
   assert.equal((await details.json()).result.kind, "event-details");
 
-  const createdChannel = await fetch(`${server.url}/v1/workspaces/workspace-test/channels`, {
+  const createdTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics`, {
     method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ name: "new", topic: "New research" }),
   });
-  assert.equal(createdChannel.status, 201);
-  assert.equal((await createdChannel.json()).result.kind, "channel-created");
-  const postedMessage = await fetch(`${server.url}/v1/workspaces/workspace-test/channels/channel-test`, {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ contentMarkdown: "Evidence" }),
+  assert.equal(createdTopic.status, 201);
+  assert.equal((await createdTopic.json()).result.kind, "topic-created");
+  const updatedOverview = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/overview`, {
+    method: "PATCH", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ contentMarkdown: "Current understanding." }),
   });
-  assert.equal(postedMessage.status, 201);
-  assert.equal((await postedMessage.json()).result.kind, "channel-message");
-  const archivedChannel = await fetch(`${server.url}/v1/workspaces/workspace-test/channels/channel-test/archive`, { method: "POST", headers });
-  assert.equal(archivedChannel.status, 200);
-  assert.equal((await archivedChannel.json()).result.kind, "channel-archived");
-  const restoredChannel = await fetch(`${server.url}/v1/workspaces/workspace-test/channels/channel-test/restore`, { method: "POST", headers });
-  assert.equal(restoredChannel.status, 200);
-  assert.equal((await restoredChannel.json()).result.kind, "channel-restored");
-  const deletedChannel = await fetch(`${server.url}/v1/workspaces/workspace-test/channels/channel-test`, { method: "DELETE", headers });
-  assert.equal(deletedChannel.status, 200);
-  assert.equal((await deletedChannel.json()).result.kind, "channel-deleted");
+  assert.equal(updatedOverview.status, 200);
+  assert.equal((await updatedOverview.json()).result.kind, "topic-update_overview");
+  const savedPage = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/pages`, {
+    method: "PUT", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ title: "Open questions", contentMarkdown: "What remains?" }),
+  });
+  assert.equal(savedPage.status, 200);
+  assert.equal((await savedPage.json()).result.kind, "topic-page.save");
+  const linkedRecord = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/links`, {
+    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ kind: "claim", resourceId: "claim_example", title: "Example claim" }),
+  });
+  assert.equal(linkedRecord.status, 201);
+  assert.equal((await linkedRecord.json()).result.kind, "topic-link");
+  const mergedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/merge`, {
+    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ targetTopic: "another-topic" }),
+  });
+  assert.equal(mergedTopic.status, 200);
+  assert.equal((await mergedTopic.json()).result.kind, "topic-merged");
+  const unmergedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/unmerge`, { method: "POST", headers });
+  assert.equal(unmergedTopic.status, 200);
+  assert.equal((await unmergedTopic.json()).result.kind, "topic-unmerged");
+  const archivedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/archive`, { method: "POST", headers });
+  assert.equal(archivedTopic.status, 200);
+  assert.equal((await archivedTopic.json()).result.kind, "topic-archived");
+  const restoredTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/restore`, { method: "POST", headers });
+  assert.equal(restoredTopic.status, 200);
+  assert.equal((await restoredTopic.json()).result.kind, "topic-restored");
+  const deletedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test`, { method: "DELETE", headers });
+  assert.equal(deletedTopic.status, 200);
+  assert.equal((await deletedTopic.json()).result.kind, "topic-deleted");
 });
 
 test("resolves workspace identity and host policy from the shared Beale registry", () => {
@@ -3610,13 +3628,16 @@ function testHostService(directory, options = {}) {
     async workspaceMemory() { return canonicalFixture("memory"); },
     async workspaceMemoryNotifications() { return canonicalFixture("memory-notifications"); },
     async workspaceSessions() { return canonicalFixture("sessions"); },
-    async workspaceChannels() { return canonicalFixture("channels"); },
-    async workspaceChannel() { return canonicalFixture("channel"); },
-    async createWorkspaceChannel() { return canonicalFixture("channel-created"); },
-    async postWorkspaceChannelMessage() { return canonicalFixture("channel-message"); },
-    async archiveWorkspaceChannel() { return canonicalFixture("channel-archived"); },
-    async restoreWorkspaceChannel() { return canonicalFixture("channel-restored"); },
-    async deleteWorkspaceChannel() { return canonicalFixture("channel-deleted"); },
+    async workspaceTopics() { return canonicalFixture("topics"); },
+    async workspaceTopic() { return canonicalFixture("topic"); },
+    async createWorkspaceTopic() { return canonicalFixture("topic-created"); },
+    async mutateWorkspaceTopic(_workspaceId, _topic, operation) { return canonicalFixture(operation.replace('topic.', 'topic-')); },
+    async searchWorkspaceTopics() { return canonicalFixture("topics-search"); },
+    async archiveWorkspaceTopic() { return canonicalFixture("topic-archived"); },
+    async restoreWorkspaceTopic() { return canonicalFixture("topic-restored"); },
+    async mergeWorkspaceTopic() { return canonicalFixture("topic-merged"); },
+    async unmergeWorkspaceTopic() { return canonicalFixture("topic-unmerged"); },
+    async deleteWorkspaceTopic() { return canonicalFixture("topic-deleted"); },
     async sessionUpdate() { return canonicalFixture("update"); },
     async sessionEvents() { return canonicalFixture("events"); },
     async sessionEventDetails() { return canonicalFixture("event-details"); },

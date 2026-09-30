@@ -12,6 +12,7 @@
 
 #### Changed
 
+- Replaced workspace collaboration channels with Topics: editable overviews and pages, typed links to canonical records, search, reversible merge aliases, and read-only imported channel activity. Agents inherit bounded topic orientation without replaying message transcripts. Desktop, iOS subagent labels, and the Codex bridge use topic names; app-server contract v28 replaces channel operations. File-authoritative workspaces store topic snapshots under `references/topics/`.
 - Workspace Highlights priority claims now sit flush vertically within the horizontal list.
 - Campaign Board columns now start flush beneath their headings and show top and bottom fades as their lists scroll.
 - Workspace Runbooks lists now match Memories for row padding, section headings, and expandable four-item previews.

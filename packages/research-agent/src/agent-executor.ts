@@ -40,7 +40,7 @@ import {
 import {
   createSubagentRuntime,
   defaultSubagentRuntimeFactory,
-  type SubagentChannelContext,
+  type SubagentTopicContext,
   type SubagentRunRequest,
   type SubagentRunResult,
   type SubagentRuntimeFactory,
@@ -110,7 +110,7 @@ export interface CreatePiAgentExecutorOptions {
   };
   subagentRuntimeFactory?: SubagentRuntimeFactory;
   collaboration?: ResearchCollaborationConfig;
-  channelContext?: SubagentChannelContext;
+  topicContext?: SubagentTopicContext;
   collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
     request: SubagentRunRequest,
@@ -426,7 +426,7 @@ export function createPiAgentExecutor(
             ...(options.subagents ? { limits: options.subagents } : {}),
             ...(collaboration ? { collaboration } : {}),
             ...(input.signal ? { signal: input.signal } : {}),
-            ...(options.channelContext ? { channelContext: options.channelContext } : {}),
+            ...(options.topicContext ? { topicContext: options.topicContext } : {}),
             run: (request) => request.provider === "anthropic" && options.runAlternateSubagent
               ? options.runAlternateSubagent(request, input)
               : runSession(request),
@@ -894,7 +894,7 @@ export function createPiAgentExecutor(
               hasTools: tools.length > 0,
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
               ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
-              hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_channel" || tool.name === "channel_post"),
+              hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_topic" || tool.name === "topic_update"),
               ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id, { lead: request.root === true }) } : {}),
               ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
               goalEnabled: request.root === true && goalRuntime !== null,
