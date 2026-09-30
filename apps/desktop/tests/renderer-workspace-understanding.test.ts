@@ -586,14 +586,14 @@ describe('workspace dashboard', () => {
     expect(html).toContain('role="tablist" aria-label="Campaign views"');
     expect(html).toContain('class="workspace-campaign-subview-tabs research-side-view-tabs pill-view-tabs"');
     expect(html).toContain('<span>Highlights</span>');
-    expect(html).toContain('<span>Board</span>');
+    expect(html).toContain('<span>Claims</span>');
     expect(html).not.toContain('<span>Activity</span>');
-    expect(html).not.toContain('<span>Claims</span>');
     expect(html).toContain('<span>Memories</span>');
     expect(html).toContain('<span>Runbooks</span>');
-    expect(html.match(/class="research-side-view-tab provider-settings-tab workspace-campaign-subview-tab(?: active)?"/g)).toHaveLength(4);
-    expect(html.indexOf('<span>Highlights</span>')).toBeLessThan(html.indexOf('<span>Board</span>'));
-    expect(html.indexOf('<span>Board</span>')).toBeLessThan(html.indexOf('<span>Memories</span>'));
+    expect(html).toContain('<span>Reports</span>');
+    expect(html.match(/class="research-side-view-tab provider-settings-tab workspace-campaign-subview-tab(?: active)?"/g)).toHaveLength(5);
+    expect(html.indexOf('<span>Highlights</span>')).toBeLessThan(html.indexOf('<span>Claims</span>'));
+    expect(html.indexOf('<span>Claims</span>')).toBeLessThan(html.indexOf('<span>Memories</span>'));
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-trail-panel" aria-selected="true"');
     expect(html).toContain('id="workspace-dashboard-campaign-trail-panel"');
     expect(html).toContain('<h2 class="campaign-view-title" id="workspace-campaign-heading">Parser Workspace Highlights</h2>');
@@ -616,9 +616,27 @@ describe('workspace dashboard', () => {
     }));
     expect(boardHtml).toContain('aria-controls="workspace-dashboard-campaign-board-panel" aria-selected="true"');
     expect(boardHtml).toContain('id="workspace-dashboard-campaign-board-panel"');
-    expect(boardHtml).toContain('id="workspace-campaign-board-heading">Parser Workspace Board</h2>');
+    expect(boardHtml).toContain('id="workspace-campaign-board-heading">Parser Workspace Claims</h2>');
     expect(boardHtml).not.toContain('workspace-dashboard-campaign-claims-panel');
-    expect(boardHtml).not.toContain('<span>Claims</span>');
+    expect(boardHtml).toContain('<span>Claims</span>');
+
+    const reportsHtml = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
+      busy: false,
+      initialView: 'reports',
+      memoryDreamingInProgress: false,
+      appServerMemory: memorySummary({ reports: [
+        { id: 'report_local', title: 'Local report' },
+        { id: 'report_other', workspaceId: 'workspace_other', title: 'Other workspace report' }
+      ] }),
+      researchProfile: testResearchProfile(),
+      workspaceName: 'Parser Workspace',
+      runs: [],
+      onRunMemoryDreaming: () => undefined
+    }));
+    expect(reportsHtml).toContain('aria-controls="workspace-dashboard-campaign-reports-panel" aria-selected="true"');
+    expect(reportsHtml).toContain('id="workspace-dashboard-campaign-reports-panel"');
+    expect(reportsHtml).toContain('Local report');
+    expect(reportsHtml).not.toContain('Other workspace report');
 
     const runbooksHtml = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,

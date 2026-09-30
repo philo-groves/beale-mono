@@ -72,8 +72,8 @@ import { MainSessionWorkspace } from './features/sessions/MainSessionWorkspace';
 import { SessionOverviewDialog } from './features/sessions/SessionOverviewDialog';
 import { StartRunForm } from './features/sessions/StartRunForm';
 import { workspaceScopeDraftForConfigurationUpdate } from './features/workspaces/WorkspaceUnderstandingView';
-import type { WorkspaceConfigurationInput } from './features/workspaces/WorkspaceUnderstandingView';
-import { ReportsIndex, ReportSessionWorkspace } from './features/reports/ReportsWorkspace';
+import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from './features/workspaces/WorkspaceUnderstandingView';
+import { ReportSessionWorkspace } from './features/reports/ReportsWorkspace';
 import { AutomationsWorkspace } from './features/automations/AutomationsWorkspace';
 import { PluginManagerWorkspace } from './features/plugins/PluginManagerWorkspace';
 import {
@@ -120,7 +120,7 @@ import {
 import { buildTraceDisplayEvents, buildTraceDisplayEventsForAgentPath } from './view-models/traceDisplay';
 import { runDetailMetricDetail, shortMetricId } from './view-models/runDetailUpdates';
 import { hasResearchProfileDetailFeatures, researchProfileFeatureAvailability } from './view-models/researchProfileFeatures';
-import { isReportResourceRun, reportsForReportingScope, reportSessionDefaultModelSelection, reportTitleFromMarkdown } from './view-models/reports';
+import { isReportResourceRun, reportSessionDefaultModelSelection, reportTitleFromMarkdown } from './view-models/reports';
 import {
   clearConfirmedProviderOAuthResults,
   isSubscriptionAuthenticationConfirmed
@@ -307,6 +307,14 @@ export function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   const [workspaceDashboardViewName, setWorkspaceDashboardViewName] = useState('Campaign');
+  const [workspaceDashboardInitialView, setWorkspaceDashboardInitialView] = useState<WorkspaceDashboardView>('campaign');
+  const workspaceDashboardWorkspaceIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const workspaceId = snapshot?.workspace.workspaceId ?? null;
+    if (workspaceDashboardWorkspaceIdRef.current === workspaceId) return;
+    workspaceDashboardWorkspaceIdRef.current = workspaceId;
+    setWorkspaceDashboardInitialView('campaign');
+  }, [snapshot?.workspace.workspaceId]);
   const [sessionOverviewOpen, setSessionOverviewOpen] = useState(false);
   const [newResearchOpen, setNewResearchOpen] = useState(false);
   const closeNewResearch = useCallback((): void => {
@@ -321,10 +329,7 @@ export function App(): JSX.Element {
   const [selectedAutomationRunId, setSelectedAutomationRunId] = useState<string | null>(null);
   const [selectedAutomationWorkspaceId, setSelectedAutomationWorkspaceId] = useState<string | null>(null);
   const [reportsOpen, setReportsOpen] = useState(false);
-  const [reportingScopeWorkspaceId, setReportingScopeWorkspaceId] = useState<string | null>(null);
-  const [reportingReports, setReportingReports] = useState<AppServerReportSummary[]>([]);
-  const [reportingReportsLoading, setReportingReportsLoading] = useState(false);
-  const [reportingReportsError, setReportingReportsError] = useState<string | null>(null);
+  const [selectedReportOverride, setSelectedReportOverride] = useState<AppServerReportSummary | null>(null);
   const [reportSessionRunId, setReportSessionRunId] = useState<string | null>(null);
   const [reportSessionRefreshVersion, setReportSessionRefreshVersion] = useState(0);
   const [agentPluginState, setAgentPluginState] = useState<AgentPluginRegistryState | null>(null);
@@ -1167,63 +1172,9 @@ export function App(): JSX.Element {
     setSelectedReportWorkspaceId(snapshot?.workspace.workspaceId ?? null);
   }, [snapshot?.workspace.workspaceId]);
 
-  const openReports = useCallback((): void => {
-    closeWorkspaceOnboarding();
-    closeNewResearch();
-    setSettingsOpen(false);
-    clearRunDetail();
-    setSelectedRunId(null);
-    setSelectedReportId(null);
-    setSelectedReportWorkspaceId(null);
-    setSelectedReportDocument(null);
-    setReportSessionRunId(null);
-    setReportSessionRefreshVersion(0);
-    setReportError(null);
-    setError(null);
-    setReportingScopeWorkspaceId(snapshot?.workspace.workspaceId ?? null);
-    setAutomationsOpen(false);
-    setPluginsOpen(false);
-    setReportsOpen(true);
-  }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId, snapshot?.workspace.workspaceId]);
-
-  const reportingWorkspaceCatalogKey = workspaceRegistry?.workspaces
+  const workspaceCatalogKey = workspaceRegistry?.workspaces
     .map((workspace) => `${workspace.id}:${workspace.workspaceId}:${workspace.updatedAt}`)
     .join('|') ?? '';
-  const activeWorkspaceReportCatalogKey = snapshot?.appServerMemory.reports
-    .map((report) => `${report.id}:${report.revision}:${report.updatedAt}`)
-    .join('|') ?? '';
-  const automaticTicketingEnabled = ticketingSettings?.provider !== undefined
-    && ticketingSettings.provider !== 'local'
-    && !ticketingSettings.automation.humanInTheLoop
-    && ticketingSettings[ticketingSettings.provider].credentialConfigured
-    && Boolean(ticketingSettings[ticketingSettings.provider].targetId);
-  useEffect(() => {
-    if (!reportsOpen && !automaticTicketingEnabled) return undefined;
-    let cancelled = false;
-    if (reportsOpen) {
-      setReportingReportsLoading(true);
-      setReportingReportsError(null);
-    }
-    void window.beale.listReportingReports()
-      .then((reports) => {
-        if (!cancelled) setReportingReports(reports);
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled && reportsOpen) setReportingReportsError(errorMessage(caught));
-      })
-      .finally(() => {
-        if (!cancelled && reportsOpen) setReportingReportsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeWorkspaceReportCatalogKey, automaticTicketingEnabled, reportingWorkspaceCatalogKey, reportsOpen]);
-
-  useEffect(() => {
-    if (!workspaceRegistry || !reportingScopeWorkspaceId) return;
-    if (workspaceRegistry.workspaces.some((workspace) => workspace.workspaceId === reportingScopeWorkspaceId)) return;
-    setReportingScopeWorkspaceId(null);
-  }, [reportingScopeWorkspaceId, workspaceRegistry]);
 
   useEffect(() => {
     if (!automationsOpen) return undefined;
@@ -1243,7 +1194,7 @@ export function App(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [automationsOpen, reportingWorkspaceCatalogKey, snapshot?.version]);
+  }, [automationsOpen, workspaceCatalogKey, snapshot?.version]);
 
   useEffect(() => {
     if (!workspaceRegistry || !automationScopeWorkspaceId) return;
@@ -1266,10 +1217,16 @@ export function App(): JSX.Element {
     setSelectedReportId(report.id);
     setSelectedReportWorkspaceId(report.workspaceId);
     setSelectedReportDocument(null);
+    setSelectedReportOverride(report);
+    setWorkspaceDashboardInitialView('reports');
     setReportSessionRunId(null);
     setReportSessionRefreshVersion(0);
     setReportError(null);
     setError(null);
+    setSettingsOpen(false);
+    setAutomationsOpen(false);
+    setPluginsOpen(false);
+    setReportsOpen(true);
   }, [clearRunDetail, setSelectedRunId]);
 
   const startReportTurn = useCallback(async (
@@ -1278,9 +1235,8 @@ export function App(): JSX.Element {
     shellSafetyMode?: ShellSafetyMode
   ): Promise<RunRecord> => {
     if (!selectedReportId || !selectedReportWorkspaceId) throw new Error('No report is selected.');
-    const report = reportingReports.find((candidate) => (
-      candidate.id === selectedReportId && candidate.workspaceId === selectedReportWorkspaceId
-    )) ?? snapshot?.appServerMemory.reports.find((candidate) => (
+    const report = (selectedReportOverride?.id === selectedReportId && selectedReportOverride.workspaceId === selectedReportWorkspaceId
+      ? selectedReportOverride : null) ?? snapshot?.appServerMemory.reports.find((candidate) => (
       candidate.id === selectedReportId && candidate.workspaceId === selectedReportWorkspaceId
     ));
     if (!report) throw new Error('The selected report is no longer available.');
@@ -1308,7 +1264,7 @@ export function App(): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [applySnapshot, reportingReports, selectedReportId, selectedReportWorkspaceId, setSelectedRunId, snapshot?.appServerMemory.reports]);
+  }, [applySnapshot, selectedReportOverride, selectedReportId, selectedReportWorkspaceId, setSelectedRunId, snapshot?.appServerMemory.reports]);
 
   const submitReportChange = useCallback(async (instruction: string): Promise<void> => {
     if (!reportSessionRunId) {
@@ -1855,19 +1811,20 @@ export function App(): JSX.Element {
   );
   const selectedReport = useMemo(
     () => {
-      if (!reportsOpen) {
-        return researchPanelMemory?.reports.find((report) => (
-          report.id === selectedReportId && (!selectedReportWorkspaceId || report.workspaceId === selectedReportWorkspaceId)
-        )) ?? null;
-      }
-      const catalogReport = reportingReports.find((report) => (
+      if (!selectedReportId) return null;
+      const memoryReport = researchPanelMemory?.reports.find((report) => (
+        report.id === selectedReportId && (!selectedReportWorkspaceId || report.workspaceId === selectedReportWorkspaceId)
+      )) ?? null;
+      if (!reportsOpen) return memoryReport;
+      const snapshotReport = snapshot?.appServerMemory.reports.find((report) => (
         report.id === selectedReportId && report.workspaceId === selectedReportWorkspaceId
       )) ?? null;
-      return catalogReport ?? snapshot?.appServerMemory.reports.find((report) => (
-        report.id === selectedReportId && report.workspaceId === selectedReportWorkspaceId
-      )) ?? null;
+      const storedReport = snapshotReport ?? memoryReport;
+      const override = selectedReportOverride?.id === selectedReportId
+        && selectedReportOverride.workspaceId === selectedReportWorkspaceId ? selectedReportOverride : null;
+      return storedReport && (!override || storedReport.revision > override.revision) ? storedReport : override;
     },
-    [reportingReports, reportsOpen, researchPanelMemory?.reports, selectedReportId, selectedReportWorkspaceId, snapshot?.appServerMemory.reports]
+    [reportsOpen, researchPanelMemory?.reports, selectedReportId, selectedReportOverride, selectedReportWorkspaceId, snapshot?.appServerMemory.reports]
   );
   const displayedQuickChats = useMemo<QuickChatDescriptor[]>(() => {
     if (settingsOpen || !reportsOpen || !selectedReport) return quickChats;
@@ -1990,12 +1947,12 @@ export function App(): JSX.Element {
     }
   }, [applyAppServerRunbookDocument, applySnapshot, fetchAppServerRunbook, researchPanelMemory?.runbooks, selectedRunbookDocument]);
   useEffect(() => {
-    if (!selectedReportId || selectedReport || (reportsOpen && reportingReportsLoading)) return;
+    if (!selectedReportId || selectedReport) return;
     setSelectedReportId(null);
     setSelectedReportWorkspaceId(null);
     setSelectedReportDocument(null);
     setReportError(null);
-  }, [reportingReportsLoading, reportsOpen, selectedReport, selectedReportId]);
+  }, [selectedReport, selectedReportId]);
   useEffect(() => {
     if (!selectedReportId || !selectedReport) {
       setReportLoading(false);
@@ -2116,9 +2073,6 @@ export function App(): JSX.Element {
     sidebarCollapsed
   })}${settingsOpen ? ' settings-open' : ''}${bottomPanelVisible ? ' bottom-panel-open' : ''}`;
   const currentWorkspaceName = snapshot?.activeScope.workspaceName ?? 'No Workspace Selected';
-  const reportingScopeName = reportingScopeWorkspaceId
-    ? workspaceRegistry?.workspaces.find((workspace) => workspace.workspaceId === reportingScopeWorkspaceId)?.workspaceName ?? 'Workspace'
-    : 'All Reports';
   const automationScopeName = automationScopeWorkspaceId
     ? workspaceRegistry?.workspaces.find((workspace) => workspace.workspaceId === automationScopeWorkspaceId)?.workspaceName ?? 'Workspace'
     : 'All Automations';
@@ -2127,10 +2081,6 @@ export function App(): JSX.Element {
       automation.runId === selectedAutomationRunId && automation.workspaceId === selectedAutomationWorkspaceId
     )) ?? null,
     [automations, selectedAutomationRunId, selectedAutomationWorkspaceId]
-  );
-  const scopedReportingReports = useMemo(
-    () => reportsForReportingScope(reportingReports, reportingScopeWorkspaceId),
-    [reportingReports, reportingScopeWorkspaceId]
   );
   const activeTopicTitle = selectedTopicDetail?.topic.title ?? null;
   const openSettings = useCallback(() => {
@@ -2276,7 +2226,7 @@ export function App(): JSX.Element {
       onStarted={handleResearchStarted}
     />
   ) : null;
-  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, reportsOpen, automationsOpen, pluginsOpen });
+  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, automationsOpen, pluginsOpen });
   return (
     <div
       ref={appShellRef}
@@ -2298,10 +2248,10 @@ export function App(): JSX.Element {
           ? { primary: 'Agent Settings', secondary: settingsSectionLabel(settingsSection), icon: settingsSectionHeaderIcon(settingsSection) }
           : reportsOpen
             ? {
-                primary: 'Reporting',
+                primary: 'Reports',
                 secondary: selectedReport
                   ? reportTitleFromMarkdown(selectedReportDocument?.content ?? '', selectedReport.title)
-                  : reportingScopeName,
+                  : currentWorkspaceName,
                 icon: 'reporting'
               }
             : automationsOpen
@@ -2344,7 +2294,6 @@ export function App(): JSX.Element {
         active={navigationDestination}
         onOpenHome={openHome}
         onOpenAutomations={openAutomations}
-        onOpenReporting={openReports}
         onOpenPlugins={openPlugins}
         onOpenSettings={openSettings}
       />
@@ -2367,7 +2316,6 @@ export function App(): JSX.Element {
           workspaceCreationActive={workspaceDraft !== null}
           newResearchActive={newResearchOpen}
           automationsActive={automationsOpen}
-          reportsActive={reportsOpen}
           pluginsActive={pluginsOpen}
           snapshot={snapshot}
           topics={researchTopics}
@@ -2535,6 +2483,14 @@ export function App(): JSX.Element {
                   loading={reportLoading}
                   error={reportError}
                   onReportChange={submitReportChange}
+                  onBackToReports={() => {
+                    setReportsOpen(false);
+                    setReportSessionRunId(null);
+                    clearRunDetail();
+                    setSelectedRunId(null);
+                    backToReports();
+                    void loadSnapshot().catch((caught: unknown) => setError(errorMessage(caught)));
+                  }}
                   onReportMarkdownChange={async (content) => {
                     try {
                       const updated = await window.beale.updateReportContent({
@@ -2543,8 +2499,7 @@ export function App(): JSX.Element {
                         expectedRevision: selectedReport.revision,
                         content
                       });
-                      setReportingReports((current) => current.map((report) =>
-                        report.id === updated.id && report.workspaceId === updated.workspaceId ? updated : report));
+                      setSelectedReportOverride(updated);
                       setSelectedReportDocument({ reportId: updated.id, content });
                     } catch (caught: unknown) {
                       const message = errorMessage(caught);
@@ -2559,8 +2514,7 @@ export function App(): JSX.Element {
                         expectedRevision: selectedReport.revision,
                         triageStatus
                       });
-                      setReportingReports((current) => current.map((report) =>
-                        report.id === updated.id && report.workspaceId === updated.workspaceId ? updated : report));
+                      setSelectedReportOverride(updated);
                     } catch (caught: unknown) {
                       throw new Error(errorMessage(caught));
                     }
@@ -2572,8 +2526,7 @@ export function App(): JSX.Element {
                         reportId: selectedReport.id
                       });
                       if (!updated) return;
-                      setReportingReports((current) => current.map((report) =>
-                        report.id === updated.id && report.workspaceId === updated.workspaceId ? updated : report));
+                      setSelectedReportOverride(updated);
                     } catch (caught: unknown) {
                       const message = errorMessage(caught);
                       setReportError(message);
@@ -2597,8 +2550,7 @@ export function App(): JSX.Element {
                         reportId: selectedReport.id
                       });
                       if (!updated) return;
-                      setReportingReports((current) => current.map((report) =>
-                        report.id === updated.id && report.workspaceId === updated.workspaceId ? updated : report));
+                      setSelectedReportOverride(updated);
                     } catch (caught: unknown) {
                       const message = errorMessage(caught);
                       setReportError(message);
@@ -2606,23 +2558,7 @@ export function App(): JSX.Element {
                     }
                   }}
                 />
-              ) : (
-                <ReportsIndex
-                  reports={scopedReportingReports}
-                  workspaces={workspaceRegistry?.workspaces ?? []}
-                  selectedWorkspaceId={reportingScopeWorkspaceId}
-                  loading={reportingReportsLoading}
-                  error={reportingReportsError}
-                  onScopeChange={(workspaceId) => {
-                    setReportingScopeWorkspaceId(workspaceId);
-                    setSelectedReportId(null);
-                    setSelectedReportWorkspaceId(null);
-                    setSelectedReportDocument(null);
-                    setReportError(null);
-                  }}
-                  onOpenReport={openReportSession}
-                />
-              )
+              ) : null
             ) : selectedTopicId ? (
               <TopicWorkspace
                 detail={selectedTopicDetail}
@@ -2714,7 +2650,11 @@ export function App(): JSX.Element {
               onChangeWorkspaceResearchSubject={changeWorkspaceResearchSubject}
               onRemoveWorkspace={removeActiveWorkspace}
               onOpenSession={openWorkspaceDashboardSession}
+              initialWorkspaceView={workspaceDashboardWorkspaceIdRef.current === snapshot.workspace.workspaceId
+                ? workspaceDashboardInitialView : 'campaign'}
               onWorkspaceViewChange={setWorkspaceDashboardViewName}
+              onWorkspaceViewSelectionChange={setWorkspaceDashboardInitialView}
+              onOpenWorkspaceReport={openReportSession}
               onResearchDetailsOpenChange={changeResearchDetailsOpen}
               onOpenAppServerRunbook={openAppServerRunbook}
               onRunAppServerRunbook={runAppServerRunbook}

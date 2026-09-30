@@ -93,11 +93,13 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onRemoveWorkspace = async () => undefined,
   onOpenSession = () => undefined,
   onWorkspaceViewChange,
+  onWorkspaceViewSelectionChange,
   onResearchDetailsOpenChange,
   onOpenAppServerRunbook,
   onRunAppServerRunbook = async () => undefined,
   onBackToRunbooks,
   onOpenAppServerReport = () => undefined,
+  onOpenWorkspaceReport = () => undefined,
   onBackToReports = () => undefined,
   onBackToSubagents,
   onSelectSubagent,
@@ -169,11 +171,13 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   onRemoveWorkspace?: () => Promise<void>;
   onOpenSession?: (runId: string) => void;
   onWorkspaceViewChange?: (viewName: string) => void;
+  onWorkspaceViewSelectionChange?: (view: WorkspaceDashboardView) => void;
   onResearchDetailsOpenChange: (expanded: boolean) => void;
   onOpenAppServerRunbook: (runbookId: string) => void;
   onRunAppServerRunbook?: (runbookId: string, selection: RunbookExecutionSelection, target: RunbookProofTargetSelection) => Promise<void>;
   onBackToRunbooks: () => void;
   onOpenAppServerReport?: (reportId: string) => void;
+  onOpenWorkspaceReport?: (report: AppServerReportSummary) => void;
   onBackToReports?: () => void;
   onBackToSubagents: () => void;
   onSelectSubagent: (path: string) => void;
@@ -387,9 +391,11 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           onRemoveWorkspace={onRemoveWorkspace}
           onOpenSession={onOpenSession}
           onActiveViewChange={onWorkspaceViewChange}
+          onViewSelectionChange={onWorkspaceViewSelectionChange}
           onOpenClaim={openWorkspaceClaim}
           onOpenMemory={openWorkspaceMemory}
           onOpenRunbook={openWorkspaceRunbook}
+          onOpenReport={onOpenWorkspaceReport}
         />
       ) : (
         <CommentaryView

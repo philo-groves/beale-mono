@@ -2,17 +2,16 @@ import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { AppServerReportSummary, ProviderSettings, ResearchProviderModelCatalog, WorkspaceRegistryEntry } from '@shared/types';
+import type { AppServerReportSummary, ProviderSettings, ResearchProviderModelCatalog } from '@shared/types';
 import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollbarActivation';
-import { EditableReport, ReportSummarySidebar, ReportsIndex } from '../src/renderer/features/reports/ReportsWorkspace';
+import { EditableReport, ReportSummarySidebar } from '../src/renderer/features/reports/ReportsWorkspace';
 import {
   isReportResourceRun,
   reportChangeInstruction,
   reportMarkdownBlocks,
   replaceReportMarkdownBlock,
   reportSessionDefaultModelSelection,
-  reportTitleFromMarkdown,
-  reportsForReportingScope
+  reportTitleFromMarkdown
 } from '../src/renderer/view-models/reports';
 
 const report: AppServerReportSummary = {
@@ -39,42 +38,7 @@ const report: AppServerReportSummary = {
   updatedAt: '2026-08-16T12:00:00.000Z'
 };
 
-const workspace: WorkspaceRegistryEntry = {
-  id: 'registry_workspace_one',
-  workspacePath: 'C:\\workspaces\\parser',
-  workspaceId: 'workspace_one',
-  workspaceName: 'Parser',
-  researchProfileId: 'security-research',
-  researchKitId: 'general',
-  scopeOwner: 'Parser',
-  descriptionMarkdown: '',
-  rulesMarkdown: '',
-  expiresAt: null,
-  createdAt: '2026-08-10T12:00:00.000Z',
-  updatedAt: '2026-08-16T12:00:00.000Z',
-  lastOpenedAt: '2026-08-16T12:00:00.000Z',
-  runCount: 1,
-  lastRunAt: '2026-08-16T12:00:00.000Z'
-};
-
 describe('reports resource views', () => {
-  it('uses the shared centered regular-weight loading state', () => {
-    const html = renderToStaticMarkup(createElement(ReportsIndex, {
-      reports: [],
-      workspaces: [workspace],
-      selectedWorkspaceId: null,
-      loading: true,
-      error: null,
-      onScopeChange: () => undefined,
-      onOpenReport: () => undefined
-    }));
-
-    expect(html).toContain('class="centered-loading-state"');
-    expect(html).toContain('class="centered-loading-state-spinner"');
-    expect(html).toContain('<span>Loading reports…</span>');
-    expect(html).not.toContain('<strong>Loading reports');
-  });
-
   it('gives report content the main surface and uses the default session sidenav width for its packet', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     expect(styles).toMatch(/\.report-session-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 6px 360px;/s);
@@ -228,103 +192,15 @@ describe('reports resource views', () => {
     expect(isReportResourceRun({ budget: { maxMinutes: 10 } })).toBe(false);
   });
 
-  it('places Reporting between Automations and Plugins in the navigation rail', () => {
-    const source = readFileSync(new URL('../src/renderer/app/AppNavigationRail.tsx', import.meta.url), 'utf8');
-    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-    expect(source.indexOf('aria-label="Reporting"')).toBeGreaterThan(source.indexOf('aria-label="Automations"'));
-    expect(source.indexOf('aria-label="Reporting"')).toBeLessThan(source.indexOf('aria-label="Plugins"'));
-    expect(styles).toMatch(/\.app-navigation-rail-button\s*\{[^}]*background:\s*transparent;/s);
-    expect(styles).toMatch(/\.app-navigation-rail-button\.active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--text\) 14%, transparent\);/s);
-  });
-
-  it('renders the workspace report catalog and current report state', () => {
-    const staleReport = {
-      ...report,
-      id: 'report_stale',
-      title: 'Parser follow-up',
-      status: 'stale' as const,
-      triageStatus: 'accepted' as const
-    };
-    const html = renderToStaticMarkup(createElement(ReportsIndex, {
-      reports: [report, staleReport],
-      workspaces: [workspace],
-      selectedWorkspaceId: null,
-      loading: false,
-      error: null,
-      onScopeChange: () => undefined,
-      onOpenReport: () => undefined
-    }));
-
-    expect(html).toContain('class="wide-content-container"');
-    expect(html).toContain('All Reports');
-    expect(html).toContain('role="tablist"');
-    expect(html).toContain('class="reports-index-tabs research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs"');
-    expect(html).toContain('aria-selected="true"');
-    expect(html).toContain('>Parser</span>');
-    expect(html).toContain('Parser boundary confusion');
-    expect(html).toContain('Parser follow-up');
-    expect(html).toContain('<small>Editing</small>');
-    expect(html).toContain('<small>Accepted</small>');
-    expect(html.match(/<span>Edit<\/span>/g)).toHaveLength(2);
-    expect(html).not.toContain('A verified parser boundary issue.');
-    expect(html).not.toContain('Update 3');
-    expect(html).not.toContain('<h2>1 Complete</h2>');
-    expect(html).not.toContain('<h2>1 Stale</h2>');
-    expect(html).not.toContain('reports-index-eyebrow');
-    expect(html).toContain('<h1>All Reporting</h1>');
-    expect(html).toContain('Review, edit, and prepare reports created during research sessions.');
-    expect(html.indexOf('role="tablist"')).toBeLessThan(html.indexOf('<h1>All Reporting</h1>'));
-  });
-
-  it('matches Profile settings content spacing and symmetric tab padding', () => {
-    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-
-    expect(styles).toMatch(/\.reports-index\s*\{[^}]*width:\s*100%;[^}]*padding:\s*10px;/s);
-    expect(styles).toMatch(/\.reports-index-tabs,[\s\S]*?\.reports-index-empty\s*\{[^}]*width:\s*100%;/s);
-    expect(styles).toMatch(/\.pill-view-tabs \.research-side-view-tab \.research-side-view-tab-activate\s*\{[^}]*height:\s*40px;[^}]*padding:\s*0 16px;/s);
-    expect(styles).toMatch(/\.resource-workspace-heading\s*\{[^}]*max-width:\s*var\(--session-content-max-width\);[^}]*margin-inline:\s*auto;/s);
-    expect(styles).toMatch(/\.resource-workspace-heading h1\s*\{[^}]*font-size:\s*26px;[^}]*font-weight:\s*400;/s);
-    expect(styles).toMatch(/\.settings-workspace\s*\{[^}]*background:\s*var\(--panel\);/s);
-    expect(styles).toMatch(/\.settings-main-view\s*\{[^}]*padding:\s*10px;/s);
-    expect(styles).toMatch(/\.profile-settings-tab-row\s*\{[^}]*min-height:\s*40px;/s);
-  });
-
-  it('uses an Archived Sessions-style flat list with edit actions', () => {
-    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-
-    expect(styles).toMatch(/\.reports-index-list\s*\{[^}]*border-radius:\s*26px;[^}]*background:\s*var\(--panel-raised\);[^}]*padding:\s*3px 14px;/s);
-    expect(styles).toMatch(/\.reports-index-list\s*\{[^}]*max-width:\s*var\(--session-content-max-width\);[^}]*margin-inline:\s*auto;/s);
-    expect(styles).toMatch(/\.reports-index-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*padding:\s*10px 0;/s);
-    expect(styles).toMatch(/\.reports-index-row \+ \.reports-index-row\s*\{[^}]*border-top:\s*1px solid var\(--line\);/s);
-    expect(styles).toMatch(/\.reports-index-edit-button\s*\{[^}]*background:\s*var\(--panel-strong\);/s);
-  });
-
-  it('renders an explicit empty state before an agent creates a report', () => {
-    const html = renderToStaticMarkup(createElement(ReportsIndex, {
-      reports: [],
-      workspaces: [workspace],
-      selectedWorkspaceId: workspace.workspaceId,
-      loading: false,
-      error: null,
-      onScopeChange: () => undefined,
-      onOpenReport: () => undefined
-    }));
-
-    expect(html).toContain('No reports yet');
-    expect(html).toContain('Reports created by agents during research sessions');
-    expect(html).toContain('<h1>Parser Reporting</h1>');
-  });
-
-  it('defaults Reporting to the selected workspace and otherwise supports all-workspace scope', () => {
+  it('routes report editing back to the workspace Reports tab', () => {
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    const sidebarSource = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
-    const otherReport = { ...report, id: 'report_other', workspaceId: 'workspace_two', workspaceName: 'Other' };
-
-    expect(reportsForReportingScope([report, otherReport], null)).toHaveLength(2);
-    expect(reportsForReportingScope([report, otherReport], workspace.workspaceId)).toEqual([report]);
-    expect(appSource).toContain('setReportingScopeWorkspaceId(snapshot?.workspace.workspaceId ?? null);');
-    expect(appSource).toContain('reportsOpen ? (');
-    expect(sidebarSource).not.toMatch(/title="Reporting"[^>]*disabled=\{!snapshot\}/);
+    const reportSource = readFileSync(new URL('../src/renderer/features/reports/ReportsWorkspace.tsx', import.meta.url), 'utf8');
+    const railSource = readFileSync(new URL('../src/renderer/app/AppNavigationRail.tsx', import.meta.url), 'utf8');
+    expect(appSource).toContain("setWorkspaceDashboardInitialView('reports')");
+    expect(appSource).toContain('onOpenWorkspaceReport={openReportSession}');
+    expect(reportSource).toContain('Back to Reports');
+    expect(railSource).not.toContain('aria-label="Reporting"');
+    expect(appSource).not.toContain('<ReportsIndex');
   });
 
   it('loads reporting data and report documents through workspace-independent host contracts', () => {

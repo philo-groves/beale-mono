@@ -117,14 +117,14 @@ export function CampaignBoardView({
     <section aria-labelledby="workspace-campaign-board-heading" className="workspace-dashboard-panel campaign-panel campaign-board-panel" id="workspace-dashboard-campaign-board-panel" role="tabpanel">
       <header className="campaign-header campaign-board-header">
         <div className="settings-form-heading campaign-view-heading">
-          <h2 className="campaign-view-title" id="workspace-campaign-board-heading">{workspaceName.trim() || 'Workspace'} Board</h2>
+          <h2 className="campaign-view-title" id="workspace-campaign-board-heading">{workspaceName.trim() || 'Workspace'} Claims</h2>
           <p>Findings grouped by maturity; proposed leads are excluded.</p>
         </div>
-        <div className="campaign-board-filters" aria-label="Board filters">
+        <div className="campaign-board-filters" aria-label="Claims filters">
           <label className="campaign-board-search">
             <Search size={14} aria-hidden="true" />
             <input
-              aria-label="Filter board findings"
+              aria-label="Filter claims"
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Filter findings"
               type="search"

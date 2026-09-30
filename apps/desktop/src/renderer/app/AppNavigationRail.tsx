@@ -1,13 +1,12 @@
 import { memo } from 'react';
 import type { JSX } from 'react';
-import { CalendarClock, FileText, House, Plug, Settings } from 'lucide-react';
+import { CalendarClock, House, Plug, Settings } from 'lucide-react';
 
-export type AppNavigationDestination = 'home' | 'automations' | 'reporting' | 'plugins' | 'settings';
+export type AppNavigationDestination = 'home' | 'automations' | 'plugins' | 'settings';
 
 const outlineIcons = {
   home: House,
   automations: CalendarClock,
-  reporting: FileText,
   plugins: Plug,
   settings: Settings
 };
@@ -31,9 +30,6 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
           <path d="M16 13v3l2 1.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
         </>
       )}
-      {destination === 'reporting' && (
-        <path d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm2 9v1.5h8V11zm0 4v1.5h8V15z" fillRule="evenodd" />
-      )}
       {destination === 'plugins' && (
         <>
           <path d="M6 8h12v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4z" />
@@ -49,17 +45,14 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
 
 export function resolveAppNavigationDestination({
   settingsOpen,
-  reportsOpen,
   automationsOpen,
   pluginsOpen
 }: {
   settingsOpen: boolean;
-  reportsOpen: boolean;
   automationsOpen: boolean;
   pluginsOpen: boolean;
 }): AppNavigationDestination {
   if (settingsOpen) return 'settings';
-  if (reportsOpen) return 'reporting';
   if (automationsOpen) return 'automations';
   if (pluginsOpen) return 'plugins';
   return 'home';
@@ -69,36 +62,31 @@ export const AppNavigationRail = memo(function AppNavigationRail({
   active,
   onOpenHome,
   onOpenAutomations,
-  onOpenReporting,
   onOpenPlugins,
   onOpenSettings
 }: {
   active: AppNavigationDestination;
   onOpenHome: () => void;
   onOpenAutomations: () => void;
-  onOpenReporting: () => void;
   onOpenPlugins: () => void;
   onOpenSettings: () => void;
 }): JSX.Element {
   return (
     <nav className="app-navigation-rail" aria-label="Main navigation">
       <div className="app-navigation-rail-top">
-        <button type="button" className={`app-navigation-rail-button${active === 'home' ? ' active' : ''}`} title="Home" aria-label="Home" aria-current={active === 'home' ? 'page' : undefined} onClick={onOpenHome}>
+        <button type="button" className={`app-navigation-rail-button${active === 'home' ? ' active' : ''}`} data-tooltip="Home" aria-label="Home" aria-current={active === 'home' ? 'page' : undefined} onClick={onOpenHome}>
           <NavigationIcon destination="home" active={active === 'home'} />
         </button>
         <div className="app-navigation-rail-sections">
-          <button type="button" className={`app-navigation-rail-button${active === 'automations' ? ' active' : ''}`} title="Automations" aria-label="Automations" aria-current={active === 'automations' ? 'page' : undefined} onClick={onOpenAutomations}>
+          <button type="button" className={`app-navigation-rail-button${active === 'automations' ? ' active' : ''}`} data-tooltip="Automations" aria-label="Automations" aria-current={active === 'automations' ? 'page' : undefined} onClick={onOpenAutomations}>
             <NavigationIcon destination="automations" active={active === 'automations'} />
           </button>
-          <button type="button" className={`app-navigation-rail-button${active === 'reporting' ? ' active' : ''}`} title="Reporting" aria-label="Reporting" aria-current={active === 'reporting' ? 'page' : undefined} onClick={onOpenReporting}>
-            <NavigationIcon destination="reporting" active={active === 'reporting'} />
-          </button>
-          <button type="button" className={`app-navigation-rail-button${active === 'plugins' ? ' active' : ''}`} title="Plugins" aria-label="Plugins" aria-current={active === 'plugins' ? 'page' : undefined} onClick={onOpenPlugins}>
+          <button type="button" className={`app-navigation-rail-button${active === 'plugins' ? ' active' : ''}`} data-tooltip="Plugins" aria-label="Plugins" aria-current={active === 'plugins' ? 'page' : undefined} onClick={onOpenPlugins}>
             <NavigationIcon destination="plugins" active={active === 'plugins'} />
           </button>
         </div>
       </div>
-      <button type="button" className={`app-navigation-rail-button${active === 'settings' ? ' active' : ''}`} title="Agent Settings" aria-label="Agent Settings" aria-current={active === 'settings' ? 'page' : undefined} onClick={onOpenSettings}>
+      <button type="button" className={`app-navigation-rail-button${active === 'settings' ? ' active' : ''}`} data-tooltip="Agent Settings" aria-label="Agent Settings" aria-current={active === 'settings' ? 'page' : undefined} onClick={onOpenSettings}>
         <NavigationIcon destination="settings" active={active === 'settings'} />
       </button>
     </nav>

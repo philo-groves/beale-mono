@@ -20,7 +20,6 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   workspaceCreationActive = false,
   newResearchActive = false,
   automationsActive = false,
-  reportsActive = false,
   pluginsActive = false,
   snapshot,
   topics = [],
@@ -48,7 +47,6 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   workspaceCreationActive?: boolean;
   newResearchActive?: boolean;
   automationsActive?: boolean;
-  reportsActive?: boolean;
   pluginsActive?: boolean;
   snapshot: WorkspaceSnapshot | null;
   topics?: ResearchTopicSummary[];
@@ -210,6 +208,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   return (
     <aside className="sidebar" aria-hidden={collapsed} inert={collapsed}>
       <div className="sidebar-primary-actions">
+        <div className="sidebar-wordmark">Beale</div>
         <button type="button" className="sidebar-utility-button sidebar-new-research" title={`Start ${newResearchLabel.toLocaleLowerCase()}`} disabled={busy || !snapshot} onClick={onStartNewResearch}>
           <SquarePen size={15} />
           <span>{newResearchLabel}</span>
@@ -402,7 +401,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
             {workspaceRows.map(({ workspace, sessions }) => {
               const workspaceLoaded = snapshot?.workspace.workspacePath === workspace.workspacePath;
               const newResearchSessionActive = workspaceLoaded && newResearchActive && !workspaceCreationActive;
-              const dashboardActive = workspaceLoaded && selectedRunId === null && !selectedTopicId && !workspaceCreationActive && !newResearchActive && !automationsActive && !reportsActive && !pluginsActive;
+              const dashboardActive = workspaceLoaded && selectedRunId === null && !selectedTopicId && !workspaceCreationActive && !newResearchActive && !automationsActive && !pluginsActive;
               const sessionsExpanded = expandedWorkspaceIds.has(workspace.id);
               const visibleSessions = filteringSessions ? sessions : sessions.slice(0, SIDEBAR_SESSION_LIMIT);
               const hiddenSessions = filteringSessions ? [] : sessions.slice(SIDEBAR_SESSION_LIMIT);

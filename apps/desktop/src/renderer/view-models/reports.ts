@@ -70,13 +70,6 @@ export function reportCatalogGroups(reports: readonly AppServerReportSummary[]):
   return { complete, stale };
 }
 
-export function reportsForReportingScope(
-  reports: readonly AppServerReportSummary[],
-  workspaceId: string | null
-): AppServerReportSummary[] {
-  return workspaceId ? reports.filter((report) => report.workspaceId === workspaceId) : [...reports];
-}
-
 export interface ReportMarkdownBlock {
   id: string;
   content: string;

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
-import { Binary, BookOpen, Boxes, Brain, Columns3, Download, GitBranch, Globe2, Info, Layers3, ListChecks, MoonStar, Plus, RefreshCw, Server, Settings, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Binary, BookOpen, Boxes, Brain, Columns3, Download, FileText, GitBranch, Globe2, Info, Layers3, ListChecks, MoonStar, Plus, RefreshCw, Server, Settings, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../shared/types';
 import { researchKitDefinition, researchKitLabel, researchKitResourceKey } from '../../../shared/researchKits';
 import type {
   AppServerMemorySummary,
+  AppServerReportSummary,
   MemoryDreamingProgressPhase,
   MemoryDreamingProgressUpdate,
   ResearchProfile,
@@ -26,7 +27,7 @@ import type {
 import { Modal } from '../../app/Modal';
 import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
 import { memoryTypeDefinition, memoryTypeLabel } from '../research/MemoryTypeLabel';
-import { MemoryCatalogItem, RunbookCatalogItem } from '../research/MemorySidePanel';
+import { MemoryCatalogItem, ReportCatalogItem, RunbookCatalogItem } from '../research/MemorySidePanel';
 import { memoryTypeGroupsByHeat } from '../../view-models/memoryCatalog';
 import { EMPTY_SESSION_HEAT_PREFERENCES } from '../../view-models/sessionHeat';
 import type { SessionHeat, SessionHeatPreferences } from '../../view-models/sessionHeat';
@@ -39,7 +40,7 @@ import { ResourcePriorArtView } from './ResourcePriorArtView';
 const WORKSPACE_ACTIVITY_DAY_COUNT = 365;
 const DAY_DURATION_MS = 24 * 60 * 60 * 1_000;
 const WORKSPACE_DASHBOARD_VIEWS = ['campaign', 'resources', 'rules', 'utilities', 'overview', 'kit'] as const;
-const WORKSPACE_CAMPAIGN_VIEWS = ['trail', 'board', 'memory', 'runbooks'] as const;
+const WORKSPACE_CAMPAIGN_VIEWS = ['trail', 'board', 'memory', 'runbooks', 'reports'] as const;
 
 type WorkspaceTopLevelView = typeof WORKSPACE_DASHBOARD_VIEWS[number];
 type WorkspaceCampaignView = typeof WORKSPACE_CAMPAIGN_VIEWS[number];
@@ -58,7 +59,8 @@ const WORKSPACE_CAMPAIGN_VIEW_ICONS: Record<WorkspaceCampaignView, typeof Info> 
   trail: GitBranch,
   board: Columns3,
   memory: Brain,
-  runbooks: BookOpen
+  runbooks: BookOpen,
+  reports: FileText
 };
 
 export interface WorkspaceConfigurationInput {
@@ -208,7 +210,9 @@ export function WorkspaceUnderstandingView({
   onOpenClaim = () => undefined,
   onOpenMemory = () => undefined,
   onOpenRunbook = () => undefined,
+  onOpenReport = () => undefined,
   onActiveViewChange,
+  onViewSelectionChange,
   onRunWorkspaceDejunk = () => undefined,
   onRepairWorkspaceCheckpoint = () => undefined,
   onRunMemoryDreaming,
@@ -253,7 +257,9 @@ export function WorkspaceUnderstandingView({
   onOpenClaim?: (claimId: string) => void;
   onOpenMemory?: (nodeId: string) => void;
   onOpenRunbook?: (runbookId: string) => void;
+  onOpenReport?: (report: AppServerReportSummary) => void;
   onActiveViewChange?: (viewName: string) => void;
+  onViewSelectionChange?: (view: WorkspaceDashboardView) => void;
   nowMs?: number;
 }): JSX.Element {
   const [activeView, setActiveView] = useState<WorkspaceTopLevelView>(() => workspaceTopLevelView(initialView));
@@ -273,6 +279,11 @@ export function WorkspaceUnderstandingView({
   useEffect(() => {
     onActiveViewChange?.(workspaceDashboardViewLabel(activeView, researchKitId));
   }, [activeView, onActiveViewChange, researchKitId]);
+  useEffect(() => {
+    onViewSelectionChange?.(activeView === 'campaign'
+      ? activeCampaignView === 'trail' ? 'campaign' : activeCampaignView
+      : activeView);
+  }, [activeCampaignView, activeView, onViewSelectionChange]);
   const timelineNowMs = nowMs ?? clockNowMs;
   const memoryTypes = researchProfile?.memory.types ?? [];
   const campaignActive = activeView === 'campaign';
@@ -292,6 +303,14 @@ export function WorkspaceUnderstandingView({
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       : [],
     [activeCampaignView, campaignActive, appServerMemory?.runbooks, workspaceId]
+  );
+  const workspaceReports = useMemo(
+    () => campaignActive && activeCampaignView === 'reports'
+      ? (appServerMemory?.reports ?? [])
+          .filter((report) => report.workspaceId === workspaceId)
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      : [],
+    [activeCampaignView, campaignActive, appServerMemory?.reports, workspaceId]
   );
 
   return (
@@ -433,6 +452,14 @@ export function WorkspaceUnderstandingView({
         workspaceName={activeScope?.workspaceName || workspaceName}
       /> : null}
 
+      {campaignActive && activeCampaignView === 'reports' ? <WorkspaceReportsPanel
+        loading={appServerMemory === null || appServerMemory.loading === true}
+        nowMs={timelineNowMs}
+        reports={workspaceReports}
+        onOpen={onOpenReport}
+        workspaceName={activeScope?.workspaceName || workspaceName}
+      /> : null}
+
       {activeView === 'utilities' ? <WorkspaceUtilitiesPanel
         busy={busy}
         hidden={false}
@@ -462,13 +489,13 @@ function workspaceDashboardViewLabel(view: WorkspaceDashboardView, researchKitId
 }
 
 function workspaceTopLevelView(initialView: WorkspaceDashboardView): WorkspaceTopLevelView {
-  return initialView === 'activity' || initialView === 'board' || initialView === 'memory' || initialView === 'runbooks'
+  return initialView === 'activity' || initialView === 'board' || initialView === 'memory' || initialView === 'runbooks' || initialView === 'reports'
     ? 'campaign'
     : initialView;
 }
 
 function workspaceCampaignView(initialView: WorkspaceDashboardView): WorkspaceCampaignView {
-  return initialView === 'board' || initialView === 'memory' || initialView === 'runbooks'
+  return initialView === 'board' || initialView === 'memory' || initialView === 'runbooks' || initialView === 'reports'
     ? initialView
     : 'trail';
 }
@@ -476,6 +503,7 @@ function workspaceCampaignView(initialView: WorkspaceDashboardView): WorkspaceCa
 function workspaceCampaignViewLabel(view: WorkspaceCampaignView): string {
   if (view === 'memory') return 'Memories';
   if (view === 'trail') return 'Highlights';
+  if (view === 'board') return 'Claims';
   return view.charAt(0).toUpperCase() + view.slice(1);
 }
 
@@ -1049,7 +1077,7 @@ function WorkspaceActivityForm({
   );
 }
 
-type WorkspaceHeatmapMetric = 'tokens' | 'resources' | 'memories' | 'runbooks';
+type WorkspaceHeatmapMetric = 'tokens' | 'resources' | 'memories' | 'runbooks' | 'reports';
 
 function workspaceHeatmapMetricCopy(metric: WorkspaceHeatmapMetric): { activityLabel: string } {
   switch (metric) {
@@ -1057,6 +1085,7 @@ function workspaceHeatmapMetricCopy(metric: WorkspaceHeatmapMetric): { activityL
     case 'resources': return { activityLabel: 'resource creation' };
     case 'memories': return { activityLabel: 'memory creation' };
     case 'runbooks': return { activityLabel: 'runbook creation' };
+    case 'reports': return { activityLabel: 'report creation' };
   }
 }
 
@@ -1067,6 +1096,7 @@ function workspaceHeatmapValueLabel(value: number, metric: WorkspaceHeatmapMetri
     case 'resources': return `${formattedValue} ${value === 1 ? 'resource' : 'resources'} created`;
     case 'memories': return `${formattedValue} ${value === 1 ? 'memory' : 'memories'} created`;
     case 'runbooks': return `${formattedValue} ${value === 1 ? 'runbook' : 'runbooks'} created`;
+    case 'reports': return `${formattedValue} ${value === 1 ? 'report' : 'reports'} created`;
   }
 }
 
@@ -1280,6 +1310,90 @@ function WorkspaceRunbookSection({
             type="button"
           >
             {expanded ? 'Show less' : `Show ${overflowRunbooks.length.toLocaleString()} more`}
+          </button>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function WorkspaceReportsPanel({
+  loading,
+  nowMs,
+  reports,
+  onOpen,
+  workspaceName
+}: {
+  loading: boolean;
+  nowMs: number;
+  reports: AppServerReportSummary[];
+  onOpen: (report: AppServerReportSummary) => void;
+  workspaceName: string;
+}): JSX.Element {
+  const activity = useMemo(() => workspaceCreationActivity(reports, nowMs), [nowMs, reports]);
+  return (
+    <section
+      aria-label="Workspace reports"
+      className="workspace-dashboard-panel workspace-catalog-view workspace-campaign-catalog-view workspace-reports-view"
+      id="workspace-dashboard-campaign-reports-panel"
+      role="tabpanel"
+    >
+      <WorkspaceActivityForm activity={activity} metric="reports" viewLabel="Reports" workspaceName={workspaceName} />
+      <MainSideScrollRegion
+        className="workspace-catalog-list workspace-report-scroll"
+        listClassName="memory-catalog-list runbook-catalog-list report-catalog-list workspace-report-list"
+        updateKey={`${loading}:${reports.length}`}
+      >
+        {reports.length > 0 ? <WorkspaceReportSection reports={reports} nowMs={nowMs} onOpen={onOpen} /> : (
+          <p className="workspace-catalog-empty">{loading ? 'Loading reports.' : 'No workspace reports yet.'}</p>
+        )}
+      </MainSideScrollRegion>
+    </section>
+  );
+}
+
+function WorkspaceReportSection({
+  reports,
+  nowMs,
+  onOpen
+}: {
+  reports: AppServerReportSummary[];
+  nowMs: number;
+  onOpen: (report: AppServerReportSummary) => void;
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const visibleReports = reports.slice(0, 4);
+  const overflowReports = reports.slice(4);
+  const label = reports.length === 1 ? 'Report' : 'Reports';
+  const renderReport = (report: AppServerReportSummary): JSX.Element => (
+    <ReportCatalogItem
+      key={report.id}
+      report={report}
+      nowMs={nowMs}
+      selected={false}
+      onOpen={() => onOpen(report)}
+    />
+  );
+  return (
+    <section className="workspace-memory-type-section" aria-label={`${reports.length} ${label}`}>
+      <h3 className="workspace-campaign-list-heading">{reports.length.toLocaleString()} {label}</h3>
+      <div className="workspace-memory-type-primary-items">{visibleReports.map(renderReport)}</div>
+      {overflowReports.length > 0 ? (
+        <>
+          <div
+            aria-hidden={!expanded}
+            className={`workspace-memory-type-overflow ${expanded ? 'expanded' : ''}`.trim()}
+            inert={expanded ? undefined : true}
+          >
+            <div>{overflowReports.map(renderReport)}</div>
+          </div>
+          <button
+            aria-expanded={expanded}
+            className="session-memory-type-toggle workspace-memory-type-toggle"
+            onClick={() => setExpanded((current) => !current)}
+            type="button"
+          >
+            {expanded ? 'Show less' : `Show ${overflowReports.length.toLocaleString()} more`}
           </button>
         </>
       ) : null}

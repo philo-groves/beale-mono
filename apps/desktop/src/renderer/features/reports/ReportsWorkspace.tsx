@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
-import { ArrowUp, CircleAlert, CircleDot, FileArchive, FileText, FolderOpen, LoaderCircle, Pencil, RefreshCw, Video } from 'lucide-react';
+import { ArrowLeft, ArrowUp, CircleAlert, CircleDot, FileArchive, FolderOpen, LoaderCircle, Pencil, RefreshCw, Video } from 'lucide-react';
 import type {
   AppServerReportDocument,
   AppServerReportSummary,
-  AppServerReportTriageStatus,
-  WorkspaceRegistryEntry
+  AppServerReportTriageStatus
 } from '@shared/types';
-import { CenteredLoadingState } from '../../app/CenteredLoadingState';
-import { traceLabel } from '../../lib/formatting';
 import { scrollFadeClasses } from '../../lib/scrollFade';
 import {
   replaceReportMarkdownBlock,
@@ -26,99 +23,6 @@ const REPORT_TRIAGE_STATUS_OPTIONS: ReadonlyArray<{ value: AppServerReportTriage
   { value: 'accepted', label: 'Accepted' }
 ];
 
-export function ReportsIndex({
-  reports,
-  workspaces,
-  selectedWorkspaceId,
-  loading,
-  error,
-  onScopeChange,
-  onOpenReport
-}: {
-  reports: readonly AppServerReportSummary[];
-  workspaces: readonly WorkspaceRegistryEntry[];
-  selectedWorkspaceId: string | null;
-  loading: boolean;
-  error: string | null;
-  onScopeChange: (workspaceId: string | null) => void;
-  onOpenReport: (report: AppServerReportSummary) => void;
-}): JSX.Element {
-  const scopeTabs = [
-    { id: null, key: 'all', label: 'All Reports' },
-    ...workspaces
-      .filter((workspace) => workspace.workspaceId.length > 0)
-      .map((workspace) => ({ id: workspace.workspaceId, key: workspace.id, label: workspace.workspaceName }))
-  ];
-  const currentScopeName = selectedWorkspaceId
-    ? workspaces.find((workspace) => workspace.workspaceId === selectedWorkspaceId)?.workspaceName ?? 'Workspace'
-    : 'All';
-  return (
-    <section className="reports-index" aria-label="Reporting">
-      <div className="wide-content-container">
-        <div className="reports-index-tabs research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label="Report workspace scope">
-          {scopeTabs.map((scope) => {
-            const selected = selectedWorkspaceId === scope.id;
-            return (
-              <div className={`research-side-view-tab provider-settings-tab reports-index-tab ${selected ? 'active' : ''}`.trim()} key={scope.key}>
-                <button
-                  type="button"
-                  className="research-side-view-tab-activate"
-                  role="tab"
-                  aria-selected={selected}
-                  aria-controls="reports-index-panel"
-                  onClick={() => onScopeChange(scope.id)}
-                >
-                  <span>{scope.label}</span>
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        <header className="resource-workspace-heading">
-          <h1>{currentScopeName} Reporting</h1>
-          <p>Review, edit, and prepare reports created during research sessions.</p>
-        </header>
-        <div id="reports-index-panel" role="tabpanel">
-          {loading ? (
-            <CenteredLoadingState label="Loading reports…" />
-          ) : error ? (
-            <div className="reports-index-empty is-error" role="alert">
-              <CircleAlert size={20} aria-hidden="true" />
-              <strong>Reports could not be loaded</strong>
-              <span>{error}</span>
-            </div>
-          ) : reports.length === 0 ? (
-            <div className="reports-index-empty">
-              <FileText size={20} aria-hidden="true" />
-              <strong>No reports yet</strong>
-              <span>Reports created by agents during research sessions will appear here.</span>
-            </div>
-          ) : (
-            <div className="reports-index-list">
-              {reports.map((report) => (
-                <div className="reports-index-row" key={`${report.workspaceId}:${report.id}`}>
-                  <span className="reports-index-row-copy">
-                    <strong>{report.title}</strong>
-                    <small>{traceLabel(report.triageStatus)}</small>
-                  </span>
-                  <button
-                    type="button"
-                    className="reports-index-edit-button"
-                    onClick={() => onOpenReport(report)}
-                  >
-                    <Pencil size={14} aria-hidden="true" />
-                    <span>Edit</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 export function ReportSessionWorkspace({
   report,
   submissionPacketPath,
@@ -127,6 +31,7 @@ export function ReportSessionWorkspace({
   error,
   onReportChange,
   onReportMarkdownChange,
+  onBackToReports,
   onStatusChange,
   onChooseSubmissionPacket,
   onRevealSubmissionPacket,
@@ -139,6 +44,7 @@ export function ReportSessionWorkspace({
   error: string | null;
   onReportChange: (instruction: string) => Promise<void>;
   onReportMarkdownChange: (content: string) => Promise<void>;
+  onBackToReports?: () => void;
   onStatusChange: (status: AppServerReportTriageStatus) => Promise<void>;
   onChooseSubmissionPacket: () => Promise<void>;
   onRevealSubmissionPacket: () => Promise<void>;
@@ -153,6 +59,7 @@ export function ReportSessionWorkspace({
         error={error}
         onChange={onReportChange}
         onMarkdownChange={onReportMarkdownChange}
+        onBackToReports={onBackToReports}
       />
       <div className="report-session-sidenav-gutter" aria-hidden="true" />
       <ReportSummarySidebar
@@ -173,7 +80,8 @@ export function EditableReport({
   loading,
   error,
   onChange,
-  onMarkdownChange
+  onMarkdownChange,
+  onBackToReports
 }: {
   report: AppServerReportSummary;
   document: AppServerReportDocument | null;
@@ -181,6 +89,7 @@ export function EditableReport({
   error: string | null;
   onChange: (instruction: string) => Promise<void>;
   onMarkdownChange: (content: string) => Promise<void>;
+  onBackToReports?: () => void;
 }): JSX.Element {
   const blocks = useMemo(() => reportMarkdownBlocks(document?.content ?? ''), [document?.content]);
   const title = reportTitleFromMarkdown(document?.content ?? '', report.title);
@@ -293,6 +202,7 @@ export function EditableReport({
   return (
     <section ref={scrollFrameRef} className="report-session-document" aria-label={`Report: ${title}`}>
       <div ref={documentScrollRef} className="report-session-document-scroll" onScroll={updateScrollEdges}>
+        {onBackToReports ? <button className="report-session-back-button" onClick={onBackToReports} type="button"><ArrowLeft size={16} aria-hidden="true" /> Back to Reports</button> : null}
         {loading && !document ? (
           <div className="report-session-state"><LoaderCircle className="runbook-view-spinner" size={18} /> Loading report.</div>
         ) : error ? (

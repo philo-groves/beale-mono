@@ -6,16 +6,20 @@
 
 #### Removed
 
-- Removed the duplicate workspace Campaign Claims view; findings remain on the Board, and findings and leads remain in the research sidebar.
+- Removed the multi-workspace Reporting screen and its navigation rail destination. Reports are available within each workspace Campaign view.
+- Removed the earlier duplicate Campaign claims list; the maturity column view remains as Campaign Claims, with findings and leads also available in the research sidebar.
 - Removed the redundant Back to Agent button from the settings sidebar; Home remains available in the icon rail.
 - Removed the investigation hierarchy, session assignment and completion gate, investigation tools and plugin, protocol operations, and Campaign Trail tree. Sessions recover prior work through claims, memory, runbooks, workspace searches, and history. Previously published investigation files remain available as read-only history. App-server contract v27 updates memory and campaign projections; clients enforcing the contract must update.
 
 #### Changed
 
-- Automations, Reporting, Providers, and Profiles view tabs now share the workspace's larger pill styling and transparent idle state.
-- Campaign list headings in Highlights, Board, Memories, and Runbooks now share the Board's muted text and divider spacing.
+- Renamed Campaign Board to Claims and added a workspace-scoped Reports tab with report activity, a catalog, and access to the existing editor.
+- The Beale sidebar wordmark uses a lighter weight, and icon rail buttons show labels to their right on hover or keyboard focus.
+- The workspace sidebar now displays a muted Beale wordmark above New Research.
+- Automations, Providers, and Profiles view tabs now share the workspace's larger pill styling and transparent idle state.
+- Campaign list headings in Highlights, Claims, Memories, and Runbooks now share the Claims view's muted text and divider spacing.
 - Workspace and campaign view tabs now use larger pill-shaped active and hover states with transparent idle backgrounds.
-- Automations, Reporting, and Plugins catalogs now use the same centered wide container as workspace views.
+- Automations and Plugins catalogs now use the same centered wide container as workspace views.
 - Workspace Resources, Rules, Utilities, Settings, and Kit views now use the full width of the centered workspace container, including workspace creation steps.
 - Campaign Memories and Runbooks now use the full width of the centered workspace container.
 - Workspace views now use a reusable centered container with a 1300px maximum width, 24px side gutters, and matching top padding while the darker content surface remains full-width.
@@ -23,12 +27,12 @@
 - Workspace Highlights priority claims now place the status close beneath the title, show only maturity and rating, and size cards to their content.
 - Replaced workspace collaboration channels with Topics: editable overviews and pages, typed links to canonical records, search, reversible merge aliases, and read-only imported channel activity. Agents inherit bounded topic orientation without replaying message transcripts. Desktop, iOS subagent labels, and the Codex bridge use topic names; app-server contract v28 replaces channel operations. File-authoritative workspaces store topic snapshots under `references/topics/`.
 - Workspace Highlights priority claims now sit flush vertically within the horizontal list.
-- Campaign Board columns now start flush beneath their headings and show top and bottom fades as their lists scroll.
+- Campaign Claims columns now start flush beneath their headings and show top and bottom fades as their lists scroll.
 - Workspace Runbooks lists now match Memories for row padding, section headings, and expandable four-item previews.
 - The workspace Campaign Memories and Runbooks lists now show top and bottom scroll fades when more items are out of view. Runbooks also use the same inset scrollbar behavior.
 - Header workspace names now preserve their saved capitalization.
 - With an open workspace and collapsed left sidebar, New Research and Quick Chat are available as header icons beside the sidebar toggle.
-- An icon navigation rail now provides Home, Automations, Reporting, Plugins, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
+- An icon navigation rail now provides Home, Automations, Plugins, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
 - The active icon navigation destination persists when research sessions and channels open; Home represents those views.
 - The workspace sidebar now leaves space above New Research and places Quick Chat directly beneath it.
 - New Research now uses the same neutral styling as Quick Chat.
@@ -66,7 +70,7 @@
 
 - The MSRC Research Kit is now MSRC Windows for the Windows Insider Preview bounty. A selectable catalog of common Windows apps, services, four program-listed sandbox contexts, and repositories for shipped open-source code can be managed during workspace creation and kit refresh; existing `msrc` workspace metadata remains compatible. Catalog entries are candidates that require guest and program eligibility checks.
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
-- Workspace Board now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
+- The workspace Claims view now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
 - New Research starts with Goal mode off by default; the Goal option remains available for individual prompts and saved settings retain their choice.
 - Provider model catalogs now include GPT-6 Sol, GPT-6 Luna, Claude Opus 5.5, and Grok 4.7 alongside the existing GPT-5.6 and earlier provider models.
 - New OpenAI configurations default to GPT-6 Sol for the large model and GPT-6 Luna for the small model, including API-key routing. Existing saved model choices remain in place. Daybreak Blue request access is omitted for other providers.

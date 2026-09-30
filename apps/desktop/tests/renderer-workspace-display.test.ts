@@ -120,10 +120,13 @@ describe('renderer workspace display view models', () => {
     }));
 
     expect(html).toContain('<div class="workspace-list-title sidebar-list-tabs" role="tablist" aria-label="Sidebar list">');
+    expect(html).toContain('<div class="sidebar-wordmark">Beale</div>');
+    expect(html.indexOf('class="sidebar-wordmark"')).toBeLessThan(html.indexOf('class="sidebar-utility-button sidebar-new-research"'));
     expect(html).toContain('role="tab" aria-selected="true" class="active">Workspaces</button>');
     expect(html).toContain('<span class="sidebar-list-tab-divider" aria-hidden="true"></span>');
     expect(html).toContain('role="tab" aria-selected="false" class="">Topics</button>');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+    expect(styles).toMatch(/\.sidebar-wordmark\s*\{[^}]*color:\s*var\(--muted\);[^}]*font-size:\s*1\.5rem;[^}]*font-weight:\s*600;/s);
     expect(styles).toMatch(/\.sidebar-list-tab-divider\s*\{[^}]*width:\s*1px;[^}]*height:\s*16px;[^}]*background:\s*color-mix\(in srgb, var\(--text\) 34%, var\(--panel\)\);/s);
     expect(html).toContain('<div class="main-side-scroll sidebar-list-scroll-region">');
     expect(html).toContain('<div class="sidebar-list-scroll workspace-list-items">');
@@ -424,7 +427,6 @@ describe('renderer workspace display view models', () => {
     );
     const callbacks = [
       ['openPlugins', 'runAgentPluginAction'],
-      ['openReports', 'reportingWorkspaceCatalogKey'],
       ['openSettings', 'openProfiling'],
       ['openAutomations', 'selectAutomation']
     ] as const;

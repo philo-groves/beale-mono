@@ -138,12 +138,13 @@ describe('renderer app shell view model', () => {
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate,
-      onOpenReporting: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
 
     expect(html).toContain('aria-label="Main navigation"');
-    for (const label of ['Home', 'Automations', 'Reporting', 'Plugins', 'Agent Settings']) {
+    for (const label of ['Home', 'Automations', 'Plugins', 'Agent Settings']) {
       expect(html).toContain(`aria-label="${label}"`);
+      expect(html).toContain(`data-tooltip="${label}"`);
     }
     expect(html.indexOf('aria-label="Home"')).toBeLessThan(html.indexOf('aria-label="Automations"'));
     expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
@@ -160,38 +161,39 @@ describe('renderer app shell view model', () => {
     expect(topStyles).toContain('gap: 6px');
     expect(styles).toContain('.app-navigation-rail-top {\n  margin-top: 8px;');
     expect(styles).toContain('.app-navigation-rail-sections {\n  margin-top: 0;');
+    expect(styles).toMatch(/\.app-navigation-rail-button::after\s*\{[^}]*left: calc\(100% \+ 10px\);[^}]*content: attr\(data-tooltip\);/s);
+    expect(styles).toContain('.app-navigation-rail-button:focus-visible::after');
   });
 
   it('fills only the active navigation icon', () => {
     const onNavigate = () => undefined;
-    for (const active of ['home', 'automations', 'reporting', 'plugins', 'settings'] as const) {
+    for (const active of ['home', 'automations', 'plugins', 'settings'] as const) {
       const html = renderToStaticMarkup(createElement(AppNavigationRail, {
         active, onOpenHome: onNavigate, onOpenAutomations: onNavigate,
-        onOpenReporting: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+        onOpenPlugins: onNavigate, onOpenSettings: onNavigate
       }));
       expect(html.match(/class="app-navigation-rail-filled-icon"/gu)).toHaveLength(1);
-      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(4);
+      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(3);
       expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
     }
   });
 
   it('keeps a navigation destination active as sessions and topics open', () => {
-    const base = { settingsOpen: false, reportsOpen: false, automationsOpen: false, pluginsOpen: false };
+    const base = { settingsOpen: false, automationsOpen: false, pluginsOpen: false };
     expect(resolveAppNavigationDestination(base)).toBe('home');
-    expect(resolveAppNavigationDestination({ ...base, reportsOpen: true })).toBe('reporting');
     expect(resolveAppNavigationDestination({ ...base, automationsOpen: true })).toBe('automations');
     expect(resolveAppNavigationDestination({ ...base, pluginsOpen: true })).toBe('plugins');
     expect(resolveAppNavigationDestination({ ...base, settingsOpen: true })).toBe('settings');
 
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, reportsOpen, automationsOpen, pluginsOpen })');
+    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, pluginsOpen })');
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: resolveAppNavigationDestination(base),
       onOpenHome: onNavigate, onOpenAutomations: onNavigate,
-      onOpenReporting: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
-    expect(html).toContain('class="app-navigation-rail-button active" title="Home"');
+    expect(html).toContain('class="app-navigation-rail-button active" data-tooltip="Home"');
     expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
   });
 
