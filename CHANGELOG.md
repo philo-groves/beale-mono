@@ -47,6 +47,14 @@
 - Aborted sessions show the latest root-agent checkpoint as the final output, with a muted elapsed-time notice beneath it, including paused runs and common abort message variants.
 - Ended sessions no longer show three follow-up cards or generate them during final disposition. The session composer now asks the configured small model for one fluent Tab suggestion.
 - Session permissions are selected in General settings; steering and New Research inputs no longer show a permission picker.
+#### Added
+
+- A default-enabled Browser Use plugin adds bounded tab navigation, page observation, element interaction, and screenshots through WebDriver BiDi. The plugin can be disabled in Plugins and launches a separate browser profile.
+- A bundled Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default but loads into sessions only for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
+
+#### Changed
+
+- The MSRC Research Kit is now MSRC Windows for the Windows Insider Preview bounty. A selectable catalog of common Windows apps, services, four program-listed sandbox contexts, and repositories for shipped open-source code can be managed during workspace creation and kit refresh; existing `msrc` workspace metadata remains compatible. Catalog entries are candidates that require guest and program eligibility checks.
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
 - Workspace Board now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
 - New Research starts with Goal mode off by default; the Goal option remains available for individual prompts and saved settings retain their choice.
@@ -135,6 +143,7 @@
 
 #### Added
 
+- Added a Meta Bug Bounty Research Kit that imports published scope examples, responsible research rules, and guidance into new workspaces and refreshes existing kit imports without replacing manual resources.
 - OpenAI provider settings now offer Default (272k) and Large (up to 1m) context sizes for new sessions, capped by each model's published capability.
 - Runbook reads now return forward/back pagination cursors and accept inclusive start/end cell identifiers for current notebooks and immutable execution snapshots. A dedicated `workspace.search` tool finds files by name or bounded text content, ordered newest-first, with category, extension, modification-time, raw/temporary, and paging filters; its schema advertises exact app-server-verified, read-only same-Subject workspace references independently of released SQLite research rows. `history.search` separately returns compact canonical references currently loaded across that Subject.
 - Research runbooks now keep setup, runtime, and cleanup in one cohesive workflow using agent-managed feature tags. Only cells matching an enabled tag execute, every new cell requires a default phase tag, mutation batches support up to 100 cells, and guidance no longer treats phase changes or a target cell count as reasons to spawn sibling runbooks. Code cells can select host or Tart VM execution; Tart cells reference a host-built workspace executable or durable artifact that app-server materializes, streams, invokes as the guest service identity or through passwordless sudo, records, and cleans without a guest-side rewrite.

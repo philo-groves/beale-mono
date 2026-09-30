@@ -75,6 +75,18 @@ function defaultBuiltinPlugins(): AppServerBuiltinPlugin[] {
       installedAt: '2026-08-14T00:00:00.000Z'
     },
     {
+      id: 'beale-browser-use-builtin',
+      path: defaultBuiltinPluginPath('beale-browser-use'),
+      installedAt: '2026-09-23T00:00:00.000Z',
+      enabledByDefault: true
+    },
+    {
+      id: 'meta-skills-builtin',
+      path: defaultBuiltinPluginPath('meta-skills'),
+      installedAt: '2026-09-23T00:00:00.000Z',
+      enabledByDefault: true
+    },
+    {
       id: 'beale-terminator-builtin',
       path: defaultManagedPluginPath('beale-terminator'),
       installedAt: '2026-08-17T00:00:00.000Z',

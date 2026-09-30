@@ -27,6 +27,7 @@
   "dependencies": {
     "@beale/app-server-runtime": "workspace:*",
     "@beale/research-agent": "workspace:*",
+    "puppeteer-core": "^25.11.0",
     "qrcode": "1.5.4",
     "typescript": "5.9.3",
     "ws": "8.21.0"

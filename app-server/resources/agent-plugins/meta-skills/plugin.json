@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "meta-skills",
+  "version": "0.1.0",
+  "description": "Meta Bug Bounty researcher-tool guidance for workspaces using the Meta Research Kit.",
+  "author": "Beale",
+  "license": "UNLICENSED",
+  "keywords": ["beale", "meta-bug-bounty", "research-skills"]
+}

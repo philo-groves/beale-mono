@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "beale-browser-use",
+  "version": "0.1.0",
+  "description": "Optional Beale browser-use tools backed by WebDriver BiDi. Enabled by default and configurable in Plugins.",
+  "author": "Beale",
+  "license": "UNLICENSED",
+  "keywords": ["beale", "browser-use", "webdriver-bidi"]
+}
