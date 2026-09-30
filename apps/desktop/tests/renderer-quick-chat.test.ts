@@ -23,7 +23,6 @@ describe('quick chats', () => {
     expect(source).not.toContain('title="Automations"');
     expect(rail).toContain('title="Automations"');
     expect(styles).not.toMatch(/\.sidebar-new-research\s*\{/u);
-    expect(styles).toMatch(/\.settings-back-button\s*\{[^}]*background: var\(--accent\);/u);
     expect(styles).toMatch(/\.sidebar-primary-actions\s*\{[^}]*gap: 0;[^}]*margin-top: 12px;/u);
     expect(styles).not.toContain('.sidebar-quick-chat {\n  margin-top:');
   });

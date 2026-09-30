@@ -87,6 +87,8 @@ describe('campaign graph projection', () => {
 
     expect(html).toContain('type="search"');
     expect(html.indexOf('aria-label="Filter board findings"')).toBeLessThan(html.indexOf('aria-label="Finding class filter"'));
+    expect(html.match(/class="main-side-scroll campaign-board-lane-scroll"/gu)).toHaveLength(4);
+    expect(html.match(/class="campaign-board-lane-list"/gu)).toHaveLength(4);
   });
 
   it('filters Board findings by text alongside class and rating', () => {

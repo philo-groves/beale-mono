@@ -2351,7 +2351,6 @@ export function App(): JSX.Element {
           collapsed={sidebarCollapsed}
           section={settingsSection}
           error={error}
-          onBack={() => setSettingsOpen(false)}
           onChangeSection={setSettingsSection}
           onResizePointerDown={beginSidebarResize}
         />

@@ -16,7 +16,6 @@ describe('renderer archive settings', () => {
       collapsed: false,
       section: 'archive',
       error: null,
-      onBack: () => undefined,
       onChangeSection: () => undefined,
       onResizePointerDown: () => undefined
     }));

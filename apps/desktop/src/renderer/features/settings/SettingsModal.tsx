@@ -5,7 +5,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import {
   DEFAULT_RESEARCH_REASONING_EFFORT
 } from '../../../shared/modelDefaults';
-import { Archive, ArchiveRestore, ArrowLeft, FileText, Hash, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
+import { Archive, ArchiveRestore, FileText, Hash, KeyRound, MessageSquare, Monitor, Palette, Plus, RefreshCw, ServerCog, Settings, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
 import type {
   AgentPluginRegistryState,
   AppServerRemoteAccessSettings,
@@ -91,14 +91,12 @@ export function SettingsSidebar({
   collapsed,
   section,
   error,
-  onBack,
   onChangeSection,
   onResizePointerDown
 }: {
   collapsed: boolean;
   section: SettingsSection;
   error: string | null;
-  onBack: () => void;
   onChangeSection: (section: SettingsSection) => void;
   onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }): JSX.Element {
@@ -106,10 +104,6 @@ export function SettingsSidebar({
 
   return (
     <aside className="sidebar settings-sidebar" aria-hidden={collapsed} inert={collapsed}>
-      <button type="button" className="settings-back-button" onClick={onBack}>
-        <ArrowLeft size={15} />
-        <span>Back to Agent</span>
-      </button>
       <div className="sidebar-section settings-sidebar-section">
         <div className="workspace-list-title">Settings</div>
         <MainSideScrollRegion

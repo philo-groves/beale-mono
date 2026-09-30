@@ -15,7 +15,6 @@ describe('renderer Computer Use settings', () => {
       collapsed: false,
       section: 'computer-use',
       error: null,
-      onBack: () => undefined,
       onChangeSection: () => undefined,
       onResizePointerDown: () => undefined
     }));
@@ -35,6 +34,7 @@ describe('renderer Computer Use settings', () => {
     expect(html).toContain('lucide-server-cog');
     expect(html).toContain('lucide-user-round-cog');
     expect(html).toContain('lucide-monitor');
+    expect(html).not.toContain('Back to Agent');
   });
 
   it('renders the persisted Terminator plugin toggle on Windows', () => {

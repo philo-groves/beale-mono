@@ -6,10 +6,16 @@
 
 #### Removed
 
+- Removed the duplicate workspace Campaign Claims view; findings remain on the Board, and findings and leads remain in the research sidebar.
+- Removed the redundant Back to Agent button from the settings sidebar; Home remains available in the icon rail.
 - Removed the investigation hierarchy, session assignment and completion gate, investigation tools and plugin, protocol operations, and Campaign Trail tree. Sessions recover prior work through claims, memory, runbooks, workspace searches, and history. Previously published investigation files remain available as read-only history. App-server contract v27 updates memory and campaign projections; clients enforcing the contract must update.
 
 #### Changed
 
+- Workspace Highlights priority claims now sit flush vertically within the horizontal list.
+- Campaign Board columns now start flush beneath their headings and show top and bottom fades as their lists scroll.
+- Workspace Runbooks lists now match Memories for row padding, section headings, and expandable four-item previews.
+- The workspace Campaign Memories and Runbooks lists now show top and bottom scroll fades when more items are out of view. Runbooks also use the same inset scrollbar behavior.
 - Header workspace names now preserve their saved capitalization.
 - With an open workspace and collapsed left sidebar, New Research and Quick Chat are available as header icons beside the sidebar toggle.
 - An icon navigation rail now provides Home, Automations, Reporting, Plugins, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
@@ -23,7 +29,7 @@
 - Header title and subtitle text are slightly larger, with the divider before the main title.
 - The left navigation background now sits closer in tone to the commentary surface across dark, light, and cream themes.
 - The session's right sidebar now shares the commentary background, leaving the left navigation and surrounding strip slightly lighter.
-- The compact right session summary uses smaller text, and the expanded session sidebar has a grey left divider.
+- The compact right session summary uses smaller text, and expanded session and workspace sidebars have a grey left divider.
 - The session commentary surface retains square corners, while the secondary left sidebar and main workbench have rounded outer edges. The composer input retains its rounded shape.
 - The left navigation and the surface beneath session commentary now share a background color.
 - Prompt settings show an approximate token count for saved custom templates, estimated from the rendered preview at four characters per token.
@@ -152,7 +158,7 @@
 - Repository Resources now open an explicit Deep or Shallow clone dialog. Deep clones are the default for full-history research, while depth-one shallow clones remain available for prohibitively large repositories.
 - Desktop workspace Campaign views now include a four-lane Board beside Trail for Refuted, Observed, Reproduced, and Verified findings. Equal-width, independently scrolling swimlanes show their filtered finding counts, reuse Priority Claim cards with compact rating metadata and filtering that prefer the latest CVSS qualitative severity, explicitly exclude proposed Leads, and support inline Class and Rating filters; Trail and Board headings identify their active subview.
 - Active Desktop session titles in the app header now open a wide squircle Session Overview dialog with the session's activity projection.
-- Desktop workspace Campaign views now include a centered Claims sub-view after Trail, with separate expandable Findings and Leads lists that initially show four items and open canonical claim details. The Memories label is now consistently plural, and Memories and Runbooks headings align with Trail and Claims.
+- Desktop workspace Campaign views use a consistently plural Memories label and align Memories and Runbooks headings with Highlights and Board.
 - Desktop Quick Chat opens compact, collapsible, closeable chat cards from the left sidenav and stacks concurrent chats leftward from the bottom-right corner. Quick chats run in an unlisted internal workspace with authenticated introspection tools for querying and editing registered Beale workspaces.
 - Desktop Agent Settings now includes an Archive view for archived Sessions and Channels. Hover archive controls replace sidebar activity ages, require confirmation, preserve durable research data, and allow both item types to be restored.
 - Desktop Agent Settings Archive now lists closed Quick Chats and can resume their original app-server session and transcript in a reopened Quick Chat card.

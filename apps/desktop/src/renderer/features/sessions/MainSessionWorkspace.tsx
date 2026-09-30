@@ -369,7 +369,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           workspaceDirectories={workspaceDirectories}
           memoryBackend={workspaceMemoryBackend}
           providerModelCatalog={providerModelCatalog}
-          selectedClaimId={selectedWorkspaceClaimId}
           workspaceName={workspaceName}
           initialView={initialWorkspaceView}
           runs={runs}

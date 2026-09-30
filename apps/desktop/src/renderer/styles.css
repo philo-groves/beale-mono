@@ -23,8 +23,7 @@
   text-align: left;
 }
 
-.campaign-header .campaign-view-heading h2,
-.settings-form-heading.workspace-claims-heading h2 {
+.campaign-header .campaign-view-heading h2 {
   font-size: 26px;
 }
 
@@ -175,7 +174,11 @@
   gap: 0;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  padding: 10px 2px 4px;
+  padding: 0 2px;
+}
+
+.campaign-priority-claim-list > .campaign-trail-section-empty {
+  padding-block: 0;
 }
 
 .campaign-priority-claim {
@@ -318,11 +321,12 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 10px 0 4px;
+  padding: 0 0 4px;
 }
 
 .campaign-board-lane-list > .campaign-trail-section-empty {
   margin-left: 10px;
+  padding-top: 0;
 }
 
 .campaign-board-card {
@@ -2444,28 +2448,6 @@ body.is-resizing-sidebar .sidebar-resize-handle {
   margin-top: 12px;
 }
 
-.settings-back-button {
-  width: calc(100% + 8px);
-  min-width: 0;
-  justify-content: flex-start;
-  border-color: transparent;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--gray-05);
-  margin-inline: -4px;
-  padding: 6px 4px;
-}
-
-.settings-back-button:hover:not(:disabled) {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--text) 90%, var(--panel));
-}
-
-.settings-back-button span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .sidebar-quick-actions {
   min-width: 0;
   display: grid;
@@ -3317,6 +3299,10 @@ body.is-resizing-quick-chat {
   border-left: 1px solid var(--panel-border);
 }
 
+.main-session-grid.workspace-context.research-details-open .research-side-column {
+  border-left: 1px solid var(--panel-border);
+}
+
 .main-session-grid.workspace-main-only {
   grid-template-columns: minmax(0, 1fr) 0 0;
 }
@@ -3978,40 +3964,40 @@ body.is-resizing-research-side .main-session-grid {
   padding: 10px var(--settings-form-inline-padding);
 }
 
-.workspace-catalog-view > .memory-catalog-list .memory-catalog-toggle {
+.workspace-memories-view .workspace-memory-type-lists .memory-catalog-toggle {
   padding-block: 7px;
 }
 
-.workspace-catalog-view > .runbook-catalog-list .runbook-catalog-item {
+.workspace-runbooks-view .workspace-runbook-list .runbook-catalog-item {
   padding-block: 7px;
 }
 
-.workspace-catalog-view > .memory-catalog-list .memory-catalog-item-description {
+.workspace-memories-view .workspace-memory-type-lists .memory-catalog-item-description {
   color: var(--muted);
 }
 
-.workspace-catalog-view > .runbook-catalog-list .runbook-catalog-purpose {
+.workspace-runbooks-view .workspace-runbook-list .runbook-catalog-purpose {
   color: var(--muted);
 }
 
-.workspace-catalog-view > .workspace-memory-type-lists {
+.workspace-memories-view > .workspace-memory-scroll {
+  overflow: hidden;
+  border-block: 0;
+}
+
+.workspace-memories-view .workspace-memory-type-lists {
   gap: 14px;
-  border-block: 0;
-  padding-bottom: 10px;
+  padding: 0 0 10px;
 }
 
-.workspace-claims-heading {
-  width: 100%;
-  max-width: var(--session-content-max-width);
-  box-sizing: border-box;
-  margin-inline: auto;
-  padding-left: 0;
+.workspace-runbooks-view > .workspace-runbook-scroll {
+  overflow: hidden;
+  border-block: 0;
 }
 
-.workspace-catalog-view > .workspace-claim-lists {
-  gap: 18px;
-  border-block: 0;
-  padding-bottom: 10px;
+.workspace-runbooks-view .workspace-runbook-list {
+  gap: 14px;
+  padding: 0 0 10px;
 }
 
 .workspace-memory-type-section {
@@ -4063,11 +4049,12 @@ body.is-resizing-research-side .main-session-grid {
 }
 
 .workspace-memory-type-overflow.expanded > div > .memory-catalog-item:first-child,
+.workspace-memory-type-overflow.expanded > div > .runbook-catalog-item:first-child,
 .workspace-claim-overflow.expanded > div > .memory-catalog-item:first-child {
   border-top: 1px solid var(--panel-border);
 }
 
-.workspace-memory-type-toggle {
+.workspace-campaign-catalog-view .workspace-memory-type-toggle {
   width: max-content;
   min-height: 24px;
   border: 0;
@@ -4078,8 +4065,8 @@ body.is-resizing-research-side .main-session-grid {
   text-align: left;
 }
 
-.workspace-memory-type-toggle:hover,
-.workspace-memory-type-toggle:focus-visible {
+.workspace-campaign-catalog-view .workspace-memory-type-toggle:hover,
+.workspace-campaign-catalog-view .workspace-memory-type-toggle:focus-visible {
   color: var(--muted-strong);
   background: transparent;
 }

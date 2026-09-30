@@ -11,7 +11,6 @@ describe('renderer ticketing settings', () => {
       collapsed: false,
       section: 'ticketing',
       error: null,
-      onBack: () => undefined,
       onChangeSection: () => undefined,
       onResizePointerDown: () => undefined
     }));

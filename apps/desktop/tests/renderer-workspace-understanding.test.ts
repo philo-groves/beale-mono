@@ -37,12 +37,13 @@ describe('workspace dashboard', () => {
     const workspaceDashboardKitTabStyles = styles.match(/\.research-side-view-tab\.workspace-dashboard-kit-tab\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceDashboardKitDividerStyles = styles.match(/\.workspace-dashboard-kit-tab::before\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignSubviewTabsStyles = styles.match(/\.workspace-campaign-subview-tabs\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignCatalogHeadingSizeStyles = styles.match(/\.campaign-header \.campaign-view-heading h2,\s*\.settings-form-heading\.workspace-claims-heading h2\s*\{([^}]*)\}/)?.[1] ?? '';
+    const campaignCatalogHeadingSizeStyles = styles.match(/\.campaign-header \.campaign-view-heading h2\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceHeadingDescriptionStyles = styles.match(/\.workspace-dashboard \.settings-form-heading > p\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPanelStyles = styles.match(/\.campaign-panel\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignTrailLayoutStyles = styles.match(/\.campaign-trail-layout\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignTrailHeadingStyles = styles.match(/\.campaign-trail-section-heading\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityListStyles = styles.match(/\.campaign-priority-claim-list\s*\{([^}]*)\}/)?.[1] ?? '';
+    const campaignPriorityEmptyStyles = styles.match(/\.campaign-priority-claim-list > \.campaign-trail-section-empty\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityScrollStyles = styles.match(/\.campaign-priority-claim-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityClaimStyles = styles.match(/\.campaign-priority-claim\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignBoardLaneStyles = styles.match(/\.campaign-board-lanes\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -93,25 +94,28 @@ describe('workspace dashboard', () => {
     const surfaceItemStyles = styles.match(/\.workspace-surface-item\s*\{([^}]*)\}/)?.[1] ?? '';
     const mainOnlyStyles = styles.match(/\.main-session-grid\.workspace-main-only\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceDetailColumnStyles = styles.match(/\.main-session-grid\.workspace-context\s+\.research-side-column\s*\{([^}]*)\}/)?.[1] ?? '';
+    const expandedWorkspaceDetailColumnStyles = styles.match(/\.main-session-grid\.workspace-context\.research-details-open\s+\.research-side-column\s*\{([^}]*)\}/)?.[1] ?? '';
     const hiddenWorkspaceDetailColumnStyles = styles.match(/\.main-session-grid\.workspace-context\.workspace-main-only\s+\.research-side-column\s*\{([^}]*)\}/)?.[1] ?? '';
     const catalogViewStyles = styles.match(/\.workspace-catalog-view\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignCatalogHeadingStyles = styles.match(/\.workspace-campaign-catalog-view\s*>\s*\.workspace-activity-form\s*>\s*\.settings-form-heading\s*\{([^}]*)\}/)?.[1] ?? '';
     const catalogListStyles = styles.match(/\.workspace-catalog-view\s*>\s*\.workspace-catalog-list\s*\{([^}]*)\}/)?.[1] ?? '';
-    const claimsHeadingStyles = styles.match(/\.workspace-claims-heading\s*\{([^}]*)\}/)?.[1] ?? '';
-    const claimListStyles = styles.match(/\.workspace-catalog-view\s*>\s*\.workspace-claim-lists\s*\{([^}]*)\}/)?.[1] ?? '';
+    const memoryScrollStyles = styles.match(/\.workspace-memories-view\s*>\s*\.workspace-memory-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
+    const memoryListStyles = styles.match(/\.workspace-memories-view\s+\.workspace-memory-type-lists\s*\{([^}]*)\}/)?.[1] ?? '';
+    const runbookScrollStyles = styles.match(/\.workspace-runbooks-view\s*>\s*\.workspace-runbook-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
+    const runbookListStyles = styles.match(/\.workspace-runbooks-view\s+\.workspace-runbook-list\s*\{([^}]*)\}/)?.[1] ?? '';
     const cleaningFormStyles = styles.match(/\.workspace-cleaning-form\s*\{([^}]*)\}/)?.[1] ?? '';
     const removalFormStyles = styles.match(/\.settings-form-control-row\.workspace-removal-form\s*\{([^}]*)\}/)?.[1] ?? '';
     const removalControlsStyles = styles.match(/\.workspace-removal-controls\s*\{([^}]*)\}/)?.[1] ?? '';
     const removalActionStyles = styles.match(/\.workspace-removal-action\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceMemoryItemStyles = styles.match(/\.workspace-catalog-view\s*>\s*\.memory-catalog-list\s+\.memory-catalog-toggle\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceMemoryDescriptionStyles = styles.match(/\.workspace-catalog-view\s*>\s*\.memory-catalog-list\s+\.memory-catalog-item-description\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceRunbookItemStyles = styles.match(/\.workspace-catalog-view\s*>\s*\.runbook-catalog-list\s+\.runbook-catalog-item\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceRunbookPurposeStyles = styles.match(/\.workspace-catalog-view\s*>\s*\.runbook-catalog-list\s+\.runbook-catalog-purpose\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceMemoryItemStyles = styles.match(/\.workspace-memories-view\s+\.workspace-memory-type-lists\s+\.memory-catalog-toggle\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceMemoryDescriptionStyles = styles.match(/\.workspace-memories-view\s+\.workspace-memory-type-lists\s+\.memory-catalog-item-description\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceRunbookItemStyles = styles.match(/\.workspace-runbooks-view\s+\.workspace-runbook-list\s+\.runbook-catalog-item\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceRunbookPurposeStyles = styles.match(/\.workspace-runbooks-view\s+\.workspace-runbook-list\s+\.runbook-catalog-purpose\s*\{([^}]*)\}/)?.[1] ?? '';
     const runbookItemStyles = styles.match(/^\.runbook-catalog-item\s*\{([^}]*)\}/m)?.[1] ?? '';
     const runbookIconStyles = styles.match(/^\.runbook-catalog-icon\s*\{([^}]*)\}/m)?.[1] ?? '';
     const workspaceMemorySectionStyles = styles.match(/\.workspace-memory-type-section\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceMemoryHeadingStyles = styles.match(/\.workspace-memory-type-section\s*>\s*h3\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceMemoryToggleStyles = styles.match(/\.workspace-memory-type-toggle\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceMemoryToggleStyles = styles.match(/\.workspace-campaign-catalog-view\s+\.workspace-memory-type-toggle\s*\{([^}]*)\}/)?.[1] ?? '';
     const sideStackStyles = styles.match(/\.workspace-side-stack\s*\{([^}]*)\}/)?.[1] ?? '';
     const dreamAreaStyles = styles.match(/\.workspace-dream-area\s*\{([^}]*)\}/)?.[1] ?? '';
     const dreamContentStyles = styles.match(/\.workspace-dream-content\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -143,6 +147,8 @@ describe('workspace dashboard', () => {
     expect(campaignPriorityListStyles).toContain('align-items: stretch');
     expect(campaignPriorityListStyles).toContain('gap: 0');
     expect(campaignPriorityListStyles).toContain('overflow-x: auto');
+    expect(campaignPriorityListStyles).toContain('padding: 0 2px');
+    expect(campaignPriorityEmptyStyles).toContain('padding-block: 0');
     expect(campaignPriorityScrollStyles).toContain('position: relative');
     expect(campaignPriorityScrollStyles).toContain('overflow: hidden');
     expect(campaignHorizontalFadeStyles).toContain('linear-gradient(to right');
@@ -159,7 +165,9 @@ describe('workspace dashboard', () => {
     expect(campaignBoardFilterStyles).toContain('justify-content: flex-end');
     expect(campaignBoardLaneListStyles).toContain('overflow-y: auto');
     expect(campaignBoardLaneListStyles).toContain('height: 100%');
+    expect(campaignBoardLaneListStyles).toContain('padding: 0 0 4px');
     expect(campaignBoardEmptyStyles).toContain('margin-left: 10px');
+    expect(campaignBoardEmptyStyles).toContain('padding-top: 0');
     expect(campaignBoardCardStyles).toContain('width: 100%');
     const campaignPriorityClaimTitleStyles = styles.match(/\.campaign-priority-claim-title\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityClaimTitleTextStyles = styles.match(/\.campaign-priority-claim-title > span\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -263,6 +271,7 @@ describe('workspace dashboard', () => {
     expect(mainOnlyStyles).toContain('grid-template-columns: minmax(0, 1fr)');
     expect(mainOnlyStyles).toContain('0 0');
     expect(workspaceDetailColumnStyles).toContain('transform: translateX(0)');
+    expect(expandedWorkspaceDetailColumnStyles).toContain('border-left: 1px solid var(--panel-border)');
     expect(workspaceDetailColumnStyles).toContain('transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)');
     expect(hiddenWorkspaceDetailColumnStyles).toContain('transform: translateX(24px)');
     expect(hiddenWorkspaceDetailColumnStyles).toContain('opacity: 0');
@@ -273,11 +282,17 @@ describe('workspace dashboard', () => {
     expect(catalogListStyles).toContain('max-width: var(--session-content-max-width)');
     expect(catalogListStyles).toContain('height: 100%');
     expect(catalogListStyles).toContain('margin-inline: auto');
-    expect(claimsHeadingStyles).toContain('max-width: var(--session-content-max-width)');
-    expect(claimsHeadingStyles).toContain('margin-inline: auto');
-    expect(claimListStyles).toContain('gap: 18px');
-    expect(claimListStyles).toContain('border-block: 0');
+    expect(memoryScrollStyles).toContain('overflow: hidden');
+    expect(memoryScrollStyles).toContain('border-block: 0');
+    expect(memoryListStyles).toContain('gap: 14px');
+    expect(memoryListStyles).toContain('padding: 0 0 10px');
+    expect(runbookScrollStyles).toContain('overflow: hidden');
+    expect(runbookScrollStyles).toContain('border-block: 0');
+    expect(runbookListStyles).toContain('gap: 14px');
+    expect(runbookListStyles).toContain('padding: 0 0 10px');
+    expect(INSET_SCROLLBAR_SELECTOR).toContain('.memory-catalog-list');
     expect(workspaceMemoryItemStyles).toContain('padding-block: 7px');
+    expect(workspaceMemoryHeadingStyles).toContain('border-bottom: 1px solid var(--panel-border)');
     expect(workspaceMemoryDescriptionStyles).toContain('color: var(--muted)');
     expect(workspaceRunbookItemStyles).toContain('padding-block: 7px');
     expect(workspaceRunbookPurposeStyles).toContain('color: var(--muted)');
@@ -535,13 +550,12 @@ describe('workspace dashboard', () => {
     expect(html).toContain('<span>Highlights</span>');
     expect(html).toContain('<span>Board</span>');
     expect(html).not.toContain('<span>Activity</span>');
-    expect(html).toContain('<span>Claims</span>');
+    expect(html).not.toContain('<span>Claims</span>');
     expect(html).toContain('<span>Memories</span>');
     expect(html).toContain('<span>Runbooks</span>');
-    expect(html.match(/class="research-side-view-tab provider-settings-tab workspace-campaign-subview-tab(?: active)?"/g)).toHaveLength(5);
+    expect(html.match(/class="research-side-view-tab provider-settings-tab workspace-campaign-subview-tab(?: active)?"/g)).toHaveLength(4);
     expect(html.indexOf('<span>Highlights</span>')).toBeLessThan(html.indexOf('<span>Board</span>'));
-    expect(html.indexOf('<span>Board</span>')).toBeLessThan(html.indexOf('<span>Claims</span>'));
-    expect(html.indexOf('<span>Claims</span>')).toBeLessThan(html.indexOf('<span>Memories</span>'));
+    expect(html.indexOf('<span>Board</span>')).toBeLessThan(html.indexOf('<span>Memories</span>'));
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-trail-panel" aria-selected="true"');
     expect(html).toContain('id="workspace-dashboard-campaign-trail-panel"');
     expect(html).toContain('<h2 class="campaign-view-title" id="workspace-campaign-heading">Parser Workspace Highlights</h2>');
@@ -564,6 +578,8 @@ describe('workspace dashboard', () => {
     expect(boardHtml).toContain('aria-controls="workspace-dashboard-campaign-board-panel" aria-selected="true"');
     expect(boardHtml).toContain('id="workspace-dashboard-campaign-board-panel"');
     expect(boardHtml).toContain('id="workspace-campaign-board-heading">Parser Workspace Board</h2>');
+    expect(boardHtml).not.toContain('workspace-dashboard-campaign-claims-panel');
+    expect(boardHtml).not.toContain('<span>Claims</span>');
 
     const runbooksHtml = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
@@ -578,24 +594,9 @@ describe('workspace dashboard', () => {
     expect(runbooksHtml).toContain('aria-controls="workspace-dashboard-campaign-subviews" aria-selected="true"');
     expect(runbooksHtml).toContain('aria-controls="workspace-dashboard-campaign-runbooks-panel" aria-selected="true"');
     expect(runbooksHtml).toContain('id="workspace-dashboard-campaign-runbooks-panel"');
+    expect(runbooksHtml).toContain('class="main-side-scroll workspace-catalog-list workspace-runbook-scroll"');
+    expect(runbooksHtml).toContain('class="memory-catalog-list runbook-catalog-list workspace-runbook-list"');
 
-    const claimsHtml = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
-      busy: false,
-      initialView: 'claims',
-      memoryDreamingInProgress: false,
-      appServerMemory: memorySummary(),
-      researchProfile: testResearchProfile(),
-      workspaceName: 'Parser Workspace',
-      runs: [],
-      onRunMemoryDreaming: () => undefined
-    }));
-    expect(claimsHtml).toContain('aria-controls="workspace-dashboard-campaign-claims-panel" aria-selected="true"');
-    expect(claimsHtml).toContain('id="workspace-dashboard-campaign-claims-panel"');
-    expect(claimsHtml).toContain('<h2>Parser Workspace Claims</h2>');
-    expect(claimsHtml.indexOf('0 Findings (0 Unrefuted)')).toBeLessThan(claimsHtml.indexOf('>0 Leads</h3>'));
-    expect(claimsHtml).not.toContain('Leads (');
-    expect(claimsHtml).toContain('No workspace findings yet.');
-    expect(claimsHtml).toContain('No workspace leads yet.');
   });
 
   it('renders the shared refresh form for only the active Research Kit', () => {
@@ -898,6 +899,8 @@ describe('workspace dashboard', () => {
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-subviews" aria-selected="true"');
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-memory-panel" aria-selected="true"');
     expect(html).toContain('id="workspace-dashboard-campaign-memory-panel"');
+    expect(html).toContain('class="main-side-scroll workspace-catalog-list workspace-memory-scroll"');
+    expect(html).toContain('class="memory-catalog-list workspace-memory-type-lists"');
     expect(html).toContain('<h2>Security Memories</h2>');
     expect(html).toContain('<h3>1 Note</h3>');
     expect(html).toContain('<h3>5 Findings</h3>');
@@ -907,6 +910,29 @@ describe('workspace dashboard', () => {
     expect(html).toContain('>Show 1 more</button>');
     expect(html).toContain('>Show 2 more</button>');
     expect(html).toContain('class="workspace-memory-type-overflow" inert=""');
+  });
+
+  it('uses the memory list section and preview behavior for workspace runbooks', () => {
+    const runbooksHtml = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
+      busy: false,
+      initialView: 'runbooks',
+      memoryDreamingInProgress: false,
+      appServerMemory: memorySummary({
+        runbooks: Array.from({ length: 6 }, (_, index) => ({
+          id: `runbook_${index}`,
+          title: `Synthetic runbook ${index}`
+        }))
+      }),
+      researchProfile: testResearchProfile(),
+      workspaceName: 'Example Workspace',
+      runs: [],
+      onRunMemoryDreaming: () => undefined
+    }));
+    expect(runbooksHtml).toContain('<h3>6 Runbooks</h3>');
+    expect(runbooksHtml).toContain('class="workspace-memory-type-primary-items"');
+    expect(runbooksHtml).toContain('class="workspace-memory-type-overflow" inert=""');
+    expect(runbooksHtml).toContain('aria-expanded="false" class="session-memory-type-toggle workspace-memory-type-toggle"');
+    expect(runbooksHtml).toContain('>Show 2 more</button>');
   });
 
   it('renders split work intervals and per-memory-type timeline markers', () => {

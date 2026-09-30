@@ -16,6 +16,7 @@ import type { CampaignClaimRatingValue } from '../../view-models/campaignClaims'
 import { researchModelDisplayName, traceLabel } from '../../lib/formatting';
 import { ProviderIcon } from '../../app/ProviderIcon';
 import { FloatingTextPicker } from '../../app/FloatingTextPicker';
+import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
 import { memoryTypeClassName, memoryTypeLabel, memoryTypeStyle } from '../research/MemoryTypeLabel';
 
 const CAMPAIGN_PRIORITY_CLAIM_LIMIT = 8;
@@ -155,7 +156,11 @@ export function CampaignBoardView({
           return (
             <section className={`campaign-board-lane maturity-${maturity}`} key={maturity} aria-labelledby={`campaign-board-${maturity}-heading`}>
               <h3 className="campaign-trail-section-heading campaign-board-lane-heading" id={`campaign-board-${maturity}-heading`}>{traceLabel(maturity)} ({findings.length.toLocaleString()})</h3>
-              <div className="campaign-board-lane-list">
+              <MainSideScrollRegion
+                className="campaign-board-lane-scroll"
+                listClassName="campaign-board-lane-list"
+                updateKey={`${loading}:${classificationFilter}:${ratingFilter}:${query}:${findings.map(({ id, revision }) => `${id}:${revision}`).join('|')}`}
+              >
                 {loading ? <p className="campaign-trail-section-empty">Loading findings.</p> : findings.length === 0 ? (
                   <p className="campaign-trail-section-empty">No {maturity} findings.</p>
                 ) : findings.map((claim) => (
@@ -168,7 +173,7 @@ export function CampaignBoardView({
                     providerModelCatalog={providerModelCatalog}
                   />
                 ))}
-              </div>
+              </MainSideScrollRegion>
             </section>
           );
         })}

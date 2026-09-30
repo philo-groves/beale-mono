@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
-import { BadgeCheck, Binary, BookOpen, Boxes, Brain, Columns3, Download, GitBranch, Globe2, Info, Layers3, ListChecks, MoonStar, Plus, RefreshCw, Server, Settings, Sparkles, Trash2, Wrench } from 'lucide-react';
+import { Binary, BookOpen, Boxes, Brain, Columns3, Download, GitBranch, Globe2, Info, Layers3, ListChecks, MoonStar, Plus, RefreshCw, Server, Settings, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../shared/types';
 import { researchKitDefinition, researchKitLabel } from '../../../shared/researchKits';
 import type {
@@ -24,8 +24,9 @@ import type {
   WorkspaceRule
 } from '@shared/types';
 import { Modal } from '../../app/Modal';
+import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
 import { memoryTypeDefinition, memoryTypeLabel } from '../research/MemoryTypeLabel';
-import { CampaignClaimCatalogLists, filterCampaignClaims, MemoryCatalogItem, RunbookCatalogItem } from '../research/MemorySidePanel';
+import { MemoryCatalogItem, RunbookCatalogItem } from '../research/MemorySidePanel';
 import { memoryTypeGroupsByHeat } from '../../view-models/memoryCatalog';
 import { EMPTY_SESSION_HEAT_PREFERENCES } from '../../view-models/sessionHeat';
 import type { SessionHeat, SessionHeatPreferences } from '../../view-models/sessionHeat';
@@ -38,7 +39,7 @@ import { ResourcePriorArtView } from './ResourcePriorArtView';
 const WORKSPACE_ACTIVITY_DAY_COUNT = 365;
 const DAY_DURATION_MS = 24 * 60 * 60 * 1_000;
 const WORKSPACE_DASHBOARD_VIEWS = ['campaign', 'resources', 'rules', 'utilities', 'overview', 'kit'] as const;
-const WORKSPACE_CAMPAIGN_VIEWS = ['trail', 'board', 'claims', 'memory', 'runbooks'] as const;
+const WORKSPACE_CAMPAIGN_VIEWS = ['trail', 'board', 'memory', 'runbooks'] as const;
 
 type WorkspaceTopLevelView = typeof WORKSPACE_DASHBOARD_VIEWS[number];
 type WorkspaceCampaignView = typeof WORKSPACE_CAMPAIGN_VIEWS[number];
@@ -56,7 +57,6 @@ const WORKSPACE_DASHBOARD_VIEW_ICONS: Record<WorkspaceTopLevelView, typeof Info>
 const WORKSPACE_CAMPAIGN_VIEW_ICONS: Record<WorkspaceCampaignView, typeof Info> = {
   trail: GitBranch,
   board: Columns3,
-  claims: BadgeCheck,
   memory: Brain,
   runbooks: BookOpen
 };
@@ -188,7 +188,6 @@ export function WorkspaceUnderstandingView({
   workspaceDirectories,
   memoryBackend = 'app-server',
   providerModelCatalog = [],
-  selectedClaimId = null,
   workspaceName,
   runs,
   workspaceDejunk = null,
@@ -234,7 +233,6 @@ export function WorkspaceUnderstandingView({
   workspaceDirectories?: readonly string[];
   memoryBackend?: WorkspaceMemoryBackendId;
   providerModelCatalog?: readonly ResearchProviderModelCatalog[];
-  selectedClaimId?: string | null;
   workspaceName: string;
   runs: RunRow[];
   onRunWorkspaceDejunk?: () => void;
@@ -279,30 +277,6 @@ export function WorkspaceUnderstandingView({
   const memoryTypes = researchProfile?.memory.types ?? [];
   const campaignActive = activeView === 'campaign';
   const workspaceId = workspaceIdInput || appServerMemory?.contextWorkspaceId || '';
-  const workspaceFindings = useMemo(
-    () => campaignActive && activeCampaignView === 'claims'
-      ? filterCampaignClaims(appServerMemory?.findings ?? [], {
-          query: '',
-          scope: 'workspace',
-          sessionId: '',
-          workspaceId,
-          subjectId: appServerMemory?.contextSubjectId ?? null
-        })
-      : [],
-    [activeCampaignView, campaignActive, appServerMemory?.contextSubjectId, appServerMemory?.findings, workspaceId]
-  );
-  const workspaceLeads = useMemo(
-    () => campaignActive && activeCampaignView === 'claims'
-      ? filterCampaignClaims(appServerMemory?.leads ?? [], {
-          query: '',
-          scope: 'workspace',
-          sessionId: '',
-          workspaceId,
-          subjectId: appServerMemory?.contextSubjectId ?? null
-        })
-      : [],
-    [activeCampaignView, campaignActive, appServerMemory?.contextSubjectId, appServerMemory?.leads, workspaceId]
-  );
   const workspaceMemoryNodes = useMemo(
     () => campaignActive && activeCampaignView === 'memory'
       ? (appServerMemory?.nodes ?? [])
@@ -423,17 +397,6 @@ export function WorkspaceUnderstandingView({
         onOpenClaim={onOpenClaim}
       /> : null}
 
-      {campaignActive && activeCampaignView === 'claims' ? <WorkspaceClaimsPanel
-        findings={workspaceFindings}
-        leads={workspaceLeads}
-        loading={appServerMemory === null || appServerMemory.loading === true}
-        nowMs={timelineNowMs}
-        onOpen={onOpenClaim}
-        providerModelCatalog={providerModelCatalog}
-        selectedClaimId={selectedClaimId}
-        workspaceName={activeScope?.workspaceName || workspaceName}
-      /> : null}
-
       {activeView === 'kit' && researchKit.refresh ? <WorkspaceResearchKitPanel
         activeScope={activeScope}
         busy={busy}
@@ -499,13 +462,13 @@ function workspaceDashboardViewLabel(view: WorkspaceDashboardView, researchKitId
 }
 
 function workspaceTopLevelView(initialView: WorkspaceDashboardView): WorkspaceTopLevelView {
-  return initialView === 'activity' || initialView === 'board' || initialView === 'claims' || initialView === 'memory' || initialView === 'runbooks'
+  return initialView === 'activity' || initialView === 'board' || initialView === 'memory' || initialView === 'runbooks'
     ? 'campaign'
     : initialView;
 }
 
 function workspaceCampaignView(initialView: WorkspaceDashboardView): WorkspaceCampaignView {
-  return initialView === 'board' || initialView === 'claims' || initialView === 'memory' || initialView === 'runbooks'
+  return initialView === 'board' || initialView === 'memory' || initialView === 'runbooks'
     ? initialView
     : 'trail';
 }
@@ -1123,7 +1086,11 @@ function WorkspaceMemoryPanel({
       role="tabpanel"
     >
       <WorkspaceActivityForm activity={activity} metric="memories" viewLabel="Memories" workspaceName={workspaceName} />
-      <div className="workspace-catalog-list memory-catalog-list workspace-memory-type-lists">
+      <MainSideScrollRegion
+        className="workspace-catalog-list workspace-memory-scroll"
+        listClassName="memory-catalog-list workspace-memory-type-lists"
+        updateKey={`${loading}:${nodes.length}:${groups.length}`}
+      >
         {groups.map((group) => (
           <WorkspaceMemoryTypeSection
             group={group}
@@ -1135,7 +1102,7 @@ function WorkspaceMemoryPanel({
         {nodes.length === 0 ? (
           <p className="workspace-catalog-empty">{!enabled ? 'Memory is disabled for this workspace.' : loading ? 'Loading memory.' : 'No workspace memory yet.'}</p>
         ) : null}
-      </div>
+      </MainSideScrollRegion>
     </section>
   );
 }
@@ -1199,55 +1166,6 @@ function workspaceMemoryTypePluralLabel(label: string): string {
   return label.endsWith('s') ? label : `${label}s`;
 }
 
-function WorkspaceClaimsPanel({
-  findings,
-  leads,
-  loading,
-  nowMs,
-  onOpen,
-  providerModelCatalog,
-  selectedClaimId,
-  workspaceName
-}: {
-  findings: AppServerMemorySummary['findings'];
-  leads: AppServerMemorySummary['leads'];
-  loading: boolean;
-  nowMs: number;
-  onOpen: (claimId: string) => void;
-  providerModelCatalog: readonly ResearchProviderModelCatalog[];
-  selectedClaimId: string | null;
-  workspaceName: string;
-}): JSX.Element {
-  return (
-    <section
-      aria-label="Workspace claims"
-      className="workspace-dashboard-panel workspace-catalog-view workspace-claims-view"
-      id="workspace-dashboard-campaign-claims-panel"
-      role="tabpanel"
-    >
-      <header className="settings-form-heading workspace-claims-heading">
-        <h2>{workspaceName} Claims</h2>
-      </header>
-      <div className="workspace-catalog-list memory-catalog-list memory-type-groups workspace-claim-lists">
-        {loading ? (
-          <p className="workspace-catalog-empty">Loading claims.</p>
-        ) : (
-          <CampaignClaimCatalogLists
-            findings={findings}
-            leads={leads}
-            nowMs={nowMs}
-            previewLimit={4}
-            providerModelCatalog={providerModelCatalog}
-            selectedClaimId={selectedClaimId}
-            showEmptySections
-            onOpen={onOpen}
-          />
-        )}
-      </div>
-    </section>
-  );
-}
-
 function WorkspaceRunbooksPanel({
   hidden,
   loading,
@@ -1273,19 +1191,63 @@ function WorkspaceRunbooksPanel({
       role="tabpanel"
     >
       <WorkspaceActivityForm activity={activity} metric="runbooks" viewLabel="Runbooks" workspaceName={workspaceName} />
-      <div className="workspace-catalog-list runbook-catalog-list">
-        {runbooks.map((runbook) => (
-          <RunbookCatalogItem
-            key={runbook.id}
-            runbook={runbook}
-            selected={false}
-            onOpen={() => onOpen(runbook.id)}
-          />
-        ))}
-        {runbooks.length === 0 ? (
+      <MainSideScrollRegion
+        className="workspace-catalog-list workspace-runbook-scroll"
+        listClassName="memory-catalog-list runbook-catalog-list workspace-runbook-list"
+        updateKey={`${loading}:${runbooks.length}`}
+      >
+        {runbooks.length > 0 ? <WorkspaceRunbookSection runbooks={runbooks} onOpen={onOpen} /> : (
           <p className="workspace-catalog-empty">{loading ? 'Loading runbooks.' : 'No workspace runbooks yet.'}</p>
-        ) : null}
+        )}
+      </MainSideScrollRegion>
+    </section>
+  );
+}
+
+function WorkspaceRunbookSection({
+  runbooks,
+  onOpen
+}: {
+  runbooks: AppServerMemorySummary['runbooks'];
+  onOpen: (runbookId: string) => void;
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const visibleRunbooks = runbooks.slice(0, 4);
+  const overflowRunbooks = runbooks.slice(4);
+  const label = runbooks.length === 1 ? 'Runbook' : 'Runbooks';
+  const renderRunbook = (runbook: AppServerMemorySummary['runbooks'][number]): JSX.Element => (
+    <RunbookCatalogItem
+      key={runbook.id}
+      runbook={runbook}
+      selected={false}
+      onOpen={() => onOpen(runbook.id)}
+    />
+  );
+  return (
+    <section className="workspace-memory-type-section" aria-label={`${runbooks.length} ${label}`}>
+      <h3>{runbooks.length.toLocaleString()} {label}</h3>
+      <div className="workspace-memory-type-primary-items">
+        {visibleRunbooks.map(renderRunbook)}
       </div>
+      {overflowRunbooks.length > 0 ? (
+        <>
+          <div
+            aria-hidden={!expanded}
+            className={`workspace-memory-type-overflow ${expanded ? 'expanded' : ''}`.trim()}
+            inert={expanded ? undefined : true}
+          >
+            <div>{overflowRunbooks.map(renderRunbook)}</div>
+          </div>
+          <button
+            aria-expanded={expanded}
+            className="session-memory-type-toggle workspace-memory-type-toggle"
+            onClick={() => setExpanded((current) => !current)}
+            type="button"
+          >
+            {expanded ? 'Show less' : `Show ${overflowRunbooks.length.toLocaleString()} more`}
+          </button>
+        </>
+      ) : null}
     </section>
   );
 }
