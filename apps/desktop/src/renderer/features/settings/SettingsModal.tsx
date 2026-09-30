@@ -106,7 +106,7 @@ export function SettingsSidebar({
 
   return (
     <aside className="sidebar settings-sidebar" aria-hidden={collapsed} inert={collapsed}>
-      <button type="button" className="sidebar-new-research settings-back-button" onClick={onBack}>
+      <button type="button" className="settings-back-button" onClick={onBack}>
         <ArrowLeft size={15} />
         <span>Back to Agent</span>
       </button>

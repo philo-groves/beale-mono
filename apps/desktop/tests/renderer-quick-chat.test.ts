@@ -5,16 +5,27 @@ import { describe, expect, it } from 'vitest';
 import { QuickChatDock } from '../src/renderer/features/quick-chat/QuickChatDock';
 
 describe('quick chats', () => {
-  it('places Quick Chat at the top of the utility actions above Automations', () => {
+  it('keeps Quick Chat in the text sidebar while section navigation lives in the icon rail', () => {
     const source = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
+    const rail = readFileSync(new URL('../src/renderer/app/AppNavigationRail.tsx', import.meta.url), 'utf8');
+    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+    const primaryActions = source.indexOf('className="sidebar-primary-actions"');
+    const newResearch = source.indexOf('className="sidebar-utility-button sidebar-new-research"');
     const utilityActions = source.indexOf('className="sidebar-quick-actions"');
     const quickChat = source.indexOf('className="sidebar-utility-button sidebar-quick-chat"');
-    const automations = source.indexOf('title="Automations"');
+    expect(primaryActions).toBeGreaterThan(-1);
+    expect(newResearch).toBeGreaterThan(primaryActions);
+    expect(utilityActions).toBeGreaterThan(newResearch);
     expect(utilityActions).toBeGreaterThan(-1);
     expect(quickChat).toBeGreaterThan(utilityActions);
-    expect(automations).toBeGreaterThan(quickChat);
-    expect(source.slice(quickChat, automations)).toContain('<Zap size={15} />');
-    expect(source.slice(quickChat, automations)).toContain('<span>New Quick Chat</span>');
+    expect(source.slice(quickChat)).toContain('<Zap size={15} />');
+    expect(source.slice(quickChat)).toContain('<span>Quick Chat</span>');
+    expect(source).not.toContain('title="Automations"');
+    expect(rail).toContain('title="Automations"');
+    expect(styles).not.toMatch(/\.sidebar-new-research\s*\{/u);
+    expect(styles).toMatch(/\.settings-back-button\s*\{[^}]*background: var\(--accent\);/u);
+    expect(styles).toMatch(/\.sidebar-primary-actions\s*\{[^}]*gap: 0;[^}]*margin-top: 12px;/u);
+    expect(styles).not.toContain('.sidebar-quick-chat {\n  margin-top:');
   });
 
   it('renders fixed bottom-right cards that stack toward the left and expose resize, collapse, and close actions', () => {

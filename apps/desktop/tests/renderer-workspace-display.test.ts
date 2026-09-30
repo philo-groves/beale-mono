@@ -188,7 +188,7 @@ describe('renderer workspace display view models', () => {
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-bottom-fade \.sidebar-list-scroll\s*\{[^}]*mask-image: linear-gradient/u);
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-top-fade\.has-bottom-fade \.sidebar-list-scroll\s*\{[^}]*mask-image: linear-gradient/u);
     expect(styles).not.toMatch(/\.sidebar-list-scroll-region::(?:before|after)\s*\{[^}]*background:/u);
-    expect(styles).toMatch(/\.sidebar-list-scroll \.workspace-item-row,\s*\.sidebar-list-scroll \.workspace-session-item\s*\{[^}]*width: 100%;[^}]*margin-inline: 0;/u);
+    expect(styles).toMatch(/\.sidebar-list-scroll \.workspace-item-row,\s*\.sidebar-list-scroll \.sidebar-channel-item,\s*\.sidebar-list-scroll \.workspace-session-item\s*\{[^}]*width: 100%;[^}]*margin-inline: 0;/u);
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-overflow \.sidebar-list-scroll:where\(:hover, :focus, :focus-within, \.scrollbar-active\)/u);
     expect(INSET_SCROLLBAR_SELECTOR).toContain('.sidebar-list-scroll');
     expect(INSET_SCROLLBAR_SELECTOR).not.toContain('.sidebar,');
@@ -224,13 +224,13 @@ describe('renderer workspace display view models', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const utilityStyles = styles.match(/\.sidebar-utility-button\s*\{([^}]*)\}/u)?.[1] ?? '';
     const sessionStyles = styles.match(/(?:^|\n)\.workspace-session-item\s*\{([^}]*)\}/u)?.[1] ?? '';
-    const statusBarStyles = styles.match(/(?:^|\n)\.status-bar\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const railButtonStyles = styles.match(/(?:^|\n)\.app-navigation-rail-button\s*\{([^}]*)\}/u)?.[1] ?? '';
 
     expect(utilityStyles).toContain('min-height: 30px');
     expect(utilityStyles).toContain('padding: 5px 4px');
     expect(sessionStyles).toContain('min-height: 30px');
     expect(sessionStyles).toContain('padding: 5px 4px');
-    expect(statusBarStyles).toContain('height: 30px');
+    expect(railButtonStyles).toContain('height: 38px');
   });
 
   it('shows registry loading state instead of an empty workspace list during startup', () => {

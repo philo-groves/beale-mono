@@ -94,12 +94,12 @@ describe('plugin manager workspace', () => {
   it('keeps plugin navigation out of the modal layer and marks it active in the sidebar', () => {
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
     const modalSource = readFileSync(new URL('../src/renderer/app/AppModals.tsx', import.meta.url), 'utf8');
-    const sidebarSource = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
+    const railSource = readFileSync(new URL('../src/renderer/app/AppNavigationRail.tsx', import.meta.url), 'utf8');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 
     expect(appSource).toContain('<PluginManagerWorkspace');
     expect(modalSource).not.toContain('PluginManager');
-    expect(sidebarSource).toContain("sidebar-utility-button${pluginsActive && !workspaceCreationActive ? ' active' : ''}");
+    expect(railSource).toContain("active === 'plugins' ? ' active' : ''");
     expect(styles).toMatch(/\.plugin-manager-body\s*\{[^}]*max-width:\s*var\(--session-content-max-width\);[^}]*margin-inline:\s*auto;/s);
     expect(styles).toMatch(/\.plugin-manager-body > \.resource-workspace-heading\s*\{[^}]*padding-top:\s*4px;/s);
     expect(styles).toMatch(/\.plugin-manager-list\s*\{[^}]*border-radius:\s*26px;[^}]*background:\s*var\(--panel-raised\);[^}]*padding:\s*3px 14px;/s);

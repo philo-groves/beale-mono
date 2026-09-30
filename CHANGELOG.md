@@ -10,6 +10,22 @@
 
 #### Changed
 
+- Header workspace names now preserve their saved capitalization.
+- With an open workspace and collapsed left sidebar, New Research and Quick Chat are available as header icons beside the sidebar toggle.
+- An icon navigation rail now provides Home, Automations, Reporting, Plugins, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
+- The active icon navigation destination persists when research sessions and channels open; Home represents those views.
+- The workspace sidebar now leaves space above New Research and places Quick Chat directly beneath it.
+- New Research now uses the same neutral styling as Quick Chat.
+- The right and bottom window gutters around the content are slightly narrower.
+- A subtle grey divider now separates the main content area from the session and settings sidebar.
+- Collapsing the left sidebar removes that divider and rounds the main content's left edge.
+- The window header is 44 pixels tall, with controls centered vertically.
+- Header title and subtitle text are slightly larger, with the divider before the main title.
+- The left navigation background now sits closer in tone to the commentary surface across dark, light, and cream themes.
+- The session's right sidebar now shares the commentary background, leaving the left navigation and surrounding strip slightly lighter.
+- The compact right session summary uses smaller text, and the expanded session sidebar has a grey left divider.
+- The session commentary surface retains square corners, while the secondary left sidebar and main workbench have rounded outer edges. The composer input retains its rounded shape.
+- The left navigation and the surface beneath session commentary now share a background color.
 - Prompt settings show an approximate token count for saved custom templates, estimated from the rendered preview at four characters per token.
 - The default agent prompt includes memory, claims, and runbook guidance only while their corresponding plugins are enabled. Report guidance is removed from the prompt template; saved templates containing `{{reports}}` remain valid and render it empty.
 - The default agent prompt now presents guidance as plain lines across its sections; plugin and memory-type catalogs retain bullets.

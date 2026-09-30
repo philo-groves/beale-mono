@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { HostEnvironment, RunDetail, RunRow, WorkspaceSnapshot } from '@shared/types';
 import { AppHeaderTitle, StaticAppHeaderTitle, type AppHeaderViewIcon } from '../src/renderer/app/AppHeaderTitle';
 import { BottomPanel, DEFAULT_BOTTOM_PANEL_OPEN } from '../src/renderer/app/BottomPanel';
-import { StatusBar } from '../src/renderer/app/StatusBar';
+import { AppNavigationRail, resolveAppNavigationDestination } from '../src/renderer/app/AppNavigationRail';
 import { headerMenuInlineEnd, rightmostHeaderMenuControl, TopBar } from '../src/renderer/app/TopBar';
 import { SessionOverviewDialog } from '../src/renderer/features/sessions/SessionOverviewDialog';
 import {
@@ -20,13 +20,14 @@ import {
 describe('renderer app shell view model', () => {
   it('matches header icons to workspace and sidenav destinations', () => {
     const workspaceHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
-      workspaceName: 'Parser',
+      workspaceName: 'ExampleCo iOS Parser',
       workspaceViewTitle: 'Memory',
       detail: null,
       channelTitle: null
     }));
     expect(workspaceHeader).toContain('lucide-folder');
-    expect(workspaceHeader).toContain('aria-label="Parser, Memory"');
+    expect(workspaceHeader).toContain('aria-label="ExampleCo iOS Parser, Memory"');
+    expect(workspaceHeader).toContain('title="ExampleCo iOS Parser"');
     expect(workspaceHeader).toContain('title="Memory"><span>Memory</span>');
 
     const newResearchHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
@@ -57,6 +58,11 @@ describe('renderer app shell view model', () => {
     }));
     expect(sessionHeader).toContain('class="app-header-session-title app-header-session-overview-button"');
     expect(sessionHeader).toContain('aria-label="Open Session Overview for Inspect parser states"');
+    const mainTitle = 'class="app-header-workspace-title app-header-static-title"';
+    for (const header of [workspaceHeader, newResearchHeader, channelHeader, sessionHeader]) {
+      expect(header.indexOf('class="app-header-divider"')).toBeLessThan(header.indexOf(mainTitle));
+      expect(header.match(/class="app-header-divider"/gu)).toHaveLength(1);
+    }
 
     const viewIcons: Array<[AppHeaderViewIcon, string]> = [
       ['settings', 'lucide-settings'],
@@ -77,6 +83,8 @@ describe('renderer app shell view model', () => {
         icon
       }));
       expect(header).toContain(iconClass);
+      expect(header.indexOf('class="app-header-divider"')).toBeLessThan(header.indexOf(mainTitle));
+      expect(header.match(/class="app-header-divider"/gu)).toHaveLength(1);
     }
   });
 
@@ -126,12 +134,79 @@ describe('renderer app shell view model', () => {
     expect(styles).toMatch(/\.session-overview-dialog \.campaign-session-projection\s*\{[^}]*height: 72px;/u);
   });
 
-  it('uses the Settings gear for the bottom-left Agent Settings control', () => {
-    const html = renderToStaticMarkup(createElement(StatusBar, { onOpenSettings: () => undefined }));
+  it('renders the compact navigation rail with Settings after the top destinations', () => {
+    const onNavigate = () => undefined;
+    const html = renderToStaticMarkup(createElement(AppNavigationRail, {
+      active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+      onOpenReporting: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+    }));
 
+    expect(html).toContain('aria-label="Main navigation"');
+    for (const label of ['Home', 'Automations', 'Reporting', 'Plugins', 'Agent Settings']) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
+    expect(html.indexOf('aria-label="Home"')).toBeLessThan(html.indexOf('aria-label="Automations"'));
+    expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
     expect(html).toContain('lucide-settings');
-    expect(html).toContain('<span>Agent Settings</span>');
-    expect(html).not.toContain('status-settings-app-icon');
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain('width="18"');
+    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+    const railStyles = styles.match(/\.app-navigation-rail\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const topStyles = styles.match(/\.app-navigation-rail-top,\s*\.app-navigation-rail-sections\s*\{([^}]*)\}/u)?.[1] ?? '';
+    expect(styles).toContain('--navigation-rail-width: 50px');
+    expect(railStyles).toContain('padding: 4px');
+    expect(railStyles).toContain('background: transparent');
+    expect(styles).toMatch(/\.app-shell\.sidebar-collapsed \.app-navigation-rail\s*\{[^}]*width: calc\(100% \+ 8px\);/u);
+    expect(topStyles).toContain('gap: 6px');
+    expect(styles).toContain('.app-navigation-rail-top {\n  margin-top: 8px;');
+    expect(styles).toContain('.app-navigation-rail-sections {\n  margin-top: 0;');
+  });
+
+  it('keeps a navigation destination active as sessions and channels open', () => {
+    const base = { settingsOpen: false, reportsOpen: false, automationsOpen: false, pluginsOpen: false };
+    expect(resolveAppNavigationDestination(base)).toBe('home');
+    expect(resolveAppNavigationDestination({ ...base, reportsOpen: true })).toBe('reporting');
+    expect(resolveAppNavigationDestination({ ...base, automationsOpen: true })).toBe('automations');
+    expect(resolveAppNavigationDestination({ ...base, pluginsOpen: true })).toBe('plugins');
+    expect(resolveAppNavigationDestination({ ...base, settingsOpen: true })).toBe('settings');
+
+    const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
+    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, reportsOpen, automationsOpen, pluginsOpen })');
+    const onNavigate = () => undefined;
+    const html = renderToStaticMarkup(createElement(AppNavigationRail, {
+      active: resolveAppNavigationDestination(base),
+      onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+      onOpenReporting: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+    }));
+    expect(html).toContain('class="app-navigation-rail-button active" title="Home"');
+    expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
+  });
+
+  it('rounds the outer edges of the secondary sidebar and main content', () => {
+    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+    const sidebarStyles = styles.match(/(?:^|\n)\.sidebar\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const workbenchStyles = styles.match(/(?:^|\n)\.workbench\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const sessionWorkbenchStyles = styles.match(/\.app-shell\[data-background\] \.workbench:has\(\.main-session-grid\)\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const collapsedWorkbenchStyles = styles.match(/\.app-shell\.sidebar-collapsed \.workbench,\s*\.app-shell\.sidebar-collapsed\[data-background\] \.workbench:has\(\.main-session-grid\)\s*\{([^}]*)\}/u)?.[1] ?? '';
+    expect(sidebarStyles).toContain('border-radius: var(--content-surface-radius) 0 0 var(--content-surface-radius)');
+    expect(workbenchStyles).toContain('border-left: 1px solid var(--panel-border)');
+    expect(workbenchStyles).toContain('border-radius: 0 var(--content-surface-radius) var(--content-surface-radius) 0');
+    expect(sessionWorkbenchStyles).toContain('border-radius: 0 var(--content-surface-radius) var(--content-surface-radius) 0');
+    expect(collapsedWorkbenchStyles).toContain('margin-left: 8px');
+    expect(collapsedWorkbenchStyles).toContain('border-left: 0');
+    expect(collapsedWorkbenchStyles).toContain('border-radius: var(--content-surface-radius)');
+  });
+
+  it('uses smaller type in the compact session summary and a divider in its expanded view', () => {
+    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+    const compactSummary = styles.match(/\.main-session-grid\[data-session-view-state='session'\] \.session-summary-panel\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const expandedColumn = styles.match(/\.main-session-grid\[data-session-view-state='session'\]\.research-details-open \.research-side-column\s*\{([^}]*)\}/u)?.[1] ?? '';
+    expect(compactSummary).toContain('--session-summary-font-size: 0.9rem');
+    expect(compactSummary).toContain('--session-summary-tooltip-font-size: 0.7rem');
+    expect(expandedColumn).toContain('border-left: 1px solid var(--panel-border)');
+    for (const selector of ['session-summary-title', 'session-summary-duration', 'session-summary-item', 'session-summary-meta', 'session-memory-type-item', 'session-memory-type-toggle']) {
+      expect(styles).toMatch(new RegExp(`\\.${selector}\\s*\\{[^}]*font-size: var\\(--session-summary-font-size, 1rem\\);`, 'u'));
+    }
   });
 
   it('opens Agent Settings on General instead of retaining the previous section', () => {
@@ -152,23 +227,30 @@ describe('renderer app shell view model', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const workspaceLabelStyles = styles.match(/\.app-header-workspace-title\s*\{([^}]*)\}/u)?.[1] ?? '';
     const secondaryLabelStyles = styles.match(/\.app-header-session-title,\s*\.app-header-channel-title\s*\{([^}]*)\}/u)?.[1] ?? '';
-    expect(styles).toContain('--main-content-inline-start: var(--sidebar-width)');
-    expect(styles).toMatch(/\.app-shell\.sidebar-collapsed\s*\{\s*--main-content-inline-start: 0px;/u);
-    expect(styles).toContain('left: max(calc(var(--main-content-inline-start) + 12px), var(--header-menu-inline-end));');
+    expect(styles).toContain('--main-content-inline-start: calc(var(--navigation-rail-width) + var(--sidebar-width))');
+    expect(styles).toMatch(/\.window-menu \.sidebar-toggle-button\s*\{[^}]*margin-left: 6px;/u);
+    expect(styles).toMatch(/\.app-shell\.sidebar-collapsed\s*\{\s*--main-content-inline-start: var\(--navigation-rail-width\);/u);
+    expect(styles).toContain('left: max(var(--main-content-inline-start), var(--header-menu-inline-end));');
+    expect(styles).toMatch(/\.app-header-view-icon\s*\{[^}]*margin-inline: 6px;/u);
+    expect(styles).toMatch(/\.app-header-divider\s*\{[^}]*height: 20px;/u);
     for (const labelStyles of [workspaceLabelStyles, secondaryLabelStyles]) {
       expect(labelStyles).toContain('height: 26px');
       expect(labelStyles).toContain('align-self: center');
       expect(labelStyles).toContain('box-sizing: border-box');
       expect(labelStyles).toContain('padding: 0 6px');
       expect(labelStyles).toContain('line-height: 1');
+      expect(labelStyles).toContain('font-size: 1rem');
     }
-    expect(styles).toMatch(/@media \(max-width: 820px\)[\s\S]*?\.app-shell\s*\{\s*--main-content-inline-start: 0px;/u);
+    expect(styles).toMatch(/@media \(max-width: 820px\)[\s\S]*?\.app-shell\s*\{\s*--main-content-inline-start: var\(--navigation-rail-width\);/u);
     expect(styles).not.toContain('left: 180px;');
   });
 
   it('shows the detected default workspace editor beside the right sidenav control', () => {
     const header = renderToStaticMarkup(createElement(TopBar, {
       sidebarCollapsed: false,
+      workspaceOpen: true,
+      newResearchLabel: 'New Research',
+      newResearchDisabled: false,
       rightSidenavAvailable: true,
       rightSidenavExpanded: false,
       contextualTitleVisible: false,
@@ -192,7 +274,9 @@ describe('renderer app shell view model', () => {
       onOpenWorkspaceInEditor: () => undefined,
       onAddWorkspace: () => undefined,
       onToggleRightSidenav: () => undefined,
-      onToggleSidebar: () => undefined
+      onToggleSidebar: () => undefined,
+      onStartNewResearch: () => undefined,
+      onOpenQuickChat: () => undefined
     }));
 
     expect(header).toContain('editor-launch-available');
@@ -202,6 +286,43 @@ describe('renderer app shell view model', () => {
     expect(header.indexOf('workspace-editor-control')).toBeLessThan(header.indexOf('right-sidenav-toggle-button'));
     expect(header).toContain('aria-label="Hide bottom panel"');
     expect(header.indexOf('bottom-panel-toggle-button')).toBeLessThan(header.indexOf('right-sidenav-toggle-button'));
+  });
+
+  it('shows workspace creation actions beside the sidebar toggle only when a workspace is open and the sidebar is collapsed', () => {
+    const renderHeader = (sidebarCollapsed: boolean, workspaceOpen: boolean, newResearchDisabled = false): string => renderToStaticMarkup(createElement(TopBar, {
+      sidebarCollapsed,
+      workspaceOpen,
+      newResearchLabel: 'New Research',
+      newResearchDisabled,
+      rightSidenavAvailable: false,
+      rightSidenavExpanded: false,
+      contextualTitleVisible: false,
+      staticContextTitle: null,
+      platform: 'darwin',
+      workspaceName: 'Example Workspace',
+      activeRunDetail: null,
+      activeChannelTitle: null,
+      profilingEnabled: false,
+      bottomPanelOpen: false,
+      workspaceEditors: null,
+      onOpenProfiling: () => undefined,
+      onToggleBottomPanel: () => undefined,
+      onOpenWorkspaceInEditor: () => undefined,
+      onAddWorkspace: () => undefined,
+      onToggleRightSidenav: () => undefined,
+      onToggleSidebar: () => undefined,
+      onStartNewResearch: () => undefined,
+      onOpenQuickChat: () => undefined
+    }));
+
+    const collapsedHeader = renderHeader(true, true);
+    expect(collapsedHeader.indexOf('class="sidebar-toggle-button"')).toBeLessThan(collapsedHeader.indexOf('aria-label="New Research"'));
+    expect(collapsedHeader.indexOf('aria-label="New Research"')).toBeLessThan(collapsedHeader.indexOf('aria-label="Quick Chat"'));
+    expect(collapsedHeader).toContain('lucide-square-pen');
+    expect(collapsedHeader).toContain('lucide-zap');
+    expect(renderHeader(true, true, true)).toMatch(/aria-label="New Research" disabled=""/u);
+    expect(renderHeader(false, true)).not.toContain('header-sidebar-action-button');
+    expect(renderHeader(true, false)).not.toContain('header-sidebar-action-button');
   });
 
   it('limits both header research controls to workspace and session views', () => {
@@ -249,11 +370,16 @@ describe('renderer app shell view model', () => {
     expect(panel).toContain('class="bottom-panel-terminal"');
 
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-    expect(styles).toContain('grid-template-rows: 38px minmax(0, 1fr) 8px 250px 8px;');
-    expect(styles).toContain('grid-template-rows: 38px minmax(0, 1fr) 0 0 8px;');
-    expect(styles).toMatch(/\.workbench\s*\{[^}]*margin: 0 8px 0 0;[^}]*padding: 0 12px;/u);
-    expect(styles).toMatch(/\.bottom-panel\s*\{[^}]*grid-column: 2;[^}]*grid-row: 4;[^}]*height: 0;/u);
-    expect(styles).toMatch(/\.bottom-panel\s*\{[^}]*margin: 0 8px 0 0;[^}]*padding: 0;/u);
+    expect(styles).toContain('--app-header-height: 44px');
+    expect(styles).toContain('grid-template-rows: var(--app-header-height) minmax(0, 1fr) 8px 250px 6px;');
+    expect(styles).toContain('grid-template-rows: var(--app-header-height) minmax(0, 1fr) 0 0 6px;');
+    expect(styles).toMatch(/\.top-bar\s*\{[^}]*min-height: var\(--app-header-height\);/u);
+    expect(styles).toMatch(/\.window-controls\s*\{[^}]*align-items: center;/u);
+    const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
+    expect(mainSource).toContain('trafficLightPosition: { x: 16, y: 16 }');
+    expect(styles).toMatch(/\.workbench\s*\{[^}]*margin: 0 6px 0 0;[^}]*padding: 0 12px;/u);
+    expect(styles).toMatch(/\.bottom-panel\s*\{[^}]*grid-column: 3;[^}]*grid-row: 4;[^}]*height: 0;/u);
+    expect(styles).toMatch(/\.bottom-panel\s*\{[^}]*margin: 0 6px 0 0;[^}]*padding: 0;/u);
     expect(styles).toMatch(/\.app-shell\.bottom-panel-open \.bottom-panel\s*\{[^}]*height: 250px;/u);
     expect(styles).toMatch(/\.bottom-panel-terminal\s*\{[^}]*padding-inline: 10px;/u);
     expect(styles).toMatch(/\.sidebar\s*\{[^}]*grid-row: 2 \/ 5;/u);
@@ -262,6 +388,9 @@ describe('renderer app shell view model', () => {
   it('hides the bottom-panel toggle wherever the right-sidenav toggle is unavailable', () => {
     const header = renderToStaticMarkup(createElement(TopBar, {
       sidebarCollapsed: false,
+      workspaceOpen: true,
+      newResearchLabel: 'New Research',
+      newResearchDisabled: false,
       rightSidenavAvailable: false,
       rightSidenavExpanded: false,
       contextualTitleVisible: false,
@@ -279,7 +408,9 @@ describe('renderer app shell view model', () => {
       onOpenWorkspaceInEditor: () => undefined,
       onAddWorkspace: () => undefined,
       onToggleRightSidenav: () => undefined,
-      onToggleSidebar: () => undefined
+      onToggleSidebar: () => undefined,
+      onStartNewResearch: () => undefined,
+      onOpenQuickChat: () => undefined
     }));
     expect(header).not.toContain('bottom-panel-toggle-button');
     expect(header).not.toContain('right-sidenav-toggle-button');
@@ -288,6 +419,9 @@ describe('renderer app shell view model', () => {
   it('keeps the channel summary toggle without exposing the session bottom panel', () => {
     const header = renderToStaticMarkup(createElement(TopBar, {
       sidebarCollapsed: false,
+      workspaceOpen: true,
+      newResearchLabel: 'New Research',
+      newResearchDisabled: false,
       rightSidenavAvailable: true,
       rightSidenavExpanded: false,
       contextualTitleVisible: true,
@@ -306,7 +440,9 @@ describe('renderer app shell view model', () => {
       onOpenWorkspaceInEditor: () => undefined,
       onAddWorkspace: () => undefined,
       onToggleRightSidenav: () => undefined,
-      onToggleSidebar: () => undefined
+      onToggleSidebar: () => undefined,
+      onStartNewResearch: () => undefined,
+      onOpenQuickChat: () => undefined
     }));
     expect(header).not.toContain('bottom-panel-toggle-button');
     expect(header).toContain('right-sidenav-toggle-button');

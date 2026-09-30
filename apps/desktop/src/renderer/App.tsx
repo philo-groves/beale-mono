@@ -59,7 +59,7 @@ import type {
 import { AppModals } from './app/AppModals';
 import { AppBackgroundPulses } from './app/AppBackgroundPulses';
 import { BottomPanel, DEFAULT_BOTTOM_PANEL_OPEN } from './app/BottomPanel';
-import { StatusBar } from './app/StatusBar';
+import { AppNavigationRail, resolveAppNavigationDestination } from './app/AppNavigationRail';
 import { TopBar } from './app/TopBar';
 import { NotificationStack, type WorkspaceAlert } from './features/notifications/Notifications';
 import { WorkspaceSidebar } from './features/workspaces/WorkspaceSidebar';
@@ -998,6 +998,7 @@ export function App(): JSX.Element {
   const openPlugins = useCallback((): void => {
     closeWorkspaceOnboarding();
     closeNewResearch();
+    setSettingsOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
     setSelectedChannelId(null);
@@ -1167,6 +1168,7 @@ export function App(): JSX.Element {
   const openReports = useCallback((): void => {
     closeWorkspaceOnboarding();
     closeNewResearch();
+    setSettingsOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
     setSelectedReportId(null);
@@ -2135,6 +2137,19 @@ export function App(): JSX.Element {
     setSettingsSection('general');
     setSettingsOpen(true);
   }, [closeNewResearch, closeWorkspaceOnboarding]);
+  const openHome = useCallback((): void => {
+    closeWorkspaceOnboarding();
+    closeNewResearch();
+    clearRunDetail();
+    setSelectedRunId(null);
+    setSelectedChannelId(null);
+    setSelectedChannelDetail(null);
+    setReportsOpen(false);
+    setAutomationsOpen(false);
+    setPluginsOpen(false);
+    setSettingsOpen(false);
+    setRightSidenavExpanded(false);
+  }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId]);
   const openProfiling = useCallback(() => {
     flushProfilingReport();
     setProfilingOpen(true);
@@ -2200,6 +2215,7 @@ export function App(): JSX.Element {
   const openAutomations = useCallback((): void => {
     closeWorkspaceOnboarding();
     closeNewResearch();
+    setSettingsOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
     setSelectedAutomationRunId(null);
@@ -2258,6 +2274,7 @@ export function App(): JSX.Element {
       onStarted={handleResearchStarted}
     />
   ) : null;
+  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, reportsOpen, automationsOpen, pluginsOpen });
   return (
     <div
       ref={appShellRef}
@@ -2269,6 +2286,9 @@ export function App(): JSX.Element {
       <AppBackgroundPulses />
       <TopBar
         sidebarCollapsed={sidebarCollapsed}
+        workspaceOpen={Boolean(snapshot)}
+        newResearchLabel={snapshot?.researchProfile.profile.presentation?.newResearchLabel ?? 'New Research'}
+        newResearchDisabled={busy}
         rightSidenavAvailable={rightSidenavAvailable}
         rightSidenavExpanded={rightSidenavExpanded && (researchDetailsAvailable || channelSummaryAvailable)}
         contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !pluginsOpen}
@@ -2305,6 +2325,8 @@ export function App(): JSX.Element {
         onAddWorkspace={beginWorkspaceCreation}
         onToggleRightSidenav={toggleRightSidenav}
         onToggleSidebar={toggleSidebar}
+        onStartNewResearch={startNewResearch}
+        onOpenQuickChat={openQuickChat}
       />
       {sessionOverviewOpen && activeRunDetail && activeSessionOverviewRun ? (
         <SessionOverviewDialog
@@ -2316,6 +2338,14 @@ export function App(): JSX.Element {
           sessionHeatPreferences={sessionHeatPreferences}
         />
       ) : null}
+      <AppNavigationRail
+        active={navigationDestination}
+        onOpenHome={openHome}
+        onOpenAutomations={openAutomations}
+        onOpenReporting={openReports}
+        onOpenPlugins={openPlugins}
+        onOpenSettings={openSettings}
+      />
       {settingsOpen ? (
         <SettingsSidebar
           collapsed={sidebarCollapsed}
@@ -2351,9 +2381,6 @@ export function App(): JSX.Element {
           onArchiveChannel={archiveResearchChannel}
           onCreateChannel={createResearchChannel}
           onResizePointerDown={beginSidebarResize}
-          onOpenAutomations={openAutomations}
-          onOpenReports={openReports}
-          onOpenPlugins={openPlugins}
           onStartNewResearch={startNewResearch}
           onOpenQuickChat={openQuickChat}
           onStartNewResearchForWorkspace={startNewResearchForWorkspace}
@@ -2710,7 +2737,6 @@ export function App(): JSX.Element {
           if (inlineApproval) handleShellApprovalDecision(inlineApproval, decision);
         }}
       />
-      {!settingsOpen ? <StatusBar onOpenSettings={openSettings} /> : null}
       <NotificationStack
         notifications={snapshot?.notifications ?? []}
         alerts={workspaceAlerts}

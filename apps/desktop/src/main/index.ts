@@ -149,7 +149,7 @@ function createWindow(): void {
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset' as const,
-          trafficLightPosition: { x: 12, y: 13 }
+          trafficLightPosition: { x: 16, y: 16 }
         }
       : {
           frame: false

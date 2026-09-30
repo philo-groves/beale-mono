@@ -68,7 +68,7 @@ function sidebarTransitionTargetName(target: HTMLElement | null): string | null 
   if (target.classList.contains('app-shell')) return 'app-shell';
   if (target.classList.contains('sidebar')) return 'sidebar';
   if (target.classList.contains('workbench')) return 'workbench';
-  if (target.classList.contains('status-bar')) return 'status-bar';
+  if (target.classList.contains('app-navigation-rail')) return 'navigation-rail';
   if (target.classList.contains('sidebar-toggle-button')) return 'toggle-button';
   return null;
 }

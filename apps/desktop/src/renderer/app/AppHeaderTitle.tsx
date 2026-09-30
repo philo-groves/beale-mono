@@ -59,21 +59,18 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
   return (
     <div className="app-header-title" aria-label={headerSegments.join(', ')}>
       <div className="app-header-identity">
+        <span className="app-header-divider" aria-hidden="true" />
         <span className="app-header-workspace-title app-header-static-title" title={workspaceLabel}>
           <Folder className="app-header-view-icon" size={15} aria-hidden="true" />
           <span>{workspaceLabel}</span>
         </span>
         {workspaceViewLabel ? (
-          <>
-            <span className="app-header-divider" aria-hidden="true" />
-            <span className="app-header-session-title app-header-static-title" title={workspaceViewLabel}>
-              <span>{workspaceViewLabel}</span>
-            </span>
-          </>
+          <span className="app-header-session-title app-header-static-title" title={workspaceViewLabel}>
+            <span>{workspaceViewLabel}</span>
+          </span>
         ) : null}
         {detail && sessionTitle ? (
           <>
-            <span className="app-header-divider" aria-hidden="true" />
             {onOpenSessionOverview ? (
               <button
                 aria-label={`Open Session Overview for ${sessionTitle}`}
@@ -92,12 +89,9 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
           </>
         ) : null}
         {channelLabel ? (
-          <>
-            <span className="app-header-divider" aria-hidden="true" />
-            <span className="app-header-channel-title app-header-static-title" title={channelLabel}>
-              <span>{channelLabel}</span>
-            </span>
-          </>
+          <span className="app-header-channel-title app-header-static-title" title={channelLabel}>
+            <span>{channelLabel}</span>
+          </span>
         ) : null}
       </div>
     </div>
@@ -130,11 +124,11 @@ export const StaticAppHeaderTitle = memo(function StaticAppHeaderTitle({
   return (
     <div className="app-header-title" aria-label={`${primaryTitle}, ${secondaryTitle}`}>
       <div className="app-header-identity">
+        <span className="app-header-divider" aria-hidden="true" />
         <span className="app-header-workspace-title app-header-static-title">
           <HeaderIcon className="app-header-view-icon" size={15} aria-hidden="true" />
           <span>{primaryTitle}</span>
         </span>
-        <span className="app-header-divider" aria-hidden="true" />
         <span className="app-header-session-title app-header-static-title">
           <span>{secondaryTitle}</span>
         </span>

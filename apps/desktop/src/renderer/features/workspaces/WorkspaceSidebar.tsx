@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
-import { Archive, CalendarClock, FileText, Folder, FolderInput, FolderPlus, Hash, LoaderCircle, Plus, Plug, RefreshCw, Search, SquarePen, X, Zap } from 'lucide-react';
+import { Archive, Folder, FolderInput, FolderPlus, Hash, LoaderCircle, Plus, RefreshCw, Search, SquarePen, X, Zap } from 'lucide-react';
 import type { WorkspaceRegistryEntry, WorkspaceRegistryState, ResearchChannelSummary, ResearchSessionSummary, RunStatus, WorkspaceSnapshot } from '@shared/types';
 import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
 import { useDevRenderProbe } from '../../devInstrumentation';
@@ -35,9 +35,6 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   onArchiveChannel = async () => undefined,
   onCreateChannel = async () => undefined,
   onResizePointerDown,
-  onOpenAutomations = () => undefined,
-  onOpenReports = () => undefined,
-  onOpenPlugins = () => undefined,
   onStartNewResearch,
   onOpenQuickChat = () => undefined,
   onStartNewResearchForWorkspace
@@ -66,9 +63,6 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   onArchiveChannel?: (channel: ResearchChannelSummary) => Promise<void>;
   onCreateChannel?: (input: { name: string; topic: string }) => Promise<void>;
   onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  onOpenAutomations?: () => void;
-  onOpenReports?: () => void;
-  onOpenPlugins?: () => void;
   onStartNewResearch: () => void;
   onOpenQuickChat?: () => void;
   onStartNewResearchForWorkspace: (workspace: WorkspaceRegistryEntry) => void;
@@ -194,27 +188,17 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
 
   return (
     <aside className="sidebar" aria-hidden={collapsed} inert={collapsed}>
-      <button type="button" className="sidebar-new-research" title={`Start ${newResearchLabel.toLocaleLowerCase()}`} disabled={busy || !snapshot} onClick={onStartNewResearch}>
-        <SquarePen size={15} />
-        <span>{newResearchLabel}</span>
-      </button>
-      <div className="sidebar-quick-actions">
-        <button type="button" className="sidebar-utility-button sidebar-quick-chat" title="Open a quick chat" onClick={onOpenQuickChat}>
-          <Zap size={15} />
-          <span>New Quick Chat</span>
+      <div className="sidebar-primary-actions">
+        <button type="button" className="sidebar-utility-button sidebar-new-research" title={`Start ${newResearchLabel.toLocaleLowerCase()}`} disabled={busy || !snapshot} onClick={onStartNewResearch}>
+          <SquarePen size={15} />
+          <span>{newResearchLabel}</span>
         </button>
-        <button type="button" className={`sidebar-utility-button${automationsActive && !workspaceCreationActive ? ' active' : ''}`} title="Automations" aria-current={automationsActive && !workspaceCreationActive ? 'page' : undefined} onClick={onOpenAutomations}>
-          <CalendarClock size={15} />
-          <span>Automations</span>
-        </button>
-        <button type="button" className={`sidebar-utility-button${reportsActive && !workspaceCreationActive ? ' active' : ''}`} title="Reporting" aria-current={reportsActive && !workspaceCreationActive ? 'page' : undefined} onClick={onOpenReports}>
-          <FileText size={15} />
-          <span>Reporting</span>
-        </button>
-        <button type="button" className={`sidebar-utility-button${pluginsActive && !workspaceCreationActive ? ' active' : ''}`} title="Plugins" aria-current={pluginsActive && !workspaceCreationActive ? 'page' : undefined} onClick={onOpenPlugins}>
-          <Plug size={15} />
-          <span>Plugins</span>
-        </button>
+        <div className="sidebar-quick-actions">
+          <button type="button" className="sidebar-utility-button sidebar-quick-chat" title="Open a quick chat" onClick={onOpenQuickChat}>
+            <Zap size={15} />
+            <span>Quick Chat</span>
+          </button>
+        </div>
       </div>
       <div className="sidebar-section workspace-list">
         <div className={`section-row workspace-list-header${sessionSearchOpen ? ' search-open' : ''}`}>

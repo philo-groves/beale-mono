@@ -228,16 +228,13 @@ describe('reports resource views', () => {
     expect(isReportResourceRun({ budget: { maxMinutes: 10 } })).toBe(false);
   });
 
-  it('places Reporting directly below Automations in the workspace sidenav', () => {
-    const source = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
+  it('places Reporting between Automations and Plugins in the navigation rail', () => {
+    const source = readFileSync(new URL('../src/renderer/app/AppNavigationRail.tsx', import.meta.url), 'utf8');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-    expect(source.indexOf('<span>Reporting</span>')).toBeGreaterThan(-1);
-    expect(source.indexOf('<span>Reporting</span>')).toBeGreaterThan(source.indexOf('<span>Automations</span>'));
-    expect(source.indexOf('<span>Reporting</span>')).toBeLessThan(source.indexOf('<span>Plugins</span>'));
-    expect(styles).toMatch(/\.sidebar-utility-button\s*\{[^}]*background:\s*transparent;/s);
-    expect(styles).toMatch(/\.sidebar-utility-button:hover:not\(:disabled\)\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--text\) 4\.5%, transparent\);/s);
-    expect(styles).toMatch(/\.sidebar-utility-button\.active\s*\{[^}]*background:\s*var\(--panel\);/s);
-    expect(styles).toMatch(/\.sidebar-utility-button\.active:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--panel\);/s);
+    expect(source.indexOf('aria-label="Reporting"')).toBeGreaterThan(source.indexOf('aria-label="Automations"'));
+    expect(source.indexOf('aria-label="Reporting"')).toBeLessThan(source.indexOf('aria-label="Plugins"'));
+    expect(styles).toMatch(/\.app-navigation-rail-button\s*\{[^}]*background:\s*transparent;/s);
+    expect(styles).toMatch(/\.app-navigation-rail-button\.active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--text\) 14%, transparent\);/s);
   });
 
   it('renders the workspace report catalog and current report state', () => {

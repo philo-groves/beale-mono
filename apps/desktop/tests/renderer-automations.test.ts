@@ -324,7 +324,7 @@ describe('automation workspace', () => {
   it('moves Automations out of AppModals and into main navigation', () => {
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
     const modalSource = readFileSync(new URL('../src/renderer/app/AppModals.tsx', import.meta.url), 'utf8');
-    const sidebarSource = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
+    const railSource = readFileSync(new URL('../src/renderer/app/AppNavigationRail.tsx', import.meta.url), 'utf8');
 
     expect(appSource).toContain('<AutomationsWorkspace');
     expect(appSource).toContain('!newResearchOpen && !automationsOpen && !reportsOpen');
@@ -332,7 +332,7 @@ describe('automation workspace', () => {
     expect(appSource).toContain('setAutomationScopeWorkspaceId(snapshot?.workspace.workspaceId ?? null);');
     expect(appSource).toContain("? { primary: 'Automations', secondary: selectedAutomation?.title ?? automationScopeName, icon: 'automations' }");
     expect(modalSource).not.toContain('AutomationsModal');
-    expect(sidebarSource).toContain("sidebar-utility-button${automationsActive && !workspaceCreationActive ? ' active' : ''}");
+    expect(railSource).toContain("active === 'automations' ? ' active' : ''");
     expect(existsSync(new URL('../src/renderer/features/plugins/AutomationsModal.tsx', import.meta.url))).toBe(false);
   });
 

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { JSX, MouseEvent } from 'react';
-import { ChevronDown, Code2, Minus, PanelBottomClose, PanelBottomOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Square, X } from 'lucide-react';
+import { ChevronDown, Code2, Minus, PanelBottomClose, PanelBottomOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Square, SquarePen, X, Zap } from 'lucide-react';
 import type { HostEnvironment, WorkspaceEditorCatalog, WorkspaceEditorId, WorkspaceEditorSummary, ZoomState } from '@shared/types';
 import { useDevRenderProbe } from '../devInstrumentation';
 import { AppHeaderTitle, StaticAppHeaderTitle } from './AppHeaderTitle';
@@ -26,6 +26,9 @@ function WorkspaceEditorIcon({ editor, size = 16 }: { editor: WorkspaceEditorSum
 
 export const TopBar = memo(function TopBar({
   sidebarCollapsed,
+  workspaceOpen,
+  newResearchLabel,
+  newResearchDisabled,
   rightSidenavAvailable,
   rightSidenavExpanded,
   contextualTitleVisible,
@@ -45,9 +48,14 @@ export const TopBar = memo(function TopBar({
   onOpenWorkspaceInEditor,
   onAddWorkspace,
   onToggleRightSidenav,
-  onToggleSidebar
+  onToggleSidebar,
+  onStartNewResearch,
+  onOpenQuickChat
 }: {
   sidebarCollapsed: boolean;
+  workspaceOpen: boolean;
+  newResearchLabel: string;
+  newResearchDisabled: boolean;
   rightSidenavAvailable: boolean;
   rightSidenavExpanded: boolean;
   contextualTitleVisible: boolean;
@@ -68,12 +76,15 @@ export const TopBar = memo(function TopBar({
   onAddWorkspace: () => void;
   onToggleRightSidenav: () => void;
   onToggleSidebar: () => void;
+  onStartNewResearch: () => void;
+  onOpenQuickChat: () => void;
 }): JSX.Element {
   useDevRenderProbe('topBar', () => ({ platform, sidebarCollapsed, profilingEnabled, workspaceName, run: activeRunDetail?.run.id ?? 'none' }));
   const SidebarToggleIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
   const RightSidenavToggleIcon = rightSidenavExpanded ? PanelRightClose : PanelRightOpen;
   const BottomPanelToggleIcon = bottomPanelOpen ? PanelBottomClose : PanelBottomOpen;
   const isMac = platform === 'darwin';
+  const showCollapsedWorkspaceActions = sidebarCollapsed && workspaceOpen;
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
   const [editorMenuOpen, setEditorMenuOpen] = useState(false);
   const [zoomState, setZoomState] = useState<ZoomState>(() => ({ level: 0, percent: 100 }));
@@ -87,11 +98,11 @@ export const TopBar = memo(function TopBar({
     const topBar = topBarRef.current;
     const menu = menuRef.current;
     if (!topBar || !menu) return undefined;
-    const menuControls = Array.from(menu.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+    const menuControls = (): HTMLElement[] => Array.from(menu.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
     const updateMenuEdge = (): void => {
       const menuRight = rightmostHeaderMenuControl(
         menu.getBoundingClientRect().left,
-        menuControls.map((control) => control.getBoundingClientRect().right)
+        menuControls().map((control) => control.getBoundingClientRect().right)
       );
       const menuEdge = headerMenuInlineEnd(topBar.getBoundingClientRect().left, menuRight);
       topBar.style.setProperty('--header-menu-inline-end', `${menuEdge}px`);
@@ -100,13 +111,13 @@ export const TopBar = memo(function TopBar({
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateMenuEdge);
     observer?.observe(topBar);
     observer?.observe(menu);
-    for (const control of menuControls) observer?.observe(control);
+    for (const control of menuControls()) observer?.observe(control);
     window.addEventListener('resize', updateMenuEdge);
     return () => {
       observer?.disconnect();
       window.removeEventListener('resize', updateMenuEdge);
     };
-  }, [platform]);
+  }, [platform, showCollapsedWorkspaceActions]);
 
   useEffect(() => {
     const closeFromPointer = (event: PointerEvent): void => {
@@ -204,6 +215,27 @@ export const TopBar = memo(function TopBar({
         >
           <SidebarToggleIcon size={14} />
         </button>
+        {showCollapsedWorkspaceActions ? <>
+          <button
+            type="button"
+            className="header-sidebar-action-button"
+            title={`Start ${newResearchLabel.toLocaleLowerCase()}`}
+            aria-label={newResearchLabel}
+            disabled={newResearchDisabled}
+            onClick={onStartNewResearch}
+          >
+            <SquarePen size={15} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="header-sidebar-action-button"
+            title="Quick Chat"
+            aria-label="Quick Chat"
+            onClick={onOpenQuickChat}
+          >
+            <Zap size={15} aria-hidden="true" />
+          </button>
+        </> : null}
         {!isMac ? <>
         <div className="window-menu-item">
           <button
