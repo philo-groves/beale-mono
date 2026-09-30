@@ -255,6 +255,7 @@ describe('reports resource views', () => {
       onOpenReport: () => undefined
     }));
 
+    expect(html).toContain('class="wide-content-container"');
     expect(html).toContain('All Reports');
     expect(html).toContain('role="tablist"');
     expect(html).toContain('aria-selected="true"');

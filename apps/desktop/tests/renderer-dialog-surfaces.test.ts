@@ -188,7 +188,7 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toContain('aria-label="Choose workspace directory"');
     expect(securityHtml).not.toContain('aria-label="Add workspace directory"');
     expect(emptyHtml).toContain('aria-label="Choose workspace directory"');
-    expect(securityHtml).toContain('class="workspace-dashboard workspace-creation"');
+    expect(securityHtml).toContain('class="workspace-dashboard workspace-creation wide-content-container"');
     expect(securityHtml).toContain('aria-label="New Workspace views"');
     expect(securityHtml).not.toContain('role="dialog"');
     expect(securityHtml).toContain('<select');

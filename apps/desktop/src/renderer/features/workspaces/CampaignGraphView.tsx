@@ -69,7 +69,7 @@ export function CampaignGraphView({
 
       <div className="campaign-trail-layout">
         <section className="campaign-trail-section campaign-priority-claims" aria-labelledby="campaign-priority-claims-heading">
-          <h3 className="campaign-trail-section-heading" id="campaign-priority-claims-heading">Priority Claims</h3>
+          <h3 className="workspace-campaign-list-heading" id="campaign-priority-claims-heading">Priority Claims</h3>
           <div className="campaign-priority-claim-scroll" ref={priorityScrollFades.frameRef}>
             <div className="campaign-priority-claim-list" onScroll={priorityScrollFades.update} ref={priorityScrollFades.scrollRef}>
               {loading ? <p className="campaign-trail-section-empty">Loading priority claims.</p> : priorityClaims.length === 0 ? (
@@ -155,7 +155,7 @@ export function CampaignBoardView({
           const findings = campaignBoardFindings(memory, maturity, { classification: classificationFilter, rating: ratingFilter, query });
           return (
             <section className={`campaign-board-lane maturity-${maturity}`} key={maturity} aria-labelledby={`campaign-board-${maturity}-heading`}>
-              <h3 className="campaign-trail-section-heading campaign-board-lane-heading" id={`campaign-board-${maturity}-heading`}>{traceLabel(maturity)} ({findings.length.toLocaleString()})</h3>
+              <h3 className="workspace-campaign-list-heading campaign-board-lane-heading" id={`campaign-board-${maturity}-heading`}>{traceLabel(maturity)} ({findings.length.toLocaleString()})</h3>
               <MainSideScrollRegion
                 className="campaign-board-lane-scroll"
                 listClassName="campaign-board-lane-list"
@@ -280,7 +280,7 @@ export function campaignPriorityClaimHasOverflow(scrollWidth: number, clientWidt
 }
 
 export function campaignPriorityClaimMetadata(claim: AppServerFindingSummary): string {
-  return `${traceLabel(claim.projection)} ${traceLabel(claim.maturity)}, ${traceLabel(claim.rating)} ${campaignBoardClassificationLabel(claim.classification)}`;
+  return `${traceLabel(claim.maturity)} ${traceLabel(claim.rating)}`;
 }
 
 export function campaignBoardClaimMetadata(claim: AppServerFindingSummary): string {

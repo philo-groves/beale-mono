@@ -8,7 +8,7 @@ export function WorkspaceStartupView({
   onAddWorkspace: () => void;
 }): JSX.Element {
   return (
-    <main className="workspace-startup-view" aria-busy="false" aria-label="No workspace selected">
+    <main className="workspace-startup-view wide-content-container" aria-busy="false" aria-label="No workspace selected">
       <div className="workspace-startup-content">
         <BealeWelcomeIcon />
         <strong>No Workspace Selected</strong>

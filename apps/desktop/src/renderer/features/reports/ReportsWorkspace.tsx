@@ -54,64 +54,66 @@ export function ReportsIndex({
     : 'All';
   return (
     <section className="reports-index" aria-label="Reporting">
-      <div className="reports-index-tabs research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Report workspace scope">
-        {scopeTabs.map((scope) => {
-          const selected = selectedWorkspaceId === scope.id;
-          return (
-            <div className={`research-side-view-tab provider-settings-tab reports-index-tab ${selected ? 'active' : ''}`.trim()} key={scope.key}>
-              <button
-                type="button"
-                className="research-side-view-tab-activate"
-                role="tab"
-                aria-selected={selected}
-                aria-controls="reports-index-panel"
-                onClick={() => onScopeChange(scope.id)}
-              >
-                <span>{scope.label}</span>
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <header className="resource-workspace-heading">
-        <h1>{currentScopeName} Reporting</h1>
-        <p>Review, edit, and prepare reports created during research sessions.</p>
-      </header>
-      <div id="reports-index-panel" role="tabpanel">
-        {loading ? (
-          <CenteredLoadingState label="Loading reports…" />
-        ) : error ? (
-          <div className="reports-index-empty is-error" role="alert">
-            <CircleAlert size={20} aria-hidden="true" />
-            <strong>Reports could not be loaded</strong>
-            <span>{error}</span>
-          </div>
-        ) : reports.length === 0 ? (
-          <div className="reports-index-empty">
-            <FileText size={20} aria-hidden="true" />
-            <strong>No reports yet</strong>
-            <span>Reports created by agents during research sessions will appear here.</span>
-          </div>
-        ) : (
-          <div className="reports-index-list">
-            {reports.map((report) => (
-              <div className="reports-index-row" key={`${report.workspaceId}:${report.id}`}>
-                <span className="reports-index-row-copy">
-                  <strong>{report.title}</strong>
-                  <small>{traceLabel(report.triageStatus)}</small>
-                </span>
+      <div className="wide-content-container">
+        <div className="reports-index-tabs research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Report workspace scope">
+          {scopeTabs.map((scope) => {
+            const selected = selectedWorkspaceId === scope.id;
+            return (
+              <div className={`research-side-view-tab provider-settings-tab reports-index-tab ${selected ? 'active' : ''}`.trim()} key={scope.key}>
                 <button
                   type="button"
-                  className="reports-index-edit-button"
-                  onClick={() => onOpenReport(report)}
+                  className="research-side-view-tab-activate"
+                  role="tab"
+                  aria-selected={selected}
+                  aria-controls="reports-index-panel"
+                  onClick={() => onScopeChange(scope.id)}
                 >
-                  <Pencil size={14} aria-hidden="true" />
-                  <span>Edit</span>
+                  <span>{scope.label}</span>
                 </button>
               </div>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
+        <header className="resource-workspace-heading">
+          <h1>{currentScopeName} Reporting</h1>
+          <p>Review, edit, and prepare reports created during research sessions.</p>
+        </header>
+        <div id="reports-index-panel" role="tabpanel">
+          {loading ? (
+            <CenteredLoadingState label="Loading reports…" />
+          ) : error ? (
+            <div className="reports-index-empty is-error" role="alert">
+              <CircleAlert size={20} aria-hidden="true" />
+              <strong>Reports could not be loaded</strong>
+              <span>{error}</span>
+            </div>
+          ) : reports.length === 0 ? (
+            <div className="reports-index-empty">
+              <FileText size={20} aria-hidden="true" />
+              <strong>No reports yet</strong>
+              <span>Reports created by agents during research sessions will appear here.</span>
+            </div>
+          ) : (
+            <div className="reports-index-list">
+              {reports.map((report) => (
+                <div className="reports-index-row" key={`${report.workspaceId}:${report.id}`}>
+                  <span className="reports-index-row-copy">
+                    <strong>{report.title}</strong>
+                    <small>{traceLabel(report.triageStatus)}</small>
+                  </span>
+                  <button
+                    type="button"
+                    className="reports-index-edit-button"
+                    onClick={() => onOpenReport(report)}
+                  >
+                    <Pencil size={14} aria-hidden="true" />
+                    <span>Edit</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );

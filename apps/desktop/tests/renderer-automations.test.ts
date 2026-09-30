@@ -262,6 +262,7 @@ describe('automation workspace', () => {
   it('renders All Automations and workspace scope tabs with a flat status list', () => {
     const html = render();
 
+    expect(html).toContain('class="wide-content-container"');
     expect(html).toContain('All Automations');
     expect(html).toContain('<h1>All Automations</h1>');
     expect(html).toContain('Manage scheduled research sessions across your workspaces.');

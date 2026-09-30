@@ -295,7 +295,7 @@ export function WorkspaceUnderstandingView({
   );
 
   return (
-    <main className={`workspace-dashboard${campaignActive ? ' campaign-active' : ''}`} aria-label="Workspace dashboard">
+    <main className={`workspace-dashboard wide-content-container${campaignActive ? ' campaign-active' : ''}`} aria-label="Workspace dashboard">
       <div className="workspace-dashboard-tabs research-side-view-tabs" role="tablist" aria-label="Workspace dashboard views">
         {dashboardViews.map((view) => {
           const selected = activeView === view;
@@ -1169,7 +1169,7 @@ function WorkspaceMemoryTypeSection({
   );
   return (
     <section className="workspace-memory-type-section" aria-label={`${group.nodes.length} ${typeLabel}`}>
-      <h3>{group.nodes.length.toLocaleString()} {typeLabel}</h3>
+      <h3 className="workspace-campaign-list-heading">{group.nodes.length.toLocaleString()} {typeLabel}</h3>
       <div className="workspace-memory-type-primary-items">
         {visibleNodes.map(renderNode)}
       </div>
@@ -1260,7 +1260,7 @@ function WorkspaceRunbookSection({
   );
   return (
     <section className="workspace-memory-type-section" aria-label={`${runbooks.length} ${label}`}>
-      <h3>{runbooks.length.toLocaleString()} {label}</h3>
+      <h3 className="workspace-campaign-list-heading">{runbooks.length.toLocaleString()} {label}</h3>
       <div className="workspace-memory-type-primary-items">
         {visibleRunbooks.map(renderRunbook)}
       </div>

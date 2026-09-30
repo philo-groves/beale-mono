@@ -12,6 +12,14 @@
 
 #### Changed
 
+- Campaign list headings in Highlights, Board, Memories, and Runbooks now share the Board's muted text and divider spacing.
+- Workspace and campaign view tabs now use larger pill-shaped active and hover states with transparent idle backgrounds.
+- Automations, Reporting, and Plugins catalogs now use the same centered wide container as workspace views.
+- Workspace Resources, Rules, Utilities, Settings, and Kit views now use the full width of the centered workspace container, including workspace creation steps.
+- Campaign Memories and Runbooks now use the full width of the centered workspace container.
+- Workspace views now use a reusable centered container with a 1300px maximum width, 24px side gutters, and matching top padding while the darker content surface remains full-width.
+- Active destinations in the left navigation rail now use filled icons.
+- Workspace Highlights priority claims now place the status close beneath the title, show only maturity and rating, and size cards to their content.
 - Replaced workspace collaboration channels with Topics: editable overviews and pages, typed links to canonical records, search, reversible merge aliases, and read-only imported channel activity. Agents inherit bounded topic orientation without replaying message transcripts. Desktop, iOS subagent labels, and the Codex bridge use topic names; app-server contract v28 replaces channel operations. File-authoritative workspaces store topic snapshots under `references/topics/`.
 - Workspace Highlights priority claims now sit flush vertically within the horizontal list.
 - Campaign Board columns now start flush beneath their headings and show top and bottom fades as their lists scroll.

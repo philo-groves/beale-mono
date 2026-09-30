@@ -45,9 +45,16 @@ describe('workspace dashboard', () => {
   });
   it('centers workspace forms, catalogs, and activity at the standard content width', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    const wideContentStyles = styles.match(/\.wide-content-container\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceWorkbenchStyles = styles.match(/\.workbench:has\(\.main-session-grid\.workspace-context\),\s*\.app-shell\[data-background\] \.workbench:has\(\.main-session-grid\.workspace-context\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceGridStyles = styles.match(/\.main-session-grid\.workspace-context\s*\{([^}]*)\}/)?.[1] ?? '';
     const dashboardStyles = styles.match(/\.workspace-dashboard\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignDashboardStyles = styles.match(/\.workspace-dashboard\.campaign-active\s*\{([^}]*)\}/)?.[1] ?? '';
     const tabsStyles = styles.match(/\.workspace-dashboard-tabs\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceViewTabStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const workspaceViewTabButtonStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\) \.research-side-view-tab-activate\s*\{([^}]*)\}/)?.[1] ?? '';
+    const idleWorkspaceViewTabStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\)\.provider-settings-tab:not\(\.active\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const hoveredWorkspaceViewTabStyles = styles.match(/\.workspace-dashboard :is\(\.workspace-dashboard-tab, \.workspace-campaign-subview-tab\)\.provider-settings-tab:not\(\.active\):is\(:hover, :focus-within\)\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceDashboardKitTabStyles = styles.match(/\.research-side-view-tab\.workspace-dashboard-kit-tab\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceDashboardKitDividerStyles = styles.match(/\.workspace-dashboard-kit-tab::before\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignSubviewTabsStyles = styles.match(/\.workspace-campaign-subview-tabs\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -55,7 +62,7 @@ describe('workspace dashboard', () => {
     const workspaceHeadingDescriptionStyles = styles.match(/\.workspace-dashboard \.settings-form-heading > p\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPanelStyles = styles.match(/\.campaign-panel\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignTrailLayoutStyles = styles.match(/\.campaign-trail-layout\s*\{([^}]*)\}/)?.[1] ?? '';
-    const campaignTrailHeadingStyles = styles.match(/\.campaign-trail-section-heading\s*\{([^}]*)\}/)?.[1] ?? '';
+    const campaignListHeadingStyles = styles.match(/\.workspace-campaign-list-heading\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityListStyles = styles.match(/\.campaign-priority-claim-list\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityEmptyStyles = styles.match(/\.campaign-priority-claim-list > \.campaign-trail-section-empty\s*\{([^}]*)\}/)?.[1] ?? '';
     const campaignPriorityScrollStyles = styles.match(/\.campaign-priority-claim-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -128,7 +135,6 @@ describe('workspace dashboard', () => {
     const runbookItemStyles = styles.match(/^\.runbook-catalog-item\s*\{([^}]*)\}/m)?.[1] ?? '';
     const runbookIconStyles = styles.match(/^\.runbook-catalog-icon\s*\{([^}]*)\}/m)?.[1] ?? '';
     const workspaceMemorySectionStyles = styles.match(/\.workspace-memory-type-section\s*\{([^}]*)\}/)?.[1] ?? '';
-    const workspaceMemoryHeadingStyles = styles.match(/\.workspace-memory-type-section\s*>\s*h3\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceMemoryToggleStyles = styles.match(/\.workspace-campaign-catalog-view\s+\.workspace-memory-type-toggle\s*\{([^}]*)\}/)?.[1] ?? '';
     const sideStackStyles = styles.match(/\.workspace-side-stack\s*\{([^}]*)\}/)?.[1] ?? '';
     const dreamAreaStyles = styles.match(/\.workspace-dream-area\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -140,9 +146,24 @@ describe('workspace dashboard', () => {
         /\.app-shell\.session-heat-medium,\s*\.workspace-dream-card\[data-dream-heat="medium"\],\s*\.workspace-dejunk-card\[data-dejunk-heat="medium"\]\s*\{([^}]*)\}/
       )?.[1] ?? '';
 
-    expect(dashboardStyles).toContain('grid-template-rows: 42px minmax(0, 1fr)');
-    expect(campaignDashboardStyles).toContain('grid-template-rows: 42px 50px minmax(0, 1fr)');
+    expect(wideContentStyles).toContain('max-width: 1300px');
+    expect(wideContentStyles).toContain('--session-content-max-width: 100%');
+    expect(wideContentStyles).toContain('width: calc(100% - 48px)');
+    expect(wideContentStyles).toContain('padding-top: 24px');
+    expect(wideContentStyles).toContain('margin-inline: auto');
+    expect(styles.indexOf('.wide-content-container {')).toBeGreaterThan(styles.indexOf('.workspace-dashboard {'));
+    expect(workspaceWorkbenchStyles).toContain('background: var(--panel)');
+    expect(workspaceGridStyles).toContain('background: var(--panel)');
+    expect(dashboardStyles).toContain('grid-template-rows: 50px minmax(0, 1fr)');
+    expect(dashboardStyles).not.toContain('background:');
+    expect(campaignDashboardStyles).toContain('grid-template-rows: 50px 58px minmax(0, 1fr)');
     expect(tabsStyles).toContain('margin: 10px 10px 0');
+    expect(workspaceViewTabStyles).toContain('height: 40px');
+    expect(workspaceViewTabStyles).toContain('border-radius: 999px');
+    expect(workspaceViewTabButtonStyles).toContain('height: 40px');
+    expect(workspaceViewTabButtonStyles).toContain('padding: 0 16px');
+    expect(idleWorkspaceViewTabStyles).toContain('background: transparent');
+    expect(hoveredWorkspaceViewTabStyles).toContain('background: var(--panel-raised)');
     expect(workspaceDashboardKitTabStyles).toContain('margin-left: 5px');
     expect(workspaceDashboardKitTabStyles).toContain('overflow: visible');
     expect(workspaceDashboardKitTabStyles).not.toContain('padding-left:');
@@ -156,9 +177,11 @@ describe('workspace dashboard', () => {
     expect(campaignPanelStyles).toContain('overflow: hidden');
     expect(campaignTrailLayoutStyles).toContain('grid-template-rows: minmax(0, 1fr)');
     expect(campaignTrailLayoutStyles).toContain('gap: 0');
-    expect(campaignTrailHeadingStyles).toContain('border-bottom: 1px solid var(--panel-border)');
+    expect(campaignListHeadingStyles).toContain('padding: 0 10px 7px');
+    expect(campaignListHeadingStyles).toContain('border-bottom: 1px solid var(--panel-border)');
+    expect(campaignListHeadingStyles).toContain('color: var(--muted)');
     expect(campaignPriorityListStyles).toContain('display: flex');
-    expect(campaignPriorityListStyles).toContain('align-items: stretch');
+    expect(campaignPriorityListStyles).toContain('align-items: flex-start');
     expect(campaignPriorityListStyles).toContain('gap: 0');
     expect(campaignPriorityListStyles).toContain('overflow-x: auto');
     expect(campaignPriorityListStyles).toContain('padding: 0 2px');
@@ -171,9 +194,10 @@ describe('workspace dashboard', () => {
     expect(campaignPriorityClaimStyles).toContain('border-radius: 0');
     expect(campaignPriorityClaimStyles).toContain('width: 375px');
     expect(campaignPriorityClaimStyles).toContain('flex: 0 0 375px');
-    expect(campaignPriorityClaimStyles).toContain('align-self: stretch');
-    expect(campaignPriorityClaimStyles).toContain('grid-template-rows: minmax(0, 1fr) auto');
-    expect(campaignPriorityClaimStyles).toContain('align-content: stretch');
+    expect(campaignPriorityClaimStyles).toContain('min-height: 0');
+    expect(campaignPriorityClaimStyles).toContain('align-self: flex-start');
+    expect(campaignPriorityClaimStyles).toContain('grid-template-rows: auto auto');
+    expect(campaignPriorityClaimStyles).toContain('align-content: start');
     expect(campaignBoardLaneStyles).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))');
     expect(campaignBoardHeaderStyles).toContain('grid-template-columns: minmax(0, 1fr) auto');
     expect(campaignBoardFilterStyles).toContain('justify-content: flex-end');
@@ -192,13 +216,13 @@ describe('workspace dashboard', () => {
     const campaignPriorityClaimFadeStyles = styles.match(/\.campaign-priority-claim-authors\.has-overflow::after\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(campaignPriorityClaimTitleStyles).toContain('display: block');
     expect(campaignPriorityClaimTitleStyles).toContain('align-self: start');
-    expect(campaignPriorityClaimTitleStyles).toContain('margin: 0 0 4px');
+    expect(campaignPriorityClaimTitleStyles).toContain('margin: 0');
     expect(campaignPriorityClaimTitleStyles).toContain('overflow-wrap: anywhere');
     expect(campaignPriorityClaimTitleStyles).toContain('white-space: normal');
     expect(campaignPriorityClaimTitleTextStyles).toContain('display: inline');
     expect(campaignPriorityClaimMetaStyles).toContain('white-space: nowrap');
     expect(campaignPriorityClaimIconStyles).toContain('margin: 0 7px 0 0');
-    expect(campaignPriorityClaimFooterStyles).toContain('align-self: end');
+    expect(campaignPriorityClaimFooterStyles).toContain('align-self: start');
     expect(campaignPriorityClaimAuthorListStyles).toContain('display: flex');
     expect(campaignPriorityClaimAuthorListStyles).toContain('width: max-content');
     expect(campaignPriorityClaimAuthorListStyles).toContain('gap: 8px');
@@ -306,7 +330,6 @@ describe('workspace dashboard', () => {
     expect(runbookListStyles).toContain('padding: 0 0 10px');
     expect(INSET_SCROLLBAR_SELECTOR).toContain('.memory-catalog-list');
     expect(workspaceMemoryItemStyles).toContain('padding-block: 7px');
-    expect(workspaceMemoryHeadingStyles).toContain('border-bottom: 1px solid var(--panel-border)');
     expect(workspaceMemoryDescriptionStyles).toContain('color: var(--muted)');
     expect(workspaceRunbookItemStyles).toContain('padding-block: 7px');
     expect(workspaceRunbookPurposeStyles).toContain('color: var(--muted)');
@@ -315,7 +338,6 @@ describe('workspace dashboard', () => {
     expect(runbookIconStyles).toContain('color: var(--runbook-status-color)');
     expect(workspaceMemorySectionStyles).not.toContain('border-top');
     expect(workspaceMemorySectionStyles).not.toContain('border-bottom');
-    expect(workspaceMemoryHeadingStyles).toContain('padding: 8px var(--settings-form-inline-padding) 12px');
     expect(workspaceMemoryToggleStyles).toContain('width: max-content');
     expect(workspaceMemoryToggleStyles).toContain('justify-content: flex-start');
     expect(workspaceMemoryToggleStyles).toContain('padding: 5px var(--settings-form-inline-padding) 7px 0');
@@ -466,7 +488,7 @@ describe('workspace dashboard', () => {
     }));
 
     expect(html).toContain('class="main-session-grid workspace-context workspace-main-only"');
-    expect(html).toContain('class="workspace-dashboard"');
+    expect(html).toContain('class="workspace-dashboard wide-content-container"');
     expect(html.match(/class="workspace-dashboard-panel/g)).toHaveLength(1);
     expect(html).toContain('aria-label="Workspace dashboard views"');
     expect(html).toContain('<span>Campaign</span>');
@@ -573,6 +595,7 @@ describe('workspace dashboard', () => {
     expect(html).toContain('aria-controls="workspace-dashboard-campaign-trail-panel" aria-selected="true"');
     expect(html).toContain('id="workspace-dashboard-campaign-trail-panel"');
     expect(html).toContain('<h2 class="campaign-view-title" id="workspace-campaign-heading">Parser Workspace Highlights</h2>');
+    expect(html).toContain('<h3 class="workspace-campaign-list-heading" id="campaign-priority-claims-heading">Priority Claims</h3>');
     expect(html).not.toContain('Research campaign');
     expect(html).not.toContain('The harness prioritizes uncovered or weakly supported territory');
     expect(html.indexOf('<span>Campaign</span>')).toBeLessThan(html.indexOf('<span>Resources</span>'));
@@ -916,10 +939,10 @@ describe('workspace dashboard', () => {
     expect(html).toContain('class="main-side-scroll workspace-catalog-list workspace-memory-scroll"');
     expect(html).toContain('class="memory-catalog-list workspace-memory-type-lists"');
     expect(html).toContain('<h2>Security Memories</h2>');
-    expect(html).toContain('<h3>1 Note</h3>');
-    expect(html).toContain('<h3>5 Findings</h3>');
-    expect(html).toContain('<h3>6 Neutrals</h3>');
-    expect(html.indexOf('<h3>1 Note</h3>')).toBeLessThan(html.indexOf('<h3>5 Findings</h3>'));
+    expect(html).toContain('<h3 class="workspace-campaign-list-heading">1 Note</h3>');
+    expect(html).toContain('<h3 class="workspace-campaign-list-heading">5 Findings</h3>');
+    expect(html).toContain('<h3 class="workspace-campaign-list-heading">6 Neutrals</h3>');
+    expect(html.indexOf('>1 Note</h3>')).toBeLessThan(html.indexOf('>5 Findings</h3>'));
     expect(html).toContain('aria-expanded="false" class="session-memory-type-toggle workspace-memory-type-toggle"');
     expect(html).toContain('>Show 1 more</button>');
     expect(html).toContain('>Show 2 more</button>');
@@ -942,7 +965,7 @@ describe('workspace dashboard', () => {
       runs: [],
       onRunMemoryDreaming: () => undefined
     }));
-    expect(runbooksHtml).toContain('<h3>6 Runbooks</h3>');
+    expect(runbooksHtml).toContain('<h3 class="workspace-campaign-list-heading">6 Runbooks</h3>');
     expect(runbooksHtml).toContain('class="workspace-memory-type-primary-items"');
     expect(runbooksHtml).toContain('class="workspace-memory-type-overflow" inert=""');
     expect(runbooksHtml).toContain('aria-expanded="false" class="session-memory-type-toggle workspace-memory-type-toggle"');

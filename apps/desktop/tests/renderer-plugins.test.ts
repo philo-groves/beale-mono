@@ -44,6 +44,7 @@ describe('plugin manager workspace', () => {
     }));
 
     expect(html).toContain('Add from Filesystem');
+    expect(html).toContain('class="plugin-manager-body wide-content-container"');
     expect(html).toContain('Add Repository');
     expect(html).toContain('<h1>Plugins</h1>');
     expect(html).toContain('Manage the plugins available to Beale agents.');
@@ -100,7 +101,8 @@ describe('plugin manager workspace', () => {
     expect(appSource).toContain('<PluginManagerWorkspace');
     expect(modalSource).not.toContain('PluginManager');
     expect(railSource).toContain("active === 'plugins' ? ' active' : ''");
-    expect(styles).toMatch(/\.plugin-manager-body\s*\{[^}]*max-width:\s*var\(--session-content-max-width\);[^}]*margin-inline:\s*auto;/s);
+    expect(styles).toMatch(/\.wide-content-container\s*\{[^}]*max-width:\s*1300px;[^}]*margin-inline:\s*auto;/s);
+    expect(styles).not.toMatch(/\.plugin-manager-body\s*\{[^}]*max-width:/s);
     expect(styles).toMatch(/\.plugin-manager-body > \.resource-workspace-heading\s*\{[^}]*padding-top:\s*4px;/s);
     expect(styles).toMatch(/\.plugin-manager-list\s*\{[^}]*border-radius:\s*26px;[^}]*background:\s*var\(--panel-raised\);[^}]*padding:\s*3px 14px;/s);
     expect(styles).toMatch(/\.plugin-manager-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*padding:\s*10px 0;/s);

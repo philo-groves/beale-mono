@@ -36,7 +36,7 @@ export function PluginManagerWorkspace({
 
   return (
     <section className="plugin-manager-workspace" aria-label="Plugins" aria-busy={loading}>
-      <div className="plugin-manager-body">
+      <div className="plugin-manager-body wide-content-container">
         <section className="plugin-manager-add">
           <button type="button" className="plugin-manager-file-button" disabled={busy || loading} onClick={onAddFilesystem}>
             <FolderPlus size={15} />

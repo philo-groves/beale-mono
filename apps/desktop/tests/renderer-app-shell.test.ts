@@ -147,7 +147,7 @@ describe('renderer app shell view model', () => {
     }
     expect(html.indexOf('aria-label="Home"')).toBeLessThan(html.indexOf('aria-label="Automations"'));
     expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
-    expect(html).toContain('lucide-settings');
+    expect(html).toContain('class="app-navigation-rail-filled-icon"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('width="18"');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
@@ -160,6 +160,19 @@ describe('renderer app shell view model', () => {
     expect(topStyles).toContain('gap: 6px');
     expect(styles).toContain('.app-navigation-rail-top {\n  margin-top: 8px;');
     expect(styles).toContain('.app-navigation-rail-sections {\n  margin-top: 0;');
+  });
+
+  it('fills only the active navigation icon', () => {
+    const onNavigate = () => undefined;
+    for (const active of ['home', 'automations', 'reporting', 'plugins', 'settings'] as const) {
+      const html = renderToStaticMarkup(createElement(AppNavigationRail, {
+        active, onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+        onOpenReporting: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      }));
+      expect(html.match(/class="app-navigation-rail-filled-icon"/gu)).toHaveLength(1);
+      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(4);
+      expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
+    }
   });
 
   it('keeps a navigation destination active as sessions and topics open', () => {

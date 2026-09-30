@@ -101,57 +101,59 @@ export function AutomationsWorkspace({
 
   return (
     <section className="automations-workspace" aria-label="Automations" aria-busy={loading}>
-      <div className="automations-workspace-tabs research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Automation workspace scope">
-        {scopeTabs.map((scope) => {
-          const selected = selectedWorkspaceId === scope.id;
-          return (
-            <div className={`research-side-view-tab provider-settings-tab automations-workspace-tab ${selected ? 'active' : ''}`.trim()} key={scope.key}>
-              <button
-                type="button"
-                className="research-side-view-tab-activate"
-                role="tab"
-                aria-selected={selected}
-                aria-controls="automations-workspace-panel"
-                onClick={() => onScopeChange(scope.id)}
-              >
-                <span>{scope.label}</span>
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <header className="resource-workspace-heading">
-        <h1>{currentScopeName} Automations</h1>
-        <p>Manage scheduled research sessions across your workspaces.</p>
-      </header>
-      <div className="automations-workspace-content" id="automations-workspace-panel" role="tabpanel">
-        <div className="automations-workspace-catalog">
-          {loading ? (
-            <CenteredLoadingState label="Loading automations…" />
-          ) : error ? (
-            <AutomationEmptyState label="Automations could not be loaded" detail={error} error />
-          ) : scoped.length === 0 ? (
-            <AutomationEmptyState label="No automations yet" detail="Repeat schedules added from New Research will appear here." />
-          ) : (
-            <div className="automations-workspace-list">
-              {scoped.map((automation) => (
-                <div className="automation-row" key={`${automation.workspaceId}:${automation.runId}`}>
-                  <span className="automation-row-copy">
-                    <strong>{automation.title}</strong>
-                    <small>{automation.enabled ? 'Active' : 'Inactive'}</small>
-                  </span>
-                  <button
-                    type="button"
-                    className="automation-edit-button"
-                    onClick={() => onSelectAutomation(automation)}
-                  >
-                    <Pencil size={14} aria-hidden="true" />
-                    <span>Edit</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+      <div className="wide-content-container">
+        <div className="automations-workspace-tabs research-side-view-tabs research-side-view-tabs-scrollable" role="tablist" aria-label="Automation workspace scope">
+          {scopeTabs.map((scope) => {
+            const selected = selectedWorkspaceId === scope.id;
+            return (
+              <div className={`research-side-view-tab provider-settings-tab automations-workspace-tab ${selected ? 'active' : ''}`.trim()} key={scope.key}>
+                <button
+                  type="button"
+                  className="research-side-view-tab-activate"
+                  role="tab"
+                  aria-selected={selected}
+                  aria-controls="automations-workspace-panel"
+                  onClick={() => onScopeChange(scope.id)}
+                >
+                  <span>{scope.label}</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <header className="resource-workspace-heading">
+          <h1>{currentScopeName} Automations</h1>
+          <p>Manage scheduled research sessions across your workspaces.</p>
+        </header>
+        <div className="automations-workspace-content" id="automations-workspace-panel" role="tabpanel">
+          <div className="automations-workspace-catalog">
+            {loading ? (
+              <CenteredLoadingState label="Loading automations…" />
+            ) : error ? (
+              <AutomationEmptyState label="Automations could not be loaded" detail={error} error />
+            ) : scoped.length === 0 ? (
+              <AutomationEmptyState label="No automations yet" detail="Repeat schedules added from New Research will appear here." />
+            ) : (
+              <div className="automations-workspace-list">
+                {scoped.map((automation) => (
+                  <div className="automation-row" key={`${automation.workspaceId}:${automation.runId}`}>
+                    <span className="automation-row-copy">
+                      <strong>{automation.title}</strong>
+                      <small>{automation.enabled ? 'Active' : 'Inactive'}</small>
+                    </span>
+                    <button
+                      type="button"
+                      className="automation-edit-button"
+                      onClick={() => onSelectAutomation(automation)}
+                    >
+                      <Pencil size={14} aria-hidden="true" />
+                      <span>Edit</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </section>

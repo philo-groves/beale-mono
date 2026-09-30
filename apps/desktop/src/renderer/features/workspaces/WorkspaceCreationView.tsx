@@ -138,7 +138,7 @@ export function WorkspaceCreationView({
   };
 
   return (
-    <main className="workspace-dashboard workspace-creation" aria-label="New Workspace">
+    <main className="workspace-dashboard workspace-creation wide-content-container" aria-label="New Workspace">
       <div className="workspace-dashboard-tabs research-side-view-tabs" role="tablist" aria-label="New Workspace views">
         {views.map((view, index) => {
           const selected = activeView === view;

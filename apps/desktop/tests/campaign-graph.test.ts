@@ -45,7 +45,7 @@ describe('campaign graph projection', () => {
     expect(environmentChanged.environmentFingerprint).not.toBe(original.environmentFingerprint);
   });
 
-  it('shows only the preferred rating on Board cards while retaining class metadata on Trail cards', () => {
+  it('shows the preferred rating on Board cards and state and rating on Highlights cards', () => {
     const claim = {
       projection: 'finding',
       maturity: 'reproduced',
@@ -63,7 +63,7 @@ describe('campaign graph projection', () => {
       classification: 'all',
       rating: 'high'
     })).toEqual([claim]);
-    expect(campaignPriorityClaimMetadata(claim)).toBe('Finding Reproduced, Low Primitive');
+    expect(campaignPriorityClaimMetadata(claim)).toBe('Reproduced Low');
   });
 
   it('falls back to the untrusted rating when a Board claim has no CVSS assessment', () => {
@@ -89,6 +89,7 @@ describe('campaign graph projection', () => {
     expect(html.indexOf('aria-label="Filter board findings"')).toBeLessThan(html.indexOf('aria-label="Finding class filter"'));
     expect(html.match(/class="main-side-scroll campaign-board-lane-scroll"/gu)).toHaveLength(4);
     expect(html.match(/class="campaign-board-lane-list"/gu)).toHaveLength(4);
+    expect(html.match(/class="workspace-campaign-list-heading campaign-board-lane-heading"/gu)).toHaveLength(4);
   });
 
   it('filters Board findings by text alongside class and rating', () => {
