@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { applyDatabaseMigrations } from "./database-migrations.js";
 import { openResearchDatabase } from "./database.js";
 import { getDefaultMemoryDatabasePath } from "./storage.js";
-import { assertWorkspaceChild, atomicWorkspaceWrite, isPublishedWorkspacePath, readWorkspaceProject, workspacePathProblem, workspaceResearchAuthority } from "./workspace-project.js";
+import { assertWorkspaceChild, atomicWorkspaceWrite, isPublishedWorkspacePath, readPublishedWorkspaceFile, readWorkspaceProject, workspaceContentHash, workspacePathProblem, workspaceResearchAuthority } from "./workspace-project.js";
 
 export type ResearchTopicMessageKind = "message" | "evidence" | "decision" | "system";
 export type ResearchTopicMemberStatus = "pending" | "running" | "completed" | "interrupted" | "errored" | "unknown";
@@ -102,6 +102,45 @@ export interface ResearchTopicDetail {
   pages: ResearchTopicPageRecord[];
   links: ResearchTopicLinkRecord[];
   mergedTopics: ResearchTopicRecord[];
+}
+
+function topicSnapshotContent(workspaceId: string, detail: ResearchTopicDetail): string {
+  return `${JSON.stringify({
+    schemaVersion: 1,
+    workspaceId,
+    topic: detail.topic,
+    pages: detail.pages,
+    links: detail.links,
+  }, null, 2)}\n`;
+}
+
+/** Return expected hashes only for topic files represented by typed canonical storage. */
+export function matchingStoredResearchTopicSnapshots(
+  options: { workspaceRoot: string; workspaceId: string; databasePath: string },
+  paths: readonly string[]
+): Map<string, string> {
+  const matching = new Map<string, string>();
+  const candidates = paths.filter((path) => /^references\/topics\/[a-zA-Z0-9][a-zA-Z0-9_.-]*\.json$/u.test(path));
+  if (candidates.length === 0) return matching;
+  const project = readWorkspaceProject(options.workspaceRoot);
+  if (project?.workspaceId !== options.workspaceId) return matching;
+  const store = new ResearchTopicStore({ databasePath: options.databasePath });
+  try {
+    for (const path of candidates) {
+      const topicId = path.slice('references/topics/'.length, -'.json'.length);
+      const detail = store.get(options.workspaceId, topicId);
+      if (!detail || detail.topic.id !== topicId) continue;
+      const absolute = join(options.workspaceRoot, path);
+      assertWorkspaceChild(options.workspaceRoot, absolute);
+      const expected = topicSnapshotContent(options.workspaceId, detail);
+      if (existsSync(absolute) && readFileSync(absolute, 'utf8') === expected) {
+        matching.set(path, workspaceContentHash(expected));
+      }
+    }
+  } finally {
+    store.close();
+  }
+  return matching;
 }
 
 export interface CreateResearchTopicInput {
@@ -710,14 +749,7 @@ export class ResearchTopicStore {
     if (!project) throw new Error("Research workspace is unavailable.");
     const detail = this.get(project.workspaceId, topicId);
     if (!detail) throw new Error("Topic snapshot source is unavailable.");
-    const document = {
-      schemaVersion: 1,
-      workspaceId: project.workspaceId,
-      topic: detail.topic,
-      pages: detail.pages,
-      links: detail.links,
-    };
-    atomicWorkspaceWrite(this.workspaceRoot, this.snapshotPath(topicId), `${JSON.stringify(document, null, 2)}\n`);
+    atomicWorkspaceWrite(this.workspaceRoot, this.snapshotPath(topicId), topicSnapshotContent(project.workspaceId, detail));
   }
 
   private hydrateWorkspaceFiles(): void {
@@ -733,7 +765,16 @@ export class ResearchTopicStore {
       const path = this.snapshotPath(topicId);
       const absolute = join(root, path);
       assertWorkspaceChild(root, absolute);
-      const parsed = JSON.parse(readFileSync(absolute, "utf8")) as Record<string, unknown>;
+      const content = readFileSync(absolute, "utf8");
+      const published = isPublishedWorkspacePath(root, path);
+      const stored = this.get(project.workspaceId, topicId);
+      if ((published && readPublishedWorkspaceFile(root, path) !== content)
+        || !published) {
+        if (!stored || stored.topic.id !== topicId || topicSnapshotContent(project.workspaceId, stored) !== content) {
+          throw new Error(`${path}: use typed research operations for topic snapshots.`);
+        }
+      }
+      const parsed = JSON.parse(content) as Record<string, unknown>;
       const topic = parsed.topic as Partial<ResearchTopicRecord> | undefined;
       if (parsed.schemaVersion !== 1 || parsed.workspaceId !== project.workspaceId
         || topic?.id !== topicId || topic.workspaceId !== project.workspaceId

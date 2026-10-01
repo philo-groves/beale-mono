@@ -827,7 +827,7 @@ export function preserveWorkspaceFile(root: string, path: string): void {
   writeFileSync(join(directory, `${Date.now()}-${randomUUID()}.json`), JSON.stringify({ path: child, hash }) + "\n");
 }
 
-export function publishWorkspaceFiles(root: string, files: Record<string, string>, pins: Record<string, string> = {}, rawFiles: Record<string, string> = {}): void {
+export function publishWorkspaceFiles(root: string, files: Record<string, string>, pins: Record<string, string> = {}, rawFiles: Record<string, string> = {}, trustedEditedHashes: ReadonlyMap<string, string> = new Map()): void {
   const project = readWorkspaceProject(root);
   if (!project) return;
   const state = join(root, ".git", "beale", "publication.json");
@@ -852,17 +852,25 @@ export function publishWorkspaceFiles(root: string, files: Record<string, string
     }
   }
   if (previous && (!existsSync(join(root, INDEX_PATH)) || readFileSync(join(root, INDEX_PATH), 'utf8') !== JSON.stringify(previous, null, 2) + '\n')) throw new Error('The published research index was edited or removed; preserve the edit before republishing.');
-  // Verify the entire previous publication before changing any file. Never overwrite manual edits.
+  // Verify the entire previous publication before changing any file. Typed snapshots
+  // may differ from the last publication only while their verified bytes are intact.
   for (const [path, hash] of Object.entries(previous?.files ?? {})) {
     const absolute = join(root, path);
     assertWorkspaceChild(root, absolute);
-    if (!existsSync(absolute) || workspaceContentHash(readFileSync(absolute)) !== hash) throw new Error(`${path}: canonical export was edited or removed; preserve/import the edit before republishing.`);
+    if (!existsSync(absolute)) throw new Error(`${path}: canonical export was edited or removed; preserve/import the edit before republishing.`);
+    const currentHash = workspaceContentHash(readFileSync(absolute));
+    if (currentHash !== hash && (!(path in publishedFiles) || trustedEditedHashes.get(path) !== currentHash)) {
+      throw new Error(`${path}: canonical export was edited or removed; preserve/import the edit before republishing.`);
+    }
   }
   const hashes: Record<string, string> = {};
   for (const [path, content] of Object.entries(publishedFiles).sort(([a], [b]) => a.localeCompare(b))) {
     if (workspacePathProblem(path)) throw new Error(`Invalid canonical export path: ${path}`);
     const destination = join(root, path);
-    if (existsSync(destination) && !previous?.files[path] && readFileSync(destination, "utf8") !== content) throw new Error(`${path}: an existing file conflicts with canonical publication.`);
+    if (existsSync(destination) && !previous?.files[path] && readFileSync(destination, "utf8") !== content
+      && trustedEditedHashes.get(path) !== workspaceContentHash(readFileSync(destination))) {
+      throw new Error(`${path}: an existing file conflicts with canonical publication.`);
+    }
     hashes[path] = workspaceContentHash(content);
   }
   const index: WorkspaceResearchIndex = { schemaVersion: 1, workspaceId: project.workspaceId, files: hashes, pins: { ...previous?.pins, ...pins, ...committed?.pins }, rawFiles: { ...previous?.rawFiles, ...rawFiles } };

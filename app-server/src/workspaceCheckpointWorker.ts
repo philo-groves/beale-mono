@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import { checkpointWorkspace, checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, installResearchDatabaseFactory, isImportableWorkspaceResearchPath, listWorkspaceResearchEdits, quarantineWorkspaceDisposable, rebuildWorkspaceResearchIndex, recoverWorkspacePublication, releaseWorkspaceResearchIndex, resolveStoredResearchProfile, workspaceCheckpointRepairPlan, workspaceResearchAuthority, workspaceResearchFileExpectedRevision, workspaceResearchIndexNeedsRebuild, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
+import { checkpointWorkspace, checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, installResearchDatabaseFactory, isImportableWorkspaceResearchPath, listWorkspaceResearchEdits, matchingStoredResearchTopicSnapshots, quarantineWorkspaceDisposable, rebuildWorkspaceResearchIndex, recoverWorkspacePublication, releaseWorkspaceResearchIndex, resolveStoredResearchProfile, workspaceCheckpointRepairPlan, workspaceResearchAuthority, workspaceResearchFileExpectedRevision, workspaceResearchIndexNeedsRebuild, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
 import { createWorkerResearchDatabaseFactory } from './workerDatabaseClient.js';
 
 if ('initializeInput' in workerData) {
@@ -32,13 +32,16 @@ try {
     // an explicit cache rebuild cannot rewrite or commit workspace files.
   } else {
   const edits = fileAuthority && !input.edit ? listWorkspaceResearchEdits(input.options.workspaceRoot) : [];
-  if (edits.some((edit) => edit.state === 'created')) {
-    throw new Error(`Use typed research creation for new file-authority records: ${edits.filter((edit) => edit.state === 'created').map((edit) => edit.path).join(', ')}`);
+  const matchingTopicSnapshots = matchingStoredResearchTopicSnapshots(input.options,
+    edits.filter((edit) => edit.state === 'created' || edit.state === 'modified').map((edit) => edit.path));
+  const created = edits.filter((edit) => edit.state === 'created' && !matchingTopicSnapshots.has(edit.path));
+  if (created.length > 0) {
+    throw new Error(`Use typed research creation for new file-authority records: ${created.slice(0, 3).map((edit) => edit.path).join(', ')}${created.length > 3 ? `, and ${created.length - 3} more` : ''}`);
   }
   if (edits.some((edit) => edit.state === 'deleted')) {
     throw new Error(`Canonical file-authority records cannot be deleted directly: ${edits.filter((edit) => edit.state === 'deleted').map((edit) => edit.path).join(', ')}`);
   }
-  const modified = edits.filter((edit) => edit.state === 'modified');
+  const modified = edits.filter((edit) => edit.state === 'modified' && !matchingTopicSnapshots.has(edit.path));
   if (!input.edit && modified.length > 1) {
     throw new Error(`Import one direct file-authority edit at a time so revisioned updates remain atomic: ${modified.map((edit) => edit.path).join(', ')}`);
   }

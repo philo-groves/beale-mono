@@ -29,6 +29,16 @@ import type { TraceDisplayEvent } from '../src/renderer/view-models/traceDisplay
 import { buildTraceDisplayEventsForAgentPath } from '../src/renderer/view-models/traceDisplay';
 
 describe('renderer commentary projection', () => {
+  it('shows the stored failure reason when a session ends before producing transcript events', () => {
+    const detail = runDetail('Inspect the example parser.');
+    detail.run.status = 'failed';
+    detail.run.summary = 'The workspace checkpoint rejected an unvalidated topic snapshot.';
+    detail.run.endedAt = '2026-08-03T10:00:00.000Z';
+    const messages = commentaryMessagesForSession(detail, []);
+    expect(messages.map((message) => message.kind)).toEqual(['user', 'error']);
+    expect(messages[1]?.contentMarkdown).toBe(detail.run.summary);
+  });
+
   it('renders the commentary session loading state with a spinner and no composer', () => {
     const html = renderToStaticMarkup(
       createElement(CommentaryView, {

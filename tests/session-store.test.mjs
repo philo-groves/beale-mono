@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -12,10 +12,21 @@ import {
   AppServerSessionStore,
   ResearchTopicStore,
   initializeWorkspaceProject,
+  publishWorkspaceFiles,
   normalizeResearchProfile,
   researchProfileHash,
 } from "../packages/research-agent/dist/index.js";
 import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolClient.js";
+
+async function publishTopicSnapshots(workspaceRoot) {
+  const directory = join(workspaceRoot, 'references', 'topics');
+  const index = JSON.parse(await readFile(join(workspaceRoot, '.git', 'beale', 'publication.json'), 'utf8'));
+  const files = Object.fromEntries(await Promise.all([
+    ...Object.keys(index.files),
+    ...(await readdir(directory)).map((name) => `references/topics/${name}`),
+  ].map(async (path) => [path, await readFile(join(workspaceRoot, path), 'utf8')])));
+  publishWorkspaceFiles(workspaceRoot, files);
+}
 
 test("topics retain canonical pages and links in workspace files", async () => {
   const directory = await mkdtemp(join(tmpdir(), "beale-topics-"));
@@ -41,6 +52,7 @@ test("topics retain canonical pages and links in workspace files", async () => {
   assert.throws(() => first.link("workspace_example", topic.id, { kind: "claim", resourceId: "claim_other_workspace", title: "Foreign claim" }), /must belong to this workspace/);
   assert.throws(() => first.updateOverview("workspace_example", topic.id, "Stale edit", topic.updatedAt), /changed since it was opened/);
   first.close();
+  await publishTopicSnapshots(workspaceRoot);
 
   const later = new ResearchTopicStore({ databasePath: join(directory, "rebuilt-memory.sqlite"), workspaceRoot });
   try {
@@ -80,6 +92,7 @@ test("topic merges retain source content, resolve aliases, and can be undone aft
   assert.throws(() => first.archive("workspace_example", target.id), /Undo dependent topic merges/);
   assert.throws(() => first.restore("workspace_example", source.id), /Undo the merge/);
   first.close();
+  await publishTopicSnapshots(workspaceRoot);
 
   const rebuilt = new ResearchTopicStore({ databasePath: join(directory, "rebuilt.sqlite"), workspaceRoot });
   try {

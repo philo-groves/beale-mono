@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import type { JSX } from 'react';
-import { Archive, CalendarClock, FileText, Folder, Palette, Plug, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi } from 'lucide-react';
+import { Archive, BookOpen, CalendarClock, FileText, Folder, Palette, Plug, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi } from 'lucide-react';
 import type { RunRecord } from '@shared/types';
 import { displaySessionTitle } from '../../shared/sessionTitle';
 import { useDevRenderProbe } from '../devInstrumentation';
@@ -8,6 +8,7 @@ import { displayTopicTitle, displayWorkspaceHeaderName } from '../view-models/ap
 
 export type AppHeaderViewIcon =
   | 'automations'
+  | 'topics'
   | 'plugins'
   | 'reporting'
   | 'settings'
@@ -109,6 +110,7 @@ export const StaticAppHeaderTitle = memo(function StaticAppHeaderTitle({
 }): JSX.Element {
   const HeaderIcon = {
     automations: CalendarClock,
+    topics: BookOpen,
     plugins: Plug,
     reporting: FileText,
     settings: Settings,

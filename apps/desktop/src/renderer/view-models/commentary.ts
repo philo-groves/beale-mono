@@ -103,6 +103,7 @@ export function commentaryMessagesForSession(
   }
   messages = coalesceConsecutiveToolMessages(messages, useActiveToolTense);
   messages = appendRecoveryErrorFallback(messages, detail, projectedEvents);
+  messages = appendFailedRunErrorFallback(messages, detail);
   messages = promoteCheckpointAfterAbort(messages, detail, projectedEvents);
 
   if (!includeInitialPrompt || !detail.run.promptMarkdown.trim() || hasRecordedInitialPrompt(events)) {
@@ -223,6 +224,18 @@ function appendRecoveryErrorFallback(
     kind: 'error',
     contentMarkdown: APP_SERVER_UNEXPECTED_ERROR_TEXT,
     createdAt: recoveryEvent.createdAt
+  }];
+}
+
+function appendFailedRunErrorFallback(messages: readonly CommentaryMessage[], detail: RunDetail): CommentaryMessage[] {
+  if (detail.run.status !== 'failed') return [...messages];
+  if (messages.some((message) => message.kind === 'error' || message.kind === 'final_answer')) return [...messages];
+  return [...messages, {
+    id: `run-failure:${detail.run.id}`,
+    traceEventId: null,
+    kind: 'error',
+    contentMarkdown: detail.run.summary?.trim() || APP_SERVER_UNEXPECTED_ERROR_TEXT,
+    createdAt: detail.run.endedAt ?? detail.run.createdAt
   }];
 }
 

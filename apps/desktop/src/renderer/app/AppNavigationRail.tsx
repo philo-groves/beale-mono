@@ -1,12 +1,13 @@
 import { memo } from 'react';
 import type { JSX } from 'react';
-import { CalendarClock, House, Plug, Settings } from 'lucide-react';
+import { BookOpen, CalendarClock, House, Plug, Settings } from 'lucide-react';
 
-export type AppNavigationDestination = 'home' | 'automations' | 'plugins' | 'settings';
+export type AppNavigationDestination = 'home' | 'automations' | 'topics' | 'plugins' | 'settings';
 
 const outlineIcons = {
   home: House,
   automations: CalendarClock,
+  topics: BookOpen,
   plugins: Plug,
   settings: Settings
 };
@@ -30,6 +31,12 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
           <path d="M16 13v3l2 1.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
         </>
       )}
+      {destination === 'topics' && (
+        <>
+          <path d="M3 4.5c3.2-1.2 6.2-.8 9 1.2v15c-2.8-2-5.8-2.4-9-1.2z" />
+          <path d="M21 4.5c-3.2-1.2-6.2-.8-9 1.2v15c2.8-2 5.8-2.4 9-1.2z" />
+        </>
+      )}
       {destination === 'plugins' && (
         <>
           <path d="M6 8h12v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4z" />
@@ -46,14 +53,17 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
 export function resolveAppNavigationDestination({
   settingsOpen,
   automationsOpen,
+  topicsOpen,
   pluginsOpen
 }: {
   settingsOpen: boolean;
   automationsOpen: boolean;
+  topicsOpen: boolean;
   pluginsOpen: boolean;
 }): AppNavigationDestination {
   if (settingsOpen) return 'settings';
   if (automationsOpen) return 'automations';
+  if (topicsOpen) return 'topics';
   if (pluginsOpen) return 'plugins';
   return 'home';
 }
@@ -62,12 +72,14 @@ export const AppNavigationRail = memo(function AppNavigationRail({
   active,
   onOpenHome,
   onOpenAutomations,
+  onOpenTopics,
   onOpenPlugins,
   onOpenSettings
 }: {
   active: AppNavigationDestination;
   onOpenHome: () => void;
   onOpenAutomations: () => void;
+  onOpenTopics: () => void;
   onOpenPlugins: () => void;
   onOpenSettings: () => void;
 }): JSX.Element {
@@ -80,6 +92,9 @@ export const AppNavigationRail = memo(function AppNavigationRail({
         <div className="app-navigation-rail-sections">
           <button type="button" className={`app-navigation-rail-button${active === 'automations' ? ' active' : ''}`} data-tooltip="Automations" aria-label="Automations" aria-current={active === 'automations' ? 'page' : undefined} onClick={onOpenAutomations}>
             <NavigationIcon destination="automations" active={active === 'automations'} />
+          </button>
+          <button type="button" className={`app-navigation-rail-button${active === 'topics' ? ' active' : ''}`} data-tooltip="Topics" aria-label="Topics" aria-current={active === 'topics' ? 'page' : undefined} onClick={onOpenTopics}>
+            <NavigationIcon destination="topics" active={active === 'topics'} />
           </button>
           <button type="button" className={`app-navigation-rail-button${active === 'plugins' ? ' active' : ''}`} data-tooltip="Plugins" aria-label="Plugins" aria-current={active === 'plugins' ? 'page' : undefined} onClick={onOpenPlugins}>
             <NavigationIcon destination="plugins" active={active === 'plugins'} />

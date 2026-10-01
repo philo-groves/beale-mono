@@ -72,6 +72,7 @@ describe('renderer app shell view model', () => {
       ['settings-remote', 'lucide-wifi'],
       ['settings-ticketing', 'lucide-ticket'],
       ['automations', 'lucide-calendar-clock'],
+      ['topics', 'lucide-book-open'],
       ['reporting', 'lucide-file-text'],
       ['plugins', 'lucide-plug']
     ];
@@ -136,16 +137,18 @@ describe('renderer app shell view model', () => {
   it('renders the compact navigation rail with Settings after the top destinations', () => {
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
-      active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+      active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
       onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
 
     expect(html).toContain('aria-label="Main navigation"');
-    for (const label of ['Home', 'Automations', 'Plugins', 'Agent Settings']) {
+    for (const label of ['Home', 'Automations', 'Topics', 'Plugins', 'Agent Settings']) {
       expect(html).toContain(`aria-label="${label}"`);
       expect(html).toContain(`data-tooltip="${label}"`);
     }
     expect(html.indexOf('aria-label="Home"')).toBeLessThan(html.indexOf('aria-label="Automations"'));
+    expect(html.indexOf('aria-label="Automations"')).toBeLessThan(html.indexOf('aria-label="Topics"'));
+    expect(html.indexOf('aria-label="Topics"')).toBeLessThan(html.indexOf('aria-label="Plugins"'));
     expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
     expect(html).toContain('class="app-navigation-rail-filled-icon"');
     expect(html).toContain('aria-current="page"');
@@ -166,30 +169,31 @@ describe('renderer app shell view model', () => {
 
   it('fills only the active navigation icon', () => {
     const onNavigate = () => undefined;
-    for (const active of ['home', 'automations', 'plugins', 'settings'] as const) {
+    for (const active of ['home', 'automations', 'topics', 'plugins', 'settings'] as const) {
       const html = renderToStaticMarkup(createElement(AppNavigationRail, {
-        active, onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+        active, onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
         onOpenPlugins: onNavigate, onOpenSettings: onNavigate
       }));
       expect(html.match(/class="app-navigation-rail-filled-icon"/gu)).toHaveLength(1);
-      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(3);
+      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(4);
       expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
     }
   });
 
   it('keeps a navigation destination active as sessions and topics open', () => {
-    const base = { settingsOpen: false, automationsOpen: false, pluginsOpen: false };
+    const base = { settingsOpen: false, automationsOpen: false, topicsOpen: false, pluginsOpen: false };
     expect(resolveAppNavigationDestination(base)).toBe('home');
     expect(resolveAppNavigationDestination({ ...base, automationsOpen: true })).toBe('automations');
+    expect(resolveAppNavigationDestination({ ...base, topicsOpen: true })).toBe('topics');
     expect(resolveAppNavigationDestination({ ...base, pluginsOpen: true })).toBe('plugins');
     expect(resolveAppNavigationDestination({ ...base, settingsOpen: true })).toBe('settings');
 
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, pluginsOpen })');
+    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, topicsOpen, pluginsOpen })');
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: resolveAppNavigationDestination(base),
-      onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+      onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
       onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
     expect(html).toContain('class="app-navigation-rail-button active" data-tooltip="Home"');
@@ -446,7 +450,7 @@ describe('renderer app shell view model', () => {
     expect(header).not.toContain('right-sidenav-toggle-button');
   });
 
-  it('keeps the topic summary toggle without exposing the session bottom panel', () => {
+  it('hides panel toggles when a topic is open', () => {
     const header = renderToStaticMarkup(createElement(TopBar, {
       sidebarCollapsed: false,
       workspaceOpen: true,
@@ -454,7 +458,7 @@ describe('renderer app shell view model', () => {
       newResearchDisabled: false,
       workspaces: [],
       workspaceRegistryLoading: false,
-      rightSidenavAvailable: true,
+      rightSidenavAvailable: false,
       rightSidenavExpanded: false,
       contextualTitleVisible: true,
       staticContextTitle: null,
@@ -478,7 +482,7 @@ describe('renderer app shell view model', () => {
       onOpenQuickChat: () => undefined
     }));
     expect(header).not.toContain('bottom-panel-toggle-button');
-    expect(header).toContain('right-sidenav-toggle-button');
+    expect(header).not.toContain('right-sidenav-toggle-button');
   });
 
   it('selects active run state and detail only when ids match', () => {

@@ -34,7 +34,7 @@ export function PluginsSidebar({
       onResizePointerDown={onResizePointerDown}
     >
       <nav className="collection-sidebar-list sidebar-list-scroll-content" aria-label="Installed plugins">
-        <div className="collection-sidebar-list-heading">Installed plugins</div>
+        <div className="collection-sidebar-list-heading">Installed</div>
         {loading ? <p className="collection-sidebar-empty">Loading plugins…</p> : plugins.length === 0 ? (
           <p className="collection-sidebar-empty">No plugins installed</p>
         ) : plugins.map((plugin) => {

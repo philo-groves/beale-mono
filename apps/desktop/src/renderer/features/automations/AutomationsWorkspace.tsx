@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
-import { CalendarClock, CircleAlert, Pencil, Repeat2 } from 'lucide-react';
+import { CalendarPlus, CircleAlert, Pencil, Repeat2 } from 'lucide-react';
 import type {
   ApprovalRecord,
   AttemptRecord,
@@ -25,23 +25,65 @@ import { repeatScheduleLabel } from '../../../shared/repeatSchedule';
 
 export function AutomationsSidebar({
   automations,
+  workspaces,
+  workspaceOpen,
+  workspaceRegistryLoading,
   selectedWorkspaceId,
   selectedAutomation,
   collapsed,
+  busy,
   loading,
   error,
   onSelectAutomation,
+  onStartNewResearch,
+  onStartNewResearchForWorkspace,
+  onAddWorkspace,
   onResizePointerDown
 }: {
   automations: readonly AutomationSummary[];
+  workspaces: readonly WorkspaceRegistryEntry[];
+  workspaceOpen: boolean;
+  workspaceRegistryLoading: boolean;
   selectedWorkspaceId: string | null;
   selectedAutomation: AutomationSummary | null;
   collapsed: boolean;
+  busy: boolean;
   loading: boolean;
   error: string | null;
   onSelectAutomation: (automation: AutomationSummary | null) => void;
+  onStartNewResearch: () => void;
+  onStartNewResearchForWorkspace: (workspace: WorkspaceRegistryEntry) => void;
+  onAddWorkspace: () => void;
   onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }): JSX.Element {
+  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
+  const workspacePickerRef = useRef<HTMLDivElement | null>(null);
+  const scheduleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const firstWorkspaceOptionRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (workspaceOpen || collapsed) setWorkspacePickerOpen(false);
+  }, [workspaceOpen, collapsed]);
+  useEffect(() => {
+    if (workspacePickerOpen) firstWorkspaceOptionRef.current?.focus();
+  }, [workspacePickerOpen, workspaceRegistryLoading, workspaces.length]);
+  useEffect(() => {
+    if (!workspacePickerOpen) return undefined;
+    const dismissOnOutsidePointer = (event: PointerEvent): void => {
+      if (!workspacePickerRef.current?.contains(event.target as Node)) setWorkspacePickerOpen(false);
+    };
+    const dismissOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setWorkspacePickerOpen(false);
+      scheduleButtonRef.current?.focus();
+    };
+    document.addEventListener('pointerdown', dismissOnOutsidePointer);
+    document.addEventListener('keydown', dismissOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', dismissOnOutsidePointer);
+      document.removeEventListener('keydown', dismissOnEscape);
+    };
+  }, [workspacePickerOpen]);
   const upcoming = automations
     .filter((automation) => automation.enabled && (!selectedWorkspaceId || automation.workspaceId === selectedWorkspaceId))
     .sort((left, right) => left.title.localeCompare(right.title));
@@ -53,15 +95,53 @@ export function AutomationsSidebar({
       error={error}
       updateKey={`${selectedWorkspaceId ?? 'all'}:${upcoming.map((automation) => `${automation.workspaceId}:${automation.runId}`).join(',')}`}
       onResizePointerDown={onResizePointerDown}
+      primaryAction={
+        <div className="sidebar-new-research-anchor" ref={workspacePickerRef}>
+          <button
+            ref={scheduleButtonRef}
+            type="button"
+            className="sidebar-utility-button"
+            aria-haspopup={!workspaceOpen ? 'menu' : undefined}
+            aria-expanded={!workspaceOpen ? workspacePickerOpen : undefined}
+            disabled={busy}
+            onClick={() => workspaceOpen ? onStartNewResearch() : setWorkspacePickerOpen((open) => !open)}
+          >
+            <CalendarPlus size={15} aria-hidden="true" />
+            <span>Schedule a Job</span>
+          </button>
+          {workspacePickerOpen && !workspaceOpen ? (
+            <div className="sidebar-new-research-menu" role="menu" aria-label="Choose workspace for scheduled research">
+              {workspaceRegistryLoading ? (
+                <div className="sidebar-new-research-menu-empty" role="status">Loading workspaces…</div>
+              ) : workspaces.length === 0 ? (
+                <>
+                  <div className="sidebar-new-research-menu-empty">No workspaces yet.</div>
+                  <button ref={firstWorkspaceOptionRef} type="button" role="menuitem" onClick={() => {
+                    setWorkspacePickerOpen(false);
+                    onAddWorkspace();
+                  }}>Create Workspace</button>
+                </>
+              ) : workspaces.map((workspace, index) => (
+                <button
+                  key={workspace.id}
+                  ref={index === 0 ? firstWorkspaceOptionRef : undefined}
+                  type="button"
+                  role="menuitem"
+                  title={workspace.workspacePath}
+                  aria-label={`Schedule research in ${workspace.workspaceName}`}
+                  onClick={() => {
+                    setWorkspacePickerOpen(false);
+                    onStartNewResearchForWorkspace(workspace);
+                  }}
+                >{workspace.workspaceName}</button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      }
     >
       <nav className="collection-sidebar-list sidebar-list-scroll-content" aria-label="Automation jobs">
-        <div className={`workspace-item-row no-menu ${selectedAutomation ? '' : 'active'}`.trim()}>
-          <button type="button" className="workspace-item" aria-current={selectedAutomation ? undefined : 'page'} onClick={() => onSelectAutomation(null)}>
-            <CalendarClock size={15} aria-hidden="true" />
-            <span>All Automations</span>
-          </button>
-        </div>
-        <div className="collection-sidebar-list-heading">Upcoming jobs</div>
+        <div className="collection-sidebar-list-heading">Upcoming</div>
         {loading ? <p className="collection-sidebar-empty">Loading jobs…</p> : upcoming.length === 0 ? (
           <p className="collection-sidebar-empty">No upcoming jobs</p>
         ) : upcoming.map((automation) => {

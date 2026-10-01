@@ -683,14 +683,14 @@ async function describeResponse(response: Response): Promise<string> {
   if (!text.trim()) return response.statusText || 'no detail';
   try {
     const parsed = JSON.parse(text) as { error?: unknown };
-    if (typeof parsed.error === 'string') return parsed.error.slice(-500);
+    if (typeof parsed.error === 'string') return parsed.error.slice(0, 500);
     if (isRecord(parsed.error) && typeof parsed.error.message === 'string') {
-      return parsed.error.message.slice(-500);
+      return parsed.error.message.slice(0, 500);
     }
   } catch {
     // Fall through to the raw text.
   }
-  return text.slice(-500);
+  return text.slice(0, 500);
 }
 
 function appServerWebSocketUrl(baseUrl: string, path: string): string {

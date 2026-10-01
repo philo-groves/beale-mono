@@ -16,6 +16,10 @@
 
 #### Changed
 
+- New Topic offers a workspace picker when no workspace is active, then opens the topic form for the chosen workspace.
+- Topics now has its own icon rail destination, a recent-topics sidebar, and an explorer with all-workspace and per-workspace filters; the session sidebar shows only Workspaces.
+- The Automations sidebar replaces its redundant All Automations row with Schedule a Job, opening New Research with the repeat schedule menu focused or a workspace picker when no workspace is active.
+- Sidebar session and topic rows no longer show relative ages; long names fade at the right edge instead of ending with ellipses.
 - Automations and Plugins now have dedicated left sidebars. Automations lists active scheduled jobs; Plugins lists installed packages and selects their catalog rows.
 - Managed plugin packages in `managed-plugins` now appear in Plugins automatically. Meta Skills retains its existing default; other packages, including Microsoft Security Devices, start disabled.
 - Source, Provenance, Knowledge, Claims, Runbooks, Reporting, and Introspection now appear as Optional Features in Agent Settings instead of Plugins. Agents see them under "Internal features" in `{{features}}` with `features.preview` and `features.load`; traditional plugins appear under "External Plugins" in `{{plugins}}` and use `plugins.preview`/`plugins.load`. Saved enabled states and registry IDs remain compatible. Quick Chat requires Introspection to be enabled.
@@ -93,6 +97,7 @@
 
 #### Fixed
 
+- Sessions that fail before producing transcript events now show their stored failure reason in the commentary, and app-server response errors retain their leading diagnostic text.
 - Prompt settings always shows the current token estimate, including for the default template and unsaved edits.
 - The left icon rail keeps its 50px width and centered icons when the adjacent sidebar is collapsed.
 - Removed the 1px window-edge glow while preserving the selected background and session heat gradient.
@@ -1224,6 +1229,7 @@
 
 #### Fixed
 
+- File-authority checkpoints now publish topic snapshots produced by typed topic operations and legacy topic migration after verifying them against canonical storage; direct topic file creation and edits remain blocked.
 - Runbook executions now attempt remaining selected cleanup cells after a proof cell fails, record their results, and preserve the failed run outcome.
 - Workspace checkpoints now detect oversized files before Git staging and retain a repair preview in the persisted failure status. The new `workspace.checkpoint-repair.v1` capability adds previewed relocation and retry for eligible untracked investigation files.
 - Startup recovery now records pending shell and computer-use approvals as denied before continuing the session, so clients do not mistake an approval waiter lost with the prior process for a live request.

@@ -4,9 +4,52 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdi
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
-import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, checkpointWorkspace, listWorkspaceResearchEdits, publishWorkspaceFiles, publishWorkspaceResearch, readWorkspaceResearchCacheState, workspaceContentHash } from '@beale/research-agent';
+import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, ResearchTopicStore, checkpointWorkspace, listWorkspaceResearchEdits, publishWorkspaceFiles, publishWorkspaceResearch, readWorkspaceResearchCacheState, workspaceContentHash } from '@beale/research-agent';
 import { initializeWorkspaceProjectAsync, previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
 import { AppServerWorkerDatabaseCoordinator } from '../dist/workerDatabaseBroker.js';
+
+test('session checkpoint publishes canonical topic snapshots materialized from stored topics', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-topic-checkpoint-example-'));
+  const workspaceRoot = join(directory, 'workspace');
+  const databasePath = join(directory, 'runtime', 'memory.sqlite');
+  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath, artifactDirectoryPath: join(directory, 'runtime', 'artifacts') };
+  try {
+    await initializeWorkspaceProjectAsync(workspaceRoot, options.workspaceId);
+    mkdirSync(options.artifactDirectoryPath, { recursive: true });
+    const databaseOnly = new ResearchTopicStore({ databasePath });
+    const topic = databaseOnly.create({ workspaceId: options.workspaceId, name: 'example-topic', topic: `Synthetic path ${workspaceRoot}/example.` });
+    databaseOnly.close();
+    const hydrated = new ResearchTopicStore({ databasePath, workspaceRoot });
+    hydrated.close();
+    const path = `references/topics/${topic.id}.json`;
+    assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), [{ path, state: 'created' }]);
+    const published = await runWorkspaceCheckpoint(options, 'Before research session');
+    assert.equal(published.status, 'committed', published.error);
+    assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
+    assert.match(readFileSync(join(workspaceRoot, path), 'utf8'), /workspace:\/example/);
+
+    const updated = new ResearchTopicStore({ databasePath, workspaceRoot });
+    updated.updateOverview(options.workspaceId, topic.id, 'Revised synthetic notes.');
+    updated.close();
+    const revised = await runWorkspaceCheckpoint(options, 'After typed topic update');
+    assert.equal(revised.status, 'committed', revised.error);
+    assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
+
+    const publishedContent = readFileSync(join(workspaceRoot, path), 'utf8');
+    writeFileSync(join(workspaceRoot, path), publishedContent.replace('Revised synthetic notes.', 'Unvalidated direct edit.'));
+    assert.throws(() => new ResearchTopicStore({ databasePath, workspaceRoot }), /typed research operations/);
+    const rejected = await runWorkspaceCheckpoint(options, 'Reject direct topic edit');
+    assert.equal(rejected.status, 'failed');
+    assert.match(rejected.error, /typed research operations/);
+    writeFileSync(join(workspaceRoot, path), publishedContent);
+    writeFileSync(join(workspaceRoot, 'references', 'topics', 'topic_untyped_example.json'), '{"schemaVersion":1}');
+    const untyped = await runWorkspaceCheckpoint(options, 'Reject untyped topic creation');
+    assert.equal(untyped.status, 'failed');
+    assert.match(untyped.error, /typed research creation/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('checkpoint worker previews and repairs oversized untracked investigation files', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-repair-example-'));

@@ -129,6 +129,7 @@ const LEGACY_RESEARCH_GOAL_WORKFLOWS: readonly ResearchProfileWorkflow[] = [
 
 interface StartRunFormProps {
   snapshot: WorkspaceSnapshot;
+  autoOpenSchedule?: boolean;
   openAiStatus: OpenAiAccountStatus | null;
   defaultProviderId: ResearchModelProviderId | null | undefined;
   defaultShellSafetyMode?: ShellSafetyMode;
@@ -154,6 +155,7 @@ interface StartRunFormProps {
 export interface ResearchSettingsFormProps {
   researchProfile: ResearchProfileSnapshot | null;
   formIdentity: string;
+  autoOpenSchedule?: boolean;
   workspaceName?: string;
   openAiStatus: OpenAiAccountStatus | null;
   defaultProviderId: ResearchModelProviderId | null | undefined;
@@ -316,6 +318,7 @@ export function ProviderKeychainAccessDialog({
 export function ResearchSettingsForm({
   researchProfile,
   formIdentity,
+  autoOpenSchedule = false,
   workspaceName = 'Workspace',
   openAiStatus,
   defaultProviderId,
@@ -966,6 +969,7 @@ export function ResearchSettingsForm({
                   value={repeatSchedule}
                   disabled={generatingPrompt}
                   disableNoRepeat={disableNoRepeat}
+                  autoOpen={autoOpenSchedule}
                   onChange={selectRepeatSchedule}
                 />
               </div>
@@ -1059,6 +1063,7 @@ export function ResearchSettingsForm({
                 value={repeatSchedule}
                 disabled={generatingPrompt}
                 disableNoRepeat={disableNoRepeat}
+                autoOpen={autoOpenSchedule}
                 onChange={selectRepeatSchedule}
               />
               <label
@@ -1261,15 +1266,18 @@ function RepeatSchedulePicker({
   value,
   disabled,
   disableNoRepeat,
+  autoOpen,
   onChange
 }: {
   value: RepeatSchedule;
   disabled: boolean;
   disableNoRepeat: boolean;
+  autoOpen: boolean;
   onChange: (value: RepeatSchedule) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(autoOpen);
   const pickerRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const schedule = normalizeRepeatSchedule(value);
   const interval = schedule.type === 'none' ? 1 : schedule.interval;
   const unit = repeatScheduleUnit(schedule.type);
@@ -1294,6 +1302,10 @@ function RepeatSchedulePicker({
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
+
+  useLayoutEffect(() => {
+    if (open && autoOpen) menuRef.current?.focus();
+  }, [open, autoOpen]);
 
   const selectType = (type: RepeatSchedule['type']): void => {
     if (disableNoRepeat && type === 'none') return;
@@ -1338,7 +1350,7 @@ function RepeatSchedulePicker({
         <ChevronDown size={13} aria-hidden="true" />
       </button>
       {open ? (
-        <div className="new-research-repeat-menu" role="dialog" aria-label="Repeat schedule">
+        <div className="new-research-repeat-menu" role="dialog" aria-label="Repeat schedule" tabIndex={-1} ref={menuRef}>
           <div className="new-research-repeat-presets" role="listbox" aria-label="Repeat preset">
             {REPEAT_SCHEDULE_TYPES.map((type) => (
               <button

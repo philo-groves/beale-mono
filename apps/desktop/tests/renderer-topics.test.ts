@@ -2,9 +2,9 @@ import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { ResearchTopicDetail, ResearchTopicSummary } from '@shared/types';
+import type { ResearchTopicDetail, ResearchTopicSummary, WorkspaceRegistryEntry } from '@shared/types';
 import { TopicWorkspace } from '../src/renderer/features/topics/TopicWorkspace';
-import { WorkspaceSidebar } from '../src/renderer/features/workspaces/WorkspaceSidebar';
+import { TopicsExplorer, TopicsSidebar, topicsForScope } from '../src/renderer/features/topics/TopicsExplorer';
 import { canonicalResearchTopicName } from '../src/renderer/view-models/researchTopics';
 
 const topic: ResearchTopicSummary = {
@@ -53,20 +53,41 @@ describe('research topics', () => {
     expect(html).not.toContain('Post to topic');
   });
 
-  it('keeps the selected topic visible in workspace navigation', () => {
-    const html = renderToStaticMarkup(createElement(WorkspaceSidebar, {
-      busy: false, collapsed: false, error: null,
-      workspaceRegistry: { registryPath: '/tmp/example-workspaces.json', workspaces: [], researchSessions: [] },
-      selectedRunId: null, snapshot: null, topics: [topic], selectedTopicId: topic.id,
-      onAddWorkspace: () => undefined, onImportWorkspace: () => undefined,
-      onOpenWorkspace: () => undefined, onOpenResearchSession: () => undefined,
-      onOpenTopic: () => undefined, onResizePointerDown: () => undefined,
-      onStartNewResearch: () => undefined, onStartNewResearchForWorkspace: () => undefined
+  it('shows recent topics in their dedicated sidebar and filters the explorer by workspace', () => {
+    const workspaces = [
+      { id: 'registry_example', workspaceId: 'workspace_example', workspaceName: 'Example Workspace' },
+      { id: 'registry_other', workspaceId: 'workspace_other', workspaceName: 'Other Workspace' }
+    ] as WorkspaceRegistryEntry[];
+    const otherTopic = { ...topic, id: 'topic_other', workspaceId: 'workspace_other', title: 'Other review', updatedAt: '2026-08-25T12:00:00.000Z' };
+    const onNavigate = () => undefined;
+    const sidebar = renderToStaticMarkup(createElement(TopicsSidebar, {
+      topics: [topic, otherTopic], workspaces, workspaceRegistryLoading: false, selectedWorkspaceId: null, activeWorkspaceId: topic.workspaceId,
+      selectedTopicId: topic.id, collapsed: false, loading: false, error: null,
+      onOpenExplorer: onNavigate, onOpenTopic: onNavigate, onCreateTopic: async () => undefined, onAddWorkspace: onNavigate,
+      onResizePointerDown: onNavigate
     }));
-    expect(html).toContain('>Topics</button>');
-    expect(html).toContain('Parser review');
-    expect(html).not.toContain('Historical observation.');
-    expect(html).toContain('aria-current="page"');
+    expect(sidebar).toContain('class="collection-sidebar-list-heading">Recent</div>');
+    expect(sidebar).toContain('Parser review');
+    expect(sidebar).toContain('Other review');
+    expect(sidebar).toContain('aria-current="page"');
+    const noWorkspaceSidebar = renderToStaticMarkup(createElement(TopicsSidebar, {
+      topics: [], workspaces, workspaceRegistryLoading: false, selectedWorkspaceId: null, activeWorkspaceId: null,
+      selectedTopicId: null, collapsed: false, loading: false, error: null,
+      onOpenExplorer: onNavigate, onOpenTopic: onNavigate, onCreateTopic: async () => undefined, onAddWorkspace: onNavigate,
+      onResizePointerDown: onNavigate
+    }));
+    expect(noWorkspaceSidebar).toContain('aria-haspopup="menu" aria-expanded="false"');
+    expect(noWorkspaceSidebar).not.toContain('disabled=""');
+    const explorer = renderToStaticMarkup(createElement(TopicsExplorer, {
+      topics: [topic, otherTopic], workspaces, selectedWorkspaceId: topic.workspaceId,
+      loading: false, error: null, onScopeChange: onNavigate, onOpenTopic: onNavigate
+    }));
+    expect(explorer).toContain('All Topics');
+    expect(explorer).toContain('Example Workspace');
+    expect(explorer).toContain('Other Workspace');
+    expect(explorer).toContain('Parser review');
+    expect(explorer).not.toContain('Other review');
+    expect(topicsForScope([topic, otherTopic], null)[0]?.id).toBe('topic_other');
   });
 
   it('shows reversible merged topics without adding their old activity to the overview', () => {
@@ -82,7 +103,7 @@ describe('research topics', () => {
 
   it('creates a stable slug while retaining a fluent title', () => {
     expect(canonicalResearchTopicName('Parser / Review / Open Questions')).toBe('parser-review-open-questions');
-    const source = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSidebar.tsx', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../src/renderer/features/topics/TopicsExplorer.tsx', import.meta.url), 'utf8');
     expect(source).toContain('title: topicName.trim()');
   });
 });

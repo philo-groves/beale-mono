@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { WorkspaceRegistryEntry, WorkspaceRegistryState, ResearchSessionSummary, WorkspaceSnapshot } from '@shared/types';
 import { sessionMatchesSidebarSearch, WorkspaceSidebar } from '../src/renderer/features/workspaces/WorkspaceSidebar';
 import { mainSideScrollHasOverflow, mainSideScrollTargetTop } from '../src/renderer/app/MainSideScrollRegion';
@@ -10,16 +10,11 @@ import {
   workspaceById,
   workspaceExists,
   promptSessionTitle,
-  researchSessionsForWorkspace,
-  shortRelativeAge
+  researchSessionsForWorkspace
 } from '../src/renderer/view-models/workspaceDisplay';
 import { testResearchProfile } from './researchProfileFixture';
 
 describe('renderer workspace display view models', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it('uses the summary sidenav transition for session-list overflow', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const overflowStyles = styles.match(/\.workspace-session-overflow\s*\{([^}]*)\}/u)?.[1] ?? '';
@@ -69,13 +64,8 @@ describe('renderer workspace display view models', () => {
     ]);
   });
 
-  it('formats session titles and compact relative ages for sidebar rows', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-04-30T12:00:00.000Z'));
-
+  it('formats session titles for sidebar rows', () => {
     expect(promptSessionTitle(session({ title: 'Android Deep Link Auth Bypass', promptMarkdown: 'Audit Android links.' }))).toBe('Android Deep Link Auth Bypass');
-    expect(shortRelativeAge('2026-04-30T10:00:00.000Z')).toBe('2H');
-    expect(shortRelativeAge('2026-04-22T12:00:00.000Z')).toBe('1W');
   });
 
   it('filters sidebar sessions immediately across their searchable metadata', () => {
@@ -119,15 +109,13 @@ describe('renderer workspace display view models', () => {
       onStartNewResearchForWorkspace: () => undefined
     }));
 
-    expect(html).toContain('<div class="workspace-list-title sidebar-list-tabs" role="tablist" aria-label="Sidebar list">');
+    expect(html).toContain('<div class="workspace-list-title"><span>Workspaces</span></div>');
     expect(html).toContain('<div class="sidebar-wordmark">Beale</div>');
     expect(html.indexOf('class="sidebar-wordmark"')).toBeLessThan(html.indexOf('class="sidebar-utility-button sidebar-new-research"'));
-    expect(html).toContain('role="tab" aria-selected="true" class="active">Workspaces</button>');
-    expect(html).toContain('<span class="sidebar-list-tab-divider" aria-hidden="true"></span>');
-    expect(html).toContain('role="tab" aria-selected="false" class="">Topics</button>');
+    expect(html).not.toContain('aria-label="Sidebar list"');
+    expect(html).not.toContain('>Topics</button>');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     expect(styles).toMatch(/\.sidebar-wordmark\s*\{[^}]*color:\s*var\(--muted\);[^}]*font-size:\s*1\.5rem;[^}]*font-weight:\s*500;/s);
-    expect(styles).toMatch(/\.sidebar-list-tab-divider\s*\{[^}]*width:\s*1px;[^}]*height:\s*16px;[^}]*background:\s*color-mix\(in srgb, var\(--text\) 34%, var\(--panel\)\);/s);
     expect(html).toContain('<div class="main-side-scroll sidebar-list-scroll-region">');
     expect(html).toContain('<div class="sidebar-list-scroll workspace-list-items">');
     expect(html).toContain('<div class="sidebar-list-scroll-content">');
@@ -198,7 +186,7 @@ describe('renderer workspace display view models', () => {
   it('limits sidebar scrolling to the workspace items viewport', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const sidebarStyles = styles.match(/\.sidebar\s*\{([^}]*)\}/u)?.[1] ?? '';
-    const workspaceListStyles = styles.match(/\.workspace-list,\s*\.settings-sidebar-section\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const workspaceListStyles = styles.match(/\.workspace-list,\s*\.settings-sidebar-section,\s*\.collection-sidebar-section\s*\{([^}]*)\}/u)?.[1] ?? '';
     const listScrollRegionStyles = styles.match(/\.main-side-scroll\.sidebar-list-scroll-region\s*\{([^}]*)\}/u)?.[1] ?? '';
     const listScrollStyles = styles.match(/\.sidebar-list-scroll\s*\{([^}]*)\}/u)?.[1] ?? '';
 
@@ -218,7 +206,7 @@ describe('renderer workspace display view models', () => {
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-bottom-fade \.sidebar-list-scroll\s*\{[^}]*mask-image: linear-gradient/u);
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-top-fade\.has-bottom-fade \.sidebar-list-scroll\s*\{[^}]*mask-image: linear-gradient/u);
     expect(styles).not.toMatch(/\.sidebar-list-scroll-region::(?:before|after)\s*\{[^}]*background:/u);
-    expect(styles).toMatch(/\.sidebar-list-scroll \.workspace-item-row,\s*\.sidebar-list-scroll \.sidebar-topic-item,\s*\.sidebar-list-scroll \.workspace-session-item\s*\{[^}]*width: 100%;[^}]*margin-inline: 0;/u);
+    expect(styles).toMatch(/\.sidebar-list-scroll \.workspace-item-row,\s*\.sidebar-list-scroll \.workspace-session-item\s*\{[^}]*width: 100%;[^}]*margin-inline: 0;/u);
     expect(styles).toMatch(/\.sidebar-list-scroll-region\.has-overflow \.sidebar-list-scroll:where\(:hover, :focus, :focus-within, \.scrollbar-active\)/u);
     expect(INSET_SCROLLBAR_SELECTOR).toContain('.sidebar-list-scroll');
     expect(INSET_SCROLLBAR_SELECTOR).not.toContain('.sidebar,');
@@ -282,7 +270,7 @@ describe('renderer workspace display view models', () => {
       onStartNewResearchForWorkspace: () => undefined
     }));
 
-    expect(html).toContain('role="tab" aria-selected="true" class="active">Workspaces</button>');
+    expect(html).toContain('<div class="workspace-list-title"><span>Workspaces</span>');
     expect(html).toContain('<span class="workspace-list-title-loading" role="status" aria-label="Loading workspaces">');
     expect(html).toContain('lucide-loader-circle');
     expect(html).not.toContain('workspace-list-loading');
@@ -374,7 +362,7 @@ describe('renderer workspace display view models', () => {
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 
-    expect(activeClasses).toEqual(['class="active"', 'class="workspace-list-add-button active"']);
+    expect(activeClasses).toEqual(['class="workspace-list-add-button active"']);
     expect(html).toContain('aria-current="page"');
     expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
     expect(appSource).toContain('workspaceCreationActive={workspaceDraft !== null}');
@@ -432,18 +420,15 @@ describe('renderer workspace display view models', () => {
 
   it('switches workspaces before opening New Research from a workspace row', () => {
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    const startActionSource = appSource.match(
-      /const startNewResearch = useCallback[\s\S]*?const startNewResearchForWorkspace/u
-    )?.[0] ?? '';
     const actionSource = appSource.match(
-      /const startNewResearchForWorkspace = useCallback[\s\S]*?const handleResearchStarted/u
+      /const openNewResearchForWorkspace = useCallback[\s\S]*?const startNewResearchForWorkspace/u
     )?.[0] ?? '';
 
-    expect(startActionSource).toContain('closeWorkspaceOnboarding();');
+    expect(appSource).toContain('const openNewResearch = useCallback((openSchedule: boolean) => {\n    setTopicsOpen(false);\n    closeWorkspaceOnboarding();');
     expect(actionSource).toContain('snapshot?.workspace.workspacePath === workspace.workspacePath');
     expect(actionSource).toContain('applySnapshot(await window.beale.openRegisteredWorkspace(workspace.id));');
     expect(actionSource.indexOf('applySnapshot(await window.beale.openRegisteredWorkspace(workspace.id));'))
-      .toBeLessThan(actionSource.lastIndexOf('startNewResearch();'));
+      .toBeLessThan(actionSource.lastIndexOf('openNewResearch(openSchedule);'));
   });
 
   it('closes New Workspace before navigating from the left sidenav', () => {
@@ -479,7 +464,8 @@ describe('renderer workspace display view models', () => {
       .toBeLessThan(sessionAction.indexOf('if (!researchSessionNeedsLoading'));
   });
 
-  it('moves an active session spinner to the leading slot and keeps its timestamp on the right', () => {
+  it('keeps an active session spinner in the leading slot and fades long titles', () => {
+    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const profile = testResearchProfile();
     const registeredWorkspace = workspace('workspace_test', '/workspace/test');
     const activeSession = session({ status: 'active', registryWorkspaceId: registeredWorkspace.id });
@@ -510,10 +496,12 @@ describe('renderer workspace display view models', () => {
     }));
 
     expect(html).toContain('class="workspace-session-leading-status" title="Active"');
+    expect(html).toContain('class="workspace-session-row has-progress-spinner"');
     expect(html).toContain('class="lucide lucide-refresh-cw"');
-    expect(html).toContain('class="workspace-session-age"');
+    expect(html).not.toContain('class="workspace-session-age"');
     expect(html.indexOf('workspace-session-leading-status')).toBeLessThan(html.indexOf('workspace-session-title'));
-    expect(html.indexOf('workspace-session-age')).toBeGreaterThan(html.indexOf('workspace-session-title'));
+    expect(styles).toMatch(/\.workspace-session-title\s*\{[^}]*mask-image: linear-gradient\(to right,/u);
+    expect(styles).toMatch(/\.workspace-session-row:not\(\.workspace-new-research-session-row\):is\(:hover, :focus-within, \.has-progress-spinner\) \.workspace-session-item\s*\{[^}]*padding-right: 32px;/u);
   });
 
   it('uses the leading slot for an unviewed result dot and leaves viewed results blank', () => {

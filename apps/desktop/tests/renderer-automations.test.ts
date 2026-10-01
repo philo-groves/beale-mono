@@ -9,7 +9,7 @@ import {
   AutomationsWorkspace,
   orderedAutomationAttempts
 } from '../src/renderer/features/automations/AutomationsWorkspace';
-import { researchSettingsInput } from '../src/renderer/features/sessions/StartRunForm';
+import { ResearchSettingsForm, researchSettingsInput } from '../src/renderer/features/sessions/StartRunForm';
 import { defaultRunInput } from '../src/renderer/view-models/runSettings';
 
 const workspace: WorkspaceRegistryEntry = {
@@ -231,21 +231,72 @@ describe('automation workspace', () => {
   it('lists enabled upcoming jobs in the automation sidebar', () => {
     const html = renderToStaticMarkup(createElement(AutomationsSidebar, {
       automations: [activeAutomation, inactiveAutomation],
+      workspaces: [workspace],
+      workspaceOpen: true,
+      workspaceRegistryLoading: false,
       selectedWorkspaceId: null,
       selectedAutomation: activeAutomation,
       collapsed: false,
+      busy: false,
       loading: false,
       error: null,
       onSelectAutomation: () => undefined,
+      onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined,
+      onAddWorkspace: () => undefined,
       onResizePointerDown: () => undefined
     }));
 
     expect(html).toContain('aria-label="Automations sidebar"');
-    expect(html).toContain('Upcoming jobs');
+    expect(html).toContain('>Schedule a Job</span>');
+    expect(html).not.toContain('>All Automations</span>');
+    expect(html).toContain('class="collection-sidebar-list-heading">Upcoming</div>');
     expect(html).toContain('Daily parser review');
     expect(html).not.toContain('Weekly regression review');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('aria-label="Resize sidebar"');
+
+    const noWorkspaceHtml = renderToStaticMarkup(createElement(AutomationsSidebar, {
+      automations: [],
+      workspaces: [workspace],
+      workspaceOpen: false,
+      workspaceRegistryLoading: false,
+      selectedWorkspaceId: null,
+      selectedAutomation: null,
+      collapsed: false,
+      busy: false,
+      loading: false,
+      error: null,
+      onSelectAutomation: () => undefined,
+      onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined,
+      onAddWorkspace: () => undefined,
+      onResizePointerDown: () => undefined
+    }));
+    expect(noWorkspaceHtml).toContain('aria-haspopup="menu" aria-expanded="false"');
+  });
+
+  it('opens the repeat menu in New Research for the scheduling entry point', () => {
+    const html = renderToStaticMarkup(createElement(ResearchSettingsForm, {
+      researchProfile: null,
+      formIdentity: 'schedule-example',
+      autoOpenSchedule: true,
+      presentation: 'session',
+      openAiStatus: null,
+      defaultProviderId: null,
+      providerModelDefaults: undefined,
+      researchProviderStatuses: [],
+      providerModelCatalog: [],
+      busy: false,
+      onSubmit: () => undefined
+    }));
+
+    expect(html).toContain('aria-label="Repeat schedule" aria-haspopup="dialog" aria-expanded="true"');
+    expect(html).toContain('role="dialog" aria-label="Repeat schedule" tabindex="-1"');
+    const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
+    expect(appSource).toContain('autoOpenSchedule={openScheduleOnNewResearch}');
+    expect(appSource).toContain('onStartNewResearch={() => openNewResearch(true)}');
+    expect(appSource).toContain('onStartNewResearchForWorkspace={(workspace) => openNewResearchForWorkspace(workspace, true)}');
   });
   it('uses the shared centered regular-weight loading state', () => {
     const html = render(null, true);

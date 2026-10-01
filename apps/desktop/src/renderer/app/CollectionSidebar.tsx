@@ -8,6 +8,7 @@ export function CollectionSidebar({
   error,
   updateKey,
   onResizePointerDown,
+  primaryAction,
   children
 }: {
   title: string;
@@ -16,12 +17,14 @@ export function CollectionSidebar({
   error: string | null;
   updateKey: string;
   onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  primaryAction?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
   return (
     <aside className="sidebar collection-sidebar" aria-label={label} aria-hidden={collapsed} inert={collapsed}>
-      <div className="sidebar-section collection-sidebar-section">
+      <div className={`sidebar-section collection-sidebar-section${primaryAction ? ' has-primary-action' : ''}`}>
         <div className="sidebar-wordmark">{title}</div>
+        {primaryAction}
         <MainSideScrollRegion
           className="sidebar-list-scroll-region"
           listClassName="sidebar-list-scroll"

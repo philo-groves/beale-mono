@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import { createResearchStorageLayout, loadResearchStorageManifest } from "./storage.js";
-import { assertWorkspaceChild, atomicWorkspaceWrite, checkpointWorkspace, publishWorkspaceFiles, readWorkspaceProject, recoverWorkspacePublication, retainWorkspaceArtifact, workspaceFileHash, workspaceContentHash, type WorkspaceCheckpointResult, type WorkspaceCommitContext } from "./workspace-project.js";
+import { assertWorkspaceChild, atomicWorkspaceWrite, checkpointWorkspace, listWorkspaceResearchEdits, publishWorkspaceFiles, readWorkspaceProject, recoverWorkspacePublication, retainWorkspaceArtifact, workspaceFileHash, workspaceContentHash, type WorkspaceCheckpointResult, type WorkspaceCommitContext } from "./workspace-project.js";
+import { matchingStoredResearchTopicSnapshots } from "./topics.js";
 import { markWorkspaceResearchIndexReady } from "./workspace-research-index.js";
 
 type Row = Record<string, unknown>;
@@ -69,6 +70,8 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
   if (!project) return;
   if (project.workspaceId !== options.workspaceId) throw new Error("Canonical publication workspace identity mismatch.");
   recoverWorkspacePublication(root);
+  const trustedTopicEdits = matchingStoredResearchTopicSnapshots(options,
+    listWorkspaceResearchEdits(root).filter((edit) => edit.state === 'created' || edit.state === 'modified').map((edit) => edit.path));
   const database = openResearchDatabase(options.databasePath, { readOnly: true });
   const files: Record<string, string> = {};
   const pins: Record<string, string> = {};
@@ -258,7 +261,7 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       files[path] = portable;
       if (path in pins) pins[path] = workspaceContentHash(portable);
     }
-    publishWorkspaceFiles(root, files, pins, rawFiles);
+    publishWorkspaceFiles(root, files, pins, rawFiles, trustedTopicEdits);
     if (project.schemaVersion === 2 && project.researchAuthority === "files") markWorkspaceResearchIndexReady(options);
     return attribution;
   } catch (error) {
