@@ -78,6 +78,8 @@
 - Session permissions are selected in General settings; steering and New Research inputs no longer show a permission picker.
 #### Added
 
+- Added default-on Browser control as an Optional Feature. Run-local CDP connections support target discovery, arbitrary commands, flattened sessions, and buffered events; the browser must be launched with remote debugging enabled.
+
 - A Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
 
 #### Changed
@@ -1214,6 +1216,7 @@
 
 #### Documentation
 
+- Noted the Meta Research Kit workaround for an unavailable Whitehat Test Accounts tool: designated researcher-controlled live accounts without real user data for manual testing, subject to current program terms.
 - Expanded the root README for human readers with current status, setup, safety boundaries, and known incomplete surfaces.
 - Added MIT licensing metadata and a root `LICENSE`.
 

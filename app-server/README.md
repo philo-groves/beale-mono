@@ -30,7 +30,7 @@ Workspace creation installs a local pre-commit hook using the host's Node/Electr
 
 ## Optional research features
 
-Seven harness features are enabled by default and appear under Optional Features in Agent Settings. Enabled features appear in the agent's `{{features}}` catalog under "Internal features" with short usage descriptions. Traditional plugins appear under "External Plugins" in `{{plugins}}`. Existing registry IDs and the six native tool groups' launch field retain saved toggle compatibility.
+Eight harness features are enabled by default and appear under Optional Features in Agent Settings. Enabled features appear in the agent's `{{features}}` catalog under "Internal features" with short usage descriptions. Traditional plugins appear under "External Plugins" in `{{plugins}}`. Existing registry IDs and the native tool groups' launch field retain saved toggle compatibility.
 
 | Feature | When to use |
 | --- | --- |
@@ -40,13 +40,16 @@ Seven harness features are enabled by default and appear under Optional Features
 | Claims (`beale-claims`) | Leads, findings, their evidence, and canonical claim revisions. |
 | Runbooks (`beale-runbooks`) | Reusable procedure documents, feature-selected host or Tart VM cells, per-cell timeouts, explicit guest/root Tart execution, revisions, and recorded executions. |
 | Reporting (`beale-reporting`) | Report documents, revisions, and structured summaries of supported results. |
+| Browser (`beale-browser`) | Connect to compatible CDP browsers, list targets, send arbitrary protocol commands, and read events. |
 | Introspection (`beale-introspection`) | Workspace and session inspection and control tools, including Quick Chat. |
 
 `file.read`, `file.write`, `file.edit`, and `shell.run` remain core tools, alongside session and collaboration controls. Existing profile, configuration, and governance limits still apply. File writes create candidate files; replacing an existing file requires the SHA-256 `contentHash` returned by `file.read` as `expectedHash`. File edits require one exact literal match, preserve UTF-8 bytes outside that match, and accept an optional hash check. Both mutations have a 1 MiB ceiling and honor lower host byte budgets.
 
 Pi, Claude, and ZCode agents initially receive core tools and discovery controls for available resources. `features.preview` and `features.load` expose enabled internal tool groups on demand; `plugins.preview` and `plugins.load` do the same for traditional Agent Plugins, including bounded skill use cases and full instructions. Loaded IDs are isolated per agent and retained in compatible continuation captures. The host still discovers configured MCP capabilities for policy and execution, while model-visible schemas remain deferred until load.
 
-Optional Feature and Plugin toggles take effect on subsequent session launches and continuations, including Quick Chat. Quick Chat requires Introspection to be enabled. The app-server retains the existing `--managed-plugins <comma-separated IDs>` launch field for the six native tool groups so saved selections and captured sessions remain compatible; `none` disables all six. A settings-read failure stops the launch instead of silently restoring defaults. Loading a schema does not enable a disabled feature or plugin or change host policy, canonical storage, or execution privileges.
+Optional Feature and Plugin toggles take effect on subsequent session launches and continuations, including Quick Chat. Quick Chat requires Introspection to be enabled. The app-server retains the existing `--managed-plugins <comma-separated IDs>` launch field for the native tool groups so saved selections and captured sessions remain compatible; `none` disables all of them. A settings-read failure stops the launch instead of silently restoring defaults. Loading a schema does not enable a disabled feature or plugin or change host policy, canonical storage, or execution privileges.
+
+Browser control connects to an already running browser with CDP remote debugging enabled. The default discovery endpoint is `http://127.0.0.1:9222`; `browser.connect` also accepts a direct `ws` or `wss` debugger URL. Use `browser.targets` to inspect targets, `browser.connect` to open a run-local connection, `browser.command` for any CDP method and optional flattened `sessionId`, `browser.events` to read buffered events, and `browser.disconnect` to close it. Connections close when the run ends. Beale does not launch or isolate the browser; use an operator-managed VM or container when browser activity needs OS isolation.
 
 New native tools must be assigned in `packages/research-agent/src/managed-tool-plugins.ts` to a harness feature or the explicit core list. Runtime assembly rejects unassigned host tools. Compatibility manifests and the compact discovery catalog are checked together by boundary tests.
 

@@ -7,6 +7,7 @@ export const META_BUG_BOUNTY_PAYOUT_GUIDELINES_URL = 'https://bugbounty.meta.com
 export const META_BUG_BOUNTY_RULES = [
   'Check the current Meta Bug Bounty terms, program scope, and payout guidelines before testing or reporting. The bundled scope resources are examples, not a complete authorization list.',
   'Test only your own account, a test account, or another account whose owner gave explicit written consent. Do not interact with another person\'s account or data without that consent.',
+  'If Meta\'s Whitehat Test Accounts tool is disabled or unavailable, use designated live accounts that you own or control for manual research and keep them free of real user data. Do not use live accounts for automated testing or treat tool unavailability as permission to interact with other users.',
   'Make a good-faith effort to avoid privacy violations, unauthorized access or destruction of data, and disruption or degradation of Meta services. Do not perform denial-of-service testing.',
   'If you inadvertently access another person\'s or Meta company data, stop further access, promptly notify Meta with a description, delete the data from your system, do not share it, and acknowledge the access in any related report.',
   'Use a discovered issue only for testing. Do not expand testing beyond authorized accounts or use the issue to demonstrate access to other users\' accounts or sensitive company data.',

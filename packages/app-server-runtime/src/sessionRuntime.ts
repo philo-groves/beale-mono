@@ -19,6 +19,8 @@ import {
   assertManagedToolOwnership,
   parseManagedToolPluginIds,
   createAnalysisTool,
+  BrowserCdpSession,
+  createBrowserTools,
   createCodeIntelligenceTools,
   createConfiguredResearchMcpClient,
   createConfiguredExperimentTool,
@@ -4159,6 +4161,14 @@ async function createRuntimeConfig(args: {
     const tool = createRunbookExecutionTool(executeRunbook);
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
+  }
+
+  if (runtimeTools.managedPluginIds === undefined || runtimeTools.managedPluginIds.includes("beale-browser")) {
+    const browserSession = new BrowserCdpSession();
+    const browserTools = createBrowserTools(browserSession);
+    executableTools.push(...browserTools);
+    toolDescriptors.push(...browserTools.map((tool) => tool.descriptor));
+    cleanupCallbacks.push(() => browserSession.cleanup());
   }
 
   assertManagedToolOwnership(executableTools);

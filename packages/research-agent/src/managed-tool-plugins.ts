@@ -34,6 +34,11 @@ export const MANAGED_TOOL_PLUGINS = [
     description: "Use for report documents, revisions, and structured summaries of supported results.",
     tools: ["report.list", "report.get", "report.create", "report.revise", "synthesis.compose"],
   },
+  {
+    id: "beale-browser", name: "Browser",
+    description: "Use for controlling compatible browsers through the full Chrome DevTools Protocol, including targets, commands, and events.",
+    tools: ["browser.targets", "browser.connect", "browser.command", "browser.events", "browser.disconnect"],
+  },
 ] as const;
 
 export type ManagedToolPluginId = typeof MANAGED_TOOL_PLUGINS[number]["id"];

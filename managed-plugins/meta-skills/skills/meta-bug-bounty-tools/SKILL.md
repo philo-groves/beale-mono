@@ -10,13 +10,15 @@ Use the [Meta Bug Bounty tools page](https://bugbounty.meta.com/tools/) to choos
 | Tool | Use it for |
 | --- | --- |
 | [SSRF validator](https://www.facebook.com/whitehat/ssrf/attempts) | Confirm a suspected server-side request forgery with Meta's validation workflow. Keep the submitted URL and observed result tied to the specific authorized hypothesis. |
-| [Test accounts](https://www.facebook.com/whitehat/accounts) | Create and manage dedicated Facebook test accounts for reproducible account and relationship scenarios. Keep test identities separate from real users. |
+| [Test accounts](https://www.facebook.com/whitehat/accounts) | When available, create and manage dedicated Facebook test accounts for reproducible account and relationship scenarios. Keep test identities separate from real users. |
 | [FBDL](https://www.facebook.com/whitehat/fbdl) | Set up complex Facebook test environments with Facebook Bug Description Language when the scenario needs repeatable social objects or relationships. |
 | [Access token debugger](https://developers.facebook.com/tools/debug/accesstoken/) | Inspect details of a token and its owner when validating an authorized token or permission question. Record only the necessary conclusions and redact token values from research artifacts. |
 | [Graph API explorer](https://developers.facebook.com/tools/explorer/) | Make focused Graph API calls with an authorized test app or account to reproduce and compare API behavior. Preserve the relevant request and response evidence without credentials. |
 | [m.facebook.com request logger](https://bugbounty.meta.com/login/?next=%2Fprofile%2F) | Inspect HTTP requests made on the researcher's behalf while browsing m.facebook.com; Meta describes the output as appearing in the browser JavaScript console. |
 
 Some tools require a Meta login or program access. Follow the linked product's current UI and documentation when access is available. If a tool is unavailable, record that limitation and use another authorized way to verify the hypothesis. Do not treat a tool's presence on the page as authorization for a target outside the workspace's recorded scope.
+
+The Whitehat Test Accounts tool may be disabled or unavailable. For manual research when it cannot be used, designate live accounts that you own or control and keep them free of real user data. Do not use live accounts for automated testing, interact with non-consenting users, or treat this workaround as expanded authorization. Check Meta's current terms before testing.
 
 ## Muse Secure VM boundary research
 
