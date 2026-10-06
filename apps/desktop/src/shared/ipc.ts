@@ -1,4 +1,9 @@
 export const IPC_CHANNELS = {
+  listBrowserContexts: 'beale:list-browser-contexts',
+  createBrowserContext: 'beale:create-browser-context',
+  renameBrowserContext: 'beale:rename-browser-context',
+  removeBrowserContext: 'beale:remove-browser-context',
+  browserContextsChanged: 'beale:browser-contexts-changed',
   listResourcePriorArt: 'beale:list-resource-prior-art',
   getResourcePriorArt: 'beale:get-resource-prior-art',
   selectWorkspace: 'beale:select-workspace',

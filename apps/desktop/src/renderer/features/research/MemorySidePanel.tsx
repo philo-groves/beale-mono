@@ -1,6 +1,8 @@
 import { memo, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CSSProperties, JSX, ReactNode } from 'react';
-import { ArrowLeft, BadgeCheck, BookOpen, Bot, ChevronDown, ChevronRight, Database, FileText, Lightbulb, LoaderCircle, Plus, Search, X } from 'lucide-react';
+import { browserContextLabel, browserSideViewId, DEFAULT_BROWSER_CONTEXT, isBrowserSideView } from '../../../shared/browserContexts';
+import type { BrowserContextSummary } from '../../../shared/browserContexts';
+import { ArrowLeft, BadgeCheck, BookOpen, Bot, ChevronDown, ChevronRight, Database, FileText, Globe2, Lightbulb, LoaderCircle, Plus, Search, X } from 'lucide-react';
 import type {
   AppServerFindingSummary,
   AppServerMemoryEdgeSummary,
@@ -44,6 +46,7 @@ import { MemoryTypeIcon, MemoryTypeLabel, memoryTypeClassName, memoryTypeDefinit
 import { memoryStatusPolarity } from './MemoryStatusDot';
 import { RunbookView } from './RunbookView';
 import { ReportView } from './ReportView';
+import { BrowserSideView } from './BrowserSideView';
 import { renderInlineCodeText } from '../traces/traceMarkup';
 
 const EMPTY_SUBAGENT_OVERVIEW = { count: 0, activeCount: 0, completedCount: 0 };
@@ -62,7 +65,7 @@ export type RunbookScopeFilter = 'session' | 'workspace';
 export const DEFAULT_RUNBOOK_SCOPE_FILTER: RunbookScopeFilter = 'session';
 export const DEFAULT_WORKSPACE_RUNBOOK_SCOPE_FILTER: RunbookScopeFilter = 'workspace';
 export type ResearchViewSpace = 'session' | 'workspace';
-export type ResearchSideView = 'memory' | 'reports' | 'subagents';
+export type ResearchSideView = 'memory' | 'reports' | 'subagents' | `browser:${string}`;
 
 export interface ResearchSideNavigationState {
   openViews: ResearchSideView[];
@@ -76,7 +79,7 @@ export type ResearchSideNavigationAction =
   | { type: 'restrict'; views: readonly ResearchSideView[] }
   | { type: 'reset' };
 
-export const RESEARCH_SIDE_VIEWS: readonly ResearchSideView[] = ['memory', 'reports', 'subagents'];
+export const RESEARCH_SIDE_VIEWS: readonly ResearchSideView[] = ['memory', 'reports', 'subagents', browserSideViewId(DEFAULT_BROWSER_CONTEXT.id)];
 
 export function memoryLevelFiltersForViewSpace(viewSpace: ResearchViewSpace): MemoryLevelFilter[] {
   return viewSpace === 'workspace' ? ['workspace', 'subject'] : ['session', 'workspace', 'subject'];
@@ -144,7 +147,10 @@ export function researchSideNavigationReducer(
   state: ResearchSideNavigationState,
   action: ResearchSideNavigationAction
 ): ResearchSideNavigationState {
-  if (action.type === 'reset') return CLOSED_RESEARCH_SIDE_NAVIGATION;
+  if (action.type === 'reset') {
+    const openViews = state.openViews.filter(isBrowserSideView);
+    return { openViews, activeView: state.activeView && openViews.some((view) => view === state.activeView) ? state.activeView : openViews[0] ?? null };
+  }
   if (action.type === 'restrict') return restrictResearchSideNavigation(state, action.views);
   if (action.type === 'open') {
     return {
@@ -178,7 +184,9 @@ export function researchSideViewsForProfile(
 ): ResearchSideView[] {
   const features = researchProfileFeatureAvailability(profile);
   return RESEARCH_SIDE_VIEWS.filter((view) => (
-    view === 'memory'
+    isBrowserSideView(view)
+      ? true
+      : view === 'memory'
       ? features.memory || features.runbooks
       : view === 'reports'
         ? features.reports
@@ -323,13 +331,36 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
 }): JSX.Element {
   const featureAvailability = researchProfileFeatureAvailability(researchProfile);
   const subagentsAvailable = featureAvailability.collaboration && viewSpace === 'session';
-  const enabledViews = researchSideViewsForProfile(researchProfile)
-    .filter((view) => viewSpace === 'session' || view !== 'subagents');
+  const [browserContexts, setBrowserContexts] = useState<BrowserContextSummary[]>([DEFAULT_BROWSER_CONTEXT]);
+  const enabledViews = [
+    ...researchSideViewsForProfile(researchProfile).filter((view) => viewSpace === 'session' || view !== 'subagents'),
+    ...browserContexts.filter((context) => context.id !== DEFAULT_BROWSER_CONTEXT.id).map((context) => browserSideViewId(context.id))
+  ];
+  const browserContextLabels = Object.fromEntries(browserContexts.map((context) => [browserSideViewId(context.id), context.label]));
   const enabledViewsKey = enabledViews.join(':');
   const [navigation, dispatchNavigation] = useReducer(
     researchSideNavigationReducer,
     initialResearchSideNavigation(selectedSubagentPath, selectedRunbookId, selectedReportId, enabledViews)
   );
+  useEffect(() => {
+    let active = true;
+    let receivedUpdate = false;
+    const unsubscribe = window.beale.onBrowserContextsChanged((update) => {
+      receivedUpdate = true;
+      setBrowserContexts(update.contexts);
+      if (update.createdId || update.openedId) {
+        dispatchNavigation({ type: 'open', view: browserSideViewId(update.createdId ?? update.openedId!) });
+        onExpandedChange?.(true);
+      }
+    });
+    void window.beale.listBrowserContexts().then((contexts) => {
+      if (active && !receivedUpdate) setBrowserContexts(contexts);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [onExpandedChange]);
   const runIdRef = useRef(runId);
   const [query, setQuery] = useState('');
   const [reportQuery, setReportQuery] = useState('');
@@ -698,6 +729,9 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
     }
     const closingLastView = isLastOpenResearchSideView(visibleNavigation.openViews, view);
     dispatchNavigation({ type: 'close', view });
+    if (isBrowserSideView(view) && view !== browserSideViewId(DEFAULT_BROWSER_CONTEXT.id)) {
+      void window.beale.removeBrowserContext(view.slice('browser:'.length));
+    }
     if (closingLastView) onExpandedChange?.(false);
   };
 
@@ -869,14 +903,14 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   if (!activeView) {
     return (
       <aside className="main-session-side memory-catalog view-empty" aria-label={`${viewSpaceLabel} details`}>
-        <ResearchSideViewChooser viewSpaceLabel={viewSpaceLabel} views={enabledViews} labels={{ memory: campaignLabel, reports: reportLabel }} onOpen={openDetails} />
+        <ResearchSideViewChooser viewSpaceLabel={viewSpaceLabel} views={enabledViews} labels={{ memory: campaignLabel, reports: reportLabel }} browserContextLabels={browserContextLabels} onOpen={openDetails} />
       </aside>
     );
   }
 
   return (
     <>
-      <aside className={`main-session-side memory-catalog view-${activeView} ${visibleSelectedSubagentPath || visibleSelectedRunbookId || visibleSelectedReportId || selectedNode || selectedClaim ? 'has-nested-view' : ''}`} aria-label={`${viewSpaceLabel} details`}>
+      <aside className={`main-session-side memory-catalog ${isBrowserSideView(activeView) ? 'view-browser' : `view-${activeView}`} ${visibleSelectedSubagentPath || visibleSelectedRunbookId || visibleSelectedReportId || selectedNode || selectedClaim ? 'has-nested-view' : ''}`} aria-label={`${viewSpaceLabel} details`}>
         {visibleSelectedSubagentPath ? (
           <ResearchSideNestedHeader
             label="Subagents"
@@ -911,11 +945,14 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
             activeView={activeView}
             enabledViews={enabledViews}
             labels={{ memory: campaignLabel, reports: reportLabel }}
+            browserContextLabels={browserContextLabels}
             openViews={visibleNavigation.openViews}
             viewSpaceLabel={viewSpaceLabel}
             onActivate={activateDetails}
             onClose={closeDetails}
             onOpen={openDetails}
+            onCreateBrowserContext={(label) => window.beale.createBrowserContext(label).then(() => undefined)}
+            onRenameBrowserContext={(id, label) => window.beale.renameBrowserContext(id, label).then(() => undefined)}
             trailing={activeView === 'memory' ? (
               <FloatingTextPicker
                 className="memory-catalog-filter memory-catalog-level-filter research-side-memory-scope"
@@ -1165,7 +1202,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
               </MainSideScrollRegion>
             ) : null}
           </>
-        ) : activeView === 'reports' ? (
+        ) : isBrowserSideView(activeView) ? null : activeView === 'reports' ? (
           <>
             <CatalogSearch value={reportQuery} placeholder="Find a Report" ariaLabel="Search reports" onChange={setReportQuery} />
             <MainSideScrollRegion listClassName="memory-catalog-list runbook-catalog-list report-catalog-list" stickToStart updateKey={reportUpdateKey}>
@@ -1236,6 +1273,14 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
             </MainSideScrollRegion>
           </>
         )}
+        {browserContexts.filter((context) => visibleNavigation.openViews.includes(browserSideViewId(context.id))).map((context) => (
+          <BrowserSideView
+            key={context.id}
+            label={context.label}
+            partition={context.partition}
+            visible={activeView === browserSideViewId(context.id) && !visibleSelectedSubagentPath && !visibleSelectedRunbookId && !visibleSelectedReportId && !selectedNode && !selectedClaim}
+          />
+        ))}
       </aside>
     </>
   );
@@ -1502,7 +1547,10 @@ export function ResearchSideViewTabs({
   onActivate,
   onClose,
   onOpen,
+  onCreateBrowserContext,
+  onRenameBrowserContext,
   labels,
+  browserContextLabels,
   trailing,
   viewSpaceLabel = 'Session'
 }: {
@@ -1512,11 +1560,16 @@ export function ResearchSideViewTabs({
   onActivate: (view: ResearchSideView) => void;
   onClose: (view: ResearchSideView) => void;
   onOpen: (view: ResearchSideView) => void;
+  onCreateBrowserContext?: (label: string) => Promise<void>;
+  onRenameBrowserContext?: (id: string, label: string) => Promise<void>;
   labels?: Partial<Record<ResearchSideView, string>>;
+  browserContextLabels?: Record<string, string>;
   trailing?: ReactNode;
   viewSpaceLabel?: string;
 }): JSX.Element {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [contextLabel, setContextLabel] = useState('');
+  const [contextError, setContextError] = useState('');
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const availableViews = availableResearchSideViews(openViews, enabledViews);
 
@@ -1537,8 +1590,8 @@ export function ResearchSideViewTabs({
   }, [pickerOpen]);
 
   useEffect(() => {
-    if (availableViews.length === 0) setPickerOpen(false);
-  }, [availableViews.length]);
+    if (availableViews.length === 0 && !onCreateBrowserContext) setPickerOpen(false);
+  }, [availableViews.length, onCreateBrowserContext]);
 
   return (
     <header className="research-side-view-header">
@@ -1550,16 +1603,24 @@ export function ResearchSideViewTabs({
               className="research-side-view-tab-activate"
               role="tab"
               aria-selected={activeView === view}
+              aria-label={isBrowserSideView(view) ? `Browser ${browserContextLabels?.[view] ?? 'Default'}` : undefined}
               onClick={() => onActivate(view)}
             >
               {researchSideViewIcon(view, 15)}
               <span>{researchSideViewLabel(view, labels)}</span>
             </button>
+            {isBrowserSideView(view) ? (
+              <EditableBrowserContextLabel
+                id={view.slice('browser:'.length)}
+                label={browserContextLabels?.[view] ?? 'Default'}
+                onRename={onRenameBrowserContext}
+              />
+            ) : null}
             <button
               type="button"
               className="research-side-view-tab-close"
-              aria-label={`Close ${researchSideViewLabel(view, labels)}`}
-              title={`Close ${researchSideViewLabel(view, labels)}`}
+              aria-label={`Close ${researchSideViewLabel(view, labels)}${isBrowserSideView(view) ? ` ${browserContextLabels?.[view] ?? 'Default'}` : ''}`}
+              title={`Close ${researchSideViewLabel(view, labels)}${isBrowserSideView(view) ? ` ${browserContextLabels?.[view] ?? 'Default'}` : ''}`}
               onClick={() => onClose(view)}
             >
               <X size={13} aria-hidden="true" />
@@ -1567,7 +1628,7 @@ export function ResearchSideViewTabs({
           </div>
         ))}
       </div>
-      {availableViews.length > 0 ? (
+      {availableViews.length > 0 || onCreateBrowserContext ? (
         <div className={`research-side-view-picker ${pickerOpen ? 'open' : ''}`} ref={pickerRef}>
           <button
             type="button"
@@ -1594,8 +1655,28 @@ export function ResearchSideViewTabs({
                 >
                   {researchSideViewIcon(view, 15)}
                   <span>{researchSideViewLabel(view, labels)}</span>
+                  {isBrowserSideView(view) ? <span className="research-browser-context-pill">{browserContextLabels?.[view] ?? 'Default'}</span> : null}
                 </button>
               ))}
+              {onCreateBrowserContext ? (
+                <form className="research-browser-context-create" onSubmit={(event) => {
+                  event.preventDefault();
+                  const label = browserContextLabel(contextLabel);
+                  if (!label) {
+                    setContextError('Use one word, up to 24 characters.');
+                    return;
+                  }
+                  void onCreateBrowserContext(label).then(() => {
+                    setContextLabel('');
+                    setContextError('');
+                    setPickerOpen(false);
+                  }, (error: unknown) => setContextError(error instanceof Error ? error.message : String(error)));
+                }}>
+                  <input type="text" maxLength={24} value={contextLabel} placeholder="Context label" aria-label="New browser context label" onChange={(event) => setContextLabel(event.target.value)} />
+                  <button type="submit">Create</button>
+                  {contextError ? <span role="alert">{contextError}</span> : null}
+                </form>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1605,13 +1686,94 @@ export function ResearchSideViewTabs({
   );
 }
 
+function EditableBrowserContextLabel({
+  id,
+  label,
+  onRename
+}: {
+  id: string;
+  label: string;
+  onRename?: (id: string, label: string) => Promise<void>;
+}): JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(label);
+  const [error, setError] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const committingRef = useRef(false);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  const commit = async (): Promise<void> => {
+    if (committingRef.current) return;
+    const nextLabel = browserContextLabel(value);
+    if (!nextLabel) {
+      setError('Use one word, up to 24 characters.');
+      inputRef.current?.focus();
+      return;
+    }
+    if (nextLabel === label) {
+      setEditing(false);
+      setError('');
+      return;
+    }
+    try {
+      committingRef.current = true;
+      await onRename?.(id, nextLabel);
+      setEditing(false);
+      setError('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      inputRef.current?.focus();
+    } finally {
+      committingRef.current = false;
+    }
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="research-browser-context-editor"
+        type="text"
+        maxLength={24}
+        value={value}
+        aria-label={`Rename Browser context ${label}`}
+        aria-invalid={Boolean(error)}
+        title={error || undefined}
+        onChange={(event) => { setValue(event.target.value); setError(''); }}
+        onBlur={() => { void commit(); }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') { event.preventDefault(); void commit(); }
+          if (event.key === 'Escape') { setValue(label); setError(''); setEditing(false); }
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="research-browser-context-pill"
+      aria-label={`Rename Browser context ${label}`}
+      title={`Rename Browser context ${label}`}
+      onClick={() => { setValue(label); setEditing(true); }}
+    >
+      {label}
+    </button>
+  );
+}
+
 export function ResearchSideViewChooser({
   labels,
+  browserContextLabels,
   onOpen,
   views = RESEARCH_SIDE_VIEWS,
   viewSpaceLabel = 'Session'
 }: {
   labels?: Partial<Record<ResearchSideView, string>>;
+  browserContextLabels?: Record<string, string>;
   onOpen: (view: ResearchSideView) => void;
   views?: readonly ResearchSideView[];
   viewSpaceLabel?: string;
@@ -1622,6 +1784,7 @@ export function ResearchSideViewChooser({
         <button type="button" key={view} onClick={() => onOpen(view)}>
           {researchSideViewIcon(view, 16)}
           <span>{researchSideViewLabel(view, labels)}</span>
+          {isBrowserSideView(view) ? <span className="research-browser-context-pill">{browserContextLabels?.[view] ?? 'Default'}</span> : null}
         </button>
       ))}
     </nav>
@@ -1636,7 +1799,9 @@ function researchSideViewLabel(
     ? 'Campaign'
     : view === 'reports'
       ? 'Reports'
-      : 'Subagents');
+      : isBrowserSideView(view)
+        ? 'Browser'
+        : 'Subagents');
 }
 
 interface CatalogMemoryTypeOption {
@@ -1692,6 +1857,7 @@ function unknownProfileValueLabel(kind: string, id: string): string {
 function researchSideViewIcon(view: ResearchSideView, size: number): JSX.Element {
   if (view === 'memory') return <Database size={size} aria-hidden="true" />;
   if (view === 'reports') return <FileText size={size} aria-hidden="true" />;
+  if (isBrowserSideView(view)) return <Globe2 size={size} aria-hidden="true" />;
   return <Bot size={size} aria-hidden="true" />;
 }
 

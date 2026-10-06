@@ -16,6 +16,7 @@
 
 #### Changed
 
+- The workspace editor, bottom panel, and research sidebar header buttons are available in New Research for an open workspace.
 - New Topic offers a workspace picker when no workspace is active, then opens the topic form for the chosen workspace.
 - Topics now has its own icon rail destination, a recent-topics sidebar, and an explorer with all-workspace and per-workspace filters; the session sidebar shows only Workspaces.
 - The Automations sidebar replaces its redundant All Automations row with Schedule a Job, opening New Research with the repeat schedule menu focused or a workspace picker when no workspace is active.
@@ -78,7 +79,10 @@
 - Session permissions are selected in General settings; steering and New Research inputs no longer show a permission picker.
 #### Added
 
-- Added default-on Browser control as an Optional Feature. Run-local CDP connections support target discovery, arbitrary commands, flattened sessions, and buffered events; the browser must be launched with remote debugging enabled.
+- Browser sidebar tabs now support up to 12 isolated, one-word labeled contexts, including a Default context. Labels can be edited in place, and browser tabs remain available when a research session starts. Browser control can list, create, open, and close contexts and select their separate CDP targets.
+- The first embedded Browser control use in each research session asks the user to acknowledge that full CDP access can expose signed-in session data. Users sign in directly in the browser; Beale does not store or inject their credentials.
+- Added an embedded Browser tab to the expanded research sidebar with a URL bar. The app-server Browser control tools discover and control its isolated page through a local CDP bridge when Beale Desktop is running; explicit external browser endpoints remain available.
+- Added default-on Browser control as an Optional Feature. Run-local CDP connections support target discovery, arbitrary commands, flattened sessions, and buffered events; external browsers must be launched with remote debugging enabled.
 
 - A Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
 
@@ -99,6 +103,7 @@
 
 #### Fixed
 
+- Closing an embedded Browser CDP connection after its page is destroyed no longer crashes the Beale main process and interrupts the research session.
 - Sessions that fail before producing transcript events now show their stored failure reason in the commentary, and app-server response errors retain their leading diagnostic text.
 - Prompt settings always shows the current token estimate, including for the default template and unsaved edits.
 - The left icon rail keeps its 50px width and centered icons when the adjacent sidebar is collapsed.

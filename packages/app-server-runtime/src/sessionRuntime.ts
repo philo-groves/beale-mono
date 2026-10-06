@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import type { Readable } from "node:stream";
@@ -4164,7 +4165,21 @@ async function createRuntimeConfig(args: {
   }
 
   if (runtimeTools.managedPluginIds === undefined || runtimeTools.managedPluginIds.includes("beale-browser")) {
-    const browserSession = new BrowserCdpSession();
+    const browserSession = new BrowserCdpSession(async () => {
+      try {
+        const discovery = JSON.parse(await readFile(resolve(homedir(), ".beale", "desktop-browser.json"), "utf8")) as unknown;
+        if (discovery && typeof discovery === "object" && "endpoint" in discovery && typeof discovery.endpoint === "string") {
+          const endpoint = new URL(discovery.endpoint);
+          if (endpoint.protocol === "http:" && endpoint.hostname === "127.0.0.1" && endpoint.searchParams.has("token")) {
+            const probe = new URL("/json/list", endpoint);
+            probe.search = endpoint.search;
+            const response = await fetch(probe, { signal: AbortSignal.timeout(500) });
+            if (response.ok) return endpoint.href;
+          }
+        }
+      } catch { /* The desktop browser is optional. */ }
+      return "http://127.0.0.1:9222";
+    }, args.sessionId);
     const browserTools = createBrowserTools(browserSession);
     executableTools.push(...browserTools);
     toolDescriptors.push(...browserTools.map((tool) => tool.descriptor));

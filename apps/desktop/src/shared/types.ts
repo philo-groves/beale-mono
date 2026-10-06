@@ -1,4 +1,5 @@
 import type { ResearchProfileId, ResearchProfileSnapshot, ResolvedResearchProfile } from './researchProfile';
+import type { BrowserContextSummary, BrowserContextsUpdate } from './browserContexts';
 import type { ResearchKitId } from './researchKits';
 import type {
   ResourcePriorArtPage,
@@ -2379,6 +2380,11 @@ export interface IosDeviceCaptureFrame {
 export type WindowBackgroundEffect = 'solid' | 'semi-transparent' | 'gradient' | 'blur';
 
 export interface BealeApi {
+  listBrowserContexts(): Promise<BrowserContextSummary[]>;
+  createBrowserContext(label: string): Promise<BrowserContextSummary>;
+  renameBrowserContext(id: string, label: string): Promise<BrowserContextSummary>;
+  removeBrowserContext(id: string): Promise<void>;
+  onBrowserContextsChanged(listener: (update: BrowserContextsUpdate) => void): () => void;
   selectWorkspace(mode: WorkspacePickerMode): Promise<WorkspacePickerResult>;
   selectWorkspaceDirectory(): Promise<WorkspaceDirectorySelection>;
   getWorkspaceRegistry(): Promise<WorkspaceRegistryState>;

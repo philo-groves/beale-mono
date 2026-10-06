@@ -8,8 +8,31 @@ const requireFromServer = createRequire(new URL("../app-server/package.json", im
 const { WebSocketServer } = requireFromServer("ws");
 
 test("browser tools expose arbitrary CDP commands, flattened sessions, events, and cleanup", async () => {
-  const server = createServer((request, response) => {
+  const contexts = [{ id: "default", label: "Default" }];
+  const server = createServer(async (request, response) => {
     response.setHeader("content-type", "application/json");
+    if (request.url === "/contexts") {
+      if (request.method === "POST") {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const { label } = JSON.parse(Buffer.concat(chunks).toString());
+        const context = { id: "context-example", label };
+        contexts.push(context);
+        response.end(JSON.stringify(context));
+      } else {
+        response.end(JSON.stringify(contexts));
+      }
+      return;
+    }
+    if (request.url === "/contexts/context-example" && request.method === "DELETE") {
+      contexts.splice(1);
+      response.end(JSON.stringify({ removed: true }));
+      return;
+    }
+    if (request.url === "/contexts/context-example/open" && request.method === "POST") {
+      response.end(JSON.stringify(contexts[1]));
+      return;
+    }
     const address = server.address();
     const debuggerUrl = `ws://127.0.0.1:${address.port}/devtools/browser/example`;
     response.end(JSON.stringify(request.url === "/json/list"
@@ -30,15 +53,20 @@ test("browser tools expose arbitrary CDP commands, flattened sessions, events, a
   }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const endpoint = `http://127.0.0.1:${server.address().port}`;
-  const session = new BrowserCdpSession();
+  const session = new BrowserCdpSession(async () => endpoint);
   const tools = createBrowserTools(session);
   const call = async (name, input) => {
     const tool = tools.find((candidate) => candidate.descriptor.name === name);
     return tool.execute({ id: `example-${name}`, toolName: name, actionClass: "experiment", input });
   };
   try {
-    assert.equal(tools.length, 5);
+    assert.equal(tools.length, 9);
     assert.ok(tools.every((tool) => managedToolPluginId(tool.descriptor.name) === "beale-browser"));
+    assert.deepEqual((await call("browser.contexts", {})).output.contexts, [{ id: "default", label: "Default" }]);
+    assert.deepEqual((await call("browser.context.create", { label: "Admin" })).output.context, { id: "context-example", label: "Admin" });
+    assert.deepEqual((await call("browser.contexts", {})).output.contexts, [{ id: "default", label: "Default" }, { id: "context-example", label: "Admin" }]);
+    assert.deepEqual((await call("browser.context.open", { contextId: "context-example" })).output.context, { id: "context-example", label: "Admin" });
+    assert.equal((await call("browser.context.close", { contextId: "context-example" })).status, "complete");
     const targets = await call("browser.targets", { endpoint });
     assert.equal(targets.output.targets[0].id, "page-example");
     assert.equal(targets.output.targets[0].webSocketDebuggerUrl, undefined);

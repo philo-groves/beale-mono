@@ -36,8 +36,8 @@ export const MANAGED_TOOL_PLUGINS = [
   },
   {
     id: "beale-browser", name: "Browser",
-    description: "Use for controlling compatible browsers through the full Chrome DevTools Protocol, including targets, commands, and events.",
-    tools: ["browser.targets", "browser.connect", "browser.command", "browser.events", "browser.disconnect"],
+    description: "Use isolated Beale browser contexts or compatible external browsers through Chrome DevTools Protocol targets, commands, and events.",
+    tools: ["browser.contexts", "browser.context.create", "browser.context.close", "browser.context.open", "browser.targets", "browser.connect", "browser.command", "browser.events", "browser.disconnect"],
   },
 ] as const;
 
