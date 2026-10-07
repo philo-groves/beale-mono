@@ -13,18 +13,18 @@ export function browserNavigationUrl(input: string): string | null {
   }
 }
 
-export function BrowserSideView({ visible, partition, label }: { visible: boolean; partition: string; label: string }): JSX.Element {
+export function BrowserSideView({ visible, partition, label, lastUrl }: { visible: boolean; partition: string; label: string; lastUrl: string }): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const guestRef = useRef<WebviewTag | null>(null);
-  const [address, setAddress] = useState('');
+  const [address, setAddress] = useState(lastUrl === 'about:blank' ? '' : lastUrl);
   const [error, setError] = useState('');
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
     const guest = document.createElement('webview') as WebviewTag;
-    guest.setAttribute('src', 'about:blank');
     guest.setAttribute('partition', partition);
+    guest.setAttribute('src', lastUrl);
     guest.setAttribute('class', 'research-browser-webview');
     guest.setAttribute('aria-label', `${label} browser page`);
     const onNavigate = (event: Event): void => {

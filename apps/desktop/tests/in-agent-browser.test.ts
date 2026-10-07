@@ -10,7 +10,7 @@ import { BrowserCdpSession } from '../../../packages/research-agent/src/browser-
 import { allowedBrowserCommand, allowedBrowserUrl, InAgentBrowserBridge } from '../src/main/inAgentBrowserBridge';
 import { browserContextLabel, DEFAULT_BROWSER_CONTEXT } from '../src/shared/browserContexts';
 import { browserNavigationUrl, BrowserSideView } from '../src/renderer/features/research/BrowserSideView';
-import { ResearchSideViewChooser, ResearchSideViewTabs, researchSideNavigationReducer, researchSideViewsForProfile } from '../src/renderer/features/research/MemorySidePanel';
+import { ResearchSidePanel, ResearchSideViewChooser, ResearchSideViewTabs, availableResearchSideViews, researchSideNavigationReducer, researchSideViewsForProfile } from '../src/renderer/features/research/MemorySidePanel';
 
 describe('in-agent browser', () => {
   it('offers Browser in the expanded chooser and tab picker', () => {
@@ -30,7 +30,7 @@ describe('in-agent browser', () => {
     expect(tabs).toContain('Close Browser Default');
     expect(tabs).toContain('class="research-browser-context-pill"');
     expect(tabs).toContain('aria-label="Rename Browser context Default"');
-    const browser = renderToStaticMarkup(createElement(BrowserSideView, { visible: true, partition: DEFAULT_BROWSER_CONTEXT.partition, label: 'Default' }));
+    const browser = renderToStaticMarkup(createElement(BrowserSideView, { visible: true, partition: DEFAULT_BROWSER_CONTEXT.partition, label: 'Default', lastUrl: DEFAULT_BROWSER_CONTEXT.lastUrl }));
     expect(browser).toContain('aria-label="Browser URL"');
     expect(browser).toContain('class="research-browser-page"');
     expect(researchSideNavigationReducer({
@@ -38,6 +38,42 @@ describe('in-agent browser', () => {
     }, { type: 'reset' })).toEqual({
       openViews: ['browser:default', 'browser:context-example'], activeView: 'browser:context-example'
     });
+    const closedTab = researchSideNavigationReducer({
+      openViews: ['browser:default', 'browser:context-example'], activeView: 'browser:context-example'
+    }, { type: 'close', view: 'browser:context-example' });
+    expect(availableResearchSideViews(closedTab.openViews, ['browser:default', 'browser:context-example']))
+      .toContain('browser:context-example');
+  });
+
+  it('offers a way back to Browser after the last tab closes and the sidebar collapses', () => {
+    const closedTab = researchSideNavigationReducer({
+      openViews: ['browser:default'], activeView: 'browser:default'
+    }, { type: 'close', view: 'browser:default' });
+    expect(closedTab).toEqual({ openViews: [], activeView: null });
+    for (const viewSpace of ['session', 'workspace'] as const) {
+      const summary = renderToStaticMarkup(createElement(ResearchSidePanel, {
+        detail: null,
+        events: [],
+        memory: null,
+        providerModelCatalog: [],
+        runId: 'run-example',
+        runStatus: null,
+        selectedRunbook: null,
+        selectedRunbookDocument: null,
+        runbookLoading: false,
+        runbookError: null,
+        selectedSubagentPath: null,
+        selectedRunbookId: null,
+        searchHighlightQuery: '',
+        onOpenRunbook: () => undefined,
+        onSelectSubagent: () => undefined,
+        onBackToRunbooks: () => undefined,
+        onBackToSubagents: () => undefined,
+        expanded: false,
+        viewSpace
+      }));
+      expect(summary).toContain('aria-label="Open Browser Default"');
+    }
   });
 
   it('accepts web URLs and rejects local and privileged schemes', () => {
@@ -72,6 +108,7 @@ describe('in-agent browser', () => {
         isDestroyed: () => false,
         getTitle: () => 'Example page',
         getURL: () => 'https://example.test/',
+        close: () => undefined,
         setWindowOpenHandler: () => undefined,
         session: { clearStorageData: async () => undefined },
         debugger: Object.assign(debuggerEvents, {
@@ -189,6 +226,47 @@ describe('in-agent browser', () => {
     } finally {
       await browser.cleanup();
       bridge.stop();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('restores context labels, page locations, and isolated storage after restart', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-browser-persistence-test-'));
+    const discoveryFile = join(directory, 'browser.json');
+    const first = new InAgentBrowserBridge(discoveryFile);
+    const guestEvents = new EventEmitter();
+    let currentUrl = 'about:blank';
+    const guest = Object.assign(guestEvents, {
+      id: 21,
+      isDestroyed: () => false,
+      getURL: () => currentUrl,
+      setWindowOpenHandler: () => undefined,
+      debugger: { isAttached: () => false }
+    }) as unknown as WebContents;
+    try {
+      const created = first.createContext('AccountOne');
+      first.renameContext('default', 'Primary');
+      first.attach(created.id, guest);
+      currentUrl = 'https://example.test/account?page=2';
+      guestEvents.emit('did-navigate');
+      currentUrl = 'https://example.test/account?page=3';
+      guestEvents.emit('did-navigate-in-page');
+      const saved = new InAgentBrowserBridge(discoveryFile, () => undefined, async () => false, async (partition) => {
+        expect(partition).toBe(created.partition);
+      });
+      expect(saved.listContexts()).toMatchObject([
+        { id: 'default', label: 'Primary', lastUrl: 'about:blank' },
+        { id: created.id, label: 'AccountOne', lastUrl: currentUrl }
+      ]);
+      expect(saved.listContexts().every((context) => context.partition.startsWith('persist:'))).toBe(true);
+      const restoredPage = renderToStaticMarkup(createElement(BrowserSideView, {
+        visible: true, partition: created.partition, label: created.label, lastUrl: currentUrl
+      }));
+      expect(restoredPage).toContain('value="https://example.test/account?page=3"');
+      await saved.removeContext(created.id);
+      expect(new InAgentBrowserBridge(discoveryFile).listContexts()).toHaveLength(1);
+    } finally {
+      first.stop();
       rmSync(directory, { recursive: true, force: true });
     }
   });

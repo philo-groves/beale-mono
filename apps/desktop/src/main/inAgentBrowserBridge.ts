@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { WebContents } from 'electron';
 import { WebSocket, WebSocketServer } from 'ws';
-import { browserContextLabel, DEFAULT_BROWSER_CONTEXT, MAX_BROWSER_CONTEXTS } from '../shared/browserContexts';
+import { browserContextLabel, browserContextPartition, DEFAULT_BROWSER_CONTEXT, MAX_BROWSER_CONTEXTS } from '../shared/browserContexts';
 import type { BrowserContextSummary, BrowserContextsUpdate } from '../shared/browserContexts';
 
 const DISCOVERY_FILE = join(homedir(), '.beale', 'desktop-browser.json');
@@ -38,6 +38,44 @@ interface BrowserContextState {
   client: WebSocket | null;
 }
 
+interface SavedBrowserContext {
+  id: string;
+  label: string;
+  lastUrl: string;
+}
+
+function restoredContexts(file: string): Map<string, BrowserContextState> {
+  const contexts = new Map<string, BrowserContextState>([[DEFAULT_BROWSER_CONTEXT.id, {
+    summary: DEFAULT_BROWSER_CONTEXT, guest: null, client: null
+  }]]);
+  let saved: unknown;
+  try {
+    saved = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+  } catch {
+    return contexts;
+  }
+  if (!saved || typeof saved !== 'object' || !('version' in saved) || saved.version !== 1 || !('contexts' in saved) || !Array.isArray(saved.contexts)) {
+    return contexts;
+  }
+  for (const value of saved.contexts.slice(0, MAX_BROWSER_CONTEXTS)) {
+    if (!value || typeof value !== 'object') continue;
+    const candidate = value as Partial<SavedBrowserContext>;
+    if (typeof candidate.id !== 'string' || typeof candidate.label !== 'string') continue;
+    const label = browserContextLabel(candidate.label);
+    if (!label || (candidate.id !== DEFAULT_BROWSER_CONTEXT.id && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(candidate.id))) continue;
+    if (contexts.size >= MAX_BROWSER_CONTEXTS && candidate.id !== DEFAULT_BROWSER_CONTEXT.id) break;
+    if (contexts.has(candidate.id) && candidate.id !== DEFAULT_BROWSER_CONTEXT.id) continue;
+    if ([...contexts.values()].some((context) => context.summary.id !== candidate.id && context.summary.label.toLowerCase() === label.toLowerCase())) continue;
+    const lastUrl = typeof candidate.lastUrl === 'string' && allowedBrowserUrl(candidate.lastUrl) ? candidate.lastUrl : 'about:blank';
+    contexts.set(candidate.id, {
+      summary: { id: candidate.id, label, partition: browserContextPartition(candidate.id), lastUrl },
+      guest: null,
+      client: null
+    });
+  }
+  return contexts;
+}
+
 function sendJson(response: ServerResponse, status: number, payload: unknown): void {
   response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   response.end(JSON.stringify(payload));
@@ -66,26 +104,28 @@ export class InAgentBrowserBridge {
   readonly #token = randomUUID();
   readonly #server: Server;
   readonly #sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
-  readonly #contexts = new Map<string, BrowserContextState>([[DEFAULT_BROWSER_CONTEXT.id, {
-    summary: DEFAULT_BROWSER_CONTEXT,
-    guest: null,
-    client: null
-  }]]);
+  readonly #contexts: Map<string, BrowserContextState>;
   #port = 0;
   readonly #discoveryFile: string;
   readonly #onChange: (update: BrowserContextsUpdate) => void;
   readonly #onAcknowledge: (sessionId: string) => Promise<boolean>;
+  readonly #clearStorage: (partition: string) => Promise<void>;
+  readonly #contextsFile: string;
   readonly #acknowledgedSessions = new Set<string>();
   readonly #pendingAcknowledgements = new Map<string, Promise<boolean>>();
 
   constructor(
     discoveryFile = DISCOVERY_FILE,
     onChange: (update: BrowserContextsUpdate) => void = () => undefined,
-    onAcknowledge: (sessionId: string) => Promise<boolean> = async () => false
+    onAcknowledge: (sessionId: string) => Promise<boolean> = async () => false,
+    clearStorage: (partition: string) => Promise<void> = async () => undefined
   ) {
     this.#discoveryFile = discoveryFile;
+    this.#contextsFile = join(dirname(discoveryFile), 'browser-contexts.json');
+    this.#contexts = restoredContexts(this.#contextsFile);
     this.#onChange = onChange;
     this.#onAcknowledge = onAcknowledge;
+    this.#clearStorage = clearStorage;
     this.#server = createServer((request, response) => {
       void this.#handleRequest(request, response).catch(() => {
         if (!response.headersSent) response.writeHead(500);
@@ -123,8 +163,9 @@ export class InAgentBrowserBridge {
       throw new Error('A browser context with that label already exists.');
     }
     const id = randomUUID();
-    const summary = { id, label, partition: `beale-in-agent-browser-${id}` };
+    const summary = { id, label, partition: browserContextPartition(id), lastUrl: 'about:blank' };
     this.#contexts.set(id, { summary, guest: null, client: null });
+    try { this.#saveContexts(); } catch (error) { this.#contexts.delete(id); throw error; }
     this.#onChange({ contexts: this.listContexts(), createdId: id });
     return summary;
   }
@@ -137,7 +178,9 @@ export class InAgentBrowserBridge {
     if (this.listContexts().some((candidate) => candidate.id !== id && candidate.label.toLowerCase() === label.toLowerCase())) {
       throw new Error('A browser context with that label already exists.');
     }
-    context.summary = { ...context.summary, label };
+    const previous = context.summary;
+    context.summary = { ...previous, label };
+    try { this.#saveContexts(); } catch (error) { context.summary = previous; throw error; }
     this.#onChange({ contexts: this.listContexts() });
     return context.summary;
   }
@@ -176,14 +219,16 @@ export class InAgentBrowserBridge {
     return pending;
   }
 
-  removeContext(id: string): void {
+  async removeContext(id: string): Promise<void> {
     if (id === DEFAULT_BROWSER_CONTEXT.id) throw new Error('The default browser context cannot be removed.');
     const context = this.#contexts.get(id);
     if (!context) throw new Error('Browser context was not found.');
-    this.#contexts.delete(id);
     const guest = context.guest;
     this.#detach(context);
-    if (guest && !guest.isDestroyed()) void guest.session?.clearStorageData();
+    if (guest && !guest.isDestroyed()) guest.close();
+    await this.#clearStorage(context.summary.partition);
+    this.#contexts.delete(id);
+    try { this.#saveContexts(); } catch (error) { this.#contexts.set(id, context); throw error; }
     this.#onChange({ contexts: this.listContexts(), removedId: id });
   }
 
@@ -214,6 +259,18 @@ export class InAgentBrowserBridge {
     guest.on('will-redirect', (event, url) => {
       if (!allowedBrowserUrl(url)) event.preventDefault();
     });
+    const recordNavigation = (): void => {
+      if (context.guest !== guest || guest.isDestroyed()) return;
+      const url = guest.getURL();
+      if (!allowedBrowserUrl(url) || url === context.summary.lastUrl) return;
+      context.summary = { ...context.summary, lastUrl: url };
+      try { this.#saveContexts(); } catch {
+        process.stderr.write('Beale could not save the embedded browser page location.\n');
+      }
+      this.#onChange({ contexts: this.listContexts() });
+    };
+    guest.on('did-navigate', recordNavigation);
+    guest.on('did-navigate-in-page', recordNavigation);
     guest.on('destroyed', () => {
       if (context.guest === guest) this.#detach(context);
     });
@@ -288,7 +345,7 @@ export class InAgentBrowserBridge {
         return;
       }
       if (request.method === 'DELETE' && url.pathname.startsWith('/contexts/')) {
-        this.removeContext(decodeURIComponent(url.pathname.slice('/contexts/'.length)));
+        await this.removeContext(decodeURIComponent(url.pathname.slice('/contexts/'.length)));
         sendJson(response, 200, { removed: true });
         return;
       }
@@ -365,5 +422,17 @@ export class InAgentBrowserBridge {
     const guest = context.guest;
     if (guest && !guest.isDestroyed() && guest.debugger.isAttached()) guest.debugger.detach();
     context.guest = null;
+  }
+
+  #saveContexts(): void {
+    const saved: SavedBrowserContext[] = this.listContexts().map(({ id, label, lastUrl }) => ({ id, label, lastUrl }));
+    mkdirSync(dirname(this.#contextsFile), { recursive: true });
+    const temporaryFile = `${this.#contextsFile}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporaryFile, JSON.stringify({ version: 1, contexts: saved }), { mode: 0o600 });
+      renameSync(temporaryFile, this.#contextsFile);
+    } finally {
+      rmSync(temporaryFile, { force: true });
+    }
   }
 }

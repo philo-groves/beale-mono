@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Fragment, memo, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CSSProperties, JSX, ReactNode } from 'react';
 import { browserContextLabel, browserSideViewId, DEFAULT_BROWSER_CONTEXT, isBrowserSideView } from '../../../shared/browserContexts';
 import type { BrowserContextSummary } from '../../../shared/browserContexts';
@@ -729,9 +729,6 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
     }
     const closingLastView = isLastOpenResearchSideView(visibleNavigation.openViews, view);
     dispatchNavigation({ type: 'close', view });
-    if (isBrowserSideView(view) && view !== browserSideViewId(DEFAULT_BROWSER_CONTEXT.id)) {
-      void window.beale.removeBrowserContext(view.slice('browser:'.length));
-    }
     if (closingLastView) onExpandedChange?.(false);
   };
 
@@ -750,6 +747,33 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
     dispatchNavigation({ type: 'open', view: 'subagents' });
     onBackToSubagents();
   };
+  const browserPages = (
+    <Fragment key="browser-pages">
+      {browserContexts.filter((context) => visibleNavigation.openViews.includes(browserSideViewId(context.id))).map((context) => (
+        <BrowserSideView
+          key={context.id}
+          label={context.label}
+          partition={context.partition}
+          lastUrl={context.lastUrl}
+          visible={detailsOpen && activeView === browserSideViewId(context.id) && !visibleSelectedSubagentPath && !visibleSelectedRunbookId && !visibleSelectedReportId && !selectedNode && !selectedClaim}
+        />
+      ))}
+    </Fragment>
+  );
+  const browserSummaryRows = browserContexts.map((context) => (
+    <button
+      key={context.id}
+      type="button"
+      className="session-summary-item"
+      aria-label={`Open Browser ${context.label}`}
+      onClick={() => openDetails(browserSideViewId(context.id))}
+    >
+      <Globe2 size={15} aria-hidden="true" />
+      <span>Browser</span>
+      <span className="session-summary-meta">{context.label}</span>
+      <ChevronRight className="session-summary-chevron" size={15} aria-hidden="true" />
+    </button>
+  ));
 
   if (!detailsOpen) {
     if (viewSpace === 'workspace') {
@@ -798,8 +822,10 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
                   />
                 </>
               ) : null}
+              {browserSummaryRows}
             </section>
           </section>
+          {browserPages}
         </aside>
       );
     }
@@ -823,7 +849,11 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
                 </div>
               </section>
             ) : null}
+            <section className="session-summary-items session-summary-resources" aria-label="Browser contexts">
+              {browserSummaryRows}
+            </section>
           </section>
+          {browserPages}
         </aside>
       );
     }
@@ -894,8 +924,10 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
                 />
               </>
             ) : null}
+            {browserSummaryRows}
           </section>
         </section>
+        {browserPages}
       </aside>
     );
   }
@@ -904,13 +936,13 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
     return (
       <aside className="main-session-side memory-catalog view-empty" aria-label={`${viewSpaceLabel} details`}>
         <ResearchSideViewChooser viewSpaceLabel={viewSpaceLabel} views={enabledViews} labels={{ memory: campaignLabel, reports: reportLabel }} browserContextLabels={browserContextLabels} onOpen={openDetails} />
+        {browserPages}
       </aside>
     );
   }
 
   return (
-    <>
-      <aside className={`main-session-side memory-catalog ${isBrowserSideView(activeView) ? 'view-browser' : `view-${activeView}`} ${visibleSelectedSubagentPath || visibleSelectedRunbookId || visibleSelectedReportId || selectedNode || selectedClaim ? 'has-nested-view' : ''}`} aria-label={`${viewSpaceLabel} details`}>
+    <aside className={`main-session-side memory-catalog ${isBrowserSideView(activeView) ? 'view-browser' : `view-${activeView}`} ${visibleSelectedSubagentPath || visibleSelectedRunbookId || visibleSelectedReportId || selectedNode || selectedClaim ? 'has-nested-view' : ''}`} aria-label={`${viewSpaceLabel} details`}>
         {visibleSelectedSubagentPath ? (
           <ResearchSideNestedHeader
             label="Subagents"
@@ -1273,16 +1305,8 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
             </MainSideScrollRegion>
           </>
         )}
-        {browserContexts.filter((context) => visibleNavigation.openViews.includes(browserSideViewId(context.id))).map((context) => (
-          <BrowserSideView
-            key={context.id}
-            label={context.label}
-            partition={context.partition}
-            visible={activeView === browserSideViewId(context.id) && !visibleSelectedSubagentPath && !visibleSelectedRunbookId && !visibleSelectedReportId && !selectedNode && !selectedClaim}
-          />
-        ))}
-      </aside>
-    </>
+        {browserPages}
+    </aside>
   );
 });
 

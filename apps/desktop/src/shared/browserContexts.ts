@@ -2,6 +2,7 @@ export interface BrowserContextSummary {
   id: string;
   label: string;
   partition: string;
+  lastUrl: string;
 }
 
 export interface BrowserContextsUpdate {
@@ -14,10 +15,15 @@ export interface BrowserContextsUpdate {
 export const DEFAULT_BROWSER_CONTEXT: BrowserContextSummary = {
   id: 'default',
   label: 'Default',
-  partition: 'beale-in-agent-browser-default'
+  partition: browserContextPartition('default'),
+  lastUrl: 'about:blank'
 };
 
 export const MAX_BROWSER_CONTEXTS = 12;
+
+export function browserContextPartition(id: string): string {
+  return `persist:beale-in-agent-browser-${id}`;
+}
 
 export function browserContextLabel(value: unknown): string | null {
   if (typeof value !== 'string') return null;

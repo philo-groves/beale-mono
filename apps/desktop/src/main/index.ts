@@ -578,9 +578,9 @@ function registerIpc(): void {
     if (!inAgentBrowserBridge) throw new Error('The embedded browser is unavailable.');
     return inAgentBrowserBridge.renameContext(id, label);
   });
-  ipcMain.handle(IPC_CHANNELS.removeBrowserContext, (_event, id: string) => {
+  ipcMain.handle(IPC_CHANNELS.removeBrowserContext, async (_event, id: string) => {
     if (!inAgentBrowserBridge) throw new Error('The embedded browser is unavailable.');
-    inAgentBrowserBridge.removeContext(id);
+    await inAgentBrowserBridge.removeContext(id);
   });
   ipcMain.handle(IPC_CHANNELS.selectWorkspace, async (_event, mode: WorkspacePickerMode) => {
     const result = await dialog.showOpenDialog({
@@ -1306,7 +1306,8 @@ if (!hasSingleInstanceLock) {
           ? await dialog.showMessageBox(mainWindow, options)
           : await dialog.showMessageBox(options);
         return result.response === 1;
-      }
+      },
+      async (partition) => { await session.fromPartition(partition).clearStorageData(); }
     );
     try {
       await browserBridge.start();

@@ -203,7 +203,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   const [workspaceSidePanelMounted, setWorkspaceSidePanelMounted] = useState(workspaceSideView && researchDetailsOpen);
   const [workspaceSidePanelVisible, setWorkspaceSidePanelVisible] = useState(workspaceSideView && researchDetailsOpen);
   const sessionHasContent = viewState === 'session' && selectedRunId !== null && sessionContentAvailable(detail, events);
-  const showResearchSidePanel = sidePanelRunId !== null || workspaceSidePanelMounted || researchDetailsOpen;
+  const showResearchSidePanel = true;
   const visibleResearchDetails = sidePanelRunId !== null ? researchDetailsOpen : workspaceSidePanelVisible;
   const expandedResearchSidePanel = sidePanelRunId !== null ? researchDetailsOpen : workspaceSidePanelMounted;
   const researchSideResizeEnabled = sessionHasContent && !visibleResearchDetails && !connectedDeviceCaptureExpanded;

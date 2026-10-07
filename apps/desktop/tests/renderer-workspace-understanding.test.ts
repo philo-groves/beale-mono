@@ -560,8 +560,9 @@ describe('workspace dashboard', () => {
     expect(html).not.toContain('Research Surface');
     expect(html).not.toContain('Workspace inputs and coverage');
     expect(html).not.toContain('workspace-surface-card');
-    expect(html).not.toContain('class="research-side-column');
-    expect(html).not.toContain('class="research-side-resize-handle"');
+    expect(html).toContain('class="research-side-column"');
+    expect(html).toContain('class="research-side-resize-handle"');
+    expect(html).toContain('aria-hidden="true" tabindex="-1"');
     expect(html).not.toContain('aria-label="Workspace resource types"');
     expect(html).not.toContain('aria-label="Daily token usage over the past year"');
     expect(html).not.toContain('class="workspace-catalog-list memory-catalog-list');

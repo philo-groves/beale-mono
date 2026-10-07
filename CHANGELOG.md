@@ -103,6 +103,8 @@
 
 #### Fixed
 
+- Collapsed session and workspace summaries now provide controls to reopen every existing Browser context after its last tab is closed.
+- Embedded Browser context labels and last visited pages now survive Beale restarts. Browser contexts use persistent, isolated session storage, and reopening a tab restores its last page. Browser pages stay mounted while the research sidebar is collapsed; closing a tab retains its context, while explicitly removing a context clears its stored session data. Earlier in-memory contexts and sign-ins cannot be recovered after a prior restart.
 - Closing an embedded Browser CDP connection after its page is destroyed no longer crashes the Beale main process and interrupts the research session.
 - Sessions that fail before producing transcript events now show their stored failure reason in the commentary, and app-server response errors retain their leading diagnostic text.
 - Prompt settings always shows the current token estimate, including for the default template and unsaved edits.
