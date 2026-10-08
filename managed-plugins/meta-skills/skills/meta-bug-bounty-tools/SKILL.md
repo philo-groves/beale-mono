@@ -18,7 +18,7 @@ Use the [Meta Bug Bounty tools page](https://bugbounty.meta.com/tools/) to choos
 
 Some tools require a Meta login or program access. Follow the linked product's current UI and documentation when access is available. If a tool is unavailable, record that limitation and use another authorized way to verify the hypothesis. Do not treat a tool's presence on the page as authorization for a target outside the workspace's recorded scope.
 
-The Whitehat Test Accounts tool may be disabled or unavailable. For manual research when it cannot be used, designate live accounts that you own or control and keep them free of real user data. Do not use live accounts for automated testing, interact with non-consenting users, or treat this workaround as expanded authorization. Check Meta's current terms before testing.
+The Whitehat Test Accounts tool may be disabled or unavailable. When it cannot be used, record designated live accounts that the researcher owns or is explicitly authorized to use in the workspace authorization boundary, and keep them free of real user data. The agent may conduct bounded research and browser inspection with those accounts, subject to Meta's current terms. Restrict messages, friend or follow requests, invitations, tags, mentions, notifications, and other account-to-account interactions to the designated authorized accounts. If the recipient or effect is unclear, do not perform the action. This does not authorize automated testing prohibited by Meta's terms or expand the workspace's scope.
 
 ## Muse Secure VM boundary research
 
