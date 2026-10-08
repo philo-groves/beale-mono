@@ -2208,9 +2208,18 @@ export function App(): JSX.Element {
     setSessionWorkflowBusy(true);
     setSessionWorkflowError(null);
     try {
-      const currentProviderSettings = await window.beale.getProviderSettings();
+      const [currentProviderSettings, catalogs, currentOpenAiStatus, currentProviderStatuses] = await Promise.all([
+        window.beale.getProviderSettings(),
+        window.beale.getResearchProviderModelCatalog(),
+        window.beale.getOpenAiStatus(),
+        window.beale.getResearchProviderStatuses()
+      ]);
       setProviderSettings(currentProviderSettings);
-      const input = workflowRunInput(workflow, permissionSettings.defaultShellSafetyMode, values, currentProviderSettings);
+      const input = workflowRunInput(workflow, permissionSettings.defaultShellSafetyMode, values, currentProviderSettings, {
+        catalogs,
+        openAiStatus: currentOpenAiStatus,
+        providerStatuses: currentProviderStatuses
+      });
       const access = await window.beale.getProviderCredentialAccessRequest(
         [input.provider]
       );

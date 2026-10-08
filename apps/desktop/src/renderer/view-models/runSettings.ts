@@ -1,8 +1,10 @@
-import type { ProviderSettings, ResearchModelProviderId, SessionWorkflowDefinition, ShellSafetyMode, StartRunInput } from '@shared/types';
+import type { OpenAiAccountStatus, ProviderSettings, ResearchModelProviderId, ResearchProviderModelCatalog, ResearchProviderStatus, SessionWorkflowDefinition, ShellSafetyMode, StartRunInput } from '@shared/types';
 import { DEFAULT_RESEARCH_REASONING_EFFORT } from '../../shared/modelDefaults';
+import { filterEnabledProviderModelCatalogs } from '../../shared/optionalProviderModels';
 import { DEFAULT_SHELL_SAFETY_MODE } from '../../shared/shellSafety';
 import { DEFAULT_RESEARCH_COLLABORATION } from '../../shared/collaboration';
 import { assignedWorkflowGoalObjective } from '../../shared/goalObjective';
+import { resolvedProviderModelDefaults } from './providerModelDefaults';
 
 export const UNBOUNDED_MINUTES = 999_999;
 export const UNBOUNDED_ATTEMPTS = 999_999;
@@ -28,10 +30,35 @@ export const defaultRunInput: StartRunInput = {
   }
 };
 
-export function workflowRunInput(workflow: Pick<SessionWorkflowDefinition, 'id' | 'title' | 'description' | 'fields'>, shellSafetyMode: ShellSafetyMode, values: Record<string, string>, providerSettings: ProviderSettings): StartRunInput & { provider: ResearchModelProviderId } {
-  const provider = providerSettings.defaultProviderId;
-  const defaults = provider ? providerSettings.modelDefaults[provider] : null;
-  if (!provider || !defaults?.largeModel) throw new Error('Choose a default Lead provider and large model in Provider settings before running a workflow.');
+export function workflowRunInput(
+  workflow: Pick<SessionWorkflowDefinition, 'id' | 'title' | 'description' | 'fields'>,
+  shellSafetyMode: ShellSafetyMode,
+  values: Record<string, string>,
+  providerSettings: ProviderSettings,
+  models: {
+    catalogs: readonly ResearchProviderModelCatalog[];
+    openAiStatus: Pick<OpenAiAccountStatus, 'configured' | 'defaultModel' | 'defaultReasoningEffort'>;
+    providerStatuses: readonly Pick<ResearchProviderStatus, 'id' | 'configured' | 'defaultModel'>[];
+  }
+): StartRunInput & { provider: ResearchModelProviderId } {
+  const configuredProviders: ResearchModelProviderId[] = [
+    ...(models.openAiStatus.configured ? ['openai-codex' as const] : []),
+    ...models.providerStatuses.filter((status) => status.configured).map((status) => status.id)
+  ];
+  const provider = configuredProviders.find((id) => id === providerSettings.defaultProviderId)
+    ?? configuredProviders[0];
+  if (!provider) throw new Error('Choose a default Lead provider in Provider settings before running a workflow.');
+  const catalog = filterEnabledProviderModelCatalogs(models.catalogs, providerSettings)
+    .find((entry) => entry.providerId === provider) ?? null;
+  const providerStatus = models.providerStatuses.find((status) => status.id === provider);
+  const defaults = resolvedProviderModelDefaults(
+    provider,
+    catalog,
+    provider === 'openai-codex' ? models.openAiStatus.defaultModel : providerStatus?.defaultModel ?? null,
+    provider === 'openai-codex' ? models.openAiStatus.defaultReasoningEffort : null,
+    providerSettings.modelDefaults[provider]
+  );
+  if (!defaults) throw new Error('No available large model for the default Lead provider. Check Provider settings before running a workflow.');
   if (defaults.reasoningEffort === 'off') throw new Error('The default large model needs a supported reasoning effort for Advanced collaboration.');
   const modelSelection = { provider, model: defaults.largeModel, reasoningEffort: defaults.reasoningEffort };
   const configuration = workflow.fields.map((field) => `- ${field.label}: ${values[field.id]?.trim() || '(empty)'}`).join('\n');

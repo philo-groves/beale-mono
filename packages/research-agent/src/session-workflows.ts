@@ -443,8 +443,8 @@ export class SessionWorkflowStore {
         for (const target of assignment.auditTargets) {
           if (!assignment.scopePaths.includes(target.path)) throw new Error(`Inventory the declared path for ${target.system} before advancing.`);
           const row = this.db.prepare(`SELECT COUNT(*) AS count FROM beale_session_workflow_files
-            WHERE workspace_id = ? AND session_id = ? AND (path = ? OR substr(path, 1, length(?) + 1) = ? || '/')`)
-            .get(this.workspaceId, sessionId, target.path, target.path, target.path) as SqlRow;
+            WHERE workspace_id = ? AND session_id = ? AND (path = ? OR substr(path, 1, length(?) + 1) = ?)`)
+            .get(this.workspaceId, sessionId, target.path, target.path, `${target.path}${sep}`) as SqlRow;
           if (Number(row.count) === 0) throw new Error(`No inventoried text files were found for ${target.system}; resolve the scope before advancing.`);
         }
       }
@@ -504,8 +504,8 @@ export class SessionWorkflowStore {
         .run(this.workspaceId, sessionId, this.workspaceId, sessionId);
       this.db.prepare(`DELETE FROM beale_session_workflow_files WHERE workspace_id = ? AND session_id = ?
         AND NOT EXISTS (SELECT 1 FROM beale_session_workflow_targets AS target WHERE target.workspace_id = ? AND target.session_id = ?
-          AND (beale_session_workflow_files.path = target.path OR substr(beale_session_workflow_files.path, 1, length(target.path) + 1) = target.path || '/'))`)
-        .run(this.workspaceId, sessionId, this.workspaceId, sessionId);
+          AND (beale_session_workflow_files.path = target.path OR substr(beale_session_workflow_files.path, 1, length(target.path) + 1) = target.path || ?))`)
+        .run(this.workspaceId, sessionId, this.workspaceId, sessionId, sep);
       if (assignment.stepIndex > 0) this.db.prepare("UPDATE beale_session_workflow_assignments SET step_index = 1, completed_at = NULL WHERE workspace_id = ? AND session_id = ?")
         .run(this.workspaceId, sessionId);
       this.db.exec("COMMIT");

@@ -113,6 +113,12 @@ test('assigned repository auditor tracks exact line coverage across scopes and c
     assert.throws(() => requireAssignedSessionWorkflowDisposition(store, 'session-example', { outcome: 'objective_achieved' }), /uncovered/u);
     assert.equal(store.getAssignment('session-example').fileCount, 4);
     assert.throws(() => store.assign('session-example', 'beale.repository-auditor', { systems: 'different' }), /cannot change/u);
+    const narrowed = store.declareAuditTargets('session-example', [
+      { system: 'example repository', path: modulePath }, { system: 'module', path: modulePath }
+    ], [repository]);
+    assert.equal(narrowed.stepIndex, 1);
+    assert.deepEqual(narrowed.scopePaths, [realpathSync(modulePath)]);
+    assert.equal(narrowed.fileCount, 3);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
