@@ -18,6 +18,7 @@ import { SessionNextStepsWidget } from '../src/renderer/features/sessions/Sessio
 import { WorkspaceCreationView } from '../src/renderer/features/workspaces/WorkspaceCreationView';
 import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollbarActivation';
 import { applyResearchKit, emptyWorkspaceOnboardingForm, onboardingFormFromDefaults } from '../src/renderer/view-models/workspaceOnboarding';
+import { defaultRunInput } from '../src/renderer/view-models/runSettings';
 
 describe('renderer dialog surfaces', () => {
   it('shows OpenAI Fast mode in the lead-model picker summary when enabled', () => {
@@ -327,6 +328,20 @@ describe('renderer dialog surfaces', () => {
     expect(html).toContain('class="new-research-compose-layout"');
     expect(html).toContain('class="modal-panel wide-modal start-run-dialog"');
     expect(html).not.toContain('bottom-sheet-panel');
+  });
+
+  it('shows Goal mode as required when New Research has an assigned workflow', () => {
+    const html = renderToStaticMarkup(createElement(StartRunForm, {
+      snapshot: { workspace: { workspaceId: 'workspace-example' }, activeScope: { id: 'scope-example' } } as WorkspaceSnapshot,
+      initialInput: { ...defaultRunInput, promptMarkdown: 'Review example source.',
+        guidanceWorkflow: { id: 'beale.repository-auditor', values: { systems: 'example module' } } },
+      openAiStatus: null, defaultProviderId: 'openai-codex', providerModelDefaults: {},
+      researchProviderStatuses: [], providerModelCatalog: [],
+      researchGoalSuggestions: phaseSuggestions(), researchGoalSuggestionsLoading: phaseValues(false),
+      researchGoalSuggestionErrors: phaseValues(null), busy: false, runAction: async () => undefined,
+      onCancel: () => undefined, onRetryResearchGoalSuggestions: () => undefined, onStarted: () => undefined
+    }));
+    expect(html).toMatch(/<label class="new-research-goal-toggle"[^>]*><input type="checkbox" disabled="" checked=""\/><span>Goal<\/span><\/label>/);
   });
 
   it('opens New Research in the shared commentary session surface', () => {

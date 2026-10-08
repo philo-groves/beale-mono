@@ -8,6 +8,7 @@ import {
   UNBOUNDED_ATTEMPTS,
   UNBOUNDED_MINUTES
 } from '../src/renderer/view-models/runSettings';
+import { resolveSessionGoal } from '../src/shared/goalObjective';
 
 describe('renderer run settings view model', () => {
   it('keeps new research sessions unlimited by minutes but one branch by default', () => {
@@ -21,6 +22,18 @@ describe('renderer run settings view model', () => {
     expect(defaultRunInput.model).toBe('');
     expect(defaultRunInput.reasoningEffort).toBe('high');
     expect(defaultRunInput.fastMode).toBe(false);
+  });
+
+  it('requires Goal mode for an assigned workflow, including continuation of an earlier run', () => {
+    const input = { ...defaultRunInput, promptMarkdown: 'Review the example module.' };
+    expect(resolveSessionGoal(input)).toEqual({ enabled: false, objective: null });
+    const assigned = resolveSessionGoal({ ...input,
+      guidanceWorkflow: { id: 'beale.repository-auditor', values: { systems: 'example module' } } });
+    expect(assigned.enabled).toBe(true);
+    expect(assigned.objective).toContain('Inspect all inventoried source lines');
+    expect(resolveSessionGoal({ ...input, goalEnabled: true, goalObjective: 'Investigate example source.',
+      guidanceWorkflow: { id: 'beale.repository-auditor', values: { systems: 'example module' } } }).objective)
+      .toBe('Investigate example source.');
   });
 
   it('parses optional positive integers and preserves unbounded budget extension', () => {

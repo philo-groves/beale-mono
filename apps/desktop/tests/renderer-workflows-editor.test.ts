@@ -36,6 +36,8 @@ describe('Workflows editor', () => {
     expect(input.guidanceWorkflow).toEqual({ id: workflow.id, values: { component: 'example module' } });
     expect(input.promptMarkdown).toContain('Run the assigned Example review workflow');
     expect(input.promptMarkdown).toContain('Component: example module');
+    expect(input.goalEnabled).toBe(true);
+    expect(input.goalObjective).toContain('Complete every cell of the assigned Example review workflow');
     expect(input.shellSafetyMode).toBe('auto_review');
     expect(input.provider).toBe('openai-codex');
     expect(input.model).toBe('example-large-model');
@@ -44,6 +46,16 @@ describe('Workflows editor', () => {
       providers: [{ provider: 'openai-codex', model: 'example-large-model', reasoningEffort: 'high', enabled: true }] });
     expect(input.collaboration?.providers).toHaveLength(1);
     expect(normalizeResearchCollaboration(input.collaboration).providers).toHaveLength(1);
+  });
+
+  it('keeps the repository auditor in Goal mode through full source coverage', () => {
+    const input = workflowRunInput({ ...workflow, id: 'beale.repository-auditor' }, 'auto_review', { component: 'example module' },
+      { defaultProviderId: 'openai-codex', modelDefaults: { 'openai-codex': {
+        largeModel: 'example-large-model', smallModel: 'example-small-model', reasoningEffort: 'high'
+      } } });
+    expect(input.goalEnabled).toBe(true);
+    expect(input.goalObjective).toContain('Inspect all inventoried source lines');
+    expect(input.goalObjective).toContain('refresh the inventory');
   });
 
   it('rejects a model without a supported collaborator reasoning effort', () => {

@@ -1,4 +1,23 @@
+import type { StartRunInput } from './types';
+
 const MAX_GOAL_OBJECTIVE_CHARS = 320;
+
+export function assignedWorkflowGoalObjective(workflowId: string, title?: string): string {
+  return workflowId === 'beale.repository-auditor'
+    ? 'Complete every cell of the assigned repository auditor workflow. Inspect all inventoried source lines in every declared system, refresh the inventory, and report coverage and evidence-backed results.'
+    : `Complete every cell of the assigned ${title ?? 'session'} workflow in order, using the session configuration and recording progress after each cell.`;
+}
+
+export function resolveSessionGoal(input: Pick<StartRunInput, 'goalEnabled' | 'goalObjective' | 'promptMarkdown' | 'guidanceWorkflow'>): {
+  enabled: boolean;
+  objective: string | null;
+} {
+  const enabled = input.goalEnabled || Boolean(input.guidanceWorkflow);
+  if (!enabled) return { enabled: false, objective: null };
+  const explicit = input.goalObjective ?? (input.guidanceWorkflow && !input.goalEnabled
+    ? assignedWorkflowGoalObjective(input.guidanceWorkflow.id) : null);
+  return { enabled: true, objective: resolveGoalObjective(explicit, input.promptMarkdown) };
+}
 
 const EXPLICIT_OBJECTIVE_LINE = /^\s*(?:#{1,6}\s*)?(?:(?:research|session)\s+)?(?:goal|objective|direction)\s*:?[ \t]*(.*)$/i;
 const MARKDOWN_PREFIX = /^\s*(?:(?:#{1,6}|[-*+]|\d+[.)])\s+)+/;

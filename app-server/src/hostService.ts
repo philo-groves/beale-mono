@@ -549,7 +549,19 @@ export class AppServerHostService {
         }
       : null;
     const workspaceReferences = await this.sameSubjectWorkspaceReferences(workspace, storage);
-    const restartLaunch = restartLaunchDescriptor(request, {
+    let goal = request.launch.goal;
+    if (request.launch.guidanceWorkflow || continuation) {
+      const workflows = new SessionWorkflowStore(storage.databasePath, workspace.workspaceId);
+      try {
+        const assignment = request.launch.guidanceWorkflow
+          ? workflows.assign(sessionId, request.launch.guidanceWorkflow.id, request.launch.guidanceWorkflow.values)
+          : workflows.getAssignment(sessionId);
+        if (assignment) goal ??= { objective: assignment.definition.kind === 'repository_auditor'
+          ? 'Complete every cell of the assigned repository auditor workflow. Inspect all inventoried source lines in every declared system, refresh the inventory, and report coverage and evidence-backed results.'
+          : `Complete every cell of the assigned ${assignment.definition.title} workflow in order, using the session configuration and recording progress after each cell.` };
+      } finally { workflows.close(); }
+    }
+    const restartLaunch = restartLaunchDescriptor({ ...request, launch: { ...request.launch, ...(goal ? { goal } : {}) } }, {
       providerId,
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -557,12 +569,6 @@ export class AppServerHostService {
       ...(daybreakBlue ? { daybreakBlue: true } : {}),
       profileId
     });
-    if (request.launch.guidanceWorkflow) {
-      const workflows = new SessionWorkflowStore(storage.databasePath, workspace.workspaceId);
-      try {
-        workflows.assign(sessionId, request.launch.guidanceWorkflow.id, request.launch.guidanceWorkflow.values);
-      } finally { workflows.close(); }
-    }
     await this.ensureCanonicalSession({
       sessionId,
       attemptId,
@@ -591,7 +597,7 @@ export class AppServerHostService {
         capturePath,
         attemptId,
         promptMarkdown: request.launch.promptMarkdown,
-        ...(request.launch.goal ? { goal: request.launch.goal } : {}),
+        ...(goal ? { goal } : {}),
         provider: {
           id: providerId,
           ...(model ? { model } : {}),

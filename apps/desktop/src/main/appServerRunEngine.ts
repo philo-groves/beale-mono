@@ -33,7 +33,7 @@ import { normalizeResearchCollaboration } from '../shared/collaboration';
 import { normalizeRepeatSchedule } from '../shared/repeatSchedule';
 import { generateSessionTitle, SESSION_TITLE_FALLBACK } from '../shared/sessionTitle';
 import { getAppServerProviderSemantics } from './appServerCliClient';
-import { resolveGoalObjective } from '../shared/goalObjective';
+import { resolveSessionGoal } from '../shared/goalObjective';
 import { redactCommandArgumentsForModel, redactForModelText, redactJsonForModel } from './redaction';
 import {
   AppServerWebSocketClient
@@ -224,10 +224,10 @@ export class AppServerRunEngine {
     if (this.disposed) {
       throw new Error('app-server run engine has been disposed.');
     }
-    const goalObjective = input.goalEnabled
-      ? resolveGoalObjective(input.goalObjective, input.promptMarkdown)
-      : null;
-    const normalizedInput: StartRunInput = { ...input, goalObjective };
+    const goal = resolveSessionGoal(input);
+    const goalEnabled = goal.enabled;
+    const goalObjective = goal.objective;
+    const normalizedInput: StartRunInput = { ...input, goalEnabled, goalObjective };
     if (input.collaboration) normalizedInput.collaboration = normalizeResearchCollaboration(input.collaboration);
     const scope = this.db.getActiveScope();
     const workflowId = resolveResearchWorkflowId(researchProfile.profile, input.workflowId, input.mode);
@@ -250,7 +250,7 @@ export class AppServerRunEngine {
         modelProvider: input.provider?.trim() || null,
         fastMode: input.fastMode === true,
         ...(input.provider === 'openai-codex' ? { daybreakBlue: input.daybreakBlue === true } : {}),
-        goalEnabled: input.goalEnabled,
+        goalEnabled,
         goalObjective,
         researchWorkflowId: workflowId,
         guidanceWorkflow: input.guidanceWorkflow ?? null,
@@ -270,7 +270,7 @@ export class AppServerRunEngine {
         reasoningEffort: input.reasoningEffort,
         fastMode: input.fastMode === true,
         ...(input.provider === 'openai-codex' ? { daybreakBlue: input.daybreakBlue === true } : {}),
-        goalEnabled: input.goalEnabled,
+        goalEnabled,
         goalObjective,
         researchProfileSnapshotId: researchProfile.id,
         researchProfileId: researchProfile.profileId,
@@ -287,7 +287,7 @@ export class AppServerRunEngine {
       payload: {
         runEngine: 'app-server',
         provider: input.provider?.trim() || null,
-        goalEnabled: input.goalEnabled,
+        goalEnabled,
         goalObjectivePresent: Boolean(goalObjective),
         sandboxProfile: input.sandboxProfile
       },
@@ -2655,9 +2655,7 @@ function appServerSessionLaunchRequest(
     fallbackPrompt: string;
   }
 ): AppServerSessionLaunchRequest {
-  const objective = input.goalEnabled
-    ? resolveGoalObjective(input.goalObjective, input.promptMarkdown)
-    : null;
+  const goal = resolveSessionGoal(input);
 
   return {
     launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
@@ -2666,7 +2664,7 @@ function appServerSessionLaunchRequest(
       workspaceId,
       ...(attemptId ? { attemptId } : {}),
       promptMarkdown: input.promptMarkdown,
-      ...(input.goalEnabled ? { goal: { ...(objective ? { objective } : {}) } } : {}),
+      ...(goal.enabled ? { goal: { ...(goal.objective ? { objective: goal.objective } : {}) } } : {}),
       ...(
         input.provider?.trim() || input.model.trim() || input.reasoningEffort.trim() || input.fastMode
           || (input.provider?.trim() === 'openai-codex' && input.daybreakBlue)
@@ -2704,16 +2702,17 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
   const persistedGoalObjective = typeof run.budget.goalObjective === 'string'
     ? run.budget.goalObjective
     : null;
+  const guidanceWorkflow = run.budget.guidanceWorkflow as StartRunInput['guidanceWorkflow'];
+  const goal = resolveSessionGoal({ goalEnabled: run.budget.goalEnabled === true,
+    goalObjective: persistedGoalObjective, promptMarkdown: run.promptMarkdown, guidanceWorkflow });
   return {
     provider: typeof run.budget.modelProvider === 'string' ? run.budget.modelProvider : undefined,
     shellSafetyMode: run.shellSafetyMode,
-    goalEnabled: run.budget.goalEnabled === true,
-    goalObjective: run.budget.goalEnabled === true
-      ? resolveGoalObjective(persistedGoalObjective, run.promptMarkdown)
-      : null,
+    goalEnabled: goal.enabled,
+    goalObjective: goal.objective,
     promptMarkdown,
     workflowId: researchWorkflowFromRun(run) || undefined,
-    ...(run.budget.guidanceWorkflow ? { guidanceWorkflow: run.budget.guidanceWorkflow as NonNullable<StartRunInput['guidanceWorkflow']> } : {}),
+    ...(guidanceWorkflow ? { guidanceWorkflow } : {}),
     ...(isReportResourceContext(run.budget.resourceContext)
       ? { resourceContext: run.budget.resourceContext }
       : {}),

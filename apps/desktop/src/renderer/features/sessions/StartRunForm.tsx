@@ -26,7 +26,7 @@ import type {
   SessionWorkflowDefinition,
   WorkspaceSnapshot
 } from '@shared/types';
-import { resolveGoalObjective } from '../../../shared/goalObjective';
+import { assignedWorkflowGoalObjective, resolveGoalObjective } from '../../../shared/goalObjective';
 import { ensureDefaultResearchCollaborator, normalizeResearchCollaboration } from '../../../shared/collaboration';
 import { Modal } from '../../app/Modal';
 import { BealeWelcomeIcon } from '../../app/BealeWelcomeIcon';
@@ -711,7 +711,13 @@ export function ResearchSettingsForm({
       if (!definition || definition.fields.some((field) => field.required && !startInput.guidanceWorkflow?.values[field.id]?.trim())) return;
     }
     setStartingRun(true);
-    void Promise.resolve(onSubmit(startInput)).finally(() => setStartingRun(false));
+    const goalEnabled = startInput.goalEnabled || Boolean(startInput.guidanceWorkflow);
+    void Promise.resolve(onSubmit({ ...startInput, goalEnabled,
+      goalObjective: startInput.guidanceWorkflow && !startInput.goalEnabled
+        ? assignedWorkflowGoalObjective(startInput.guidanceWorkflow.id,
+          sessionWorkflows.find((workflow) => workflow.id === startInput.guidanceWorkflow?.id)?.title)
+        : goalEnabled ? resolveGoalObjective(startInput.goalObjective, startInput.promptMarkdown) : null
+    })).finally(() => setStartingRun(false));
   };
 
   const start = (): void => {
@@ -989,12 +995,12 @@ export function ResearchSettingsForm({
               <div className="new-research-options-tray-right">
                 <label
                   className="new-research-goal-toggle"
-                  title="Keep working across turns until the objective is complete or genuinely blocked."
+                  title={input.guidanceWorkflow ? 'Assigned workflows use Goal mode until their runbooks complete or an external blocker requires attention.' : 'Keep working across turns until the objective is complete or genuinely blocked.'}
                 >
                   <input
                     type="checkbox"
-                    checked={input.goalEnabled}
-                    disabled={generatingPrompt}
+                    checked={input.goalEnabled || Boolean(input.guidanceWorkflow)}
+                    disabled={generatingPrompt || Boolean(input.guidanceWorkflow)}
                     onChange={(event) => update('goalEnabled', event.target.checked)}
                   />
                   <span>Goal</span>
@@ -1084,12 +1090,12 @@ export function ResearchSettingsForm({
               />
               <label
                 className="new-research-goal-toggle"
-                title="Keep working across turns until the objective is complete or genuinely blocked."
+                title={input.guidanceWorkflow ? 'Assigned workflows use Goal mode until their runbooks complete or an external blocker requires attention.' : 'Keep working across turns until the objective is complete or genuinely blocked.'}
               >
                 <input
                   type="checkbox"
-                  checked={input.goalEnabled}
-                  disabled={generatingPrompt}
+                  checked={input.goalEnabled || Boolean(input.guidanceWorkflow)}
+                  disabled={generatingPrompt || Boolean(input.guidanceWorkflow)}
                   onChange={(event) => update('goalEnabled', event.target.checked)}
                 />
                 <span>Goal</span>

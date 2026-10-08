@@ -2,6 +2,7 @@ import type { ProviderSettings, ResearchModelProviderId, SessionWorkflowDefiniti
 import { DEFAULT_RESEARCH_REASONING_EFFORT } from '../../shared/modelDefaults';
 import { DEFAULT_SHELL_SAFETY_MODE } from '../../shared/shellSafety';
 import { DEFAULT_RESEARCH_COLLABORATION } from '../../shared/collaboration';
+import { assignedWorkflowGoalObjective } from '../../shared/goalObjective';
 
 export const UNBOUNDED_MINUTES = 999_999;
 export const UNBOUNDED_ATTEMPTS = 999_999;
@@ -36,6 +37,8 @@ export function workflowRunInput(workflow: Pick<SessionWorkflowDefinition, 'id' 
   const configuration = workflow.fields.map((field) => `- ${field.label}: ${values[field.id]?.trim() || '(empty)'}`).join('\n');
   return {
     ...defaultRunInput,
+    goalEnabled: true,
+    goalObjective: assignedWorkflowGoalObjective(workflow.id, workflow.title),
     provider: modelSelection.provider,
     model: modelSelection.model,
     reasoningEffort: modelSelection.reasoningEffort,

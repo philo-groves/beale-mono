@@ -90,6 +90,7 @@
 
 #### Changed
 
+- Assigned workflows now start in persistent Goal mode from Run All or New Research, and earlier assigned runs enter Goal mode when continued. The repository auditor's goal requires complete inventoried source coverage and a refreshed inventory before reporting completion; partial dispositions continue the session.
 - Workflow run history now reads the canonical session lifecycle, and app-server records terminal states for workers that end before their runbooks finish. Run All fetches current provider settings before launch so an unopened New Research view does not block it.
 - The MSRC Research Kit is now MSRC Windows for the Windows Insider Preview bounty. A selectable catalog of common Windows apps, services, four program-listed sandbox contexts, and repositories for shipped open-source code can be managed during workspace creation and kit refresh; existing `msrc` workspace metadata remains compatible. Catalog entries are candidates that require guest and program eligibility checks.
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
