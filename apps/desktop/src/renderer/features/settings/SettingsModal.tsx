@@ -2,9 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import type { CSSProperties } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import {
-  DEFAULT_RESEARCH_REASONING_EFFORT
-} from '../../../shared/modelDefaults';
 import { Archive, ArchiveRestore, FileText, KeyRound, MessageSquare, Palette, Plus, RefreshCw, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
 import { OPTIONAL_AGENT_FEATURES } from '../../../shared/optionalAgentFeatures';
 import type {
@@ -55,6 +52,7 @@ import {
 } from '../../../shared/optionalProviderModels';
 import { normalizeShellSafetyMode } from '../../../shared/shellSafety';
 import { permissionModeOptions } from '../../view-models/permissionSettings';
+import { preferredProviderReasoningEffort, resolvedProviderModelDefaults } from '../../view-models/providerModelDefaults';
 import {
   APPEARANCE_BACKGROUNDS,
   APPEARANCE_TRANSPARENCY_PERCENTAGES,
@@ -2181,29 +2179,6 @@ export function nextConfiguredProviderIdAfterRemoval(
     : remainingProviderIds[0] ?? null;
 }
 
-export function resolvedProviderModelDefaults(
-  providerId: ResearchModelProviderId,
-  catalog: ResearchProviderModelCatalog | null,
-  configuredLargeModel: string | null,
-  configuredReasoningEffort: string | null,
-  stored: ProviderModelDefaults | undefined
-): ProviderModelDefaults | null {
-  const models = catalog?.models ?? [];
-  if (models.length === 0) return null;
-  const largeModel = models.find((model) => model.id === stored?.largeModel)?.id
-    ?? models.find((model) => model.id === configuredLargeModel)?.id
-    ?? models[0]!.id;
-  const smallModel = models.find((model) => model.id === stored?.smallModel)?.id
-    ?? models.find((model) => model.id === catalog?.defaultSmallModel)?.id
-    ?? models[0]!.id;
-  const largeModelEntry = models.find((model) => model.id === largeModel)!;
-  const desiredEffort = stored?.reasoningEffort ?? normalizeReasoningEffort(configuredReasoningEffort) ?? DEFAULT_RESEARCH_REASONING_EFFORT;
-  const reasoningEffort = largeModelEntry.effortLevels.includes(desiredEffort)
-    ? desiredEffort
-    : preferredProviderReasoningEffort(largeModelEntry.effortLevels);
-  return { largeModel, smallModel, reasoningEffort };
-}
-
 export function ProvidersSettingsView({
   openAiStatus,
   openAiOAuthResult,
@@ -3141,19 +3116,6 @@ function ProviderModelDefaultsControls({
 
 function providerModelOptionLabel(providerId: ResearchModelProviderId | undefined, model: ResearchProviderModel): string {
   return providerId ? researchModelNameLabel(providerId, model.name) : model.name;
-}
-
-function normalizeReasoningEffort(value: string | null): ResearchModelEffortLevel | null {
-  return value === 'off' || value === 'minimal' || value === 'low' || value === 'medium'
-    || value === 'high' || value === 'xhigh' || value === 'max'
-    ? value
-    : null;
-}
-
-function preferredProviderReasoningEffort(levels: readonly ResearchModelEffortLevel[]): ResearchModelEffortLevel {
-  if (levels.includes('high')) return 'high';
-  if (levels.includes('medium')) return 'medium';
-  return levels[0] ?? 'off';
 }
 
 function reasoningEffortLabel(effort: ResearchModelEffortLevel): string {

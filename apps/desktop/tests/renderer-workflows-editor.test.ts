@@ -26,13 +26,21 @@ const workflow: SessionWorkflowDefinition = {
   ]
 };
 const workspaces = [{ id: 'registered-example', workspaceId: 'workspace-example', workspaceName: 'Example workspace' }] as WorkspaceRegistryEntry[];
+const modelContext = {
+  catalogs: [{ providerId: 'openai-codex' as const, providerName: 'Example provider', models: [
+    { id: 'example-large-model', name: 'Example large model', reasoning: true, effortLevels: ['high' as const, 'off' as const], contextWindow: 1000, maxTokens: 100 },
+    { id: 'example-small-model', name: 'Example small model', reasoning: true, effortLevels: ['high' as const], contextWindow: 1000, maxTokens: 100 }
+  ] }],
+  openAiStatus: { configured: true, defaultModel: 'example-large-model', defaultReasoningEffort: 'high' },
+  providerStatuses: []
+};
 
 describe('Workflows editor', () => {
   it('opens a new session with this workflow assigned and editable operator values', () => {
     const input = workflowRunInput(workflow, 'auto_review', { component: 'example module' },
       { defaultProviderId: 'openai-codex', modelDefaults: { 'openai-codex': {
         largeModel: 'example-large-model', smallModel: 'example-small-model', reasoningEffort: 'high'
-      } } });
+      } } }, modelContext);
     expect(input.guidanceWorkflow).toEqual({ id: workflow.id, values: { component: 'example module' } });
     expect(input.promptMarkdown).toContain('Run the assigned Example review workflow');
     expect(input.promptMarkdown).toContain('Component: example module');
@@ -52,7 +60,7 @@ describe('Workflows editor', () => {
     const input = workflowRunInput({ ...workflow, id: 'beale.repository-auditor' }, 'auto_review', { component: 'example module' },
       { defaultProviderId: 'openai-codex', modelDefaults: { 'openai-codex': {
         largeModel: 'example-large-model', smallModel: 'example-small-model', reasoningEffort: 'high'
-      } } });
+      } } }, modelContext);
     expect(input.goalEnabled).toBe(true);
     expect(input.goalObjective).toContain('Inspect all inventoried source lines');
     expect(input.goalObjective).toContain('refresh the inventory');
@@ -62,9 +70,39 @@ describe('Workflows editor', () => {
     expect(() => workflowRunInput(workflow, 'auto_review', {},
       { defaultProviderId: 'openai-codex', modelDefaults: { 'openai-codex': {
         largeModel: 'example-large-model', smallModel: 'example-small-model', reasoningEffort: 'off'
-      } } })).toThrow(/reasoning effort/u);
+      } } }, modelContext)).toThrow(/reasoning effort/u);
     expect(() => workflowRunInput(workflow, 'auto_review', {},
-      { defaultProviderId: 'openai-codex', modelDefaults: {} })).toThrow(/default Lead provider and large model/u);
+      { defaultProviderId: 'openai-codex', modelDefaults: {} }, { ...modelContext, catalogs: [] })).toThrow(/No available large model/u);
+  });
+
+  it('uses the large model displayed in Provider settings when no explicit defaults were saved', () => {
+    const input = workflowRunInput(workflow, 'auto_review', {},
+      { defaultProviderId: 'openai-codex', modelDefaults: {} }, modelContext);
+    expect(input.provider).toBe('openai-codex');
+    expect(input.model).toBe('example-large-model');
+    expect(input.reasoningEffort).toBe('high');
+    expect(input.collaboration?.providers).toMatchObject([
+      { provider: 'openai-codex', model: 'example-large-model', reasoningEffort: 'high' }
+    ]);
+  });
+
+  it('uses the displayed Lead provider while its default selection has not been saved', () => {
+    const input = workflowRunInput(workflow, 'auto_review', {},
+      { defaultProviderId: null, modelDefaults: {} }, modelContext);
+    expect(input.provider).toBe('openai-codex');
+    expect(input.model).toBe('example-large-model');
+  });
+
+  it('uses a configured research provider and its account model without saved defaults', () => {
+    const input = workflowRunInput(workflow, 'auto_review', {},
+      { defaultProviderId: 'anthropic', modelDefaults: {} }, {
+        catalogs: [{ ...modelContext.catalogs[0]!, providerId: 'anthropic' }],
+        openAiStatus: { ...modelContext.openAiStatus, configured: false },
+        providerStatuses: [{ id: 'anthropic', configured: true, defaultModel: 'example-large-model' }]
+      });
+    expect(input.provider).toBe('anthropic');
+    expect(input.model).toBe('example-large-model');
+    expect(input.reasoningEffort).toBe('high');
   });
 
   it('asks for a workspace when none is selected', () => {

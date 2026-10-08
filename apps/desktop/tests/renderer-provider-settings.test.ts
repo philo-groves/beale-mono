@@ -10,9 +10,9 @@ import {
   defaultProviderPickerOptions,
   providerSettingsOptions,
   resolvedDefaultProviderId,
-  nextConfiguredProviderIdAfterRemoval,
-  resolvedProviderModelDefaults
+  nextConfiguredProviderIdAfterRemoval
 } from '../src/renderer/features/settings/SettingsModal';
+import { resolvedProviderModelDefaults } from '../src/renderer/view-models/providerModelDefaults';
 
 describe('renderer provider settings', () => {
   it('replaces the provider removal control with progress text while removing', () => {
