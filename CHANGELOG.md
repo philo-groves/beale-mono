@@ -1228,7 +1228,7 @@
 
 #### Documentation
 
-- Noted the Meta Research Kit workaround for an unavailable Whitehat Test Accounts tool: designated researcher-controlled live accounts without real user data for manual testing, subject to current program terms.
+- Clarified that the Meta Research Kit permits bounded agent research on designated, authorized live accounts when Whitehat Test Accounts are unavailable, while prohibiting communication with accounts outside the recorded authorization boundary and retaining Meta's automation limits.
 - Expanded the root README for human readers with current status, setup, safety boundaries, and known incomplete surfaces.
 - Added MIT licensing metadata and a root `LICENSE`.
 

@@ -129,6 +129,10 @@ describe('renderer workspace onboarding view model', () => {
     expect(meta.workspaceName).toBe(base.workspaceName);
     expect(meta.researchSubjectName).toBe(base.researchSubjectName);
     expect(meta.rules).toEqual(expect.arrayContaining([expect.stringContaining('test account')]));
+    expect(meta.rules).toEqual(expect.arrayContaining([
+      expect.stringContaining('The agent may conduct bounded research and browser inspection'),
+      expect.stringContaining('do not message, friend, follow, invite, tag, mention, notify')
+    ]));
     expect(meta.descriptionMarkdown).toContain('https://bugbounty.meta.com/scope/');
     expect(meta.assets).toEqual(expect.arrayContaining([
       expect.objectContaining({ direction: 'in_scope', kind: 'domain', value: 'facebook.com' }),
