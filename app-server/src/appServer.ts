@@ -880,9 +880,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       if (runtime.introspectionToken) introspectionBindings.delete(runtime.introspectionToken);
       notifyChange();
       const detail = error instanceof Error ? error.message : String(error);
-      runtime.diagnostic = boundedDiagnostic(detail);
-      await recordSessionLaunchFailure(runtime, detail);
-      throw new HttpError(502, `app-server session failed to start: ${detail}`);
+      const diagnostic = runtime.diagnostic ?? detail;
+      runtime.diagnostic = boundedDiagnostic(diagnostic);
+      await recordSessionLaunchFailure(runtime, diagnostic);
+      throw new HttpError(502, `app-server session failed to start: ${diagnostic}`);
     }
   }
 

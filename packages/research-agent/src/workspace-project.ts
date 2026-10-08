@@ -12,7 +12,7 @@ const WORKSPACE_ROOT_INTERNAL_ENTRIES = new Set([".git", ".beale"]);
 const MAX_TRACKED_BYTES = 5 * 1024 * 1024;
 const MAX_GENERATED_RESEARCH_BYTES = 32 * 1024 * 1024;
 const INDEX_PATH = "references/research-index.json";
-const IGNORES = ["/.beale/", "/scratch/", "/cache/", "/traces/**/events*.jsonl", "/traces/**/outputs/", "**/evidence/raw/", "**/node_modules/", "**/.git/", "**/*.noindex/", "*.sqlite*", "*.db", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.tmp"];
+const IGNORES = ["/.beale/", "/scratch/", "/cache/", "/traces/**/events*.jsonl", "/traces/**/outputs/", "**/evidence/raw/", "**/node_modules/", "**/build/", "**/.libs/", "**/.git/", "**/*.noindex/", "*.sqlite*", "*.db", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.tmp"];
 const WORKSPACE_GITIGNORE_START = "# >>> Beale managed workspace layout >>>";
 const WORKSPACE_GITIGNORE_END = "# <<< Beale managed workspace layout <<<";
 const RAW_ARTIFACT_EXCLUDE_START = "# >>> Beale oversized candidate evidence >>>";
@@ -343,6 +343,7 @@ This directory is one research workspace. Source repositories belong in the host
 
 Keep related scripts and fixtures with their investigation or runbook. Default shell execution uses session scratch; specify an external repository cwd for source work and an explicit investigation directory for persistent candidate work.
 Place generated candidate artifacts larger than 5 MiB beneath an evidence/ directory, including a nested investigation/evidence/ directory when the artifact belongs with candidate code. App-server retains those oversized files locally, records tracked integrity manifests, and excludes their exact paths from Git. Do not generate oversized artifacts elsewhere in the workspace because required checkpoints will reject them.
+Build output directories named build/ and .libs/ are left in place but excluded from Git checkpoints. Move durable scripts, fixtures, and evidence outside those directories before relying on a checkpoint to retain them.
 If an untracked investigation file exceeds the limit, Beale reports its path before staging and offers a previewed move into evidence/recovered/ followed by a checkpoint retry. Tracked or canonical oversized files require an explicit operator repair.
 Keep the workspace top level clean. Unexpected files and directories are ignored by Git but detected directly by app-server; the agent is reminded every turn until it moves them into an approved directory.
 App-server keeps its derived research index synchronized with these files and creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
@@ -403,6 +404,11 @@ export function workspacePathProblem(path: string): string | null {
   if (parts.some((part) => /^(?:node_modules|\.env(?:\..*)?|credentials?(?:\..*)?|id_rsa|id_ed25519)$/iu.test(part)) || /\.(?:sqlite(?:-wal|-shm)?|db|pem|key|p12|pfx)$/iu.test(path)) return "runtime databases and credential material must not be committed";
   if (/(?:^|\/)evidence\/raw\//u.test(path) || (parts[0] === "traces" && (parts.includes("outputs") || /\.jsonl$/iu.test(path)))) return "raw captures are retained outside Git";
   return null;
+}
+
+function ignoredGeneratedTrackedPaths(root: string): Set<string> {
+  return new Set(git(root, ["ls-files", "-ci", "--exclude-standard", "-z"]).split("\0")
+    .filter((path) => path && path.split("/").some((part) => part.toLowerCase() === "build" || part.toLowerCase() === ".libs")));
 }
 
 function stagedFiles(root: string): Map<string, { mode: string; hash: string }> {
@@ -538,11 +544,13 @@ function workspaceFileIsSQLiteDatabase(path: string): boolean {
 /** Preview only untracked investigation files. Tracked and canonical files need operator-directed repair. */
 export function workspaceCheckpointRepairPlan(root: string): WorkspaceCheckpointRepairPlan {
   const tracked = new Set(git(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
+  const generatedTracked = ignoredGeneratedTrackedPaths(root);
   const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
   const candidates: WorkspaceCheckpointRepairFile[] = [];
   const blockers: WorkspaceCheckpointRepairBlocker[] = [];
   const revisions: string[] = [];
   for (const path of [...new Set([...tracked, ...untracked])].sort()) {
+    if (generatedTracked.has(path)) continue;
     const absolute = join(root, path);
     if (!existsSync(absolute)) continue;
     const stats = lstatSync(absolute);
@@ -780,11 +788,20 @@ export function checkpointWorkspace(root: string, reason: string, publish?: () =
         const indexPath = join(root, ".git", "index");
         if (existsSync(indexPath)) copyFileSync(indexPath, temporaryIndex);
         const env = { GIT_INDEX_FILE: temporaryIndex };
-        const candidates = new Set([...git(root, ["ls-files", "-z"]).split("\0"), ...git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0")].filter(Boolean));
-        const paths = [...candidates].filter((path) => !workspacePathProblem(path));
+        const tracked = git(root, ["ls-files", "-z"]).split("\0").filter(Boolean);
+        const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+        const candidates = new Set([...tracked, ...untracked]);
         const invalid = [...candidates].filter((path) => workspacePathProblem(path));
         if (invalid.length) throw new Error(`Move unclassified files into the workspace layout before checkpointing: ${invalid.slice(0, 8).join(", ")}`);
-        if (paths.length) git(root, ["add", "--all", "--pathspec-from-file=-", "--pathspec-file-nul"], env, paths.join("\0") + "\0");
+        // A previously tracked generated file can become ignored when the
+        // managed ignore block is refreshed. Git add --all rejects an explicit
+        // pathspec beneath that directory, even though the file is tracked.
+        const generatedSet = ignoredGeneratedTrackedPaths(root);
+        const generatedTracked = tracked.filter((path) => generatedSet.has(path));
+        const trackedToUpdate = tracked.filter((path) => !generatedSet.has(path));
+        if (trackedToUpdate.length) git(root, ["add", "--update", "--pathspec-from-file=-", "--pathspec-file-nul"], env, trackedToUpdate.join("\0") + "\0");
+        if (generatedTracked.length) git(root, ["rm", "--quiet", "--cached", "--pathspec-from-file=-", "--pathspec-file-nul"], env, generatedTracked.join("\0") + "\0");
+        if (untracked.length) git(root, ["add", "--all", "--pathspec-from-file=-", "--pathspec-file-nul"], env, untracked.join("\0") + "\0");
         if (!git(root, ["diff", "--cached", "--name-only"], env).trim()) {
           git(root, ['hook', 'run', 'pre-commit'], env);
           const result: WorkspaceCheckpointResult = { status: 'unchanged', reason, commit: git(root, ['rev-parse', 'HEAD']).trim(), ...(recoveredRawArtifacts.length ? { recoveredRawArtifacts } : {}) };

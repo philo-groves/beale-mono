@@ -974,7 +974,9 @@ export class AppServerHostService {
       storage,
       input: {
         status: 'failed',
-        summary: 'The app-server session failed before its research worker started.',
+        summary: input.diagnostic.startsWith('Workspace checkpoint failed;')
+          ? input.diagnostic.slice(0, 1_000)
+          : 'The app-server session failed before its research worker started.',
         attemptId: input.attemptId,
         metadata: {
           appServerLaunchFailure: true,

@@ -173,7 +173,29 @@ test('a failed pre-session checkpoint prevents worker launch without discarding 
   assert.equal(spawned, false);
   assert.equal(launchFailures.length, 1);
   assert.equal(launchFailures[0].sessionId, 'session-checkpoint-failed-example');
+  assert.match(launchFailures[0].diagnostic, /Workspace checkpoint failed; working files were preserved/u);
   assert.match(launchFailures[0].diagnostic, /Resolve the example staged edit/);
+});
+
+test('pre-worker checkpoint failures retain their actionable diagnostic in the session summary', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-summary-example-'));
+  temporaryDirectories.push(directory);
+  const transitions = [];
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation, options) => {
+      assert.equal(operation, 'session.transition');
+      transitions.push(options.input);
+      return { status: 'failed' };
+    },
+  });
+  await service.recordSessionLaunchFailure({
+    request: sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-summary-example' }),
+    sessionId: 'session-checkpoint-summary-example', attemptId: 'attempt-example',
+    diagnostic: 'Workspace checkpoint failed; working files were preserved. Generated build output needs to be excluded.',
+  });
+  assert.match(transitions[0].summary, /Generated build output needs to be excluded/u);
+  assert.equal(transitions[0].status, 'failed');
 });
 
 test('keeps a hosted session starting until the runtime readiness handshake completes', async () => {

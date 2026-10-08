@@ -1245,6 +1245,7 @@
 
 #### Fixed
 
+- Required pre-session checkpoints now ignore generated `build/` and `.libs/` trees, remove previously tracked files in those trees from Git, and retain the working files locally. Checkpoint launch failures preserve the specific diagnostic in the session summary instead of showing only a generic startup failure.
 - File-authority checkpoints now publish topic snapshots produced by typed topic operations and legacy topic migration after verifying them against canonical storage; direct topic file creation and edits remain blocked.
 - Runbook executions now attempt remaining selected cleanup cells after a proof cell fails, record their results, and preserve the failed run outcome.
 - Workspace checkpoints now detect oversized files before Git staging and retain a repair preview in the persisted failure status. The new `workspace.checkpoint-repair.v1` capability adds previewed relocation and retry for eligible untracked investigation files.

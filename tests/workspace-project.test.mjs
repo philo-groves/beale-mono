@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, afterEach } from 'node:test';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, copyFileSync, renameSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, copyFileSync, renameSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -53,7 +53,7 @@ test('active checkpoints refresh generated-file ignores and name unexpected over
   writeFileSync(ignorePath, readFileSync(ignorePath, 'utf8').replace('**/*.noindex/\n', ''));
   assert.equal(git(root, 'add', '.gitignore').status, 0);
   assert.equal(git(root, 'commit', '--no-verify', '-m', 'Simulate prior managed ignore block').status, 0);
-  const generated = join(root, 'investigations', 'example', 'Build', 'Intermediates.noindex', 'Example.pcm');
+  const generated = join(root, 'investigations', 'example', 'Compiler', 'Intermediates.noindex', 'Example.pcm');
   mkdirSync(join(generated, '..'), { recursive: true });
   writeFileSync(generated, Buffer.alloc(5 * 1024 * 1024 + 1));
 
@@ -85,6 +85,58 @@ test('active checkpoints refresh generated-file ignores and name unexpected over
   assert.equal(existsSync(join(root, oversizedPath)), false);
   assert.equal(existsSync(join(root, preview.candidates[0].destinationPath)), true);
   assert.equal(repaired.recoveredRawArtifacts[0].path, preview.candidates[0].destinationPath);
+});
+
+test('automatic checkpoints leave generated build symlinks outside Git while retaining research files', { skip: process.platform === 'win32' }, () => {
+  const root = workspace();
+  const build = join(root, 'investigations', 'example', 'build', 'lib', '.libs');
+  mkdirSync(build, { recursive: true });
+  writeFileSync(join(build, 'libexample.0.dylib'), 'synthetic build output');
+  symlinkSync('libexample.0.dylib', join(build, 'libexample.dylib'));
+  const researchFile = 'investigations/example/notes.md';
+  writeFileSync(join(root, researchFile), 'Synthetic review notes.\n');
+
+  const result = checkpointWorkspace(root, 'Checkpoint research beside build output');
+  assert.equal(result.status, 'committed', result.error);
+  assert.equal(git(root, 'ls-files', 'investigations/example/build').stdout.trim(), '');
+  assert.equal(git(root, 'show', `HEAD:${researchFile}`).stdout, 'Synthetic review notes.\n');
+  assert.equal(existsSync(join(build, 'libexample.dylib')), true);
+  assert.match(git(root, 'check-ignore', '-v', join(build, 'libexample.dylib')).stdout, /\*\*\/build\//u);
+
+  symlinkSync('notes.md', join(root, 'investigations', 'example', 'linked-notes.md'));
+  const rejected = checkpointWorkspace(root, 'Reject a research symlink outside build output');
+  assert.equal(rejected.status, 'failed');
+  assert.match(rejected.error, /symlinks and nested repositories cannot be tracked research files/u);
+});
+
+test('checkpoint untracks previously committed generated build files without deleting working files', () => {
+  const root = workspace();
+  const ignorePath = join(root, '.gitignore');
+  writeFileSync(ignorePath, readFileSync(ignorePath, 'utf8').replace('**/build/\n', '').replace('**/.libs/\n', ''));
+  const generated = [
+    'investigations/example/build/output.txt',
+    'investigations/example/.libs/library.txt',
+    'investigations/example/build/oversized.bin',
+  ];
+  for (const path of generated) {
+    mkdirSync(join(root, path, '..'), { recursive: true });
+    writeFileSync(join(root, path), path.endsWith('.bin') ? Buffer.alloc(5 * 1024 * 1024 + 1) : 'synthetic generated output\n');
+  }
+  assert.equal(git(root, 'add', '.gitignore', ...generated).status, 0);
+  assert.equal(git(root, 'commit', '--no-verify', '-m', 'Simulate prior generated tracking').status, 0);
+  writeFileSync(join(root, generated[0]), 'updated generated output\n');
+  const researchPath = 'investigations/example/notes.md';
+  writeFileSync(join(root, researchPath), 'Synthetic research notes.\n');
+
+  const result = checkpointWorkspace(root, 'Migrate generated files out of Git');
+  assert.equal(result.status, 'committed', result.error);
+  for (const path of generated) {
+    assert.equal(git(root, 'ls-files', path).stdout.trim(), '');
+    assert.equal(existsSync(join(root, path)), true);
+  }
+  assert.equal(git(root, 'show', `HEAD:${researchPath}`).stdout, 'Synthetic research notes.\n');
+  assert.equal(git(root, 'diff', '--cached', '--name-only').stdout.trim(), '');
+  assert.equal(checkpointWorkspace(root, 'No more generated changes').status, 'unchanged');
 });
 
 test('automatic checkpoints retain oversized candidate evidence with a tracked manifest', () => {
