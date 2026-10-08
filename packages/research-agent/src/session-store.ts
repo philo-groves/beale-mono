@@ -762,6 +762,20 @@ export class AppServerSessionStore {
     );
   }
 
+  public getLifecycleSummaries(workspaceId: string, sessionIds: readonly string[]): Map<string, { status: AppServerSessionStatus; endedAt: string | null }> {
+    const ids = [...new Set(sessionIds.map((sessionId) => requiredString(sessionId, "Session id")))];
+    const result = new Map<string, { status: AppServerSessionStatus; endedAt: string | null }>();
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const chunk = ids.slice(offset, offset + 400);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = this.database.prepare(`SELECT id, status, json_extract(document_json, '$.endedAt') AS ended_at
+        FROM app_server_sessions WHERE workspace_id = ? AND id IN (${placeholders})`)
+        .all(requiredString(workspaceId, "Workspace id"), ...chunk) as Array<{ id: string; status: AppServerSessionStatus; ended_at: string | null }>;
+      for (const row of rows) result.set(row.id, { status: row.status, endedAt: row.ended_at });
+    }
+    return result;
+  }
+
   public getCapture(sessionId: string, attemptId: string): AppServerSessionCapture | null {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     const normalizedAttemptId = requiredString(attemptId, "Attempt id");

@@ -143,12 +143,14 @@ function boundedSkillUseWhen(skills: ResearchPluginCatalogEntry["skills"]): stri
 }
 
 export const CORE_TOOL_NAMES = ["file.read", "file.write", "file.edit", "shell.run", "session.disposition", "tool_result.page"] as const;
+const SESSION_CONDITIONAL_TOOL_NAMES = ["workflow.progress"] as const;
 
 /** New host tools must explicitly join a harness feature or the small core surface. */
 export function assertManagedToolOwnership(tools: readonly ResearchExecutableTool[]): void {
   for (const { descriptor } of tools) {
     if (descriptor.metadata?.provider === "mcp") continue;
     if (CORE_TOOL_NAMES.some((name) => name === descriptor.name)) continue;
+    if (SESSION_CONDITIONAL_TOOL_NAMES.some((name) => name === descriptor.name)) continue;
     if (!managedToolPluginId(descriptor.name)) throw new Error(`Assign host tool ${descriptor.name} to a harness feature before exposing it.`);
   }
 }

@@ -1,4 +1,4 @@
-import type { StartRunInput } from '@shared/types';
+import type { ProviderSettings, ResearchModelProviderId, SessionWorkflowDefinition, ShellSafetyMode, StartRunInput } from '@shared/types';
 import { DEFAULT_RESEARCH_REASONING_EFFORT } from '../../shared/modelDefaults';
 import { DEFAULT_SHELL_SAFETY_MODE } from '../../shared/shellSafety';
 import { DEFAULT_RESEARCH_COLLABORATION } from '../../shared/collaboration';
@@ -26,6 +26,27 @@ export const defaultRunInput: StartRunInput = {
     repeatSchedule: { type: 'none' }
   }
 };
+
+export function workflowRunInput(workflow: Pick<SessionWorkflowDefinition, 'id' | 'title' | 'description' | 'fields'>, shellSafetyMode: ShellSafetyMode, values: Record<string, string>, providerSettings: ProviderSettings): StartRunInput & { provider: ResearchModelProviderId } {
+  const provider = providerSettings.defaultProviderId;
+  const defaults = provider ? providerSettings.modelDefaults[provider] : null;
+  if (!provider || !defaults?.largeModel) throw new Error('Choose a default Lead provider and large model in Provider settings before running a workflow.');
+  if (defaults.reasoningEffort === 'off') throw new Error('The default large model needs a supported reasoning effort for Advanced collaboration.');
+  const modelSelection = { provider, model: defaults.largeModel, reasoningEffort: defaults.reasoningEffort };
+  const configuration = workflow.fields.map((field) => `- ${field.label}: ${values[field.id]?.trim() || '(empty)'}`).join('\n');
+  return {
+    ...defaultRunInput,
+    provider: modelSelection.provider,
+    model: modelSelection.model,
+    reasoningEffort: modelSelection.reasoningEffort,
+    collaboration: { ...DEFAULT_RESEARCH_COLLABORATION, subagentMode: 'advanced',
+      providers: [{ ...modelSelection, enabled: true }] },
+    shellSafetyMode,
+    promptMarkdown: `Run the assigned ${workflow.title} workflow.\n\n${workflow.description}\n\nSession configuration:\n${configuration || '(No fields)'}\n\nFollow the assigned runbook in order and record progress after each cell.`,
+    guidanceWorkflow: { id: workflow.id, values: { ...values } },
+    budget: { ...defaultRunInput.budget }
+  };
+}
 
 export function budgetNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;

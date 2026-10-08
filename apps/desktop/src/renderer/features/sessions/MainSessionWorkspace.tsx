@@ -6,6 +6,7 @@ import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from '../wor
 import { ResearchSidePanel } from '../research/MemorySidePanel';
 import { CommentaryView } from '../commentary/CommentaryView';
 import { ConnectedDeviceCapture } from '../deviceCapture/ConnectedDeviceCapture';
+import { SessionWorkflowProgress } from '../workflows/SessionWorkflowProgress';
 import { EMPTY_SESSION_HEAT_PREFERENCES } from '../../view-models/sessionHeat';
 import type { SessionHeatPreferences } from '../../view-models/sessionHeat';
 import type { TraceDisplayEvent } from '../../view-models/traceDisplay';
@@ -402,6 +403,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
         />
       ) : (
         <CommentaryView
+          preComposerContent={selectedRunId ? <SessionWorkflowProgress sessionId={selectedRunId} /> : null}
           busy={busy}
           detail={detail}
           sessionSetupPending={sessionSetupPending}

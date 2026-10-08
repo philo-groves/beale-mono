@@ -1173,6 +1173,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       };
       deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
       notifyChange();
+      await recordSessionLaunchFailure(runtime, runtime.startupDiagnostic ?? detail);
       session.stop();
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -1372,6 +1373,29 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime.diagnostic = state === 'failed' ? boundedDiagnostic(diagnostic ?? '') : null;
     teardownRuntime(runtime, state === 'completed' ? 1000 : 1011);
     notifyChange();
+    void recordSessionTerminalState(runtime, state);
+  }
+
+  async function recordSessionTerminalState(runtime: SessionRuntime, state: 'completed' | 'failed' | 'stopped'): Promise<void> {
+    const service = hostService as AppServerHostService & {
+      recordSessionTerminalState?: (input: {
+        request: AppServerSessionLaunchRequest;
+        sessionId: string;
+        attemptId: string;
+        state: 'completed' | 'failed' | 'stopped';
+      }) => Promise<void>;
+    };
+    try {
+      await service.recordSessionTerminalState?.({
+        request: runtime.request, sessionId: runtime.sessionId, attemptId: runtime.currentAttemptId, state
+      });
+      notifyChange();
+    } catch (error) {
+      runtime.diagnostic = boundedDiagnostic(
+        `${runtime.diagnostic ? `${runtime.diagnostic} ` : ''}Could not persist ${state} session state: ${error instanceof Error ? error.message : String(error)}`
+      );
+      notifyChange();
+    }
   }
 
   function emitRecoveryCommentary(

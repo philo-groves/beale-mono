@@ -78,10 +78,13 @@
 - Session permissions are selected in General settings; steering and New Research inputs no longer show a permission picker.
 #### Added
 
+- Session workflows now store Jupyter-format notebooks with ordered markdown and language-tagged code cells. The Workflows editor offers cell type and language selection with rendered previews; existing instruction steps are read as markdown cells. Code workflows attach a session runbook and require a successful execution of the exact code cell before advancing. Contract v36 requires rebuilding Beale and app-server together.
+- Workflows has an icon rail editor with workspace selection, inline name and description editing, a Workspace-style field form above editable runbook cells, and a joined Run All action that starts a session with the workflow assigned and one Advanced collaborator using the default Lead provider's large model and effort. Each field occupies one preview row; its title, description, input size, placeholder, and requirement are configured in a dialog. Entered field values remain visible after starting a session. A run selector displays the current and earlier session states, per-cell progress, and a link to each session. New Research can assign one workflow or leave the session unassigned, and active sessions show step and repository coverage progress.
 - A Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
 
 #### Changed
 
+- Workflow run history now reads the canonical session lifecycle, and app-server records terminal states for workers that end before their runbooks finish. Run All fetches current provider settings before launch so an unopened New Research view does not block it.
 - The MSRC Research Kit is now MSRC Windows for the Windows Insider Preview bounty. A selectable catalog of common Windows apps, services, four program-listed sandbox contexts, and repositories for shipped open-source code can be managed during workspace creation and kit refresh; existing `msrc` workspace metadata remains compatible. Catalog entries are candidates that require guest and program eligibility checks.
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
 - The workspace Claims view now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
@@ -97,6 +100,7 @@
 
 #### Fixed
 
+- Workspace checkpoints now retain untracked SQLite artifacts outside Git with integrity manifests, including database files without an extension. Manual commits report SQLite content separately from credential material.
 - Sessions that fail before producing transcript events now show their stored failure reason in the commentary, and app-server response errors retain their leading diagnostic text.
 - Prompt settings always shows the current token estimate, including for the default template and unsaved edits.
 - The left icon rail keeps its 50px width and centered icons when the adjacent sidebar is collapsed.
@@ -1221,6 +1225,7 @@
 
 #### Added
 
+- Session workflow definitions, revision-checked edits, and per-session snapshots are stored in the app-server database. Field descriptions and added auditor configuration fields persist with definition revisions; the auditor's core fields remain fixed. Assigned agents must use the progress tool before final disposition and record a completion note for each ordered step before claiming objective achievement. The built-in repository auditor maps each named system to concrete paths, inventories tracked and unignored untracked text, and records line coverage as bounded source excerpts are returned before its review step can complete. Contract v33 requires rebuilding Beale and app-server together.
 - The hosted `suggestion.steering` operation generates a bounded suggestion from canonical session context using the configured small model; Desktop and app-server must be rebuilt together.
 - `runbook.prepare` now finds or creates a cohesive workflow and returns its investigations candidate path and entry cell before implementation. `runbook.edit` revises an existing code cell under an expected runbook revision while preserving its identity and invalidating old displayed output.
 - Research workspace commits now end with a session ID trailer for history filtering. Automatic checkpoints resolve session attribution, and manual commits receive an explicit `none` value when no attribution is supplied; existing history is preserved.

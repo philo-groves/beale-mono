@@ -72,6 +72,8 @@ export * from "./research-trace.js";
 export * from "./pi-runtime.js";
 export * from "./session-title.js";
 export * from "./session-disposition-tool.js";
+export * from "./session-workflows.js";
+export * from "./session-workflow-tool.js";
 export * from "./goal-runtime.js";
 export * from "./goal-suggestions.js";
 export * from "./steering-suggestion.js";

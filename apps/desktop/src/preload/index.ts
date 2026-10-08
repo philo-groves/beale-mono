@@ -47,6 +47,11 @@ import type {
   UndoHistoryDuplicateInput,
   ClaimBoardTransitionRequest,
   AppServerRunbookDocument,
+  SessionWorkflowAssignment,
+  SessionWorkflowRunSummary,
+  SessionWorkflowDefinition,
+  SessionWorkflowDraft,
+  SessionWorkflowUpdateInput,
   AppServerReportDocument,
   AppServerReportLocator,
   AppServerReportSummary,
@@ -453,6 +458,21 @@ const api: BealeApi = {
   },
   getAppServerRunbook(runbookId: string): Promise<AppServerRunbookDocument> {
     return ipcRenderer.invoke(IPC_CHANNELS.getAppServerRunbook, runbookId);
+  },
+  listSessionWorkflows(): Promise<SessionWorkflowDefinition[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listSessionWorkflows);
+  },
+  createSessionWorkflow(input: SessionWorkflowDraft): Promise<SessionWorkflowDefinition> {
+    return ipcRenderer.invoke(IPC_CHANNELS.createSessionWorkflow, input);
+  },
+  updateSessionWorkflow(input: SessionWorkflowUpdateInput): Promise<SessionWorkflowDefinition> {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateSessionWorkflow, input);
+  },
+  getSessionWorkflow(sessionId: string): Promise<SessionWorkflowAssignment | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getSessionWorkflow, sessionId);
+  },
+  listSessionWorkflowRuns(workflowId: string): Promise<SessionWorkflowRunSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listSessionWorkflowRuns, workflowId);
   },
   listAutomations(): Promise<AutomationSummary[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.listAutomations);

@@ -204,8 +204,13 @@ test('fails stalled runtime initialization with a visible bounded diagnostic', a
   const directory = mkdtempSync(join(tmpdir(), 'beale-runtime-startup-timeout-example-'));
   temporaryDirectories.push(directory);
   const upstream = await createFakeAppServerSessionHost();
+  const hostService = testHostService(directory);
+  const launchFailures = [];
+  const terminalStates = [];
+  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
+  hostService.recordSessionTerminalState = async (input) => { terminalStates.push(input); };
   const server = await startAppServer({
-    hostService: testHostService(directory),
+    hostService,
     sessionStartupTimeoutMs: 100,
     longSessionRecovery: false,
     spawnSession: async (options) => ({
@@ -225,12 +230,45 @@ test('fails stalled runtime initialization with a visible bounded diagnostic', a
   assert.match(entry?.diagnostic ?? '', /did not become ready within 1 seconds/u);
   assert.match(entry?.diagnostic ?? '', /No model request was sent/u);
   assert.equal(upstream.stopCalls(), 1);
+  assert.equal(launchFailures.length, 1);
+  assert.equal(launchFailures[0].sessionId, 'session-runtime-timeout-example');
+  await waitFor(() => terminalStates.length === 1);
+  assert.equal(terminalStates[0].sessionId, 'session-runtime-timeout-example');
+  assert.equal(terminalStates[0].state, 'failed');
   await waitFor(() => messages.some((message) => (
     message.type === 'session.event'
       && message.event?.kind === 'model.output'
       && /No model request was sent/u.test(message.event.payload?.text ?? '')
   )));
   socket.close();
+});
+
+test('session finalization persists early worker exits without overwriting terminal sessions', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-session-finalization-example-'));
+  temporaryDirectories.push(directory);
+  let status = 'active';
+  const transitions = [];
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation, options) => {
+      if (operation === 'session.get') return { status };
+      if (operation === 'session.transition') {
+        transitions.push(options.input);
+        status = options.input.status;
+        return { status };
+      }
+      throw new Error(`Unexpected operation: ${operation}`);
+    },
+  });
+  const input = { request: sessionLaunchRequest(directory, { sessionId: 'session-finalization-example' }),
+    sessionId: 'session-finalization-example', attemptId: 'attempt-example', state: 'failed' };
+  await service.recordSessionTerminalState(input);
+  assert.equal(status, 'failed');
+  assert.equal(transitions[0].attemptId, 'attempt-example');
+  assert.equal(transitions.length, 1);
+  await service.recordSessionTerminalState({ ...input, state: 'stopped' });
+  assert.equal(status, 'failed');
+  assert.equal(transitions.length, 1);
 });
 
 test('a committed host checkpoint appends a valid canonical session event', async () => {

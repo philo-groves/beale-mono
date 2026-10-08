@@ -138,17 +138,18 @@ describe('renderer app shell view model', () => {
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
-      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      onOpenWorkflows: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
 
     expect(html).toContain('aria-label="Main navigation"');
-    for (const label of ['Home', 'Automations', 'Topics', 'Plugins', 'Agent Settings']) {
+    for (const label of ['Home', 'Automations', 'Topics', 'Workflows', 'Plugins', 'Agent Settings']) {
       expect(html).toContain(`aria-label="${label}"`);
       expect(html).toContain(`data-tooltip="${label}"`);
     }
     expect(html.indexOf('aria-label="Home"')).toBeLessThan(html.indexOf('aria-label="Automations"'));
     expect(html.indexOf('aria-label="Automations"')).toBeLessThan(html.indexOf('aria-label="Topics"'));
-    expect(html.indexOf('aria-label="Topics"')).toBeLessThan(html.indexOf('aria-label="Plugins"'));
+    expect(html.indexOf('aria-label="Topics"')).toBeLessThan(html.indexOf('aria-label="Workflows"'));
+    expect(html.indexOf('aria-label="Workflows"')).toBeLessThan(html.indexOf('aria-label="Plugins"'));
     expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
     expect(html).toContain('class="app-navigation-rail-filled-icon"');
     expect(html).toContain('aria-current="page"');
@@ -169,13 +170,13 @@ describe('renderer app shell view model', () => {
 
   it('fills only the active navigation icon', () => {
     const onNavigate = () => undefined;
-    for (const active of ['home', 'automations', 'topics', 'plugins', 'settings'] as const) {
+    for (const active of ['home', 'automations', 'topics', 'workflows', 'plugins', 'settings'] as const) {
       const html = renderToStaticMarkup(createElement(AppNavigationRail, {
         active, onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
-        onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+        onOpenWorkflows: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
       }));
       expect(html.match(/class="app-navigation-rail-filled-icon"/gu)).toHaveLength(1);
-      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(4);
+      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(5);
       expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
     }
   });
@@ -185,16 +186,17 @@ describe('renderer app shell view model', () => {
     expect(resolveAppNavigationDestination(base)).toBe('home');
     expect(resolveAppNavigationDestination({ ...base, automationsOpen: true })).toBe('automations');
     expect(resolveAppNavigationDestination({ ...base, topicsOpen: true })).toBe('topics');
+    expect(resolveAppNavigationDestination({ ...base, workflowsOpen: true })).toBe('workflows');
     expect(resolveAppNavigationDestination({ ...base, pluginsOpen: true })).toBe('plugins');
     expect(resolveAppNavigationDestination({ ...base, settingsOpen: true })).toBe('settings');
 
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, topicsOpen, pluginsOpen })');
+    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, topicsOpen, workflowsOpen, pluginsOpen })');
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: resolveAppNavigationDestination(base),
       onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
-      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      onOpenWorkflows: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
     expect(html).toContain('class="app-navigation-rail-button active" data-tooltip="Home"');
     expect(html.match(/aria-current="page"/gu)).toHaveLength(1);

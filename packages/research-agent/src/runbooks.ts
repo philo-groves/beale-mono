@@ -1283,7 +1283,10 @@ function streamOutput(outputs: Array<Record<string, unknown>>, name: "stdout" | 
 function validateCell(value: RunbookCellInput): RunbookCellInput {
   if (!isRecord(value)) throw new Error("Each runbook cell must be an object.");
   if (value.kind !== "markdown" && value.kind !== "code") throw new Error("Runbook cell kind must be markdown or code.");
-  const source = requiredText(value.source, "cell source", 64_000);
+  if (typeof value.source !== "string" || !value.source.trim() || value.source.length > 64_000) {
+    throw new Error("cell source must be non-empty and at most 64,000 characters.");
+  }
+  const source = value.source;
   const features = validateCellFeatures(value.features, "cell features");
   const executor = value.executor === undefined ? undefined : validateCellExecutor(value.executor, "cell executor");
   if (value.kind === "markdown" && executor) throw new Error("Markdown cells cannot select an executor.");
