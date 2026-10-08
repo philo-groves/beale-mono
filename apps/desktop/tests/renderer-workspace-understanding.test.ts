@@ -560,14 +560,56 @@ describe('workspace dashboard', () => {
     expect(html).not.toContain('Research Surface');
     expect(html).not.toContain('Workspace inputs and coverage');
     expect(html).not.toContain('workspace-surface-card');
-    expect(html).not.toContain('class="research-side-column');
-    expect(html).not.toContain('class="research-side-resize-handle"');
+    expect(html).toContain('class="research-side-column"');
+    expect(html).toContain('class="research-side-resize-handle"');
+    expect(html).toContain('aria-hidden="true" tabindex="-1"');
     expect(html).not.toContain('aria-label="Workspace resource types"');
     expect(html).not.toContain('aria-label="Daily token usage over the past year"');
     expect(html).not.toContain('class="workspace-catalog-list memory-catalog-list');
     expect(html).not.toContain('class="workspace-catalog-list runbook-catalog-list');
     expect(html).not.toContain('>Dejunk Now</button>');
     expect(html).not.toContain('>Dream Now</button>');
+  });
+
+  it('opens the workspace detail sidebar beside New Research', () => {
+    const html = renderToStaticMarkup(createElement(MainSessionWorkspace, {
+      detail: null,
+      events: [],
+      allEvents: [],
+      providerModelCatalog: [],
+      appServerMemory: memorySummary(),
+      researchProfile: testResearchProfile(),
+      workspaceName: 'Example Workspace',
+      viewState: 'new-research',
+      newResearchContent: createElement('section', null, 'New Research form'),
+      runs: [],
+      selectedRunId: 'run_previous',
+      researchDetailsOpen: true,
+      selectedRunbookId: null,
+      selectedRunbook: null,
+      selectedRunbookDocument: null,
+      runbookLoading: false,
+      runbookError: null,
+      selectedSubagentPath: null,
+      searchHighlightQuery: '',
+      busy: false,
+      memoryDreamingInProgress: false,
+      onRunMemoryDreaming: () => undefined,
+      onResearchDetailsOpenChange: () => undefined,
+      onOpenAppServerRunbook: () => undefined,
+      onBackToRunbooks: () => undefined,
+      onBackToSubagents: () => undefined,
+      onSelectSubagent: () => undefined,
+      onSessionAction: () => undefined,
+      onSteerInstruction: () => undefined
+    }));
+
+    expect(html).toContain('data-session-view-state="new-research"');
+    expect(html).toContain('class="main-session-grid workspace-context research-details-open"');
+    expect(html).toContain('New Research form');
+    expect(html).toContain('aria-label="Workspace details"');
+    expect(html).toContain('Browser');
+    expect(html).not.toContain('session-main-only');
   });
 
   it('opens existing workspaces on Campaign Highlights with Campaign sub-views and Settings last', () => {

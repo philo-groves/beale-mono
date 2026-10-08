@@ -20,7 +20,7 @@ import {
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
-import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate } from '@beale/research-agent';
+import { decodeResearchPluginCatalog, SessionWorkflowStore, validateResearchSystemPromptTemplate } from '@beale/research-agent';
 import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
@@ -557,6 +557,12 @@ export class AppServerHostService {
       ...(daybreakBlue ? { daybreakBlue: true } : {}),
       profileId
     });
+    if (request.launch.guidanceWorkflow) {
+      const workflows = new SessionWorkflowStore(storage.databasePath, workspace.workspaceId);
+      try {
+        workflows.assign(sessionId, request.launch.guidanceWorkflow.id, request.launch.guidanceWorkflow.values);
+      } finally { workflows.close(); }
+    }
     await this.ensureCanonicalSession({
       sessionId,
       attemptId,
@@ -968,6 +974,30 @@ export class AppServerHostService {
           appServerLaunchFailure: true,
           diagnostic: input.diagnostic.slice(-1_000)
         }
+      }
+    });
+  }
+
+  public async recordSessionTerminalState(input: {
+    request: AppServerSessionLaunchRequest;
+    sessionId: string;
+    attemptId: string;
+    state: 'completed' | 'failed' | 'stopped';
+  }): Promise<void> {
+    const workspace = this.requireWorkspace(input.request.launch.workspaceId);
+    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    const current = await this.invokeProtocol<AppServerSessionSummaryProjection>('session.get', {
+      args: ['session', 'get', '--session-id', input.sessionId], storage
+    });
+    if (current.status === 'blocked' || current.status === 'completed' || current.status === 'failed' || current.status === 'stopped') return;
+    await this.invokeProtocol('session.transition', {
+      args: ['session', 'transition', '--session-id', input.sessionId], storage,
+      input: {
+        status: input.state,
+        summary: input.state === 'completed' ? 'The app-server research session completed.'
+          : input.state === 'stopped' ? 'Stopped by the user.'
+            : 'The app-server research worker ended before the session completed.',
+        attemptId: input.attemptId
       }
     });
   }
@@ -1805,6 +1835,7 @@ function restartLaunchDescriptor(
       },
       shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
       ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
+      ...(request.launch.guidanceWorkflow ? { guidanceWorkflow: request.launch.guidanceWorkflow } : {}),
       researchProfileId: request.launch.researchProfileId?.trim() || resolved.profileId,
       ...(request.launch.researchProfileHash
         ? { researchProfileHash: request.launch.researchProfileHash }

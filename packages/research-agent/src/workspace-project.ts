@@ -80,6 +80,7 @@ export interface WorkspaceRawArtifactRecovery {
 }
 interface WorkspaceRawArtifactRegistryEntry extends WorkspaceRawArtifactRecovery {
   mtimeMs: number;
+  retentionReason?: "sqlite";
 }
 interface WorkspaceRawArtifactRegistry {
   schemaVersion: 1;
@@ -454,7 +455,8 @@ export function validateWorkspaceCommit(root: string): void {
       offset = header + 1 + content.length + 1;
       contentHashes.set(hash, workspaceContentHash(content));
       const text = content.toString('utf8');
-      if (content.subarray(0, 16).toString() === 'SQLite format 3\0' || /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:sk-proj-|sk-ant-)[A-Za-z0-9_-]{16,}/u.test(text)) throw new Error('A staged file contains runtime database or credential material.');
+      if (isSQLiteDatabase(content)) throw new Error('A staged file contains a SQLite database. Keep database artifacts outside Git.');
+      if (/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:sk-proj-|sk-ant-)[A-Za-z0-9_-]{16,}/u.test(text)) throw new Error('A staged file contains credential material.');
       if (hash === entries.get('workspace.json')?.hash || hash === entries.get(INDEX_PATH)?.hash) special.set(hash, text);
     }
   }
@@ -514,6 +516,23 @@ function isCandidateEvidencePath(path: string): boolean {
     && /(?:^|\/)evidence\//u.test(path)
     && !/(?:^|\/)evidence\/raw(?:\/|$)/u.test(path)
     && !path.startsWith(`${RAW_ARTIFACT_MANIFEST_DIRECTORY}/`);
+}
+
+function isSQLiteDatabase(content: Uint8Array): boolean {
+  return content.length >= 16 && Buffer.from(content.buffer, content.byteOffset, 16).toString() === 'SQLite format 3\0';
+}
+
+function isUntrackedDatabasePath(path: string): boolean {
+  return path.includes('/') && !/[\0\r\n]/u.test(path) && !workspacePathProblem(path)
+    && !path.startsWith(`${RAW_ARTIFACT_MANIFEST_DIRECTORY}/`);
+}
+
+function workspaceFileIsSQLiteDatabase(path: string): boolean {
+  const descriptor = openSync(path, 'r');
+  try {
+    const header = Buffer.alloc(16);
+    return readSync(descriptor, header, 0, header.length, 0) === header.length && isSQLiteDatabase(header);
+  } finally { closeSync(descriptor); }
 }
 
 /** Preview only untracked investigation files. Tracked and canonical files need operator-directed repair. */
@@ -583,7 +602,7 @@ function writeRawArtifactExcludes(root: string, paths: readonly string[]): void 
   existing = existing.replace(managedPattern, "").trimEnd();
   const managed = [
     RAW_ARTIFACT_EXCLUDE_START,
-    "# Exact workspace-local paths preserved after exceeding the tracked-file limit.",
+    "# Exact workspace-local database and oversized candidate paths retained outside Git.",
     ...[...new Set(paths)].sort().map(rawArtifactExcludePattern),
     RAW_ARTIFACT_EXCLUDE_END,
   ].join("\n");
@@ -597,7 +616,8 @@ function readRawArtifactRegistry(root: string): WorkspaceRawArtifactRegistry {
   const value = JSON.parse(readFileSync(path, "utf8")) as WorkspaceRawArtifactRegistry;
   if (value.schemaVersion !== 1 || !Array.isArray(value.artifacts)) throw new Error("The workspace-local raw-artifact recovery registry is invalid.");
   for (const artifact of value.artifacts) {
-    if (!isCandidateEvidencePath(artifact.path)
+    if (!(artifact.retentionReason === "sqlite" ? isUntrackedDatabasePath(artifact.path) : isCandidateEvidencePath(artifact.path))
+      || (artifact.retentionReason !== undefined && artifact.retentionReason !== "sqlite")
       || !safeRelative(artifact.manifestPath)
       || !artifact.manifestPath.startsWith(`${RAW_ARTIFACT_MANIFEST_DIRECTORY}/`)
       || !Number.isFinite(artifact.sizeBytes)
@@ -609,11 +629,11 @@ function readRawArtifactRegistry(root: string): WorkspaceRawArtifactRegistry {
   return value;
 }
 
-function recoverRawArtifact(root: string, path: string): WorkspaceRawArtifactRegistryEntry {
+function recoverRawArtifact(root: string, path: string, retentionReason?: "sqlite"): WorkspaceRawArtifactRegistryEntry {
   const absolute = join(root, path);
   assertWorkspaceChild(root, absolute);
   const before = lstatSync(absolute);
-  if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${path}: oversized candidate evidence must be a regular file.`);
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${path}: retained candidate artifact must be a regular file.`);
   const sha256 = workspaceFileHash(absolute);
   const after = lstatSync(absolute);
   if (!after.isFile() || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
@@ -628,18 +648,21 @@ function recoverRawArtifact(root: string, path: string): WorkspaceRawArtifactReg
     sizeBytes: after.size,
     sha256,
     tracking: "workspace-local",
-    reason: "Generated candidate evidence exceeded the ordinary tracked-file limit.",
+    reason: retentionReason === "sqlite"
+      ? "Untracked SQLite database retained outside Git."
+      : "Generated candidate evidence exceeded the ordinary tracked-file limit.",
   }, null, 2) + "\n";
   const manifestAbsolute = join(root, manifestPath);
   if (existsSync(manifestAbsolute) && readFileSync(manifestAbsolute, "utf8") !== manifest) {
     throw new Error(`${manifestPath}: an existing raw-artifact manifest conflicts with the recovered candidate.`);
   }
   if (!existsSync(manifestAbsolute)) atomicWorkspaceWrite(root, manifestPath, manifest);
-  return { path, manifestPath, sizeBytes: after.size, sha256, mtimeMs: after.mtimeMs };
+  return { path, manifestPath, sizeBytes: after.size, sha256, mtimeMs: after.mtimeMs,
+    ...(retentionReason ? { retentionReason } : {}) };
 }
 
 /**
- * Keep oversized, unpinned candidate evidence available to active research while
+ * Keep untracked databases and oversized, unpinned candidate evidence available to active research while
  * preventing the same generated file from poisoning every later checkpoint.
  * Tracked and published files remain subject to the normal commit guard.
  */
@@ -651,10 +674,13 @@ function recoverOversizedCandidateEvidence(root: string): WorkspaceRawArtifactRe
     const absolute = join(root, recorded.path);
     if (tracked.has(recorded.path) || isPublishedWorkspacePath(root, recorded.path) || !existsSync(absolute)) continue;
     const stats = lstatSync(absolute);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= trackedFileLimit(recorded.path)) continue;
+    if (!stats.isFile() || stats.isSymbolicLink()) continue;
+    if (recorded.retentionReason === "sqlite") {
+      if (!workspaceFileIsSQLiteDatabase(absolute)) continue;
+    } else if (stats.size <= trackedFileLimit(recorded.path)) continue;
     if (stats.size === recorded.sizeBytes && stats.mtimeMs === recorded.mtimeMs) retained.push(recorded);
     else {
-      const replacement = recoverRawArtifact(root, recorded.path);
+      const replacement = recoverRawArtifact(root, recorded.path, recorded.retentionReason);
       retained.push(replacement);
       recovered.push(replacement);
     }
@@ -664,11 +690,13 @@ function recoverOversizedCandidateEvidence(root: string): WorkspaceRawArtifactRe
   writeRawArtifactExcludes(root, retained.map(({ path }) => path));
   const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
   for (const path of untracked) {
-    if (!isCandidateEvidencePath(path) || tracked.has(path) || isPublishedWorkspacePath(root, path)) continue;
+    if (tracked.has(path) || isPublishedWorkspacePath(root, path)) continue;
     const absolute = join(root, path);
     const stats = lstatSync(absolute);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= trackedFileLimit(path)) continue;
-    const artifact = recoverRawArtifact(root, path);
+    if (!stats.isFile() || stats.isSymbolicLink()) continue;
+    const sqlite = isUntrackedDatabasePath(path) && workspaceFileIsSQLiteDatabase(absolute);
+    if (!sqlite && (!isCandidateEvidencePath(path) || stats.size <= trackedFileLimit(path))) continue;
+    const artifact = recoverRawArtifact(root, path, sqlite ? "sqlite" : undefined);
     retained.push(artifact);
     recovered.push(artifact);
   }

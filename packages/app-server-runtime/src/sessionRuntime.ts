@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import type { Readable } from "node:stream";
@@ -81,6 +82,12 @@ import {
   getDefaultResearchToolConfigPath,
   createSynthesisTool,
   createSessionDispositionTool,
+  createSessionWorkflowTool,
+  ensureSessionWorkflowRunbook,
+  verifySessionWorkflowCodeRun,
+  SessionWorkflowStore,
+  sessionWorkflowInstructions,
+  requireAssignedSessionWorkflowDisposition,
   getAuthStatus,
   getProviderModelCatalog,
   generateResearchSessionTitle,
@@ -2188,6 +2195,9 @@ export async function main(
       const agentInstructions = discoverResearchAgentInstructions({
         workingDirectory: runtimeConfig.workspaceContext.workspaceRoot,
       });
+      if (runtimeConfig.sessionWorkflowInstructions) {
+        agentInstructions.content = [agentInstructions.content, runtimeConfig.sessionWorkflowInstructions].filter(Boolean).join("\n\n");
+      }
       let agentExecutor: ResearchAgentExecutor;
       const promptTemplate = args.promptTemplatePath ? await readFile(args.promptTemplatePath, "utf8") : undefined;
       if (promptTemplate !== undefined) validateResearchSystemPromptTemplate(promptTemplate);
@@ -3730,6 +3740,7 @@ async function createRuntimeConfig(args: {
   capture: Record<string, unknown>;
   dispositionRecorder: ResearchDispositionRecorder;
   memoryGraph: MemoryGraphStore;
+  sessionWorkflowInstructions: string | null;
   executeRunbook?: (request: {
     runbookId: string;
     cellId?: string;
@@ -3774,8 +3785,13 @@ async function createRuntimeConfig(args: {
   );
   const governance = createCliGovernance(runtimeTools);
   const cleanupCallbacks: (() => Promise<void>)[] = [];
+  let sessionWorkflowStore: SessionWorkflowStore | undefined;
   const dispositionRecorder = new ResearchDispositionRecorder();
-  const dispositionTool = createSessionDispositionTool(dispositionRecorder);
+  const dispositionTool = createSessionDispositionTool(dispositionRecorder, {
+    beforeRecord: (input) => {
+      if (args.sessionId && sessionWorkflowStore) requireAssignedSessionWorkflowDisposition(sessionWorkflowStore, args.sessionId, input);
+    }
+  });
   executableTools.push(dispositionTool);
   toolDescriptors.push(dispositionTool.descriptor);
   const storageLayout = createResearchStorageLayout({
@@ -3793,6 +3809,12 @@ async function createRuntimeConfig(args: {
         }
       : {}),
   });
+  let assignedWorkflowInstructions: string | null = null;
+  if (args.sessionId && workspaceContext.memoryContext?.workspaceId) {
+    const workflowStore = new SessionWorkflowStore(memoryGraph.databasePath, workspaceContext.memoryContext.workspaceId);
+    sessionWorkflowStore = workflowStore;
+    cleanupCallbacks.push(async () => workflowStore.close());
+  }
   const resourceCatalog = new ResearchResourceCatalog({
     databasePath: memoryGraph.databasePath,
     workspaceId: workspaceContext.memoryContext?.workspaceId ?? `workspace:${workspaceRoot}`,
@@ -3852,6 +3874,14 @@ async function createRuntimeConfig(args: {
   toolDescriptors.push(...findingTools.map((tool) => tool.descriptor));
   cleanupCallbacks.push(async () => findingStore.close());
   cleanupCallbacks.push(async () => memoryGraph.close());
+  const workflowHasCode = Boolean(args.sessionId && sessionWorkflowStore?.getAssignment(args.sessionId)?.definition.notebook.cells.some((cell) => cell.cell_type === "code"));
+  const enabledPluginIds = runtimeTools.managedPluginIds ?? MANAGED_TOOL_PLUGIN_IDS;
+  if (workflowHasCode && !resolvedResearchProfile.profile.capabilities.runbooksEnabled) {
+    throw new Error("The selected research profile does not support runbooks required by this workflow's code cells.");
+  }
+  if (workflowHasCode && !enabledPluginIds.includes("beale-runbooks")) {
+    throw new Error("Enable the Runbooks feature before starting a workflow with code cells.");
+  }
   if (resolvedResearchProfile.profile.capabilities.runbooksEnabled) {
     const runbooks = new RunbookStore(
       memoryGraph.databasePath,
@@ -4164,11 +4194,48 @@ async function createRuntimeConfig(args: {
   }
 
   if (runtimeTools.managedPluginIds === undefined || runtimeTools.managedPluginIds.includes("beale-browser")) {
-    const browserSession = new BrowserCdpSession();
+    const browserSession = new BrowserCdpSession(async () => {
+      try {
+        const discovery = JSON.parse(await readFile(resolve(homedir(), ".beale", "desktop-browser.json"), "utf8")) as unknown;
+        if (discovery && typeof discovery === "object" && "endpoint" in discovery && typeof discovery.endpoint === "string") {
+          const endpoint = new URL(discovery.endpoint);
+          if (endpoint.protocol === "http:" && endpoint.hostname === "127.0.0.1" && endpoint.searchParams.has("token")) {
+            const probe = new URL("/json/list", endpoint);
+            probe.search = endpoint.search;
+            const response = await fetch(probe, { signal: AbortSignal.timeout(500) });
+            if (response.ok) return endpoint.href;
+          }
+        }
+      } catch { /* The desktop browser is optional. */ }
+      return "http://127.0.0.1:9222";
+    }, args.sessionId);
     const browserTools = createBrowserTools(browserSession);
     executableTools.push(...browserTools);
     toolDescriptors.push(...browserTools.map((tool) => tool.descriptor));
     cleanupCallbacks.push(() => browserSession.cleanup());
+  }
+
+  if (args.sessionId && sessionWorkflowStore) {
+    const workflowStore = sessionWorkflowStore;
+    let assignment = workflowStore.getAssignment(args.sessionId);
+    if (assignment?.definition.notebook.cells.some((cell) => cell.cell_type === "code")) {
+      if (!runbookStore || !executeRunbook) throw new Error("Workflow code cells require the app-server runbook executor and shell tool.");
+      assignment = ensureSessionWorkflowRunbook(workflowStore, runbookStore, args.sessionId);
+    }
+    if (assignment) {
+      const activeRunbookStore = runbookStore;
+      const workflowTool = createSessionWorkflowTool(workflowStore, args.sessionId, [
+        workspaceRoot,
+        ...workspaceContext.knownRepositories.map((repository) => repository.rootPath),
+        ...workspaceContext.materializedSourcePaths
+      ], (current, cell, runId) => {
+        if (!activeRunbookStore || !current.runbookId) throw new Error("The workflow runbook is unavailable.");
+        verifySessionWorkflowCodeRun(activeRunbookStore, current, cell, runId);
+      });
+      executableTools.push(workflowTool);
+      toolDescriptors.push(workflowTool.descriptor);
+      assignedWorkflowInstructions = sessionWorkflowInstructions(workflowStore, args.sessionId);
+    }
   }
 
   assertManagedToolOwnership(executableTools);
@@ -4178,7 +4245,6 @@ async function createRuntimeConfig(args: {
     toolDescriptors,
   });
 
-  const enabledPluginIds = runtimeTools.managedPluginIds ?? MANAGED_TOOL_PLUGIN_IDS;
   const managedPlugins = managedToolPluginOptions(modelToolCuration.executableTools, enabledPluginIds);
   const enabledTools = modelToolCuration.executableTools.filter((tool) => {
     const pluginId = managedToolPluginId(tool.descriptor.name);
@@ -4202,6 +4268,7 @@ async function createRuntimeConfig(args: {
     runtimeTools,
     dispositionRecorder,
     memoryGraph,
+    sessionWorkflowInstructions: assignedWorkflowInstructions,
     ...(executeRunbook ? { executeRunbook } : {}),
     capture: createRuntimeCapture({
       families,

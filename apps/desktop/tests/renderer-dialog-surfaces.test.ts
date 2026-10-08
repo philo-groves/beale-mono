@@ -400,7 +400,7 @@ describe('renderer dialog surfaces', () => {
     expect(appSource).toContain('const openResearchSessionFromSidebar = useCallback');
     expect(appSource).toContain('onOpenWorkspace={openWorkspaceFromSidebar}');
     expect(appSource).toContain('onOpenResearchSession={openResearchSessionFromSidebar}');
-    expect(appSource).toContain('onCancel={closeNewResearch}');
+    expect(appSource).toContain('onCancel={cancelNewResearch}');
     expect(modalSource).not.toContain('StartRunForm');
     expect(settingsSource).toContain('collaboration={collaboration}');
     expect(composerSource).toContain('onClick={openDialog}');

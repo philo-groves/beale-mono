@@ -116,6 +116,44 @@ test('automatic checkpoints retain oversized candidate evidence with a tracked m
   assert.equal(followUp.recoveredRawArtifacts, undefined);
 });
 
+test('automatic checkpoints retain untracked SQLite artifacts without hiding later text replacements', () => {
+  const root = workspace();
+  const path = 'investigations/example/generated/state';
+  mkdirSync(join(root, 'investigations', 'example', 'generated'), { recursive: true });
+  const database = Buffer.alloc(4096);
+  database.write('SQLite format 3\0');
+  writeFileSync(join(root, path), database);
+
+  const result = checkpointWorkspace(root, 'Retain generated database');
+  assert.equal(result.status, 'committed', result.error);
+  assert.equal(result.recoveredRawArtifacts?.length, 1);
+  assert.equal(result.recoveredRawArtifacts[0].path, path);
+  assert.equal(git(root, 'ls-files', path).stdout, '');
+  assert.match(git(root, 'check-ignore', '-v', path).stdout, /\.git\/info\/exclude/u);
+  const manifest = JSON.parse(readFileSync(join(root, result.recoveredRawArtifacts[0].manifestPath), 'utf8'));
+  assert.equal(manifest.sha256, workspaceContentHash(database));
+  assert.equal(readFileSync(join(root, path)).equals(database), true);
+  assert.equal(checkpointWorkspace(root, 'No database changes').status, 'unchanged');
+
+  writeFileSync(join(root, path), 'example text replacement');
+  const replacement = checkpointWorkspace(root, 'Track text replacement');
+  assert.equal(replacement.status, 'committed', replacement.error);
+  assert.equal(git(root, 'show', `HEAD:${path}`).stdout, 'example text replacement');
+});
+
+test('manual commits still reject staged SQLite artifacts', () => {
+  const root = workspace();
+  const path = 'investigations/example/generated/state';
+  mkdirSync(join(root, 'investigations', 'example', 'generated'), { recursive: true });
+  const database = Buffer.alloc(4096);
+  database.write('SQLite format 3\0');
+  writeFileSync(join(root, path), database);
+  assert.equal(git(root, 'add', path).status, 0);
+  const commit = git(root, 'commit', '-m', 'Reject database');
+  assert.notEqual(commit.status, 0);
+  assert.match(commit.stderr, /SQLite database/u);
+});
+
 test('checkpoint repair reports oversized tracked evidence as a blocker', () => {
   const root = workspace();
   const path = 'investigations/example/evidence/tracked-example.bin';

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
+import type { BrowserContextSummary, BrowserContextsUpdate } from '@shared/browserContexts';
 import type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
@@ -47,6 +48,11 @@ import type {
   UndoHistoryDuplicateInput,
   ClaimBoardTransitionRequest,
   AppServerRunbookDocument,
+  SessionWorkflowAssignment,
+  SessionWorkflowRunSummary,
+  SessionWorkflowDefinition,
+  SessionWorkflowDraft,
+  SessionWorkflowUpdateInput,
   AppServerReportDocument,
   AppServerReportLocator,
   AppServerReportSummary,
@@ -119,6 +125,23 @@ async function invokeRunDetail<T>(topic: string, ...args: unknown[]): Promise<T>
 }
 
 const api: BealeApi = {
+  listBrowserContexts(): Promise<BrowserContextSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listBrowserContexts);
+  },
+  createBrowserContext(label: string): Promise<BrowserContextSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.createBrowserContext, label);
+  },
+  renameBrowserContext(id: string, label: string): Promise<BrowserContextSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.renameBrowserContext, id, label);
+  },
+  removeBrowserContext(id: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.removeBrowserContext, id);
+  },
+  onBrowserContextsChanged(listener: (update: BrowserContextsUpdate) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, update: BrowserContextsUpdate): void => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.browserContextsChanged, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.browserContextsChanged, wrapped);
+  },
   selectWorkspace(mode: WorkspacePickerMode) {
     return ipcRenderer.invoke(IPC_CHANNELS.selectWorkspace, mode);
   },
@@ -453,6 +476,21 @@ const api: BealeApi = {
   },
   getAppServerRunbook(runbookId: string): Promise<AppServerRunbookDocument> {
     return ipcRenderer.invoke(IPC_CHANNELS.getAppServerRunbook, runbookId);
+  },
+  listSessionWorkflows(): Promise<SessionWorkflowDefinition[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listSessionWorkflows);
+  },
+  createSessionWorkflow(input: SessionWorkflowDraft): Promise<SessionWorkflowDefinition> {
+    return ipcRenderer.invoke(IPC_CHANNELS.createSessionWorkflow, input);
+  },
+  updateSessionWorkflow(input: SessionWorkflowUpdateInput): Promise<SessionWorkflowDefinition> {
+    return ipcRenderer.invoke(IPC_CHANNELS.updateSessionWorkflow, input);
+  },
+  getSessionWorkflow(sessionId: string): Promise<SessionWorkflowAssignment | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getSessionWorkflow, sessionId);
+  },
+  listSessionWorkflowRuns(workflowId: string): Promise<SessionWorkflowRunSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listSessionWorkflowRuns, workflowId);
   },
   listAutomations(): Promise<AutomationSummary[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.listAutomations);

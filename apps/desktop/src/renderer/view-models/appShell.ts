@@ -24,15 +24,19 @@ export function workspaceHasLiveResearchRun(snapshot: WorkspaceSnapshot | null):
 
 export function shouldShowHeaderResearchControls(input: {
   researchDetailsAvailable: boolean;
+  newResearchOpen: boolean;
+  workspaceOpen: boolean;
   settingsOpen: boolean;
   reportsOpen: boolean;
   automationsOpen: boolean;
+  topicsOpen: boolean;
   pluginsOpen: boolean;
 }): boolean {
-  return input.researchDetailsAvailable
+  return (input.researchDetailsAvailable || (input.newResearchOpen && input.workspaceOpen))
     && !input.settingsOpen
     && !input.reportsOpen
     && !input.automationsOpen
+    && !input.topicsOpen
     && !input.pluginsOpen;
 }
 

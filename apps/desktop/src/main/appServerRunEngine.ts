@@ -253,6 +253,7 @@ export class AppServerRunEngine {
         goalEnabled: input.goalEnabled,
         goalObjective,
         researchWorkflowId: workflowId,
+        guidanceWorkflow: input.guidanceWorkflow ?? null,
         resourceContext: input.resourceContext ?? null,
         collaboration: normalizedInput.collaboration ?? null
       }
@@ -2690,6 +2691,7 @@ function appServerSessionLaunchRequest(
             workflowId: researchProfile.workflowId
           }
         : {}),
+      ...(input.guidanceWorkflow ? { guidanceWorkflow: input.guidanceWorkflow } : {}),
       ...(collaboration ? { collaboration: collaboration as Record<string, unknown> } : {}),
       ...(continuation ? { continuation } : {}),
       ...(generateTitle ? { generateTitle: true } : {}),
@@ -2711,6 +2713,7 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
       : null,
     promptMarkdown,
     workflowId: researchWorkflowFromRun(run) || undefined,
+    ...(run.budget.guidanceWorkflow ? { guidanceWorkflow: run.budget.guidanceWorkflow as NonNullable<StartRunInput['guidanceWorkflow']> } : {}),
     ...(isReportResourceContext(run.budget.resourceContext)
       ? { resourceContext: run.budget.resourceContext }
       : {}),

@@ -71,10 +71,16 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v30 claim board, persistence, continuation, and topic contract", () => {
+test("protocol describe exposes a runtime-bound v36 workflow run lifecycle contract", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 30);
+  assert.equal(descriptor.contractVersion, 36);
+  assert.ok(descriptor.capabilities.includes('session.workflows.v1'));
+  assert.ok(descriptor.capabilities.includes('session.workflows.notebook.v1'));
+  assert.ok(descriptor.capabilities.includes('session.workflows.runs.v1'));
+  assert.ok(descriptor.operations.includes('workflow.list'));
+  assert.ok(descriptor.operations.includes('workflow.update'));
+  assert.ok(descriptor.operations.includes('workflow.runs'));
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 13);
   assert.equal(descriptor.schemas.finding, 6);

@@ -1,4 +1,5 @@
 import type { ResearchProfileId, ResearchProfileSnapshot, ResolvedResearchProfile } from './researchProfile';
+import type { BrowserContextSummary, BrowserContextsUpdate } from './browserContexts';
 import type { ResearchKitId } from './researchKits';
 import type {
   ResourcePriorArtPage,
@@ -19,7 +20,16 @@ import type {
   ResearchClaimRating,
   ClaimBoardTransitionRequest,
   ClaimBoardMaturity,
-  SteeringSuggestionResult
+  SteeringSuggestionResult,
+  SessionWorkflowDefinition,
+  SessionWorkflowDraft,
+  SessionWorkflowUpdateInput,
+  SessionWorkflowField,
+  SessionWorkflowStep,
+  SessionWorkflowNotebook,
+  SessionWorkflowNotebookCell,
+  SessionWorkflowAssignment,
+  SessionWorkflowRunSummary
 } from '@beale/app-server-runtime/protocol';
 
 export * from './researchProfile';
@@ -44,7 +54,16 @@ export type {
   ResearchClaimRating,
   ClaimBoardTransitionRequest,
   ClaimBoardMaturity,
-  SteeringSuggestionResult
+  SteeringSuggestionResult,
+  SessionWorkflowDefinition,
+  SessionWorkflowDraft,
+  SessionWorkflowUpdateInput,
+  SessionWorkflowField,
+  SessionWorkflowStep,
+  SessionWorkflowNotebook,
+  SessionWorkflowNotebookCell,
+  SessionWorkflowAssignment,
+  SessionWorkflowRunSummary
 } from '@beale/app-server-runtime/protocol';
 
 export type ScopeAssetDirection = 'in_scope' | 'out_of_scope';
@@ -1703,6 +1722,7 @@ export interface StartRunInput {
   goalObjective: string | null;
   promptMarkdown: string;
   workflowId?: string;
+  guidanceWorkflow?: { id: string; values: Record<string, string> };
   resourceContext?: ReportResourceContext;
   mode: string;
   attemptStrategy: string;
@@ -2379,6 +2399,11 @@ export interface IosDeviceCaptureFrame {
 export type WindowBackgroundEffect = 'solid' | 'semi-transparent' | 'gradient' | 'blur';
 
 export interface BealeApi {
+  listBrowserContexts(): Promise<BrowserContextSummary[]>;
+  createBrowserContext(label: string): Promise<BrowserContextSummary>;
+  renameBrowserContext(id: string, label: string): Promise<BrowserContextSummary>;
+  removeBrowserContext(id: string): Promise<void>;
+  onBrowserContextsChanged(listener: (update: BrowserContextsUpdate) => void): () => void;
   selectWorkspace(mode: WorkspacePickerMode): Promise<WorkspacePickerResult>;
   selectWorkspaceDirectory(): Promise<WorkspaceDirectorySelection>;
   getWorkspaceRegistry(): Promise<WorkspaceRegistryState>;
@@ -2484,6 +2509,11 @@ export interface BealeApi {
   recordProfilingReport(report: ProfilingReport): Promise<ProfilingState>;
   openAppServerMemoryDirectory(name: AppServerMemoryDirectorySummary['name']): Promise<void>;
   getAppServerRunbook(runbookId: string): Promise<AppServerRunbookDocument>;
+  listSessionWorkflows(): Promise<SessionWorkflowDefinition[]>;
+  createSessionWorkflow(input: SessionWorkflowDraft): Promise<SessionWorkflowDefinition>;
+  updateSessionWorkflow(input: SessionWorkflowUpdateInput): Promise<SessionWorkflowDefinition>;
+  getSessionWorkflow(sessionId: string): Promise<SessionWorkflowAssignment | null>;
+  listSessionWorkflowRuns(workflowId: string): Promise<SessionWorkflowRunSummary[]>;
   listAutomations(): Promise<AutomationSummary[]>;
   updateAutomation(input: AutomationUpdateInput): Promise<AutomationSummary>;
   listReportingReports(): Promise<AppServerReportSummary[]>;
