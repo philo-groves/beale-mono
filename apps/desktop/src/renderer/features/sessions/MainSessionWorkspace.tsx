@@ -199,12 +199,14 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   const autoExpandedRunbookRunIdRef = useRef<string | null>(null);
   const viewState = viewStateInput ?? mainSessionViewState(false, selectedRunId);
   const workspaceView = viewState === 'workspace';
-  const [workspaceSidePanelMounted, setWorkspaceSidePanelMounted] = useState(workspaceView && researchDetailsOpen);
-  const [workspaceSidePanelVisible, setWorkspaceSidePanelVisible] = useState(workspaceView && researchDetailsOpen);
+  const workspaceSideView = viewState !== 'session';
+  const sidePanelRunId = viewState === 'session' ? selectedRunId : null;
+  const [workspaceSidePanelMounted, setWorkspaceSidePanelMounted] = useState(workspaceSideView && researchDetailsOpen);
+  const [workspaceSidePanelVisible, setWorkspaceSidePanelVisible] = useState(workspaceSideView && researchDetailsOpen);
   const sessionHasContent = viewState === 'session' && selectedRunId !== null && sessionContentAvailable(detail, events);
-  const showResearchSidePanel = sessionHasContent || workspaceSidePanelMounted;
-  const visibleResearchDetails = selectedRunId !== null ? sessionHasContent && researchDetailsOpen : workspaceSidePanelVisible;
-  const expandedResearchSidePanel = selectedRunId !== null ? sessionHasContent && researchDetailsOpen : workspaceSidePanelMounted;
+  const showResearchSidePanel = true;
+  const visibleResearchDetails = sidePanelRunId !== null ? researchDetailsOpen : workspaceSidePanelVisible;
+  const expandedResearchSidePanel = sidePanelRunId !== null ? researchDetailsOpen : workspaceSidePanelMounted;
   const researchSideResizeEnabled = sessionHasContent && !visibleResearchDetails && !connectedDeviceCaptureExpanded;
   const {
     containerRef,
@@ -228,10 +230,10 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     return () => observer.disconnect();
   }, [containerRef]);
   const viewSpace = viewState === 'session' ? 'session' : 'workspace';
-  const researchSidePanelKey = selectedRunId ?? `workspace:${appServerMemory?.contextWorkspaceId ?? 'current'}`;
+  const researchSidePanelKey = sidePanelRunId ?? `workspace:${appServerMemory?.contextWorkspaceId ?? 'current'}`;
   const researchSideData = useCoalescedResearchSideData({
-    detail,
-    events: allEvents,
+    detail: sidePanelRunId ? detail : null,
+    events: sidePanelRunId ? allEvents : [],
     key: `${researchSidePanelKey}:${selectedSubagentPath ?? 'root'}`,
     coalesce: viewSpace === 'session' && detail?.run.status === 'active'
   });
@@ -240,7 +242,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     setSelectedWorkspaceMemoryId(null);
   }, [appServerMemory?.contextWorkspaceId, selectedRunId]);
   useEffect(() => {
-    if (!workspaceView) {
+    if (!workspaceSideView) {
       setWorkspaceSidePanelMounted(false);
       setWorkspaceSidePanelVisible(false);
       return;
@@ -262,7 +264,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
       if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
       if (closeTimer !== null) window.clearTimeout(closeTimer);
     };
-  }, [researchDetailsOpen, workspaceView]);
+  }, [researchDetailsOpen, workspaceSideView]);
 
   const openWorkspaceClaim = (claimId: string): void => {
     onBackToRunbooks();
@@ -346,7 +348,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   return (
     <div
       ref={containerRef}
-      className={`main-session-grid${workspaceView ? ' workspace-context' : ''}${visibleResearchDetails || (viewState === 'session' && connectedDeviceCaptureExpanded) ? ' research-details-open' : ''}${workspaceView && !visibleResearchDetails ? ' workspace-main-only' : ''}${viewState === 'new-research' || (selectedRunId !== null && !sessionHasContent) ? ' session-main-only' : ''}`}
+      className={`main-session-grid${workspaceSideView ? ' workspace-context' : ''}${visibleResearchDetails || (viewState === 'session' && connectedDeviceCaptureExpanded) ? ' research-details-open' : ''}${workspaceSideView && !visibleResearchDetails ? ' workspace-main-only' : ''}${(viewState === 'new-research' && !visibleResearchDetails) || (viewState === 'session' && selectedRunId !== null && !sessionHasContent) ? ' session-main-only' : ''}`}
       data-session-view-state={viewState}
       style={{
         '--research-side-panel-width': `${panelWidth}px`,
@@ -428,7 +430,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
         <div
           className="research-side-resize-handle"
           role="separator"
-          aria-label={selectedRunId ? 'Resize Runbooks, Reports, Subagents, and Memories sidebar' : 'Resize workspace detail sidebar'}
+          aria-label={sidePanelRunId ? 'Resize Runbooks, Reports, Subagents, and Memories sidebar' : 'Resize workspace detail sidebar'}
           aria-orientation="vertical"
           aria-valuemin={MIN_RESEARCH_SIDE_PANEL_WIDTH}
           aria-valuemax={maximumPanelWidth}
@@ -453,8 +455,8 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           selectedRunbook={selectedRunbook}
           selectedRunbookDocument={selectedRunbookDocument}
           selectedRunbookId={selectedRunbookId}
-          selectedClaimId={!selectedRunId ? selectedWorkspaceClaimId : undefined}
-          selectedMemoryNodeId={!selectedRunId ? selectedWorkspaceMemoryId : undefined}
+          selectedClaimId={!sidePanelRunId ? selectedWorkspaceClaimId : undefined}
+          selectedMemoryNodeId={!sidePanelRunId ? selectedWorkspaceMemoryId : undefined}
           runbookLoading={runbookLoading}
           runbookError={runbookError}
           connectedDeviceOs={connectedDeviceOs}
@@ -466,15 +468,15 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           selectedSubagentPath={selectedSubagentPath}
           searchHighlightQuery={searchHighlightQuery}
           onSelectSubagent={onSelectSubagent}
-          onOpenClaim={!selectedRunId ? openWorkspaceClaim : undefined}
+          onOpenClaim={!sidePanelRunId ? openWorkspaceClaim : undefined}
           historyMutationBusy={busy}
           onMarkHistoryDuplicate={onMarkHistoryDuplicate}
           onUndoHistoryDuplicate={onUndoHistoryDuplicate}
-          onOpenRunbook={selectedRunId ? onOpenAppServerRunbook : openWorkspaceRunbook}
-          onRunbookExecute={selectedRunId ? onRunAppServerRunbook : undefined}
-          onBackToRunbooks={selectedRunId ? onBackToRunbooks : closeWorkspaceRunbook}
-          onBackToClaim={!selectedRunId ? closeWorkspaceClaim : undefined}
-          onBackToMemory={!selectedRunId ? closeWorkspaceMemory : undefined}
+          onOpenRunbook={sidePanelRunId ? onOpenAppServerRunbook : openWorkspaceRunbook}
+          onRunbookExecute={sidePanelRunId ? onRunAppServerRunbook : undefined}
+          onBackToRunbooks={sidePanelRunId ? onBackToRunbooks : closeWorkspaceRunbook}
+          onBackToClaim={!sidePanelRunId ? closeWorkspaceClaim : undefined}
+          onBackToMemory={!sidePanelRunId ? closeWorkspaceMemory : undefined}
           onOpenReport={onOpenAppServerReport}
           onBackToReports={onBackToReports}
           onBackToSubagents={onBackToSubagents}

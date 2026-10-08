@@ -2111,9 +2111,12 @@ export function App(): JSX.Element {
   const windowControlPlatform = windowControlPlatformForState(snapshot, hostEnvironment);
   const headerResearchControlsAvailable = shouldShowHeaderResearchControls({
     researchDetailsAvailable,
+    newResearchOpen,
+    workspaceOpen: snapshot !== null,
     settingsOpen,
     reportsOpen,
     automationsOpen,
+    topicsOpen,
     pluginsOpen
   }) && !workflowsOpen;
   const bottomPanelVisible = bottomPanelOpen && headerResearchControlsAvailable;
@@ -2172,8 +2175,8 @@ export function App(): JSX.Element {
   const toggleBottomPanel = useCallback(() => setBottomPanelOpen((current) => !current), []);
   const toggleRightSidenav = useCallback(() => setRightSidenavExpanded((current) => !current), []);
   const changeResearchDetailsOpen = useCallback((expanded: boolean): void => {
-    setRightSidenavExpanded(researchDetailsAvailable && expanded);
-  }, [researchDetailsAvailable]);
+    setRightSidenavExpanded(headerResearchControlsAvailable && expanded);
+  }, [headerResearchControlsAvailable]);
   const decideInlineShellApproval = useCallback((decision: PolicyReviewDecision): void => {
     if (inlineApproval) handleShellApprovalDecision(inlineApproval, decision);
   }, [handleShellApprovalDecision, inlineApproval]);
@@ -2404,7 +2407,7 @@ export function App(): JSX.Element {
         workspaces={workspaceRegistry?.workspaces ?? []}
         workspaceRegistryLoading={startupPhase === 'shell' || startupPhase === 'registry'}
         rightSidenavAvailable={headerResearchControlsAvailable}
-        rightSidenavExpanded={rightSidenavExpanded && researchDetailsAvailable}
+        rightSidenavExpanded={rightSidenavExpanded && headerResearchControlsAvailable}
         contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !topicsOpen && !workflowsOpen && !pluginsOpen}
         staticContextTitle={settingsOpen
           ? { primary: 'Agent Settings', secondary: settingsSectionLabel(settingsSection), icon: settingsSectionHeaderIcon(settingsSection) }
@@ -2842,34 +2845,34 @@ export function App(): JSX.Element {
               allEvents={activeTraceEvents}
               providerModelCatalog={enabledResearchProviderModelCatalog}
               providerModelDefaults={providerSettings?.modelDefaults}
-              appServerMemory={selectedRunId ? null : snapshot?.appServerMemory ?? null}
+              appServerMemory={selectedRunId && !newResearchOpen ? null : snapshot?.appServerMemory ?? null}
               activeScope={snapshot?.activeScope ?? null}
-              workspaceRules={selectedRunId ? [] : snapshot?.workspaceRules ?? []}
-              researchProfile={selectedRunId ? renderedRunDetail?.researchProfile?.profile ?? null : snapshot?.researchProfile.profile ?? null}
+              workspaceRules={selectedRunId && !newResearchOpen ? [] : snapshot?.workspaceRules ?? []}
+              researchProfile={selectedRunId && !newResearchOpen ? renderedRunDetail?.researchProfile?.profile ?? null : snapshot?.researchProfile.profile ?? null}
               researchKitId={snapshot.workspace.researchKitId}
-              researchSubjectName={selectedRunId ? '' : snapshot?.researchSubject.name ?? ''}
+              researchSubjectName={selectedRunId && !newResearchOpen ? '' : snapshot?.researchSubject.name ?? ''}
               sessionHeatPreferences={sessionHeatPreferences}
               responseSuggestionsEnabled={suggestionPreferences.responseSuggestionsEnabled}
-              workspacePath={selectedRunId ? '' : snapshot?.workspace.workspacePath ?? ''}
-              workspaceDirectories={selectedRunId ? [] : snapshot?.workspace.workspaceDirectories}
+              workspacePath={selectedRunId && !newResearchOpen ? '' : snapshot?.workspace.workspacePath ?? ''}
+              workspaceDirectories={selectedRunId && !newResearchOpen ? [] : snapshot?.workspace.workspaceDirectories}
               workspaceMemoryBackend={snapshot.workspace.memoryBackend ?? 'app-server'}
               workspaceName={snapshot?.activeScope.workspaceName ?? 'Workspace'}
               viewState={newResearchOpen ? 'new-research' : selectedRunId ? 'session' : 'workspace'}
               newResearchContent={newResearchContent}
               runs={selectedRunId ? [] : workspaceDashboardRuns}
               selectedRunId={selectedRunId}
-              researchDetailsOpen={rightSidenavExpanded && researchDetailsAvailable}
-              selectedRunbookId={selectedRunbookId}
-              selectedRunbook={selectedRunbook}
-              selectedRunbookDocument={selectedRunbookDocument}
+              researchDetailsOpen={rightSidenavExpanded && headerResearchControlsAvailable}
+              selectedRunbookId={newResearchOpen ? null : selectedRunbookId}
+              selectedRunbook={newResearchOpen ? null : selectedRunbook}
+              selectedRunbookDocument={newResearchOpen ? null : selectedRunbookDocument}
               runbookLoading={runbookLoading}
               runbookError={runbookError}
-              selectedReportId={selectedReportId}
-              selectedReport={selectedReport}
-              selectedReportDocument={selectedReportDocument}
+              selectedReportId={newResearchOpen ? null : selectedReportId}
+              selectedReport={newResearchOpen ? null : selectedReport}
+              selectedReportDocument={newResearchOpen ? null : selectedReportDocument}
               reportLoading={reportLoading}
               reportError={reportError}
-              selectedSubagentPath={selectedSubagentPath}
+              selectedSubagentPath={newResearchOpen ? null : selectedSubagentPath}
               searchHighlightQuery=""
               shellApproval={inlineApproval}
               shellApprovalBusy={Boolean(inlineApproval && (busy || shellApprovalDecisionInFlight === inlineApproval.id))}

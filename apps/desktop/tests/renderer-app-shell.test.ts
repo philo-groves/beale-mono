@@ -358,18 +358,25 @@ describe('renderer app shell view model', () => {
     expect(topBarSource).toContain('newResearchPickerOpen && !workspaceOpen');
   });
 
-  it('limits both header research controls to workspace and session views', () => {
+  it('shows header research controls for New Research with an open workspace', () => {
     const base = {
       researchDetailsAvailable: true,
+      newResearchOpen: false,
+      workspaceOpen: true,
       settingsOpen: false,
       reportsOpen: false,
       automationsOpen: false,
+      topicsOpen: false,
       pluginsOpen: false
     };
     expect(shouldShowHeaderResearchControls(base)).toBe(true);
+    expect(shouldShowHeaderResearchControls({ ...base, researchDetailsAvailable: false, newResearchOpen: true })).toBe(true);
+    expect(shouldShowHeaderResearchControls({ ...base, researchDetailsAvailable: false, newResearchOpen: true, workspaceOpen: false })).toBe(false);
+    expect(shouldShowHeaderResearchControls({ ...base, newResearchOpen: true, settingsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, settingsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, reportsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, automationsOpen: true })).toBe(false);
+    expect(shouldShowHeaderResearchControls({ ...base, newResearchOpen: true, topicsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, pluginsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, researchDetailsAvailable: false })).toBe(false);
 

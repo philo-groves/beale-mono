@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
+import type { BrowserContextSummary, BrowserContextsUpdate } from '@shared/browserContexts';
 import type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
@@ -124,6 +125,23 @@ async function invokeRunDetail<T>(topic: string, ...args: unknown[]): Promise<T>
 }
 
 const api: BealeApi = {
+  listBrowserContexts(): Promise<BrowserContextSummary[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.listBrowserContexts);
+  },
+  createBrowserContext(label: string): Promise<BrowserContextSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.createBrowserContext, label);
+  },
+  renameBrowserContext(id: string, label: string): Promise<BrowserContextSummary> {
+    return ipcRenderer.invoke(IPC_CHANNELS.renameBrowserContext, id, label);
+  },
+  removeBrowserContext(id: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.removeBrowserContext, id);
+  },
+  onBrowserContextsChanged(listener: (update: BrowserContextsUpdate) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, update: BrowserContextsUpdate): void => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.browserContextsChanged, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.browserContextsChanged, wrapped);
+  },
   selectWorkspace(mode: WorkspacePickerMode) {
     return ipcRenderer.invoke(IPC_CHANNELS.selectWorkspace, mode);
   },

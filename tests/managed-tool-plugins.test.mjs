@@ -33,6 +33,9 @@ test("runtime assembly honors managed plugin selection while retaining core tool
     assert.ok(names(enabled).includes("repository.fetch_history"));
     assert.ok(names(enabled).includes("memory.get"));
     assert.ok(names(enabled).includes("claim.get"));
+    assert.ok(names(enabled).includes("browser.command"));
+    assert.equal(names(disabled).includes("browser.command"), false);
+    assert.equal(names(knowledge).includes("browser.command"), false);
     assert.ok(names(knowledge).includes("memory.get"));
     assert.equal(names(knowledge).includes("claim.get"), false);
     assert.equal(names(knowledge).includes("repository.search"), false);
@@ -44,8 +47,8 @@ test("runtime assembly honors managed plugin selection while retaining core tool
   }
 });
 
-test("all six internal optional features have unique tool ownership and compatibility manifests", async () => {
-  assert.equal(MANAGED_TOOL_PLUGINS.length, 6);
+test("all seven internal optional features have unique tool ownership and compatibility manifests", async () => {
+  assert.equal(MANAGED_TOOL_PLUGINS.length, 7);
   const names = MANAGED_TOOL_PLUGINS.flatMap((plugin) => plugin.tools);
   assert.equal(new Set(names).size, names.length);
   for (const plugin of MANAGED_TOOL_PLUGINS) {
@@ -70,9 +73,9 @@ test("all six internal optional features have unique tool ownership and compatib
 test("plugin catalog stays complete; loading is atomic, isolated, and bounded", async () => {
   const tools = [stub("memory.get"), stub("repository.search"), stub("file.read")];
   const options = managedToolPluginOptions(tools, ["beale-knowledge"]);
-  assert.equal(options.length, 6);
+  assert.equal(options.length, 7);
   const catalog = formatManagedToolPluginCatalog(options);
-  assert.equal(catalog.split("\n").length, 6);
+  assert.equal(catalog.split("\n").length, 7);
   assert.match(catalog, /beale-source: .*Disabled by operator/);
   const session = new ManagedToolPluginSession(options);
   const other = new ManagedToolPluginSession(options);
@@ -288,7 +291,7 @@ test("bundled plugin defaults and disablement persist in launch arguments", asyn
   try {
     const builtinPlugins = MANAGED_TOOL_PLUGIN_IDS.map((id) => ({ id: `${id}-builtin`, path: resolve("app-server/resources/harness-features", id), installedAt: "2026-01-01T00:00:00.000Z", enabledByDefault: true }));
     const registry = new AgentPluginRegistry(directory, { builtinPlugins });
-    assert.equal(registry.getState().plugins.length, 6);
+    assert.equal(registry.getState().plugins.length, 7);
     assert.ok(registry.getState().plugins.every((plugin) => plugin.enabled && plugin.status === "ready"));
     assert.deepEqual(registry.getAppServerRuntime().managedPluginIds.sort(), [...MANAGED_TOOL_PLUGIN_IDS].sort());
     for (const id of MANAGED_TOOL_PLUGIN_IDS) registry.setEnabled(`${id}-builtin`, false);

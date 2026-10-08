@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, session, shell } from 'electron';
 import { installPreBealeEnvironmentAliases } from '@beale/research-agent/legacy-compatibility';
 import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync } from 'node:fs';
@@ -75,6 +75,7 @@ import { getWorkspaceEditorCatalogForHost, openWorkspaceInEditor } from './works
 import { resolveContentLink } from './contentLinks';
 import { WorkspaceTerminalService } from './workspaceTerminalService';
 import { TicketingService } from './ticketingService';
+import { allowedBrowserUrl, InAgentBrowserBridge } from './inAgentBrowserBridge';
 import {
   NATIVE_WINDOW_SHAPE_RADIUS_PX,
   needsExplicitRoundedWindowShape,
@@ -103,6 +104,7 @@ let workspaceService: WorkspaceService;
 let iosDeviceCaptureService: IosDeviceCaptureService;
 let workspaceTerminalService: WorkspaceTerminalService;
 let ticketingService: TicketingService;
+let inAgentBrowserBridge: InAgentBrowserBridge | null = null;
 let appServerRestartDialog: Promise<boolean> | null = null;
 const runDetailRequestControllers = new Map<string, AbortController>();
 const researchGoalSuggestionControllers = new Map<string, AbortController>();
@@ -159,7 +161,8 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webviewTag: true
     }
   });
   mainWindow = window;
@@ -175,6 +178,21 @@ function createWindow(): void {
   registerWindowChromeStateEvents(window);
   registerRendererDevToolsControls(window);
   registerRendererNavigationPolicy(window);
+  window.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    if (!inAgentBrowserBridge?.contextIdForPartition(params.partition) || !allowedBrowserUrl(params.src)) {
+      event.preventDefault();
+      return;
+    }
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+  });
+  window.webContents.on('did-attach-webview', (_event, guest) => {
+    const context = inAgentBrowserBridge?.listContexts().find((candidate) => session.fromPartition(candidate.partition) === guest.session);
+    if (context) inAgentBrowserBridge?.attach(context.id, guest);
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     window.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -551,6 +569,19 @@ function workspaceRegistryBroadcastMetricDetail(workspaceRegistry: WorkspaceRegi
 }
 
 function registerIpc(): void {
+  ipcMain.handle(IPC_CHANNELS.listBrowserContexts, () => inAgentBrowserBridge?.listContexts() ?? []);
+  ipcMain.handle(IPC_CHANNELS.createBrowserContext, (_event, label: string) => {
+    if (!inAgentBrowserBridge) throw new Error('The embedded browser is unavailable.');
+    return inAgentBrowserBridge.createContext(label);
+  });
+  ipcMain.handle(IPC_CHANNELS.renameBrowserContext, (_event, id: string, label: string) => {
+    if (!inAgentBrowserBridge) throw new Error('The embedded browser is unavailable.');
+    return inAgentBrowserBridge.renameContext(id, label);
+  });
+  ipcMain.handle(IPC_CHANNELS.removeBrowserContext, async (_event, id: string) => {
+    if (!inAgentBrowserBridge) throw new Error('The embedded browser is unavailable.');
+    await inAgentBrowserBridge.removeContext(id);
+  });
   ipcMain.handle(IPC_CHANNELS.selectWorkspace, async (_event, mode: WorkspacePickerMode) => {
     const result = await dialog.showOpenDialog({
       title: mode === 'create' ? 'Create Beale workspace' : 'Import Beale workspace',
@@ -1260,6 +1291,36 @@ if (!hasSingleInstanceLock) {
       broadcastIosDeviceCaptureFrame
     );
     workspaceTerminalService = new WorkspaceTerminalService();
+    const browserBridge = new InAgentBrowserBridge(
+      undefined,
+      (update) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.browserContextsChanged, update);
+      },
+      async () => {
+        const options = {
+          type: 'warning' as const,
+          title: 'Allow browser access for this research session?',
+          message: 'Allow this research session to control the open Browser contexts?',
+          detail: 'Full browser control can read page content, form values, cookies, session tokens, and network data. Complete sign-in and leave the password form before allowing access. This acknowledgement applies to this research session while Beale remains open.',
+          buttons: ['Cancel', 'Allow browser access'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true
+        };
+        const result = mainWindow && !mainWindow.isDestroyed()
+          ? await dialog.showMessageBox(mainWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 1;
+      },
+      async (partition) => { await session.fromPartition(partition).clearStorageData(); }
+    );
+    try {
+      await browserBridge.start();
+      inAgentBrowserBridge = browserBridge;
+    } catch (error) {
+      browserBridge.stop();
+      process.stderr.write(`Beale could not start the embedded browser bridge: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
     registerIpc();
     createWindow();
     if (smokeTestMode) {
@@ -1276,6 +1337,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('before-quit', () => {
+    inAgentBrowserBridge?.stop();
     workspaceTerminalService?.dispose();
     iosDeviceCaptureService?.dispose();
     workspaceService?.dispose();

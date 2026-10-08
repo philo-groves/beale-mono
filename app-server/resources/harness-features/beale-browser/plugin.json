@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "beale-browser",
+  "version": "0.1.0",
+  "description": "Use isolated Beale browser contexts or compatible external browsers through Chrome DevTools Protocol targets, commands, and events.",
+  "author": "Beale",
+  "license": "MIT",
+  "extensions": {
+    "beale": {
+      "hostToolPlugin": "beale-browser"
+    }
+  }
+}
