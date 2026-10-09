@@ -6,6 +6,8 @@
 
 #### Added
 
+- Fleet can restart local, guest, and same-tailnet remote app-server processes through an independent supervisor, including when the app-server HTTP endpoint is unresponsive. Restarted hosts recover eligible sessions; VM and machine power state is unchanged. Contract v42 requires rebuilt clients and hosts.
+- New Research now lists stopped Fleet base VMs and clones the selected base for each session. Existing workers stay out of the picker; the base is never started. Fleet stops the clone after result import and retains its identity for reconnect and transfer.
 - Added a local Fleet App Servers form for connecting to authenticated peers on the same Tailscale network. Home and Automations can switch between Local and saved app servers to view and control their research sessions.
 - New Research can assign a workspace session to a VM owned by another primary app server. The launching workspace keeps the session and receives changed files through the VM-owning primary.
 - Added Fleet settings for Tart and Hyper-V inventory, clone-only base VMs, SSH configuration, and workspace VM requirements. New Research selects Local or a configured worker; VM sessions stream into the launching primary workspace and return changed workspace files. Concurrent edits and guest canonical records are kept for review.
@@ -28,6 +30,9 @@
 
 #### Changed
 
+- New Research uses a compact Machine menu that accepts multiple base VMs in priority order. Session preparation falls back to the next selected base when an earlier one cannot be prepared; Local remains exclusive.
+- The per-workspace Require a VM control now appears in the workspace Settings form alongside its other general settings, rather than in Fleet.
+- Fleet now has its own destination below Plugins in the left navigation rail. Its configuration, app servers, and virtual machines remain local to the current Beale instance.
 - The macOS development Electron bundle now signs with Beale's bundle identifier so Local Network permission applies to the app-server's SSH helper.
 - Fleet settings now separates Fleet and Virtual Machines into two settings forms. Each VM has a compact row and a configuration dialog for its SSH, base, privilege, clone, and lifecycle controls.
 - Kept Discovery, Chaining, Reporting, and Longshot as New Research suggestion categories. They shape generated ideas and optional prompt expansion without assigning a session workflow or constraining the agent's flow.
@@ -62,7 +67,7 @@
 - The workspace Campaign Memories and Runbooks lists now show top and bottom scroll fades when more items are out of view. Runbooks also use the same inset scrollbar behavior.
 - Header workspace names now preserve their saved capitalization.
 - With an open workspace and collapsed left sidebar, New Research and Quick Chat are available as header icons beside the sidebar toggle.
-- An icon navigation rail now provides Home, Automations, Plugins, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
+- An icon navigation rail now provides Home, Automations, Plugins, Fleet, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
 - The active icon navigation destination persists when research sessions and channels open; Home represents those views.
 - The workspace sidebar now leaves space above New Research and places Quick Chat directly beneath it.
 - New Research now uses the same neutral styling as Quick Chat.
@@ -121,6 +126,8 @@
 
 #### Fixed
 
+- New Research loads local VM choices before remote discovery completes and includes bases from reachable saved app servers even when another peer fails. Remote inventory reads have a bounded timeout.
+- Clicking a base VM name in New Research now keeps the Machine menu open so multiple bases can be selected. The trigger shows a readiness dot and the menu uses single-line options.
 - Fleet VM rows now distinguish a saved primary-side SSH user from SSH setup inside the guest. Registered bases enable the default workspace VM requirement even before that user is saved in Beale.
 - Workspace checkpoints retain oversized untracked macOS executables in investigation directories at their existing paths, with tracked integrity manifests and exact local Git exclusions, so compiled harnesses no longer block later checkpoints.
 - Repository Auditor workflows now recognize inventoried files beneath declared scope directories on Windows, allowing the inventory step to advance.
@@ -1254,6 +1261,8 @@
 
 #### Added
 
+- A separate localhost restart supervisor can replace the app-server process when its control plane is unavailable. Managed Tailscale remote access publishes the supervisor on a separate HTTPS port, and Fleet can reach guest supervisors through SSH.
+- Fleet adds a session clone operation for local and cross-primary launches. Control contract v41 requires rebuilding Beale and app-server together.
 - Fleet now records a durable machine-and-session owner for each VM and rejects conflicting reservations. Remote app-server connections verify a matching online Tailscale peer, and cross-primary workspace transfers use authenticated app-server operations. Control contract v40 requires rebuilding Beale and app-server together.
 - Added Fleet inventory, clone/start/stop operations, model-facing Fleet tools, SSH guest session transport, and chunked workspace transfer. Guest credentials stay in the VM; external source checkouts are not copied from the primary. Registry migration records a session's machine for recovery, and control contract v38 requires rebuilding Beale and app-server together.
 - Added draft SSH connection testing and per-VM known-hosts paths. Control contract v39 requires rebuilding Beale and app-server together.

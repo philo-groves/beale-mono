@@ -787,13 +787,15 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         const endpoint = await hostCall(() => hostService.executeOperation({ operation: 'fleet.prepare', input: {
           workspaceId: request.launch.workspaceId, runId: normalized.sessionId,
           machineId: request.launch.machineId, ownerMachineId: request.launch.fleetOwnerMachineId,
-        } })) as { url?: unknown; operatorToken?: unknown };
-        if (typeof endpoint.url !== 'string' || typeof endpoint.operatorToken !== 'string') throw new HttpError(502, 'Fleet guest connection is unavailable.');
+        } })) as { url?: unknown; operatorToken?: unknown; machineId?: unknown };
+        if (typeof endpoint.url !== 'string' || typeof endpoint.operatorToken !== 'string'
+          || typeof endpoint.machineId !== 'string') throw new HttpError(502, 'Fleet guest connection is unavailable.');
         let guestRejected = false;
         try {
         const guestResponse = await fetch(endpoint.url + BEALE_APP_SERVER_SESSIONS_PATH, {
           method: 'POST', headers: { authorization: `Bearer ${endpoint.operatorToken}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ ...request, sessionId: normalized.sessionId }), redirect: 'error', signal: AbortSignal.timeout(90_000),
+          body: JSON.stringify({ ...request, sessionId: normalized.sessionId,
+            launch: { ...request.launch, machineId: endpoint.machineId } }), redirect: 'error', signal: AbortSignal.timeout(90_000),
         });
         if (!guestResponse.ok) { guestRejected = true; throw new HttpError(502, `Fleet guest rejected the session (${guestResponse.status}).`); }
         const started: unknown = await guestResponse.json();
@@ -805,9 +807,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
           completed: false, workspaceId: request.launch.workspaceId, prompt: request.launch.promptMarkdown, state: 'running', startedAt: new Date().toISOString() });
         return started as StartedSession;
         } catch (error) {
-          if (guestRejected) await hostCall(() => hostService.executeOperation({ operation: 'fleet.release', input: {
-            machineId: request.launch.machineId, ownerMachineId: request.launch.fleetOwnerMachineId, sessionId: normalized.sessionId,
-          } })).catch(() => undefined);
+          if (guestRejected) {
+            const owner = { machineId: endpoint.machineId, ownerMachineId: request.launch.fleetOwnerMachineId, sessionId: normalized.sessionId };
+            await hostCall(() => hostService.executeOperation({ operation: 'fleet.stop', input: owner })).catch(() => undefined);
+            await hostCall(() => hostService.executeOperation({ operation: 'fleet.release', input: owner })).catch(() => undefined);
+          }
           throw error;
         }
       }

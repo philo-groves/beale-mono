@@ -244,6 +244,15 @@ const api: BealeApi = {
   getFleetState(): Promise<FleetState> {
     return ipcRenderer.invoke(IPC_CHANNELS.getFleetState);
   },
+  restartLocalAppServer(): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restartLocalAppServer);
+  },
+  restartFleetAppServer(serverId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restartFleetAppServer, serverId);
+  },
+  restartFleetGuestAppServer(machineId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restartFleetGuestAppServer, machineId);
+  },
   getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteMachines);
   },

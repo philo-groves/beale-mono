@@ -1683,6 +1683,8 @@ export interface StartRunInput {
   goalObjective: string | null;
   promptMarkdown: string;
   machineId?: string;
+  /** Ordered base VMs eligible for this launch; the first is preferred. */
+  machineIds?: string[];
   workflowId?: string;
   resourceContext?: ReportResourceContext;
   mode: string;
@@ -1706,6 +1708,7 @@ export interface StartRunInput {
     goalObjective?: string | null;
     researchWorkflowId?: string | null;
     machineId?: string | null;
+    machineIds?: string[];
     collaboration?: ResearchCollaborationPreferences | null;
   };
   /** Internal host metadata. Renderer-created research sessions must not set this. */
@@ -2400,6 +2403,9 @@ export interface BealeApi {
   previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string): Promise<string>;
   getAgentPlugins(): Promise<AgentPluginRegistryState>;
   getFleetState(): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  restartLocalAppServer(): Promise<void>;
+  restartFleetAppServer(serverId: string): Promise<void>;
+  restartFleetGuestAppServer(machineId: string): Promise<void>;
   getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]>;
   getFleetRemoteCatalog(serverId: string): Promise<import('@beale/app-server-runtime/protocol').FleetRemoteCatalog>;
   getFleetRemoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown>;

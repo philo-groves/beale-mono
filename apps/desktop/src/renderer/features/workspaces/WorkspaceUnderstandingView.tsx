@@ -36,6 +36,7 @@ import type { SessionHeat, SessionHeatPreferences } from '../../view-models/sess
 import { errorMessage } from '../../lib/errors';
 import { renderTraceProseText } from '../traces/traceMarkup';
 import { WorkspaceDirectoriesField } from './WorkspaceDirectoriesWidget';
+import { WorkspaceVmRequirement } from './WorkspaceVmRequirement';
 import { CampaignBoardView, CampaignGraphView } from './CampaignGraphView';
 import { ResourcePriorArtView } from './ResourcePriorArtView';
 
@@ -383,6 +384,7 @@ export function WorkspaceUnderstandingView({
         researchKitId={researchKitId}
         researchSubjectName={researchSubjectName}
         workspaceName={workspaceName}
+        workspaceId={workspaceId}
         workspacePath={workspacePath}
         workspaceDirectories={workspaceDirectories ?? (workspacePath ? [workspacePath] : [])}
       /> : null}
@@ -723,6 +725,7 @@ function WorkspaceOverviewPanel({
   researchSubjectName,
   researchSubjectLocked,
   workspaceName,
+  workspaceId,
   workspacePath,
   workspaceDirectories
 }: {
@@ -740,6 +743,7 @@ function WorkspaceOverviewPanel({
   researchSubjectName: string;
   researchSubjectLocked: boolean;
   workspaceName: string;
+  workspaceId: string;
   workspacePath: string;
   workspaceDirectories: readonly string[];
 }): JSX.Element {
@@ -959,6 +963,7 @@ function WorkspaceOverviewPanel({
                 }}
                 onRemove={(directory) => onChangeDirectories(workspaceDirectories.filter((item) => workspaceDirectoryKey(item) !== workspaceDirectoryKey(directory)))}
               />
+              <WorkspaceVmRequirement workspaceId={workspaceId} disabled={busy} />
               <div className="settings-form-control-row workspace-overview-control-row workspace-overview-textarea-row">
                 <div className="workspace-guidance-field-heading">
                   <span className="settings-form-control-copy">

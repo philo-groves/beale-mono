@@ -20,6 +20,7 @@ import { startAppServer, type AppServerHandle, type AppServerOptions, type Sessi
 import { createAppServerPairingPayload } from './pairing.js';
 import { PairingWindowController } from './pairingWindowController.js';
 import { readPersistedRemoteAccessLaunchOptions } from './remoteAccessConfig.js';
+import { launchRestartSupervisor } from './restartSupervisorMain.js';
 
 const CHECK_EXIT_DELAY_MS = 1_500;
 const ATTACH_EXISTING_FLAG = '--attach-existing';
@@ -123,6 +124,7 @@ void app.whenReady().then(async () => {
     app.exit(1);
     return;
   }
+  if (!checkOnly) launchRestartSupervisor({ discoveryFile: stateFile, hostMode: 'tray', operatorToken: server.operatorToken });
   appSuspensionBlockerId = powerSaveBlocker.start('prevent-app-suspension');
 
   await createTray();

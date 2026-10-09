@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FleetState } from '@beale/app-server-runtime/protocol';
-import { defaultFleetMachineId, fleetVmRequired, isAllowedFleetMachine } from '../src/shared/fleet';
+import { defaultFleetMachineId, fleetVmRequired, isAllowedFleetMachine, isAllowedFleetMachineSelection, selectedFleetMachineIds } from '../src/shared/fleet';
 
 const base: FleetState = {
   machineId: 'machine-example', role: 'primary', enabled: true, available: true, error: null,
@@ -14,16 +14,17 @@ const base: FleetState = {
 };
 
 describe('Fleet machine selection', () => {
-  it('requires a worker when a base exists and falls back alphabetically', () => {
+  it('offers a stopped base and excludes existing workers', () => {
     expect(fleetVmRequired(base, 'workspace-example')).toBe(true);
-    expect(defaultFleetMachineId(base, 'workspace-example')).toBe('tart:worker-a');
+    expect(defaultFleetMachineId(base, 'workspace-example')).toBe('tart:example-base');
     expect(isAllowedFleetMachine(base, 'workspace-example', 'local')).toBe(false);
-    expect(isAllowedFleetMachine(base, 'workspace-example', 'tart:example-base')).toBe(false);
+    expect(isAllowedFleetMachine(base, 'workspace-example', 'tart:example-base')).toBe(true);
+    expect(isAllowedFleetMachine(base, 'workspace-example', 'tart:worker-a')).toBe(false);
   });
 
-  it('uses the last worker and permits Local when the requirement is disabled', () => {
+  it('ignores a saved worker and permits Local when the requirement is disabled', () => {
     const state = { ...base, lastMachineByWorkspace: { 'workspace-example': 'tart:worker-z' } };
-    expect(defaultFleetMachineId(state, 'workspace-example')).toBe('tart:worker-z');
+    expect(defaultFleetMachineId(state, 'workspace-example')).toBe('tart:example-base');
     const optional = { ...state, optionalWorkspaceIds: ['workspace-example'] };
     expect(defaultFleetMachineId(optional, 'workspace-example')).toBe('local');
     expect(isAllowedFleetMachine(optional, 'workspace-example', 'local')).toBe(true);
@@ -40,11 +41,26 @@ describe('Fleet machine selection', () => {
     const state = { ...base, machines: base.machines.map((machine) =>
       machine.base ? { ...machine, sshConfigured: false } : machine) };
     expect(fleetVmRequired(state, 'workspace-example')).toBe(true);
+    expect(defaultFleetMachineId(state, 'workspace-example')).toBe('tart:example-base');
   });
 
-  it('offers an available remote worker under its owning server identity', () => {
-    const state = { ...base, machines: base.machines.slice(0, 1), remoteMachines: [{ ...base.machines[1]!, id: 'remote:server-example:tart:worker-z', name: 'Other machine / worker-z' }] };
-    expect(defaultFleetMachineId(state, 'workspace-example')).toBe('remote:server-example:tart:worker-z');
-    expect(isAllowedFleetMachine(state, 'workspace-example', 'remote:server-example:tart:worker-z')).toBe(true);
+  it('offers a remote base under its owning server identity', () => {
+    const state = { ...base, machines: [], remoteMachines: [{ ...base.machines[0]!, id: 'remote:server-example:tart:example-base', name: 'Other machine / example-base' }] };
+    expect(defaultFleetMachineId(state, 'workspace-example')).toBe('remote:server-example:tart:example-base');
+    expect(isAllowedFleetMachine(state, 'workspace-example', 'remote:server-example:tart:example-base')).toBe(true);
+    expect(isAllowedFleetMachine({ ...state, available: false }, 'workspace-example', 'remote:server-example:tart:example-base')).toBe(true);
+  });
+
+  it('keeps an ordered pool of distinct bases and treats Local as exclusive', () => {
+    const second = { ...base.machines[0]!, id: 'tart:example-second', name: 'example-second' };
+    const state = { ...base, machines: [...base.machines, second] };
+    expect(selectedFleetMachineIds(state, 'workspace-example',
+      ['tart:example-base', 'tart:example-second', 'tart:example-base'])).toEqual(['tart:example-base', 'tart:example-second']);
+    expect(isAllowedFleetMachineSelection(state, 'workspace-example', ['tart:example-base', 'tart:example-second'])).toBe(true);
+    expect(isAllowedFleetMachineSelection(state, 'workspace-example', ['tart:example-base', 'tart:worker-a'])).toBe(false);
+    expect(isAllowedFleetMachineSelection(state, 'workspace-example', ['tart:example-base', 'tart:example-base'])).toBe(false);
+    expect(isAllowedFleetMachineSelection(state, 'workspace-example', ['local', 'tart:example-base'])).toBe(false);
+    expect(selectedFleetMachineIds({ ...state, optionalWorkspaceIds: ['workspace-example'] },
+      'workspace-example', ['local', 'tart:example-base'])).toEqual(['local']);
   });
 });

@@ -9,6 +9,7 @@ import { displayWorkspaceHeaderName } from '../view-models/appHeader';
 export type AppHeaderViewIcon =
   | 'automations'
   | 'plugins'
+  | 'fleet'
   | 'reporting'
   | 'settings'
   | 'settings-archive'
@@ -17,7 +18,6 @@ export type AppHeaderViewIcon =
   | 'settings-profiles'
   | 'settings-providers'
   | 'settings-remote'
-  | 'settings-fleet'
   | 'settings-ticketing';
 
 export interface AppHeaderRun {
@@ -99,6 +99,7 @@ export const StaticAppHeaderTitle = memo(function StaticAppHeaderTitle({
   const HeaderIcon = {
     automations: CalendarClock,
     plugins: Plug,
+    fleet: ServerCog,
     reporting: FileText,
     settings: Settings,
     'settings-archive': Archive,
@@ -107,7 +108,6 @@ export const StaticAppHeaderTitle = memo(function StaticAppHeaderTitle({
     'settings-profiles': UserRoundCog,
     'settings-providers': ServerCog,
     'settings-remote': Wifi,
-    'settings-fleet': ServerCog,
     'settings-ticketing': Ticket
   }[icon];
 

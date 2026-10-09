@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -26,10 +26,11 @@ test('Fleet registers only operator-designated bases and never runs one directly
     launch(command, args) { launched.push({ command, args }); machines.set(args[1], true); },
   };
   try {
-    const fleet = new FleetService(join(root, 'fleet.json'), 'darwin', runner);
+    const path = join(root, 'fleet.json');
+    const fleet = new FleetService(path, 'darwin', runner);
     assert.equal((await fleet.state()).machines[0]?.base, false);
     await assert.rejects(fleet.clone('tart:example-base', 'example-copy'), /registered base/);
-    await fleet.configure({ action: 'set-machine', machineId: 'tart:example-base', base: true, privilege: 'elevated' });
+    await fleet.configure({ action: 'set-machine', machineId: 'tart:example-base', base: true, privilege: 'elevated', sshUser: 'example' });
     await assert.rejects(fleet.start('tart:example-base'), /runnable/);
     const cloned = await fleet.clone('tart:example-base', 'example-copy');
     assert.equal(cloned.machines.find((machine) => machine.name === 'example-copy')?.base, false);
@@ -37,8 +38,21 @@ test('Fleet registers only operator-designated bases and never runs one directly
     await fleet.start('tart:example-copy');
     assert.deepEqual(launched, [{ command: 'tart', args: ['run', 'example-copy', '--no-graphics'] }]);
     await fleet.configure({ action: 'set-machine', machineId: 'tart:example-copy', sshUser: 'example' });
-    await fleet.configure({ action: 'select-machine', workspaceId: 'workspace-example', machineId: 'tart:example-copy' });
-    assert.equal((await fleet.state()).lastMachineByWorkspace['workspace-example'], 'tart:example-copy');
+    await fleet.configure({ action: 'select-machine', workspaceId: 'workspace-example', machineId: 'tart:example-base' });
+    assert.equal((await fleet.state()).lastMachineByWorkspace['workspace-example'], 'tart:example-base');
+    const owner = { machineId: 'machine-example', sessionId: 'session-example' };
+    const [first, again] = await Promise.all([
+      fleet.cloneForSession('tart:example-base', owner), fleet.cloneForSession('tart:example-base', owner),
+    ]);
+    assert.equal(first.id, again.id);
+    assert.match(first.name, /^beale-example-base-[a-f0-9]{16}$/);
+    assert.deepEqual((await fleet.state()).machines.find((machine) => machine.id === first.id)?.owner, owner);
+    assert.equal(new FleetService(path, 'darwin', runner).isSessionClone(first.id), true);
+    assert.equal((await fleet.state()).machines.find((machine) => machine.id === 'tart:example-base')?.state, 'stopped');
+    await fleet.release(first.id, owner);
+    const next = await fleet.cloneForSession('tart:example-base', owner);
+    assert.equal(next.name, `${first.name}-2`);
+    assert.notEqual(next.id, first.id);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -128,4 +142,35 @@ test('Fleet leases persist by machine and session and reject conflicting control
     await fleet.release('tart:example-worker', owner);
     assert.equal((await fleet.state()).machines.find((machine) => machine.id === 'tart:example-worker').owner, null);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Fleet includes bases from reachable app servers when another peer fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'beale-fleet-remote-bases-'));
+  try {
+    const path = join(root, 'fleet.json');
+    writeFileSync(path, JSON.stringify({ version: 2, machineId: 'machine-example', role: 'primary', enabled: true,
+      appServers: {
+        'server-good': { name: 'Example remote', url: 'https://good.example.ts.net:47174', operatorToken: 'synthetic-operator-token' },
+        'server-bad': { name: 'Offline remote', url: 'https://bad.example.ts.net:47174', operatorToken: 'synthetic-operator-token' },
+      }
+    }));
+    const fleet = new FleetService(path, 'darwin');
+    const calls = [];
+    fleet.callRemote = async (serverId, operation, _input, timeoutMs) => {
+      calls.push({ serverId, operation, timeoutMs });
+      if (serverId === 'server-bad') throw new Error('Synthetic peer unavailable');
+      return { enabled: true, role: 'primary', available: true, machines: [
+        { id: 'tart:example-base', name: 'example-base', base: true, state: 'stopped', sshConfigured: true },
+        { id: 'tart:example-worker', name: 'example-worker', base: false, state: 'stopped', sshConfigured: true },
+      ] };
+    };
+    assert.deepEqual((await fleet.remoteMachines()).map(({ id, name }) => ({ id, name })), [
+      { id: 'remote:server-good:tart:example-base', name: 'Example remote / example-base' }
+    ]);
+    assert.ok(calls.every((call) => call.operation === 'fleet.state' && call.timeoutMs === 12_000));
+    fleet.callRemote = async () => { throw new Error('Synthetic peers unavailable'); };
+    await assert.rejects(fleet.remoteMachines(), /Could not load VM inventory/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

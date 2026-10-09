@@ -36,7 +36,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 40 as const;
+export const APP_SERVER_CONTRACT_VERSION = 42 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -44,12 +44,13 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T13:30:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T14:18:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "fleet.inventory.v1",
   "fleet.lifecycle.v1",
   "fleet.session.v1",
+  "fleet.session-clone.v1",
   "fleet.remote-servers.v1",
   "fleet.session-ownership.v1",
   "workspace.research-project.v3",
@@ -108,6 +109,9 @@ export const BEALE_APP_SERVER_WORKSPACES_PATH = "/v1/workspaces" as const;
 export const BEALE_APP_SERVER_PROVIDERS_PATH = "/v1/providers" as const;
 export const BEALE_APP_SERVER_OPERATIONS_PATH = "/v1/operations" as const;
 export const BEALE_APP_SERVER_SHUTDOWN_PATH = "/v1/server/shutdown" as const;
+export const BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT = 47_175 as const;
+export const BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT = 47_176 as const;
+export const BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH = "/v1/supervisor/restart" as const;
 export const BEALE_APP_SERVER_MAX_REPLAY_BYTES = 4_194_304 as const;
 export const BEALE_APP_SERVER_MAX_REPLAY_FRAMES = 256 as const;
 
@@ -425,9 +429,10 @@ export const APP_SERVER_TRANSPORT_PREFIX = APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX;
 export const APP_SERVER_TRANSPORT_PATH = APP_SERVER_PROTOCOL_WEBSOCKET_PATH;
 
 export const APP_SERVER_PROTOCOL_OPERATIONS = [
-  "fleet.state", "fleet.configure", "fleet.test_ssh", "fleet.test_app_server", "fleet.clone", "fleet.start", "fleet.stop",
+  "fleet.state", "fleet.configure", "fleet.test_ssh", "fleet.test_app_server", "fleet.clone", "fleet.clone_for_session", "fleet.start", "fleet.stop",
   "fleet.prepare", "fleet.connect", "fleet.complete", "fleet.stage", "fleet.export", "fleet.reserve", "fleet.release",
   "fleet.remote_machines", "fleet.remote_catalog", "fleet.remote_session", "fleet.remote_launch", "fleet.remote_control", "fleet.relay_stage", "fleet.relay_export",
+  "fleet.restart_app_server", "fleet.restart_guest_app_server",
   "resource.prior_art.list", "resource.prior_art.get",
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",

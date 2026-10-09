@@ -982,6 +982,14 @@ export class WorkspaceService {
     return invokeAppServerOperation<FleetState>({ operation: 'fleet.state' });
   }
 
+  public async restartFleetAppServer(serverId: string): Promise<void> {
+    await invokeAppServerOperation({ operation: 'fleet.restart_app_server', input: { serverId } });
+  }
+
+  public async restartFleetGuestAppServer(machineId: string): Promise<void> {
+    await invokeAppServerOperation({ operation: 'fleet.restart_guest_app_server', input: { machineId } });
+  }
+
   public getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]> {
     return invokeAppServerOperation({ operation: 'fleet.remote_machines' });
   }
@@ -3560,6 +3568,16 @@ export class WorkspaceService {
       shellSafetyMode: requestedShellSafetyMode ?? DEFAULT_SHELL_SAFETY_MODE,
       ...(input.collaboration ? { collaboration: normalizeResearchCollaboration(input.collaboration) } : {})
     };
+    if (normalizedInput.machineIds !== undefined) {
+      const machineIds = normalizedInput.machineIds;
+      if (!Array.isArray(machineIds) || machineIds.length === 0 || machineIds.length > 32
+        || machineIds.some((id) => typeof id !== 'string' || !id.trim() || id.length > 256)
+        || new Set(machineIds).size !== machineIds.length
+        || (machineIds.includes('local') && machineIds.length !== 1)
+        || normalizedInput.machineId !== machineIds[0]) {
+        throw new Error('Select Local or one or more distinct Fleet base VMs.');
+      }
+    }
     if (!runtime) throw new Error('No Beale workspace is open');
     if (normalizedInput.machineId && normalizedInput.machineId !== 'local'
       && normalizeRepeatSchedule(normalizedInput.budget.repeatSchedule).type !== 'none') {

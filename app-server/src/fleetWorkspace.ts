@@ -14,6 +14,7 @@ export interface FleetTransferBaseline {
   workspaceId: string;
   workspacePath: string;
   machineId: string;
+  selectedBaseId?: string;
   runId: string;
   ownerMachineId?: string;
   remoteServerId?: string;
@@ -130,6 +131,11 @@ export class FleetWorkspaceStore {
       throw new Error('Fleet transfer baseline is invalid.');
     }
     return value as unknown as FleetTransferBaseline;
+  }
+
+  public baselineIfExists(runId: string): FleetTransferBaseline | null {
+    const path = join(this.baselineDirectory, safeId(runId) + '.json');
+    return existsSync(path) ? this.readBaseline(runId) : null;
   }
 
   public async importGuestFile(

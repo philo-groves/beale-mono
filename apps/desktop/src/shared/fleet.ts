@@ -4,13 +4,13 @@ export function fleetVmRequired(state: FleetState, workspaceId: string): boolean
   if (state.role !== 'primary' || !state.enabled) return false;
   if (state.requiredWorkspaceIds.includes(workspaceId)) return true;
   if (state.optionalWorkspaceIds.includes(workspaceId)) return false;
-  return state.machines.some((machine) => machine.base);
+  return [...state.machines, ...state.remoteMachines].some((machine) => machine.base);
 }
 
 export function runnableFleetMachines(state: FleetState): FleetMachine[] {
-  if (state.role !== 'primary' || !state.enabled || !state.available) return [];
-  return [...state.machines, ...state.remoteMachines]
-    .filter((machine) => !machine.base && !machine.owner && machine.sshConfigured && machine.state !== 'unknown')
+  if (state.role !== 'primary' || !state.enabled) return [];
+  return [...(state.available ? state.machines : []), ...state.remoteMachines]
+    .filter((machine) => machine.base && machine.state === 'stopped')
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 }
 
@@ -24,4 +24,24 @@ export function defaultFleetMachineId(state: FleetState, workspaceId: string): s
 export function isAllowedFleetMachine(state: FleetState, workspaceId: string, machineId: string): boolean {
   if (machineId === 'local') return !fleetVmRequired(state, workspaceId);
   return runnableFleetMachines(state).some((machine) => machine.id === machineId);
+}
+
+export function selectedFleetMachineIds(
+  state: FleetState,
+  workspaceId: string,
+  requestedIds: readonly string[] | undefined,
+  requestedId?: string,
+): string[] {
+  const requested = requestedIds?.length ? requestedIds : requestedId ? [requestedId] : [];
+  const valid = [...new Set(requested)].filter((id) => isAllowedFleetMachine(state, workspaceId, id));
+  if (valid.includes('local')) return ['local'];
+  if (valid.length) return valid;
+  const fallback = defaultFleetMachineId(state, workspaceId);
+  return fallback ? [fallback] : [];
+}
+
+export function isAllowedFleetMachineSelection(state: FleetState, workspaceId: string, ids: readonly string[]): boolean {
+  return ids.length > 0 && new Set(ids).size === ids.length
+    && (ids.length === 1 || !ids.includes('local'))
+    && ids.every((id) => isAllowedFleetMachine(state, workspaceId, id));
 }

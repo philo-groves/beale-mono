@@ -217,6 +217,8 @@ export class AppServerHostService {
       if (request.operation === 'fleet.remote_session') return this.fleet.remoteSession(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.sessionId) ?? '');
       if (request.operation === 'fleet.remote_launch') return this.fleet.remoteLaunch(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.promptMarkdown) ?? '', nonEmpty(input.machineId) ?? 'local');
       if (request.operation === 'fleet.remote_control') return this.fleet.remoteControl(nonEmpty(input.serverId) ?? '', nonEmpty(input.sessionId) ?? '', nonEmpty(input.type) ?? '', nonEmpty(input.instruction));
+      if (request.operation === 'fleet.restart_app_server') return this.fleet.restartRemoteAppServer(nonEmpty(input.serverId) ?? '');
+      if (request.operation === 'fleet.restart_guest_app_server') return this.fleetRemote.restartGuestAppServer(nonEmpty(input.machineId) ?? '');
       if (request.operation === 'fleet.configure') return this.fleet.configure(input);
       if (request.operation === 'fleet.test_ssh') return this.fleet.testSsh(decodeFleetSshTestInput(input));
       if (request.operation === 'fleet.test_app_server') return this.fleet.testAppServer(input);
@@ -225,6 +227,13 @@ export class AppServerHostService {
         const owner = fleetOwner(input, this.fleet.machineId());
         const clone = state.machines.find((machine) => machine.name === input.name);
         return owner && clone ? this.fleet.reserve(clone.id, owner) : state;
+      }
+      if (request.operation === 'fleet.clone_for_session') {
+        const owner = fleetOwner(input, null);
+        if (!owner) throw new Error('Fleet session clone requires an owning machine and session.');
+        const worker = await this.fleet.cloneForSession(nonEmpty(input.baseId) ?? '', { ...owner,
+          ...(nonEmpty(input.workspaceId) ? { workspaceId: nonEmpty(input.workspaceId)! } : {}) });
+        return { machineId: worker.id };
       }
       if (request.operation === 'fleet.start') {
         const machineId = nonEmpty(input.machineId) ?? '';
@@ -242,7 +251,11 @@ export class AppServerHostService {
       if (request.operation === 'fleet.release') {
         const owner = fleetOwner(input, null);
         if (!owner) throw new Error('Fleet release requires an owner machine and session.');
-        return this.fleet.release(nonEmpty(input.machineId) ?? '', owner);
+        const machineId = nonEmpty(input.machineId) ?? '';
+        if (this.fleet.isReservedBy(machineId, owner) && this.fleet.isSessionClone(machineId)) {
+          await this.fleet.stop(machineId, owner);
+        }
+        return this.fleet.release(machineId, owner);
       }
       if (request.operation === 'fleet.prepare') {
         const workspaceId = nonEmpty(input.workspaceId);

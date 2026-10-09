@@ -27,7 +27,7 @@ import type {
   WorkspaceSnapshot
 } from '@shared/types';
 import { resolveGoalObjective } from '../../../shared/goalObjective';
-import { defaultFleetMachineId, fleetVmRequired, isAllowedFleetMachine, runnableFleetMachines } from '../../../shared/fleet';
+import { fleetVmRequired, isAllowedFleetMachineSelection, runnableFleetMachines, selectedFleetMachineIds } from '../../../shared/fleet';
 import { ensureDefaultResearchCollaborator, normalizeResearchCollaboration } from '../../../shared/collaboration';
 import { Modal } from '../../app/Modal';
 import { BealeWelcomeIcon } from '../../app/BealeWelcomeIcon';
@@ -370,6 +370,7 @@ export function ResearchSettingsForm({
   ));
   const [fleetState, setFleetState] = useState<FleetState | null>(null);
   const [fleetError, setFleetError] = useState<string | null>(null);
+  const [fleetRemoteLoading, setFleetRemoteLoading] = useState(false);
   const [startingRun, setStartingRun] = useState(false);
   const [editorStage, setEditorStage] = useState<PromptEditorStage>(initialInput || initialGoal?.promptMarkdown ? 'prompt' : 'goal');
   const [generateEnabled, setGenerateEnabled] = useState(false);
@@ -561,19 +562,30 @@ export function ResearchSettingsForm({
   useEffect(() => {
     if (!fleetWorkspaceId) return;
     let active = true;
-    void Promise.all([window.beale.getFleetState(), window.beale.getFleetRemoteMachines().catch(() => [])]).then(([localState, remoteMachines]) => {
+    setFleetRemoteLoading(false);
+    const updateFleet = (state: FleetState): void => {
       if (!active) return;
-      const state = { ...localState, remoteMachines };
       setFleetState(state);
       setFleetError(null);
-      const machineId = initialInput?.machineId && isAllowedFleetMachine(state, fleetWorkspaceId, initialInput.machineId)
-        ? initialInput.machineId
-        : defaultFleetMachineId(state, fleetWorkspaceId);
       setInput((current) => {
-        const next = { ...current, machineId: machineId ?? undefined };
+        const machineIds = selectedFleetMachineIds(state, fleetWorkspaceId, current.machineIds, current.machineId);
+        const next = { ...current, machineId: machineIds[0], machineIds };
         inputRef.current = next;
         return next;
       });
+    };
+    void window.beale.getFleetState().then(async (localState) => {
+      updateFleet(localState);
+      if (localState.appServers.length === 0) return;
+      if (active) setFleetRemoteLoading(true);
+      try {
+        const remoteMachines = await window.beale.getFleetRemoteMachines();
+        updateFleet({ ...localState, remoteMachines });
+      } catch (caught) {
+        if (active) setFleetError(userFacingErrorMessage(caught));
+      } finally {
+        if (active) setFleetRemoteLoading(false);
+      }
     }).catch((caught: unknown) => {
       if (active) setFleetError(userFacingErrorMessage(caught));
     });
@@ -704,6 +716,14 @@ export function ResearchSettingsForm({
     }
   };
 
+  const selectMachines = (machineIds: string[]): void => {
+    setInput((current) => {
+      const next = { ...current, machineId: machineIds[0], machineIds };
+      inputRef.current = next;
+      return next;
+    });
+  };
+
   const hasPromptDraft = input.promptMarkdown.trim().length > 0;
   const activeWorkflowId = input.workflowId ?? defaultWorkflowId;
   const selectedEffort = effortLevelFromInput(input.reasoningEffort);
@@ -730,9 +750,10 @@ export function ResearchSettingsForm({
         && (!requiresCyberPolicyAcknowledgement || providerPolicyRiskAcknowledgements?.[preference.provider] === true);
     });
   const canGenerate = hasPromptDraft && selectedProvider?.configured === true && !generatingPrompt;
-  const vmRepeatConflict = Boolean(input.machineId && input.machineId !== 'local' && repeatSchedule.type !== 'none');
+  const selectedMachines = input.machineIds?.length ? input.machineIds : input.machineId ? [input.machineId] : [];
+  const vmRepeatConflict = Boolean(selectedMachines.some((id) => id !== 'local') && repeatSchedule.type !== 'none');
   const canStart = hasPromptDraft
-    && (!fleetWorkspaceId || Boolean(fleetState && input.machineId && isAllowedFleetMachine(fleetState, fleetWorkspaceId, input.machineId)))
+    && (!fleetWorkspaceId || Boolean(fleetState && isAllowedFleetMachineSelection(fleetState, fleetWorkspaceId, selectedMachines)))
     && !vmRepeatConflict
     && selectedProvider?.configured === true
     && Boolean(selectedModel?.effortLevels.includes(selectedEffort))
@@ -1045,7 +1066,7 @@ export function ResearchSettingsForm({
                 ) : null}
               </div>
               <div className="new-research-options-tray-right">
-                {fleetWorkspaceId ? <MachinePicker state={fleetState} workspaceId={fleetWorkspaceId} value={input.machineId ?? ''} disabled={generatingPrompt} error={fleetError} onChange={(machineId) => update('machineId', machineId)} /> : null}
+                {fleetWorkspaceId ? <MachinePicker state={fleetState} workspaceId={fleetWorkspaceId} value={selectedMachines} disabled={generatingPrompt} error={fleetError} loadingRemote={fleetRemoteLoading} onChange={selectMachines} /> : null}
               </div>
             </div>
             {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM.</div> : null}
@@ -1140,7 +1161,7 @@ export function ResearchSettingsForm({
                   <span>Add Context</span>
                 </label>
               ) : null}
-              {fleetWorkspaceId ? <MachinePicker state={fleetState} workspaceId={fleetWorkspaceId} value={input.machineId ?? ''} disabled={generatingPrompt} error={fleetError} onChange={(machineId) => update('machineId', machineId)} /> : null}
+              {fleetWorkspaceId ? <MachinePicker state={fleetState} workspaceId={fleetWorkspaceId} value={selectedMachines} disabled={generatingPrompt} error={fleetError} loadingRemote={fleetRemoteLoading} onChange={selectMachines} /> : null}
             </div>
             {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM.</div> : null}
           </section>
@@ -1619,24 +1640,78 @@ function ResearchWorkflowIcon({ workflow }: { workflow: ResearchProfileWorkflow 
   return <Lightbulb size={19} aria-hidden="true" />;
 }
 
-function MachinePicker({ state, workspaceId, value, disabled, error, onChange }: {
+function MachinePicker({ state, workspaceId, value, disabled, error, loadingRemote, onChange }: {
   state: FleetState | null;
   workspaceId: string;
-  value: string;
+  value: readonly string[];
   disabled: boolean;
   error: string | null;
-  onChange: (machineId: string) => void;
+  loadingRemote: boolean;
+  onChange: (machineIds: string[]) => void;
 }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
   const required = state ? fleetVmRequired(state, workspaceId) : false;
   const machines = state ? runnableFleetMachines(state) : [];
-  return <label className="new-research-machine-picker" title={error ?? (required ? 'This workspace requires a VM for research.' : 'Choose where this research session runs.')}>
-    <span>Machine</span>
-    <select aria-label="Research machine" value={value} disabled={disabled || !state || (required && machines.length === 0)} onChange={(event) => onChange(event.currentTarget.value)}>
-      {!state || (required && machines.length === 0) ? <option value="">{error ?? (state ? 'No runnable VM' : 'Loading…')}</option> : null}
-      {!required ? <option value="local">Local</option> : null}
-      {machines.map((machine) => <option value={machine.id} key={machine.id}>{machine.name}{machine.state === 'stopped' ? ' (stopped)' : ''}</option>)}
-    </select>
-  </label>;
+  const selected = value.filter((id) => id !== 'local');
+  const ready = Boolean(state && (value.includes('local') || selected.length > 0
+    && selected.every((id) => machines.some((machine) => machine.id === id && machine.sshConfigured))));
+  const label = !state ? 'Loading…' : required && machines.length === 0 ? 'No base VM'
+    : value.includes('local') ? 'Local'
+      : selected.length === 1 ? machines.find((machine) => machine.id === selected[0])?.name ?? '1 base VM'
+        : `${selected.length} base VMs`;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const dismissOnOutsidePointer = (event: PointerEvent): void => {
+      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const dismissOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', dismissOnOutsidePointer);
+    document.addEventListener('keydown', dismissOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', dismissOnOutsidePointer);
+      document.removeEventListener('keydown', dismissOnEscape);
+    };
+  }, [open]);
+
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+
+  const toggleBase = (machineId: string): void => {
+    if (!selected.includes(machineId)) {
+      onChange([...selected, machineId]);
+      return;
+    }
+    const remaining = selected.filter((id) => id !== machineId);
+    if (remaining.length) onChange(remaining);
+    else if (!required) onChange(['local']);
+  };
+
+  return <div className={`new-research-machine-picker${open ? ' is-open' : ''}`} ref={pickerRef}>
+    <button type="button" className="new-research-machine-trigger" title={error ?? (required ? 'This workspace requires a VM for research.' : 'Choose where this research session runs.')}
+      aria-label={`Research machines: ${label}${ready ? ', ready' : ', not ready'}`} aria-haspopup="dialog" aria-expanded={open}
+      disabled={disabled || !state || (required && machines.length === 0)} onClick={() => setOpen((current) => !current)}>
+      <span className={`new-research-machine-status${ready ? ' is-ready' : ' is-unready'}`} aria-hidden="true" />
+      <strong>{label}</strong><ChevronDown size={13} aria-hidden="true" />
+    </button>
+    {open ? <div className="new-research-machine-menu" role="dialog" aria-label="Research machines">
+      {!required ? <label className={`new-research-machine-option${value.includes('local') ? ' is-selected' : ''}`} title="Ready to run locally">
+        <input type="checkbox" checked={value.includes('local')} onChange={() => onChange(['local'])} />
+        <span className="new-research-machine-status is-ready" aria-hidden="true" />
+        <span>Local</span>
+      </label> : null}
+      {machines.map((machine) => <label className={`new-research-machine-option${selected.includes(machine.id) ? ' is-selected' : ''}`}
+        title={machine.sshConfigured ? 'Ready to clone for this session' : 'Set SSH user in Fleet'} key={machine.id}>
+        <input type="checkbox" checked={selected.includes(machine.id)} onChange={() => toggleBase(machine.id)} />
+        <span className={`new-research-machine-status${machine.sshConfigured ? ' is-ready' : ' is-unready'}`} aria-hidden="true" />
+        <span>{machine.name}</span>
+      </label>)}
+      {loadingRemote ? <p className="new-research-machine-menu-status" role="status">Loading other app servers…</p> : null}
+      {error ? <p className="new-research-machine-menu-status is-error" role="alert" title={error}>Remote bases unavailable.</p> : null}
+    </div> : null}
+  </div>;
 }
 
 export function defaultResearchWorkflowId(workflows: readonly ResearchProfileWorkflow[]): string {

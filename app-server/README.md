@@ -128,6 +128,8 @@ Options may be supplied as CLI flags (`--host`, `--port`, `--state-file`) or env
 
 Beale Desktop persists its managed remote-access choice in `~/.beale/app-server-remote-access.json`. When enabled, Desktop launches the app-server on the stable loopback port `47173`, advertises the configured MagicDNS origin on the dedicated Tailscale Serve HTTPS port `47174`, and continues using the discovery record's `localUrl` for host-local control traffic. Explicit `BEALE_APP_SERVER_*` environment variables retain precedence for custom deployments.
 
+Normal app-server startup also launches an independent restart supervisor on loopback port `47175`. It accepts an operator-token-authenticated `POST /v1/supervisor/restart`, verifies that the discovery process owns its lock, stops only that process, launches a replacement, and waits for its health check. An unresponsive process is force-stopped after the graceful timeout; eligible active sessions recover on replacement startup. Fleet reaches a guest supervisor through SSH. Managed Tailscale remote access also publishes the supervisor on a separate HTTPS port `47176`, so a primary can restart a peer even if the peer's app-server HTTP endpoint is unavailable. Custom remote deployments must expose that supervisor route within the same tailnet to use remote restart. The supervisor does not restart VMs or physical machines.
+
 ## Authentication model
 
 Two token scopes exist:

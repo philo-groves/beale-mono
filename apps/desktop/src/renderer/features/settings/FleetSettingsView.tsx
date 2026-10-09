@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
-import { Plus, RefreshCw, Settings2, X } from 'lucide-react';
+import { Plus, RefreshCw, RotateCw, Settings2, X } from 'lucide-react';
 import type { FleetAppServer, FleetMachine, FleetSshTestResult, FleetState } from '@beale/app-server-runtime/protocol';
-import { fleetVmRequired } from '../../../shared/fleet';
 
-export function FleetSettingsView({ workspaceId }: { workspaceId?: string }): JSX.Element {
+export function FleetSettingsView(): JSX.Element {
   const [state, setState] = useState<FleetState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openMachineId, setOpenMachineId] = useState<string | null>(null);
   const [openServerId, setOpenServerId] = useState<string | null>(null);
   const [addingServer, setAddingServer] = useState(false);
+  const [restartingId, setRestartingId] = useState<string | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -37,10 +37,32 @@ export function FleetSettingsView({ workspaceId }: { workspaceId?: string }): JS
     }
   };
 
+  const restart = async (id: string, action: () => Promise<void>): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    setRestartingId(id);
+    setError(null);
+    try {
+      await action();
+      await refresh();
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setBusy(false);
+      setRestartingId(null);
+    }
+  };
+
+  const localServerRow = <div className="settings-form-control-row fleet-machine-row">
+    <span className="settings-form-control-copy"><strong>Local App Server</strong><small>This machine’s Beale app-server process.</small></span>
+    <button type="button" className="fleet-machine-configure-button" aria-label="Restart local app server" title="Restart local app server" disabled={busy} onClick={() => void restart('local', () => window.beale.restartLocalAppServer())}>
+      <RotateCw size={18} aria-hidden="true" />
+    </button>
+  </div>;
+
   if (!state) {
-    return <div className="settings-page fleet-settings-page"><h2>Fleet</h2><p>{error ?? 'Loading machines…'}</p></div>;
+    return <div className="settings-page fleet-settings-page"><section className="settings-form"><header className="settings-form-heading"><h2>App Servers</h2></header><div className="settings-form-squircle"><div className="settings-form-control-list">{localServerRow}</div></div><p className={error ? 'settings-form-error' : 'fleet-machine-empty'} role={error ? 'alert' : 'status'}>{error ?? 'Loading Fleet…'}</p></section></div>;
   }
-  const required = workspaceId ? fleetVmRequired(state, workspaceId) : false;
   const openMachine = state.role === 'primary' ? state.machines.find((machine) => machine.id === openMachineId) : undefined;
   const openServer = state.appServers.find((server) => server.id === openServerId);
   return (
@@ -68,15 +90,6 @@ export function FleetSettingsView({ workspaceId }: { workspaceId?: string }): JS
                 <option value="primary">Primary</option><option value="guest">VM guest</option>
               </select>
             </label>
-            {state.role === 'primary' && workspaceId ? (
-              <label className="settings-form-control-row">
-                <span className="settings-form-control-copy"><strong>Require a VM for this workspace</strong><small>Defaults on when a base VM is registered.</small></span>
-                <input type="checkbox" checked={required} onChange={(event) => {
-                  const nextRequired = event.currentTarget.checked;
-                  void change(() => window.beale.configureFleet({ action: 'set-required', workspaceId, required: nextRequired }));
-                }} />
-              </label>
-            ) : null}
             {state.role === 'guest' ? (
               <div className="settings-form-control-row">
                 <span className="settings-form-control-copy"><strong>Primary machine</strong><small>{state.primary?.name ?? 'No primary machine has connected.'}{state.primary?.sshHost ? ` · SSH host ${state.primary.sshHost}` : ''}</small></span>
@@ -93,13 +106,19 @@ export function FleetSettingsView({ workspaceId }: { workspaceId?: string }): JS
         </header>
         <div className="settings-form-squircle" aria-labelledby="fleet-app-servers-heading">
           <div className="settings-form-control-list fleet-machine-list" aria-label="Remote app servers">
+            {localServerRow}
             {state.appServers.length === 0 ? <p className="fleet-machine-empty">No remote app servers are saved.</p> : null}
             {state.appServers.map((server) => (
               <div className="settings-form-control-row fleet-machine-row" key={server.id}>
                 <span className="settings-form-control-copy"><strong>{server.name}</strong><small>{server.url}</small></span>
-                <button type="button" className="fleet-machine-configure-button" aria-label={`Configure ${server.name}`} title={`Configure ${server.name}`} disabled={busy || state.role !== 'primary'} onClick={() => { setError(null); setOpenServerId(server.id); }}>
-                  <Settings2 size={18} aria-hidden="true" />
-                </button>
+                <span className="fleet-machine-actions">
+                  <button type="button" className="fleet-machine-configure-button" aria-label={`Restart ${server.name} app server`} title={`Restart ${server.name} app server`} disabled={busy || state.role !== 'primary'} onClick={() => void restart(server.id, () => window.beale.restartFleetAppServer(server.id))}>
+                    <RotateCw size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="fleet-machine-configure-button" aria-label={`Configure ${server.name}`} title={`Configure ${server.name}`} disabled={busy || state.role !== 'primary'} onClick={() => { setError(null); setOpenServerId(server.id); }}>
+                    <Settings2 size={18} aria-hidden="true" />
+                  </button>
+                </span>
               </div>
             ))}
           </div>
@@ -125,15 +144,21 @@ export function FleetSettingsView({ workspaceId }: { workspaceId?: string }): JS
                     <strong>{machine.name}</strong>
                     <small>{machine.backend} · {machine.state} · {machine.base ? 'Base VM' : 'Worker'} · {machine.privilege} privilege · {machine.owner ? 'Reserved by a session' : machine.sshConfigured ? 'SSH user saved in Beale' : 'Set SSH user in Beale'}</small>
                   </span>
-                  <button type="button" className="fleet-machine-configure-button" aria-label={`Configure ${machine.name}`} title={`Configure ${machine.name}`} disabled={busy} onClick={() => { setError(null); setOpenMachineId(machine.id); }}>
-                    <Settings2 size={18} aria-hidden="true" />
-                  </button>
+                  <span className="fleet-machine-actions">
+                    {!machine.base && machine.state === 'running' && machine.sshConfigured ? <button type="button" className="fleet-machine-configure-button" aria-label={`Restart ${machine.name} app server`} title={`Restart ${machine.name} app server`} disabled={busy} onClick={() => void restart(machine.id, () => window.beale.restartFleetGuestAppServer(machine.id))}>
+                      <RotateCw size={18} aria-hidden="true" />
+                    </button> : null}
+                    <button type="button" className="fleet-machine-configure-button" aria-label={`Configure ${machine.name}`} title={`Configure ${machine.name}`} disabled={busy} onClick={() => { setError(null); setOpenMachineId(machine.id); }}>
+                      <Settings2 size={18} aria-hidden="true" />
+                    </button>
+                  </span>
                 </div>
               ))}
             </div>
           )}
         </div>
         {error && !openMachine ? <p className="settings-form-error" role="alert">{error}</p> : null}
+        {restartingId ? <p role="status" className="fleet-machine-empty">Restarting app-server…</p> : null}
         <div className="settings-form-actions fleet-machine-refresh">
           <span />
           <button type="button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} aria-hidden="true" />Refresh</button>

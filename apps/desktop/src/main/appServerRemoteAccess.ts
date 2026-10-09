@@ -7,6 +7,7 @@ import type {
   AppServerRemoteAccessSettings,
   AppServerRemoteAccessUpdate
 } from '@shared/types';
+import { BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT, BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT } from '@beale/app-server-runtime/protocol';
 
 const execFileAsync = promisify(execFile);
 const CONFIG_VERSION = 1 as const;
@@ -86,8 +87,14 @@ export async function updateAppServerRemoteAccess(
       `--https=${next.httpsPort}`,
       `http://127.0.0.1:${next.localPort}`
     ]);
+    await runner([
+      'serve', '--bg', '--yes',
+      `--https=${BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT}`,
+      `http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}`
+    ]);
   } else if (current.enabled) {
     await runner(['serve', `--https=${current.httpsPort}`, 'off']);
+    await runner(['serve', `--https=${BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT}`, 'off']);
   }
 
   writeConfig(next);

@@ -159,7 +159,7 @@ function readOperatorToken(path: string): string | null {
   }
 }
 
-function readDiscoveryLockPid(path: string): number | null {
+export function readDiscoveryLockPid(path: string): number | null {
   if (!existsSync(path)) return null;
   try {
     const value = JSON.parse(readFileSync(path, 'utf8')) as { pid?: unknown };

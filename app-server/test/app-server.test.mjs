@@ -441,15 +441,21 @@ test("control plane requires the operator bearer token", async () => {
 
 test("a primary proxies a remote-owned VM session through its guest transport", async () => {
   const guestRequests = [];
+  let guestLaunch = null;
   const guest = createServer((request, response) => {
     guestRequests.push({ method: request.method, path: request.url });
     response.setHeader("content-type", "application/json");
     if (request.method === "POST" && request.url === "/v1/sessions") {
-      response.statusCode = 201;
-      response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
-        session: { sessionId: "session-relay", state: "running" }, attemptId: "attempt-relay",
-        transport: { path: "/v1/sessions/session-relay/transport", protocolVersion: 1,
-          authentication: "bearer", token: "guest-client-token", reconnect: "replay" } }));
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        guestLaunch = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        response.statusCode = 201;
+        response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          session: { sessionId: "session-relay", state: "running" }, attemptId: "attempt-relay",
+          transport: { path: "/v1/sessions/session-relay/transport", protocolVersion: 1,
+            authentication: "bearer", token: "guest-client-token", reconnect: "replay" } }));
+      });
       return;
     }
     if (request.url === "/v1/sessions/session-relay") {
@@ -476,7 +482,7 @@ test("a primary proxies a remote-owned VM session through its guest transport", 
         operations.push(request);
         if (request.operation === "fleet.state") return { role: "primary" };
         if (request.operation === "fleet.prepare" || request.operation === "fleet.connect") {
-          return { url: guestUrl, operatorToken: "guest-operator-token" };
+          return { machineId: "tart:session-clone", url: guestUrl, operatorToken: "guest-operator-token" };
         }
         throw new Error(`Unexpected operation ${request.operation}`);
       },
@@ -489,6 +495,7 @@ test("a primary proxies a remote-owned VM session through its guest transport", 
     const started = await fetch(`${server.url}/v1/sessions`, { method: "POST", headers: auth, body: JSON.stringify(request) });
     assert.equal(started.status, 201);
     assert.equal((await started.json()).transport.token, "guest-client-token");
+    assert.equal(guestLaunch.launch.machineId, "tart:session-clone");
     const read = await fetch(`${server.url}/v1/sessions/session-relay`, { headers: auth });
     assert.equal(read.status, 200);
     assert.equal((await read.json()).session.state, "running");

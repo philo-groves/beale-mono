@@ -64,6 +64,8 @@ import { TopBar } from './app/TopBar';
 import { NotificationStack, type WorkspaceAlert } from './features/notifications/Notifications';
 import { WorkspaceSidebar } from './features/workspaces/WorkspaceSidebar';
 import { RemoteFleetSidebar, RemoteFleetWorkspace } from './features/fleet/RemoteFleetWorkspace';
+import { FleetSidebar } from './features/fleet/FleetSidebar';
+import { FleetSettingsView } from './features/settings/FleetSettingsView';
 import { QuickChatDock, type QuickChatDescriptor } from './features/quick-chat/QuickChatDock';
 import { WorkspaceStartupView } from './features/workspaces/WorkspaceStartupView';
 import { WorkspaceCreationView } from './features/workspaces/WorkspaceCreationView';
@@ -335,6 +337,7 @@ export function App(): JSX.Element {
   const [workspaceOnboardingProgress, setWorkspaceOnboardingProgress] = useState<WorkspaceOnboardingProgressUpdate | null>(null);
   const [missingDirectoryWorkspace, setMissingDirectoryWorkspace] = useState<WorkspaceRegistryEntry | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [fleetOpen, setFleetOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   const [workspaceDashboardViewName, setWorkspaceDashboardViewName] = useState('Campaign');
   const [workspaceDashboardInitialView, setWorkspaceDashboardInitialView] = useState<WorkspaceDashboardView>('campaign');
@@ -843,6 +846,7 @@ export function App(): JSX.Element {
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsOpen(false);
+    setFleetOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
     setReportsOpen(false);
@@ -1068,6 +1072,7 @@ export function App(): JSX.Element {
     setReportError(null);
     setError(null);
     setSettingsOpen(false);
+    setFleetOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
     setReportsOpen(true);
@@ -1892,6 +1897,7 @@ export function App(): JSX.Element {
     newResearchOpen,
     workspaceOpen: snapshot !== null,
     settingsOpen,
+    fleetOpen,
     reportsOpen,
     automationsOpen,
     pluginsOpen
@@ -1906,7 +1912,7 @@ export function App(): JSX.Element {
     platform: windowControlPlatform,
     windowChromeState,
     sidebarCollapsed
-  })}${settingsOpen ? ' settings-open' : ''}${bottomPanelVisible ? ' bottom-panel-open' : ''}`;
+  })}${settingsOpen || fleetOpen ? ' settings-open' : ''}${bottomPanelVisible ? ' bottom-panel-open' : ''}`;
   const currentWorkspaceName = snapshot?.activeScope.workspaceName ?? 'No Workspace Selected';
   const automationScopeName = automationScopeWorkspaceId
     ? workspaceRegistry?.workspaces.find((workspace) => workspace.workspaceId === automationScopeWorkspaceId)?.workspaceName ?? 'Workspace'
@@ -1921,8 +1927,20 @@ export function App(): JSX.Element {
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsSection('general');
+    setFleetOpen(false);
     setSettingsOpen(true);
   }, [closeNewResearch, closeWorkspaceOnboarding]);
+  const openFleet = useCallback((): void => {
+    closeWorkspaceOnboarding();
+    closeNewResearch();
+    clearRunDetail();
+    setSelectedRunId(null);
+    setReportsOpen(false);
+    setAutomationsOpen(false);
+    setPluginsOpen(false);
+    setSettingsOpen(false);
+    setFleetOpen(true);
+  }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId]);
   const openHome = useCallback((): void => {
     closeWorkspaceOnboarding();
     closeNewResearch();
@@ -1932,6 +1950,7 @@ export function App(): JSX.Element {
     setAutomationsOpen(false);
     setPluginsOpen(false);
     setSettingsOpen(false);
+    setFleetOpen(false);
     setRightSidenavExpanded(false);
   }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId]);
   const openProfiling = useCallback(() => {
@@ -1963,6 +1982,7 @@ export function App(): JSX.Element {
     setAutomationsOpen(false);
     setPluginsOpen(false);
     setSettingsOpen(false);
+    setFleetOpen(false);
     setOpenScheduleOnNewResearch(openSchedule);
     setNewResearchOpen(true);
   }, [clearRunDetail, closeWorkspaceOnboarding, reportsOpen, setSelectedRunId]);
@@ -2010,6 +2030,7 @@ export function App(): JSX.Element {
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsOpen(false);
+    setFleetOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
     setSelectedAutomationRunId(null);
@@ -2070,7 +2091,7 @@ export function App(): JSX.Element {
       onStarted={handleResearchStarted}
     />
   ) : null;
-  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, automationsOpen, pluginsOpen });
+  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, fleetOpen, automationsOpen, pluginsOpen });
   const selectedFleetServer = fleetServers.find((server) => server.id === selectedFleetServerId);
   const serverSelector = <select className="sidebar-server-selector" aria-label="App server" value={selectedFleetServerId} onChange={(event) => {
     setSelectedFleetServerId(event.currentTarget.value);
@@ -2096,9 +2117,11 @@ export function App(): JSX.Element {
         workspaceRegistryLoading={startupPhase === 'shell' || startupPhase === 'registry'}
         rightSidenavAvailable={headerResearchControlsAvailable}
         rightSidenavExpanded={rightSidenavExpanded && headerResearchControlsAvailable}
-        contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !pluginsOpen}
+        contextualTitleVisible={!settingsOpen && !fleetOpen && !reportsOpen && !automationsOpen && !pluginsOpen}
         staticContextTitle={settingsOpen
           ? { primary: 'Agent Settings', secondary: settingsSectionLabel(settingsSection), icon: settingsSectionHeaderIcon(settingsSection) }
+          : fleetOpen
+            ? { primary: 'Fleet', secondary: 'Machine Management', icon: 'fleet' }
           : reportsOpen
             ? {
                 primary: 'Reports',
@@ -2149,6 +2172,7 @@ export function App(): JSX.Element {
         onOpenAutomations={openAutomations}
         onOpenPlugins={openPlugins}
         onOpenSettings={openSettings}
+        onOpenFleet={openFleet}
       />
       {settingsOpen ? (
         <SettingsSidebar
@@ -2158,6 +2182,8 @@ export function App(): JSX.Element {
           onChangeSection={setSettingsSection}
           onResizePointerDown={beginSidebarResize}
         />
+      ) : fleetOpen ? (
+        <FleetSidebar collapsed={sidebarCollapsed} onResizePointerDown={beginSidebarResize} />
       ) : pluginsOpen ? (
         <PluginsSidebar
           state={agentPluginState}
@@ -2228,7 +2254,6 @@ export function App(): JSX.Element {
         {settingsOpen ? (
           <SettingsView
             section={settingsSection}
-            workspaceId={snapshot?.workspace.workspaceId}
             appearanceBackground={appearanceBackground}
             appearanceTransparencyPercentage={appearanceTransparencyPercentage}
             appearanceTheme={appearanceTheme}
@@ -2298,6 +2323,12 @@ export function App(): JSX.Element {
             onRestoreResearchSession={restoreResearchSession}
             onResumeQuickChat={resumeQuickChat}
           />
+        ) : fleetOpen ? (
+          <div className="settings-workspace">
+            <section className="settings-view settings-main-view" aria-label="Fleet">
+              <FleetSettingsView />
+            </section>
+          </div>
         ) : (
           <div className="workspace-page">
             {selectedFleetServerId !== 'local' && !pluginsOpen ? (

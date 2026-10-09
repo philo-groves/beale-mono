@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { setTimeout as waitForRetry } from 'node:timers/promises';
 import {
   BEALE_APP_SERVER_CAPABILITIES,
@@ -10,6 +10,8 @@ import {
   BEALE_APP_SERVER_OPERATIONS_PATH,
   BEALE_APP_SERVER_SESSIONS_PATH,
   BEALE_APP_SERVER_SHUTDOWN_PATH,
+  BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT,
+  BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH,
   decodeBealeAppServerSessionCatalog,
   decodeBealeAppServerSessionAttachResult,
   decodeBealeAppServerSessionResult,
@@ -706,6 +708,20 @@ export function appServerControlUrl(record: BealeAppServerDiscovery): string {
 export async function restartBealeAppServer(): Promise<BealeAppServerDiscovery> {
   const existing = readBealeAppServerDiscovery();
   if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
+  return ensureBealeAppServerRunning();
+}
+
+export async function restartBealeAppServerViaSupervisor(): Promise<BealeAppServerDiscovery> {
+  const stateFile = bealeAppServerStateFilePath();
+  const discovery = readBealeAppServerDiscovery(stateFile);
+  const tokenFile = join(dirname(stateFile), `${basename(stateFile, extname(stateFile))}.token`);
+  const token = discovery?.operatorToken || process.env.BEALE_APP_SERVER_TOKEN?.trim()
+    || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
+  if (!token) throw new Error('The local app-server restart token is unavailable.');
+  const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH}`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(90_000)
+  });
+  if (!response.ok) throw new Error(`The local app-server restart supervisor refused the request (HTTP ${response.status}).`);
   return ensureBealeAppServerRunning();
 }
 

@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT, BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT } from '@beale/app-server-runtime/protocol';
 import {
   APP_SERVER_LOCAL_PORT,
   APP_SERVER_TAILSCALE_HTTPS_PORT,
@@ -58,13 +59,10 @@ describe('app-server remote access', () => {
       magicDnsName: 'beale-mac.example.ts.net'
     }, runner);
 
-    expect(calls).toEqual([[
-      'serve',
-      '--bg',
-      '--yes',
-      `--https=${APP_SERVER_TAILSCALE_HTTPS_PORT}`,
-      `http://127.0.0.1:${APP_SERVER_LOCAL_PORT}`
-    ]]);
+    expect(calls).toEqual([
+      ['serve', '--bg', '--yes', `--https=${APP_SERVER_TAILSCALE_HTTPS_PORT}`, `http://127.0.0.1:${APP_SERVER_LOCAL_PORT}`],
+      ['serve', '--bg', '--yes', `--https=${BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT}`, `http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}`]
+    ]);
     expect(settings).toMatchObject({
       enabled: true,
       publicUrl: `https://beale-mac.example.ts.net:${APP_SERVER_TAILSCALE_HTTPS_PORT}`,
@@ -90,7 +88,10 @@ describe('app-server remote access', () => {
     };
     await updateAppServerRemoteAccess({ enabled: true, magicDnsName: 'beale.example.ts.net' }, runner);
     const disabled = await updateAppServerRemoteAccess({ enabled: false }, runner);
-    expect(calls.at(-1)).toEqual(['serve', `--https=${APP_SERVER_TAILSCALE_HTTPS_PORT}`, 'off']);
+    expect(calls.slice(-2)).toEqual([
+      ['serve', `--https=${APP_SERVER_TAILSCALE_HTTPS_PORT}`, 'off'],
+      ['serve', `--https=${BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT}`, 'off']
+    ]);
     expect(disabled).toMatchObject({ enabled: false, status: 'disabled' });
     expect(appServerRemoteAccessLaunchEnvironment()).toEqual({});
   });

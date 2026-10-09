@@ -112,8 +112,8 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
         <label className="fleet-vm-dialog-field"><span>New Research prompt</span><textarea value={prompt} onChange={(event) => setPrompt(event.currentTarget.value)} rows={7} placeholder="Describe the authorized research task." /></label>
         <label className="fleet-vm-dialog-field"><span>Machine</span><select value={machineId} onChange={(event) => setMachineId(event.currentTarget.value)}>
           {!required ? <option value="local">Local</option> : null}
-          {required && runnable.length === 0 ? <option value="">No runnable VM</option> : null}
-          {runnable.map((machine) => <option key={machine.id} value={machine.id}>{machine.name}</option>)}
+          {required && runnable.length === 0 ? <option value="">No configured base VM</option> : null}
+          {runnable.map((machine) => <option key={machine.id} value={machine.id}>{machine.name} ({machine.sshConfigured ? 'clone for session' : 'set SSH user in Fleet'})</option>)}
         </select></label>
         {launchError ? <p className="settings-form-error" role="alert">{launchError}</p> : null}
         <button type="button" className="primary-button" disabled={starting || !prompt.trim() || !machineId} onClick={() => void start()}>{starting ? 'Starting…' : 'Start Research'}</button>

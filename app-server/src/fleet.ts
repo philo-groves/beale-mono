@@ -1,10 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { APP_SERVER_SESSION_LAUNCH_VERSION, BEALE_APP_SERVER_CONTRACT_TIMESTAMP, BEALE_APP_SERVER_CONTROL_VERSION, BEALE_APP_SERVER_OPERATIONS_PATH, BEALE_APP_SERVER_SERVER_PATH, BEALE_APP_SERVER_WORKSPACES_PATH, BEALE_APP_SERVER_SESSIONS_PATH, type AppServerProtocolOperation, type FleetBackend, type FleetMachine, type FleetRemoteCatalog, type FleetSshTestInput, type FleetSshTestResult, type FleetState } from '@beale/app-server-runtime/protocol';
+import { APP_SERVER_SESSION_LAUNCH_VERSION, BEALE_APP_SERVER_CONTRACT_TIMESTAMP, BEALE_APP_SERVER_CONTROL_VERSION, BEALE_APP_SERVER_OPERATIONS_PATH, BEALE_APP_SERVER_SERVER_PATH, BEALE_APP_SERVER_WORKSPACES_PATH, BEALE_APP_SERVER_SESSIONS_PATH, BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT, BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH, type AppServerProtocolOperation, type FleetBackend, type FleetMachine, type FleetRemoteCatalog, type FleetSshTestInput, type FleetSshTestResult, type FleetState } from '@beale/app-server-runtime/protocol';
 import { sshConnectionArgs } from './fleetSsh.js';
 import { normalizeTailnetOrigin, verifySameTailnet } from './tailnetRemote.js';
 
@@ -14,6 +14,7 @@ const WORKSPACE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 
 interface FleetMachineConfig {
   base: boolean;
+  sessionClone: boolean;
   privilege: 'standard' | 'elevated';
   sshHost: string | null;
   sshUser: string | null;
@@ -59,6 +60,7 @@ const defaultRunner: FleetCommandRunner = {
 
 export class FleetService {
   private ownershipQueue: Promise<void> = Promise.resolve();
+  private readonly sessionClones = new Map<string, Promise<FleetMachine>>();
   private readonly validatedRemotePeers = new Map<string, { url: string; at: number }>();
   public constructor(
     private readonly path = join(homedir(), '.beale', 'fleet.json'),
@@ -127,7 +129,7 @@ export class FleetService {
       const workspaceId = validWorkspaceId(input.workspaceId);
       const machineId = requiredText(input.machineId, 'Machine ID');
       const state = await this.state();
-      const selectable = state.machines.some((machine) => machine.id === machineId && !machine.base && !machine.owner && machine.sshConfigured && machine.state !== 'unknown')
+      const selectable = state.machines.some((machine) => machine.id === machineId && machine.base && machine.state === 'stopped')
         || (machineId.startsWith('remote:') && (await this.remoteMachines()).some((machine) => machine.id === machineId));
       if (!selectable) {
         throw new Error('Select an existing runnable Fleet machine.');
@@ -148,6 +150,7 @@ export class FleetService {
       }
       config.machines[machineId] = {
         base,
+        sessionClone: base ? false : prior.sessionClone,
         privilege,
         sshHost: input.sshHost === undefined ? prior.sshHost : optionalText(input.sshHost),
         sshUser: input.sshUser === undefined ? prior.sshUser : optionalText(input.sshUser),
@@ -212,11 +215,24 @@ export class FleetService {
     return server;
   }
 
-  public async callRemote<T>(serverId: string, operation: AppServerProtocolOperation, input: Record<string, unknown>): Promise<T> {
+  public async restartRemoteAppServer(serverId: string): Promise<{ restarted: true }> {
+    const server = this.remoteAppServer(serverId);
+    await verifySameTailnet(server.url, this.runner);
+    const endpoint = new URL(server.url);
+    endpoint.port = String(BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT);
+    const response = await fetch(endpoint.origin + BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH, {
+      method: 'POST', headers: { authorization: `Bearer ${server.operatorToken}` },
+      redirect: 'error', signal: AbortSignal.timeout(90_000),
+    });
+    if (!response.ok) throw new Error(`The remote app-server restart supervisor refused the request (HTTP ${response.status}).`);
+    return { restarted: true };
+  }
+
+  public async callRemote<T>(serverId: string, operation: AppServerProtocolOperation, input: Record<string, unknown>, timeoutMs = 5 * 60_000): Promise<T> {
     const server = await this.connectedRemoteAppServer(serverId);
     const response = await fetch(server.url + BEALE_APP_SERVER_OPERATIONS_PATH, {
       method: 'POST', headers: { authorization: `Bearer ${server.operatorToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ operation, input }), redirect: 'error', signal: AbortSignal.timeout(5 * 60_000),
+      body: JSON.stringify({ operation, input }), redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`Remote app-server ${operation} failed (${response.status}).`);
     const payload: unknown = await response.json();
@@ -229,11 +245,14 @@ export class FleetService {
   public async remoteMachines(): Promise<FleetMachine[]> {
     const ids = Object.keys(this.read().appServers);
     const results = await Promise.allSettled(ids.map(async (serverId): Promise<FleetMachine[]> => {
-      const state = await this.callRemote<FleetState>(serverId, 'fleet.state', {});
+      const state = await this.callRemote<FleetState>(serverId, 'fleet.state', {}, 12_000);
       if (!state.enabled || state.role !== 'primary' || !state.available) return [];
-      return state.machines.filter((machine) => !machine.base && !machine.owner && machine.sshConfigured && machine.state !== 'unknown')
+      return state.machines.filter((machine) => machine.base && machine.state === 'stopped')
         .map((machine) => ({ ...machine, id: `remote:${serverId}:${machine.id}`, name: `${this.remoteAppServer(serverId).name} / ${machine.name}` }));
     }));
+    if (ids.length && results.every((result) => result.status === 'rejected')) {
+      throw new Error('Could not load VM inventory from any saved app server. Check their connections in Fleet.');
+    }
     return results.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
       .sort((left, right) => left.name.localeCompare(right.name));
   }
@@ -267,7 +286,7 @@ export class FleetService {
       });
     }))).flat();
     return { serverId, workspaces, sessions: sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-      machines: fleetState.machines.filter((machine) => !machine.base && machine.sshConfigured && machine.state !== 'unknown'),
+      machines: fleetState.machines.filter((machine) => machine.base && machine.state === 'stopped'),
       requiredWorkspaceIds: fleetState.requiredWorkspaceIds, optionalWorkspaceIds: fleetState.optionalWorkspaceIds,
       hasBaseVm: fleetState.machines.some((machine) => machine.base) };
   }
@@ -285,8 +304,8 @@ export class FleetService {
       fleetState.requiredWorkspaceIds.includes(workspaceId)
       || !fleetState.optionalWorkspaceIds.includes(workspaceId) && fleetState.machines.some((machine) => machine.base));
     if (machineId === 'local' && required) throw new Error('This remote workspace requires a VM. Select a configured worker.');
-    if (machineId !== 'local' && !fleetState.machines.some((machine) => machine.id === machineId && !machine.base && machine.sshConfigured && machine.state !== 'unknown' && !machine.owner)) {
-      throw new Error('Select an available remote Fleet VM.');
+    if (machineId !== 'local' && !fleetState.machines.some((machine) => machine.id === machineId && machine.base && machine.state === 'stopped')) {
+      throw new Error('Select a stopped Fleet base VM.');
     }
     const payload = await this.remotePost(server, BEALE_APP_SERVER_SESSIONS_PATH, {
       launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION, launch: { workspaceId, promptMarkdown: promptMarkdown.trim(),
@@ -380,6 +399,11 @@ export class FleetService {
     }
   }
 
+  public isReservedBy(machineId: string, owner: { machineId: string; sessionId: string }): boolean {
+    const current = this.read().owners[machineId];
+    return current?.machineId === owner.machineId && current.sessionId === owner.sessionId;
+  }
+
   private async exclusive<T>(work: () => Promise<T>): Promise<T> {
     const previous = this.ownershipQueue;
     let unlock: () => void = () => undefined;
@@ -421,6 +445,58 @@ export class FleetService {
     latest.machines[clone.id] = { ...config.machines[baseId]!, base: false, sshHost: null };
     this.write(latest);
     return this.state();
+  }
+
+  public async cloneForSession(
+    baseId: string,
+    owner: { machineId: string; sessionId: string; workspaceId?: string },
+  ): Promise<FleetMachine> {
+    const key = `${baseId}\0${owner.machineId}\0${owner.sessionId}`;
+    const pending = this.sessionClones.get(key);
+    if (pending) return pending;
+    const clone = this.cloneForSessionOnce(baseId, owner);
+    this.sessionClones.set(key, clone);
+    void clone.finally(() => { if (this.sessionClones.get(key) === clone) this.sessionClones.delete(key); }).catch(() => undefined);
+    return clone;
+  }
+
+  private async cloneForSessionOnce(
+    baseId: string,
+    owner: { machineId: string; sessionId: string; workspaceId?: string },
+  ): Promise<FleetMachine> {
+    validOwner(owner);
+    const state = await this.state();
+    const base = state.machines.find((machine) => machine.id === baseId);
+    if (!base?.base || base.state !== 'stopped' || !base.sshConfigured) {
+      throw new Error('Select a stopped Fleet base VM with a configured SSH user.');
+    }
+    if (owner.workspaceId && Object.values(this.read().owners).some((claim) => claim.workspaceId === owner.workspaceId
+      && (claim.machineId !== owner.machineId || claim.sessionId !== owner.sessionId))) {
+      throw new Error('Fleet workspace is already staged for another VM session.');
+    }
+    const suffix = createHash('sha256').update(`${baseId}\0${owner.machineId}\0${owner.sessionId}`).digest('hex').slice(0, 16);
+    const prefix = `beale-${base.name.slice(0, 64)}-${suffix}`;
+    for (const existing of state.machines.filter((machine) => machine.name === prefix || machine.name.startsWith(`${prefix}-`))) {
+      const claim = this.read().owners[existing.id];
+      if (claim?.machineId === owner.machineId && claim.sessionId === owner.sessionId) return existing;
+    }
+    let name = prefix;
+    for (let sequence = 2; state.machines.some((machine) => machine.name === name); sequence += 1) {
+      if (sequence > 10_000) throw new Error('Fleet has too many clones for this session.');
+      name = `${prefix}-${sequence}`;
+    }
+    const cloned = await this.clone(baseId, name);
+    const worker = cloned.machines.find((machine) => machine.name === name);
+    if (!worker) throw new Error('Fleet session clone could not be found.');
+    const config = this.read();
+    config.machines[worker.id] = { ...config.machines[worker.id]!, sessionClone: true };
+    this.write(config);
+    await this.reserve(worker.id, owner);
+    return worker;
+  }
+
+  public isSessionClone(machineId: string): boolean {
+    return this.read().machines[machineId]?.sessionClone === true;
   }
 
   public async start(machineId: string, owner?: { machineId: string; sessionId: string }): Promise<FleetState> {
@@ -591,6 +667,7 @@ export class FleetService {
           if (!isRecord(value)) continue;
           config.machines[key] = {
             base: value.base === true,
+            sessionClone: value.sessionClone === true,
             privilege: value.privilege === 'elevated' ? 'elevated' : 'standard',
             sshHost: optionalText(value.sshHost),
             sshUser: optionalText(value.sshUser),
@@ -633,7 +710,7 @@ export class FleetService {
 }
 
 function defaultMachineConfig(): FleetMachineConfig {
-  return { base: false, privilege: 'standard', sshHost: null, sshUser: null, sshIdentityFile: null, sshKnownHostsFile: null };
+  return { base: false, sessionClone: false, privilege: 'standard', sshHost: null, sshUser: null, sshIdentityFile: null, sshKnownHostsFile: null };
 }
 
 function defaultConfig(): FleetConfiguration {

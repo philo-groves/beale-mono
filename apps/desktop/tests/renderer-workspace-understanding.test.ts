@@ -81,7 +81,7 @@ describe('workspace dashboard', () => {
     const overviewFormStyles = styles.match(/\.workspace-overview-form\s*\{([^}]*)\}/)?.[1] ?? '';
     const overviewControlStyles = styles.match(/\.workspace-overview-control-row\s*\{([^}]*)\}/)?.[1] ?? '';
     const overviewRowDividerStyles = styles.match(/\.workspace-overview-form \.settings-form-control-list > \* \+ \*\s*\{([^}]*)\}/)?.[1] ?? '';
-    const overviewFieldStyles = styles.match(/\.workspace-overview-form :is\(input, textarea\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const overviewFieldStyles = styles.match(/\.workspace-overview-form :is\(input:not\(\[type='checkbox'\]\), textarea\)\s*\{([^}]*)\}/)?.[1] ?? '';
     const guidanceHeadingStyles = styles.match(/\.workspace-guidance-field-heading\s*\{([^}]*)\}/)?.[1] ?? '';
     const guidanceSurfaceStyles = styles.match(/\.workspace-overview-form \.workspace-guidance-editor,\s*\.workspace-guidance-preview\s*\{([^}]*)\}/)?.[1] ?? '';
     const guidancePreviewStyles = [...styles.matchAll(/^\.workspace-guidance-preview\s*\{([^}]*)\}/gm)].at(-1)?.[1] ?? '';
@@ -97,7 +97,7 @@ describe('workspace dashboard', () => {
     const primaryDirectoryIndicatorStyles = styles.match(/\.workspace-directory-primary-indicator::before\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceHeadingStyles = styles.match(/\.workspace-overview-layout\s*>\s*\.workspace-overview-heading,\s*\.workspace-activity-form\s*>\s*:is\(\.settings-form-heading\),\s*\.workspace-cleaning-form\s*>\s*:is\(\.settings-form-heading\)\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceHeatmapStyles = styles.match(/\.workspace-activity-grid-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
-    const overviewDisabledStyles = styles.match(/\.workspace-overview-form :is\(input, textarea\):disabled\s*\{([^}]*)\}/)?.[1] ?? '';
+    const overviewDisabledStyles = styles.match(/\.workspace-overview-form :is\(input:not\(\[type='checkbox'\]\), textarea\):disabled\s*\{([^}]*)\}/)?.[1] ?? '';
     const timelinePanelStyles = styles.match(/\.workspace-timeline-card\s*\{([^}]*)\}/)?.[1] ?? '';
     const activityFormStyles = styles.match(/\.workspace-activity-form\s*\{([^}]*)\}/)?.[1] ?? '';
     const chartStyles = styles.match(/\.workspace-timeline-chart\s*\{([^}]*)\}/)?.[1] ?? '';
