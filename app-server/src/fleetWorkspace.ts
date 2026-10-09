@@ -21,6 +21,7 @@ export interface FleetTransferBaseline {
   remoteMachineId?: string;
   remoteCompleted?: boolean;
   completedResult?: { imported: number; conflicts: number; candidateRecords: number };
+  brokerPolicy?: { providerIds: string[]; fastMode: boolean; daybreakBlue: boolean };
   files: Record<string, string>;
 }
 
@@ -78,7 +79,7 @@ export class FleetWorkspaceStore {
       const name = text(input.name, 'Fleet workspace name');
       const researchKitId = text(input.researchKitId, 'Fleet research kit');
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(researchKitId)) throw new Error('Invalid Fleet research kit.');
-      await initializeWorkspaceProjectAsync(root, workspaceId);
+      await initializeWorkspaceProjectAsync(root, workspaceId, true);
       this.registry.registerFleetWorkspace(root, workspaceId, name, researchKitId);
       return { workspaceId };
     }
@@ -136,6 +137,16 @@ export class FleetWorkspaceStore {
   public baselineIfExists(runId: string): FleetTransferBaseline | null {
     const path = join(this.baselineDirectory, safeId(runId) + '.json');
     return existsSync(path) ? this.readBaseline(runId) : null;
+  }
+
+  public pendingBaselines(): FleetTransferBaseline[] {
+    if (!existsSync(this.baselineDirectory)) return [];
+    return readdirSync(this.baselineDirectory).filter((name) => name.endsWith('.json')).flatMap((name) => {
+      try {
+        const baseline = this.readBaseline(name.slice(0, -'.json'.length));
+        return baseline.completedResult ? [] : [baseline];
+      } catch { return []; }
+    });
   }
 
   public async importGuestFile(

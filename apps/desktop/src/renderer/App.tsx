@@ -412,7 +412,6 @@ export function App(): JSX.Element {
   const [reportError, setReportError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [workspaceDejunkInProgress, setWorkspaceDejunkInProgress] = useState(false);
-  const [checkpointRepairInProgress, setCheckpointRepairInProgress] = useState(false);
   const [memoryDreamingInProgress, setMemoryDreamingInProgress] = useState(false);
   const [memoryDreamingProgress, setMemoryDreamingProgress] = useState<MemoryDreamingProgressUpdate | null>(null);
   const memoryDreamingProgressClearTimerRef = useRef<number | null>(null);
@@ -994,12 +993,6 @@ export function App(): JSX.Element {
     void runAction(() => window.beale.runWorkspaceDejunk())
       .finally(() => setWorkspaceDejunkInProgress(false));
   }, [runAction]);
-  const repairWorkspaceCheckpoint = useCallback((fingerprint: string): void => {
-    setCheckpointRepairInProgress(true);
-    void runAction(() => window.beale.repairWorkspaceCheckpoint(fingerprint))
-      .finally(() => setCheckpointRepairInProgress(false));
-  }, [runAction]);
-
   const openAppServerRunbook = useCallback((runbookId: string): void => {
     setRightSidenavExpanded(true);
     setSelectedSubagentPath(null);
@@ -2530,11 +2523,9 @@ export function App(): JSX.Element {
               connectedDeviceCaptureEnabled={windowControlPlatform === 'darwin'}
               workspaceDejunk={selectedRunId ? null : snapshot?.workspace.dejunk ?? null}
               workspaceDejunkInProgress={workspaceDejunkInProgress}
-              checkpointRepairInProgress={checkpointRepairInProgress}
               memoryDreamingInProgress={memoryDreamingInProgress}
               memoryDreamingProgress={memoryDreamingProgress}
               onRunWorkspaceDejunk={runWorkspaceDejunk}
-              onRepairWorkspaceCheckpoint={repairWorkspaceCheckpoint}
               onRunMemoryDreaming={runMemoryDreaming}
               onMarkHistoryDuplicate={markHistoryDuplicate}
               onUndoHistoryDuplicate={undoHistoryDuplicate}

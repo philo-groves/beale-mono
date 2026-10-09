@@ -704,7 +704,10 @@ export function createPiAgentExecutor(
         };
         const streamFn = createRetryingStreamFn(dynamicStreamFn, {
           signal: request.signal,
-          firstEventTimeoutMs: options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
+          // Brokered completions arrive as one durable result after the primary
+          // finishes the call. The local first-event timer must not cancel them.
+          firstEventTimeoutMs: process.env.APP_SERVER_MODEL_BROKER_URL
+            ? 0 : options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
           tryAuthenticationFallback: (errorMessage) => {
             const active = activeModelSelection();
             return authenticationRouter.tryFallback(active.model.provider, errorMessage);
@@ -3070,7 +3073,11 @@ function withProviderSession(
   fastMode: boolean,
   daybreakBlue: boolean,
 ): SimpleStreamOptions {
-  const sessionOptions = withNativeOpenAiCompaction(model, { ...options, sessionId }) ?? { ...options, sessionId };
+  const brokerFlags = process.env.APP_SERVER_MODEL_BROKER_URL
+    ? { brokerNativeCompaction: isNativeOpenAiResponsesModel(model), brokerFastMode: fastMode,
+        brokerDaybreakBlue: daybreakBlue, brokerContextWindow: model.contextWindow }
+    : {};
+  const sessionOptions = withNativeOpenAiCompaction(model, { ...options, ...brokerFlags, sessionId }) ?? { ...options, ...brokerFlags, sessionId };
   if ((!fastMode && !daybreakBlue) || !isNativeOpenAiResponsesModel(model)) return sessionOptions;
   const previousOnPayload = sessionOptions.onPayload;
   return {

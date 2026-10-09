@@ -45,8 +45,9 @@ export class BrowserCdpSession {
   }
 
   async contexts(signal?: AbortSignal): Promise<{ id: string; label: string }[]> {
-    const response = await fetch(browserDiscoveryUrl('/contexts', browserHttpEndpoint(await this.#defaultEndpoint())), {
-      signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(CONNECT_TIMEOUT_MS)])
+    const endpoint = browserHttpEndpoint(await this.#defaultEndpoint());
+    const response = await fetch(browserDiscoveryUrl('/contexts', endpoint), {
+      signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(browserConnectTimeout(endpoint))])
     });
     if (!response.ok) throw new Error(`Embedded browser context listing failed with HTTP ${response.status}.`);
     const body: unknown = await response.json();
@@ -89,7 +90,7 @@ export class BrowserCdpSession {
 
   async targets(endpoint?: string, signal?: AbortSignal): Promise<Record<string, unknown>[]> {
     const base = browserHttpEndpoint(endpoint ?? await this.#defaultEndpoint());
-    const response = await fetch(browserDiscoveryUrl("/json/list", base), { signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(CONNECT_TIMEOUT_MS)]) });
+    const response = await fetch(browserDiscoveryUrl("/json/list", base), { signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(browserConnectTimeout(base))]) });
     if (!response.ok) throw new Error(`CDP target discovery failed with HTTP ${response.status}.`);
     const body: unknown = await response.json();
     if (!Array.isArray(body)) throw new Error("CDP target discovery returned an invalid response.");
@@ -115,7 +116,7 @@ export class BrowserCdpSession {
     } else {
       const base = browserHttpEndpoint(parsed.href);
       const discovery = browserDiscoveryUrl(targetId ? "/json/list" : "/json/version", base);
-      const response = await fetch(discovery, { signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(CONNECT_TIMEOUT_MS)]) });
+      const response = await fetch(discovery, { signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(browserConnectTimeout(base))]) });
       if (!response.ok) throw new Error(`CDP discovery failed with HTTP ${response.status}.`);
       const body: unknown = await response.json();
       const entry = targetId && Array.isArray(body)
@@ -265,9 +266,14 @@ function browserHttpEndpoint(endpoint: string): URL {
 }
 
 function browserDiscoveryUrl(path: string, base: URL): URL {
-  const discovery = new URL(path, base);
+  const prefix = base.pathname.startsWith('/v1/fleet-browser/') ? base.pathname.replace(/\/$/u, '') : '';
+  const discovery = new URL(`${prefix}${path}`, base);
   discovery.search = base.search;
   return discovery;
+}
+
+function browserConnectTimeout(endpoint: URL): number {
+  return endpoint.pathname.startsWith('/v1/fleet-browser/') ? 10 * 60_000 : CONNECT_TIMEOUT_MS;
 }
 
 function isEmbeddedBrowserSocket(url: URL): boolean {

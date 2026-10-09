@@ -282,7 +282,6 @@ function exportTrace(database: DatabaseSync, root: string, sessionId: string, se
   }
 }
 
-export function checkpointWorkspaceResearch(options: WorkspacePublicationOptions, reason: string, repairFingerprint?: string): WorkspaceCheckpointResult {
-  const context: WorkspaceCommitContext = {};
-  return checkpointWorkspace(options.workspaceRoot, reason, () => { Object.assign(context, publishWorkspaceResearch(options)); }, context, repairFingerprint);
+export function checkpointWorkspaceResearch(options: WorkspacePublicationOptions, reason: string): WorkspaceCheckpointResult {
+  return checkpointWorkspace(options.workspaceRoot, reason, () => { publishWorkspaceResearch(options); });
 }

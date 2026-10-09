@@ -1996,6 +1996,34 @@ test("Pi Agent retries a model stream that produces no response events", async (
   ));
 });
 
+test("Pi Agent waits for a durable broker completion without a local first-event timeout", async () => {
+  const previous = process.env.APP_SERVER_MODEL_BROKER_URL;
+  process.env.APP_SERVER_MODEL_BROKER_URL = "http://127.0.0.1:1/broker";
+  let calls = 0;
+  try {
+    const result = await runResearchAgent({
+      prompt: "Review the synthetic workspace through a broker.",
+      executor: createPiAgentExecutor({
+        provider: "faux",
+        model: "faux-model",
+        models: {
+          getModel() { return FAUX_MODEL; },
+          streamSimple() {
+            calls += 1;
+            return streamFromAfter(assistant("## Result\nBrokered completion arrived."), 30);
+          },
+        },
+        modelFirstEventTimeoutMs: 10,
+      }),
+    });
+    assert.equal(result.agentRun.status, "complete");
+    assert.equal(calls, 1);
+  } finally {
+    if (previous === undefined) delete process.env.APP_SERVER_MODEL_BROKER_URL;
+    else process.env.APP_SERVER_MODEL_BROKER_URL = previous;
+  }
+});
+
 test("Pi Agent retries a model stream that stalls after reasoning only", async () => {
   let calls = 0;
   const liveEvents = [];

@@ -5970,6 +5970,20 @@ button.session-summary-item:hover:not(:disabled),
   display: flex;
 }
 
+.fleet-browser-page {
+  outline: none;
+  touch-action: none;
+}
+
+.fleet-browser-page img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+}
+
 .research-side-view-chooser {
   min-width: 0;
   width: min(220px, 100%);
@@ -13551,7 +13565,7 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
 
 .new-research-machine-option:hover { background: var(--gray-24); }
 .new-research-machine-option.is-selected { border-color: var(--text); color: var(--text); }
-.new-research-machine-option input[type='checkbox'] {
+.new-research-machine-option input[type='radio'] {
   width: 14px;
   min-width: 14px;
   height: 14px;

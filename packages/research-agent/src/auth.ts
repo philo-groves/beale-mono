@@ -17,6 +17,12 @@ import type {
   OAuthCredential,
 } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { brokeredModels } from "./model-broker.js";
+
+// The session-scoped broker capability stays in the runtime process. Tools and
+// plugin child processes must not inherit it through their environment.
+const MODEL_BROKER_TOKEN = process.env.APP_SERVER_MODEL_BROKER_TOKEN;
+if (MODEL_BROKER_TOKEN) delete process.env.APP_SERVER_MODEL_BROKER_TOKEN;
 import {
   compatibleExistingPath,
   PRE_BEALE_DATA_DIRECTORY_NAME,
@@ -605,7 +611,9 @@ export function createAuthenticatedModels(
     ...(options.authContext ? { authContext: options.authContext } : {}),
   });
   models.deleteProvider("anthropic");
-  return models;
+  const brokerUrl = process.env.APP_SERVER_MODEL_BROKER_URL;
+  const brokerToken = MODEL_BROKER_TOKEN;
+  return brokerUrl && brokerToken ? brokeredModels(models, { url: brokerUrl, token: brokerToken }) : models;
 }
 
 export function listAuthProviders(): AuthProviderSummary[] {

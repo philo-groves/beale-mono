@@ -250,7 +250,6 @@ export class AppServerRunEngine {
         ...input.budget,
         runEngine: 'app-server',
         machineId: input.machineId ?? 'local',
-        machineIds: input.machineIds ?? [input.machineId ?? 'local'],
         modelProvider: input.provider?.trim() || null,
         fastMode: input.fastMode === true,
         ...(input.provider === 'openai-codex' ? { daybreakBlue: input.daybreakBlue === true } : {}),
@@ -589,32 +588,25 @@ export class AppServerRunEngine {
     request: AppServerSessionLaunchRequest;
   }): Promise<void> {
     const { active, request } = params;
-    const candidates = request.launch.continuation
-      ? [machineIdFromRun(active.context.run)] : machineIdsFromRun(active.context.run);
-    let machineId = candidates[0]!;
-    let prepared: FleetPreparedSession | undefined;
-    let lastPreparationError: unknown;
-    for (const candidate of candidates) {
-      if (active.stopped) break;
-      try {
-        prepared = await invokeAppServerOperation<FleetPreparedSession>({
-          operation: 'fleet.prepare',
-          input: { workspaceId: request.launch.workspaceId, runId: active.context.run.id,
-            machineId: candidate, mode: active.context.run.mode }
-        });
-        machineId = candidate;
-        break;
-      } catch (error) {
-        lastPreparationError = error;
-      }
-    }
-    if (!prepared) {
-      if (active.stopped) { this.finishPrelaunchStop(active); return; }
-      throw lastPreparationError ?? new Error('No selected Fleet base VM could prepare this session.');
-    }
-    if (machineId !== machineIdFromRun(active.context.run)) {
-      active.context.run = this.db.updateRunBudget(active.context.run.id, { machineId });
-    }
+    const machineId = machineIdFromRun(active.context.run);
+    const collaborators = Array.isArray(request.launch.collaboration?.providers)
+      ? request.launch.collaboration.providers.filter((entry): entry is { provider: string; model: string; enabled: true } =>
+        typeof entry === 'object' && entry !== null && entry.enabled === true
+          && typeof entry.provider === 'string' && typeof entry.model === 'string')
+          .map((entry) => ({ providerId: entry.provider, modelId: entry.model })) : [];
+    const prepared = await invokeAppServerOperation<FleetPreparedSession>({
+      operation: 'fleet.prepare',
+      input: { workspaceId: request.launch.workspaceId, runId: active.context.run.id,
+        machineId, mode: active.context.run.mode,
+        providerId: request.launch.provider?.id, modelId: request.launch.provider?.model,
+        providerModels: [
+          ...(request.launch.provider?.id && request.launch.provider.model
+            ? [{ providerId: request.launch.provider.id, modelId: request.launch.provider.model }] : []),
+          ...collaborators,
+        ],
+        fastMode: request.launch.provider?.fastMode === true,
+        daybreakBlue: request.launch.provider?.daybreakBlue === true }
+    });
     if (active.stopped && machineId !== 'local') { this.finishPrelaunchStop(active); return; }
     const record = machineId === 'local'
       ? await ensureBealeAppServerRunning()
@@ -628,6 +620,10 @@ export class AppServerRunEngine {
       ...request, launch: { ...request.launch, introspection: undefined,
         machineId: prepared.remoteMachineId ?? prepared.machineId,
         ...(prepared.ownerMachineId ? { fleetOwnerMachineId: prepared.ownerMachineId } : {}),
+        ...(prepared.brokerAuthenticationPreferences
+          ? { brokerAuthenticationPreferences: prepared.brokerAuthenticationPreferences } : {}),
+        ...(prepared.brokerRiskAcknowledgements
+          ? { brokerRiskAcknowledgements: prepared.brokerRiskAcknowledgements } : {}),
       }
     };
     const started = await startAppServerSession(record, guestRequest);
@@ -2905,7 +2901,6 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
     goalObjective: persistedGoalObjective, promptMarkdown: run.promptMarkdown });
   return {
     machineId: machineIdFromRun(run),
-    machineIds: machineIdsFromRun(run),
     provider: typeof run.budget.modelProvider === 'string' ? run.budget.modelProvider : undefined,
     shellSafetyMode: run.shellSafetyMode,
     goalEnabled: goal.enabled,
@@ -2943,18 +2938,13 @@ interface FleetPreparedSession {
   operatorToken?: string;
   remoteMachineId?: string;
   ownerMachineId?: string;
+  brokerAuthenticationPreferences?: Record<string, 'subscription' | 'api_key'>;
+  brokerRiskAcknowledgements?: Array<'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter'>;
 }
 
 function machineIdFromRun(run: RunRecord): string {
   return typeof run.budget.machineId === 'string' && run.budget.machineId.trim()
     ? run.budget.machineId : 'local';
-}
-
-function machineIdsFromRun(run: RunRecord): string[] {
-  const machineIds = run.budget.machineIds;
-  if (!Array.isArray(machineIds) || machineIds.length === 0) return [machineIdFromRun(run)];
-  const valid = machineIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
-  return valid.length ? [...new Set([machineIdFromRun(run), ...valid])] : [machineIdFromRun(run)];
 }
 
 function fleetRemoteRecord(endpoint: FleetPreparedSession): BealeAppServerDiscovery {

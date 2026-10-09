@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import { resolve as resolvePath } from 'node:path';
-import type { WorkspaceCheckpointRepairPlan, WorkspaceCheckpointResult, WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
+import type { WorkspaceCheckpointResult, WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
 import {
   AppServerWorkerDatabaseBroker,
   type AppServerWorkerDatabaseCoordinator
@@ -14,12 +14,8 @@ export function runWorkspaceMaintenance(input: unknown): Promise<unknown> {
   return runWorkspaceSetupWorker({ maintenanceInput: input });
 }
 
-export function initializeWorkspaceProjectAsync(workspaceRoot: string, workspaceId: string): Promise<unknown> {
-  return runWorkspaceSetupWorker({ initializeInput: { workspaceRoot, workspaceId } });
-}
-
-export function previewWorkspaceCheckpointRepair(workspaceRoot: string): Promise<WorkspaceCheckpointRepairPlan> {
-  return runWorkspaceSetupWorker({ repairPreviewInput: { workspaceRoot } }) as Promise<WorkspaceCheckpointRepairPlan>;
+export function initializeWorkspaceProjectAsync(workspaceRoot: string, workspaceId: string, adoptStagedIndex = false): Promise<unknown> {
+  return runWorkspaceSetupWorker({ initializeInput: { workspaceRoot, workspaceId, adoptStagedIndex } });
 }
 
 function runWorkspaceSetupWorker(workerData: unknown): Promise<unknown> {
@@ -36,20 +32,20 @@ function runWorkspaceSetupWorker(workerData: unknown): Promise<unknown> {
   });
 }
 
-/** Git and export I/O must never block delivery of stop controls on the host event loop. */
+/** Publication I/O must never block delivery of stop controls on the host event loop. */
 export function runWorkspaceCheckpoint(
   options: WorkspacePublicationOptions,
   reason: string,
   edit?: { path: string; expectedRevision: number },
   cleanupSession?: string,
   databaseCoordinator?: AppServerWorkerDatabaseCoordinator,
-  settings?: { exportResearch?: boolean; researchIndexAction?: 'rebuild' | 'release'; repairFingerprint?: string },
+  settings?: { exportResearch?: boolean; researchIndexAction?: 'rebuild' | 'release' },
 ): Promise<WorkspaceCheckpointResult> {
   const key = workspaceOperationKey(options.workspaceRoot);
   const previous = queues.get(key) ?? Promise.resolve();
   const operation = previous.catch(() => undefined).then(() => new Promise<WorkspaceCheckpointResult>((resolve) => {
     let worker: Worker;
-    try { worker = new Worker(new URL('./workspaceCheckpointWorker.js', import.meta.url), { workerData: { options, reason, edit, exportResearch: settings?.exportResearch === true, researchIndexAction: settings?.researchIndexAction, repairFingerprint: settings?.repairFingerprint, cleanupSession } }); }
+    try { worker = new Worker(new URL('./workspaceCheckpointWorker.js', import.meta.url), { workerData: { options, reason, edit, exportResearch: settings?.exportResearch === true, researchIndexAction: settings?.researchIndexAction, cleanupSession } }); }
     catch (error) { resolve({ status: 'failed', reason, error: error instanceof Error ? error.message : String(error) }); return; }
     const databaseBroker = new AppServerWorkerDatabaseBroker(options.databasePath, databaseCoordinator);
     let result: WorkspaceCheckpointResult | undefined;
@@ -63,7 +59,7 @@ export function runWorkspaceCheckpoint(
     worker.once('error', (error) => { result = { status: 'failed', reason, error: error.message }; });
     worker.once('exit', (code) => {
       databaseBroker.close();
-      resolve(result ?? { status: 'failed', reason, error: `Checkpoint worker exited with code ${code}; working files were preserved.` });
+      resolve(result ?? { status: 'failed', reason, error: `Publication worker exited with code ${code}; working files were preserved.` });
     });
   }));
   queues.set(key, operation);

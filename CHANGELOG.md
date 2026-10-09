@@ -6,6 +6,7 @@
 
 #### Added
 
+- Fleet VM sessions run a guest-owned headless browser and relay its page frames, navigation, pointer, keyboard, and text input into the primary Desktop session view. The primary does not load a second copy of the page. A session-scoped CDP gateway keeps agent browser commands on the guest, and the browser profile remains on its retained clone. Control contract v45 requires rebuilt clients and hosts.
 - Fleet can restart local, guest, and same-tailnet remote app-server processes through an independent supervisor, including when the app-server HTTP endpoint is unresponsive. Restarted hosts recover eligible sessions; VM and machine power state is unchanged. Contract v42 requires rebuilt clients and hosts.
 - New Research now lists stopped Fleet base VMs and clones the selected base for each session. Existing workers stay out of the picker; the base is never started. Fleet stops the clone after result import and retains its identity for reconnect and transfer.
 - Added a local Fleet App Servers form for connecting to authenticated peers on the same Tailscale network. Home and Automations can switch between Local and saved app servers to view and control their research sessions.
@@ -15,6 +16,7 @@
 
 #### Removed
 
+- Removed automatic workspace Git initialization, managed commit hooks, research-session Git checkpoints, and Git checkpoint repair controls. Existing Git history is retained; canonical publication metadata for new workspaces lives under `.beale/publication/`. Control contract v44 requires rebuilt clients and hosts.
 - Removed session workflow creation, assignment, notebook execution gates, progress UI, and the built-in Repository Auditor. Existing workflow records remain in local storage but are no longer used when sessions continue.
 
 - Beale now creates and runs Security research workspaces only. Mathematics and other non-security workspaces are hidden from its workspace and session lists; their files and stored records are retained. The Mathematics choice is removed from workspace creation and prompt settings.
@@ -30,7 +32,7 @@
 
 #### Changed
 
-- New Research uses a compact Machine menu that accepts multiple base VMs in priority order. Session preparation falls back to the next selected base when an earlier one cannot be prepared; Local remains exclusive.
+- New Research selects one execution machine per session: Local or one base VM, including bases from saved app servers. The selected base is cloned for the session.
 - The per-workspace Require a VM control now appears in the workspace Settings form alongside its other general settings, rather than in Fleet.
 - Fleet now has its own destination below Plugins in the left navigation rail. Its configuration, app servers, and virtual machines remain local to the current Beale instance.
 - The macOS development Electron bundle now signs with Beale's bundle identifier so Local Network permission applies to the app-server's SSH helper.
@@ -127,7 +129,7 @@
 #### Fixed
 
 - New Research loads local VM choices before remote discovery completes and includes bases from reachable saved app servers even when another peer fails. Remote inventory reads have a bounded timeout.
-- Clicking a base VM name in New Research now keeps the Machine menu open so multiple bases can be selected. The trigger shows a readiness dot and the menu uses single-line options.
+- The New Research Machine menu shows readiness dots and single-line options; clicking a VM name selects that VM.
 - Fleet VM rows now distinguish a saved primary-side SSH user from SSH setup inside the guest. Registered bases enable the default workspace VM requirement even before that user is saved in Beale.
 - Workspace checkpoints retain oversized untracked macOS executables in investigation directories at their existing paths, with tracked integrity manifests and exact local Git exclusions, so compiled harnesses no longer block later checkpoints.
 - Repository Auditor workflows now recognize inventoried files beneath declared scope directories on Windows, allowing the inventory step to advance.
@@ -1261,10 +1263,13 @@
 
 #### Added
 
+- Fleet recovery reuses the session's recorded clone and guest workspace after an unexpected interruption, restarting a stopped clone when needed without restaging over its in-progress files.
+- Fleet installs a built Beale app-server and Node runtime into a session clone over SSH when the guest is missing or incompatible, starts it, and configures its Fleet guest relay before launching research. VM readiness still depends on SSH setup, not an existing Beale installation.
+- Fleet guests route Pi-backed provider requests through a durable broker on the workspace-owning primary. Guest requests survive app-server restarts, use renewable leases, and replay completed results after reconnect; the broker does not copy provider credentials to guests. Anthropic and Z.ai subscription SDK sessions are rejected until those SDK paths support brokered execution. Control contract v43 requires rebuilt clients and hosts.
 - A separate localhost restart supervisor can replace the app-server process when its control plane is unavailable. Managed Tailscale remote access publishes the supervisor on a separate HTTPS port, and Fleet can reach guest supervisors through SSH.
 - Fleet adds a session clone operation for local and cross-primary launches. Control contract v41 requires rebuilding Beale and app-server together.
 - Fleet now records a durable machine-and-session owner for each VM and rejects conflicting reservations. Remote app-server connections verify a matching online Tailscale peer, and cross-primary workspace transfers use authenticated app-server operations. Control contract v40 requires rebuilding Beale and app-server together.
-- Added Fleet inventory, clone/start/stop operations, model-facing Fleet tools, SSH guest session transport, and chunked workspace transfer. Guest credentials stay in the VM; external source checkouts are not copied from the primary. Registry migration records a session's machine for recovery, and control contract v38 requires rebuilding Beale and app-server together.
+- Added Fleet inventory, clone/start/stop operations, model-facing Fleet tools, SSH guest session transport, and chunked workspace transfer. External source checkouts are not copied from the primary. Registry migration records a session's machine for recovery, and control contract v38 requires rebuilding Beale and app-server together.
 - Added draft SSH connection testing and per-VM known-hosts paths. Control contract v39 requires rebuilding Beale and app-server together.
 - Tart Fleet connections now prefer guest-agent address resolution and fall back to DHCP. SSH test results report the attempted address to help diagnose connectivity after a VM restart.
 - SSH test failures now include the final SSH diagnostic line so connection and macOS permission failures can be distinguished.

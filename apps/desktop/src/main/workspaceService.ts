@@ -9,7 +9,7 @@ import { isManagedToolPluginId, MANAGED_TOOL_PLUGINS, type ResearchPluginCatalog
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
 import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
-import { decodeClaimBoardTransitionRequest, type FleetSshTestInput, type FleetSshTestResult, type FleetState, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
+import { decodeClaimBoardTransitionRequest, type FleetSshTestInput, type FleetSshTestResult, type FleetState, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput } from '@beale/app-server-runtime/protocol';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -982,6 +982,12 @@ export class WorkspaceService {
     return invokeAppServerOperation<FleetState>({ operation: 'fleet.state' });
   }
 
+  public fleetBrowserMachineId(runId: string): string | null {
+    const run = this.runtimeForRunId(runId)?.db.getRun(runId);
+    const machineId = run?.budget.machineId;
+    return typeof machineId === 'string' && machineId.trim() && machineId !== 'local' ? machineId : null;
+  }
+
   public async restartFleetAppServer(serverId: string): Promise<void> {
     await invokeAppServerOperation({ operation: 'fleet.restart_app_server', input: { serverId } });
   }
@@ -1801,23 +1807,6 @@ export class WorkspaceService {
       this.snapshotCache.delete(runtime.workspacePath);
     }
     return summary;
-  }
-
-  public async repairWorkspaceCheckpoint(fingerprint: string): Promise<WorkspaceSnapshot> {
-    const runtime = this.getForegroundRuntime();
-    if (!runtime) throw new Error('No Beale workspace is open');
-    if (runtime.db.listRunRows().some(({ run }) => isLiveResearchRunStatus(run.status))) {
-      throw new Error('Stop workspace research before repairing a checkpoint.');
-    }
-    const result = await invokeAppServerOperation<WorkspaceCheckpointResult>({
-      operation: 'workspace.project',
-      input: { workspaceId: runtime.db.getWorkspaceId(), action: 'repair', fingerprint }
-    });
-    invalidateWorkspaceDejunkSummary(runtime.workspacePath);
-    this.workspaceDejunkSummaries.set(runtime.workspacePath, await getWorkspaceDejunkSummaryAsync(runtime.workspacePath));
-    this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
-    if (result.status === 'failed') throw new Error(result.error ?? 'Checkpoint repair failed.');
-    return this.requireSnapshot();
   }
 
   public async runMemoryDreaming(onProgress: MemoryDreamingProgressHandler | null = null): Promise<WorkspaceSnapshot> {
@@ -3568,16 +3557,6 @@ export class WorkspaceService {
       shellSafetyMode: requestedShellSafetyMode ?? DEFAULT_SHELL_SAFETY_MODE,
       ...(input.collaboration ? { collaboration: normalizeResearchCollaboration(input.collaboration) } : {})
     };
-    if (normalizedInput.machineIds !== undefined) {
-      const machineIds = normalizedInput.machineIds;
-      if (!Array.isArray(machineIds) || machineIds.length === 0 || machineIds.length > 32
-        || machineIds.some((id) => typeof id !== 'string' || !id.trim() || id.length > 256)
-        || new Set(machineIds).size !== machineIds.length
-        || (machineIds.includes('local') && machineIds.length !== 1)
-        || normalizedInput.machineId !== machineIds[0]) {
-        throw new Error('Select Local or one or more distinct Fleet base VMs.');
-      }
-    }
     if (!runtime) throw new Error('No Beale workspace is open');
     if (normalizedInput.machineId && normalizedInput.machineId !== 'local'
       && normalizeRepeatSchedule(normalizedInput.budget.repeatSchedule).type !== 'none') {
@@ -3608,8 +3587,7 @@ export class WorkspaceService {
       ...(!explicitProvider && leadDefaults?.reasoningEffort ? { reasoningEffort: leadDefaults.reasoningEffort } : {})
     };
     const selectedProviderIds = selectedRunProviderIds(normalizedInput, leadProvider);
-    const remoteFleetRun = Boolean(normalizedInput.machineId && normalizedInput.machineId !== 'local');
-    const lockedProviderIds = remoteFleetRun ? [] : this.providerCredentials.providersRequiringUnlock(selectedProviderIds);
+    const lockedProviderIds = this.providerCredentials.providersRequiringUnlock(selectedProviderIds);
     if (lockedProviderIds.length > 0) {
       throw new Error('Confirm Beale Safe Storage access before starting this session.');
     }

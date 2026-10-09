@@ -1,4 +1,5 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { hostname, platform } from 'node:os';
 import { promisify } from 'node:util';
@@ -8,11 +9,15 @@ import {
   BEALE_APP_SERVER_OPERATIONS_PATH,
   BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT,
   BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH,
+  type AppServerProviderRiskAcknowledgement,
 } from '@beale/app-server-runtime/protocol';
 import type { AppServerHostWorkspace } from './hostRegistry.js';
+import { completeBrokerModelRequest, type ModelBrokerRequest, type ProviderAuthenticationPreferences } from '@beale/research-agent';
 import { FleetService } from './fleet.js';
 import { FleetWorkspaceStore, type FleetFile } from './fleetWorkspace.js';
 import { sshConnectionArgs } from './fleetSsh.js';
+import { FleetGuestInstaller } from './fleetGuestInstall.js';
+import { resolveAppServerCodexAuthFile } from './sessionLaunch.js';
 
 const execFileAsync = promisify(execFile);
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -23,6 +28,8 @@ export interface FleetRemoteEndpoint {
   operatorToken: string;
   remoteMachineId?: string;
   ownerMachineId?: string;
+  brokerAuthenticationPreferences?: ProviderAuthenticationPreferences;
+  brokerRiskAcknowledgements?: readonly AppServerProviderRiskAcknowledgement[];
 }
 
 interface Tunnel extends FleetRemoteEndpoint { process: ChildProcess }
@@ -30,10 +37,26 @@ const activeTunnelProcesses = new Set<ChildProcess>();
 process.once('exit', () => { for (const child of activeTunnelProcesses) child.kill(); });
 
 export class FleetRemoteController {
+  private readonly guestInstaller = new FleetGuestInstaller();
   private readonly tunnels = new Map<string, Tunnel>();
   private readonly completions = new Map<string, Promise<{ imported: number; conflicts: number; candidateRecords: number }>>();
+  private readonly brokerLoops = new Map<string, { stopped: boolean }>();
 
-  public constructor(private readonly fleet: FleetService, private readonly files: FleetWorkspaceStore) {}
+  public constructor(private readonly fleet: FleetService, private readonly files: FleetWorkspaceStore,
+    private readonly authenticationPreferences: () => ProviderAuthenticationPreferences = () => ({}),
+    private readonly riskAcknowledgements: () => readonly AppServerProviderRiskAcknowledgement[] = () => []) {}
+
+  public resumePendingBrokers(): void {
+    for (const baseline of this.files.pendingBaselines()) {
+      if (!baseline.brokerPolicy) continue;
+      if (baseline.ownerMachineId && baseline.ownerMachineId !== this.fleet.machineId()) continue;
+      this.startBroker(baseline.runId, baseline.machineId);
+    }
+  }
+
+  public stopAllBrokers(): void {
+    for (const loop of this.brokerLoops.values()) loop.stopped = true;
+  }
 
   public async restartGuestAppServer(machineId: string): Promise<{ restarted: true }> {
     const state = await this.fleet.state();
@@ -85,9 +108,18 @@ export class FleetRemoteController {
     }
   }
 
-  public async prepare(workspace: AppServerHostWorkspace, runId: string, machineId: string, ownerMachineId = this.fleet.machineId()): Promise<FleetRemoteEndpoint> {
+  public async prepare(workspace: AppServerHostWorkspace, runId: string, machineId: string, ownerMachineId = this.fleet.machineId(),
+    brokerPolicy?: { providerIds: string[]; fastMode: boolean; daybreakBlue: boolean }): Promise<FleetRemoteEndpoint> {
+    const baseline = this.files.baselineIfExists(runId);
+    if (baseline && !baseline.completedResult && baseline.workspaceId === workspace.workspaceId
+      && baseline.ownerMachineId === ownerMachineId
+      && (baseline.machineId === machineId || baseline.selectedBaseId === machineId)) {
+      const endpoint = await this.connect(baseline.machineId, runId, ownerMachineId);
+      return { ...endpoint, brokerAuthenticationPreferences: this.authenticationPreferences(),
+        brokerRiskAcknowledgements: this.riskAcknowledgements() };
+    }
     const remote = parseRemoteMachineId(machineId);
-    if (remote) return this.prepareRemote(workspace, runId, machineId, remote.serverId, remote.machineId);
+    if (remote) return this.prepareRemote(workspace, runId, machineId, remote.serverId, remote.machineId, brokerPolicy);
     const state = await this.fleet.state();
     if (state.role !== 'primary' || !state.enabled || !state.available) throw new Error('Fleet is unavailable on this primary machine.');
     const machine = state.machines.find((candidate) => candidate.id === machineId);
@@ -129,10 +161,14 @@ export class FleetRemoteController {
       action: 'finish', workspaceId: workspace.workspaceId, name: workspace.name,
       researchKitId: workspace.researchKitId,
     });
+    await remoteOperation(endpoint, 'fleet.broker', { action: 'register', runId });
     this.files.saveBaseline({ workspaceId: workspace.workspaceId, workspacePath: workspace.workspacePath, machineId: workerId,
       ...(machine.base ? { selectedBaseId: machineId } : {}), runId, ownerMachineId,
+      ...(brokerPolicy ? { brokerPolicy } : {}),
       files: Object.fromEntries(sourceFiles.map((file) => [file.path, file.sha256])) });
-    return endpoint;
+    if (ownerMachineId === this.fleet.machineId()) this.startBroker(runId, workerId);
+    return { ...endpoint, brokerAuthenticationPreferences: this.authenticationPreferences(),
+      brokerRiskAcknowledgements: this.riskAcknowledgements() };
     } catch (error) {
       if (machine.base) await this.fleet.stop(workerId, owner).catch(() => undefined);
       await this.fleet.release(workerId, owner).catch(() => undefined);
@@ -150,6 +186,8 @@ export class FleetRemoteController {
   }
 
   private async completeOnce(runId: string): Promise<{ imported: number; conflicts: number; candidateRecords: number }> {
+    const broker = this.brokerLoops.get(runId);
+    if (broker) broker.stopped = true;
     const baseline = this.files.readBaseline(runId);
     if (baseline.completedResult) return baseline.completedResult;
     if (baseline.remoteServerId) return this.completeRemote(baseline);
@@ -195,8 +233,11 @@ export class FleetRemoteController {
     if (required) throw new Error('This workspace requires a Fleet VM. Select a VM or disable the requirement in workspace Settings.');
   }
 
-  public async connect(machineId: string, runId: string, ownerMachineId = this.fleet.machineId()): Promise<FleetRemoteEndpoint> {
+  public async connect(machineId: string, runId: string, ownerMachineId = this.fleet.machineId(), attemptedInstall = false): Promise<FleetRemoteEndpoint> {
     const baseline = this.files.baselineIfExists(runId);
+    if (baseline && !baseline.completedResult && ownerMachineId === this.fleet.machineId()) {
+      this.startBroker(runId, baseline.machineId);
+    }
     if (baseline?.selectedBaseId === machineId) {
       machineId = baseline.remoteServerId && baseline.remoteMachineId
         ? `remote:${baseline.remoteServerId}:${baseline.remoteMachineId}` : baseline.machineId;
@@ -211,6 +252,17 @@ export class FleetRemoteController {
         remoteMachineId: remote.machineId, ownerMachineId };
     }
     this.fleet.assertReserved(machineId, { machineId: ownerMachineId, sessionId: runId });
+    const machine = (await this.fleet.state()).machines.find((candidate) => candidate.id === machineId);
+    if (!machine || machine.base) throw new Error('The reserved Fleet session VM is unavailable.');
+    if (machine.state !== 'running') {
+      await this.fleet.start(machineId, { machineId: ownerMachineId, sessionId: runId });
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        const current = (await this.fleet.state()).machines.find((candidate) => candidate.id === machineId);
+        if (current?.state === 'running') break;
+        await delay(1_000);
+      }
+    }
     const existing = this.tunnels.get(machineId);
     if (existing && existing.process.exitCode === null) {
       if (await healthy(existing)) return existing;
@@ -218,17 +270,36 @@ export class FleetRemoteController {
       this.tunnels.delete(machineId);
     }
     const connection = await this.fleet.connection(machineId);
+    if (!attemptedInstall) await this.guestInstaller.ensure(connection);
     const sshArgs = sshConnectionArgs(connection.sshHost, connection.sshUser, connection.sshIdentityFile, connection.sshKnownHostsFile, connection.machine.backend);
     const readCommand = platform() === 'win32'
       ? `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from("Get-Content -Raw (Join-Path $HOME '.beale/app-server.json')", 'utf16le').toString('base64')}`
-      : 'cat .beale/app-server.json';
-    const { stdout } = await execFileAsync('ssh', [...sshArgs, readCommand], { timeout: CONNECT_TIMEOUT_MS, maxBuffer: 100_000, encoding: 'utf8', windowsHide: true });
-    const discovery: unknown = JSON.parse(stdout);
-    if (!isRecord(discovery) || discovery.contractTimestamp !== BEALE_APP_SERVER_CONTRACT_TIMESTAMP
-      || typeof discovery.port !== 'number' || discovery.port < 1 || discovery.port > 65535
-      || typeof discovery.operatorToken !== 'string' || !discovery.operatorToken) {
-      throw new Error('Guest Beale app-server is unavailable or has an incompatible control contract.');
+      : 'cat "$HOME/.beale/app-server.json"';
+    const readDiscovery = async (): Promise<{ port: number; operatorToken: string; pid: number } | null> => {
+      try {
+        const { stdout } = await execFileAsync('ssh', [...sshArgs, readCommand],
+          { timeout: CONNECT_TIMEOUT_MS, maxBuffer: 100_000, encoding: 'utf8', windowsHide: true });
+        const discovery: unknown = JSON.parse(stdout);
+        return isRecord(discovery) && discovery.contractTimestamp === BEALE_APP_SERVER_CONTRACT_TIMESTAMP
+          && typeof discovery.port === 'number' && discovery.port > 0 && discovery.port <= 65_535
+          && typeof discovery.pid === 'number' && Number.isSafeInteger(discovery.pid) && discovery.pid > 0
+          && typeof discovery.operatorToken === 'string' && discovery.operatorToken
+          ? { port: discovery.port, operatorToken: discovery.operatorToken, pid: discovery.pid } : null;
+      } catch { return null; }
+    };
+    let discovery = await readDiscovery();
+    if (!discovery) {
+      if (attemptedInstall) throw new Error('Fleet installed Beale in the guest, but its app-server did not start. Check the guest install log.');
+      await this.guestInstaller.ensure(connection, true);
+      const deadline = Date.now() + 60_000;
+      do {
+        discovery = await readDiscovery();
+        if (discovery) break;
+        await delay(500);
+      } while (Date.now() < deadline);
+      if (!discovery) throw new Error('Fleet installed Beale in the guest, but its app-server did not start. Check the guest install log.');
     }
+    const connectedPid = discovery.pid;
     const localPort = await freePort();
     const child = spawn('ssh', [
       '-o', 'ExitOnForwardFailure=yes', ...sshArgs.slice(0, -1),
@@ -248,6 +319,9 @@ export class FleetRemoteController {
       if (spawnError) throw spawnError;
       if (child.exitCode !== null) throw new Error('SSH could not forward the guest Beale app-server port.');
       if (await healthy(tunnel)) {
+        await remoteOperation(tunnel, 'fleet.configure', { action: 'set-role', role: 'guest' });
+        await remoteOperation(tunnel, 'fleet.configure', { action: 'set-enabled', enabled: true });
+        await remoteOperation(tunnel, 'fleet.configure', { action: 'set-primary', name: hostname() });
         const state = await remoteOperation<{ role: string; enabled: boolean }>(tunnel, 'fleet.state', {});
         if (state.role !== 'guest' || !state.enabled) {
           child.kill();
@@ -259,11 +333,22 @@ export class FleetRemoteController {
       await delay(250);
     }
     child.kill();
+    if (!attemptedInstall) {
+      await this.guestInstaller.ensure(connection, true);
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        const updated = await readDiscovery();
+        if (updated && updated.pid !== connectedPid) break;
+        await delay(500);
+      }
+      return this.connect(machineId, runId, ownerMachineId, true);
+    }
     throw new Error('Timed out connecting to the guest Beale app-server over SSH.');
   }
 
   private async prepareRemote(
     workspace: AppServerHostWorkspace, runId: string, machineId: string, serverId: string, remoteMachineId: string,
+    brokerPolicy?: { providerIds: string[]; fastMode: boolean; daybreakBlue: boolean },
   ): Promise<FleetRemoteEndpoint> {
     const server = await this.fleet.connectedRemoteAppServer(serverId);
     const remoteState = await this.fleet.callRemote<{ enabled: boolean; role: string; machines: Array<{ id: string; base: boolean; sshConfigured: boolean; state: string; owner?: { machineId: string; sessionId: string } | null }> }>(serverId, 'fleet.state', {});
@@ -312,8 +397,12 @@ export class FleetRemoteController {
     this.files.saveBaseline({ workspaceId: workspace.workspaceId, workspacePath: workspace.workspacePath,
       machineId, ...(machine.base ? { selectedBaseId: machineId } : {}),
       remoteServerId: serverId, remoteMachineId: workerId, runId, ownerMachineId: this.fleet.machineId(),
+      ...(brokerPolicy ? { brokerPolicy } : {}),
       files: Object.fromEntries(sourceFiles.map((file) => [file.path, file.sha256])) });
+    this.startBroker(runId, machineId);
     return { machineId, url: server.url, operatorToken: server.operatorToken,
+      brokerAuthenticationPreferences: this.authenticationPreferences(),
+      brokerRiskAcknowledgements: this.riskAcknowledgements(),
       remoteMachineId: workerId, ownerMachineId: this.fleet.machineId() };
     } catch (error) {
       await this.fleet.callRemote(serverId, 'fleet.release', {
@@ -353,6 +442,82 @@ export class FleetRemoteController {
     return result;
   }
 
+  public async brokerOperation(machineId: string, runId: string, ownerMachineId: string,
+    input: Record<string, unknown>): Promise<unknown> {
+    if (!ownerMachineId) throw new Error('Model broker owner is required.');
+    const endpoint = await this.connect(machineId, runId, ownerMachineId);
+    const { machineId: _machineId, ownerMachineId: _ownerMachineId, ...guestInput } = input;
+    return remoteOperation(endpoint, 'fleet.broker', guestInput);
+  }
+
+  private startBroker(runId: string, machineId: string): void {
+    if (this.brokerLoops.has(runId)) return;
+    const loop = { stopped: false };
+    this.brokerLoops.set(runId, loop);
+    void this.runBroker(runId, machineId, loop).finally(() => {
+      if (this.brokerLoops.get(runId) === loop) this.brokerLoops.delete(runId);
+    }).catch(() => undefined);
+  }
+
+  private async runBroker(runId: string, machineId: string, loop: { stopped: boolean }): Promise<void> {
+    while (!loop.stopped) {
+      try {
+        const pending = await this.brokerCall<{ request: ModelBrokerRequest; leaseId: string } | null>(runId, machineId, { action: 'poll' });
+        if (!pending) { await delay(500); continue; }
+        await this.answerBrokerRequest(runId, machineId, pending.request, pending.leaseId);
+      } catch {
+        if (!loop.stopped) await delay(2_000);
+      }
+    }
+  }
+
+  private async answerBrokerRequest(runId: string, machineId: string, request: ModelBrokerRequest, leaseId: string): Promise<void> {
+    let renewing = false;
+    const heartbeat = setInterval(() => {
+      if (renewing) return;
+      renewing = true;
+      void this.brokerCall(runId, machineId, { action: 'renew', requestId: request.id, leaseId })
+        .catch(() => undefined).finally(() => { renewing = false; });
+    }, 10_000);
+    heartbeat.unref();
+    try {
+      let result: unknown;
+      try {
+        const provider = request.model.provider === 'openai' ? 'openai-codex' : request.model.provider;
+        const policy = this.files.baselineIfExists(runId)?.brokerPolicy;
+        if (policy && (!policy.providerIds.includes(provider)
+          || request.brokerFlags?.fastMode === true && !policy.fastMode
+          || request.brokerFlags?.daybreakBlue === true && !policy.daybreakBlue)) {
+          throw new Error('The model broker request exceeds this session’s provider selection.');
+        }
+        if (!['openai-codex', 'xai', 'zai', 'openrouter'].includes(provider)) {
+          throw new Error('This provider cannot use the Fleet model broker.');
+        }
+        result = { state: 'done', message: await completeBrokerModelRequest(request, this.authenticationPreferences(),
+          resolveAppServerCodexAuthFile()) };
+      } catch {
+        result = { state: 'error', error: 'The model request failed on the workspace primary app-server.' };
+      }
+      const bytes = Buffer.from(JSON.stringify(result));
+      await this.brokerCall(runId, machineId, { action: 'begin', requestId: request.id, leaseId });
+      for (let offset = 0; offset < bytes.length; offset += 192 * 1024) {
+        await this.brokerCall(runId, machineId, { action: 'append', requestId: request.id, leaseId,
+          offset, data: bytes.subarray(offset, offset + 192 * 1024).toString('base64') });
+      }
+      await this.brokerCall(runId, machineId, { action: 'seal', requestId: request.id, leaseId,
+        sha256: createHash('sha256').update(bytes).digest('hex') });
+    } finally { clearInterval(heartbeat); }
+  }
+
+  private async brokerCall<T>(runId: string, machineId: string, input: Record<string, unknown>): Promise<T> {
+    const remote = parseRemoteMachineId(machineId);
+    if (remote) return this.fleet.callRemote<T>(remote.serverId, 'fleet.relay_broker', {
+      ...input, runId, machineId: this.files.baselineIfExists(runId)?.remoteMachineId ?? remote.machineId,
+      ownerMachineId: this.fleet.machineId(),
+    });
+    return this.brokerOperation(machineId, runId, this.fleet.machineId(), { ...input, runId }) as Promise<T>;
+  }
+
   private async connectWithRetry(machineId: string, runId: string, timeoutMs: number, ownerMachineId = this.fleet.machineId()): Promise<FleetRemoteEndpoint> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown = null;
@@ -366,7 +531,7 @@ export class FleetRemoteController {
   }
 }
 
-async function remoteOperation<T>(endpoint: FleetRemoteEndpoint, operation: 'fleet.state' | 'fleet.stage' | 'fleet.export', input: Record<string, unknown>): Promise<T> {
+async function remoteOperation<T>(endpoint: FleetRemoteEndpoint, operation: 'fleet.state' | 'fleet.configure' | 'fleet.stage' | 'fleet.export' | 'fleet.broker', input: Record<string, unknown>): Promise<T> {
   const response = await fetch(endpoint.url + BEALE_APP_SERVER_OPERATIONS_PATH, {
     method: 'POST', headers: { authorization: `Bearer ${endpoint.operatorToken}`, 'content-type': 'application/json' },
     body: JSON.stringify({ operation, input }), signal: AbortSignal.timeout(60_000),

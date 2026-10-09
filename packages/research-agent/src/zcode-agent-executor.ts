@@ -102,6 +102,9 @@ export function extractCompatibleZCodeAgentResumableState(
 }
 
 export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOptions): ResearchAgentExecutor {
+  if (process.env.APP_SERVER_MODEL_BROKER_URL) {
+    throw new Error("Z.ai subscription SDK requests cannot run inside a brokered Fleet guest.");
+  }
   const workflow = researchProfileWorkflow(options.researchProfile, options.workflowId);
   const profileHash = researchProfileHash(options.researchProfile);
   return {

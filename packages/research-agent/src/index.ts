@@ -28,6 +28,7 @@ export * from "./report-tools.js";
 export * from "./model-context.js";
 export * from "./auth.js";
 export * from "./auth-routing.js";
+export * from "./model-broker.js";
 export * from "./auxiliary-completion.js";
 export * from "./bootstrap.js";
 export * from "./config.js";

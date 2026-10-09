@@ -20,9 +20,9 @@ import {
   type AppServerSessionLaunchRequest,
   decodeFleetSshTestInput
 } from '@beale/app-server-runtime/protocol';
-import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
-import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate } from '@beale/research-agent';
-import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
+import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchIndexNeedsRebuild } from '@beale/app-server-runtime/runtime-services';
+import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate, verifyBrokerModelAccess } from '@beale/research-agent';
+import { runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
   type AppServerHostRegistryOptions,
@@ -41,6 +41,8 @@ import { longSessionRecoveryFallbackPrompt } from './sessionRecovery.js';
 import { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
 import { FleetService } from './fleet.js';
 import { FleetRemoteController } from './fleetRemote.js';
+import { FleetModelBrokerQueue } from './fleetModelBrokerQueue.js';
+import type { ModelBrokerRequest } from '@beale/research-agent';
 import { FleetWorkspaceStore } from './fleetWorkspace.js';
 
 type ProtocolInvoker = <T>(
@@ -141,6 +143,7 @@ export class AppServerHostService {
   private readonly fleet: FleetService;
   private readonly fleetRemote: FleetRemoteController;
   private readonly fleetWorkspace: FleetWorkspaceStore;
+  private readonly fleetBroker: FleetModelBrokerQueue;
   private readonly invokeProtocol: ProtocolInvoker;
   private readonly databaseCoordinator: AppServerWorkerDatabaseCoordinator;
   private providerSemanticsPromise: Promise<{
@@ -153,7 +156,10 @@ export class AppServerHostService {
     this.registry = options.registry ?? new AppServerHostRegistry(options);
     this.fleet = new FleetService(join(this.registry.registryDirectory, 'fleet.json'));
     this.fleetWorkspace = new FleetWorkspaceStore(this.registry);
-    this.fleetRemote = new FleetRemoteController(this.fleet, this.fleetWorkspace);
+    this.fleetBroker = new FleetModelBrokerQueue(join(this.registry.registryDirectory, 'fleet-model-broker'));
+    this.fleetRemote = new FleetRemoteController(this.fleet, this.fleetWorkspace,
+      () => this.registry.providerSettings().authenticationPreferences,
+      () => this.registry.providerSettings().riskAcknowledgements);
     this.databaseCoordinator = options.databaseCoordinator ?? new AppServerWorkerDatabaseCoordinator();
     const invokeProtocol = options.invokeProtocol ?? invokeAppServerProtocol;
     this.invokeProtocol = (operation, invokeOptions) => invokeOptions.storage
@@ -163,6 +169,19 @@ export class AppServerHostService {
           )
         : invokeProtocol(operation, invokeOptions);
   }
+
+  public brokerToken(sessionId: string): string | null { return this.fleetBroker.token(sessionId); }
+
+  public brokerSubmit(sessionId: string, token: string, request: ModelBrokerRequest): void {
+    this.fleetBroker.submit(sessionId, token, request);
+  }
+
+  public brokerResult(sessionId: string, token: string, requestId: string): unknown {
+    return this.fleetBroker.result(sessionId, token, requestId);
+  }
+
+  public resumeFleetModelBrokers(): void { this.fleetRemote.resumePendingBrokers(); }
+  public stopFleetModelBrokers(): void { this.fleetRemote.stopAllBrokers(); }
 
   public listWorkspaces(): BealeAppServerWorkspaceList {
     return {
@@ -264,13 +283,63 @@ export class AppServerHostService {
         if (!workspaceId || !runId) throw new Error('Fleet preparation requires a workspace and run ID.');
         const workspace = this.requireWorkspace(workspaceId);
         if (!machineId || machineId === 'local') { await this.fleetRemote.validateLocal(workspace.workspaceId, nonEmpty(input.mode)); return { machineId: 'local' }; }
-        return this.fleetRemote.prepare(workspace, runId, machineId, nonEmpty(input.ownerMachineId) ?? this.fleet.machineId());
+        const ownerMachineId = nonEmpty(input.ownerMachineId) ?? this.fleet.machineId();
+        if (ownerMachineId !== this.fleet.machineId()) {
+          return this.fleetRemote.prepare(workspace, runId, machineId, ownerMachineId);
+        }
+        const providerId = nonEmpty(input.providerId);
+        const modelId = nonEmpty(input.modelId);
+        const providerModels = Array.isArray(input.providerModels)
+          ? input.providerModels.filter((value): value is { providerId: string; modelId: string } =>
+            value !== null && typeof value === 'object'
+              && typeof value.providerId === 'string' && typeof value.modelId === 'string'
+              && value.providerId.length > 0 && value.modelId.length > 0)
+          : providerId && modelId ? [{ providerId, modelId }] : [];
+        if (providerModels.length === 0) throw new Error('Select an authenticated model before launching a Fleet session.');
+        for (const selection of providerModels) {
+          await verifyBrokerModelAccess(selection.providerId, selection.modelId,
+            this.registry.providerSettings().authenticationPreferences, resolveAppServerCodexAuthFile());
+        }
+        const providerIds = providerModels.map((selection) => selection.providerId);
+        return this.fleetRemote.prepare(workspace, runId, machineId, ownerMachineId,
+          providerIds.length ? { providerIds: [...new Set(providerIds)], fastMode: input.fastMode === true,
+            daybreakBlue: input.daybreakBlue === true } : undefined);
       }
       if (request.operation === 'fleet.connect') return this.fleetRemote.connect(nonEmpty(input.machineId) ?? '', nonEmpty(input.runId) ?? '', nonEmpty(input.ownerMachineId) ?? this.fleet.machineId());
       if (request.operation === 'fleet.complete') {
         const runId = nonEmpty(input.runId);
         if (!runId) throw new Error('Fleet completion requires a run ID.');
         return this.fleetRemote.complete(runId);
+      }
+      if (request.operation === 'fleet.broker') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'guest') throw new Error('Model broker requests require a Fleet guest.');
+        const runId = nonEmpty(input.runId);
+        if (!runId) throw new Error('Model broker session ID is required.');
+        const action = nonEmpty(input.action);
+        if (action === 'register') { this.fleetBroker.register(runId); return { registered: true }; }
+        if (action === 'poll') return this.fleetBroker.poll(runId);
+        const requestId = nonEmpty(input.requestId) ?? '';
+        const leaseId = nonEmpty(input.leaseId) ?? '';
+        if (action === 'renew') { this.fleetBroker.renew(runId, requestId, leaseId); return { renewed: true }; }
+        if (action === 'begin') { this.fleetBroker.beginResult(runId, requestId, leaseId); return { begun: true }; }
+        if (action === 'append') {
+          this.fleetBroker.appendResult(runId, requestId, leaseId, Number(input.offset), nonEmpty(input.data) ?? '');
+          return { appended: true };
+        }
+        if (action === 'seal') {
+          this.fleetBroker.sealResult(runId, requestId, leaseId, nonEmpty(input.sha256) ?? '');
+          return { sealed: true };
+        }
+        throw new Error('Unsupported model broker action.');
+      }
+      if (request.operation === 'fleet.relay_broker') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'primary') throw new Error('Model broker relay requires a primary.');
+        const machineId = nonEmpty(input.machineId) ?? '';
+        const runId = nonEmpty(input.runId) ?? '';
+        const ownerMachineId = nonEmpty(input.ownerMachineId) ?? '';
+        return this.fleetRemote.brokerOperation(machineId, runId, ownerMachineId, input);
       }
       if (request.operation === 'fleet.stage' || request.operation === 'fleet.export') {
         const state = await this.fleet.state();
@@ -317,25 +386,22 @@ export class AppServerHostService {
       if (!workspace) throw new Error('A registered workspace is required.');
       const project = readWorkspaceProject(workspace.workspacePath);
       if (input.action === 'status') {
-        const statusPath = join(workspace.workspacePath, '.git', 'beale', 'checkpoint.json');
-        return { project, checkpoint: existsSync(statusPath) ? JSON.parse(readFileSync(statusPath, 'utf8')) as unknown : null,
+        return { project, checkpoint: null,
           researchIndex: readWorkspaceResearchCacheState(workspace.workspacePath) };
       }
       if (!project) throw new Error('This reference workspace does not use the research project layout. Create a new workspace.');
       const key = workspaceOperationKey(workspace.workspacePath);
       if (this.workspaceExclusiveOperations.has(key)) throw new Error('Another workspace operation is in progress.');
-      if (input.action === 'repair-preview') return previewWorkspaceCheckpointRepair(workspace.workspacePath);
-      const exclusive = input.action === 'import' || input.action === 'export' || input.action === 'sync' || input.action === 'rebuild-index' || input.action === 'release-index' || input.action === 'repair';
+      const exclusive = input.action === 'import' || input.action === 'export' || input.action === 'sync' || input.action === 'rebuild-index' || input.action === 'release-index';
       if (exclusive && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error(`Stop workspace research before ${input.action.replace(/-/gu, ' ')}.`);
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
       if (exclusive) this.workspaceExclusiveOperations.add(key);
       try { return await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
-        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export compatibility research snapshot' : input.action === 'sync' ? 'Synchronize file-authority research' : input.action === 'rebuild-index' ? 'Rebuild derived research index' : input.action === 'release-index' ? 'Release derived research index' : input.action === 'repair' ? 'Repair oversized checkpoint files' : 'Operator workspace checkpoint',
+        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export compatibility research snapshot' : input.action === 'sync' ? 'Synchronize file-authority research' : input.action === 'rebuild-index' ? 'Rebuild derived research index' : input.action === 'release-index' ? 'Release derived research index' : 'Synchronize workspace research',
         input.action === 'import' ? input : undefined, undefined, this.databaseCoordinator,
         (input.action === 'export' || input.action === 'sync') ? { exportResearch: true }
           : input.action === 'rebuild-index' ? { researchIndexAction: 'rebuild' }
           : input.action === 'release-index' ? { researchIndexAction: 'release' }
-          : input.action === 'repair' ? { repairFingerprint: input.fingerprint }
           : undefined);
       } finally { if (exclusive) this.workspaceExclusiveOperations.delete(key); }
     }
@@ -685,8 +751,11 @@ export class AppServerHostService {
           ...(fastMode ? { fastMode: true } : {}),
           ...(daybreakBlue ? { daybreakBlue: true } : {}),
           contextSize: providerSettings.contextSizes?.['openai-codex'] ?? 'default',
-          riskAcknowledgements: providerSettings.riskAcknowledgements,
-          authenticationPreferences: providerSettings.authenticationPreferences,
+          riskAcknowledgements: this.fleetBroker.token(sessionId) && request.launch.brokerRiskAcknowledgements
+            ? request.launch.brokerRiskAcknowledgements : providerSettings.riskAcknowledgements,
+          authenticationPreferences: this.fleetBroker.token(sessionId) && request.launch.brokerAuthenticationPreferences
+            ? request.launch.brokerAuthenticationPreferences
+            : providerSettings.authenticationPreferences,
           ...(request.launch.generateTitle
             ? {
                 title: {
@@ -766,34 +835,6 @@ export class AppServerHostService {
         }
       });
     });
-  }
-
-  public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false): Promise<WorkspaceCheckpointResult> {
-    const workspace = this.requireWorkspace(workspaceIdentifier);
-    if (!readWorkspaceProject(workspace.workspacePath)) return { status: 'unmanaged', reason };
-    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
-    const key = workspaceOperationKey(workspace.workspacePath);
-    const anotherSessionIsActive = [...this.workspaceWriters.entries()].some(([activeSessionId, root]) => activeSessionId !== sessionId && workspaceOperationKey(root) === key);
-    const releaseResearchIndex = cleanupScratch && !anotherSessionIsActive && workspaceResearchAuthority(workspace.workspacePath) === 'files';
-    const result = await runWorkspaceCheckpoint({
-      workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId,
-      databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
-      sessionId,
-    }, reason, undefined, cleanupScratch ? sessionId : undefined, this.databaseCoordinator,
-    releaseResearchIndex ? { researchIndexAction: 'release' } : undefined);
-    if (result.status === 'committed' || result.status === 'failed') {
-      await this.invokeProtocol('session.append_event', {
-        args: ['session', 'append-event', '--session-id', sessionId], storage,
-        input: {
-          id: `checkpoint-${randomUUID()}`, kind: 'agent.event', timestamp: new Date().toISOString(),
-          summary: result.status === 'committed'
-            ? 'Workspace checkpoint committed.'
-            : 'Workspace checkpoint failed.',
-          payload: { eventType: 'workspace.checkpoint', ...result },
-        },
-      });
-    }
-    return result;
   }
 
   public setWorkspaceSessionActive(workspaceIdentifier: string, sessionId: string, active: boolean): void {
@@ -1055,9 +1096,7 @@ export class AppServerHostService {
       storage,
       input: {
         status: 'failed',
-        summary: input.diagnostic.startsWith('Workspace checkpoint failed;')
-          ? input.diagnostic.slice(0, 1_000)
-          : 'The app-server session failed before its research worker started.',
+        summary: 'The app-server session failed before its research worker started.',
         attemptId: input.attemptId,
         metadata: {
           appServerLaunchFailure: true,

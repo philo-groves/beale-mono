@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   initializeWorkspaceProject, checkpointWorkspaceResearch, importWorkspaceResearchFile,
@@ -90,7 +89,7 @@ test('publication splits and deduplicates large prior-art bodies and rebuilds th
     catalog.priorArt.save(resourceId, 'action-example-two', { ...document, fetchedAt: '2026-09-02T00:00:00.000Z' }, { revision: 'build-example-001' });
 
     const checkpoint = checkpointWorkspaceResearch(options, 'Publish bounded prior-art payloads');
-    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    assert.equal(checkpoint.status, 'unchanged', checkpoint.error);
     const resources = JSON.parse(readFileSync(join(workspaceRoot, 'references', 'resources.json'), 'utf8'));
     assert.equal(resources.schemaVersion, 2);
     assert.equal(resources.priorArt.length, 2);
@@ -144,7 +143,7 @@ test('publication preserves directory evidence references without reading them a
       }],
     });
     const checkpoint = checkpointWorkspaceResearch(options, 'Publish directory evidence reference');
-    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    assert.equal(checkpoint.status, 'unchanged', checkpoint.error);
     const published = readFileSync(join(workspaceRoot, 'memories', `${memory.id}.md`), 'utf8');
     assert.match(published, /investigations\/investigation-example\/captured-output/u);
   } finally {
@@ -178,7 +177,7 @@ test('publication preserves a workspace-root evidence reference without rejectin
       }],
     });
     const checkpoint = checkpointWorkspaceResearch(options, 'Publish workspace-root evidence reference');
-    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    assert.equal(checkpoint.status, 'unchanged', checkpoint.error);
     const published = readFileSync(join(workspaceRoot, 'memories', `${memory.id}.md`), 'utf8');
     assert.match(published, /"path": "\."/u);
   } finally {
@@ -207,7 +206,7 @@ test('publication gives opaque legacy record IDs stable filesystem-safe paths', 
       status: 'suspected',
     });
     const checkpoint = checkpointWorkspaceResearch(options, 'Publish opaque legacy record');
-    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    assert.equal(checkpoint.status, 'unchanged', checkpoint.error);
 
     const memoryPath = `memories/encoded-${workspaceContentHash(opaqueId)}.md`;
     const absoluteMemoryPath = join(workspaceRoot, memoryPath);
@@ -218,7 +217,7 @@ test('publication gives opaque legacy record IDs stable filesystem-safe paths', 
     writeFileSync(absoluteMemoryPath, published.replace('Original synthetic body.', 'Revised synthetic body.'));
     importWorkspaceResearchFile(options, memoryPath, memory.revision);
     assert.equal(graph.get(opaqueId).body, 'Revised synthetic body.');
-    assert.equal(checkpointWorkspaceResearch(options, 'Publish revised opaque legacy record').status, 'committed');
+    assert.equal(checkpointWorkspaceResearch(options, 'Publish revised opaque legacy record').status, 'unchanged');
   } finally {
     graph.close();
     rmSync(directory, { recursive: true, force: true });
@@ -284,7 +283,7 @@ test('completed execution evidence remains pinned when its workspace candidate i
     });
 
     const first = checkpointWorkspaceResearch(options, 'Publish completed execution');
-    assert.equal(first.status, 'committed', first.error);
+    assert.equal(first.status, 'unchanged', first.error);
     const executionPath = join(workspaceRoot, 'evidence', `execution-${runId}.json`);
     const pinnedExecution = readFileSync(executionPath, 'utf8');
     assert.match(pinnedExecution, new RegExp(`evidence/raw/${firstHash}`));
@@ -296,7 +295,7 @@ test('completed execution evidence remains pinned when its workspace candidate i
     assert.equal(readFileSync(executionPath, 'utf8'), pinnedExecution);
     assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
     const second = checkpointWorkspaceResearch(options, 'Publish revised candidate');
-    assert.equal(second.status, 'committed', second.error);
+    assert.equal(second.status, 'unchanged', second.error);
     assert.equal(readFileSync(executionPath, 'utf8'), pinnedExecution);
     assert.ok(existsSync(join(workspaceRoot, 'evidence', `${firstHash}.json`)));
     assert.ok(existsSync(join(workspaceRoot, 'evidence', `${secondHash}.json`)));
@@ -329,7 +328,7 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
     const runbook = runbooks.create({ title: 'Example procedure', purpose: 'Repeat the example.', cells: [{ kind: 'code', source: 'echo example', features: ['runtime'], language: 'shell' }] }).runbook;
     const report = reports.create({ title: 'Example report', summary: 'Example summary.', content: '# Example report\n' }).report;
     const checkpoint = checkpointWorkspaceResearch(options, 'Canonical research checkpoint');
-    assert.equal(checkpoint.status, 'committed', checkpoint.error);
+    assert.equal(checkpoint.status, 'unchanged', checkpoint.error);
     assert.ok(existsSync(join(workspaceRoot, 'memories', `${memory.id}.md`)));
     assert.equal(existsSync(join(workspaceRoot, 'memories', `${foreign.id}.md`)), false);
     assert.equal(checkpointWorkspaceResearch(options, 'Unchanged publication').status, 'unchanged');
@@ -353,7 +352,7 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
     writeFileSync(join(workspaceRoot, claimPath), JSON.stringify(exported));
     importWorkspaceResearchFile(options, claimPath, claim.revision);
     assert.equal(claims.get(claim.id).summary, exported.summary);
-    assert.equal(checkpointWorkspaceResearch(options, 'Imported claim').status, 'committed');
+    assert.equal(checkpointWorkspaceResearch(options, 'Imported claim').status, 'unchanged');
 
     const memoryPath = `memories/${memory.id}.md`;
     const publishedMemory = readFileSync(join(workspaceRoot, memoryPath), 'utf8');
@@ -367,13 +366,13 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
     writeFileSync(join(workspaceRoot, memoryPath), readFileSync(join(workspaceRoot, memoryPath), 'utf8').replace('Original explanation.', 'Revised explanation.'));
     importWorkspaceResearchFile(options, memoryPath, memory.revision);
     assert.equal(graph.get(memory.id).body, 'Revised explanation.');
-    assert.equal(checkpointWorkspaceResearch(options, 'Imported memory').status, 'committed');
+    assert.equal(checkpointWorkspaceResearch(options, 'Imported memory').status, 'unchanged');
 
     const reportPath = `reports/${report.id}/report.md`;
     writeFileSync(join(workspaceRoot, reportPath), '# Revised example report\n');
     importWorkspaceResearchFile(options, reportPath, report.revision);
     assert.match(reports.get(report.id).content, /Revised/);
-    assert.equal(checkpointWorkspaceResearch(options, 'Imported report').status, 'committed');
+    assert.equal(checkpointWorkspaceResearch(options, 'Imported report').status, 'unchanged');
 
     const runbookPath = `runbooks/${runbook.id}/runbook.ipynb`;
     const notebook = JSON.parse(readFileSync(join(workspaceRoot, runbookPath), 'utf8'));
@@ -382,9 +381,8 @@ test('canonical snapshots isolate workspace records and imports preserve revisio
     importWorkspaceResearchFile(options, runbookPath, runbook.revision);
     assert.equal(runbooks.get(runbook.id).contentRevision, runbook.contentRevision + 1);
     const attributed = checkpointWorkspaceResearch({ ...options, sessionId: 'session-example' }, 'Session checkpoint');
-    assert.equal(attributed.status, 'committed', attributed.error);
-    const message = spawnSync('git', ['log', '-1', '--format=%B'], { cwd: workspaceRoot, encoding: 'utf8', windowsHide: true }).stdout.trim();
-    assert.equal(message, 'Session checkpoint\n\nSession-ID: session-example');
+    assert.equal(attributed.status, 'unchanged', attributed.error);
+    assert.equal(existsSync(join(workspaceRoot, '.git')), false);
     const released = releaseWorkspaceResearchIndex(options);
     assert.equal(released.state, 'released');
     const rebuilt = rebuildWorkspaceResearchIndex(options);

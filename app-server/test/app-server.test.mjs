@@ -106,97 +106,17 @@ test("persists the OpenAI context size provider setting", () => {
   reopened.close();
 });
 
-test('research checkpoints are host-owned and a pending milestone does not delay Stop', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-lifecycle-example-'));
+test('research starts without a workspace Git checkpoint', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-no-checkpoint-example-'));
   temporaryDirectories.push(directory);
   const upstream = await createFakeAppServerSessionHost();
   const hostService = testHostService(directory);
-  const reasons = [];
-  let releaseMilestone;
-  hostService.checkpointSession = async (_workspaceId, sessionId, reason, _cleanupScratch) => {
-    assert.equal(sessionId, 'session-checkpoint-example');
-    reasons.push(reason);
-    if (reason === 'Research milestone') await new Promise((resolve) => { releaseMilestone = resolve; });
-    return { status: 'unchanged', reason };
-  };
+  hostService.checkpointSession = async () => { throw new Error('Git checkpoint must not run.'); };
   const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
   servers.push(server);
-  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example' }));
-  assert.deepEqual(reasons, ['Before research session']);
-  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'claim.revise', status: 'complete' } });
-  await waitFor(() => Boolean(releaseMilestone));
-  server.stopSession('session-checkpoint-example');
-  assert.equal(upstream.stopCalls(), 1);
-  releaseMilestone();
-  await waitFor(() => server.listSessions()[0]?.state === 'stopped');
-  assert.deepEqual(reasons, ['Before research session', 'Research milestone', 'Research stopped; preserve incomplete work']);
-});
-
-test('runbook checkpoints occur once after the complete execution rather than after each cell', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-runbook-checkpoint-example-'));
-  temporaryDirectories.push(directory);
-  const upstream = await createFakeAppServerSessionHost();
-  const hostService = testHostService(directory);
-  const reasons = [];
-  hostService.checkpointSession = async (_workspaceId, _sessionId, reason) => {
-    reasons.push(reason);
-    return { status: 'unchanged', reason };
-  };
-  const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
-  servers.push(server);
-  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-runbook-checkpoint-example' }));
-  assert.deepEqual(reasons, ['Before research session']);
-
-  upstream.sendEvent({ kind: 'agent.event', payload: { eventType: 'runbook.execution', runId: 'runbook_run_example', cellId: 'cell-example', status: 'succeeded' } });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(reasons, ['Before research session']);
-
-  upstream.sendEvent({ kind: 'agent.event', payload: { eventType: 'runbook.execution', runId: 'runbook_run_example', cellId: null, status: 'blocked' } });
-  await waitFor(() => reasons.length === 2);
-  assert.deepEqual(reasons, ['Before research session', 'Runbook execution finished']);
-
-  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'runbook.run', status: 'complete' } });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(reasons, ['Before research session', 'Runbook execution finished']);
-});
-
-test('a failed pre-session checkpoint prevents worker launch without discarding files', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-failure-example-'));
-  temporaryDirectories.push(directory);
-  const hostService = testHostService(directory);
-  hostService.checkpointSession = async () => ({ status: 'failed', reason: 'Before research session', error: 'Resolve the example staged edit.' });
-  const launchFailures = [];
-  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
-  let spawned = false;
-  const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: async () => { spawned = true; throw new Error('Must not launch'); } });
-  servers.push(server);
-  await assert.rejects(server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-failed-example' })), /Resolve the example staged edit/);
-  assert.equal(spawned, false);
-  assert.equal(launchFailures.length, 1);
-  assert.equal(launchFailures[0].sessionId, 'session-checkpoint-failed-example');
-  assert.match(launchFailures[0].diagnostic, /Workspace checkpoint failed; working files were preserved/u);
-  assert.match(launchFailures[0].diagnostic, /Resolve the example staged edit/);
-});
-
-test('pre-worker checkpoint failures retain their actionable diagnostic in the session summary', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-summary-example-'));
-  temporaryDirectories.push(directory);
-  const transitions = [];
-  const service = new AppServerHostService({
-    registry: hostRegistryFixture(directory),
-    invokeProtocol: async (operation, options) => {
-      assert.equal(operation, 'session.transition');
-      transitions.push(options.input);
-      return { status: 'failed' };
-    },
-  });
-  await service.recordSessionLaunchFailure({
-    request: sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-summary-example' }),
-    sessionId: 'session-checkpoint-summary-example', attemptId: 'attempt-example',
-    diagnostic: 'Workspace checkpoint failed; working files were preserved. Generated build output needs to be excluded.',
-  });
-  assert.match(transitions[0].summary, /Generated build output needs to be excluded/u);
-  assert.equal(transitions[0].status, 'failed');
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-no-checkpoint-example' }));
+  assert.equal(server.listSessions()[0]?.state, 'running');
+  upstream.complete();
 });
 
 test('keeps a hosted session starting until the runtime readiness handshake completes', async () => {
@@ -292,58 +212,6 @@ test('session finalization persists early worker exits without overwriting termi
   await service.recordSessionTerminalState({ ...input, state: 'stopped' });
   assert.equal(status, 'failed');
   assert.equal(transitions.length, 1);
-});
-
-test('a committed host checkpoint appends a valid canonical session event', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-event-example-'));
-  temporaryDirectories.push(directory);
-  await initializeWorkspaceProjectAsync(directory, 'workspace-test');
-  mkdirSync(join(directory, 'investigations', 'investigation-example'), { recursive: true });
-  writeFileSync(
-    join(directory, 'investigations', 'investigation-example', 'proof-plan.md'),
-    'Synthetic checkpoint event regression fixture.\n',
-  );
-  const sessionId = 'session-checkpoint-event-example';
-  const sessionStore = new AppServerSessionStore({ databasePath: join(directory, 'memory.sqlite') });
-  sessionStore.create({
-    id: sessionId,
-    workspaceId: 'workspace-test',
-    attemptId: 'attempt-checkpoint-event-example',
-    title: 'Checkpoint event regression',
-    prompt: 'Exercise a committed pre-session checkpoint.',
-    provider: 'openai-codex',
-    model: 'gpt-example',
-    reasoningEffort: 'high',
-  });
-  sessionStore.close();
-  const calls = [];
-  const service = new AppServerHostService({
-    registry: hostRegistryFixture(directory),
-    invokeProtocol: async (operation, options) => {
-      calls.push({ operation, options });
-      const store = new AppServerSessionStore({ databasePath: options.storage.databasePath });
-      try {
-        return store.appendEvent(sessionId, options.input);
-      } finally {
-        store.close();
-      }
-    },
-  });
-
-  const result = await service.checkpointSession(
-    'workspace-test',
-    sessionId,
-    'Before research session',
-  );
-
-  assert.equal(result.status, 'committed', result.error);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].operation, 'session.append_event');
-  assert.equal(calls[0].options.input.summary, 'Workspace checkpoint committed.');
-  assert.deepEqual(calls[0].options.input.payload, {
-    eventType: 'workspace.checkpoint',
-    ...result,
-  });
 });
 
 test("creates a versioned app-server pairing payload without altering credentials", () => {
@@ -442,6 +310,8 @@ test("control plane requires the operator bearer token", async () => {
 test("a primary proxies a remote-owned VM session through its guest transport", async () => {
   const guestRequests = [];
   let guestLaunch = null;
+  const guestSockets = new WebSocket.Server({ noServer: true });
+  const browserInputs = [];
   const guest = createServer((request, response) => {
     guestRequests.push({ method: request.method, path: request.url });
     response.setHeader("content-type", "application/json");
@@ -463,7 +333,7 @@ test("a primary proxies a remote-owned VM session through its guest transport", 
         session: { sessionId: "session-relay", state: "running" } }));
       return;
     }
-    if (request.url === "/v1/sessions/session-relay/attach") {
+    if (request.url === "/v1/sessions/session-relay/attachments") {
       response.statusCode = 201;
       response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
         transport: { path: "/v1/sessions/session-relay/transport", protocolVersion: 1,
@@ -472,6 +342,16 @@ test("a primary proxies a remote-owned VM session through its guest transport", 
     }
     response.statusCode = 404;
     response.end("{}");
+  });
+  guest.on("upgrade", (request, socket, head) => {
+    if (request.url !== "/v1/sessions/session-relay/browser"
+      || !["Bearer guest-client-token", "Bearer attached-client-token"].includes(request.headers.authorization)) {
+      socket.destroy(); return;
+    }
+    guestSockets.handleUpgrade(request, socket, head, (client) => {
+      client.send(JSON.stringify({ type: "browser.ready", url: "https://example.test/", width: 1280, height: 800 }));
+      client.on("message", (raw) => browserInputs.push(JSON.parse(String(raw))));
+    });
   });
   await new Promise((resolve) => guest.listen(0, "127.0.0.1", resolve));
   try {
@@ -499,13 +379,30 @@ test("a primary proxies a remote-owned VM session through its guest transport", 
     const read = await fetch(`${server.url}/v1/sessions/session-relay`, { headers: auth });
     assert.equal(read.status, 200);
     assert.equal((await read.json()).session.state, "running");
-    const attached = await fetch(`${server.url}/v1/sessions/session-relay/attach`, { method: "POST", headers: auth });
+    const attached = await fetch(`${server.url}/v1/sessions/session-relay/attachments`, { method: "POST", headers: auth });
     assert.equal(attached.status, 201);
     assert.equal((await attached.json()).transport.token, "attached-client-token");
+    const connected = await fetch(`${server.url}/v1/operations`, { method: "POST", headers: auth,
+      body: JSON.stringify({ operation: "fleet.connect", input: { runId: "session-relay", machineId: "tart:worker", proxy: true } }) });
+    assert.equal(connected.status, 200);
+    const browser = new WebSocket(`${server.url.replace(/^http/u, "ws")}/v1/sessions/session-relay/browser`, {
+      headers: { authorization: "Bearer guest-client-token" },
+    });
+    try {
+      const ready = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Fleet browser relay did not respond.")), 3000);
+        browser.once("message", (raw) => { clearTimeout(timeout); resolve(JSON.parse(String(raw))); });
+        browser.once("error", reject);
+      });
+      assert.equal(ready.url, "https://example.test/");
+      browser.send(JSON.stringify({ type: "browser.mouse", id: 1, eventType: "mouseMoved", x: 10, y: 10 }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(browserInputs[0].type, "browser.mouse");
+    } finally { browser.close(); }
     assert.deepEqual(operations.find((operation) => operation.operation === "fleet.prepare").input,
       { workspaceId: "workspace-test", runId: "session-relay", machineId: "tart:worker", ownerMachineId: "machine-source" });
     assert.ok(guestRequests.some((entry) => entry.method === "GET" && entry.path === "/v1/sessions/session-relay"));
-  } finally { await new Promise((resolve) => guest.close(resolve)); }
+  } finally { guestSockets.close(); await new Promise((resolve) => guest.close(resolve)); }
 });
 
 test("continues a terminal session through the authenticated control plane", async () => {
@@ -3447,55 +3344,6 @@ test("app-server startup relaunches interrupted sessions before clients attach",
   await waitForSocketClose(socket);
   assert.equal(server.listSessions()[0].state, "completed");
   await fakeHost.close();
-});
-
-test("app-server startup recovery finalizes a session when its checkpoint cannot launch", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-startup-checkpoint-failure-"));
-  temporaryDirectories.push(directory);
-  const request = sessionLaunchRequest(directory, {
-    sessionId: "session-startup-checkpoint-failure",
-    promptMarkdown: "Resume the synthetic interrupted session.",
-  });
-  const hostService = testHostService(directory);
-  const launchFailures = [];
-  hostService.recoverInterruptedSessions = async () => ({
-    interruptedSessions: 1,
-    skippedSessions: 0,
-    errors: [],
-    recovered: [{
-      request,
-      prepared: {
-        sessionId: request.sessionId,
-        attemptId: "attempt-startup-checkpoint-failure",
-        launch: {
-          ...resolvedSessionLaunch(directory, {
-            capturePath: join(directory, "session-startup-checkpoint-failure.capture.json"),
-            promptMarkdown: request.launch.promptMarkdown,
-          }),
-          attemptId: "attempt-startup-checkpoint-failure",
-        },
-      },
-    }],
-  });
-  hostService.checkpointSession = async () => ({
-    status: "failed",
-    reason: "Before research session",
-    error: "Resolve the synthetic generated projection drift.",
-  });
-  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
-  let spawned = false;
-  const server = await startAppServer({
-    hostService,
-    recoverInterruptedOnStart: true,
-    spawnSession: async () => { spawned = true; throw new Error("Must not launch"); },
-  });
-  servers.push(server);
-
-  assert.equal(spawned, false);
-  assert.equal(server.listSessions()[0].state, "failed");
-  assert.equal(launchFailures.length, 1);
-  assert.equal(launchFailures[0].sessionId, request.sessionId);
-  assert.match(launchFailures[0].diagnostic, /generated projection drift/u);
 });
 
 test("accepted pause and stop controls are persisted as intentional session state", async () => {

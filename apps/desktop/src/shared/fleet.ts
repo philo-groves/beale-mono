@@ -25,23 +25,3 @@ export function isAllowedFleetMachine(state: FleetState, workspaceId: string, ma
   if (machineId === 'local') return !fleetVmRequired(state, workspaceId);
   return runnableFleetMachines(state).some((machine) => machine.id === machineId);
 }
-
-export function selectedFleetMachineIds(
-  state: FleetState,
-  workspaceId: string,
-  requestedIds: readonly string[] | undefined,
-  requestedId?: string,
-): string[] {
-  const requested = requestedIds?.length ? requestedIds : requestedId ? [requestedId] : [];
-  const valid = [...new Set(requested)].filter((id) => isAllowedFleetMachine(state, workspaceId, id));
-  if (valid.includes('local')) return ['local'];
-  if (valid.length) return valid;
-  const fallback = defaultFleetMachineId(state, workspaceId);
-  return fallback ? [fallback] : [];
-}
-
-export function isAllowedFleetMachineSelection(state: FleetState, workspaceId: string, ids: readonly string[]): boolean {
-  return ids.length > 0 && new Set(ids).size === ids.length
-    && (ids.length === 1 || !ids.includes('local'))
-    && ids.every((id) => isAllowedFleetMachine(state, workspaceId, id));
-}

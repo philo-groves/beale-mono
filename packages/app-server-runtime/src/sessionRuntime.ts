@@ -2709,9 +2709,14 @@ async function validateCollaborationProviders(
   const enabled = collaboration.providers.filter((provider) => provider.enabled);
   if (enabled.length === 0) throw new Error("Collaboration mode requires at least one enabled provider.");
   for (const preference of enabled) {
-    const status = await verifyProviderAuth(preference.provider, preference.model);
-    if (!status.configured) {
-      throw new Error(`This session cannot continue because its enabled ${status.providerName} collaborator (${status.modelId}) is not authenticated. Authenticate ${status.providerName} in Beale Settings > Providers, then continue the session again.`);
+    if (process.env.APP_SERVER_MODEL_BROKER_URL) {
+      const available = getProviderModelCatalog(preference.provider)[0]?.models.some((model) => model.id === preference.model);
+      if (!available) throw new Error(`Brokered collaborator ${preference.provider}/${preference.model} is unavailable.`);
+    } else {
+      const status = await verifyProviderAuth(preference.provider, preference.model);
+      if (!status.configured) {
+        throw new Error(`This session cannot continue because its enabled ${status.providerName} collaborator (${status.modelId}) is not authenticated. Authenticate ${status.providerName} in Beale Settings > Providers, then continue the session again.`);
+      }
     }
     if (!cybersecurity) continue;
     if (preference.provider === "openai-codex" && !args.openAiTrustedAccessCyberRiskAcknowledged) {
@@ -4194,6 +4199,7 @@ async function createRuntimeConfig(args: {
 
   if (runtimeTools.managedPluginIds === undefined || runtimeTools.managedPluginIds.includes("beale-browser")) {
     const browserSession = new BrowserCdpSession(async () => {
+      if (process.env.BEALE_FLEET_BROWSER_ENDPOINT) return process.env.BEALE_FLEET_BROWSER_ENDPOINT;
       try {
         const discovery = JSON.parse(await readFile(resolve(homedir(), ".beale", "desktop-browser.json"), "utf8")) as unknown;
         if (discovery && typeof discovery === "object" && "endpoint" in discovery && typeof discovery.endpoint === "string") {

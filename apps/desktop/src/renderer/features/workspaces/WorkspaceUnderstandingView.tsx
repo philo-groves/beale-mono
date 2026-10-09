@@ -197,7 +197,6 @@ export function WorkspaceUnderstandingView({
   runs,
   workspaceDejunk = null,
   workspaceDejunkInProgress = false,
-  checkpointRepairInProgress = false,
   memoryDreamingInProgress,
   memoryDreamingProgress = null,
   onAddResource = async () => undefined,
@@ -218,7 +217,6 @@ export function WorkspaceUnderstandingView({
   onActiveViewChange,
   onViewSelectionChange,
   onRunWorkspaceDejunk = () => undefined,
-  onRepairWorkspaceCheckpoint = () => undefined,
   onRunMemoryDreaming,
   initialView = 'campaign',
   nowMs
@@ -226,7 +224,6 @@ export function WorkspaceUnderstandingView({
   busy: boolean;
   workspaceDejunk?: WorkspaceDejunkSummary | null;
   workspaceDejunkInProgress?: boolean;
-  checkpointRepairInProgress?: boolean;
   memoryDreamingInProgress: boolean;
   memoryDreamingProgress?: MemoryDreamingProgressUpdate | null;
   appServerMemory: AppServerMemorySummary | null;
@@ -244,7 +241,6 @@ export function WorkspaceUnderstandingView({
   workspaceName: string;
   runs: RunRow[];
   onRunWorkspaceDejunk?: () => void;
-  onRepairWorkspaceCheckpoint?: (fingerprint: string) => void;
   onRunMemoryDreaming: () => void;
   initialView?: WorkspaceDashboardView;
   onAddResource?: (asset: ScopeAssetInput) => Promise<void>;
@@ -478,10 +474,8 @@ export function WorkspaceUnderstandingView({
         runs={runs}
         workspaceDejunk={workspaceDejunk}
         workspaceDejunkInProgress={workspaceDejunkInProgress}
-        checkpointRepairInProgress={checkpointRepairInProgress}
         onRunMemoryDreaming={onRunMemoryDreaming}
         onRunWorkspaceDejunk={onRunWorkspaceDejunk}
-        onRepairWorkspaceCheckpoint={onRepairWorkspaceCheckpoint}
         onRemoveWorkspace={onRemoveWorkspace}
         workspaceName={activeScope?.workspaceName || workspaceName}
       /> : null}
@@ -1421,10 +1415,8 @@ function WorkspaceUtilitiesPanel({
   runs,
   workspaceDejunk,
   workspaceDejunkInProgress,
-  checkpointRepairInProgress,
   onRunMemoryDreaming,
   onRunWorkspaceDejunk,
-  onRepairWorkspaceCheckpoint,
   onRemoveWorkspace,
   workspaceName
 }: {
@@ -1438,10 +1430,8 @@ function WorkspaceUtilitiesPanel({
   runs: RunRow[];
   workspaceDejunk: WorkspaceDejunkSummary | null;
   workspaceDejunkInProgress: boolean;
-  checkpointRepairInProgress: boolean;
   onRunMemoryDreaming: () => void;
   onRunWorkspaceDejunk: () => void;
-  onRepairWorkspaceCheckpoint: (fingerprint: string) => void;
   onRemoveWorkspace: () => Promise<void>;
   workspaceName: string;
 }): JSX.Element {
@@ -1456,8 +1446,6 @@ function WorkspaceUtilitiesPanel({
   const dejunkLoading = workspaceDejunk?.loading === true;
   const dejunkDisabled = busy || workspaceDejunkInProgress || dejunkLoading || activeSession || workspaceDejunk?.available === false;
   const dejunkStatus = workspaceDejunkInProgress ? 'Dejunking workspace files…' : dejunkLoading ? 'Checking workspace files…' : null;
-  const checkpoint = workspaceDejunk?.project?.checkpoint;
-  const repair = checkpoint?.status === 'failed' ? checkpoint.repair : undefined;
   return (
     <section
       aria-label="Workspace utilities"
@@ -1483,23 +1471,7 @@ function WorkspaceUtilitiesPanel({
                 )}
               </span>
               <button className="workspace-cleaning-action" disabled={dejunkDisabled} onClick={onRunWorkspaceDejunk} type="button">Dejunk Now</button>
-              {workspaceDejunk?.project?.checkpoint?.status === 'failed' ? <p role="alert">Git checkpoint failed: {workspaceDejunk.project.checkpoint.error} Working files were preserved.</p> : null}
             </div>
-            {repair && (repair.candidates.length > 0 || repair.blockers.length > 0) ? (
-              <div className="settings-form-control-row workspace-cleaning-row">
-                <span className="settings-form-control-copy">
-                  <strong>Checkpoint repair</strong>
-                  <small>Review these relative paths before moving files. Beale will retry the checkpoint afterward.</small>
-                  {repair.candidates.slice(0, 8).map((file) => <small key={file.path}>{file.path} → {file.destinationPath} ({(file.sizeBytes / 1048576).toFixed(1)} MiB)</small>)}
-                  {repair.candidates.length > 8 ? <small>And {repair.candidates.length - 8} more eligible files.</small> : null}
-                  {repair.blockers.slice(0, 8).map((file) => <small key={file.path}>{file.path}: {file.reason}</small>)}
-                </span>
-                <button className="workspace-cleaning-action" disabled={busy || activeSession || checkpointRepairInProgress || repair.blockers.length > 0 || repair.candidates.length === 0}
-                  onClick={() => onRepairWorkspaceCheckpoint(repair.fingerprint)} type="button">
-                  {checkpointRepairInProgress ? 'Repairing…' : 'Move and retry'}
-                </button>
-              </div>
-            ) : null}
             <div className="settings-form-control-row workspace-cleaning-row">
               <span className="settings-form-control-copy">
                 <strong>Dream</strong>
@@ -1653,7 +1625,6 @@ export function WorkspaceHousekeepingPanel({
             <Sparkles aria-hidden="true" size={18} />
             {workspaceDejunkInProgress ? 'Dejunking…' : dejunkLoading ? 'Loading…' : 'Dejunk'}
           </span>
-          {workspaceDejunk?.project?.checkpoint?.status === 'failed' ? <span role="alert">Git checkpoint failed. Working files are preserved; see workspace maintenance for details.</span> : null}
         </button>
         <button
           className="workspace-dream-card workspace-housekeeping-card"

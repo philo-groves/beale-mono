@@ -93,3 +93,42 @@ test("browser tools expose arbitrary CDP commands, flattened sessions, events, a
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('Fleet browser discovery stays under its session-scoped gateway', async () => {
+  const requested = [];
+  const server = createServer((request, response) => {
+    requested.push(request.url);
+    response.setHeader('content-type', 'application/json');
+    if (request.url === '/v1/fleet-browser/session-example/contexts?token=synthetic') {
+      response.end(JSON.stringify([{ id: 'default', label: 'Default' }]));
+    } else if (request.url === '/v1/fleet-browser/session-example/json/version?token=synthetic') {
+      response.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/v1/fleet-browser/session-example/devtools/page/page-example?token=synthetic` }));
+    } else response.writeHead(404).end();
+  });
+  const sockets = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (request, socket, head) => sockets.handleUpgrade(request, socket, head, (client) => {
+    requested.push(request.url);
+    client.on('message', (raw) => {
+      const command = JSON.parse(String(raw));
+      client.send(JSON.stringify({ id: command.id, result: {} }));
+    });
+  }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${server.address().port}/v1/fleet-browser/session-example?token=synthetic`;
+  const browser = new BrowserCdpSession(async () => endpoint, 'session-example');
+  try {
+    assert.deepEqual(await browser.contexts(), [{ id: 'default', label: 'Default' }]);
+    const connection = await browser.connect();
+    assert.deepEqual((await browser.command(connection, 'Runtime.enable')).result, {});
+    assert.deepEqual(requested, [
+      '/v1/fleet-browser/session-example/contexts?token=synthetic',
+      '/v1/fleet-browser/session-example/json/version?token=synthetic',
+      '/v1/fleet-browser/session-example/devtools/page/page-example?token=synthetic'
+    ]);
+  } finally {
+    await browser.cleanup();
+    for (const client of sockets.clients) client.terminate();
+    await new Promise((resolve) => sockets.close(resolve));
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

@@ -28,6 +28,7 @@ import {
   decodeBealeAppServerSessionControlResult,
   decodeAppServerServerMessage,
   APP_SERVER_PROTOCOL_OPERATIONS,
+  APP_SERVER_CONTRACT_VERSION,
   APP_SERVER_PROTOCOL_VERSION,
   APP_SERVER_SESSION_LAUNCH_VERSION,
   appServerProtocolFailure,
@@ -37,15 +38,12 @@ import {
 } from "../packages/app-server-runtime/dist/protocol.js";
 
 test('research workspace operations require explicit revisions for canonical imports', () => {
-  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'checkpoint' }), { workspaceId: 'workspace-example', action: 'checkpoint' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'sync' }), { workspaceId: 'workspace-example', action: 'sync' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'export' }), { workspaceId: 'workspace-example', action: 'export' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'rebuild-index' }), { workspaceId: 'workspace-example', action: 'rebuild-index' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'release-index' }), { workspaceId: 'workspace-example', action: 'release-index' });
-  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'repair-preview' }), { workspaceId: 'workspace-example', action: 'repair-preview' });
-  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) }), { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 }), { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 });
-  for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'invalid' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
+  for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'checkpoint' }, { workspaceId: 'workspace-example', action: 'repair-preview' }, { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
 });
 
 test('claim board transitions accept only versioned finding moves to visible columns', () => {
@@ -81,7 +79,7 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
 test("protocol describe omits removed workflow operations", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 39);
+  assert.equal(descriptor.contractVersion, APP_SERVER_CONTRACT_VERSION);
   assert.ok(!descriptor.capabilities.some((capability) => capability.startsWith('session.workflows.')));
   assert.ok(!descriptor.operations.some((operation) => operation.startsWith('workflow.')));
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
@@ -146,7 +144,7 @@ test("protocol describe omits removed workflow operations", () => {
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-subject-mutation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-project.v3"));
-  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.checkpoint-repair.v1"));
+  assert.ok(!BEALE_APP_SERVER_CAPABILITIES.includes("workspace.checkpoint-repair.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-daybreak-blue.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));

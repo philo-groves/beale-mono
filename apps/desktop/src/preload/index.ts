@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { BrowserContextSummary, BrowserContextsUpdate } from '@shared/browserContexts';
+import type { FleetBrowserInput, FleetBrowserUpdate } from '@shared/fleetBrowser';
 import type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
@@ -131,6 +132,23 @@ const api: BealeApi = {
     const wrapped = (_event: Electron.IpcRendererEvent, update: BrowserContextsUpdate): void => listener(update);
     ipcRenderer.on(IPC_CHANNELS.browserContextsChanged, wrapped);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.browserContextsChanged, wrapped);
+  },
+  fleetBrowserMachine(runId: string): Promise<string | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.fleetBrowserMachine, runId);
+  },
+  connectFleetBrowser(runId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.connectFleetBrowser, runId);
+  },
+  disconnectFleetBrowser(runId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.disconnectFleetBrowser, runId);
+  },
+  fleetBrowserInput(runId: string, input: FleetBrowserInput): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.fleetBrowserInput, runId, input);
+  },
+  onFleetBrowserUpdate(listener: (update: FleetBrowserUpdate) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, update: FleetBrowserUpdate): void => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.fleetBrowserUpdate, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.fleetBrowserUpdate, wrapped);
   },
   selectWorkspace(mode: WorkspacePickerMode) {
     return ipcRenderer.invoke(IPC_CHANNELS.selectWorkspace, mode);
@@ -514,9 +532,6 @@ const api: BealeApi = {
   },
   runWorkspaceDejunk() {
     return ipcRenderer.invoke(IPC_CHANNELS.runWorkspaceDejunk);
-  },
-  repairWorkspaceCheckpoint(fingerprint: string) {
-    return ipcRenderer.invoke(IPC_CHANNELS.repairWorkspaceCheckpoint, fingerprint);
   },
   runMemoryDreaming() {
     return ipcRenderer.invoke(IPC_CHANNELS.runMemoryDreaming);

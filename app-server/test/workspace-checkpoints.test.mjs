@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, ResearchTopicStore, checkpointWorkspace, listWorkspaceResearchEdits, publishWorkspaceFiles, publishWorkspaceResearch, readWorkspaceResearchCacheState, workspaceContentHash } from '@beale/research-agent';
-import { initializeWorkspaceProjectAsync, previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
+import { initializeWorkspaceProjectAsync, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
 import { AppServerWorkerDatabaseCoordinator } from '../dist/workerDatabaseBroker.js';
 
 test('session checkpoint exports legacy topic notes and preserves canonical snapshots', async () => {
@@ -24,7 +24,7 @@ test('session checkpoint exports legacy topic notes and preserves canonical snap
     const path = `references/topics/${topic.id}.json`;
     assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), [{ path, state: 'created' }]);
     const published = await runWorkspaceCheckpoint(options, 'Before research session');
-    assert.equal(published.status, 'committed', published.error);
+    assert.equal(published.status, 'unchanged', published.error);
     assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
     assert.match(readFileSync(join(workspaceRoot, path), 'utf8'), /workspace:\/example/);
     const documentPath = join(workspaceRoot, 'references', 'research', 'legacy-topics', topic.id, 'overview.md');
@@ -34,7 +34,7 @@ test('session checkpoint exports legacy topic notes and preserves canonical snap
     updated.updateOverview(options.workspaceId, topic.id, 'Revised synthetic notes.');
     updated.close();
     const revised = await runWorkspaceCheckpoint(options, 'After typed topic update');
-    assert.equal(revised.status, 'committed', revised.error);
+    assert.equal(revised.status, 'unchanged', revised.error);
     assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
 
     const publishedContent = readFileSync(join(workspaceRoot, path), 'utf8');
@@ -48,29 +48,6 @@ test('session checkpoint exports legacy topic notes and preserves canonical snap
     const untyped = await runWorkspaceCheckpoint(options, 'Reject untyped topic creation');
     assert.equal(untyped.status, 'failed');
     assert.match(untyped.error, /typed research creation/);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('checkpoint worker previews and repairs oversized untracked investigation files', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-repair-example-'));
-  const workspaceRoot = join(directory, 'workspace');
-  const options = { workspaceRoot, workspaceId: 'workspace-example', databasePath: join(directory, 'runtime', 'memory.sqlite'), artifactDirectoryPath: join(directory, 'runtime', 'artifacts') };
-  try {
-    await initializeWorkspaceProjectAsync(workspaceRoot, options.workspaceId);
-    mkdirSync(options.artifactDirectoryPath, { recursive: true });
-    const path = join(workspaceRoot, 'investigations', 'example', 'generated.bin');
-    mkdirSync(join(workspaceRoot, 'investigations', 'example'), { recursive: true });
-    writeFileSync(path, Buffer.alloc(5 * 1024 * 1024 + 1));
-    const failed = await runWorkspaceCheckpoint(options, 'Preflight oversized file');
-    assert.equal(failed.status, 'failed');
-    const preview = await previewWorkspaceCheckpointRepair(workspaceRoot);
-    assert.deepEqual(preview, failed.repair);
-    const repaired = await runWorkspaceCheckpoint(options, 'Repair oversized file', undefined, undefined, undefined, { repairFingerprint: preview.fingerprint });
-    assert.equal(repaired.status, 'committed', repaired.error);
-    assert.equal(existsSync(path), false);
-    assert.equal(existsSync(join(workspaceRoot, preview.candidates[0].destinationPath)), true);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -111,10 +88,10 @@ test('session checkpointing automatically migrates an oversized monolithic prior
     } finally { database.close(); }
     assert.equal(Buffer.byteLength(legacyResources) > 5 * 1024 * 1024, true);
     publishWorkspaceFiles(workspaceRoot, { 'references/resources.json': legacyResources });
-    assert.equal(checkpointWorkspace(workspaceRoot, 'Simulate legacy prior-art publication').status, 'committed');
+    assert.equal(checkpointWorkspace(workspaceRoot, 'Simulate legacy prior-art publication').status, 'unchanged');
 
     const recovered = await runWorkspaceCheckpoint(options, 'Before research session');
-    assert.equal(recovered.status, 'committed', recovered.error);
+    assert.equal(recovered.status, 'unchanged', recovered.error);
     const resources = JSON.parse(readFileSync(join(workspaceRoot, 'references', 'resources.json'), 'utf8'));
     assert.equal(resources.schemaVersion, 2);
     assert.equal(resources.priorArt[0].data_json, undefined);
@@ -141,11 +118,11 @@ test('session checkpoint recovers an interrupted publication before checking dir
     let memory;
     try {
       memory = graph.save({ type: 'invariant', title: 'Example boundary', body: 'Original example.', status: 'suspected' });
-      assert.equal((await runWorkspaceCheckpoint(options, 'Initial publication')).status, 'committed');
+      assert.equal((await runWorkspaceCheckpoint(options, 'Initial publication')).status, 'unchanged');
       graph.correct(memory.id, memory.revision, { body: 'Revised example.' });
     } finally { graph.close(); }
 
-    const publicationPath = join(workspaceRoot, '.git', 'beale', 'publication.json');
+    const publicationPath = join(workspaceRoot, '.beale', 'publication', 'publication.json');
     const indexPath = join(workspaceRoot, 'references', 'research-index.json');
     const previousPublication = readFileSync(publicationPath, 'utf8');
     const previousIndex = readFileSync(indexPath, 'utf8');
@@ -155,12 +132,12 @@ test('session checkpoint recovers an interrupted publication before checking dir
     const files = Object.fromEntries(Object.keys(nextIndex.files).map((path) => [path, readFileSync(join(workspaceRoot, path), 'utf8')]));
     writeFileSync(publicationPath, previousPublication);
     writeFileSync(indexPath, previousIndex);
-    const pendingPath = join(workspaceRoot, '.git', 'beale', 'pending-publication.json');
+    const pendingPath = join(workspaceRoot, '.beale', 'publication', 'pending-publication.json');
     writeFileSync(pendingPath, JSON.stringify({ files, index: nextIndex }));
     assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot).map((edit) => edit.state), ['modified']);
 
     const recovered = await runWorkspaceCheckpoint(options, 'Before research session');
-    assert.equal(recovered.status, 'committed', recovered.error);
+    assert.equal(recovered.status, 'unchanged', recovered.error);
     assert.equal(existsSync(pendingPath), false);
     assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
     assert.match(readFileSync(join(workspaceRoot, 'memories', `${memory.id}.md`), 'utf8'), /Revised example\./);
@@ -179,7 +156,7 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
   const timer = setInterval(() => ticks++, 10);
   try {
     await initializeWorkspaceProjectAsync(workspaceRoot, options.workspaceId);
-    assert.ok(ticks > 0, 'initial Git setup must yield the host event loop');
+    assert.ok(ticks > 0, 'workspace setup must yield the host event loop');
     mkdirSync(artifactDirectoryPath, { recursive: true });
     const graph = new MemoryGraphStore({ workspaceRoot, databasePath, context: { workspaceId: options.workspaceId, workspaceName: 'Example', subjectId: 'subject-example', subjectName: 'Example' } });
     const memory = graph.save({ id: 'memory-z-parent-example', type: 'invariant', title: 'Example boundary', body: 'Original file-authority body.', status: 'suspected' });
@@ -200,14 +177,14 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
       runWorkspaceCheckpoint(options, 'First checkpoint', undefined, undefined, coordinator),
       runWorkspaceCheckpoint(options, 'Queued checkpoint', undefined, undefined, coordinator),
     ]);
-    assert.equal(results[0].status, 'committed', results[0].error);
+    assert.equal(results[0].status, 'unchanged', results[0].error);
     assert.equal(results[1].status, 'unchanged', results[1].error);
-    assert.ok(brokeredRequests > 0, 'file-authority checkpoints must refresh their app-server-owned derived index projection');
-    assert.ok(ticks > before, 'Git checkpointing must yield the host event loop');
+    assert.ok(brokeredRequests > 0, 'file-authority publication must refresh the app-server-owned derived index projection');
+    assert.ok(ticks > before, 'research publication must yield the host event loop');
     const memoryPath = join(workspaceRoot, 'memories', `${memory.id}.md`);
     writeFileSync(memoryPath, readFileSync(memoryPath, 'utf8').replace('Original file-authority body.', 'Edited file-authority body.'));
     const imported = await runWorkspaceCheckpoint(options, 'Import validated file-authority edit', undefined, undefined, coordinator);
-    assert.equal(imported.status, 'committed', imported.error);
+    assert.equal(imported.status, 'unchanged', imported.error);
     const refreshed = new MemoryGraphStore({ workspaceRoot, databasePath, context: { workspaceId: options.workspaceId, workspaceName: 'Example', subjectId: 'subject-example', subjectName: 'Example' } });
     assert.equal(refreshed.get(memory.id).body, 'Edited file-authority body.');
     refreshed.close();
@@ -232,7 +209,7 @@ test('workspace creation, queued checkpoints, and housekeeping keep the host eve
     rebuiltGraph.close();
     writeFileSync(join(workspaceRoot, 'evidence', 'candidate-verifier-example.json'), '{"result":"candidate"}\n');
     const candidateEvidence = await runWorkspaceCheckpoint(options, 'Checkpoint candidate evidence', undefined, undefined, coordinator);
-    assert.equal(candidateEvidence.status, 'committed', candidateEvidence.error);
+    assert.equal(candidateEvidence.status, 'unchanged', candidateEvidence.error);
     const untypedClaim = join(workspaceRoot, 'claims', 'claim-untyped-example.json');
     writeFileSync(untypedClaim, '{"revision":1}');
     const rejected = await runWorkspaceCheckpoint(options, 'Reject untyped record creation', undefined, undefined, coordinator);

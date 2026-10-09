@@ -1,20 +1,17 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import { checkpointWorkspace, checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, installResearchDatabaseFactory, isImportableWorkspaceResearchPath, listWorkspaceResearchEdits, matchingStoredResearchTopicSnapshots, quarantineWorkspaceDisposable, rebuildWorkspaceResearchIndex, recoverWorkspacePublication, releaseWorkspaceResearchIndex, resolveStoredResearchProfile, workspaceCheckpointRepairPlan, workspaceResearchAuthority, workspaceResearchFileExpectedRevision, workspaceResearchIndexNeedsRebuild, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
+import { checkpointWorkspace, checkpointWorkspaceResearch, importWorkspaceResearchFile, initializeWorkspaceProject, installResearchDatabaseFactory, isImportableWorkspaceResearchPath, listWorkspaceResearchEdits, matchingStoredResearchTopicSnapshots, quarantineWorkspaceDisposable, rebuildWorkspaceResearchIndex, recoverWorkspacePublication, releaseWorkspaceResearchIndex, resolveStoredResearchProfile, workspaceResearchAuthority, workspaceResearchFileExpectedRevision, workspaceResearchIndexNeedsRebuild, writeCheckpointStatus, type WorkspacePublicationOptions } from '@beale/app-server-runtime/runtime-services';
 import { createWorkerResearchDatabaseFactory } from './workerDatabaseClient.js';
 
 if ('initializeInput' in workerData) {
-  try { parentPort?.postMessage({ result: initializeWorkspaceProject(workerData.initializeInput.workspaceRoot, workerData.initializeInput.workspaceId) }); }
+  try { parentPort?.postMessage({ result: initializeWorkspaceProject(workerData.initializeInput.workspaceRoot, workerData.initializeInput.workspaceId, workerData.initializeInput.adoptStagedIndex === true) }); }
   catch (error) { parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) }); }
 } else if ('maintenanceInput' in workerData) {
   try {
     const { invokeAppServerProtocol } = await import('./appServerProtocolClient.js');
     parentPort?.postMessage({ result: await invokeAppServerProtocol('maintenance.run', { args: [], input: workerData.maintenanceInput }) });
   } catch (error) { parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) }); }
-} else if ('repairPreviewInput' in workerData) {
-  try { parentPort?.postMessage({ result: workspaceCheckpointRepairPlan(workerData.repairPreviewInput.workspaceRoot) }); }
-  catch (error) { parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) }); }
 } else {
-const input = workerData as { options: WorkspacePublicationOptions; reason: string; edit?: { path: string; expectedRevision: number }; exportResearch?: boolean; researchIndexAction?: 'rebuild' | 'release'; cleanupSession?: string; repairFingerprint?: string };
+const input = workerData as { options: WorkspacePublicationOptions; reason: string; edit?: { path: string; expectedRevision: number }; exportResearch?: boolean; researchIndexAction?: 'rebuild' | 'release'; cleanupSession?: string };
 if (!parentPort) throw new Error('The workspace checkpoint worker requires a parent port.');
 const checkpointPort = parentPort;
 installResearchDatabaseFactory(createWorkerResearchDatabaseFactory((message) => checkpointPort.postMessage(message)));
@@ -55,15 +52,13 @@ try {
     else if (modified[0]) importWorkspaceResearchFile(input.options, modified[0].path,
       workspaceResearchFileExpectedRevision(input.options.workspaceRoot, modified[0].path), profile);
   }
-  // File-authority workspaces republish the derived query index at every
-  // checkpoint. Legacy schema-v1 workspaces retain explicit export semantics.
+  // File-authority workspaces republish the derived query index during each
+  // publication. Legacy schema-v1 workspaces retain explicit export semantics.
   const result = fileAuthority || input.edit || input.exportResearch
-    ? checkpointWorkspaceResearch(input.options, input.reason, input.repairFingerprint)
-    : checkpointWorkspace(input.options.workspaceRoot, input.reason, undefined, {
-        ...(input.options.sessionId ? { sessionId: input.options.sessionId } : {}),
-      }, input.repairFingerprint);
-  if (input.cleanupSession && (result.status === 'committed' || result.status === 'unchanged')) quarantineWorkspaceDisposable(input.options.workspaceRoot, input.cleanupSession);
-  const researchIndex = input.researchIndexAction === 'release' && (result.status === 'committed' || result.status === 'unchanged')
+    ? checkpointWorkspaceResearch(input.options, input.reason)
+    : checkpointWorkspace(input.options.workspaceRoot, input.reason);
+  if (input.cleanupSession && result.status === 'unchanged') quarantineWorkspaceDisposable(input.options.workspaceRoot, input.cleanupSession);
+  const researchIndex = input.researchIndexAction === 'release' && result.status === 'unchanged'
     ? releaseWorkspaceResearchIndex(input.options) : undefined;
   parentPort?.postMessage({ ...result, ...(input.edit ? { imported: true } : {}), ...(researchIndex ? { researchIndex } : {}) });
   }

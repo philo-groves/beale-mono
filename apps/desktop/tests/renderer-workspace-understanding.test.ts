@@ -422,8 +422,8 @@ describe('workspace dashboard', () => {
     expect(html).toContain('disabled=""');
   });
 
-  it('previews checkpoint file moves and keeps repair unavailable for blockers', () => {
-    const renderRepair = (blockers: Array<{ path: string; sizeBytes: number; reason: string }>): string => renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
+  it('does not surface legacy Git checkpoint repair controls', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
       initialView: 'utilities',
       appServerMemory: memorySummary(),
@@ -434,20 +434,13 @@ describe('workspace dashboard', () => {
       workspaceDejunk: {
         available: true, newFileCount: 1, newFileCountCapped: false, baselineAt: '2026-08-12T12:00:00.000Z', lastRun: null,
         project: { fileCount: 1, totalBytes: 6 * 1048576, temporaryBytes: 0, unclassifiedFileCount: 0, partial: false,
-          checkpoint: { status: 'failed', reason: 'Test checkpoint', error: 'Oversized file.', repair: {
-            fingerprint: 'a'.repeat(64), candidates: [{ path: 'investigations/example/generated.bin', sizeBytes: 6 * 1048576,
-              destinationPath: 'evidence/recovered/example-generated.bin' }], blockers
-          } }
+          checkpoint: { status: 'failed', reason: 'Legacy checkpoint', error: 'Legacy status.' }
         }
       }
     }));
-    const ready = renderRepair([]);
-    expect(ready).toContain('investigations/example/generated.bin');
-    expect(ready).toContain('evidence/recovered/example-generated.bin');
-    expect(ready).toMatch(/<button[^>]*>Move and retry<\/button>/u);
-    const blocked = renderRepair([{ path: 'reports/example/large.md', sizeBytes: 6 * 1048576, reason: 'Tracked file.' }]);
-    expect(blocked).toContain('reports/example/large.md');
-    expect(blocked).toMatch(/<button[^>]*disabled=""[^>]*>Move and retry<\/button>/u);
+    expect(html).toContain('Dejunk Now');
+    expect(html).not.toContain('Checkpoint repair');
+    expect(html).not.toContain('Git checkpoint failed');
   });
 
   it('shows the active Research Kit tab while mounting only the requested Settings panel', () => {

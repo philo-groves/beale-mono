@@ -109,6 +109,9 @@ export function claudeAgentMcpToolAccess(toolNames: readonly string[]): ClaudeAg
 export async function completeClaudeAgentText(
   options: CompleteClaudeAgentTextOptions,
 ): Promise<ClaudeAgentTextCompletion> {
+  if (process.env.APP_SERVER_MODEL_BROKER_URL) {
+    throw new Error("Claude Agent SDK requests cannot run inside a brokered Fleet guest.");
+  }
   const abortController = new AbortController();
   const abort = () => abortController.abort(options.signal?.reason);
   if (options.signal?.aborted) abort();
@@ -207,6 +210,9 @@ export function extractCompatibleClaudeAgentResumableState(
 }
 
 export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOptions): ResearchAgentExecutor {
+  if (process.env.APP_SERVER_MODEL_BROKER_URL) {
+    throw new Error("Claude Agent SDK requests cannot run inside a brokered Fleet guest.");
+  }
   const authenticationRouter = new ProviderAuthenticationRouter(options.authenticationPreferences);
   const workflow = researchProfileWorkflow(options.researchProfile, options.workflowId);
   const profileHash = researchProfileHash(options.researchProfile);

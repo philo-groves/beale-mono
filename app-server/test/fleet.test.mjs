@@ -51,8 +51,8 @@ test('Fleet registers only operator-designated bases and never runs one directly
     assert.equal((await fleet.state()).machines.find((machine) => machine.id === 'tart:example-base')?.state, 'stopped');
     await fleet.release(first.id, owner);
     const next = await fleet.cloneForSession('tart:example-base', owner);
-    assert.equal(next.name, `${first.name}-2`);
-    assert.notEqual(next.id, first.id);
+    assert.equal(next.name, first.name);
+    assert.equal(next.id, first.id);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

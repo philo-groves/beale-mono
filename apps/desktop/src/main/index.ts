@@ -69,6 +69,8 @@ import { resolveContentLink } from './contentLinks';
 import { WorkspaceTerminalService } from './workspaceTerminalService';
 import { TicketingService } from './ticketingService';
 import { allowedBrowserUrl, InAgentBrowserBridge } from './inAgentBrowserBridge';
+import { FleetBrowserViewer } from './fleetBrowserViewer';
+import type { FleetBrowserInput } from '../shared/fleetBrowser';
 import {
   NATIVE_WINDOW_SHAPE_RADIUS_PX,
   needsExplicitRoundedWindowShape,
@@ -99,6 +101,9 @@ let iosDeviceCaptureService: IosDeviceCaptureService;
 let workspaceTerminalService: WorkspaceTerminalService;
 let ticketingService: TicketingService;
 let inAgentBrowserBridge: InAgentBrowserBridge | null = null;
+const fleetBrowserViewer = new FleetBrowserViewer((update) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.fleetBrowserUpdate, update);
+});
 let appServerRestartDialog: Promise<boolean> | null = null;
 const runDetailRequestControllers = new Map<string, AbortController>();
 const researchGoalSuggestionControllers = new Map<string, AbortController>();
@@ -564,6 +569,14 @@ function workspaceRegistryBroadcastMetricDetail(workspaceRegistry: WorkspaceRegi
 
 function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.listBrowserContexts, () => inAgentBrowserBridge?.listContexts() ?? []);
+  ipcMain.handle(IPC_CHANNELS.fleetBrowserMachine, (_event, runId: string) => workspaceService.fleetBrowserMachineId(runId));
+  ipcMain.handle(IPC_CHANNELS.connectFleetBrowser, (_event, runId: string) => {
+    const machineId = workspaceService.fleetBrowserMachineId(runId);
+    if (!machineId) throw new Error('This session does not run in a Fleet VM.');
+    fleetBrowserViewer.connect(runId, machineId);
+  });
+  ipcMain.handle(IPC_CHANNELS.disconnectFleetBrowser, (_event, runId: string) => fleetBrowserViewer.disconnect(runId));
+  ipcMain.handle(IPC_CHANNELS.fleetBrowserInput, (_event, runId: string, input: FleetBrowserInput) => fleetBrowserViewer.input(runId, input));
   ipcMain.handle(IPC_CHANNELS.createBrowserContext, (_event, label: string) => {
     if (!inAgentBrowserBridge) throw new Error('The embedded browser is unavailable.');
     return inAgentBrowserBridge.createContext(label);
@@ -938,9 +951,6 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.runWorkspaceDejunk, () =>
     timedMainIpc('runWorkspaceDejunk', {}, () => workspaceService.runWorkspaceDejunk())
   );
-  ipcMain.handle(IPC_CHANNELS.repairWorkspaceCheckpoint, (_event, fingerprint: string) =>
-    timedMainIpcAsync('repairWorkspaceCheckpoint', {}, () => workspaceService.repairWorkspaceCheckpoint(fingerprint))
-  );
   ipcMain.handle(IPC_CHANNELS.runMemoryDreaming, (event) =>
     timedMainIpcAsync('runMemoryDreaming', {}, () => workspaceService.runMemoryDreaming((update) => {
       if (!event.sender.isDestroyed()) event.sender.send(IPC_CHANNELS.memoryDreamingUpdated, update);
@@ -1230,6 +1240,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('before-quit', () => {
+    fleetBrowserViewer.close();
     inAgentBrowserBridge?.stop();
     workspaceTerminalService?.dispose();
     iosDeviceCaptureService?.dispose();

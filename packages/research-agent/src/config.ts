@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { compatibleExistingPath, PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 import {
   getAuthStatus,
+  getProviderModelCatalog,
   verifyProviderAuth,
   type AuthStatus,
   type AuthVerifyResult,
@@ -145,6 +146,13 @@ export async function resolveResearchModelConfig(
   });
 
   if (provider) {
+    if (process.env.APP_SERVER_MODEL_BROKER_URL) {
+      const catalog = getProviderModelCatalog(provider)[0];
+      const selected = model ? catalog?.models.find((candidate) => candidate.id === model) : catalog?.models[0];
+      if (!catalog || !selected) throw new Error(`Brokered model ${provider}/${model ?? ''} is unavailable.`);
+      return { provider: catalog.providerId, model: selected.id, ...(effort ? { effort } : {}), source,
+        ...(configPath ? { configPath } : {}) };
+    }
     const verified = await verify(provider, model, authOptions);
     if (!verified.configured) {
       throw new Error(

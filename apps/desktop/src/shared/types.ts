@@ -1,5 +1,6 @@
 import type { ResearchProfileId, ResearchProfileSnapshot, ResolvedResearchProfile } from './researchProfile';
 import type { BrowserContextSummary, BrowserContextsUpdate } from './browserContexts';
+import type { FleetBrowserInput, FleetBrowserUpdate } from './fleetBrowser';
 import type { ResearchKitId } from './researchKits';
 import type {
   ResourcePriorArtPage,
@@ -1683,8 +1684,6 @@ export interface StartRunInput {
   goalObjective: string | null;
   promptMarkdown: string;
   machineId?: string;
-  /** Ordered base VMs eligible for this launch; the first is preferred. */
-  machineIds?: string[];
   workflowId?: string;
   resourceContext?: ReportResourceContext;
   mode: string;
@@ -1708,7 +1707,6 @@ export interface StartRunInput {
     goalObjective?: string | null;
     researchWorkflowId?: string | null;
     machineId?: string | null;
-    machineIds?: string[];
     collaboration?: ResearchCollaborationPreferences | null;
   };
   /** Internal host metadata. Renderer-created research sessions must not set this. */
@@ -2369,6 +2367,11 @@ export interface BealeApi {
   renameBrowserContext(id: string, label: string): Promise<BrowserContextSummary>;
   removeBrowserContext(id: string): Promise<void>;
   onBrowserContextsChanged(listener: (update: BrowserContextsUpdate) => void): () => void;
+  fleetBrowserMachine(runId: string): Promise<string | null>;
+  connectFleetBrowser(runId: string): Promise<void>;
+  disconnectFleetBrowser(runId: string): Promise<void>;
+  fleetBrowserInput(runId: string, input: FleetBrowserInput): Promise<void>;
+  onFleetBrowserUpdate(listener: (update: FleetBrowserUpdate) => void): () => void;
   selectWorkspace(mode: WorkspacePickerMode): Promise<WorkspacePickerResult>;
   selectWorkspaceDirectory(): Promise<WorkspaceDirectorySelection>;
   getWorkspaceRegistry(): Promise<WorkspaceRegistryState>;
@@ -2490,7 +2493,6 @@ export interface BealeApi {
   startReportSession(input: ReportSessionStartInput): Promise<ReportSessionStartResult>;
   getWorkspaceDejunkSummary(workspaceId: string): Promise<WorkspaceDejunkSummary>;
   runWorkspaceDejunk(): Promise<WorkspaceSnapshot>;
-  repairWorkspaceCheckpoint(fingerprint: string): Promise<WorkspaceSnapshot>;
   runMemoryDreaming(): Promise<WorkspaceSnapshot>;
   onMemoryDreamingProgress(listener: (update: MemoryDreamingProgressUpdate) => void): () => void;
   restoreMemoryDreamingChange(changeId: string): Promise<WorkspaceSnapshot>;

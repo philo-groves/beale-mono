@@ -43,6 +43,8 @@ test('Fleet stages a workspace and returns changed files', async () => {
     if (operation === 'fleet.stage' && input.action === 'finish') {
       finishInput = input;
       result = { workspaceId: input.workspaceId };
+    } else if (operation === 'fleet.broker') {
+      result = input.action === 'poll' ? null : { registered: true };
     } else {
       result = operation === 'fleet.stage' ? await guest.guestStage(input) : guest.guestExport(input);
     }
@@ -57,7 +59,13 @@ test('Fleet stages a workspace and returns changed files', async () => {
     assert.equal(readFileSync(join(root, 'guest', 'fleet-workspaces', 'workspace-example', 'note.md'), 'utf8'), 'before');
     assert.equal(readFileSync(join(root, 'guest', 'fleet-workspaces', 'workspace-example', 'sources', 'target.txt'), 'utf8'), 'source copy');
     writeFileSync(join(root, 'guest', 'fleet-workspaces', 'workspace-example', 'note.md'), 'after');
-    const completed = await controller.complete('run-example');
+    const resumedController = new FleetRemoteController(fleet, primaryStore);
+    resumedController.connect = controller.connect;
+    await resumedController.prepare({ workspaceId: 'workspace-example', workspacePath: primary, workspaceDirectories: [primary], name: 'Example workspace', researchKitId: 'general' }, 'run-example', 'tart:example-base');
+    assert.deepEqual(lifecycle, [['clone', 'tart:example-base'], ['start', 'tart:session-clone']]);
+    assert.equal(readFileSync(join(root, 'guest', 'fleet-workspaces', 'workspace-example', 'note.md'), 'utf8'), 'after');
+    const completed = await resumedController.complete('run-example');
+    controller.stopAllBrokers();
     assert.deepEqual(completed, { imported: 1, conflicts: 0, candidateRecords: 0 });
     assert.deepEqual(lifecycle.at(-1), ['stop', 'tart:session-clone']);
     assert.equal(readFileSync(join(primary, 'note.md'), 'utf8'), 'after');
@@ -119,8 +127,16 @@ test('Fleet transfers a source workspace through another primary and preserves s
       'run-example', 'remote:server-example:tart:example-base');
     assert.equal(prepared.remoteMachineId, 'tart:session-clone');
     assert.equal(prepared.ownerMachineId, 'machine-source');
+    assert.equal(calls.find((call) => call.operation === 'fleet.relay_broker')?.input.machineId, 'tart:session-clone');
     assert.equal(readFileSync(join(root, 'relay-registry', 'fleet-workspaces', 'workspace-example', 'note.md'), 'utf8'), 'before');
-    const [first, second] = await Promise.all([controller.complete('run-example'), controller.complete('run-example')]);
+    writeFileSync(join(root, 'relay-registry', 'fleet-workspaces', 'workspace-example', 'note.md'), 'guest progress');
+    const resumedController = new FleetRemoteController(fleet, sourceStore);
+    await resumedController.prepare({ workspaceId: 'workspace-example', workspacePath: source, name: 'Example workspace', researchKitId: 'general' },
+      'run-example', 'remote:server-example:tart:example-base');
+    assert.equal(calls.filter((call) => call.operation === 'fleet.clone_for_session').length, 1);
+    assert.equal(readFileSync(join(root, 'relay-registry', 'fleet-workspaces', 'workspace-example', 'note.md'), 'utf8'), 'guest progress');
+    const [first, second] = await Promise.all([resumedController.complete('run-example'), resumedController.complete('run-example')]);
+    controller.stopAllBrokers();
     assert.deepEqual(first, second);
     assert.deepEqual(first, { imported: 1, conflicts: 0, candidateRecords: 0 });
     assert.equal(readFileSync(join(source, 'note.md'), 'utf8'), 'after');

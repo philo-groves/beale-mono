@@ -479,6 +479,13 @@ export class FleetService {
     for (const existing of state.machines.filter((machine) => machine.name === prefix || machine.name.startsWith(`${prefix}-`))) {
       const claim = this.read().owners[existing.id];
       if (claim?.machineId === owner.machineId && claim.sessionId === owner.sessionId) return existing;
+      if (existing.name === prefix && !claim && !existing.base) {
+        const config = this.read();
+        config.machines[existing.id] = { ...(config.machines[existing.id] ?? config.machines[baseId]!), base: false, sessionClone: true };
+        this.write(config);
+        await this.reserve(existing.id, owner);
+        return existing;
+      }
     }
     let name = prefix;
     for (let sequence = 2; state.machines.some((machine) => machine.name === name); sequence += 1) {

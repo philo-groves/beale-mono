@@ -21,7 +21,7 @@ import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolCli
 
 async function publishTopicSnapshots(workspaceRoot) {
   const directory = join(workspaceRoot, 'references', 'topics');
-  const index = JSON.parse(await readFile(join(workspaceRoot, '.git', 'beale', 'publication.json'), 'utf8'));
+  const index = JSON.parse(await readFile(join(workspaceRoot, '.beale', 'publication', 'publication.json'), 'utf8'));
   const files = Object.fromEntries(await Promise.all([
     ...Object.keys(index.files),
     ...(await readdir(directory)).map((name) => `references/topics/${name}`),
