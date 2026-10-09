@@ -168,6 +168,44 @@ test('automatic checkpoints retain oversized candidate evidence with a tracked m
   assert.equal(followUp.recoveredRawArtifacts, undefined);
 });
 
+test('automatic checkpoints retain oversized untracked macOS harness executables in place', () => {
+  const root = workspace();
+  const path = 'investigations/example/example-harness';
+  const executable = Buffer.alloc(5 * 1024 * 1024 + 1);
+  executable.set([0xcf, 0xfa, 0xed, 0xfe]);
+  mkdirSync(join(root, 'investigations', 'example'), { recursive: true });
+  writeFileSync(join(root, path), executable);
+
+  assert.deepEqual(workspaceCheckpointRepairPlan(root).candidates, []);
+  const result = checkpointWorkspace(root, 'Retain compiled example harness');
+  assert.equal(result.status, 'committed', result.error);
+  assert.equal(result.recoveredRawArtifacts?.length, 1);
+  assert.equal(result.recoveredRawArtifacts[0].path, path);
+  assert.equal(result.recoveredRawArtifacts[0].sha256, workspaceContentHash(executable));
+  assert.deepEqual(readFileSync(join(root, path)), executable);
+  assert.equal(git(root, 'ls-files', path).stdout, '');
+  assert.match(git(root, 'check-ignore', '-v', path).stdout, /\.git\/info\/exclude/u);
+  const manifestPath = result.recoveredRawArtifacts[0].manifestPath;
+  assert.equal(git(root, 'ls-files', manifestPath).stdout.trim(), manifestPath);
+  assert.equal(checkpointWorkspace(root, 'No harness changes').status, 'unchanged');
+
+  executable[executable.length - 1] = 1;
+  writeFileSync(join(root, path), executable);
+  const updated = checkpointWorkspace(root, 'Updated compiled example harness');
+  assert.equal(updated.status, 'committed', updated.error);
+  assert.equal(updated.recoveredRawArtifacts?.[0].sha256, workspaceContentHash(executable));
+
+  writeFileSync(join(root, path), 'Synthetic source replacement.\n');
+  const replacement = checkpointWorkspace(root, 'Track replacement source');
+  assert.equal(replacement.status, 'committed', replacement.error);
+  assert.equal(git(root, 'show', `HEAD:${path}`).stdout, 'Synthetic source replacement.\n');
+
+  writeFileSync(join(root, path), executable);
+  const tracked = checkpointWorkspace(root, 'Reject oversized tracked executable');
+  assert.equal(tracked.status, 'failed');
+  assert.equal(tracked.repair?.blockers[0].path, path);
+});
+
 test('automatic checkpoints retain untracked SQLite artifacts without hiding later text replacements', () => {
   const root = workspace();
   const path = 'investigations/example/generated/state';

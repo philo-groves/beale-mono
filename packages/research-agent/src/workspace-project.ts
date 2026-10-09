@@ -19,6 +19,7 @@ const RAW_ARTIFACT_EXCLUDE_START = "# >>> Beale oversized candidate evidence >>>
 const RAW_ARTIFACT_EXCLUDE_END = "# <<< Beale oversized candidate evidence <<<";
 const RAW_ARTIFACT_REGISTRY_PATH = ".git/beale/raw-artifacts.json";
 const RAW_ARTIFACT_MANIFEST_DIRECTORY = "evidence/raw-manifests";
+const MACH_O_MAGICS = new Set(['feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca']);
 export const WORKSPACE_LAYOUT_GUARD_PREFIX = "[[APP_SERVER_HOST_WORKSPACE_LAYOUT_GUARD_V1]]\n";
 export const WORKSPACE_LAYOUT_GUARD_SUFFIX = "\n[[/APP_SERVER_HOST_WORKSPACE_LAYOUT_GUARD_V1]]";
 
@@ -80,7 +81,7 @@ export interface WorkspaceRawArtifactRecovery {
 }
 interface WorkspaceRawArtifactRegistryEntry extends WorkspaceRawArtifactRecovery {
   mtimeMs: number;
-  retentionReason?: "sqlite";
+  retentionReason?: "sqlite" | "macho";
 }
 interface WorkspaceRawArtifactRegistry {
   schemaVersion: 1;
@@ -342,9 +343,9 @@ This directory is one research workspace. Source repositories belong in the host
 - scratch/: disposable session experiments; cache/: rebuildable outputs and downloads. Both are excluded from Git.
 
 Keep related scripts and fixtures with their investigation or runbook. Default shell execution uses session scratch; specify an external repository cwd for source work and an explicit investigation directory for persistent candidate work.
-Place generated candidate artifacts larger than 5 MiB beneath an evidence/ directory, including a nested investigation/evidence/ directory when the artifact belongs with candidate code. App-server retains those oversized files locally, records tracked integrity manifests, and excludes their exact paths from Git. Do not generate oversized artifacts elsewhere in the workspace because required checkpoints will reject them.
+Place generated candidate artifacts larger than 5 MiB beneath an evidence/ directory, including a nested investigation/evidence/ directory when the artifact belongs with candidate code. App-server retains those oversized files locally, records tracked integrity manifests, and excludes their exact paths from Git. Oversized untracked macOS executables in investigations/ receive the same in-place retention so compiled harness paths remain usable. Other oversized files outside evidence/ require repair before checkpointing.
 Build output directories named build/ and .libs/ are left in place but excluded from Git checkpoints. Move durable scripts, fixtures, and evidence outside those directories before relying on a checkpoint to retain them.
-If an untracked investigation file exceeds the limit, Beale reports its path before staging and offers a previewed move into evidence/recovered/ followed by a checkpoint retry. Tracked or canonical oversized files require an explicit operator repair.
+If another untracked investigation file exceeds the limit, Beale reports its path before staging and offers a previewed move into evidence/recovered/ followed by a checkpoint retry. Tracked or canonical oversized files require an explicit operator repair.
 Keep the workspace top level clean. Unexpected files and directories are ignored by Git but detected directly by app-server; the agent is reminded every turn until it moves them into an approved directory.
 App-server keeps its derived research index synchronized with these files and creates local Git checkpoints before research, at research milestones, every ten minutes with changes, and after execution ends. Do not bypass guards, rewrite history, discard changes, or push automatically. A checkpoint is history, not evidence validation. Git guard failures preserve work and must be surfaced.
 Every commit ends with a Session-ID trailer. Supply the actual ID for manual research commits; use none when there is no associated session.
@@ -541,6 +542,23 @@ function workspaceFileIsSQLiteDatabase(path: string): boolean {
   } finally { closeSync(descriptor); }
 }
 
+function workspaceFileIsMachO(path: string): boolean {
+  const descriptor = openSync(path, 'r');
+  try {
+    const magic = Buffer.alloc(4);
+    if (readSync(descriptor, magic, 0, magic.length, 0) !== magic.length) return false;
+    return MACH_O_MAGICS.has(magic.toString('hex'));
+  } finally { closeSync(descriptor); }
+}
+
+function isUntrackedInvestigationMachO(root: string, path: string, sizeBytes: number): boolean {
+  if (!path.startsWith('investigations/') || workspacePathProblem(path)
+    || sizeBytes <= trackedFileLimit(path) || isPublishedWorkspacePath(root, path)) return false;
+  const absolute = join(root, path);
+  assertWorkspaceChild(root, absolute);
+  return workspaceFileIsMachO(absolute);
+}
+
 /** Preview only untracked investigation files. Tracked and canonical files need operator-directed repair. */
 export function workspaceCheckpointRepairPlan(root: string): WorkspaceCheckpointRepairPlan {
   const tracked = new Set(git(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
@@ -554,7 +572,8 @@ export function workspaceCheckpointRepairPlan(root: string): WorkspaceCheckpoint
     const absolute = join(root, path);
     if (!existsSync(absolute)) continue;
     const stats = lstatSync(absolute);
-    if (!stats.isFile() || stats.size <= trackedFileLimit(path) || (isCandidateEvidencePath(path) && !tracked.has(path))) continue;
+    if (!stats.isFile() || stats.size <= trackedFileLimit(path)
+      || (!tracked.has(path) && (isCandidateEvidencePath(path) || isUntrackedInvestigationMachO(root, path, stats.size)))) continue;
     revisions.push(`${path}\0${stats.size}\0${stats.mtimeMs}`);
     const eligible = !tracked.has(path) && path.startsWith("investigations/")
       && !workspacePathProblem(path) && !isPublishedWorkspacePath(root, path);
@@ -624,8 +643,10 @@ function readRawArtifactRegistry(root: string): WorkspaceRawArtifactRegistry {
   const value = JSON.parse(readFileSync(path, "utf8")) as WorkspaceRawArtifactRegistry;
   if (value.schemaVersion !== 1 || !Array.isArray(value.artifacts)) throw new Error("The workspace-local raw-artifact recovery registry is invalid.");
   for (const artifact of value.artifacts) {
-    if (!(artifact.retentionReason === "sqlite" ? isUntrackedDatabasePath(artifact.path) : isCandidateEvidencePath(artifact.path))
-      || (artifact.retentionReason !== undefined && artifact.retentionReason !== "sqlite")
+    if (!(artifact.retentionReason === "sqlite" ? isUntrackedDatabasePath(artifact.path)
+      : artifact.retentionReason === "macho" ? artifact.path.startsWith('investigations/') && !workspacePathProblem(artifact.path)
+      : isCandidateEvidencePath(artifact.path))
+      || (artifact.retentionReason !== undefined && artifact.retentionReason !== "sqlite" && artifact.retentionReason !== "macho")
       || !safeRelative(artifact.manifestPath)
       || !artifact.manifestPath.startsWith(`${RAW_ARTIFACT_MANIFEST_DIRECTORY}/`)
       || !Number.isFinite(artifact.sizeBytes)
@@ -637,7 +658,7 @@ function readRawArtifactRegistry(root: string): WorkspaceRawArtifactRegistry {
   return value;
 }
 
-function recoverRawArtifact(root: string, path: string, retentionReason?: "sqlite"): WorkspaceRawArtifactRegistryEntry {
+function recoverRawArtifact(root: string, path: string, retentionReason?: "sqlite" | "macho"): WorkspaceRawArtifactRegistryEntry {
   const absolute = join(root, path);
   assertWorkspaceChild(root, absolute);
   const before = lstatSync(absolute);
@@ -658,7 +679,9 @@ function recoverRawArtifact(root: string, path: string, retentionReason?: "sqlit
     tracking: "workspace-local",
     reason: retentionReason === "sqlite"
       ? "Untracked SQLite database retained outside Git."
-      : "Generated candidate evidence exceeded the ordinary tracked-file limit.",
+      : retentionReason === "macho"
+        ? "Untracked macOS executable exceeded the ordinary tracked-file limit."
+        : "Generated candidate evidence exceeded the ordinary tracked-file limit.",
   }, null, 2) + "\n";
   const manifestAbsolute = join(root, manifestPath);
   if (existsSync(manifestAbsolute) && readFileSync(manifestAbsolute, "utf8") !== manifest) {
@@ -685,6 +708,8 @@ function recoverOversizedCandidateEvidence(root: string): WorkspaceRawArtifactRe
     if (!stats.isFile() || stats.isSymbolicLink()) continue;
     if (recorded.retentionReason === "sqlite") {
       if (!workspaceFileIsSQLiteDatabase(absolute)) continue;
+    } else if (recorded.retentionReason === "macho") {
+      if (!isUntrackedInvestigationMachO(root, recorded.path, stats.size)) continue;
     } else if (stats.size <= trackedFileLimit(recorded.path)) continue;
     if (stats.size === recorded.sizeBytes && stats.mtimeMs === recorded.mtimeMs) retained.push(recorded);
     else {
@@ -703,8 +728,9 @@ function recoverOversizedCandidateEvidence(root: string): WorkspaceRawArtifactRe
     const stats = lstatSync(absolute);
     if (!stats.isFile() || stats.isSymbolicLink()) continue;
     const sqlite = isUntrackedDatabasePath(path) && workspaceFileIsSQLiteDatabase(absolute);
-    if (!sqlite && (!isCandidateEvidencePath(path) || stats.size <= trackedFileLimit(path))) continue;
-    const artifact = recoverRawArtifact(root, path, sqlite ? "sqlite" : undefined);
+    const macho = isUntrackedInvestigationMachO(root, path, stats.size);
+    if (!sqlite && !macho && (!isCandidateEvidencePath(path) || stats.size <= trackedFileLimit(path))) continue;
+    const artifact = recoverRawArtifact(root, path, sqlite ? "sqlite" : macho ? "macho" : undefined);
     retained.push(artifact);
     recovered.push(artifact);
   }

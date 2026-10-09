@@ -107,6 +107,7 @@
 
 #### Fixed
 
+- Workspace checkpoints retain oversized untracked macOS executables in investigation directories at their existing paths, with tracked integrity manifests and exact local Git exclusions, so compiled harnesses no longer block later checkpoints.
 - Repository Auditor workflows now recognize inventoried files beneath declared scope directories on Windows, allowing the inventory step to advance.
 - Workflow Run All now uses the effective Lead provider and model shown in Provider settings when their defaults have not been explicitly saved.
 - Collapsed session and workspace summaries now provide controls to reopen every existing Browser context after its last tab is closed.
