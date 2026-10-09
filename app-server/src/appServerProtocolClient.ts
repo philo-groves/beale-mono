@@ -221,6 +221,9 @@ async function profileOperation(options: InvokeAppServerProtocolOptions): Promis
     ...(profilePath ? { profilePath } : {}),
     ...(profileId ? { bundledProfileId: profileId as (typeof BUNDLED_RESEARCH_PROFILE_IDS)[number] } : {})
   });
+  if (resolved.profile.id !== 'security-research') {
+    throw new Error('Beale resolves active Security research profiles only.');
+  }
   return {
     catalogProtocolVersion: 1,
     supportedResearchProfileSchemaVersions: [RESEARCH_PROFILE_SCHEMA_VERSION],

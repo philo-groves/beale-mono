@@ -440,6 +440,9 @@ export class AppServerHostService {
       );
     }
     const profileId = workspace.researchProfileId || 'security-research';
+    if (profileId !== 'security-research') {
+      throw new Error('Beale starts new research sessions only in Security workspaces. Existing non-security workspaces remain available for historical inspection.');
+    }
     const storage = this.registry.storageForProfile(profileId);
     const providerSettings = this.registry.providerSettings();
     const providerSemantics = await this.resolveProviderSemantics();
@@ -915,6 +918,7 @@ export class AppServerHostService {
     for (const summary of this.registry.listWorkspaces()) {
       const workspace = this.registry.resolveWorkspace(summary.workspaceId);
       if (!workspace) continue;
+      if (workspace.researchProfileId !== 'security-research') continue;
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
       let sessions: AppServerSessionSummaryProjection[];
       try {

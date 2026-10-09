@@ -345,11 +345,10 @@ test("workspace-tools exposes the compatibility surface without generic global a
   }
   assert.deepEqual(workspaceTools.BUNDLED_RESEARCH_PROFILE_IDS, [
     "security-research",
-    "mathematics",
   ]);
   assert.equal(
-    workspaceTools.bundledResearchProfile("mathematics").id,
-    "mathematics",
+    workspaceTools.bundledResearchProfile("security-research").id,
+    "security-research",
   );
   assert.equal("listResearchStorageArtifacts" in workspaceTools, false);
   assert.equal("resolveResearchStorageArtifact" in workspaceTools, false);

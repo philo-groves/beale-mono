@@ -1696,7 +1696,7 @@ function usage(): string {
 
 function profileUsage(): string {
   return [
-    "Usage: appServer profile resolve --workspace-root <path> [--profile <path> | --profile-id <security-research|mathematics>] --json",
+    "Usage: appServer profile resolve --workspace-root <path> [--profile <path> | --profile-id security-research] --json",
     "",
     "Resolves an explicit profile or selected bundled profile, then .beale/profile.json, then the bundled security profile.",
   ].join("\n");
@@ -1717,6 +1717,9 @@ async function handleProfileCommand(argv: readonly string[]): Promise<void> {
     ...(args.profilePath ? { profilePath: args.profilePath } : {}),
     ...(args.profileId ? { bundledProfileId: args.profileId } : {}),
   });
+  if (resolvedProfile.profile.id !== "security-research") {
+    throw new Error("Beale resolves active Security research profiles only.");
+  }
   const envelope = {
     catalogProtocolVersion: PROFILE_CATALOG_PROTOCOL_VERSION,
     supportedResearchProfileSchemaVersions: [RESEARCH_PROFILE_SCHEMA_VERSION],
@@ -1777,6 +1780,9 @@ async function resolveCliResearchProfile(args: Pick<
     throw new Error(
       `Research profile hash mismatch: expected ${args.researchProfileHash}, resolved ${resolvedResearchProfile.hash}.`,
     );
+  }
+  if (resolvedResearchProfile.profile.id !== "security-research") {
+    throw new Error("Beale runs only Security research sessions.");
   }
   validateResearchProfileModelJobs(resolvedResearchProfile.profile);
 

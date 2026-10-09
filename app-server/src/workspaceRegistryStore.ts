@@ -59,24 +59,24 @@ export class WorkspaceRegistry {
   }
 
   public getPromptTemplateSettings(profileId: string): { template: string; defaultTemplate: string; overridden: boolean } {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     const override = this.getMeta(`prompt_template_${profileId}`);
     return { template: override ?? defaultResearchSystemPromptTemplate(), defaultTemplate: defaultResearchSystemPromptTemplate(), overridden: override !== null };
   }
 
   public setPromptTemplate(profileId: string, template: string): void {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     validateResearchSystemPromptTemplate(template);
     this.setMeta(`prompt_template_${profileId}`, template);
   }
 
   public resetPromptTemplate(profileId: string): void {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     this.deleteMeta(`prompt_template_${profileId}`);
   }
 
   public previewPromptTemplate(profileId: string, template: string, agentPath?: string, pluginCatalog?: readonly ResearchPluginCatalogEntry[]): string {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     validateResearchSystemPromptTemplate(template);
     return createResearchSystemPrompt({
       hasTools: true,

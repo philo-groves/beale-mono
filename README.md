@@ -35,7 +35,6 @@ The project is under heavy development. The agent is not ready for real use; exp
 | `integrations/beale-codex` | Codex plugin with a Beale research skill and local stdio MCP server |
 | `packages/research-agent` | `@beale/research-agent` — workspace context, durable memory, tools, and the Pi-backed agent runtime |
 | `tests` | app-server test suite (`node:test`, runs against built packages) |
-| `examples` | Example research profiles |
 | `patches` | pnpm patches for Pi dependencies |
 | `planning` | app-server architecture notes |
 
@@ -62,7 +61,7 @@ Workspace memory is independently selectable in Desktop's Workspace Overview:
 - **Enabled** uses one canonical research system: concise knowledge memory, a stable claim ledger projected as Leads and Findings, reversible duplicate coalescing, durable runbooks, and one workspace-history search across those records.
 - **Disabled** removes memory behavior from new sessions while retaining stored data.
 
-Profiles define domain classifications such as `security.primitive`, `security.chain`, `mathematics.theorem`, and `mathematics.counterexample`; they do not create competing memory backends. Legacy v1/v2/shadow selections migrate to Enabled, and legacy claim-shaped memory rows migrate non-destructively into the claim ledger.
+Beale runs authorized security research. Security claims distinguish leads, isolated findings (`security.primitive`), and demonstrated exploit chains (`security.chain`). Legacy v1/v2/shadow memory selections migrate to Enabled, and legacy claim-shaped memory rows migrate non-destructively into the claim ledger.
 
 During development, Desktop discovers and launches the workspace app-server. `BEALE_APP_SERVER_COMMAND` and related environment variables override this for packaged builds and custom setups.
 

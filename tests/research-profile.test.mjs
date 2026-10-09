@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
-  DEFAULT_MATHEMATICS_RESEARCH_PROFILE,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   createDeterministicAgentExecutor,
   createResearchSystemPrompt,
@@ -21,13 +20,13 @@ import {
 const pluginCatalog = (...ids) => ids.map((id) => ({ id, name: id, mcpServers: [], skills: [] }));
 
 test("prompt templates render profile sections and require the authorization boundary", () => {
-  const profile = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
+  const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const options = { hasTools: true, hasMemoryTools: true, researchProfile: profile };
   const defaultPrompt = createResearchSystemPrompt(options);
   assert.equal(createResearchSystemPrompt({ ...options, promptTemplate: defaultResearchSystemPromptTemplate() }), defaultPrompt);
   const custom = createResearchSystemPrompt({ ...options, promptTemplate: "{{boundary}}\nProfile: {{profile.name}}\n{{identity}}" });
   assert.ok(custom.startsWith("Scope and authority:"));
-  assert.ok(custom.includes("Profile: Mathematics"));
+  assert.ok(custom.includes("Profile: Security"));
   assert.ok(custom.includes(profile.agent.role));
   assert.match(defaultResearchSystemPromptTemplate(), /\{\{tools\}\}\n\n\{\{features\}\}\n\n\{\{plugins\}\}\n\n\{\{collaboration\}\}/);
   assert.doesNotMatch(defaultResearchSystemPromptTemplate(), /\{\{reports\}\}/);
@@ -180,31 +179,21 @@ test("research profiles normalize to immutable, deterministic snapshots", () => 
   assert.notEqual(researchProfileHash(profile), researchProfileHash(normalizeResearchProfile(changed)));
 });
 
-test("bundled profiles separate claim classifications from knowledge memory and product attention", () => {
+test("the bundled Security profile separates claim classifications from knowledge memory", () => {
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
-  const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
 
   assert.equal(security.name, "Security");
   assert.equal(security.capabilities.reportsEnabled, true);
   assert.deepEqual(security.capabilities.defaultToolFamilies, ["shell", "repository-search", "file-read"]);
-  assert.equal(mathematics.capabilities.reportsEnabled, true);
   assert.equal(Object.hasOwn(normalizeResearchProfile(generalResearchProfile()).capabilities, "reportsEnabled"), false);
   assert.equal(security.presentation.sessionHeatPalette, undefined);
-  assert.equal(mathematics.presentation.sessionHeatPalette, undefined);
   assert.ok(security.memory.types.every((type) => type.sessionHeat === undefined));
-  assert.ok(mathematics.memory.types.every((type) => type.sessionHeat === undefined));
   assert.deepEqual(
     security.memory.types.filter((type) => type.lifecycle === "active").map((type) => type.id),
     ["asset", "invariant", "mitigation", "flow-endpoint", "trajectory"],
   );
-  assert.deepEqual(
-    mathematics.memory.types.filter((type) => type.lifecycle === "active").map((type) => type.id),
-    ["problem", "definition", "technique", "reference", "trajectory"],
-  );
   assert.deepEqual(security.claims.classifications.map((classification) => classification.id),
     ["security.vulnerability", "security.primitive", "security.chain"]);
-  assert.deepEqual(mathematics.claims.classifications.map((classification) => classification.id),
-    ["mathematics.conjecture", "mathematics.theorem", "mathematics.counterexample"]);
 });
 
 test("memory, claims, and runbook prompt sections follow enabled optional features", () => {
@@ -230,13 +219,10 @@ test("memory, claims, and runbook prompt sections follow enabled optional featur
   assert.doesNotMatch(legacy, /Use reports as durable Markdown artifacts|\{\{reports\}\}/);
 });
 
-test("bundled profiles gate collaboration recipes by domain and workflow", () => {
+test("the bundled Security profile gates collaboration recipes by workflow", () => {
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
-  const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
   assert.deepEqual(security.collaboration.recipes.map((recipe) => recipe.workflowIds), [["discovery", "longshot"], ["chaining"], ["reporting"]]);
-  assert.deepEqual(mathematics.collaboration.recipes.map((recipe) => recipe.workflowIds), [["exploration", "longshot"], ["proof"], ["verification"], ["synthesis"]]);
   assert.ok(security.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
-  assert.ok(mathematics.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
 });
 
 test("retired bundled memory types stay out of model-facing catalogs", () => {
@@ -268,42 +254,29 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.match(securityPrompt, /workspace history search to recover prior work across sessions/);
 });
 
-test("bundled profiles define domain-specific Longshot workflows", () => {
+test("the bundled Security profile defines a security Longshot lane", () => {
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
-  const mathematics = normalizeResearchProfile(DEFAULT_MATHEMATICS_RESEARCH_PROFILE);
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
-  const mathematicsLongshot = mathematics.workflows.find((workflow) => workflow.id === "longshot");
 
   assert.equal(security.version, "1.15.2");
-  assert.equal(mathematics.version, "1.6.0");
   assert.equal(securityLongshot?.name, "Longshot");
   assert.equal(securityLongshot?.goalSuggestionCount, 4);
   assert.equal(securityLongshot?.description, "Hunt for ambitious, reportable high- or critical-severity vulnerabilities.");
   assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /broad attack surface.*explicit systemic impact ceiling/);
   assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /not.*binary verification task/);
   assert.match(securityLongshot?.promptInstructions.join(" ") ?? "", /severity, and reportability evidence-gated/);
-  assert.equal(mathematicsLongshot?.name, "Longshot");
-  assert.equal(mathematicsLongshot?.goalSuggestionCount, 4);
-  assert.match(mathematicsLongshot?.description ?? "", /major mathematical breakthrough/);
-  assert.match(mathematicsLongshot?.goalSuggestionInstructions.join(" ") ?? "", /specific leverage point|source of possible leverage/);
-  assert.match(mathematicsLongshot?.goalSuggestionInstructions.join(" ") ?? "", /open a research program.*breakthrough-scale ceiling/);
 });
 
 test("suggestion lanes do not constrain live collaboration guidance", () => {
   const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, workflowId: "chaining" });
-  const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE, workflowId: "proof" });
   assert.doesNotMatch(securityPrompt, /Exploit-chain cell|reachability-analyst|Active research workflow/);
   assert.doesNotMatch(securityPrompt, /Construction Explorer/);
-  assert.doesNotMatch(mathematicsPrompt, /Proof development cell|assumption-auditor|Active research workflow/);
-  assert.doesNotMatch(mathematicsPrompt, /Mitigation Challenger/);
 });
 
 test("Longshot remains a suggestion lane and is absent from live prompts", () => {
   const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, workflowId: "longshot" });
-  const mathematicsPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_MATHEMATICS_RESEARCH_PROFILE, workflowId: "longshot" });
 
   assert.doesNotMatch(securityPrompt, /Longshot|reportable high or critical impact|Security discovery cell/);
-  assert.doesNotMatch(mathematicsPrompt, /Longshot|major mathematical advance|Mathematical exploration cell/);
 });
 test("research profile validation rejects silent schema drift", () => {
   const unknownRootField = { ...structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE), typoedWorkflows: [] };
@@ -388,7 +361,7 @@ test("workspace profiles override the bundled security default", async () => {
 });
 
 test("the direct run boundary rejects a stale resolved profile hash before compiling context", async () => {
-  const profile = normalizeResearchProfile(generalResearchProfile());
+  const profile = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const staleHash = researchProfileHash(profile);
   const changedProfile = structuredClone(profile);
   changedProfile.name = "Changed after resolution";
@@ -420,6 +393,15 @@ test("the direct run boundary rejects a stale resolved profile hash before compi
   assert.deepEqual(liveEvents, []);
 });
 
+test("the direct run boundary rejects non-security profiles", async () => {
+  const profile = normalizeResearchProfile(generalResearchProfile());
+  await assert.rejects(runResearchAgent({
+    prompt: "Synthetic research prompt.",
+    resolvedResearchProfile: { profile, hash: researchProfileHash(profile), source: "explicit" },
+    executor: createDeterministicAgentExecutor(),
+  }), /only Security research sessions/);
+});
+
 test("custom profiles replace domain language without weakening host invariants", () => {
   const profile = normalizeResearchProfile(generalResearchProfile());
   const prompt = createResearchSystemPrompt({
@@ -444,24 +426,11 @@ test("custom profiles replace domain language without weakening host invariants"
   assert.doesNotMatch(prompt, /casual, blog-like language/);
 });
 
-test("the general-research example is a valid non-security profile", async () => {
-  const source = await readFile(new URL("../examples/general-research.profile.json", import.meta.url), "utf8");
-  const profile = normalizeResearchProfile(JSON.parse(source));
-
-  assert.equal(profile.id, "general-research");
-  assert.deepEqual(profile.memory.types.map((type) => [type.id, type.name]), [
-    ["claim", "Question"],
-    ["result", "Result"],
-  ]);
-  assert.equal(resolveResearchProfileMemoryType(profile, "question").canonicalId, "claim");
-  assert.equal(profile.workspace.authorizationMode, "optional");
-});
-
 test("profile-selected skills remain inert until the host explicitly selects them", async () => {
   const workspaceRoot = join(tmpdir(), `app-server-profile-skill-${process.pid}-${Date.now()}`);
   try {
     await mkdir(workspaceRoot, { recursive: true });
-    const input = generalResearchProfile();
+    const input = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
     input.capabilities.selectedSkillIds = ["profile-only"];
     const profile = normalizeResearchProfile(input);
     const resolvedResearchProfile = {

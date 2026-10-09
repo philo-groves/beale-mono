@@ -1478,6 +1478,38 @@ test("lists older workspace registries that do not yet have session catalog meta
   });
 });
 
+test("hides legacy non-security workspaces without deleting their registry records", () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-hidden-workspace-"));
+  temporaryDirectories.push(directory);
+  const database = new DatabaseSync(join(directory, "workspace-registry.sqlite"));
+  try {
+    database.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY, workspace_path TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        workspace_name TEXT NOT NULL, research_profile_id TEXT NOT NULL,
+        research_kit_id TEXT NOT NULL, workspace_directories_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    database.prepare(`INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "registry-legacy-example", join(directory, "legacy-workspace"), "workspace-legacy-example",
+      "Legacy example", "mathematics", "general", "[]", "2026-08-21T00:00:00.000Z",
+    );
+  } finally {
+    database.close();
+  }
+
+  const registry = new AppServerHostRegistry({ registryDirectory: directory });
+  assert.deepEqual(registry.listWorkspaces(), []);
+  assert.equal(registry.resolveWorkspace("workspace-legacy-example"), null);
+  const databaseAfter = new DatabaseSync(join(directory, "workspace-registry.sqlite"), { readOnly: true });
+  try {
+    assert.equal(databaseAfter.prepare("SELECT COUNT(*) AS count FROM workspaces").get().count, 1);
+  } finally {
+    databaseAfter.close();
+  }
+});
+
 test("enforces workspace ownership for canonical session reads", async () => {
   const calls = [];
   const service = new AppServerHostService({

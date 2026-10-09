@@ -6,6 +6,7 @@
 
 #### Removed
 
+- Beale now creates and runs Security research workspaces only. Mathematics and other non-security workspaces are hidden from its workspace and session lists; their files and stored records are retained. The Mathematics choice is removed from workspace creation and prompt settings.
 - Removed Topics screens, navigation, and Codex bridge tools. Existing topic overviews and pages export once to editable workspace Markdown under `references/research/legacy-topics/`.
 
 - Removed the default Browser Use plugin, its WebDriver BiDi server and Puppeteer dependency. Existing saved built-in Browser Use entries are pruned from the plugin registry.
@@ -1480,6 +1481,7 @@
 
 #### Removed
 
+- Non-security workspaces are omitted from host discovery and scheduled runs, and the host and worker reject new non-security research sessions. Stored records remain intact; the app-server contract requires rebuilt clients and host.
 - Removed Topics operations and model-facing collaboration tools. Legacy topic snapshots remain readable for compatibility, and the shared app-server contract requires rebuilt clients.
 
 - Removed the second-model background memory curator, its advisory `memory.request` tool, provider-model CLI options, turn queue, notifications, and synthetic activity events.

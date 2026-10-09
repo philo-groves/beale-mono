@@ -1670,51 +1670,24 @@ test("Pi Agent treats an authorized safety guardrail as a likely false positive 
   assert.equal(retry?.payload.safetyDisposition, "likely_false_positive");
 });
 
-test("non-security profile safety recovery uses the resolved research boundary without cyber-specific steering", async () => {
+test("non-security profiles cannot enter the research runtime", async () => {
   const inputProfile = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
   inputProfile.id = "historical-research";
-  inputProfile.version = "1.0.0";
   inputProfile.name = "Historical Research";
-  inputProfile.description = "Evidence-driven historical research.";
-  inputProfile.agent.role = "You are a careful historical researcher.";
-  inputProfile.workspace.boundaryNoun = "Archive collection boundary";
-  inputProfile.workspace.authorizationMode = "optional";
   const profile = normalizeResearchProfile(inputProfile);
-  const resolvedResearchProfile = {
-    profile,
-    hash: researchProfileHash(profile),
-    source: "explicit",
-  };
-  const contexts = [];
-  const liveEvents = [];
-  const result = await runResearchAgent({
-    prompt: "Compare primary sources about the historical use of malware and persistence terminology.",
-    workspaceContext: authorizedWorkspaceContext(),
-    resolvedResearchProfile,
-    eventSink(event) {
-      liveEvents.push(event);
+  let executorCalled = false;
+  await assert.rejects(runResearchAgent({
+    prompt: "Inspect a synthetic archive.",
+    resolvedResearchProfile: { profile, hash: researchProfileHash(profile), source: "explicit" },
+    executor: {
+      name: "must-not-run",
+      async execute() {
+        executorCalled = true;
+        return { text: "unexpected" };
+      },
     },
-    executor: createPiAgentExecutor({
-      provider: "faux",
-      model: "faux-model",
-      researchProfile: profile,
-      models: createScriptedModels([
-        assistantError("Provider safety guardrail interrupted this response."),
-        assistant("## Result\nContinued with bounded archive analysis."),
-      ], contexts),
-    }),
-  });
-
-  assert.equal(result.agentRun.status, "complete");
-  const recovery = contexts[1].messageContents.at(-1);
-  assert.match(recovery, /Historical Research profile/);
-  assert.match(recovery, /Archive collection boundary \(Authorized fixture\)/);
-  assert.match(recovery, /bounded, reversible, evidence-producing methods/);
-  assert.doesNotMatch(recovery, /safety\/cyber|credential abuse|red-team rhetoric|live-target authorization/);
-  const retry = liveEvents.find((event) =>
-    event.kind === "agent.event" && event.payload.type === "model_retry"
-  );
-  assert.equal(retry?.payload.safetyDisposition, "safety_adjustment");
+  }), /only Security research sessions/);
+  assert.equal(executorCalled, false);
 });
 
 test("Pi Agent waits for live steering after one automatic safeguard retry", async () => {

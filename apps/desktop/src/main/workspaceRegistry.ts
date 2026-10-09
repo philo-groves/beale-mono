@@ -95,7 +95,7 @@ export class WorkspaceRegistry {
   }
 
   public getState(): WorkspaceRegistryState {
-    return this.state;
+    return visibleSecurityWorkspaceRegistryState(this.state);
   }
 
   public markResearchSessionViewed(sessionId: string, viewedAt?: string): void {
@@ -406,6 +406,19 @@ export class WorkspaceRegistry {
     };
     if (this.lastKnownWorkspace?.id === workspace.id) this.lastKnownWorkspace = workspace;
   }
+}
+
+export function visibleSecurityWorkspaceRegistryState(state: WorkspaceRegistryState): WorkspaceRegistryState {
+  const workspaces = state.workspaces.filter((workspace) => workspace.researchProfileId === 'security-research');
+  const visibleIds = new Set(workspaces.map((workspace) => workspace.id));
+  return {
+    ...state,
+    workspaces,
+    researchSessions: state.researchSessions.filter((session) => visibleIds.has(session.registryWorkspaceId)),
+    ...(state.archivedResearchSessions
+      ? { archivedResearchSessions: state.archivedResearchSessions.filter((session) => visibleIds.has(session.registryWorkspaceId)) }
+      : {}),
+  };
 }
 
 function optionalSecondArgument(first: string, second: string | undefined): unknown[] {

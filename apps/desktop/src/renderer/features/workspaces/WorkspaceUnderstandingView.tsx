@@ -1028,7 +1028,6 @@ function workspaceDirectoryKey(directory: string): string {
 function workspaceResearchProfileLabel(profile: ResearchProfile | null): string {
   if (!profile) return '';
   if (profile.id === 'security-research') return 'Security';
-  if (profile.id === 'mathematics') return 'Mathematics';
   return profile.name;
 }
 

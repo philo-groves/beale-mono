@@ -153,13 +153,10 @@ export function useWorkspaceActions({
 
   const lookupHackerOneScope = useCallback(
     async (identifier: string): Promise<void> => {
-      if (workspaceDraft?.researchProfileId === 'mathematics') {
-        throw new Error('HackerOne workspace autofill is unavailable for the Mathematics research profile.');
-      }
       const lookup = await window.beale.lookupHackerOneScope(identifier);
       setWorkspaceDraft((current) => (current ? onboardingFormFromHackerOneLookup(current, lookup) : current));
     },
-    [setWorkspaceDraft, workspaceDraft?.researchProfileId]
+    [setWorkspaceDraft]
   );
 
   return {

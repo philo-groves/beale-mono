@@ -151,17 +151,17 @@ describe('renderer dialog surfaces', () => {
 
   it('renders workspace creation as sequential workspace views instead of a dialog', () => {
     const form = onboardingFormFromDefaults({
-      workspacePath: '/math/erdos-straus',
-      workspaceName: 'Erdos-Straus Conjecture',
+      workspacePath: '/workspaces/example-security',
+      workspaceName: 'Example Security Workspace',
       scopeOwner: '',
       descriptionMarkdown: '',
       rules: [],
       expiresAt: null,
       assets: []
     });
-    const render = (researchProfileId: 'security-research' | 'mathematics'): string => renderToStaticMarkup(
+    const render = (): string => renderToStaticMarkup(
       createElement(WorkspaceCreationView, {
-        form: { ...form, researchProfileId },
+        form,
         busy: false,
         progress: null,
         onChange: () => undefined,
@@ -172,8 +172,7 @@ describe('renderer dialog surfaces', () => {
       })
     );
 
-    const securityHtml = render('security-research');
-    const mathematicsHtml = render('mathematics');
+    const securityHtml = render();
     const emptyHtml = renderToStaticMarkup(createElement(WorkspaceCreationView, {
       form: emptyWorkspaceOnboardingForm(),
       busy: false,
@@ -193,7 +192,8 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toContain('aria-label="New Workspace views"');
     expect(securityHtml).not.toContain('role="dialog"');
     expect(securityHtml).toContain('<select');
-    expect(securityHtml).toContain('<option value="security-research" selected="">Security</option>');
+    expect(securityHtml).not.toContain('aria-label="Research Profile"');
+    expect(securityHtml).not.toContain('Mathematics');
     expect(securityHtml).not.toContain('Authorization owner');
     expect(securityHtml).not.toContain('Authorization expires');
     expect(securityHtml).not.toContain('Index Now');
@@ -206,7 +206,7 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toContain('<option value="msrc">MSRC Windows</option>');
     expect(securityHtml).toContain('<option value="meta-bug-bounty">Meta Bug Bounty</option>');
     expect(securityHtml).toContain('<span>Settings</span>');
-    expect(securityHtml).toContain('<h2>Erdos-Straus Conjecture Settings</h2>');
+    expect(securityHtml).toContain('<h2>Example Security Workspace Settings</h2>');
     expect(emptyHtml).toContain('<h2>New Workspace Settings</h2>');
     expect(securityHtml).toContain('<span>Resources</span>');
     expect(securityHtml).toContain('<span>Rules</span>');
@@ -214,13 +214,7 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toMatch(/aria-controls="workspace-creation-resources-panel"[^>]*disabled=""/u);
     expect(securityHtml).toMatch(/aria-controls="workspace-creation-rules-panel"[^>]*disabled=""/u);
     expect(securityHtml).toContain('class="primary-button" type="button">Next</button>');
-    expect(mathematicsHtml).toContain('aria-label="Research Kit"');
-    expect(mathematicsHtml).toContain('<option value="general" selected="">General</option>');
-    expect(mathematicsHtml).not.toContain('<option value="hackerone">HackerOne</option>');
-    expect(mathematicsHtml).toContain('<option value="mathematics" selected="">Mathematics</option>');
-    expect(mathematicsHtml).not.toContain('<option value="apple-security-bounty">Apple Security Bounty</option>');
-    expect(mathematicsHtml).not.toContain('<option value="msrc">MSRC Windows</option>');
-    expect(mathematicsHtml).not.toContain('<option value="meta-bug-bounty">Meta Bug Bounty</option>');
+    expect(securityHtml).toContain('<option value="general" selected="">Manual Security</option>');
 
     const appleHtml = renderToStaticMarkup(createElement(WorkspaceCreationView, {
       form: applyResearchKit(form, 'apple-security-bounty'),

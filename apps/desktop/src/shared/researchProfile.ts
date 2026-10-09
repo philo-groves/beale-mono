@@ -1,6 +1,8 @@
 export const RESEARCH_PROFILE_SCHEMA_VERSION = 1 as const;
 export const RESEARCH_PROFILE_MIN_SCHEMA_VERSION = 0 as const;
+/** Historical IDs remain decodable in stored workspace and session records. */
 export const RESEARCH_PROFILE_IDS = ['security-research', 'mathematics'] as const;
+export const ACTIVE_RESEARCH_PROFILE_IDS = ['security-research'] as const;
 export type ResearchProfileId = typeof RESEARCH_PROFILE_IDS[number];
 
 export function isResearchProfileId(value: unknown): value is ResearchProfileId {

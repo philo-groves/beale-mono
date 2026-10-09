@@ -75,6 +75,7 @@ export class ResearchProfileService {
     invocation: AppServerInvocation;
     args: string[];
   } {
+    if (profileId !== 'security-research') throw new Error('Beale resolves active Security research profiles only.');
     const resolvedWorkspaceRoot = win32.isAbsolute(workspaceRoot) ? win32.normalize(workspaceRoot) : resolve(workspaceRoot);
     const invocation = (this.options.resolveInvocation ?? resolveAppServerProfileInvocation)();
     return {
@@ -118,6 +119,9 @@ export function decodeResearchProfileCatalogEnvelope(value: unknown): ResearchPr
     source: envelope.source,
     ...(envelope.path === undefined ? {} : { path: envelope.path })
   });
+  if (resolvedProfile.profile.id !== 'security-research') {
+    throw new Error('Beale resolves active Security research profiles only.');
+  }
   if (!supportedVersions.includes(resolvedProfile.profile.schemaVersion) && !supportedVersions.includes(migratedProfile.originalSchemaVersion)) {
     throw new Error(`app-server profile schema version ${resolvedProfile.profile.schemaVersion} is not advertised by the catalog.`);
   }

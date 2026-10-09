@@ -110,7 +110,7 @@ import {
 } from './researchGoalSuggestions';
 import { resolveGoalObjective } from '../shared/goalObjective';
 import { normalizeResearchCollaboration } from '../shared/collaboration';
-import { isResearchProfileId, RESEARCH_PROFILE_IDS } from '../shared/researchProfile';
+import { ACTIVE_RESEARCH_PROFILE_IDS, isResearchProfileId } from '../shared/researchProfile';
 import { researchKitDefinition, researchKitResourceKey, researchKitSupportsProfile, selectedResearchKitCatalogAssets } from '../shared/researchKits';
 import { normalizeRepeatSchedule } from '../shared/repeatSchedule';
 import { DEFAULT_SHELL_SAFETY_MODE, normalizeShellSafetyMode } from '../shared/shellSafety';
@@ -734,7 +734,11 @@ export class WorkspaceService {
   public openLastWorkspaceIfAvailable(): WorkspaceSnapshot | null {
     const current = this.getSnapshot();
     if (current) return current;
-    const workspace = this.getWorkspaceRegistry().getLastKnownWorkspace();
+    const registry = this.getWorkspaceRegistry();
+    const lastKnown = registry.getLastKnownWorkspace();
+    const workspace = lastKnown?.researchProfileId === 'security-research'
+      ? lastKnown
+      : registry.getState().workspaces[0];
     if (!workspace || !isExistingWorkspace(workspace.workspacePath)) {
       return null;
     }
@@ -896,10 +900,10 @@ export class WorkspaceService {
   public async getResearchProfiles(): Promise<ResolvedResearchProfile[]> {
     const workspacePath = this.workspacePath ?? process.cwd();
     if (this.options.researchProfileResolver) {
-      return RESEARCH_PROFILE_IDS.map((profileId) => this.options.researchProfileResolver!(workspacePath, profileId));
+      return ACTIVE_RESEARCH_PROFILE_IDS.map((profileId) => this.options.researchProfileResolver!(workspacePath, profileId));
     }
     return Promise.all(
-      RESEARCH_PROFILE_IDS.map((profileId) => this.researchProfileService.resolveAsync(workspacePath, profileId))
+      ACTIVE_RESEARCH_PROFILE_IDS.map((profileId) => this.researchProfileService.resolveAsync(workspacePath, profileId))
     );
   }
 
@@ -2188,7 +2192,7 @@ export class WorkspaceService {
     const workspacePath = initialRuntime.workspacePath;
     const researchKitId = initialRuntime.db.getResearchKitId();
     const kit = researchKitDefinition(researchKitId);
-    if (!kit.refresh) throw new Error('The General Research Kit has no imports to refresh.');
+    if (!kit.refresh) throw new Error('The Manual Security kit has no imports to refresh.');
     if (input.selectedResourceKeys && !kit.resourceCatalog) throw new Error('This Research Kit has no selectable resource catalog.');
 
     let importedAssets: ScopeAssetInput[] | null = null;
@@ -2320,6 +2324,9 @@ export class WorkspaceService {
     const profileId = input.researchProfileId ?? 'security-research';
     if (!isResearchProfileId(profileId)) {
       throw new Error(`Unsupported research profile: ${String(profileId)}`);
+    }
+    if (profileId !== 'security-research') {
+      throw new Error('New Beale workspaces require the Security research profile.');
     }
     const researchKitId = input.researchKitId ?? 'general';
     if (!isResearchKitId(researchKitId)) {
@@ -3537,6 +3544,9 @@ export class WorkspaceService {
     };
     if (!runtime) throw new Error('No Beale workspace is open');
     const researchProfile = this.refreshResearchProfile(runtime);
+    if (researchProfile.profile.id !== 'security-research') {
+      throw new Error('Beale starts new research sessions only in Security workspaces.');
+    }
     const providerSettings = this.getWorkspaceRegistry().getProviderSettings();
     const requestedProvider = normalizedInput.provider?.trim() || null;
     const explicitProvider = isResearchModelProviderId(requestedProvider) ? requestedProvider : null;
@@ -4675,6 +4685,10 @@ export class WorkspaceService {
     syncRegistry = true
   ): WorkspaceSnapshot {
     const workspacePath = resolve(path);
+    const registered = this.getWorkspaceRegistry().getWorkspaceByPath(workspacePath);
+    if (registered && registered.researchProfileId !== 'security-research') {
+      throw new Error('This non-security workspace is hidden from Beale. Its research files and records remain on disk.');
+    }
     if (create) {
       mkdirSync(workspacePath, { recursive: true });
     } else {
@@ -4775,9 +4789,11 @@ export class WorkspaceService {
     const registryWorkspace = registry.getWorkspaceByPath(workspacePath);
     const selectedProfileId = requestedProfileId ?? registryWorkspace?.researchProfileId ?? 'security-research';
     const resolvedResearchProfile = this.resolveResearchProfile(workspacePath, selectedProfileId);
-    // Workspace-local profiles may replace the selected bundled profile with
-    // their own stable identity. Resolve that identity before choosing global
-    // storage or publishing the workspace to the app-server registry.
+    if (resolvedResearchProfile.profile.id !== 'security-research') {
+      throw new Error('This non-security workspace is hidden from Beale. Its research files and records remain on disk.');
+    }
+    // Workspace-local Security customizations retain the Security identity.
+    // Resolve that identity before choosing global storage or publishing the workspace.
     const profileId = resolvedResearchProfile.profile.id as ResearchProfileId;
     const memoryBackend = registryWorkspace?.memoryBackend ?? 'app-server';
     const databasePath = this.globalAppServerDatabasePath(profileId);
@@ -4788,6 +4804,11 @@ export class WorkspaceService {
       researchKitId: requestedResearchKitId ?? registryWorkspace?.researchKitId ?? 'general'
     });
     db.initialize();
+    const previousProfile = db.getActiveResearchProfileSnapshot();
+    if (previousProfile && previousProfile.profile.id !== 'security-research') {
+      db.close();
+      throw new Error('This non-security workspace is hidden from Beale. Its research files and records remain on disk.');
+    }
     if (createProject) db.initializeResearchProject();
     migrateWorkspaceDescription(workspacePath, db.getActiveScope().descriptionMarkdown);
     const openedAt = new Date().toISOString();

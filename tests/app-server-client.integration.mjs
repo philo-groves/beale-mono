@@ -15,14 +15,17 @@ test("the optional client resolves profiles through the app-server", async () =>
   try {
     const result = runClient([
       "profile", "resolve", "--workspace-root", workspaceRoot,
-      "--profile-id", "mathematics", "--json",
+      "--profile-id", "security-research", "--json",
     ]);
     assert.equal(result.status, 0, result.stderr);
     const envelope = JSON.parse(result.stdout);
     assert.equal(envelope.catalogProtocolVersion, 1);
     assert.equal(envelope.source, "bundled-default");
-    assert.equal(envelope.profile.id, "mathematics");
+    assert.equal(envelope.profile.id, "security-research");
     assert.equal(envelope.hash, researchProfileHash(envelope.profile));
+    const unsupported = runClient(["profile", "resolve", "--workspace-root", workspaceRoot, "--profile-id", "mathematics", "--json"]);
+    assert.equal(unsupported.status, 1);
+    assert.match(unsupported.stderr, /security-research/);
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

@@ -90,7 +90,8 @@ export class AppServerHostRegistry {
       `).all() as SqlRow[];
       return rows
         .filter((row) => !this.isInternalWorkspacePath(requiredText(row, 'workspace_path')))
-        .map(projectHostWorkspace);
+        .map(projectHostWorkspace)
+        .filter((workspace) => workspace.researchProfileId === 'security-research');
     }, []);
   }
 
@@ -110,7 +111,8 @@ export class AppServerHostRegistry {
         ORDER BY CASE WHEN w.id = ? THEN 0 ELSE 1 END
         LIMIT 1
       `).get(normalized, normalized, normalized) as SqlRow | undefined;
-      return row ? projectHostWorkspace(row) : null;
+      const workspace = row ? projectHostWorkspace(row) : null;
+      return workspace?.researchProfileId === 'security-research' ? workspace : null;
     }, null);
   }
 

@@ -791,7 +791,7 @@ const PROMPT_VARIABLES = [
 ] as const;
 
 export function PromptSettingsView(): JSX.Element {
-  const [profileId, setProfileId] = useState<ResearchProfileId>('security-research');
+  const profileId: ResearchProfileId = 'security-research';
   const [saved, setSaved] = useState('');
   const [defaultTemplate, setDefaultTemplate] = useState('');
   const [draft, setDraft] = useState('');
@@ -867,15 +867,7 @@ export function PromptSettingsView(): JSX.Element {
   };
 
   return <div className="prompt-settings">
-    <div className="settings-form-heading"><h2>Agent Prompt</h2><p>Edit the template used when a new session starts. Variables expand from the selected research profile and run capabilities.</p></div>
-    <label className="prompt-settings-profile">Profile <select value={profileId} onChange={(event) => {
-      if (draft !== saved && !window.confirm('Discard unsaved prompt changes?')) return;
-      setProfileId(event.target.value as ResearchProfileId);
-      setDraft('');
-      setPreview('');
-    }}>
-      <option value="security-research">Security</option><option value="mathematics">Mathematics</option>
-    </select></label>
+    <div className="settings-form-heading"><h2>Agent Prompt</h2><p>Edit the template used when a new session starts. Variables expand from the Security profile and run capabilities.</p></div>
     <div className="prompt-settings-tabs" role="tablist" aria-label="Prompt view">
       <button type="button" role="tab" aria-selected={tab === 'template'} onClick={() => setTab('template')}>Template</button>
       <button type="button" role="tab" aria-selected={tab === 'preview'} onClick={() => setTab('preview')}>Preview</button>
@@ -953,7 +945,7 @@ export function ProfileSettingsView({
       <div className="settings-page profile-settings-page" aria-busy={loading}>
         <section className="profile-settings-empty" role="status">
           {loading ? <span className="provider-settings-loading-indicator" aria-hidden="true" /> : null}
-          <span>{loading ? 'Loading profiles...' : 'No research profiles are available.'}</span>
+          <span>{loading ? 'Loading Security profile...' : 'The Security profile is unavailable.'}</span>
         </section>
       </div>
     );
@@ -981,7 +973,7 @@ export function ProfileSettingsView({
 
   return (
     <div className="settings-page profile-settings-page">
-      <div className="profile-settings-tab-stack">
+      {profiles.length > 1 ? <div className="profile-settings-tab-stack">
         <div className="profile-settings-tab-row research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label="Research profiles">
           {profiles.map((profile) => {
             const selected = profile.profile.id === selectedProfile.profile.id;
@@ -1006,12 +998,13 @@ export function ProfileSettingsView({
           })}
           {loading ? <span className="profile-settings-loading" role="status">Loading profiles...</span> : null}
         </div>
-      </div>
+      </div> : null}
       <div
         className="profile-settings-profile-view"
         id="profile-settings-profile-panel"
         role="tabpanel"
-        aria-labelledby={`profile-settings-tab-${selectedProfile.profile.id}`}
+        aria-labelledby={profiles.length > 1 ? `profile-settings-tab-${selectedProfile.profile.id}` : undefined}
+        aria-label={profiles.length === 1 ? `${profileName} profile` : undefined}
       >
         <div className="profile-settings-tab-row profile-settings-view-tab-row research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label={`${profileName} profile views`}>
           <div className={`research-side-view-tab provider-settings-tab profile-settings-tab ${selectedMemoryType ? '' : 'active'}`.trim()}>
@@ -3117,7 +3110,7 @@ export function settingsSectionLabel(section: SettingsSection): string {
     case 'ticketing':
       return 'Ticketing';
     case 'profile':
-      return 'Profiles';
+      return 'Security Profile';
     case 'prompt':
       return 'Prompt';
     case 'archive':

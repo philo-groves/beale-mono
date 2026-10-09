@@ -39,7 +39,6 @@ export {
 export {
   BUNDLED_RESEARCH_PROFILE_IDS,
   bundledResearchProfile,
-  DEFAULT_MATHEMATICS_RESEARCH_PROFILE,
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   researchProfileHash,
   resolveResearchProfile,

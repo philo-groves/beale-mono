@@ -79,16 +79,8 @@ export function workspaceOnboardingFormForProfile(
   form: WorkspaceOnboardingFormState,
   profileId: ResearchProfileId
 ): WorkspaceOnboardingFormState {
-  return !researchKitSupportsProfile(form.researchKitId, profileId)
-    ? {
-        ...form,
-        researchKitId: 'general',
-        resourceCandidates: [],
-        repositoryCandidates: [],
-        repositoryCatalogLoading: false,
-        repositoryCatalogError: null
-      }
-    : form;
+  if (profileId !== 'security-research') throw new Error('Beale creates Security research workspaces only.');
+  return form;
 }
 
 export interface OnboardingRepository {
