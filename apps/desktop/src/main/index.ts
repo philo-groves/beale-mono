@@ -683,8 +683,14 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.previewPromptTemplate, (_event, profileId: ResearchProfileId, template: string, agentPath?: string) => workspaceService.previewPromptTemplate(profileId, template, agentPath));
   ipcMain.handle(IPC_CHANNELS.getAgentPlugins, () => workspaceService.getAgentPlugins());
   ipcMain.handle(IPC_CHANNELS.getFleetState, () => workspaceService.getFleetState());
+  ipcMain.handle(IPC_CHANNELS.getFleetRemoteMachines, () => workspaceService.getFleetRemoteMachines());
+  ipcMain.handle(IPC_CHANNELS.getFleetRemoteCatalog, (_event, serverId: string) => workspaceService.getFleetRemoteCatalog(serverId));
+  ipcMain.handle(IPC_CHANNELS.getFleetRemoteSession, (_event, serverId: string, workspaceId: string, sessionId: string) => workspaceService.getFleetRemoteSession(serverId, workspaceId, sessionId));
+  ipcMain.handle(IPC_CHANNELS.startFleetRemoteSession, (_event, serverId: string, workspaceId: string, promptMarkdown: string, machineId: string) => workspaceService.startFleetRemoteSession(serverId, workspaceId, promptMarkdown, machineId));
+  ipcMain.handle(IPC_CHANNELS.controlFleetRemoteSession, (_event, serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string) => workspaceService.controlFleetRemoteSession(serverId, sessionId, type, instruction));
   ipcMain.handle(IPC_CHANNELS.configureFleet, (_event, input: Record<string, unknown>) => workspaceService.configureFleet(input));
   ipcMain.handle(IPC_CHANNELS.testFleetVmConnection, (_event, input: import('@beale/app-server-runtime/protocol').FleetSshTestInput) => workspaceService.testFleetVmConnection(input));
+  ipcMain.handle(IPC_CHANNELS.testFleetAppServer, (_event, input: { serverId?: string; url: string; operatorToken: string }) => workspaceService.testFleetAppServer(input));
   ipcMain.handle(IPC_CHANNELS.cloneFleetVm, (_event, baseId: string, name: string) => workspaceService.cloneFleetVm(baseId, name));
   ipcMain.handle(IPC_CHANNELS.startFleetVm, (_event, machineId: string) => workspaceService.startFleetVm(machineId));
   ipcMain.handle(IPC_CHANNELS.stopFleetVm, (_event, machineId: string) => workspaceService.stopFleetVm(machineId));

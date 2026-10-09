@@ -561,8 +561,9 @@ export function ResearchSettingsForm({
   useEffect(() => {
     if (!fleetWorkspaceId) return;
     let active = true;
-    void window.beale.getFleetState().then((state) => {
+    void Promise.all([window.beale.getFleetState(), window.beale.getFleetRemoteMachines().catch(() => [])]).then(([localState, remoteMachines]) => {
       if (!active) return;
+      const state = { ...localState, remoteMachines };
       setFleetState(state);
       setFleetError(null);
       const machineId = initialInput?.machineId && isAllowedFleetMachine(state, fleetWorkspaceId, initialInput.machineId)

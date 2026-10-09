@@ -6,6 +6,8 @@
 
 #### Added
 
+- Added a local Fleet App Servers form for connecting to authenticated peers on the same Tailscale network. Home and Automations can switch between Local and saved app servers to view and control their research sessions.
+- New Research can assign a workspace session to a VM owned by another primary app server. The launching workspace keeps the session and receives changed files through the VM-owning primary.
 - Added Fleet settings for Tart and Hyper-V inventory, clone-only base VMs, SSH configuration, and workspace VM requirements. New Research selects Local or a configured worker; VM sessions stream into the launching primary workspace and return changed workspace files. Concurrent edits and guest canonical records are kept for review.
 - Added a VM settings Test SSH action that checks draft connection values without saving them. Tart connections use the dedicated known-hosts file from the Desktop SSH setup script when present.
 
@@ -1252,6 +1254,7 @@
 
 #### Added
 
+- Fleet now records a durable machine-and-session owner for each VM and rejects conflicting reservations. Remote app-server connections verify a matching online Tailscale peer, and cross-primary workspace transfers use authenticated app-server operations. Control contract v40 requires rebuilding Beale and app-server together.
 - Added Fleet inventory, clone/start/stop operations, model-facing Fleet tools, SSH guest session transport, and chunked workspace transfer. Guest credentials stay in the VM; external source checkouts are not copied from the primary. Registry migration records a session's machine for recovery, and control contract v38 requires rebuilding Beale and app-server together.
 - Added draft SSH connection testing and per-VM known-hosts paths. Control contract v39 requires rebuilding Beale and app-server together.
 - Tart Fleet connections now prefer guest-agent address resolution and fall back to DHCP. SSH test results report the attempted address to help diagnose connectivity after a VM restart.

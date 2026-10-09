@@ -98,3 +98,34 @@ test('Fleet tests draft SSH settings without saving them or starting a base', as
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Fleet leases persist by machine and session and reject conflicting control', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'beale-fleet-owner-test-'));
+  let running = false;
+  const runner = {
+    async run(command, args) {
+      assert.equal(command, 'tart');
+      if (args[0] === 'list') return JSON.stringify([{ Name: 'example-worker', Running: running }, { Name: 'example-second', Running: false }]);
+      if (args[0] === 'stop') { running = false; return ''; }
+      throw new Error('Unexpected Fleet test command.');
+    },
+    launch() { running = true; },
+  };
+  try {
+    const path = join(root, 'fleet.json');
+    const fleet = new FleetService(path, 'darwin', runner);
+    const owner = { machineId: 'machine-example', sessionId: 'session-example', workspaceId: 'workspace-example' };
+    await fleet.reserve('tart:example-worker', owner);
+    assert.deepEqual((await new FleetService(path, 'darwin', runner).state()).machines.find((machine) => machine.id === 'tart:example-worker').owner,
+      { machineId: owner.machineId, sessionId: owner.sessionId });
+    await assert.rejects(fleet.reserve('tart:example-worker', { machineId: 'machine-other', sessionId: 'session-example' }), /already reserved/);
+    await assert.rejects(fleet.reserve('tart:example-second', { machineId: 'machine-other', sessionId: 'session-other', workspaceId: 'workspace-example' }), /already staged/);
+    await assert.rejects(fleet.start('tart:example-worker'), /reserved/);
+    await fleet.start('tart:example-worker', owner);
+    await assert.rejects(fleet.stop('tart:example-worker', { machineId: owner.machineId, sessionId: 'session-other' }), /reserved/);
+    await fleet.stop('tart:example-worker', owner);
+    await assert.rejects(fleet.release('tart:example-worker', { machineId: 'machine-other', sessionId: owner.sessionId }), /Only the owning/);
+    await fleet.release('tart:example-worker', owner);
+    assert.equal((await fleet.state()).machines.find((machine) => machine.id === 'tart:example-worker').owner, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

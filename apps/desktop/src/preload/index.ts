@@ -244,11 +244,29 @@ const api: BealeApi = {
   getFleetState(): Promise<FleetState> {
     return ipcRenderer.invoke(IPC_CHANNELS.getFleetState);
   },
+  getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteMachines);
+  },
+  getFleetRemoteCatalog(serverId: string): Promise<import('@beale/app-server-runtime/protocol').FleetRemoteCatalog> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteCatalog, serverId);
+  },
+  getFleetRemoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteSession, serverId, workspaceId, sessionId);
+  },
+  startFleetRemoteSession(serverId: string, workspaceId: string, promptMarkdown: string, machineId: string): Promise<{ sessionId: string }> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startFleetRemoteSession, serverId, workspaceId, promptMarkdown, machineId);
+  },
+  controlFleetRemoteSession(serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.controlFleetRemoteSession, serverId, sessionId, type, instruction);
+  },
   configureFleet(input: Record<string, unknown>): Promise<FleetState> {
     return ipcRenderer.invoke(IPC_CHANNELS.configureFleet, input);
   },
   testFleetVmConnection(input: FleetSshTestInput): Promise<FleetSshTestResult> {
     return ipcRenderer.invoke(IPC_CHANNELS.testFleetVmConnection, input);
+  },
+  testFleetAppServer(input: { serverId?: string; url: string; operatorToken: string }): Promise<{ success: boolean; message: string }> {
+    return ipcRenderer.invoke(IPC_CHANNELS.testFleetAppServer, input);
   },
   cloneFleetVm(baseId: string, name: string): Promise<FleetState> {
     return ipcRenderer.invoke(IPC_CHANNELS.cloneFleetVm, baseId, name);

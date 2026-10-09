@@ -3872,7 +3872,10 @@ async function createRuntimeConfig(args: {
     try {
       const state = await invokeResidentFleetOperation('fleet.state');
       if (state.enabled && state.role === 'primary' && state.available) {
-        const fleetTools = createFleetTools(invokeResidentFleetOperation);
+        const fleetTools = createFleetTools((operation, input) => invokeResidentFleetOperation(operation, {
+          ...input,
+          ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+        }));
         executableTools.push(...fleetTools);
         toolDescriptors.push(...fleetTools.map((tool) => tool.descriptor));
       }

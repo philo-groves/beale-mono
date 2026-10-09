@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -436,6 +437,68 @@ test("control plane requires the operator bearer token", async () => {
     operations: "/v1/operations",
     shutdown: "/v1/server/shutdown",
   });
+});
+
+test("a primary proxies a remote-owned VM session through its guest transport", async () => {
+  const guestRequests = [];
+  const guest = createServer((request, response) => {
+    guestRequests.push({ method: request.method, path: request.url });
+    response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && request.url === "/v1/sessions") {
+      response.statusCode = 201;
+      response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+        session: { sessionId: "session-relay", state: "running" }, attemptId: "attempt-relay",
+        transport: { path: "/v1/sessions/session-relay/transport", protocolVersion: 1,
+          authentication: "bearer", token: "guest-client-token", reconnect: "replay" } }));
+      return;
+    }
+    if (request.url === "/v1/sessions/session-relay") {
+      response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+        session: { sessionId: "session-relay", state: "running" } }));
+      return;
+    }
+    if (request.url === "/v1/sessions/session-relay/attach") {
+      response.statusCode = 201;
+      response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+        transport: { path: "/v1/sessions/session-relay/transport", protocolVersion: 1,
+          authentication: "bearer", token: "attached-client-token", reconnect: "replay" } }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end("{}");
+  });
+  await new Promise((resolve) => guest.listen(0, "127.0.0.1", resolve));
+  try {
+    const guestUrl = `http://127.0.0.1:${guest.address().port}`;
+    const operations = [];
+    const server = await startAppServer({ hostService: {
+      async executeOperation(request) {
+        operations.push(request);
+        if (request.operation === "fleet.state") return { role: "primary" };
+        if (request.operation === "fleet.prepare" || request.operation === "fleet.connect") {
+          return { url: guestUrl, operatorToken: "guest-operator-token" };
+        }
+        throw new Error(`Unexpected operation ${request.operation}`);
+      },
+    } });
+    servers.push(server);
+    const auth = { authorization: `Bearer ${server.operatorToken}`, "content-type": "application/json" };
+    const request = sessionLaunchRequest(tmpdir(), { sessionId: "session-relay" });
+    request.launch.machineId = "tart:worker";
+    request.launch.fleetOwnerMachineId = "machine-source";
+    const started = await fetch(`${server.url}/v1/sessions`, { method: "POST", headers: auth, body: JSON.stringify(request) });
+    assert.equal(started.status, 201);
+    assert.equal((await started.json()).transport.token, "guest-client-token");
+    const read = await fetch(`${server.url}/v1/sessions/session-relay`, { headers: auth });
+    assert.equal(read.status, 200);
+    assert.equal((await read.json()).session.state, "running");
+    const attached = await fetch(`${server.url}/v1/sessions/session-relay/attach`, { method: "POST", headers: auth });
+    assert.equal(attached.status, 201);
+    assert.equal((await attached.json()).transport.token, "attached-client-token");
+    assert.deepEqual(operations.find((operation) => operation.operation === "fleet.prepare").input,
+      { workspaceId: "workspace-test", runId: "session-relay", machineId: "tart:worker", ownerMachineId: "machine-source" });
+    assert.ok(guestRequests.some((entry) => entry.method === "GET" && entry.path === "/v1/sessions/session-relay"));
+  } finally { await new Promise((resolve) => guest.close(resolve)); }
 });
 
 test("continues a terminal session through the authenticated control plane", async () => {

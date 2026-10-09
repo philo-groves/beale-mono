@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
+import type { JSX, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { CalendarPlus, CircleAlert, Pencil, Repeat2 } from 'lucide-react';
 import type {
   ApprovalRecord,
@@ -38,6 +38,7 @@ export function AutomationsSidebar({
   onStartNewResearch,
   onStartNewResearchForWorkspace,
   onAddWorkspace,
+  serverSelector,
   onResizePointerDown
 }: {
   automations: readonly AutomationSummary[];
@@ -54,6 +55,7 @@ export function AutomationsSidebar({
   onStartNewResearch: () => void;
   onStartNewResearchForWorkspace: (workspace: WorkspaceRegistryEntry) => void;
   onAddWorkspace: () => void;
+  serverSelector?: ReactNode;
   onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }): JSX.Element {
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
@@ -95,6 +97,7 @@ export function AutomationsSidebar({
       error={error}
       updateKey={`${selectedWorkspaceId ?? 'all'}:${upcoming.map((automation) => `${automation.workspaceId}:${automation.runId}`).join(',')}`}
       onResizePointerDown={onResizePointerDown}
+      serverSelector={serverSelector}
       primaryAction={
         <div className="sidebar-new-research-anchor" ref={workspacePickerRef}>
           <button

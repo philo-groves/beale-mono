@@ -15,6 +15,11 @@ export interface FleetTransferBaseline {
   workspacePath: string;
   machineId: string;
   runId: string;
+  ownerMachineId?: string;
+  remoteServerId?: string;
+  remoteMachineId?: string;
+  remoteCompleted?: boolean;
+  completedResult?: { imported: number; conflicts: number; candidateRecords: number };
   files: Record<string, string>;
 }
 

@@ -9,8 +9,8 @@ export function fleetVmRequired(state: FleetState, workspaceId: string): boolean
 
 export function runnableFleetMachines(state: FleetState): FleetMachine[] {
   if (state.role !== 'primary' || !state.enabled || !state.available) return [];
-  return state.machines
-    .filter((machine) => !machine.base && machine.sshConfigured && machine.state !== 'unknown')
+  return [...state.machines, ...state.remoteMachines]
+    .filter((machine) => !machine.base && !machine.owner && machine.sshConfigured && machine.state !== 'unknown')
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
 }
 

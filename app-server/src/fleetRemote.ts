@@ -19,6 +19,8 @@ export interface FleetRemoteEndpoint {
   machineId: string;
   url: string;
   operatorToken: string;
+  remoteMachineId?: string;
+  ownerMachineId?: string;
 }
 
 interface Tunnel extends FleetRemoteEndpoint { process: ChildProcess }
@@ -27,16 +29,23 @@ process.once('exit', () => { for (const child of activeTunnelProcesses) child.ki
 
 export class FleetRemoteController {
   private readonly tunnels = new Map<string, Tunnel>();
+  private readonly completions = new Map<string, Promise<{ imported: number; conflicts: number; candidateRecords: number }>>();
 
   public constructor(private readonly fleet: FleetService, private readonly files: FleetWorkspaceStore) {}
 
-  public async prepare(workspace: AppServerHostWorkspace, runId: string, machineId: string): Promise<FleetRemoteEndpoint> {
+  public async prepare(workspace: AppServerHostWorkspace, runId: string, machineId: string, ownerMachineId = this.fleet.machineId()): Promise<FleetRemoteEndpoint> {
+    const remote = parseRemoteMachineId(machineId);
+    if (remote) return this.prepareRemote(workspace, runId, machineId, remote.serverId, remote.machineId);
     const state = await this.fleet.state();
     if (state.role !== 'primary' || !state.enabled || !state.available) throw new Error('Fleet is unavailable on this primary machine.');
     const machine = state.machines.find((candidate) => candidate.id === machineId);
     if (!machine || machine.base || !machine.sshConfigured || machine.state === 'unknown') throw new Error('Select a configured, runnable Fleet VM.');
+    const owner = { machineId: ownerMachineId, sessionId: runId,
+      ...(ownerMachineId !== this.fleet.machineId() ? { workspaceId: workspace.workspaceId } : {}) };
+    await this.fleet.reserve(machineId, owner);
+    try {
     if (machine.state !== 'running') {
-      await this.fleet.start(machineId);
+      await this.fleet.start(machineId, owner);
       const deadline = Date.now() + 90_000;
       while (Date.now() < deadline) {
         const current = await this.fleet.state();
@@ -44,7 +53,7 @@ export class FleetRemoteController {
         await delay(1_000);
       }
     }
-    const endpoint = await this.connectWithRetry(machineId, 120_000);
+    const endpoint = await this.connectWithRetry(machineId, runId, 120_000, ownerMachineId);
     const sourceFiles = this.files.sourceFiles(workspace);
     const prior = await remoteOperation<{ files: FleetFile[] }>(endpoint, 'fleet.stage', {
       action: 'begin', workspaceId: workspace.workspaceId, primaryName: hostname(),
@@ -65,14 +74,30 @@ export class FleetRemoteController {
       action: 'finish', workspaceId: workspace.workspaceId, name: workspace.name,
       researchKitId: workspace.researchKitId,
     });
-    this.files.saveBaseline({ workspaceId: workspace.workspaceId, workspacePath: workspace.workspacePath, machineId, runId,
+    this.files.saveBaseline({ workspaceId: workspace.workspaceId, workspacePath: workspace.workspacePath, machineId, runId, ownerMachineId,
       files: Object.fromEntries(sourceFiles.map((file) => [file.path, file.sha256])) });
     return endpoint;
+    } catch (error) {
+      await this.fleet.release(machineId, owner).catch(() => undefined);
+      throw error;
+    }
   }
 
-  public async complete(runId: string): Promise<{ imported: number; conflicts: number; candidateRecords: number }> {
+  public complete(runId: string): Promise<{ imported: number; conflicts: number; candidateRecords: number }> {
+    const pending = this.completions.get(runId);
+    if (pending) return pending;
+    const completion = this.completeOnce(runId);
+    this.completions.set(runId, completion);
+    void completion.finally(() => { if (this.completions.get(runId) === completion) this.completions.delete(runId); }).catch(() => undefined);
+    return completion;
+  }
+
+  private async completeOnce(runId: string): Promise<{ imported: number; conflicts: number; candidateRecords: number }> {
     const baseline = this.files.readBaseline(runId);
-    const endpoint = await this.connectWithRetry(baseline.machineId, 45_000);
+    if (baseline.completedResult) return baseline.completedResult;
+    if (baseline.remoteServerId) return this.completeRemote(baseline);
+    const ownerMachineId = baseline.ownerMachineId ?? this.fleet.machineId();
+    const endpoint = await this.connectWithRetry(baseline.machineId, runId, 45_000, ownerMachineId);
     const exportList = await remoteOperation<{ files: FleetFile[] }>(endpoint, 'fleet.export', { action: 'list', workspaceId: baseline.workspaceId });
     let imported = 0;
     let conflicts = 0;
@@ -91,7 +116,12 @@ export class FleetRemoteController {
       else if (result === 'candidate') candidateRecords += 1;
       else imported += 1;
     }
-    return { imported, conflicts, candidateRecords };
+    if (ownerMachineId === this.fleet.machineId()) {
+      await this.fleet.release(baseline.machineId, { machineId: ownerMachineId, sessionId: runId });
+    }
+    const result = { imported, conflicts, candidateRecords };
+    this.files.saveBaseline({ ...baseline, completedResult: result });
+    return result;
   }
 
   public async validateLocal(workspaceId: string, mode: string | null): Promise<void> {
@@ -104,7 +134,17 @@ export class FleetRemoteController {
     if (required) throw new Error('This workspace requires a Fleet VM. Select a VM or disable the requirement in Fleet settings.');
   }
 
-  public async connect(machineId: string): Promise<FleetRemoteEndpoint> {
+  public async connect(machineId: string, runId: string, ownerMachineId = this.fleet.machineId()): Promise<FleetRemoteEndpoint> {
+    const remote = parseRemoteMachineId(machineId);
+    if (remote) {
+      const server = await this.fleet.connectedRemoteAppServer(remote.serverId);
+      await this.fleet.callRemote(remote.serverId, 'fleet.connect', {
+        machineId: remote.machineId, runId, ownerMachineId, proxy: true,
+      });
+      return { machineId, url: server.url, operatorToken: server.operatorToken,
+        remoteMachineId: remote.machineId, ownerMachineId };
+    }
+    this.fleet.assertReserved(machineId, { machineId: ownerMachineId, sessionId: runId });
     const existing = this.tunnels.get(machineId);
     if (existing && existing.process.exitCode === null) {
       if (await healthy(existing)) return existing;
@@ -156,11 +196,94 @@ export class FleetRemoteController {
     throw new Error('Timed out connecting to the guest Beale app-server over SSH.');
   }
 
-  private async connectWithRetry(machineId: string, timeoutMs: number): Promise<FleetRemoteEndpoint> {
+  private async prepareRemote(
+    workspace: AppServerHostWorkspace, runId: string, machineId: string, serverId: string, remoteMachineId: string,
+  ): Promise<FleetRemoteEndpoint> {
+    const server = await this.fleet.connectedRemoteAppServer(serverId);
+    const remoteState = await this.fleet.callRemote<{ enabled: boolean; role: string; machines: Array<{ id: string; base: boolean; sshConfigured: boolean; state: string; owner?: { machineId: string; sessionId: string } | null }> }>(serverId, 'fleet.state', {});
+    const machine = remoteState.machines.find((candidate) => candidate.id === remoteMachineId);
+    if (!remoteState.enabled || remoteState.role !== 'primary' || !machine || machine.base || !machine.sshConfigured || machine.state === 'unknown') {
+      throw new Error('The remote app server does not have a configured runnable VM.');
+    }
+    if (machine.owner && (machine.owner.machineId !== this.fleet.machineId() || machine.owner.sessionId !== runId)) {
+      throw new Error('The remote VM is reserved by another machine or session.');
+    }
+    await this.fleet.callRemote(serverId, 'fleet.reserve', {
+      machineId: remoteMachineId, ownerMachineId: this.fleet.machineId(), sessionId: runId,
+      workspaceId: workspace.workspaceId,
+    });
+    try {
+    const sourceFiles = this.files.sourceFiles(workspace);
+    const prior = await this.fleet.callRemote<{ files: FleetFile[] }>(serverId, 'fleet.relay_stage', {
+      action: 'begin', workspaceId: workspace.workspaceId,
+    });
+    const hashes = new Map(prior.files.map((file) => [file.path, file.sha256]));
+    for (const file of sourceFiles) {
+      if (hashes.get(file.path) === file.sha256) continue;
+      for (let offset = 0; offset < file.size; offset += 192 * 1024) {
+        await this.fleet.callRemote(serverId, 'fleet.relay_stage', {
+          action: 'write', workspaceId: workspace.workspaceId, path: file.path, offset,
+          data: this.files.readSourceChunk(workspace.workspacePath, file.path, offset),
+        });
+      }
+      if (file.size === 0) await this.fleet.callRemote(serverId, 'fleet.relay_stage', {
+        action: 'write', workspaceId: workspace.workspaceId, path: file.path, offset: 0, data: '',
+      });
+      await this.fleet.callRemote(serverId, 'fleet.relay_stage', {
+        action: 'seal', workspaceId: workspace.workspaceId, path: file.path, sha256: file.sha256,
+      });
+    }
+    await this.fleet.callRemote(serverId, 'fleet.relay_stage', {
+      action: 'finish', workspaceId: workspace.workspaceId, name: workspace.name, researchKitId: workspace.researchKitId,
+    });
+    this.files.saveBaseline({ workspaceId: workspace.workspaceId, workspacePath: workspace.workspacePath,
+      machineId, remoteServerId: serverId, remoteMachineId, runId, ownerMachineId: this.fleet.machineId(),
+      files: Object.fromEntries(sourceFiles.map((file) => [file.path, file.sha256])) });
+    return { machineId, url: server.url, operatorToken: server.operatorToken,
+      remoteMachineId, ownerMachineId: this.fleet.machineId() };
+    } catch (error) {
+      await this.fleet.callRemote(serverId, 'fleet.release', {
+        machineId: remoteMachineId, ownerMachineId: this.fleet.machineId(), sessionId: runId,
+      }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async completeRemote(baseline: import('./fleetWorkspace.js').FleetTransferBaseline): Promise<{ imported: number; conflicts: number; candidateRecords: number }> {
+    const serverId = baseline.remoteServerId!;
+    if (!baseline.remoteCompleted) {
+      await this.fleet.callRemote(serverId, 'fleet.complete', { runId: baseline.runId });
+      baseline.remoteCompleted = true;
+      this.files.saveBaseline(baseline);
+    }
+    const exportList = await this.fleet.callRemote<{ files: FleetFile[] }>(serverId, 'fleet.relay_export', { action: 'list', workspaceId: baseline.workspaceId });
+    let imported = 0; let conflicts = 0; let candidateRecords = 0;
+    for (const file of exportList.files) {
+      if (baseline.files[file.path] === file.sha256 || file.path === 'references/research-index.json' || file.path.startsWith('traces/')) continue;
+      const result = await this.files.importGuestFile(baseline, file, async (offset) => {
+        const chunk = await this.fleet.callRemote<{ data: string; size: number }>(serverId, 'fleet.relay_export', {
+          action: 'read', workspaceId: baseline.workspaceId, path: file.path, offset,
+        });
+        if (chunk.size !== file.size) throw new Error('Remote Fleet result changed during transfer.');
+        return chunk.data;
+      });
+      if (result === 'conflict') conflicts += 1;
+      else if (result === 'candidate') candidateRecords += 1;
+      else imported += 1;
+    }
+    const result = { imported, conflicts, candidateRecords };
+    await this.fleet.callRemote(serverId, 'fleet.release', {
+      machineId: baseline.remoteMachineId, ownerMachineId: this.fleet.machineId(), sessionId: baseline.runId,
+    });
+    this.files.saveBaseline({ ...baseline, completedResult: result });
+    return result;
+  }
+
+  private async connectWithRetry(machineId: string, runId: string, timeoutMs: number, ownerMachineId = this.fleet.machineId()): Promise<FleetRemoteEndpoint> {
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown = null;
     do {
-      try { return await this.connect(machineId); }
+      try { return await this.connect(machineId, runId, ownerMachineId); }
       catch (error) { lastError = error; }
       if (Date.now() >= deadline) break;
       await delay(Math.min(2_000, deadline - Date.now()));
@@ -202,3 +325,7 @@ function freePort(): Promise<number> {
 }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
+function parseRemoteMachineId(value: string): { serverId: string; machineId: string } | null {
+  const match = /^remote:([A-Za-z0-9][A-Za-z0-9._-]{0,127}):(tart|hyper-v):([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/u.exec(value);
+  return match ? { serverId: match[1]!, machineId: `${match[2]}:${match[3]}` } : null;
+}

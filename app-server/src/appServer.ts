@@ -209,9 +209,13 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     ? null
     : options.automationScheduler ?? {};
   const sessions = new Map<string, SessionRuntime>();
+  const fleetProxySessions = new Map<string, { endpoint: { url: string; operatorToken: string }; clientTokens: Set<string>; completed: boolean;
+    workspaceId: string | null; prompt: string; state: string; startedAt: string }>();
   const introspectionBindings = new Map<string, ResidentIntrospectionBinding>();
   let discoveryRecord: AppServerDiscoveryRecord | null = null;
   let automationTimer: NodeJS.Timeout | null = null;
+  let fleetProxyTimer: NodeJS.Timeout | null = null;
+  let fleetProxyScanInProgress = false;
   let automationScanInProgress = false;
   let closing = false;
 
@@ -235,6 +239,14 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   httpServer.on('upgrade', (request, socket, head) => {
     try {
+      const proxyMatch = /^\/v1\/sessions\/([^/]+)\/transport$/.exec(new URL(request.url ?? '/', 'http://localhost').pathname);
+      const proxy = proxyMatch ? fleetProxySessions.get(decodeURIComponent(proxyMatch[1] ?? '')) : null;
+      if (proxy) {
+        const token = [...proxy.clientTokens].find((value) => authorizedBearer(request.headers.authorization, value));
+        if (!token) { rejectUpgrade(socket, 401, 'A valid bearer token is required.'); return; }
+        wss.handleUpgrade(request, socket, head, (clientSocket) => attachFleetProxyClient(proxy, token, request.url ?? '', clientSocket));
+        return;
+      }
       const runtime = authenticateUpgrade(request);
       if (!runtime) {
         rejectUpgrade(socket, 404, 'Unknown session.');
@@ -288,6 +300,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     automationTimer.unref();
     setImmediate(() => void scanDueAutomations());
   }
+  fleetProxyTimer = setInterval(() => void scanFleetProxySessions(), 5_000);
+  fleetProxyTimer.unref();
 
   function requireOperator(request: IncomingMessage): void {
     if (!authorizedBearer(request.headers.authorization, operatorToken)) {
@@ -455,6 +469,12 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       return;
     }
     requireOperator(request);
+    const proxiedSessionId = proxySessionId(url.pathname);
+    const proxied = proxiedSessionId ? fleetProxySessions.get(proxiedSessionId) : null;
+    if (proxied) {
+      await proxyFleetHttp(proxied, request, response, url, proxiedSessionId!);
+      return;
+    }
     if (request.method === 'GET' && url.pathname === BEALE_APP_SERVER_PROVIDERS_PATH) {
       sendJson(response, 200, hostService.providerCatalog());
       return;
@@ -466,7 +486,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (request.method === 'GET' && url.pathname === BEALE_APP_SERVER_SESSIONS_PATH) {
       const catalog: BealeAppServerSessionCatalog = {
         controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
-        sessions: listSessions()
+        sessions: [...listSessions(), ...[...fleetProxySessions].map(([sessionId, proxy]): BealeAppServerSessionCatalogEntry => ({
+          sessionId, state: proxySessionState(proxy.state), startedAt: proxy.startedAt, endedAt: proxy.completed ? new Date().toISOString() : null,
+          exitCode: null, clientConnected: false, diagnostic: null,
+          replay: { bufferedFrames: 0, bufferedBytes: 0, droppedFrames: 0 },
+        }))]
       };
       sendJson(response, 200, catalog);
       return;
@@ -483,6 +507,22 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       }
       if (body.args !== undefined && (!Array.isArray(body.args) || body.args.some((value) => typeof value !== 'string'))) {
         throw new HttpError(400, 'Operation args must be an array of strings.');
+      }
+      if (body.operation === 'fleet.connect' && isRecord(body.input) && body.input.proxy === true) {
+        const runId = typeof body.input.runId === 'string' ? body.input.runId : '';
+        const endpoint = await hostCall(() => hostService.executeOperation({ operation: 'fleet.connect', input: body.input })) as { url?: unknown; operatorToken?: unknown };
+        if (typeof endpoint.url !== 'string' || typeof endpoint.operatorToken !== 'string') throw new HttpError(502, 'Fleet guest connection is unavailable.');
+        const attach = await fetch(`${endpoint.url}${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(runId)}/attach`, {
+          method: 'POST', headers: { authorization: `Bearer ${endpoint.operatorToken}` }, signal: AbortSignal.timeout(30_000),
+        });
+        if (!attach.ok) throw new HttpError(502, 'Fleet guest session could not be reattached.');
+        const attached: unknown = await attach.json();
+        const token = isRecord(attached) && isRecord(attached.transport) ? attached.transport.token : null;
+        if (typeof token !== 'string' || !token) throw new HttpError(502, 'Fleet guest session returned no transport token.');
+        fleetProxySessions.set(runId, { endpoint: { url: endpoint.url, operatorToken: endpoint.operatorToken }, clientTokens: new Set([token]),
+          completed: false, workspaceId: null, prompt: '', state: 'running', startedAt: new Date().toISOString() });
+        sendJson(response, 200, { controlVersion: BEALE_APP_SERVER_CONTROL_VERSION, result: { machineId: body.input.machineId, url: baseUrl } });
+        return;
       }
       const controller = new AbortController();
       const abortDisconnectedOperation = (): void => {
@@ -526,10 +566,17 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       ? /^\/v1\/workspaces\/([^/]+)\/sessions$/.exec(url.pathname)
       : null;
     if (workspaceSessionsMatch) {
-      sendJson(response, 200, await hostCall(() => hostService.workspaceSessions(
-        pathPart(workspaceSessionsMatch, 1),
+      const workspaceId = pathPart(workspaceSessionsMatch, 1);
+      const catalog = await hostCall(() => hostService.workspaceSessions(
+        workspaceId,
         queryInteger(url, 'limit', 200)
-      )));
+      ));
+      const proxied = [...fleetProxySessions].flatMap(([sessionId, proxy]) => proxy.workspaceId === workspaceId ? [{
+        id: sessionId, workspaceId, title: proxy.prompt.slice(0, 90), prompt: proxy.prompt, status: proxy.state,
+        createdAt: proxy.startedAt, attempts: [{ startedAt: proxy.startedAt }], metadata: {},
+      }] : []);
+      sendJson(response, 200, isRecord(catalog) && Array.isArray(catalog.result)
+        ? { ...catalog, result: [...proxied, ...catalog.result] } : catalog);
       return;
     }
     const canonicalSessionMatch = /^\/v1\/workspaces\/([^/]+)\/sessions\/([^/]+)\/(update|events|collaboration|captures|event-details)$/.exec(url.pathname);
@@ -734,6 +781,37 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   ): Promise<StartedSession> {
     const normalized = normalizeSessionRequest(input);
     let request = normalized.request;
+    if (request.launch.machineId && request.launch.machineId !== 'local' && request.launch.fleetOwnerMachineId) {
+      const fleetState = await hostCall(() => hostService.executeOperation({ operation: 'fleet.state' })) as { role?: unknown };
+      if (fleetState.role === 'primary') {
+        const endpoint = await hostCall(() => hostService.executeOperation({ operation: 'fleet.prepare', input: {
+          workspaceId: request.launch.workspaceId, runId: normalized.sessionId,
+          machineId: request.launch.machineId, ownerMachineId: request.launch.fleetOwnerMachineId,
+        } })) as { url?: unknown; operatorToken?: unknown };
+        if (typeof endpoint.url !== 'string' || typeof endpoint.operatorToken !== 'string') throw new HttpError(502, 'Fleet guest connection is unavailable.');
+        let guestRejected = false;
+        try {
+        const guestResponse = await fetch(endpoint.url + BEALE_APP_SERVER_SESSIONS_PATH, {
+          method: 'POST', headers: { authorization: `Bearer ${endpoint.operatorToken}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ ...request, sessionId: normalized.sessionId }), redirect: 'error', signal: AbortSignal.timeout(90_000),
+        });
+        if (!guestResponse.ok) { guestRejected = true; throw new HttpError(502, `Fleet guest rejected the session (${guestResponse.status}).`); }
+        const started: unknown = await guestResponse.json();
+        const startedRecord = isRecord(started) ? started : null;
+        const token = startedRecord && isRecord(startedRecord.transport) ? startedRecord.transport.token : null;
+        const guestSession = startedRecord && isRecord(startedRecord.session) ? startedRecord.session : null;
+        if (typeof token !== 'string' || !token || guestSession?.sessionId !== normalized.sessionId) throw new HttpError(502, 'Fleet guest returned an invalid session.');
+        fleetProxySessions.set(normalized.sessionId, { endpoint: { url: endpoint.url, operatorToken: endpoint.operatorToken }, clientTokens: new Set([token]),
+          completed: false, workspaceId: request.launch.workspaceId, prompt: request.launch.promptMarkdown, state: 'running', startedAt: new Date().toISOString() });
+        return started as StartedSession;
+        } catch (error) {
+          if (guestRejected) await hostCall(() => hostService.executeOperation({ operation: 'fleet.release', input: {
+            machineId: request.launch.machineId, ownerMachineId: request.launch.fleetOwnerMachineId, sessionId: normalized.sessionId,
+          } })).catch(() => undefined);
+          throw error;
+        }
+      }
+    }
     let residentIntrospectionToken: string | null = null;
     if (residentIntrospection && !request.launch.introspection) {
       residentIntrospectionToken = generateSessionToken();
@@ -796,6 +874,28 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       await recordSessionLaunchFailure(runtime, diagnostic);
       throw new HttpError(502, `app-server session failed to start: ${diagnostic}`);
     }
+  }
+
+  async function scanFleetProxySessions(): Promise<void> {
+    if (closing || fleetProxyScanInProgress) return;
+    fleetProxyScanInProgress = true;
+    try {
+    for (const [runId, proxy] of fleetProxySessions) {
+      if (proxy.completed) continue;
+      try {
+        const response = await fetch(`${proxy.endpoint.url}${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(runId)}`, {
+          headers: { authorization: `Bearer ${proxy.endpoint.operatorToken}` }, signal: AbortSignal.timeout(3_000),
+        });
+        if (!response.ok) continue;
+        const body: unknown = await response.json();
+        const state = isRecord(body) && isRecord(body.session) ? body.session.state : null;
+        if (typeof state === 'string') proxy.state = state;
+        if (state !== 'completed' && state !== 'failed' && state !== 'stopped') continue;
+        await hostCall(() => hostService.executeOperation({ operation: 'fleet.complete', input: { runId } }));
+        proxy.completed = true;
+      } catch { /* Retry after the guest or transfer becomes available. */ }
+    }
+    } finally { fleetProxyScanInProgress = false; }
   }
 
   async function scanDueAutomations(): Promise<void> {
@@ -1423,6 +1523,54 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     return runtime;
   }
 
+  async function proxyFleetHttp(
+    proxy: { endpoint: { url: string; operatorToken: string }; clientTokens: Set<string> },
+    request: IncomingMessage, response: ServerResponse, url: URL, sessionId: string,
+  ): Promise<void> {
+    const body = request.method === 'POST' ? await readProxyBody(request) : undefined;
+    const upstream = await fetch(proxy.endpoint.url + url.pathname + url.search, {
+      method: request.method ?? 'GET',
+      headers: { authorization: `Bearer ${proxy.endpoint.operatorToken}`,
+        ...(body ? { 'content-type': request.headers['content-type'] ?? 'application/json' } : {}) },
+      ...(body ? { body } : {}), signal: AbortSignal.timeout(60_000),
+    });
+    const payload: unknown = await upstream.json().catch(() => null);
+    if (request.method === 'POST' && (url.pathname === `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/attach`
+      || url.pathname === `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/continuations`)
+      && isRecord(payload) && isRecord(payload.transport) && typeof payload.transport.token === 'string') {
+      proxy.clientTokens.add(payload.transport.token);
+    }
+    sendJson(response, upstream.status, payload);
+  }
+
+  function attachFleetProxyClient(
+    proxy: { endpoint: { url: string; operatorToken: string }; clientTokens: Set<string> },
+    token: string, path: string, client: WebSocket,
+  ): void {
+    const upstreamUrl = new URL(path, proxy.endpoint.url);
+    upstreamUrl.protocol = upstreamUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    const upstream = new WebSocket(upstreamUrl, { headers: { authorization: `Bearer ${token}` }, maxPayload: MAX_FRAME_BYTES });
+    const queued: Array<{ frame: Buffer; binary: boolean }> = [];
+    let queuedBytes = 0;
+    client.on('message', (data, binary) => {
+      const frame = toBuffer(data);
+      if (frame.byteLength > MAX_FRAME_BYTES) { client.close(1009); return; }
+      if (upstream.readyState === WebSocket.OPEN) upstream.send(frame, { binary });
+      else if (upstream.readyState === WebSocket.CONNECTING && queuedBytes + frame.byteLength <= MAX_FRAME_BYTES * 4) {
+        queued.push({ frame, binary }); queuedBytes += frame.byteLength;
+      } else client.close(1011, 'Fleet guest transport unavailable');
+    });
+    upstream.on('open', () => {
+      for (const entry of queued) upstream.send(entry.frame, { binary: entry.binary });
+      queued.length = 0;
+    });
+    upstream.on('message', (data, binary) => { if (client.readyState === WebSocket.OPEN) client.send(data, { binary }); });
+    upstream.on('close', () => { if (client.readyState === WebSocket.OPEN) client.close(1001); });
+    upstream.on('error', () => { if (client.readyState === WebSocket.OPEN) client.close(1011); });
+    client.on('close', () => { if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) upstream.close(); });
+    client.on('error', () => upstream.terminate());
+  }
+
   function attachFacadeClient(runtime: SessionRuntime, clientSocket: WebSocket): void {
     runtime.clientSockets.add(clientSocket);
     let receivedClientHello = false;
@@ -1546,6 +1694,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     closing = true;
     if (automationTimer) clearInterval(automationTimer);
     automationTimer = null;
+    if (fleetProxyTimer) clearInterval(fleetProxyTimer);
+    fleetProxyTimer = null;
     for (const runtime of [...sessions.values()]) {
       if (runtime.recoveryTimer) clearTimeout(runtime.recoveryTimer);
       runtime.recoveryTimer = null;
@@ -1643,6 +1793,31 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   } catch {
     throw new HttpError(400, 'Request body must be valid JSON.');
   }
+}
+
+async function readProxyBody(request: IncomingMessage): Promise<Buffer | undefined> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBufferLike);
+    total += buffer.byteLength;
+    if (total > MAX_REQUEST_BODY_BYTES) throw new HttpError(413, 'Fleet proxy request body is too large.');
+    chunks.push(buffer);
+  }
+  return total ? Buffer.concat(chunks) : undefined;
+}
+
+function proxySessionId(pathname: string): string | null {
+  const direct = /^\/v1\/sessions\/([^/]+)(?:\/[^/]+)?$/u.exec(pathname);
+  const canonical = /^\/v1\/workspaces\/[^/]+\/sessions\/([^/]+)\/(?:update|events|collaboration|captures|event-details)$/u.exec(pathname);
+  const encoded = direct?.[1] ?? canonical?.[1];
+  if (!encoded) return null;
+  try { return decodeURIComponent(encoded); } catch { return null; }
+}
+
+function proxySessionState(value: string): BealeAppServerSessionCatalogEntry['state'] {
+  return value === 'starting' || value === 'running' || value === 'completed' || value === 'failed' || value === 'stopped'
+    ? value : 'running';
 }
 
 function sendJson(response: ServerResponse, status: number, payload: unknown): void {

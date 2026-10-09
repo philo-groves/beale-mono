@@ -603,7 +603,10 @@ export class AppServerRunEngine {
     active.appServerRecord = record;
     if (active.stopped && machineId !== 'local') { this.finishPrelaunchStop(active); return; }
     const guestRequest = machineId === 'local' ? request : {
-      ...request, launch: { ...request.launch, introspection: undefined }
+      ...request, launch: { ...request.launch, introspection: undefined,
+        ...(prepared.remoteMachineId ? { machineId: prepared.remoteMachineId } : {}),
+        ...(prepared.ownerMachineId ? { fleetOwnerMachineId: prepared.ownerMachineId } : {}),
+      }
     };
     const started = await startAppServerSession(record, guestRequest);
     if (active.stopped) {
@@ -662,7 +665,7 @@ export class AppServerRunEngine {
     const machineId = machineIdFromRun(run);
     if (machineId === 'local') return ensureBealeAppServerRunning();
     const connection = await invokeAppServerOperation<FleetPreparedSession>({
-      operation: 'fleet.connect', input: { machineId }
+      operation: 'fleet.connect', input: { machineId, runId: run.id }
     });
     return fleetRemoteRecord(connection);
   }
@@ -2915,6 +2918,8 @@ interface FleetPreparedSession {
   machineId: string;
   url?: string;
   operatorToken?: string;
+  remoteMachineId?: string;
+  ownerMachineId?: string;
 }
 
 function machineIdFromRun(run: RunRecord): string {
@@ -2925,14 +2930,17 @@ function machineIdFromRun(run: RunRecord): string {
 function fleetRemoteRecord(endpoint: FleetPreparedSession): BealeAppServerDiscovery {
   if (!endpoint.url || !endpoint.operatorToken) throw new Error('Fleet did not provide a guest Beale connection.');
   const url = new URL(endpoint.url);
-  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) {
-    throw new Error('Fleet guest control connection must use a local SSH tunnel.');
+  const localTunnel = url.protocol === 'http:' && url.hostname === '127.0.0.1' && Boolean(url.port);
+  const tailnet = url.protocol === 'https:' && /^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/u.test(url.hostname)
+    && url.pathname === '/' && !url.username && !url.password && !url.search && !url.hash;
+  if (!localTunnel && !tailnet) {
+    throw new Error('Fleet guest control must use a local SSH tunnel or Tailscale HTTPS app server.');
   }
   return {
     version: 1,
     pid: 0,
-    host: '127.0.0.1',
-    port: Number(url.port),
+    host: url.hostname,
+    port: Number(url.port || (tailnet ? 443 : 0)),
     url: endpoint.url,
     localUrl: endpoint.url,
     operatorToken: endpoint.operatorToken,

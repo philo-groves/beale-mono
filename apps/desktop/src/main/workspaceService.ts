@@ -982,12 +982,36 @@ export class WorkspaceService {
     return invokeAppServerOperation<FleetState>({ operation: 'fleet.state' });
   }
 
+  public getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_machines' });
+  }
+
+  public getFleetRemoteCatalog(serverId: string): Promise<import('@beale/app-server-runtime/protocol').FleetRemoteCatalog> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_catalog', input: { serverId } });
+  }
+
+  public getFleetRemoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_session', input: { serverId, workspaceId, sessionId } });
+  }
+
+  public startFleetRemoteSession(serverId: string, workspaceId: string, promptMarkdown: string, machineId: string): Promise<{ sessionId: string }> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_launch', input: { serverId, workspaceId, promptMarkdown, machineId } });
+  }
+
+  public controlFleetRemoteSession(serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string): Promise<void> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_control', input: { serverId, sessionId, type, instruction } });
+  }
+
   public configureFleet(input: Record<string, unknown>): Promise<FleetState> {
     return invokeAppServerOperation<FleetState>({ operation: 'fleet.configure', input });
   }
 
   public testFleetVmConnection(input: FleetSshTestInput): Promise<FleetSshTestResult> {
     return invokeAppServerOperation<FleetSshTestResult>({ operation: 'fleet.test_ssh', input });
+  }
+
+  public testFleetAppServer(input: { serverId?: string; url: string; operatorToken: string }): Promise<{ success: boolean; message: string }> {
+    return invokeAppServerOperation({ operation: 'fleet.test_app_server', input });
   }
 
   public cloneFleetVm(baseId: string, name: string): Promise<FleetState> {

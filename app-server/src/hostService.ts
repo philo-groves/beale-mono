@@ -212,11 +212,38 @@ export class AppServerHostService {
     if (request.operation.startsWith('fleet.')) {
       const input = isRecord(request.input) ? request.input : {};
       if (request.operation === 'fleet.state') return this.fleet.state();
+      if (request.operation === 'fleet.remote_machines') return this.fleet.remoteMachines();
+      if (request.operation === 'fleet.remote_catalog') return this.fleet.remoteCatalog(nonEmpty(input.serverId) ?? '');
+      if (request.operation === 'fleet.remote_session') return this.fleet.remoteSession(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.sessionId) ?? '');
+      if (request.operation === 'fleet.remote_launch') return this.fleet.remoteLaunch(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.promptMarkdown) ?? '', nonEmpty(input.machineId) ?? 'local');
+      if (request.operation === 'fleet.remote_control') return this.fleet.remoteControl(nonEmpty(input.serverId) ?? '', nonEmpty(input.sessionId) ?? '', nonEmpty(input.type) ?? '', nonEmpty(input.instruction));
       if (request.operation === 'fleet.configure') return this.fleet.configure(input);
       if (request.operation === 'fleet.test_ssh') return this.fleet.testSsh(decodeFleetSshTestInput(input));
-      if (request.operation === 'fleet.clone') return this.fleet.clone(nonEmpty(input.baseId) ?? '', nonEmpty(input.name) ?? '');
-      if (request.operation === 'fleet.start') return this.fleet.start(nonEmpty(input.machineId) ?? '');
-      if (request.operation === 'fleet.stop') return this.fleet.stop(nonEmpty(input.machineId) ?? '');
+      if (request.operation === 'fleet.test_app_server') return this.fleet.testAppServer(input);
+      if (request.operation === 'fleet.clone') {
+        const state = await this.fleet.clone(nonEmpty(input.baseId) ?? '', nonEmpty(input.name) ?? '');
+        const owner = fleetOwner(input, this.fleet.machineId());
+        const clone = state.machines.find((machine) => machine.name === input.name);
+        return owner && clone ? this.fleet.reserve(clone.id, owner) : state;
+      }
+      if (request.operation === 'fleet.start') {
+        const machineId = nonEmpty(input.machineId) ?? '';
+        const owner = fleetOwner(input, this.fleet.machineId());
+        if (owner) await this.fleet.reserve(machineId, owner);
+        return this.fleet.start(machineId, owner ?? undefined);
+      }
+      if (request.operation === 'fleet.stop') return this.fleet.stop(nonEmpty(input.machineId) ?? '', fleetOwner(input, this.fleet.machineId()) ?? undefined);
+      if (request.operation === 'fleet.reserve') {
+        const owner = fleetOwner(input, null);
+        if (!owner) throw new Error('Fleet reservation requires an owner machine and session.');
+        return this.fleet.reserve(nonEmpty(input.machineId) ?? '', { ...owner,
+          ...(nonEmpty(input.workspaceId) ? { workspaceId: nonEmpty(input.workspaceId)! } : {}) });
+      }
+      if (request.operation === 'fleet.release') {
+        const owner = fleetOwner(input, null);
+        if (!owner) throw new Error('Fleet release requires an owner machine and session.');
+        return this.fleet.release(nonEmpty(input.machineId) ?? '', owner);
+      }
       if (request.operation === 'fleet.prepare') {
         const workspaceId = nonEmpty(input.workspaceId);
         const runId = nonEmpty(input.runId);
@@ -224,9 +251,9 @@ export class AppServerHostService {
         if (!workspaceId || !runId) throw new Error('Fleet preparation requires a workspace and run ID.');
         const workspace = this.requireWorkspace(workspaceId);
         if (!machineId || machineId === 'local') { await this.fleetRemote.validateLocal(workspace.workspaceId, nonEmpty(input.mode)); return { machineId: 'local' }; }
-        return this.fleetRemote.prepare(workspace, runId, machineId);
+        return this.fleetRemote.prepare(workspace, runId, machineId, nonEmpty(input.ownerMachineId) ?? this.fleet.machineId());
       }
-      if (request.operation === 'fleet.connect') return this.fleetRemote.connect(nonEmpty(input.machineId) ?? '');
+      if (request.operation === 'fleet.connect') return this.fleetRemote.connect(nonEmpty(input.machineId) ?? '', nonEmpty(input.runId) ?? '', nonEmpty(input.ownerMachineId) ?? this.fleet.machineId());
       if (request.operation === 'fleet.complete') {
         const runId = nonEmpty(input.runId);
         if (!runId) throw new Error('Fleet completion requires a run ID.');
@@ -239,6 +266,11 @@ export class AppServerHostService {
           await this.fleet.configure({ action: 'set-primary', name: input.primaryName });
         }
         return request.operation === 'fleet.stage' ? this.fleetWorkspace.guestStage(input) : this.fleetWorkspace.guestExport(input);
+      }
+      if (request.operation === 'fleet.relay_stage' || request.operation === 'fleet.relay_export') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'primary') throw new Error('Fleet relay transfers require an enabled primary app server.');
+        return request.operation === 'fleet.relay_stage' ? this.fleetWorkspace.guestStage(input) : this.fleetWorkspace.guestExport(input);
       }
       throw new Error('Unsupported Fleet operation.');
     }
@@ -2017,6 +2049,14 @@ function stringRecord(value: unknown): Record<string, string> {
 
 function nonEmpty(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function fleetOwner(input: Record<string, unknown>, defaultMachineId: string | null): { machineId: string; sessionId: string } | null {
+  const sessionId = nonEmpty(input.sessionId);
+  if (!sessionId) return null;
+  const machineId = nonEmpty(input.ownerMachineId) ?? defaultMachineId;
+  if (!machineId) throw new Error('Fleet owner machine ID is required.');
+  return { machineId, sessionId };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

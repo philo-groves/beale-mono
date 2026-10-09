@@ -3,11 +3,12 @@ import type { FleetState } from '@beale/app-server-runtime/protocol';
 import { defaultFleetMachineId, fleetVmRequired, isAllowedFleetMachine } from '../src/shared/fleet';
 
 const base: FleetState = {
-  role: 'primary', enabled: true, available: true, error: null,
+  machineId: 'machine-example', role: 'primary', enabled: true, available: true, error: null,
+  appServers: [], remoteMachines: [],
   machines: [
-    { id: 'tart:example-base', name: 'example-base', backend: 'tart', state: 'stopped', base: true, privilege: 'standard', sshConfigured: true, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: 'example' },
-    { id: 'tart:worker-z', name: 'worker-z', backend: 'tart', state: 'stopped', base: false, privilege: 'standard', sshConfigured: true, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: 'example' },
-    { id: 'tart:worker-a', name: 'worker-a', backend: 'tart', state: 'stopped', base: false, privilege: 'standard', sshConfigured: true, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: 'example' },
+    { id: 'tart:example-base', name: 'example-base', backend: 'tart', state: 'stopped', base: true, privilege: 'standard', sshConfigured: true, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: 'example', owner: null },
+    { id: 'tart:worker-z', name: 'worker-z', backend: 'tart', state: 'stopped', base: false, privilege: 'standard', sshConfigured: true, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: 'example', owner: null },
+    { id: 'tart:worker-a', name: 'worker-a', backend: 'tart', state: 'stopped', base: false, privilege: 'standard', sshConfigured: true, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: 'example', owner: null },
   ],
   primary: null, requiredWorkspaceIds: [], optionalWorkspaceIds: [], lastMachineByWorkspace: {},
 };
@@ -39,5 +40,11 @@ describe('Fleet machine selection', () => {
     const state = { ...base, machines: base.machines.map((machine) =>
       machine.base ? { ...machine, sshConfigured: false } : machine) };
     expect(fleetVmRequired(state, 'workspace-example')).toBe(true);
+  });
+
+  it('offers an available remote worker under its owning server identity', () => {
+    const state = { ...base, machines: base.machines.slice(0, 1), remoteMachines: [{ ...base.machines[1]!, id: 'remote:server-example:tart:worker-z', name: 'Other machine / worker-z' }] };
+    expect(defaultFleetMachineId(state, 'workspace-example')).toBe('remote:server-example:tart:worker-z');
+    expect(isAllowedFleetMachine(state, 'workspace-example', 'remote:server-example:tart:worker-z')).toBe(true);
   });
 });

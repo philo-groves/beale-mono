@@ -4,8 +4,9 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import type { FleetBackend, FleetMachine, FleetSshTestInput, FleetSshTestResult, FleetState } from '@beale/app-server-runtime/protocol';
+import { APP_SERVER_SESSION_LAUNCH_VERSION, BEALE_APP_SERVER_CONTRACT_TIMESTAMP, BEALE_APP_SERVER_CONTROL_VERSION, BEALE_APP_SERVER_OPERATIONS_PATH, BEALE_APP_SERVER_SERVER_PATH, BEALE_APP_SERVER_WORKSPACES_PATH, BEALE_APP_SERVER_SESSIONS_PATH, type AppServerProtocolOperation, type FleetBackend, type FleetMachine, type FleetRemoteCatalog, type FleetSshTestInput, type FleetSshTestResult, type FleetState } from '@beale/app-server-runtime/protocol';
 import { sshConnectionArgs } from './fleetSsh.js';
+import { normalizeTailnetOrigin, verifySameTailnet } from './tailnetRemote.js';
 
 const execFileAsync = promisify(execFile);
 const VM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -21,7 +22,8 @@ interface FleetMachineConfig {
 }
 
 interface FleetConfiguration {
-  version: 1;
+  version: 2;
+  machineId: string;
   role: 'primary' | 'guest';
   enabled: boolean;
   primary: { name: string; sshHost: string | null } | null;
@@ -29,6 +31,8 @@ interface FleetConfiguration {
   optionalWorkspaceIds: string[];
   lastMachineByWorkspace: Record<string, string>;
   machines: Record<string, FleetMachineConfig>;
+  appServers: Record<string, { name: string; url: string; operatorToken: string }>;
+  owners: Record<string, { machineId: string; sessionId: string; workspaceId?: string }>;
 }
 
 export interface FleetCommandRunner {
@@ -54,6 +58,8 @@ const defaultRunner: FleetCommandRunner = {
 };
 
 export class FleetService {
+  private ownershipQueue: Promise<void> = Promise.resolve();
+  private readonly validatedRemotePeers = new Map<string, { url: string; at: number }>();
   public constructor(
     private readonly path = join(homedir(), '.beale', 'fleet.json'),
     private readonly hostPlatform = platform(),
@@ -78,6 +84,8 @@ export class FleetService {
           sshKnownHostsConfigured: Boolean(saved?.sshKnownHostsFile),
           sshHost: saved?.sshHost ?? null,
           sshUser: saved?.sshUser ?? null,
+          owner: config.owners[machine.id]
+            ? { machineId: config.owners[machine.id]!.machineId, sessionId: config.owners[machine.id]!.sessionId } : null,
         };
       }).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
       return this.project(config, machines, true, null);
@@ -87,13 +95,19 @@ export class FleetService {
   }
 
   public async configure(input: Record<string, unknown>): Promise<FleetState> {
+    return this.exclusive(() => this.configureUnlocked(input));
+  }
+
+  private async configureUnlocked(input: Record<string, unknown>): Promise<FleetState> {
     const config = this.read();
     const action = requiredText(input.action, 'Fleet action');
     if (action === 'set-role') {
       if (input.role !== 'primary' && input.role !== 'guest') throw new Error('Fleet role must be primary or guest.');
+      if (input.role !== config.role && Object.keys(config.owners).length) throw new Error('Release active VM sessions before changing the Fleet role.');
       config.role = input.role;
     } else if (action === 'set-enabled') {
       if (typeof input.enabled !== 'boolean') throw new Error('Fleet enabled must be boolean.');
+      if (!input.enabled && Object.keys(config.owners).length) throw new Error('Release active VM sessions before disabling Fleet.');
       config.enabled = input.enabled;
     } else if (action === 'set-primary') {
       config.primary = {
@@ -113,7 +127,9 @@ export class FleetService {
       const workspaceId = validWorkspaceId(input.workspaceId);
       const machineId = requiredText(input.machineId, 'Machine ID');
       const state = await this.state();
-      if (!state.machines.some((machine) => machine.id === machineId && !machine.base && machine.sshConfigured && machine.state !== 'unknown')) {
+      const selectable = state.machines.some((machine) => machine.id === machineId && !machine.base && !machine.owner && machine.sshConfigured && machine.state !== 'unknown')
+        || (machineId.startsWith('remote:') && (await this.remoteMachines()).some((machine) => machine.id === machineId));
+      if (!selectable) {
         throw new Error('Select an existing runnable Fleet machine.');
       }
       config.lastMachineByWorkspace[workspaceId] = machineId;
@@ -121,6 +137,7 @@ export class FleetService {
       const machineId = requiredText(input.machineId, 'Machine ID');
       const state = await this.state();
       if (!state.machines.some((machine) => machine.id === machineId)) throw new Error('Unknown Fleet machine.');
+      if (config.owners[machineId]) throw new Error('VM settings cannot change while a session owns the VM.');
       const prior = config.machines[machineId] ?? defaultMachineConfig();
       const base = input.base === undefined ? prior.base : input.base;
       const privilege = input.privilege === undefined ? prior.privilege : input.privilege;
@@ -137,11 +154,238 @@ export class FleetService {
         sshIdentityFile: input.sshIdentityFile === undefined ? prior.sshIdentityFile : optionalText(input.sshIdentityFile),
         sshKnownHostsFile: input.sshKnownHostsFile === undefined ? prior.sshKnownHostsFile : optionalText(input.sshKnownHostsFile),
       };
+    } else if (action === 'set-app-server') {
+      this.requirePrimaryEnabled(config);
+      const id = requiredText(input.serverId, 'App server ID');
+      if (!VM_NAME.test(id)) throw new Error('Invalid app server ID.');
+      const name = requiredText(input.name, 'App server name');
+      const url = normalizeTailnetOrigin(input.url);
+      const token = typeof input.operatorToken === 'string' && input.operatorToken.trim()
+        ? input.operatorToken.trim() : config.appServers[id]?.operatorToken;
+      if (!token || token.length > 4096) throw new Error('An app-server operator token is required.');
+      await this.validateRemoteAppServer(url, token);
+      config.appServers[id] = { name, url, operatorToken: token };
+      this.validatedRemotePeers.delete(id);
+    } else if (action === 'remove-app-server') {
+      this.requirePrimaryEnabled(config);
+      const id = requiredText(input.serverId, 'App server ID');
+      delete config.appServers[id];
+      this.validatedRemotePeers.delete(id);
     } else {
       throw new Error('Unsupported Fleet configuration action.');
     }
     this.write(config);
     return this.state();
+  }
+
+  public machineId(): string { return this.read().machineId; }
+
+  public remoteAppServer(serverId: string): { id: string; name: string; url: string; operatorToken: string } {
+    const config = this.read();
+    this.requirePrimaryEnabled(config);
+    const server = config.appServers[serverId];
+    if (!server) throw new Error('Unknown Fleet app server.');
+    return { id: serverId, ...server };
+  }
+
+  public async testAppServer(input: Record<string, unknown>): Promise<{ success: boolean; message: string }> {
+    try {
+      const url = normalizeTailnetOrigin(input.url);
+      const serverId = typeof input.serverId === 'string' ? input.serverId : '';
+      const token = typeof input.operatorToken === 'string' && input.operatorToken.trim()
+        ? input.operatorToken.trim() : this.read().appServers[serverId]?.operatorToken ?? '';
+      if (!token || token.length > 4096) throw new Error('An app-server operator token is required.');
+      await this.validateRemoteAppServer(url, token);
+      return { success: true, message: 'Connected to a compatible app server on this Tailscale network.' };
+    } catch (error) {
+      return { success: false, message: boundedError(error) };
+    }
+  }
+
+  public async connectedRemoteAppServer(serverId: string): Promise<{ id: string; name: string; url: string; operatorToken: string }> {
+    const server = this.remoteAppServer(serverId);
+    const cached = this.validatedRemotePeers.get(serverId);
+    if (!cached || cached.url !== server.url || Date.now() - cached.at > 5_000) {
+      await this.validateRemoteAppServer(server.url, server.operatorToken);
+      this.validatedRemotePeers.set(serverId, { url: server.url, at: Date.now() });
+    }
+    return server;
+  }
+
+  public async callRemote<T>(serverId: string, operation: AppServerProtocolOperation, input: Record<string, unknown>): Promise<T> {
+    const server = await this.connectedRemoteAppServer(serverId);
+    const response = await fetch(server.url + BEALE_APP_SERVER_OPERATIONS_PATH, {
+      method: 'POST', headers: { authorization: `Bearer ${server.operatorToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ operation, input }), redirect: 'error', signal: AbortSignal.timeout(5 * 60_000),
+    });
+    if (!response.ok) throw new Error(`Remote app-server ${operation} failed (${response.status}).`);
+    const payload: unknown = await response.json();
+    if (!isRecord(payload) || payload.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION) {
+      throw new Error('Remote app-server response has an incompatible control contract.');
+    }
+    return payload.result as T;
+  }
+
+  public async remoteMachines(): Promise<FleetMachine[]> {
+    const ids = Object.keys(this.read().appServers);
+    const results = await Promise.allSettled(ids.map(async (serverId): Promise<FleetMachine[]> => {
+      const state = await this.callRemote<FleetState>(serverId, 'fleet.state', {});
+      if (!state.enabled || state.role !== 'primary' || !state.available) return [];
+      return state.machines.filter((machine) => !machine.base && !machine.owner && machine.sshConfigured && machine.state !== 'unknown')
+        .map((machine) => ({ ...machine, id: `remote:${serverId}:${machine.id}`, name: `${this.remoteAppServer(serverId).name} / ${machine.name}` }));
+    }));
+    return results.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  public async remoteCatalog(serverId: string): Promise<FleetRemoteCatalog> {
+    const server = await this.connectedRemoteAppServer(serverId);
+    const fleetState = await this.callRemote<FleetState>(serverId, 'fleet.state', {});
+    const workspacesResult = await this.remoteGet(server, BEALE_APP_SERVER_WORKSPACES_PATH);
+    if (!isRecord(workspacesResult) || !Array.isArray(workspacesResult.workspaces)) throw new Error('Remote workspace catalog is invalid.');
+    const workspaces = workspacesResult.workspaces.flatMap((value: unknown) => {
+      if (!isRecord(value) || typeof value.id !== 'string' || typeof value.workspaceId !== 'string' || typeof value.name !== 'string') return [];
+      return [{ id: value.id, workspaceId: value.workspaceId, name: value.name, runCount: typeof value.runCount === 'number' ? value.runCount : 0 }];
+    });
+    const sessions = (await Promise.all(workspaces.map(async (workspace) => {
+      const payload = await this.remoteGet(server, `${BEALE_APP_SERVER_WORKSPACES_PATH}/${encodeURIComponent(workspace.workspaceId)}/sessions?limit=500`);
+      if (!isRecord(payload) || !Array.isArray(payload.result)) return [];
+      return payload.result.flatMap((value: unknown) => {
+        if (!isRecord(value) || typeof value.id !== 'string') return [];
+        const metadata = isRecord(value.metadata) ? value.metadata : {};
+        const bealeRun = isRecord(metadata.bealeRun) ? metadata.bealeRun : {};
+        const budget = isRecord(bealeRun.budget) ? bealeRun.budget : {};
+        const schedule = isRecord(budget.repeatSchedule) ? budget.repeatSchedule : {};
+        const attempts = Array.isArray(value.attempts) ? value.attempts : [];
+        const lastAttempt = attempts.at(-1);
+        return [{ id: value.id, workspaceId: workspace.workspaceId,
+          title: typeof value.title === 'string' && value.title.trim() ? value.title : typeof value.prompt === 'string' ? value.prompt.slice(0, 90) : value.id,
+          status: typeof value.status === 'string' ? value.status : 'unknown',
+          prompt: typeof value.prompt === 'string' ? value.prompt : '',
+          updatedAt: isRecord(lastAttempt) && typeof lastAttempt.startedAt === 'string' ? lastAttempt.startedAt : typeof value.createdAt === 'string' ? value.createdAt : '',
+          automation: typeof schedule.type === 'string' && schedule.type !== 'none' }];
+      });
+    }))).flat();
+    return { serverId, workspaces, sessions: sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      machines: fleetState.machines.filter((machine) => !machine.base && machine.sshConfigured && machine.state !== 'unknown'),
+      requiredWorkspaceIds: fleetState.requiredWorkspaceIds, optionalWorkspaceIds: fleetState.optionalWorkspaceIds,
+      hasBaseVm: fleetState.machines.some((machine) => machine.base) };
+  }
+
+  public async remoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown> {
+    const server = await this.connectedRemoteAppServer(serverId);
+    return this.remoteGet(server, `${BEALE_APP_SERVER_WORKSPACES_PATH}/${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}/update?tail=true&limit=200`);
+  }
+
+  public async remoteLaunch(serverId: string, workspaceId: string, promptMarkdown: string, machineId = 'local'): Promise<{ sessionId: string }> {
+    const server = await this.connectedRemoteAppServer(serverId);
+    if (!promptMarkdown.trim() || promptMarkdown.length > 131_072) throw new Error('Enter a research prompt.');
+    const fleetState = await this.callRemote<FleetState>(serverId, 'fleet.state', {});
+    const required = fleetState.enabled && fleetState.role === 'primary' && (
+      fleetState.requiredWorkspaceIds.includes(workspaceId)
+      || !fleetState.optionalWorkspaceIds.includes(workspaceId) && fleetState.machines.some((machine) => machine.base));
+    if (machineId === 'local' && required) throw new Error('This remote workspace requires a VM. Select a configured worker.');
+    if (machineId !== 'local' && !fleetState.machines.some((machine) => machine.id === machineId && !machine.base && machine.sshConfigured && machine.state !== 'unknown' && !machine.owner)) {
+      throw new Error('Select an available remote Fleet VM.');
+    }
+    const payload = await this.remotePost(server, BEALE_APP_SERVER_SESSIONS_PATH, {
+      launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION, launch: { workspaceId, promptMarkdown: promptMarkdown.trim(),
+        machineId, ...(machineId !== 'local' ? { fleetOwnerMachineId: fleetState.machineId } : {}) },
+    });
+    if (!isRecord(payload) || !isRecord(payload.session) || typeof payload.session.sessionId !== 'string') {
+      throw new Error('Remote app server returned an invalid session start.');
+    }
+    return { sessionId: payload.session.sessionId };
+  }
+
+  public async remoteControl(serverId: string, sessionId: string, type: string, instruction: string | null): Promise<void> {
+    if (!VM_NAME.test(sessionId) || !['pause', 'resume', 'stop', 'steer'].includes(type)) throw new Error('Invalid remote session control.');
+    if (type === 'steer' && (!instruction?.trim() || instruction.length > 131_072)) throw new Error('Enter a steering instruction.');
+    const server = await this.connectedRemoteAppServer(serverId);
+    await this.remotePost(server, `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/control`, {
+      type, ...(type === 'steer' ? { instruction: instruction!.trim() } : {}),
+    });
+  }
+
+  private async remoteGet(server: { url: string; operatorToken: string }, path: string): Promise<unknown> {
+    const response = await fetch(server.url + path, { headers: { authorization: `Bearer ${server.operatorToken}` }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`Remote app-server request failed (${response.status}).`);
+    return response.json();
+  }
+
+  private async remotePost(server: { url: string; operatorToken: string }, path: string, body: unknown): Promise<unknown> {
+    const response = await fetch(server.url + path, { method: 'POST', headers: { authorization: `Bearer ${server.operatorToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(90_000) });
+    if (!response.ok) throw new Error(`Remote app-server request failed (${response.status}).`);
+    return response.json();
+  }
+
+  private async validateRemoteAppServer(url: string, token: string): Promise<void> {
+    await verifySameTailnet(url, this.runner);
+    const response = await fetch(url + BEALE_APP_SERVER_SERVER_PATH, {
+      headers: { authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`Remote app-server authentication failed (${response.status}).`);
+    const descriptor: unknown = await response.json();
+    if (!isRecord(descriptor) || descriptor.ok !== true
+      || descriptor.contractTimestamp !== BEALE_APP_SERVER_CONTRACT_TIMESTAMP) {
+      throw new Error('The remote app server has an incompatible control contract.');
+    }
+  }
+
+  public async reserve(machineId: string, owner: { machineId: string; sessionId: string; workspaceId?: string }): Promise<FleetState> {
+    return this.exclusive(async () => {
+      validOwner(owner);
+      const state = await this.state();
+      const machine = state.machines.find((candidate) => candidate.id === machineId);
+      if (!machine || machine.base) throw new Error('Select an existing runnable Fleet VM.');
+      const config = this.read();
+      this.requirePrimaryEnabled(config);
+      const current = config.owners[machineId];
+      if (current && (current.machineId !== owner.machineId || current.sessionId !== owner.sessionId)) {
+        throw new Error('Fleet VM is already reserved by another machine or session.');
+      }
+      if (current?.workspaceId && owner.workspaceId && current.workspaceId !== owner.workspaceId) {
+        throw new Error('Fleet VM is already staging another workspace for this session.');
+      }
+      if (owner.workspaceId && Object.entries(config.owners).some(([id, claim]) => id !== machineId
+        && claim.workspaceId === owner.workspaceId && (claim.machineId !== owner.machineId || claim.sessionId !== owner.sessionId))) {
+        throw new Error('Fleet workspace is already staged for another VM session.');
+      }
+      config.owners[machineId] = { ...current, ...owner };
+      this.write(config);
+      return this.state();
+    });
+  }
+
+  public async release(machineId: string, owner: { machineId: string; sessionId: string }): Promise<FleetState> {
+    return this.exclusive(async () => {
+      validOwner(owner);
+      const config = this.read();
+      const current = config.owners[machineId];
+      if (current && (current.machineId !== owner.machineId || current.sessionId !== owner.sessionId)) {
+        throw new Error('Only the owning machine and session may release this Fleet VM.');
+      }
+      delete config.owners[machineId];
+      this.write(config);
+      return this.state();
+    });
+  }
+
+  public assertReserved(machineId: string, owner: { machineId: string; sessionId: string }): void {
+    validOwner(owner);
+    const current = this.read().owners[machineId];
+    if (!current || current.machineId !== owner.machineId || current.sessionId !== owner.sessionId) {
+      throw new Error('Fleet VM is not reserved by this machine and session.');
+    }
+  }
+
+  private async exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const previous = this.ownershipQueue;
+    let unlock: () => void = () => undefined;
+    this.ownershipQueue = new Promise<void>((resolve) => { unlock = resolve; });
+    await previous;
+    try { return await work(); } finally { unlock(); }
   }
 
   public async clone(baseId: string, name: string): Promise<FleetState> {
@@ -173,21 +417,24 @@ export class FleetService {
     const next = await this.state();
     const clone = next.machines.find((machine) => machine.name === targetName);
     if (!clone) throw new Error('The VM was cloned but could not be found in Fleet inventory.');
-    config.machines[clone.id] = { ...config.machines[baseId]!, base: false, sshHost: null };
-    this.write(config);
+    const latest = this.read();
+    latest.machines[clone.id] = { ...config.machines[baseId]!, base: false, sshHost: null };
+    this.write(latest);
     return this.state();
   }
 
-  public async start(machineId: string): Promise<FleetState> {
+  public async start(machineId: string, owner?: { machineId: string; sessionId: string }): Promise<FleetState> {
     const { machine } = await this.runnable(machineId);
+    this.assertOwnership(machineId, owner);
     if (machine.state === 'running') return this.state();
     if (machine.backend === 'tart') this.runner.launch('tart', ['run', machine.name, '--no-graphics']);
     else await this.powershell(`Start-VM -Name ${powershellString(machine.name)} -ErrorAction Stop`, 120_000);
     return this.state();
   }
 
-  public async stop(machineId: string): Promise<FleetState> {
+  public async stop(machineId: string, owner?: { machineId: string; sessionId: string }): Promise<FleetState> {
     const { machine } = await this.runnable(machineId);
+    this.assertOwnership(machineId, owner);
     if (machine.state === 'stopped') return this.state();
     if (machine.backend === 'tart') await this.runner.run('tart', ['stop', machine.name], 120_000);
     else await this.powershell(`Stop-VM -Name ${powershellString(machine.name)} -Shutdown -ErrorAction Stop`, 120_000);
@@ -243,6 +490,14 @@ export class FleetService {
     if (config.role !== 'primary' || !config.enabled) throw new Error('Fleet is unavailable on this Beale instance.');
   }
 
+  private assertOwnership(machineId: string, owner?: { machineId: string; sessionId: string }): void {
+    const current = this.read().owners[machineId];
+    if (!current) return;
+    if (!owner || owner.machineId !== current.machineId || owner.sessionId !== current.sessionId) {
+      throw new Error('Fleet VM is reserved by another machine or session.');
+    }
+  }
+
   private backend(): FleetBackend | null {
     return this.hostPlatform === 'darwin' ? 'tart' : this.hostPlatform === 'win32' ? 'hyper-v' : null;
   }
@@ -257,7 +512,7 @@ export class FleetService {
         if (typeof name !== 'string' || !VM_NAME.test(name)) return [];
         const running = item.Running === true || item.running === true;
         return [{ id: `tart:${name}`, name, backend, state: running ? 'running' as const : 'stopped' as const,
-          base: false, privilege: 'standard' as const, sshConfigured: false, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: null }];
+          base: false, privilege: 'standard' as const, sshConfigured: false, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: null, owner: null }];
       });
     }
     const output = await this.powershell("Get-VM | Select-Object Name, @{Name='VMId';Expression={$_.VMId.ToString()}}, @{Name='State';Expression={$_.State.ToString()}} | ConvertTo-Json -Compress", 15_000);
@@ -268,7 +523,7 @@ export class FleetService {
       const id = typeof item.VMId === 'string' ? item.VMId : null;
       if (!id) return [];
       return [{ id: `hyper-v:${id}`, name: item.Name, backend, state: item.State === 'Running' ? 'running' as const : item.State === 'Off' ? 'stopped' as const : 'unknown' as const,
-        base: false, privilege: 'standard' as const, sshConfigured: false, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: null }];
+        base: false, privilege: 'standard' as const, sshConfigured: false, sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: null, owner: null }];
     });
   }
 
@@ -297,6 +552,10 @@ export class FleetService {
       available,
       error,
       machines,
+      remoteMachines: [],
+      machineId: config.machineId,
+      appServers: Object.entries(config.appServers).map(([id, server]) => ({ id, name: server.name, url: server.url }))
+        .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
       primary: config.primary,
       requiredWorkspaceIds: [...config.requiredWorkspaceIds],
       optionalWorkspaceIds: [...config.optionalWorkspaceIds],
@@ -305,11 +564,16 @@ export class FleetService {
   }
 
   private read(): FleetConfiguration {
-    if (!existsSync(this.path)) return defaultConfig();
+    if (!existsSync(this.path)) {
+      const config = defaultConfig();
+      this.write(config);
+      return config;
+    }
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.path, 'utf8'));
-      if (!isRecord(parsed) || parsed.version !== 1) throw new Error('Unsupported Fleet configuration.');
+      if (!isRecord(parsed) || (parsed.version !== 1 && parsed.version !== 2)) throw new Error('Unsupported Fleet configuration.');
       const config = defaultConfig();
+      if (typeof parsed.machineId === 'string' && VM_NAME.test(parsed.machineId)) config.machineId = parsed.machineId;
       if (parsed.role === 'primary' || parsed.role === 'guest') config.role = parsed.role;
       config.enabled = parsed.enabled !== false;
       if (isRecord(parsed.primary) && typeof parsed.primary.name === 'string') {
@@ -335,6 +599,24 @@ export class FleetService {
           };
         }
       }
+      if (isRecord(parsed.appServers)) {
+        for (const [id, value] of Object.entries(parsed.appServers)) {
+          if (!VM_NAME.test(id) || !isRecord(value) || typeof value.name !== 'string'
+            || typeof value.operatorToken !== 'string' || !value.operatorToken) continue;
+          try { config.appServers[id] = { name: value.name, url: normalizeTailnetOrigin(value.url), operatorToken: value.operatorToken }; }
+          catch { /* Preserve valid remote entries without exposing malformed endpoints. */ }
+        }
+      }
+      if (isRecord(parsed.owners)) {
+        for (const [id, value] of Object.entries(parsed.owners)) {
+          if (!isRecord(value)) continue;
+          const owner = { machineId: value.machineId, sessionId: value.sessionId,
+            ...(typeof value.workspaceId === 'string' ? { workspaceId: value.workspaceId } : {}) };
+          try { validOwner(owner); config.owners[id] = owner as { machineId: string; sessionId: string; workspaceId?: string }; }
+          catch { /* Ignore malformed ownership records. */ }
+        }
+      }
+      if (parsed.version === 1) this.write(config);
       return config;
     } catch {
       throw new Error('Fleet configuration is invalid; preserve the file and repair it before changing Fleet.');
@@ -355,8 +637,17 @@ function defaultMachineConfig(): FleetMachineConfig {
 }
 
 function defaultConfig(): FleetConfiguration {
-  return { version: 1, role: 'primary', enabled: true, primary: null, requiredWorkspaceIds: [], optionalWorkspaceIds: [], lastMachineByWorkspace: {}, machines: {} };
+  return { version: 2, machineId: randomUUID(), role: 'primary', enabled: true, primary: null, requiredWorkspaceIds: [], optionalWorkspaceIds: [], lastMachineByWorkspace: {}, machines: {}, appServers: {}, owners: {} };
 }
+
+function validOwner(owner: { machineId: unknown; sessionId: unknown; workspaceId?: unknown }): void {
+  if (typeof owner.machineId !== 'string' || !VM_NAME.test(owner.machineId)
+    || typeof owner.sessionId !== 'string' || !VM_NAME.test(owner.sessionId)
+    || owner.workspaceId !== undefined && (typeof owner.workspaceId !== 'string' || !WORKSPACE_ID.test(owner.workspaceId))) {
+    throw new Error('Fleet owner requires a machine and session ID.');
+  }
+}
+
 
 function requiredText(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new Error(`${name} is required.`);

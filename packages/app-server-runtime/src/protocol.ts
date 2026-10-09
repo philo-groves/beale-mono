@@ -36,7 +36,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 39 as const;
+export const APP_SERVER_CONTRACT_VERSION = 40 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -44,12 +44,14 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T11:55:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T13:30:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "fleet.inventory.v1",
   "fleet.lifecycle.v1",
   "fleet.session.v1",
+  "fleet.remote-servers.v1",
+  "fleet.session-ownership.v1",
   "workspace.research-project.v3",
   "workspace.checkpoint-repair.v1",
   "session.typed-launch.v2",
@@ -423,8 +425,9 @@ export const APP_SERVER_TRANSPORT_PREFIX = APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX;
 export const APP_SERVER_TRANSPORT_PATH = APP_SERVER_PROTOCOL_WEBSOCKET_PATH;
 
 export const APP_SERVER_PROTOCOL_OPERATIONS = [
-  "fleet.state", "fleet.configure", "fleet.test_ssh", "fleet.clone", "fleet.start", "fleet.stop",
-  "fleet.prepare", "fleet.connect", "fleet.complete", "fleet.stage", "fleet.export",
+  "fleet.state", "fleet.configure", "fleet.test_ssh", "fleet.test_app_server", "fleet.clone", "fleet.start", "fleet.stop",
+  "fleet.prepare", "fleet.connect", "fleet.complete", "fleet.stage", "fleet.export", "fleet.reserve", "fleet.release",
+  "fleet.remote_machines", "fleet.remote_catalog", "fleet.remote_session", "fleet.remote_launch", "fleet.remote_control", "fleet.relay_stage", "fleet.relay_export",
   "resource.prior_art.list", "resource.prior_art.get",
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
@@ -460,6 +463,33 @@ export interface FleetMachine {
   sshKnownHostsConfigured: boolean;
   sshHost: string | null;
   sshUser: string | null;
+  owner: { machineId: string; sessionId: string } | null;
+}
+
+export interface FleetAppServer {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface FleetRemoteSessionSummary {
+  id: string;
+  workspaceId: string;
+  title: string;
+  status: string;
+  prompt: string;
+  updatedAt: string;
+  automation: boolean;
+}
+
+export interface FleetRemoteCatalog {
+  serverId: string;
+  workspaces: Array<{ id: string; workspaceId: string; name: string; runCount: number }>;
+  sessions: FleetRemoteSessionSummary[];
+  machines: FleetMachine[];
+  requiredWorkspaceIds: string[];
+  optionalWorkspaceIds: string[];
+  hasBaseVm: boolean;
 }
 
 export interface FleetSshTestInput {
@@ -492,11 +522,14 @@ export function decodeFleetSshTestInput(value: unknown): FleetSshTestInput {
 }
 
 export interface FleetState {
+  machineId: string;
   role: FleetRole;
   enabled: boolean;
   available: boolean;
   error: string | null;
   machines: FleetMachine[];
+  remoteMachines: FleetMachine[];
+  appServers: FleetAppServer[];
   primary: { name: string; sshHost: string | null } | null;
   requiredWorkspaceIds: string[];
   optionalWorkspaceIds: string[];
@@ -709,6 +742,7 @@ export interface AppServerSessionLaunchIntent {
   /** Beale's durable workspace id, never a host filesystem path. */
   workspaceId: string;
   machineId?: string;
+  fleetOwnerMachineId?: string;
   mode?: string;
   attemptId?: string;
   promptMarkdown: string;
@@ -744,6 +778,7 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
   const launch = requiredRecord(value, "launch");
   requiredBoundedString(launch, "workspaceId", 256);
   optionalBoundedString(launch, "machineId", 256);
+  optionalBoundedString(launch, "fleetOwnerMachineId", 128);
   optionalBoundedString(launch, "mode", 128);
   optionalBoundedString(launch, "attemptId", 128);
   requiredBoundedString(launch, "promptMarkdown", 131_072);

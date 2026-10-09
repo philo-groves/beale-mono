@@ -2,6 +2,7 @@ import { startTransition, useCallback, useDeferredValue, useEffect, useLayoutEff
 import type { JSX } from 'react';
 import type { CSSProperties } from 'react';
 import 'katex/dist/katex.min.css';
+import type { FleetAppServer, FleetRemoteCatalog } from '@beale/app-server-runtime/protocol';
 import './styles.css';
 import { devInstrumentation, useDevInputLatencyProbe, useDevRenderProbe } from './devInstrumentation';
 import type {
@@ -62,6 +63,7 @@ import { AppNavigationRail, resolveAppNavigationDestination } from './app/AppNav
 import { TopBar } from './app/TopBar';
 import { NotificationStack, type WorkspaceAlert } from './features/notifications/Notifications';
 import { WorkspaceSidebar } from './features/workspaces/WorkspaceSidebar';
+import { RemoteFleetSidebar, RemoteFleetWorkspace } from './features/fleet/RemoteFleetWorkspace';
 import { QuickChatDock, type QuickChatDescriptor } from './features/quick-chat/QuickChatDock';
 import { WorkspaceStartupView } from './features/workspaces/WorkspaceStartupView';
 import { WorkspaceCreationView } from './features/workspaces/WorkspaceCreationView';
@@ -165,6 +167,37 @@ export function App(): JSX.Element {
     loadSnapshot,
     loadWorkspaceRegistry
   } = useWorkspaceRuntime(handleError);
+  const [fleetServers, setFleetServers] = useState<FleetAppServer[]>([]);
+  const [selectedFleetServerId, setSelectedFleetServerId] = useState('local');
+  const [remoteCatalog, setRemoteCatalog] = useState<FleetRemoteCatalog | null>(null);
+  const [remoteCatalogError, setRemoteCatalogError] = useState<string | null>(null);
+  const [remoteWorkspaceId, setRemoteWorkspaceId] = useState<string | null>(null);
+  const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null);
+  useEffect(() => {
+    if (startupPhase !== 'ready') return;
+    let active = true;
+    const refresh = (): void => { void window.beale.getFleetState().then((state) => {
+      if (active) setFleetServers(state.enabled && state.role === 'primary' ? state.appServers : []);
+    }).catch(() => undefined); };
+    refresh();
+    const interval = window.setInterval(refresh, 20_000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [startupPhase]);
+  useEffect(() => {
+    if (selectedFleetServerId !== 'local' && !fleetServers.some((server) => server.id === selectedFleetServerId)) {
+      setSelectedFleetServerId('local');
+    }
+  }, [fleetServers, selectedFleetServerId]);
+  useEffect(() => {
+    if (selectedFleetServerId === 'local') { setRemoteCatalog(null); setRemoteCatalogError(null); return; }
+    let active = true;
+    const refresh = (): void => { void window.beale.getFleetRemoteCatalog(selectedFleetServerId).then((catalog) => {
+      if (active) { setRemoteCatalog(catalog); setRemoteCatalogError(null); }
+    }).catch((caught: unknown) => { if (active) setRemoteCatalogError(errorMessage(caught)); }); };
+    refresh();
+    const interval = window.setInterval(refresh, 5_000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [selectedFleetServerId]);
   useEffect(() => {
     if (startupPhase !== 'ready') return;
     let cancelled = false;
@@ -2038,6 +2071,13 @@ export function App(): JSX.Element {
     />
   ) : null;
   const navigationDestination = resolveAppNavigationDestination({ settingsOpen, automationsOpen, pluginsOpen });
+  const selectedFleetServer = fleetServers.find((server) => server.id === selectedFleetServerId);
+  const serverSelector = <select className="sidebar-server-selector" aria-label="App server" value={selectedFleetServerId} onChange={(event) => {
+    setSelectedFleetServerId(event.currentTarget.value);
+    setRemoteCatalog(null);
+    setRemoteWorkspaceId(null);
+    setRemoteSessionId(null);
+  }}><option value="local">Local</option>{fleetServers.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</select>;
   return (
     <div
       ref={appShellRef}
@@ -2128,8 +2168,17 @@ export function App(): JSX.Element {
           onSelectPlugin={setSelectedPluginId}
           onResizePointerDown={beginSidebarResize}
         />
+      ) : selectedFleetServerId !== 'local' ? (
+        <RemoteFleetSidebar
+          catalog={remoteCatalog} serverName={selectedFleetServer?.name ?? 'Remote'}
+          selectedWorkspaceId={remoteWorkspaceId} selectedSessionId={remoteSessionId}
+          automations={automationsOpen} collapsed={sidebarCollapsed} serverSelector={serverSelector}
+          onSelect={(workspaceId, sessionId) => { setRemoteWorkspaceId(workspaceId); setRemoteSessionId(sessionId); }}
+          onResizePointerDown={beginSidebarResize}
+        />
       ) : automationsOpen ? (
         <AutomationsSidebar
+          serverSelector={serverSelector}
           automations={automations}
           workspaces={workspaceRegistry?.workspaces ?? []}
           workspaceOpen={Boolean(snapshot)}
@@ -2151,6 +2200,7 @@ export function App(): JSX.Element {
         />
       ) : (
         <WorkspaceSidebar
+          serverSelector={serverSelector}
           busy={busy}
           collapsed={sidebarCollapsed}
           error={error}
@@ -2250,7 +2300,18 @@ export function App(): JSX.Element {
           />
         ) : (
           <div className="workspace-page">
-            {workspaceDraft ? (
+            {selectedFleetServerId !== 'local' && !pluginsOpen ? (
+              <RemoteFleetWorkspace
+                serverId={selectedFleetServerId} serverName={selectedFleetServer?.name ?? 'Remote'}
+                catalog={remoteCatalog} workspaceId={remoteWorkspaceId} sessionId={remoteSessionId}
+                automations={automationsOpen} error={remoteCatalogError}
+                onLaunched={(workspaceId, sessionId) => {
+                  setRemoteWorkspaceId(workspaceId);
+                  setRemoteSessionId(sessionId);
+                  void window.beale.getFleetRemoteCatalog(selectedFleetServerId).then(setRemoteCatalog).catch((caught: unknown) => setRemoteCatalogError(errorMessage(caught)));
+                }}
+              />
+            ) : workspaceDraft ? (
               <WorkspaceCreationView
                 busy={busy}
                 form={workspaceDraft}

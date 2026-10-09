@@ -2400,8 +2400,14 @@ export interface BealeApi {
   previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string): Promise<string>;
   getAgentPlugins(): Promise<AgentPluginRegistryState>;
   getFleetState(): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]>;
+  getFleetRemoteCatalog(serverId: string): Promise<import('@beale/app-server-runtime/protocol').FleetRemoteCatalog>;
+  getFleetRemoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown>;
+  startFleetRemoteSession(serverId: string, workspaceId: string, promptMarkdown: string, machineId: string): Promise<{ sessionId: string }>;
+  controlFleetRemoteSession(serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string): Promise<void>;
   configureFleet(input: Record<string, unknown>): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
   testFleetVmConnection(input: import('@beale/app-server-runtime/protocol').FleetSshTestInput): Promise<import('@beale/app-server-runtime/protocol').FleetSshTestResult>;
+  testFleetAppServer(input: { serverId?: string; url: string; operatorToken: string }): Promise<{ success: boolean; message: string }>;
   cloneFleetVm(baseId: string, name: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
   startFleetVm(machineId: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
   stopFleetVm(machineId: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
