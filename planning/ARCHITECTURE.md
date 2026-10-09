@@ -1,6 +1,6 @@
 # Architecture
 
-app-server is a general-purpose research agent built around Pi's native agent loop. It puts useful workspace context, durable knowledge, and tools in front of the selected model, then lets the model plan and decide when the work is complete.
+app-server is Beale's local security research engine built around Pi's native agent loop. It provides authorized workspace context, durable knowledge, and tools to the selected model, then lets the model plan and decide when the work is complete.
 
 ## Core Ownership
 
@@ -50,7 +50,7 @@ The root session is `/root`. In Simple mode it receives Pi research tools plus d
 
 Simple mode retains direct spawning, bounded inheritance, lead/child messaging, follow-ups, interruption, waiting, and durable channel participation.
 
-Advanced mode replaces direct spawning and peer messaging with lead-only `delegate_batch`, `work_status`, `steer_work`, `cancel_work`, and `wait_for_work` controls. It permits one exploration wave of at least two disjoint scouts followed by at most one verification wave containing an independent falsifier or verifier. Verification cannot start until exploration is terminal and must cite the candidate evidence or work it challenges. Workers receive fresh context plus explicit task packets, have no delegation or peer-messaging tools, and can only read or contribute to durable topics through their overview, pages, and canonical links. Terminal prose is projected into a typed result with conclusions, observations, evidence references, negative results, uncertainty, contradictions, next experiments, and schema-completeness state. The lead remains the sole synthesis owner. Focused, Balanced, and Deep intensity allow two, four, and six active evidence workers respectively.
+Advanced mode replaces direct spawning and peer messaging with lead-only `delegate_batch`, `work_status`, `steer_work`, `cancel_work`, and `wait_for_work` controls. It permits one exploration wave of at least two disjoint scouts followed by at most one verification wave containing an independent falsifier or verifier. Verification cannot start until exploration is terminal and must cite the candidate evidence or work it challenges. Workers receive fresh context plus explicit task packets, have no delegation or peer-messaging tools, and can read or write shared workspace research documents under `references/research/`. Terminal prose is projected into a typed result with conclusions, observations, evidence references, negative results, uncertainty, contradictions, next experiments, and schema-completeness state. The lead remains the sole synthesis owner. Focused, Balanced, and Deep intensity allow two, four, and six active evidence workers respectively.
 
 Each child receives an opaque id and canonical path such as `/root/parser_review`. Both modes limit children to one level.
 
@@ -82,7 +82,7 @@ Transcripts, narration, and bulk tool output are operational data, not durable k
 
 Runbooks are a separate workspace-scoped artifact family for reusable multi-step procedures. SQLite stores their ownership, lifecycle, artifact identity, and optimistic revision. Valid Jupyter `nbformat 4` files store ordered markdown/code cells and bounded recorded results under `~/.beale/artifacts/runbooks/<workspace-id>/`. Runbooks are portable documents, not an alternate executor; all commands run through the normal research tools.
 
-The agent searches knowledge, leads, and findings early and when research crosses system boundaries. In the Security profile, a suspected vulnerability starts as a Lead, an evidence-backed isolated flaw is classified `security.primitive`, and an end-to-end result that composes component claims into demonstrated impact is classified `security.chain`. In the Mathematics profile, conjecture, theorem, and counterexample are claim classifications rather than memory-node types. Reusable flow endpoints, invariants, mitigations, references, techniques, and trajectories remain knowledge. Routine narration is not durable state.
+The agent searches knowledge, leads, and findings early and when research crosses system boundaries. A suspected vulnerability starts as a Lead, an evidence-backed isolated flaw is classified `security.primitive`, and an end-to-end result that composes component claims into demonstrated impact is classified `security.chain`. Reusable flow endpoints, invariants, mitigations, references, techniques, and trajectories remain knowledge. Routine narration is not durable state.
 
 Claim transitions are append-audited and revision-checked. Direct evidence is required to promote a Lead to a Finding; reproduction requires a successful durable runbook execution; verification requires independent evidence; reporting and disclosure require matching durable report or disclosure references. A composite verified claim must cite component claim IDs. Legacy hypothesis, primitive, chain, conjecture, theorem, counterexample, and finding rows remain in SQLite for audit but migrate idempotently to stable claim identities and are hidden from the knowledge projection.
 

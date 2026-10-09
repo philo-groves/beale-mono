@@ -311,8 +311,8 @@ describe('automation workspace', () => {
   it('keeps New Research defaults uninflated and preserves stored automation choices when inflated', () => {
     const defaults = researchSettingsInput(undefined, 'discovery', null);
     const dangerDefaults = researchSettingsInput(undefined, 'discovery', null, 'danger');
-    const inflated = researchSettingsInput(activeAutomation.settings, 'longshot', null);
-    const explicitGoal = researchSettingsInput({ ...activeAutomation.settings, goalEnabled: true }, 'longshot', null);
+    const inflated = researchSettingsInput(activeAutomation.settings, 'discovery', null);
+    const explicitGoal = researchSettingsInput({ ...activeAutomation.settings, goalEnabled: true }, 'discovery', null);
 
     expect(defaults.promptMarkdown).toBe('');
     expect(defaults.goalEnabled).toBe(false);
@@ -328,6 +328,8 @@ describe('automation workspace', () => {
       promptMarkdown: 'Review parser boundary changes.',
       budget: { repeatSchedule: { type: 'daily', interval: 1 } }
     });
+    expect(researchSettingsInput({ ...activeAutomation.settings, workflowId: 'research' }, 'discovery', null).workflowId)
+      .toBe('discovery');
   });
 
   it('renders All Automations and workspace scope tabs with a flat status list', () => {

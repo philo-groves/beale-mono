@@ -14,18 +14,6 @@ export type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   ResourcePriorArtSummary,
-  ResearchTopicDetail,
-  ResearchTopicMemberRecord,
-  ResearchTopicMemberStatus,
-  ResearchTopicMessageKind,
-  ResearchTopicMessageRecord,
-  ResearchTopicRecord,
-  ResearchTopicSharedResourceKind,
-  ResearchTopicSharedResourceRecord,
-  ResearchTopicSummary,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchClaimRating,
   GeneratedResearchGoalSuggestions,
   ResearchGoalSuggestionInput,
@@ -34,13 +22,6 @@ export type {
 
 export interface SteeringSuggestionResult {
   suggestion: string | null;
-}
-
-export interface CreateResearchTopicInput {
-  name: string;
-  title?: string;
-  topic: string;
-  overviewMarkdown?: string;
 }
 
 export interface ResourcePriorArtListInput {
@@ -55,7 +36,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 30 as const;
+export const APP_SERVER_CONTRACT_VERSION = 46 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -63,12 +44,19 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-09-30T15:22:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T21:24:54.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
-  "workspace.topics.v1",
+  "fleet.inventory.v1",
+  "fleet.lifecycle.v1",
+  "fleet.session.v1",
+  "fleet.session-clone.v1",
+  "fleet.remote-servers.v1",
+  "fleet.session-ownership.v1",
+  "fleet.model-broker.v1",
+  "fleet.browser-relay.v1",
+  "fleet.remote-browser-relay.v1",
   "workspace.research-project.v3",
-  "workspace.checkpoint-repair.v1",
   "session.typed-launch.v2",
   "session.openai-fast-mode.v1",
   "session.openai-daybreak-blue.v1",
@@ -123,6 +111,9 @@ export const BEALE_APP_SERVER_WORKSPACES_PATH = "/v1/workspaces" as const;
 export const BEALE_APP_SERVER_PROVIDERS_PATH = "/v1/providers" as const;
 export const BEALE_APP_SERVER_OPERATIONS_PATH = "/v1/operations" as const;
 export const BEALE_APP_SERVER_SHUTDOWN_PATH = "/v1/server/shutdown" as const;
+export const BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT = 47_175 as const;
+export const BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT = 47_176 as const;
+export const BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH = "/v1/supervisor/restart" as const;
 export const BEALE_APP_SERVER_MAX_REPLAY_BYTES = 4_194_304 as const;
 export const BEALE_APP_SERVER_MAX_REPLAY_FRAMES = 256 as const;
 
@@ -423,7 +414,6 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "session.event_identity",
   "session.bounded_reads",
   "session.targeted_details",
-  "workspace.topics.v1",
   "workspace.goal-suggestions.v1",
   "workspace.prompt-expansion.v1",
   "knowledge.report-content-revise.v1",
@@ -441,11 +431,15 @@ export const APP_SERVER_TRANSPORT_PREFIX = APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX;
 export const APP_SERVER_TRANSPORT_PATH = APP_SERVER_PROTOCOL_WEBSOCKET_PATH;
 
 export const APP_SERVER_PROTOCOL_OPERATIONS = [
+  "fleet.state", "fleet.configure", "fleet.test_ssh", "fleet.test_app_server", "fleet.clone", "fleet.clone_for_session", "fleet.start", "fleet.stop",
+  "fleet.prepare", "fleet.connect", "fleet.complete", "fleet.stage", "fleet.export", "fleet.reserve", "fleet.release",
+  "fleet.broker", "fleet.relay_broker",
+  "fleet.remote_machines", "fleet.remote_catalog", "fleet.remote_session", "fleet.remote_launch", "fleet.remote_control", "fleet.remote_browser_attach", "fleet.relay_stage", "fleet.relay_export",
+  "fleet.restart_app_server", "fleet.restart_guest_app_server",
   "resource.prior_art.list", "resource.prior_art.get",
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
-  "topic.list", "topic.search", "topic.get", "topic.create", "topic.join", "topic.update_overview", "topic.page.save", "topic.page.delete", "topic.link", "topic.unlink", "topic.merge", "topic.unmerge", "topic.archive", "topic.restore", "topic.delete",
   "memory.summary", "memory.notification_feed", "history.mark_duplicate", "history.undo_duplicate", "claim.mark_duplicate", "claim.undo_duplicate", "claim.board_transition", "workspace.state", "registry.state", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",
@@ -460,6 +454,95 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
 ] as const;
 
 export type AppServerProtocolOperation = (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number];
+
+export type FleetBackend = "tart" | "hyper-v";
+export type FleetRole = "primary" | "guest";
+export type FleetMachineState = "running" | "stopped" | "unknown";
+
+export interface FleetMachine {
+  id: string;
+  name: string;
+  backend: FleetBackend;
+  state: FleetMachineState;
+  base: boolean;
+  privilege: "standard" | "elevated";
+  sshConfigured: boolean;
+  sshIdentityConfigured: boolean;
+  sshKnownHostsConfigured: boolean;
+  sshHost: string | null;
+  sshUser: string | null;
+  owner: { machineId: string; sessionId: string } | null;
+}
+
+export interface FleetAppServer {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface FleetRemoteSessionSummary {
+  id: string;
+  workspaceId: string;
+  title: string;
+  status: string;
+  prompt: string;
+  updatedAt: string;
+  automation: boolean;
+}
+
+export interface FleetRemoteCatalog {
+  serverId: string;
+  workspaces: Array<{ id: string; workspaceId: string; name: string; runCount: number }>;
+  sessions: FleetRemoteSessionSummary[];
+  machines: FleetMachine[];
+  requiredWorkspaceIds: string[];
+  optionalWorkspaceIds: string[];
+  hasBaseVm: boolean;
+}
+
+export interface FleetSshTestInput {
+  machineId: string;
+  sshHost: string;
+  sshUser: string;
+  sshIdentityFile?: string;
+  sshKnownHostsFile?: string;
+}
+
+export interface FleetSshTestResult {
+  success: boolean;
+  message: string;
+}
+
+export function decodeFleetSshTestInput(value: unknown): FleetSshTestInput {
+  if (!isRecord(value) || typeof value.machineId !== 'string' || !value.machineId
+    || typeof value.sshHost !== 'string' || typeof value.sshUser !== 'string'
+    || (value.sshIdentityFile !== undefined && typeof value.sshIdentityFile !== 'string')
+    || (value.sshKnownHostsFile !== undefined && typeof value.sshKnownHostsFile !== 'string')) {
+    throw new Error('Invalid Fleet SSH test settings.');
+  }
+  return {
+    machineId: value.machineId,
+    sshHost: value.sshHost,
+    sshUser: value.sshUser,
+    ...(value.sshIdentityFile === undefined ? {} : { sshIdentityFile: value.sshIdentityFile }),
+    ...(value.sshKnownHostsFile === undefined ? {} : { sshKnownHostsFile: value.sshKnownHostsFile }),
+  };
+}
+
+export interface FleetState {
+  machineId: string;
+  role: FleetRole;
+  enabled: boolean;
+  available: boolean;
+  error: string | null;
+  machines: FleetMachine[];
+  remoteMachines: FleetMachine[];
+  appServers: FleetAppServer[];
+  primary: { name: string; sshHost: string | null } | null;
+  requiredWorkspaceIds: string[];
+  optionalWorkspaceIds: string[];
+  lastMachineByWorkspace: Record<string, string>;
+}
 
 export const CLAIM_BOARD_MATURITIES = ["refuted", "observed", "reproduced", "verified"] as const;
 export type ClaimBoardMaturity = (typeof CLAIM_BOARD_MATURITIES)[number];
@@ -489,21 +572,19 @@ export function decodeClaimBoardTransitionRequest(value: unknown): ClaimBoardTra
 }
 
 export type WorkspaceProjectRequest =
-  | { workspaceId: string; action: 'status' | 'checkpoint' | 'sync' | 'export' | 'rebuild-index' | 'release-index' | 'repair-preview' }
-  | { workspaceId: string; action: 'repair'; fingerprint: string }
+  | { workspaceId: string; action: 'status' | 'sync' | 'export' | 'rebuild-index' | 'release-index' }
   | { workspaceId: string; action: 'import'; path: string; expectedRevision: number };
 
-export type { WorkspaceProject, WorkspaceProjectHealth, WorkspaceCheckpointResult, WorkspaceCheckpointRepairPlan } from '@beale/research-agent';
+export type { WorkspaceProject, WorkspaceProjectHealth, WorkspaceCheckpointResult } from '@beale/research-agent';
 
 export function decodeWorkspaceProjectRequest(value: unknown): WorkspaceProjectRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Workspace project input is required.');
   const input = value as Record<string, unknown>;
   if (typeof input.workspaceId !== 'string' || !input.workspaceId.trim()) throw new Error('workspaceId is required.');
-  if (input.action === 'status' || input.action === 'checkpoint' || input.action === 'sync' || input.action === 'export' || input.action === 'rebuild-index' || input.action === 'release-index' || input.action === 'repair-preview') return { workspaceId: input.workspaceId, action: input.action };
-  if (input.action === 'repair' && typeof input.fingerprint === 'string' && /^[a-f0-9]{64}$/u.test(input.fingerprint)) return { workspaceId: input.workspaceId, action: 'repair', fingerprint: input.fingerprint };
+  if (input.action === 'status' || input.action === 'sync' || input.action === 'export' || input.action === 'rebuild-index' || input.action === 'release-index') return { workspaceId: input.workspaceId, action: input.action };
   if (input.action === 'import' && typeof input.path === 'string' && input.path.length > 0 && input.path.length < 1024
     && Number.isSafeInteger(input.expectedRevision) && Number(input.expectedRevision) > 0) return { workspaceId: input.workspaceId, action: 'import', path: input.path, expectedRevision: Number(input.expectedRevision) };
-  throw new Error('Expected status, checkpoint, sync, export, rebuild-index, release-index, repair-preview, repair with a preview fingerprint, or import with a path and positive expectedRevision.');
+  throw new Error('Expected status, sync, export, rebuild-index, release-index, or import with a path and positive expectedRevision.');
 }
 
 export interface AppServerProtocolErrorDetail {
@@ -666,6 +747,14 @@ export interface AppServerSessionLaunchContinuation {
 export interface AppServerSessionLaunchIntent {
   /** Beale's durable workspace id, never a host filesystem path. */
   workspaceId: string;
+  machineId?: string;
+  /** Host-owned browser page for a session opened through a connected primary. */
+  browserRelay?: boolean;
+  fleetOwnerMachineId?: string;
+  /** Provider routing preferences of the workspace-owning primary for a brokered Fleet guest. */
+  brokerAuthenticationPreferences?: Readonly<Record<string, AppServerProviderAuthenticationMethod>>;
+  brokerRiskAcknowledgements?: readonly AppServerProviderRiskAcknowledgement[];
+  mode?: string;
   attemptId?: string;
   promptMarkdown: string;
   goal?: { objective?: string };
@@ -699,6 +788,27 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
   optionalBoundedString(value, "sessionId", 128);
   const launch = requiredRecord(value, "launch");
   requiredBoundedString(launch, "workspaceId", 256);
+  optionalBoundedString(launch, "machineId", 256);
+  if (launch.browserRelay !== undefined && typeof launch.browserRelay !== "boolean") {
+    throw new Error("launch.browserRelay must be a boolean.");
+  }
+  optionalBoundedString(launch, "fleetOwnerMachineId", 128);
+  if (launch.brokerAuthenticationPreferences !== undefined) {
+    const preferences = requiredRecord(launch, "brokerAuthenticationPreferences");
+    for (const [provider, method] of Object.entries(preferences)) {
+      if (!APP_SERVER_PROVIDER_RISK_ACKNOWLEDGEMENTS.includes(provider as AppServerProviderRiskAcknowledgement)
+        || (method !== "subscription" && method !== "api_key")) {
+        throw new Error("Invalid broker provider authentication preference.");
+      }
+    }
+  }
+  if (launch.brokerRiskAcknowledgements !== undefined
+    && (!Array.isArray(launch.brokerRiskAcknowledgements)
+      || launch.brokerRiskAcknowledgements.some((value: unknown) =>
+        !APP_SERVER_PROVIDER_RISK_ACKNOWLEDGEMENTS.includes(value as AppServerProviderRiskAcknowledgement)))) {
+    throw new Error("Invalid broker provider risk acknowledgements.");
+  }
+  optionalBoundedString(launch, "mode", 128);
   optionalBoundedString(launch, "attemptId", 128);
   requiredBoundedString(launch, "promptMarkdown", 131_072);
   optionalBoundedString(launch, "shellSafetyMode", 64);

@@ -59,24 +59,24 @@ export class WorkspaceRegistry {
   }
 
   public getPromptTemplateSettings(profileId: string): { template: string; defaultTemplate: string; overridden: boolean } {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     const override = this.getMeta(`prompt_template_${profileId}`);
     return { template: override ?? defaultResearchSystemPromptTemplate(), defaultTemplate: defaultResearchSystemPromptTemplate(), overridden: override !== null };
   }
 
   public setPromptTemplate(profileId: string, template: string): void {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     validateResearchSystemPromptTemplate(template);
     this.setMeta(`prompt_template_${profileId}`, template);
   }
 
   public resetPromptTemplate(profileId: string): void {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     this.deleteMeta(`prompt_template_${profileId}`);
   }
 
   public previewPromptTemplate(profileId: string, template: string, agentPath?: string, pluginCatalog?: readonly ResearchPluginCatalogEntry[]): string {
-    if (!isResearchProfileId(profileId)) throw new Error(`Unknown research profile: ${profileId}`);
+    if (profileId !== 'security-research') throw new Error(`Unsupported active research profile: ${profileId}`);
     validateResearchSystemPromptTemplate(template);
     return createResearchSystemPrompt({
       hasTools: true,
@@ -782,6 +782,15 @@ export class WorkspaceRegistry {
           ON research_sessions(archived_at, updated_at DESC);
         `);
       }
+    }, {
+      version: 13,
+      name: 'fleet_session_machine',
+      up: (database) => {
+        const columns = database.prepare('PRAGMA table_info(research_sessions)').all() as Array<{ name?: unknown }>;
+        if (!columns.some((column) => column.name === 'machine_id')) {
+          database.exec("ALTER TABLE research_sessions ADD COLUMN machine_id TEXT NOT NULL DEFAULT 'local';");
+        }
+      }
     }]);
   }
 
@@ -975,6 +984,8 @@ export class WorkspaceRegistry {
            WHERE id = ?`
         )
         .run(...values, text(existing, 'id'));
+      this.db.prepare('UPDATE research_sessions SET machine_id = ? WHERE id = ?')
+        .run(typeof run.budget?.machineId === 'string' ? run.budget.machineId : 'local', text(existing, 'id'));
       return;
     }
 
@@ -987,6 +998,8 @@ export class WorkspaceRegistry {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(`session_${randomUUID()}`, ...values);
+    this.db.prepare('UPDATE research_sessions SET machine_id = ? WHERE workspace_path = ? AND run_id = ?')
+      .run(typeof run.budget?.machineId === 'string' ? run.budget.machineId : 'local', resolve(workspacePath), run.id);
   }
 
   private mapWorkspace(row: SqlRow): WorkspaceRegistryEntry {
@@ -1022,6 +1035,7 @@ export class WorkspaceRegistry {
       workspacePath: text(row, 'workspace_path'),
       workspaceId: text(row, 'workspace_id'),
       runId: text(row, 'run_id'),
+      machineId: typeof row.machine_id === 'string' ? row.machine_id : 'local',
       title: text(row, 'title'),
       status: text(row, 'status') as RunStatus,
       runEngine: text(row, 'run_engine') as RunEngineKind,

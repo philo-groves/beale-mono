@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "beale-fleet",
+  "version": "0.1.0",
+  "description": "Use for listing, cloning, starting, and stopping operator-configured local virtual machines.",
+  "author": "Beale",
+  "license": "MIT",
+  "extensions": {
+    "beale": {
+      "hostToolPlugin": "beale-fleet"
+    }
+  }
+}

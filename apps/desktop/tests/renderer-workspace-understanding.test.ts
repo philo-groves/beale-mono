@@ -81,7 +81,7 @@ describe('workspace dashboard', () => {
     const overviewFormStyles = styles.match(/\.workspace-overview-form\s*\{([^}]*)\}/)?.[1] ?? '';
     const overviewControlStyles = styles.match(/\.workspace-overview-control-row\s*\{([^}]*)\}/)?.[1] ?? '';
     const overviewRowDividerStyles = styles.match(/\.workspace-overview-form \.settings-form-control-list > \* \+ \*\s*\{([^}]*)\}/)?.[1] ?? '';
-    const overviewFieldStyles = styles.match(/\.workspace-overview-form :is\(input, textarea\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    const overviewFieldStyles = styles.match(/\.workspace-overview-form :is\(input:not\(\[type='checkbox'\]\), textarea\)\s*\{([^}]*)\}/)?.[1] ?? '';
     const guidanceHeadingStyles = styles.match(/\.workspace-guidance-field-heading\s*\{([^}]*)\}/)?.[1] ?? '';
     const guidanceSurfaceStyles = styles.match(/\.workspace-overview-form \.workspace-guidance-editor,\s*\.workspace-guidance-preview\s*\{([^}]*)\}/)?.[1] ?? '';
     const guidancePreviewStyles = [...styles.matchAll(/^\.workspace-guidance-preview\s*\{([^}]*)\}/gm)].at(-1)?.[1] ?? '';
@@ -97,7 +97,7 @@ describe('workspace dashboard', () => {
     const primaryDirectoryIndicatorStyles = styles.match(/\.workspace-directory-primary-indicator::before\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceHeadingStyles = styles.match(/\.workspace-overview-layout\s*>\s*\.workspace-overview-heading,\s*\.workspace-activity-form\s*>\s*:is\(\.settings-form-heading\),\s*\.workspace-cleaning-form\s*>\s*:is\(\.settings-form-heading\)\s*\{([^}]*)\}/)?.[1] ?? '';
     const workspaceHeatmapStyles = styles.match(/\.workspace-activity-grid-scroll\s*\{([^}]*)\}/)?.[1] ?? '';
-    const overviewDisabledStyles = styles.match(/\.workspace-overview-form :is\(input, textarea\):disabled\s*\{([^}]*)\}/)?.[1] ?? '';
+    const overviewDisabledStyles = styles.match(/\.workspace-overview-form :is\(input:not\(\[type='checkbox'\]\), textarea\):disabled\s*\{([^}]*)\}/)?.[1] ?? '';
     const timelinePanelStyles = styles.match(/\.workspace-timeline-card\s*\{([^}]*)\}/)?.[1] ?? '';
     const activityFormStyles = styles.match(/\.workspace-activity-form\s*\{([^}]*)\}/)?.[1] ?? '';
     const chartStyles = styles.match(/\.workspace-timeline-chart\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -422,8 +422,8 @@ describe('workspace dashboard', () => {
     expect(html).toContain('disabled=""');
   });
 
-  it('previews checkpoint file moves and keeps repair unavailable for blockers', () => {
-    const renderRepair = (blockers: Array<{ path: string; sizeBytes: number; reason: string }>): string => renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
+  it('does not surface legacy Git checkpoint repair controls', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
       initialView: 'utilities',
       appServerMemory: memorySummary(),
@@ -434,20 +434,13 @@ describe('workspace dashboard', () => {
       workspaceDejunk: {
         available: true, newFileCount: 1, newFileCountCapped: false, baselineAt: '2026-08-12T12:00:00.000Z', lastRun: null,
         project: { fileCount: 1, totalBytes: 6 * 1048576, temporaryBytes: 0, unclassifiedFileCount: 0, partial: false,
-          checkpoint: { status: 'failed', reason: 'Test checkpoint', error: 'Oversized file.', repair: {
-            fingerprint: 'a'.repeat(64), candidates: [{ path: 'investigations/example/generated.bin', sizeBytes: 6 * 1048576,
-              destinationPath: 'evidence/recovered/example-generated.bin' }], blockers
-          } }
+          checkpoint: { status: 'failed', reason: 'Legacy checkpoint', error: 'Legacy status.' }
         }
       }
     }));
-    const ready = renderRepair([]);
-    expect(ready).toContain('investigations/example/generated.bin');
-    expect(ready).toContain('evidence/recovered/example-generated.bin');
-    expect(ready).toMatch(/<button[^>]*>Move and retry<\/button>/u);
-    const blocked = renderRepair([{ path: 'reports/example/large.md', sizeBytes: 6 * 1048576, reason: 'Tracked file.' }]);
-    expect(blocked).toContain('reports/example/large.md');
-    expect(blocked).toMatch(/<button[^>]*disabled=""[^>]*>Move and retry<\/button>/u);
+    expect(html).toContain('Dejunk Now');
+    expect(html).not.toContain('Checkpoint repair');
+    expect(html).not.toContain('Git checkpoint failed');
   });
 
   it('shows the active Research Kit tab while mounting only the requested Settings panel', () => {

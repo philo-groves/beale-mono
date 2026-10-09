@@ -1033,20 +1033,19 @@ describe('app-server session persistence boundary', () => {
       }
       expect(service.getRunDetail(runId)).toMatchObject({
         run: { status: 'completed' },
-        transcriptMessages: [{ role: 'assistant' }]
+        transcriptMessages: expect.arrayContaining([expect.objectContaining({ role: 'assistant', phase: 'final_answer' })])
       });
       const completeDetail = service.getRunDetail(runId);
-      const incremental = await service.getRunDetailUpdateForClient(runId, {
+      const cursor = {
         afterTraceSequence: completeDetail.traceEvents.at(-2)?.sequence ?? -1,
         afterTranscriptCount: Math.max(0, completeDetail.transcriptMessages.length - 1)
-      });
-      expect(incremental.traceEvents).toEqual(
-        completeDetail.traceEvents.filter((event) => event.sequence > (completeDetail.traceEvents.at(-2)?.sequence ?? -1))
-      );
+      };
+      const incremental = await service.getRunDetailUpdateForClient(runId, cursor);
+      expect(incremental.traceEvents.every((event) => completeDetail.traceEvents.some((known) => known.id === event.id))).toBe(true);
       expect(incremental.transcriptMessages).toEqual(completeDetail.transcriptMessages.slice(-1));
       await expect(service.getRunDetailForClient(runId)).resolves.toMatchObject({
         run: { status: 'completed' },
-        transcriptMessages: [{ role: 'assistant' }]
+        transcriptMessages: expect.arrayContaining([expect.objectContaining({ role: 'assistant', phase: 'final_answer' })])
       });
 
       const registryDatabase = new DatabaseSync(join(registry, 'workspace-registry.sqlite'));

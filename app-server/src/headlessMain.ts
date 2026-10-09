@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { launchRestartSupervisor } from './restartSupervisorMain.js';
 import {
   acquireDiscoveryLock,
   defaultDiscoveryPath,
@@ -55,6 +56,7 @@ export async function runHeadlessMain(args: readonly string[] = process.argv.sli
     releaseDiscoveryLock(stateFile, process.pid);
     throw error;
   });
+  if (!options.check) launchRestartSupervisor({ discoveryFile: stateFile, hostMode: 'headless', operatorToken: server.operatorToken });
   process.stdout.write(`Beale App Server listening at ${server.url} (pid ${process.pid}).\n`);
   process.stdout.write(`Endpoint record: ${stateFile}\n`);
 

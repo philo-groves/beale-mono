@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { BrowserContextSummary, BrowserContextsUpdate } from '@shared/browserContexts';
+import type { FleetBrowserInput, FleetBrowserUpdate } from '@shared/fleetBrowser';
 import type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
@@ -19,6 +20,9 @@ import type {
   TicketingTarget,
   TicketSubmissionResult,
   AgentPluginRegistryState,
+  FleetState,
+  FleetSshTestInput,
+  FleetSshTestResult,
   AppServerRemoteAccessSettings,
   AppServerRemoteAccessUpdate,
   MemorySettings,
@@ -62,15 +66,7 @@ import type {
   WorkspaceOnboardingProgressUpdate,
   WorkspaceOnboardingSkipInput,
   WorkspaceRegistryState,
-  ResearchTopicSummary,
-  ResearchTopicDetail,
-  ResearchTopicRecord,
-  ResearchTopicMessageRecord,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchSessionSummary,
-  CreateResearchTopicInput,
   ProfilingReport,
   ProfilingState,
   WorkspaceScopeDraft,
@@ -111,8 +107,8 @@ function zoomState(): ZoomState {
   };
 }
 
-async function invokeRunDetail<T>(topic: string, ...args: unknown[]): Promise<T> {
-  const result = await ipcRenderer.invoke(topic, ...args) as
+async function invokeRunDetail<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const result = await ipcRenderer.invoke(channel, ...args) as
     | { canceled: true }
     | { canceled: false; value: T };
   if (result.canceled) throw new Error('Beale session detail request was canceled.');
@@ -137,6 +133,23 @@ const api: BealeApi = {
     ipcRenderer.on(IPC_CHANNELS.browserContextsChanged, wrapped);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.browserContextsChanged, wrapped);
   },
+  fleetBrowserMachine(runId: string): Promise<string | null> {
+    return ipcRenderer.invoke(IPC_CHANNELS.fleetBrowserMachine, runId);
+  },
+  connectFleetBrowser(runId: string, remoteServerId?: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.connectFleetBrowser, runId, remoteServerId);
+  },
+  disconnectFleetBrowser(runId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.disconnectFleetBrowser, runId);
+  },
+  fleetBrowserInput(runId: string, input: FleetBrowserInput): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.fleetBrowserInput, runId, input);
+  },
+  onFleetBrowserUpdate(listener: (update: FleetBrowserUpdate) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, update: FleetBrowserUpdate): void => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.fleetBrowserUpdate, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.fleetBrowserUpdate, wrapped);
+  },
   selectWorkspace(mode: WorkspacePickerMode) {
     return ipcRenderer.invoke(IPC_CHANNELS.selectWorkspace, mode);
   },
@@ -146,53 +159,8 @@ const api: BealeApi = {
   getWorkspaceRegistry() {
     return ipcRenderer.invoke(IPC_CHANNELS.getWorkspaceRegistry);
   },
-  listResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]> {
-    return ipcRenderer.invoke(IPC_CHANNELS.listResearchTopics, workspaceId);
-  },
-  listArchivedResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]> {
-    return ipcRenderer.invoke(IPC_CHANNELS.listArchivedResearchTopics, workspaceId);
-  },
   listArchivedQuickChats(): Promise<ResearchSessionSummary[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.listArchivedQuickChats);
-  },
-  getResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicDetail> {
-    return ipcRenderer.invoke(IPC_CHANNELS.getResearchTopic, workspaceId, topicId);
-  },
-  createResearchTopic(workspaceId: string, input: CreateResearchTopicInput): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.createResearchTopic, workspaceId, input);
-  },
-  searchResearchTopics(workspaceId: string, query: string): Promise<ResearchTopicSummary[]> {
-    return ipcRenderer.invoke(IPC_CHANNELS.searchResearchTopics, workspaceId, query);
-  },
-  updateResearchTopicOverview(workspaceId: string, topicId: string, contentMarkdown: string, expectedUpdatedAt?: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.updateResearchTopicOverview, workspaceId, topicId, contentMarkdown, expectedUpdatedAt);
-  },
-  saveResearchTopicPage(workspaceId: string, topicId: string, input: { id?: string; title: string; contentMarkdown: string; expectedUpdatedAt?: string }): Promise<ResearchTopicPageRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.saveResearchTopicPage, workspaceId, topicId, input);
-  },
-  deleteResearchTopicPage(workspaceId: string, topicId: string, pageId: string): Promise<void> {
-    return ipcRenderer.invoke(IPC_CHANNELS.deleteResearchTopicPage, workspaceId, topicId, pageId);
-  },
-  linkResearchTopicResource(workspaceId: string, topicId: string, input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }): Promise<ResearchTopicLinkRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.linkResearchTopicResource, workspaceId, topicId, input);
-  },
-  unlinkResearchTopicResource(workspaceId: string, topicId: string, linkId: string): Promise<void> {
-    return ipcRenderer.invoke(IPC_CHANNELS.unlinkResearchTopicResource, workspaceId, topicId, linkId);
-  },
-  mergeResearchTopic(workspaceId: string, sourceTopicId: string, targetTopicId: string): Promise<{ source: ResearchTopicRecord; target: ResearchTopicRecord }> {
-    return ipcRenderer.invoke(IPC_CHANNELS.mergeResearchTopic, workspaceId, sourceTopicId, targetTopicId);
-  },
-  unmergeResearchTopic(workspaceId: string, sourceTopicId: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.unmergeResearchTopic, workspaceId, sourceTopicId);
-  },
-  deleteResearchTopic(workspaceId: string, topicId: string): Promise<void> {
-    return ipcRenderer.invoke(IPC_CHANNELS.deleteResearchTopic, workspaceId, topicId);
-  },
-  archiveResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.archiveResearchTopic, workspaceId, topicId);
-  },
-  restoreResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.restoreResearchTopic, workspaceId, topicId);
   },
   archiveResearchSession(sessionId: string): Promise<WorkspaceRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.archiveResearchSession, sessionId);
@@ -290,6 +258,51 @@ const api: BealeApi = {
   },
   getAgentPlugins(): Promise<AgentPluginRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.getAgentPlugins);
+  },
+  getFleetState(): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetState);
+  },
+  restartLocalAppServer(): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restartLocalAppServer);
+  },
+  restartFleetAppServer(serverId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restartFleetAppServer, serverId);
+  },
+  restartFleetGuestAppServer(machineId: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.restartFleetGuestAppServer, machineId);
+  },
+  getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteMachines);
+  },
+  getFleetRemoteCatalog(serverId: string): Promise<import('@beale/app-server-runtime/protocol').FleetRemoteCatalog> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteCatalog, serverId);
+  },
+  getFleetRemoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteSession, serverId, workspaceId, sessionId);
+  },
+  startFleetRemoteSession(serverId: string, workspaceId: string, promptMarkdown: string, machineId: string): Promise<{ sessionId: string }> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startFleetRemoteSession, serverId, workspaceId, promptMarkdown, machineId);
+  },
+  controlFleetRemoteSession(serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.controlFleetRemoteSession, serverId, sessionId, type, instruction);
+  },
+  configureFleet(input: Record<string, unknown>): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.configureFleet, input);
+  },
+  testFleetVmConnection(input: FleetSshTestInput): Promise<FleetSshTestResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.testFleetVmConnection, input);
+  },
+  testFleetAppServer(input: { serverId?: string; url: string; operatorToken: string }): Promise<{ success: boolean; message: string }> {
+    return ipcRenderer.invoke(IPC_CHANNELS.testFleetAppServer, input);
+  },
+  cloneFleetVm(baseId: string, name: string): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.cloneFleetVm, baseId, name);
+  },
+  startFleetVm(machineId: string): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startFleetVm, machineId);
+  },
+  stopFleetVm(machineId: string): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.stopFleetVm, machineId);
   },
   addAgentPluginFromFilesystem(): Promise<AgentPluginRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.addAgentPluginFromFilesystem);
@@ -519,9 +532,6 @@ const api: BealeApi = {
   },
   runWorkspaceDejunk() {
     return ipcRenderer.invoke(IPC_CHANNELS.runWorkspaceDejunk);
-  },
-  repairWorkspaceCheckpoint(fingerprint: string) {
-    return ipcRenderer.invoke(IPC_CHANNELS.repairWorkspaceCheckpoint, fingerprint);
   },
   runMemoryDreaming() {
     return ipcRenderer.invoke(IPC_CHANNELS.runMemoryDreaming);

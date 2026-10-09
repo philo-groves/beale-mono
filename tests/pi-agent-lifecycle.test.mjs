@@ -64,21 +64,12 @@ const FAUX_MODEL = {
   maxTokens: 4096,
 };
 const COLLABORATION_TOOL_NAMES = [
-  "create_topic",
   "spawn_agent",
   "send_message",
   "followup_task",
   "interrupt_agent",
   "list_agents",
   "wait_agent",
-  "topic_list",
-  "topic_search",
-  "topic_read",
-  "topic_page_read",
-  "join_topic",
-  "topic_update",
-  "topic_page_save",
-  "topic_link",
 ];
 const WORKSPACE_AGENT_INSTRUCTIONS = agentInstructions(
   "Security workspace guidance: use the Tart VM with SIP enabled for target execution.",
@@ -736,7 +727,6 @@ test("research system prompt allows same-model review only from a fresh distinct
     pluginCatalog: [{ id: "beale-claims", name: "Claims", mcpServers: [], skills: [] }] });
   assert.match(prompt, /same provider and model/);
   assert.match(prompt, /distinct reviewer subagent spawned with fork_turns=none/);
-  assert.match(prompt, /without inherited topic context/);
   assert.doesNotMatch(prompt, /independent evidence outside the originating session/);
 });
 
@@ -1680,51 +1670,24 @@ test("Pi Agent treats an authorized safety guardrail as a likely false positive 
   assert.equal(retry?.payload.safetyDisposition, "likely_false_positive");
 });
 
-test("non-security profile safety recovery uses the resolved research boundary without cyber-specific steering", async () => {
+test("non-security profiles cannot enter the research runtime", async () => {
   const inputProfile = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
   inputProfile.id = "historical-research";
-  inputProfile.version = "1.0.0";
   inputProfile.name = "Historical Research";
-  inputProfile.description = "Evidence-driven historical research.";
-  inputProfile.agent.role = "You are a careful historical researcher.";
-  inputProfile.workspace.boundaryNoun = "Archive collection boundary";
-  inputProfile.workspace.authorizationMode = "optional";
   const profile = normalizeResearchProfile(inputProfile);
-  const resolvedResearchProfile = {
-    profile,
-    hash: researchProfileHash(profile),
-    source: "explicit",
-  };
-  const contexts = [];
-  const liveEvents = [];
-  const result = await runResearchAgent({
-    prompt: "Compare primary sources about the historical use of malware and persistence terminology.",
-    workspaceContext: authorizedWorkspaceContext(),
-    resolvedResearchProfile,
-    eventSink(event) {
-      liveEvents.push(event);
+  let executorCalled = false;
+  await assert.rejects(runResearchAgent({
+    prompt: "Inspect a synthetic archive.",
+    resolvedResearchProfile: { profile, hash: researchProfileHash(profile), source: "explicit" },
+    executor: {
+      name: "must-not-run",
+      async execute() {
+        executorCalled = true;
+        return { text: "unexpected" };
+      },
     },
-    executor: createPiAgentExecutor({
-      provider: "faux",
-      model: "faux-model",
-      researchProfile: profile,
-      models: createScriptedModels([
-        assistantError("Provider safety guardrail interrupted this response."),
-        assistant("## Result\nContinued with bounded archive analysis."),
-      ], contexts),
-    }),
-  });
-
-  assert.equal(result.agentRun.status, "complete");
-  const recovery = contexts[1].messageContents.at(-1);
-  assert.match(recovery, /Historical Research profile/);
-  assert.match(recovery, /Archive collection boundary \(Authorized fixture\)/);
-  assert.match(recovery, /bounded, reversible, evidence-producing methods/);
-  assert.doesNotMatch(recovery, /safety\/cyber|credential abuse|red-team rhetoric|live-target authorization/);
-  const retry = liveEvents.find((event) =>
-    event.kind === "agent.event" && event.payload.type === "model_retry"
-  );
-  assert.equal(retry?.payload.safetyDisposition, "safety_adjustment");
+  }), /only Security research sessions/);
+  assert.equal(executorCalled, false);
 });
 
 test("Pi Agent waits for live steering after one automatic safeguard retry", async () => {
@@ -2031,6 +1994,34 @@ test("Pi Agent retries a model stream that produces no response events", async (
     && event.payload.type === "model_retry"
     && event.payload.errorMessage.includes("produced no actionable content")
   ));
+});
+
+test("Pi Agent waits for a durable broker completion without a local first-event timeout", async () => {
+  const previous = process.env.APP_SERVER_MODEL_BROKER_URL;
+  process.env.APP_SERVER_MODEL_BROKER_URL = "http://127.0.0.1:1/broker";
+  let calls = 0;
+  try {
+    const result = await runResearchAgent({
+      prompt: "Review the synthetic workspace through a broker.",
+      executor: createPiAgentExecutor({
+        provider: "faux",
+        model: "faux-model",
+        models: {
+          getModel() { return FAUX_MODEL; },
+          streamSimple() {
+            calls += 1;
+            return streamFromAfter(assistant("## Result\nBrokered completion arrived."), 30);
+          },
+        },
+        modelFirstEventTimeoutMs: 10,
+      }),
+    });
+    assert.equal(result.agentRun.status, "complete");
+    assert.equal(calls, 1);
+  } finally {
+    if (previous === undefined) delete process.env.APP_SERVER_MODEL_BROKER_URL;
+    else process.env.APP_SERVER_MODEL_BROKER_URL = previous;
+  }
 });
 
 test("Pi Agent retries a model stream that stalls after reasoning only", async () => {

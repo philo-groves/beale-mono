@@ -1,15 +1,15 @@
 import { memo } from 'react';
 import type { JSX } from 'react';
-import { Archive, BookOpen, CalendarClock, FileText, Folder, Palette, Plug, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi } from 'lucide-react';
+import { Archive, CalendarClock, FileText, Folder, Palette, Plug, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi } from 'lucide-react';
 import type { RunRecord } from '@shared/types';
 import { displaySessionTitle } from '../../shared/sessionTitle';
 import { useDevRenderProbe } from '../devInstrumentation';
-import { displayTopicTitle, displayWorkspaceHeaderName } from '../view-models/appHeader';
+import { displayWorkspaceHeaderName } from '../view-models/appHeader';
 
 export type AppHeaderViewIcon =
   | 'automations'
-  | 'topics'
   | 'plugins'
+  | 'fleet'
   | 'reporting'
   | 'settings'
   | 'settings-archive'
@@ -28,13 +28,11 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
   workspaceName,
   workspaceViewTitle,
   detail,
-  topicTitle,
   onOpenSessionOverview
 }: {
   workspaceName: string;
   workspaceViewTitle?: string | null;
   detail: AppHeaderRun | null;
-  topicTitle?: string | null;
   onOpenSessionOverview?: () => void;
 }): JSX.Element {
   const workspaceLabel = displayWorkspaceHeaderName(workspaceName);
@@ -42,19 +40,14 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
   const sessionTitle = !workspaceViewLabel && detail
     ? displaySessionTitle(detail.run.title, detail.run.promptMarkdown)
     : null;
-  const topicLabel = !workspaceViewLabel && topicTitle
-    ? displayTopicTitle(topicTitle)
-    : null;
   const headerSegments = [
     workspaceLabel,
     ...(workspaceViewLabel ? [workspaceViewLabel] : []),
-    ...(sessionTitle ? [sessionTitle] : []),
-    ...(topicLabel ? [topicLabel] : [])
+    ...(sessionTitle ? [sessionTitle] : [])
   ];
   useDevRenderProbe('appHeaderTitle', () => ({
     workspace: workspaceLabel,
-    run: detail?.run.id ?? 'none',
-    topic: topicLabel ?? 'none'
+    run: detail?.run.id ?? 'none'
   }));
 
   return (
@@ -89,11 +82,6 @@ export const AppHeaderTitle = memo(function AppHeaderTitle({
             )}
           </>
         ) : null}
-        {topicLabel ? (
-          <span className="app-header-topic-title app-header-static-title" title={topicLabel}>
-            <span>{topicLabel}</span>
-          </span>
-        ) : null}
       </div>
     </div>
   );
@@ -110,8 +98,8 @@ export const StaticAppHeaderTitle = memo(function StaticAppHeaderTitle({
 }): JSX.Element {
   const HeaderIcon = {
     automations: CalendarClock,
-    topics: BookOpen,
     plugins: Plug,
+    fleet: ServerCog,
     reporting: FileText,
     settings: Settings,
     'settings-archive': Archive,

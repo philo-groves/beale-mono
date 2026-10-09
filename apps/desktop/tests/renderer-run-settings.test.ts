@@ -8,6 +8,7 @@ import {
   UNBOUNDED_ATTEMPTS,
   UNBOUNDED_MINUTES
 } from '../src/renderer/view-models/runSettings';
+import { resolveSessionGoal } from '../src/shared/goalObjective';
 
 describe('renderer run settings view model', () => {
   it('keeps new research sessions unlimited by minutes but one branch by default', () => {
@@ -21,6 +22,15 @@ describe('renderer run settings view model', () => {
     expect(defaultRunInput.model).toBe('');
     expect(defaultRunInput.reasoningEffort).toBe('high');
     expect(defaultRunInput.fastMode).toBe(false);
+  });
+
+  it('uses the session prompt or explicit objective when Goal mode is enabled', () => {
+    const input = { ...defaultRunInput, promptMarkdown: 'Review the example module.' };
+    expect(resolveSessionGoal(input)).toEqual({ enabled: false, objective: null });
+    expect(resolveSessionGoal({ ...input, goalEnabled: true }).objective).toBe('Review the example module.');
+    expect(resolveSessionGoal({ ...input, goalEnabled: true, goalObjective: 'Investigate example source.',
+    }).objective)
+      .toBe('Investigate example source.');
   });
 
   it('parses optional positive integers and preserves unbounded budget extension', () => {

@@ -94,7 +94,7 @@ export class ResearchDispositionRecorder {
 
 export function createSessionDispositionTool(
   recorder: ResearchDispositionRecorder,
-  options: { beforeRecord?: () => void } = {},
+  options: { beforeRecord?: (input: unknown) => void } = {},
 ): ResearchExecutableTool {
   return {
     descriptor: {
@@ -111,7 +111,7 @@ export function createSessionDispositionTool(
     async execute(action): Promise<ResearchToolExecutionResult> {
       const startedAt = nowIso();
       try {
-        options.beforeRecord?.();
+        options.beforeRecord?.(action.input);
         const disposition = recorder.record(action.input);
         return complete(action, startedAt, disposition);
       } catch (error) {

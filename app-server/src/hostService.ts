@@ -17,11 +17,12 @@ import {
   decodeAppServerSessionLaunchRequest,
   decodeWorkspaceProjectRequest,
   type AppServerProtocolOperation,
-  type AppServerSessionLaunchRequest
+  type AppServerSessionLaunchRequest,
+  decodeFleetSshTestInput
 } from '@beale/app-server-runtime/protocol';
-import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
-import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate } from '@beale/research-agent';
-import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
+import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchIndexNeedsRebuild } from '@beale/app-server-runtime/runtime-services';
+import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate, verifyBrokerModelAccess } from '@beale/research-agent';
+import { runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
   type AppServerHostRegistryOptions,
@@ -38,6 +39,11 @@ import {
 } from './sessionLaunch.js';
 import { longSessionRecoveryFallbackPrompt } from './sessionRecovery.js';
 import { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
+import { FleetService } from './fleet.js';
+import { FleetRemoteController } from './fleetRemote.js';
+import { FleetModelBrokerQueue } from './fleetModelBrokerQueue.js';
+import type { ModelBrokerRequest } from '@beale/research-agent';
+import { FleetWorkspaceStore } from './fleetWorkspace.js';
 
 type ProtocolInvoker = <T>(
   operation: AppServerProtocolOperation,
@@ -134,6 +140,10 @@ export class AppServerHostService {
   private readonly workspaceWriters = new Map<string, string>();
   private readonly workspaceExclusiveOperations = new Set<string>();
   private readonly registry: AppServerHostRegistry;
+  private readonly fleet: FleetService;
+  private readonly fleetRemote: FleetRemoteController;
+  private readonly fleetWorkspace: FleetWorkspaceStore;
+  private readonly fleetBroker: FleetModelBrokerQueue;
   private readonly invokeProtocol: ProtocolInvoker;
   private readonly databaseCoordinator: AppServerWorkerDatabaseCoordinator;
   private providerSemanticsPromise: Promise<{
@@ -144,6 +154,12 @@ export class AppServerHostService {
 
   public constructor(options: AppServerHostServiceOptions = {}) {
     this.registry = options.registry ?? new AppServerHostRegistry(options);
+    this.fleet = new FleetService(join(this.registry.registryDirectory, 'fleet.json'));
+    this.fleetWorkspace = new FleetWorkspaceStore(this.registry);
+    this.fleetBroker = new FleetModelBrokerQueue(join(this.registry.registryDirectory, 'fleet-model-broker'));
+    this.fleetRemote = new FleetRemoteController(this.fleet, this.fleetWorkspace,
+      () => this.registry.providerSettings().authenticationPreferences,
+      () => this.registry.providerSettings().riskAcknowledgements);
     this.databaseCoordinator = options.databaseCoordinator ?? new AppServerWorkerDatabaseCoordinator();
     const invokeProtocol = options.invokeProtocol ?? invokeAppServerProtocol;
     this.invokeProtocol = (operation, invokeOptions) => invokeOptions.storage
@@ -153,6 +169,19 @@ export class AppServerHostService {
           )
         : invokeProtocol(operation, invokeOptions);
   }
+
+  public brokerToken(sessionId: string): string | null { return this.fleetBroker.token(sessionId); }
+
+  public brokerSubmit(sessionId: string, token: string, request: ModelBrokerRequest): void {
+    this.fleetBroker.submit(sessionId, token, request);
+  }
+
+  public brokerResult(sessionId: string, token: string, requestId: string): unknown {
+    return this.fleetBroker.result(sessionId, token, requestId);
+  }
+
+  public resumeFleetModelBrokers(): void { this.fleetRemote.resumePendingBrokers(); }
+  public stopFleetModelBrokers(): void { this.fleetRemote.stopAllBrokers(); }
 
   public listWorkspaces(): BealeAppServerWorkspaceList {
     return {
@@ -199,6 +228,135 @@ export class AppServerHostService {
     profileId?: string;
     signal?: AbortSignal;
   }): Promise<unknown> {
+    if (request.operation.startsWith('fleet.')) {
+      const input = isRecord(request.input) ? request.input : {};
+      if (request.operation === 'fleet.state') return this.fleet.state();
+      if (request.operation === 'fleet.remote_machines') return this.fleet.remoteMachines();
+      if (request.operation === 'fleet.remote_catalog') return this.fleet.remoteCatalog(nonEmpty(input.serverId) ?? '');
+      if (request.operation === 'fleet.remote_session') return this.fleet.remoteSession(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.sessionId) ?? '');
+      if (request.operation === 'fleet.remote_browser_attach') return this.fleet.remoteBrowserAttach(nonEmpty(input.serverId) ?? '', nonEmpty(input.sessionId) ?? '');
+      if (request.operation === 'fleet.remote_launch') return this.fleet.remoteLaunch(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.promptMarkdown) ?? '', nonEmpty(input.machineId) ?? 'local');
+      if (request.operation === 'fleet.remote_control') return this.fleet.remoteControl(nonEmpty(input.serverId) ?? '', nonEmpty(input.sessionId) ?? '', nonEmpty(input.type) ?? '', nonEmpty(input.instruction));
+      if (request.operation === 'fleet.restart_app_server') return this.fleet.restartRemoteAppServer(nonEmpty(input.serverId) ?? '');
+      if (request.operation === 'fleet.restart_guest_app_server') return this.fleetRemote.restartGuestAppServer(nonEmpty(input.machineId) ?? '');
+      if (request.operation === 'fleet.configure') return this.fleet.configure(input);
+      if (request.operation === 'fleet.test_ssh') return this.fleet.testSsh(decodeFleetSshTestInput(input));
+      if (request.operation === 'fleet.test_app_server') return this.fleet.testAppServer(input);
+      if (request.operation === 'fleet.clone') {
+        const state = await this.fleet.clone(nonEmpty(input.baseId) ?? '', nonEmpty(input.name) ?? '');
+        const owner = fleetOwner(input, this.fleet.machineId());
+        const clone = state.machines.find((machine) => machine.name === input.name);
+        return owner && clone ? this.fleet.reserve(clone.id, owner) : state;
+      }
+      if (request.operation === 'fleet.clone_for_session') {
+        const owner = fleetOwner(input, null);
+        if (!owner) throw new Error('Fleet session clone requires an owning machine and session.');
+        const worker = await this.fleet.cloneForSession(nonEmpty(input.baseId) ?? '', { ...owner,
+          ...(nonEmpty(input.workspaceId) ? { workspaceId: nonEmpty(input.workspaceId)! } : {}) });
+        return { machineId: worker.id };
+      }
+      if (request.operation === 'fleet.start') {
+        const machineId = nonEmpty(input.machineId) ?? '';
+        const owner = fleetOwner(input, this.fleet.machineId());
+        if (owner) await this.fleet.reserve(machineId, owner);
+        return this.fleet.start(machineId, owner ?? undefined);
+      }
+      if (request.operation === 'fleet.stop') return this.fleet.stop(nonEmpty(input.machineId) ?? '', fleetOwner(input, this.fleet.machineId()) ?? undefined);
+      if (request.operation === 'fleet.reserve') {
+        const owner = fleetOwner(input, null);
+        if (!owner) throw new Error('Fleet reservation requires an owner machine and session.');
+        return this.fleet.reserve(nonEmpty(input.machineId) ?? '', { ...owner,
+          ...(nonEmpty(input.workspaceId) ? { workspaceId: nonEmpty(input.workspaceId)! } : {}) });
+      }
+      if (request.operation === 'fleet.release') {
+        const owner = fleetOwner(input, null);
+        if (!owner) throw new Error('Fleet release requires an owner machine and session.');
+        const machineId = nonEmpty(input.machineId) ?? '';
+        if (this.fleet.isReservedBy(machineId, owner) && this.fleet.isSessionClone(machineId)) {
+          await this.fleet.stop(machineId, owner);
+        }
+        return this.fleet.release(machineId, owner);
+      }
+      if (request.operation === 'fleet.prepare') {
+        const workspaceId = nonEmpty(input.workspaceId);
+        const runId = nonEmpty(input.runId);
+        const machineId = nonEmpty(input.machineId);
+        if (!workspaceId || !runId) throw new Error('Fleet preparation requires a workspace and run ID.');
+        const workspace = this.requireWorkspace(workspaceId);
+        if (!machineId || machineId === 'local') { await this.fleetRemote.validateLocal(workspace.workspaceId, nonEmpty(input.mode)); return { machineId: 'local' }; }
+        const ownerMachineId = nonEmpty(input.ownerMachineId) ?? this.fleet.machineId();
+        if (ownerMachineId !== this.fleet.machineId()) {
+          return this.fleetRemote.prepare(workspace, runId, machineId, ownerMachineId);
+        }
+        const providerId = nonEmpty(input.providerId);
+        const modelId = nonEmpty(input.modelId);
+        const providerModels = Array.isArray(input.providerModels)
+          ? input.providerModels.filter((value): value is { providerId: string; modelId: string } =>
+            value !== null && typeof value === 'object'
+              && typeof value.providerId === 'string' && typeof value.modelId === 'string'
+              && value.providerId.length > 0 && value.modelId.length > 0)
+          : providerId && modelId ? [{ providerId, modelId }] : [];
+        if (providerModels.length === 0) throw new Error('Select an authenticated model before launching a Fleet session.');
+        for (const selection of providerModels) {
+          await verifyBrokerModelAccess(selection.providerId, selection.modelId,
+            this.registry.providerSettings().authenticationPreferences, resolveAppServerCodexAuthFile());
+        }
+        const providerIds = providerModels.map((selection) => selection.providerId);
+        return this.fleetRemote.prepare(workspace, runId, machineId, ownerMachineId,
+          providerIds.length ? { providerIds: [...new Set(providerIds)], fastMode: input.fastMode === true,
+            daybreakBlue: input.daybreakBlue === true } : undefined);
+      }
+      if (request.operation === 'fleet.connect') return this.fleetRemote.connect(nonEmpty(input.machineId) ?? '', nonEmpty(input.runId) ?? '', nonEmpty(input.ownerMachineId) ?? this.fleet.machineId());
+      if (request.operation === 'fleet.complete') {
+        const runId = nonEmpty(input.runId);
+        if (!runId) throw new Error('Fleet completion requires a run ID.');
+        return this.fleetRemote.complete(runId);
+      }
+      if (request.operation === 'fleet.broker') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'guest') throw new Error('Model broker requests require a Fleet guest.');
+        const runId = nonEmpty(input.runId);
+        if (!runId) throw new Error('Model broker session ID is required.');
+        const action = nonEmpty(input.action);
+        if (action === 'register') { this.fleetBroker.register(runId); return { registered: true }; }
+        if (action === 'poll') return this.fleetBroker.poll(runId);
+        const requestId = nonEmpty(input.requestId) ?? '';
+        const leaseId = nonEmpty(input.leaseId) ?? '';
+        if (action === 'renew') { this.fleetBroker.renew(runId, requestId, leaseId); return { renewed: true }; }
+        if (action === 'begin') { this.fleetBroker.beginResult(runId, requestId, leaseId); return { begun: true }; }
+        if (action === 'append') {
+          this.fleetBroker.appendResult(runId, requestId, leaseId, Number(input.offset), nonEmpty(input.data) ?? '');
+          return { appended: true };
+        }
+        if (action === 'seal') {
+          this.fleetBroker.sealResult(runId, requestId, leaseId, nonEmpty(input.sha256) ?? '');
+          return { sealed: true };
+        }
+        throw new Error('Unsupported model broker action.');
+      }
+      if (request.operation === 'fleet.relay_broker') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'primary') throw new Error('Model broker relay requires a primary.');
+        const machineId = nonEmpty(input.machineId) ?? '';
+        const runId = nonEmpty(input.runId) ?? '';
+        const ownerMachineId = nonEmpty(input.ownerMachineId) ?? '';
+        return this.fleetRemote.brokerOperation(machineId, runId, ownerMachineId, input);
+      }
+      if (request.operation === 'fleet.stage' || request.operation === 'fleet.export') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'guest') throw new Error('Fleet workspace transfer is available only in a guest Beale instance.');
+        if (request.operation === 'fleet.stage' && input.action === 'begin' && typeof input.primaryName === 'string') {
+          await this.fleet.configure({ action: 'set-primary', name: input.primaryName });
+        }
+        return request.operation === 'fleet.stage' ? this.fleetWorkspace.guestStage(input) : this.fleetWorkspace.guestExport(input);
+      }
+      if (request.operation === 'fleet.relay_stage' || request.operation === 'fleet.relay_export') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'primary') throw new Error('Fleet relay transfers require an enabled primary app server.');
+        return request.operation === 'fleet.relay_stage' ? this.fleetWorkspace.guestStage(input) : this.fleetWorkspace.guestExport(input);
+      }
+      throw new Error('Unsupported Fleet operation.');
+    }
     if (request.operation === 'maintenance.run' && isRecord(request.input)) {
       const path = nonEmpty(request.input.workspacePath);
       if (!path) throw new Error('workspacePath is required.');
@@ -229,25 +387,22 @@ export class AppServerHostService {
       if (!workspace) throw new Error('A registered workspace is required.');
       const project = readWorkspaceProject(workspace.workspacePath);
       if (input.action === 'status') {
-        const statusPath = join(workspace.workspacePath, '.git', 'beale', 'checkpoint.json');
-        return { project, checkpoint: existsSync(statusPath) ? JSON.parse(readFileSync(statusPath, 'utf8')) as unknown : null,
+        return { project, checkpoint: null,
           researchIndex: readWorkspaceResearchCacheState(workspace.workspacePath) };
       }
       if (!project) throw new Error('This reference workspace does not use the research project layout. Create a new workspace.');
       const key = workspaceOperationKey(workspace.workspacePath);
       if (this.workspaceExclusiveOperations.has(key)) throw new Error('Another workspace operation is in progress.');
-      if (input.action === 'repair-preview') return previewWorkspaceCheckpointRepair(workspace.workspacePath);
-      const exclusive = input.action === 'import' || input.action === 'export' || input.action === 'sync' || input.action === 'rebuild-index' || input.action === 'release-index' || input.action === 'repair';
+      const exclusive = input.action === 'import' || input.action === 'export' || input.action === 'sync' || input.action === 'rebuild-index' || input.action === 'release-index';
       if (exclusive && [...this.workspaceWriters.values()].some((root) => workspaceOperationKey(root) === key)) throw new Error(`Stop workspace research before ${input.action.replace(/-/gu, ' ')}.`);
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
       if (exclusive) this.workspaceExclusiveOperations.add(key);
       try { return await runWorkspaceCheckpoint({ workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId, ...storage },
-        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export compatibility research snapshot' : input.action === 'sync' ? 'Synchronize file-authority research' : input.action === 'rebuild-index' ? 'Rebuild derived research index' : input.action === 'release-index' ? 'Release derived research index' : input.action === 'repair' ? 'Repair oversized checkpoint files' : 'Operator workspace checkpoint',
+        input.action === 'import' ? 'Import research file edit' : input.action === 'export' ? 'Export compatibility research snapshot' : input.action === 'sync' ? 'Synchronize file-authority research' : input.action === 'rebuild-index' ? 'Rebuild derived research index' : input.action === 'release-index' ? 'Release derived research index' : 'Synchronize workspace research',
         input.action === 'import' ? input : undefined, undefined, this.databaseCoordinator,
         (input.action === 'export' || input.action === 'sync') ? { exportResearch: true }
           : input.action === 'rebuild-index' ? { researchIndexAction: 'rebuild' }
           : input.action === 'release-index' ? { researchIndexAction: 'release' }
-          : input.action === 'repair' ? { repairFingerprint: input.fingerprint }
           : undefined);
       } finally { if (exclusive) this.workspaceExclusiveOperations.delete(key); }
     }
@@ -432,6 +587,7 @@ export class AppServerHostService {
   ): Promise<PreparedAppServerSession> {
     const sessionId = request.sessionId ?? generatedSessionId;
     const workspace = this.requireWorkspace(request.launch.workspaceId);
+    await this.fleetRemote.validateLocal(workspace.workspaceId, request.launch.mode ?? null);
     const attemptId = request.launch.attemptId ?? `attempt-${randomUUID()}`;
     const requestedProfileId = request.launch.researchProfileId?.trim();
     if (requestedProfileId && requestedProfileId !== workspace.researchProfileId) {
@@ -440,6 +596,9 @@ export class AppServerHostService {
       );
     }
     const profileId = workspace.researchProfileId || 'security-research';
+    if (profileId !== 'security-research') {
+      throw new Error('Beale starts new research sessions only in Security workspaces. Existing non-security workspaces remain available for historical inspection.');
+    }
     const storage = this.registry.storageForProfile(profileId);
     const providerSettings = this.registry.providerSettings();
     const providerSemantics = await this.resolveProviderSemantics();
@@ -593,8 +752,11 @@ export class AppServerHostService {
           ...(fastMode ? { fastMode: true } : {}),
           ...(daybreakBlue ? { daybreakBlue: true } : {}),
           contextSize: providerSettings.contextSizes?.['openai-codex'] ?? 'default',
-          riskAcknowledgements: providerSettings.riskAcknowledgements,
-          authenticationPreferences: providerSettings.authenticationPreferences,
+          riskAcknowledgements: this.fleetBroker.token(sessionId) && request.launch.brokerRiskAcknowledgements
+            ? request.launch.brokerRiskAcknowledgements : providerSettings.riskAcknowledgements,
+          authenticationPreferences: this.fleetBroker.token(sessionId) && request.launch.brokerAuthenticationPreferences
+            ? request.launch.brokerAuthenticationPreferences
+            : providerSettings.authenticationPreferences,
           ...(request.launch.generateTitle
             ? {
                 title: {
@@ -674,34 +836,6 @@ export class AppServerHostService {
         }
       });
     });
-  }
-
-  public async checkpointSession(workspaceIdentifier: string, sessionId: string, reason: string, cleanupScratch = false): Promise<WorkspaceCheckpointResult> {
-    const workspace = this.requireWorkspace(workspaceIdentifier);
-    if (!readWorkspaceProject(workspace.workspacePath)) return { status: 'unmanaged', reason };
-    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
-    const key = workspaceOperationKey(workspace.workspacePath);
-    const anotherSessionIsActive = [...this.workspaceWriters.entries()].some(([activeSessionId, root]) => activeSessionId !== sessionId && workspaceOperationKey(root) === key);
-    const releaseResearchIndex = cleanupScratch && !anotherSessionIsActive && workspaceResearchAuthority(workspace.workspacePath) === 'files';
-    const result = await runWorkspaceCheckpoint({
-      workspaceRoot: workspace.workspacePath, workspaceId: workspace.workspaceId,
-      databasePath: storage.databasePath, artifactDirectoryPath: storage.artifactDirectoryPath,
-      sessionId,
-    }, reason, undefined, cleanupScratch ? sessionId : undefined, this.databaseCoordinator,
-    releaseResearchIndex ? { researchIndexAction: 'release' } : undefined);
-    if (result.status === 'committed' || result.status === 'failed') {
-      await this.invokeProtocol('session.append_event', {
-        args: ['session', 'append-event', '--session-id', sessionId], storage,
-        input: {
-          id: `checkpoint-${randomUUID()}`, kind: 'agent.event', timestamp: new Date().toISOString(),
-          summary: result.status === 'committed'
-            ? 'Workspace checkpoint committed.'
-            : 'Workspace checkpoint failed.',
-          payload: { eventType: 'workspace.checkpoint', ...result },
-        },
-      });
-    }
-    return result;
   }
 
   public setWorkspaceSessionActive(workspaceIdentifier: string, sessionId: string, active: boolean): void {
@@ -903,6 +1037,7 @@ export class AppServerHostService {
     for (const summary of this.registry.listWorkspaces()) {
       const workspace = this.registry.resolveWorkspace(summary.workspaceId);
       if (!workspace) continue;
+      if (workspace.researchProfileId !== 'security-research') continue;
       const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
       let sessions: AppServerSessionSummaryProjection[];
       try {
@@ -972,6 +1107,30 @@ export class AppServerHostService {
     });
   }
 
+  public async recordSessionTerminalState(input: {
+    request: AppServerSessionLaunchRequest;
+    sessionId: string;
+    attemptId: string;
+    state: 'completed' | 'failed' | 'stopped';
+  }): Promise<void> {
+    const workspace = this.requireWorkspace(input.request.launch.workspaceId);
+    const storage = this.registry.storageForProfile(workspace.researchProfileId || 'security-research');
+    const current = await this.invokeProtocol<AppServerSessionSummaryProjection>('session.get', {
+      args: ['session', 'get', '--session-id', input.sessionId], storage
+    });
+    if (current.status === 'blocked' || current.status === 'completed' || current.status === 'failed' || current.status === 'stopped') return;
+    await this.invokeProtocol('session.transition', {
+      args: ['session', 'transition', '--session-id', input.sessionId], storage,
+      input: {
+        status: input.state,
+        summary: input.state === 'completed' ? 'The app-server research session completed.'
+          : input.state === 'stopped' ? 'Stopped by the user.'
+            : 'The app-server research worker ended before the session completed.',
+        attemptId: input.attemptId
+      }
+    });
+  }
+
   public async workspaceMemory(
     workspaceIdentifier: string
   ): Promise<BealeAppServerCanonicalResult<BealeWorkspaceMemoryCatalog>> {
@@ -1027,80 +1186,6 @@ export class AppServerHostService {
       storage: this.registry.storageForProfile(workspace.researchProfileId)
     });
     return canonicalResult(workspace, result);
-  }
-
-  public async workspaceTopics(
-    workspaceIdentifier: string,
-    limit = 200,
-    archived = false
-  ): Promise<BealeAppServerCanonicalResult> {
-    const workspace = this.requireWorkspace(workspaceIdentifier);
-    const result = await this.invokeProtocol<unknown>('topic.list', {
-      args: ['topic', 'list', '--workspace-id', workspace.workspaceId, '--workspace-root', workspace.workspacePath, '--limit', String(boundedInteger(limit, 1, 500))],
-      input: { workspaceId: workspace.workspaceId, archived },
-      storage: this.registry.storageForProfile(workspace.researchProfileId)
-    });
-    return canonicalResult(workspace, result);
-  }
-
-  public async searchWorkspaceTopics(workspaceIdentifier: string, query: string, limit = 50): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.search', null, { query }, ['--limit', String(boundedInteger(limit, 1, 500))]);
-  }
-
-  public async mutateWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string,
-    operation: 'topic.update_overview' | 'topic.page.save' | 'topic.page.delete' | 'topic.link' | 'topic.unlink',
-    input: Record<string, unknown>
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, operation, topic, { ...input, topic });
-  }
-
-  public async workspaceTopic(
-    workspaceIdentifier: string,
-    topic: string,
-    messageLimit = 0
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.get', topic, {
-      topic,
-      messageLimit
-    }, messageLimit > 0 ? ['--message-limit', String(boundedInteger(messageLimit, 1, 2_000))] : []);
-  }
-
-  public async createWorkspaceTopic(
-    workspaceIdentifier: string,
-    input: Record<string, unknown>
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.create', null, input);
-  }
-
-  public async deleteWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.delete', topic, { topic });
-  }
-
-  public async archiveWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.archive', topic, { topic });
-  }
-
-  public async restoreWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.restore', topic, { topic });
-  }
-
-  public async mergeWorkspaceTopic(workspaceIdentifier: string, sourceTopic: string, targetTopic: string): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.merge', sourceTopic, { topic: sourceTopic, targetTopic });
-  }
-
-  public async unmergeWorkspaceTopic(workspaceIdentifier: string, sourceTopic: string): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.unmerge', sourceTopic, { topic: sourceTopic });
   }
 
   public async sessionUpdate(
@@ -1189,27 +1274,6 @@ export class AppServerHostService {
     const result = await this.invokeProtocol<unknown>(operation, {
       args,
       storage
-    });
-    return canonicalResult(workspace, result);
-  }
-
-  private async topicOperation(
-    workspaceIdentifier: string,
-    operation: AppServerProtocolOperation,
-    topic: string | null,
-    input: Record<string, unknown>,
-    extraArgs: readonly string[] = []
-  ): Promise<BealeAppServerCanonicalResult> {
-    const workspace = this.requireWorkspace(workspaceIdentifier);
-    const result = await this.invokeProtocol<unknown>(operation, {
-      args: [
-        'topic', operation.slice('topic.'.length), '--workspace-id', workspace.workspaceId,
-        '--workspace-root', workspace.workspacePath,
-        ...(topic ? ['--topic', topic] : []),
-        ...extraArgs
-      ],
-      input: { ...input, workspaceId: workspace.workspaceId, ...(topic ? { topic } : {}) },
-      storage: this.registry.storageForProfile(workspace.researchProfileId)
     });
     return canonicalResult(workspace, result);
   }
@@ -1835,6 +1899,7 @@ function dueAutomation(
   const metadata = isRecord(session.metadata) ? session.metadata : {};
   const storedRun = isRecord(metadata.bealeRun) ? metadata.bealeRun : {};
   const budget = isRecord(storedRun.budget) ? storedRun.budget : {};
+  if (typeof budget.machineId === 'string' && budget.machineId !== 'local') return null;
   const schedule = automationInterval(budget.repeatSchedule);
   if (!schedule) return null;
   const latestStartedAt = latestAutomationAttemptStartedAt(session.attempts) ?? nonEmpty(session.createdAt);
@@ -2037,6 +2102,14 @@ function stringRecord(value: unknown): Record<string, string> {
 
 function nonEmpty(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function fleetOwner(input: Record<string, unknown>, defaultMachineId: string | null): { machineId: string; sessionId: string } | null {
+  const sessionId = nonEmpty(input.sessionId);
+  if (!sessionId) return null;
+  const machineId = nonEmpty(input.ownerMachineId) ?? defaultMachineId;
+  if (!machineId) throw new Error('Fleet owner machine ID is required.');
+  return { machineId, sessionId };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

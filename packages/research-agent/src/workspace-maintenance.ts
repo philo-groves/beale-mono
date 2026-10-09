@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { normalizeSourceRepositoryUrl, sourceRepositoryCheckoutPath } from './source-materializer.js';
 import { PRE_BEALE_DATA_DIRECTORY_NAME } from './legacy-compatibility.js';
-import { checkpointWorkspace, getWorkspaceProjectHealth, quarantineWorkspaceDisposable, readWorkspaceProject, type WorkspaceProjectHealth } from './workspace-project.js';
+import { getWorkspaceProjectHealth, quarantineWorkspaceDisposable, readWorkspaceProject, type WorkspaceProjectHealth } from './workspace-project.js';
 export interface WorkspaceDejunkRunSummary {
   status: 'completed' | 'failed';
   startedAt: string;
@@ -158,8 +158,6 @@ export function runWorkspaceDejunk(workspacePath: string): WorkspaceDejunkSummar
   let reclaimedBytes = 0;
   try {
     if (readWorkspaceProject(root)) {
-      const checkpoint = checkpointWorkspace(root, 'Before workspace housekeeping');
-      if (checkpoint.status === 'failed') throw new Error(checkpoint.error);
       movedFileCount = quarantineWorkspaceDisposable(root);
     } else {
       movedFileCount = organizeLooseResearch(root);

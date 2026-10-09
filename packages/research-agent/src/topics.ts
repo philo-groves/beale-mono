@@ -104,6 +104,78 @@ export interface ResearchTopicDetail {
   mergedTopics: ResearchTopicRecord[];
 }
 
+/** One-time compatibility export. The resulting Markdown belongs to the workspace. */
+export function exportLegacyResearchTopicDocuments(options: {
+  workspaceRoot: string;
+  workspaceId: string;
+  databasePath: string;
+}): string[] {
+  const snapshotDirectory = join(options.workspaceRoot, "references", "topics");
+  const hasSnapshots = existsSync(snapshotDirectory)
+    && readdirSync(snapshotDirectory).some((name) => /^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.json$/u.test(name));
+  let hasStoredTopics = false;
+  if (existsSync(options.databasePath)) {
+    const database = openResearchDatabase(options.databasePath, { readOnly: true });
+    try {
+      for (const table of ["app_server_topics", "app_server_channels"] as const) {
+        if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) continue;
+        if (database.prepare(`SELECT 1 FROM ${table} WHERE workspace_id = ? LIMIT 1`).get(options.workspaceId)) {
+          hasStoredTopics = true;
+          break;
+        }
+      }
+    } finally {
+      database.close();
+    }
+  }
+  if (!hasSnapshots && !hasStoredTopics) return [];
+  const marker = ".beale/topic-document-export-v1.json";
+  const previous = existsSync(join(options.workspaceRoot, marker))
+    ? JSON.parse(readFileSync(join(options.workspaceRoot, marker), "utf8")) as { schemaVersion?: unknown; workspaceId?: unknown; ids?: unknown }
+    : null;
+  if (previous && (previous.schemaVersion !== 1 || previous.workspaceId !== options.workspaceId
+    || !Array.isArray(previous.ids) || previous.ids.some((id) => typeof id !== "string"))) {
+    throw new Error("Legacy topic export metadata is invalid.");
+  }
+  const exportedIds = new Set<string>(previous?.ids as string[] | undefined ?? []);
+  const previousCount = exportedIds.size;
+  const store = new ResearchTopicStore({
+    databasePath: options.databasePath,
+    ...(hasSnapshots ? { workspaceRoot: options.workspaceRoot } : {}),
+  });
+  const paths: string[] = [];
+  try {
+    for (const detail of store.allForExport(options.workspaceId)) {
+      const topic = detail.topic;
+      if (exportedIds.has(topic.id)) continue;
+      const safeId = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u.test(topic.id)
+        ? topic.id : workspaceContentHash(topic.id);
+      const directory = `references/research/legacy-topics/${safeId}`;
+      const overviewPath = `${directory}/overview.md`;
+      const links = detail.links.map((link) => `- ${link.kind}: ${link.title} (${link.resourceId})`).join("\n");
+      const overview = `# ${topic.title}\n\n${topic.overviewMarkdown}\n\n## Original topic metadata\n\n- Name: ${topic.name}\n- Status: ${topic.archivedAt ? "archived" : "active"}\n\n## Linked records\n\n${links || "None."}\n`;
+      if (!existsSync(join(options.workspaceRoot, overviewPath))) {
+        atomicWorkspaceWrite(options.workspaceRoot, overviewPath, overview);
+        paths.push(overviewPath);
+      }
+      for (const page of detail.pages) {
+        const safePageId = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u.test(page.id)
+          ? page.id : workspaceContentHash(page.id);
+        const path = `${directory}/page-${safePageId}.md`;
+        if (existsSync(join(options.workspaceRoot, path))) continue;
+        atomicWorkspaceWrite(options.workspaceRoot, path, `# ${page.title}\n\n${page.contentMarkdown}\n`);
+        paths.push(path);
+      }
+      exportedIds.add(topic.id);
+    }
+    if (!previous || exportedIds.size !== previousCount) atomicWorkspaceWrite(options.workspaceRoot, marker,
+      JSON.stringify({ schemaVersion: 1, workspaceId: options.workspaceId, ids: [...exportedIds].sort() }) + "\n");
+    return paths;
+  } finally {
+    store.close();
+  }
+}
+
 function topicSnapshotContent(workspaceId: string, detail: ResearchTopicDetail): string {
   return `${JSON.stringify({
     schemaVersion: 1,
@@ -412,6 +484,15 @@ export class ResearchTopicStore {
 
   public close(): void {
     this.database.close();
+  }
+
+  public allForExport(workspaceId: string): ResearchTopicDetail[] {
+    const rows = this.database.prepare("SELECT id FROM app_server_topics WHERE workspace_id = ? ORDER BY id")
+      .all(requiredText(workspaceId, "Workspace id")) as Array<{ id: string }>;
+    return rows.flatMap(({ id }) => {
+      const detail = this.get(workspaceId, id);
+      return detail ? [detail] : [];
+    });
   }
 
   public create(input: CreateResearchTopicInput): ResearchTopicRecord {

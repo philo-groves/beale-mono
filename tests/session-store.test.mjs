@@ -11,6 +11,7 @@ import {
   DEFAULT_SECURITY_RESEARCH_PROFILE,
   AppServerSessionStore,
   ResearchTopicStore,
+  exportLegacyResearchTopicDocuments,
   initializeWorkspaceProject,
   publishWorkspaceFiles,
   normalizeResearchProfile,
@@ -20,7 +21,7 @@ import { invokeAppServerProtocol } from "../app-server/dist/appServerProtocolCli
 
 async function publishTopicSnapshots(workspaceRoot) {
   const directory = join(workspaceRoot, 'references', 'topics');
-  const index = JSON.parse(await readFile(join(workspaceRoot, '.git', 'beale', 'publication.json'), 'utf8'));
+  const index = JSON.parse(await readFile(join(workspaceRoot, '.beale', 'publication', 'publication.json'), 'utf8'));
   const files = Object.fromEntries(await Promise.all([
     ...Object.keys(index.files),
     ...(await readdir(directory)).map((name) => `references/topics/${name}`),
@@ -71,6 +72,48 @@ test("topics retain canonical pages and links in workspace files", async () => {
   const snapshot = JSON.parse(await readFile(join(workspaceRoot, "references", "topics", `${topic.id}.json`), "utf8"));
   assert.equal(snapshot.workspaceId, "workspace_example");
   assert.equal(snapshot.pages[0].id, page.id);
+});
+
+test("legacy topic notes export once as editable workspace research documents", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-topic-export-example-"));
+  const workspaceRoot = join(directory, "workspace");
+  const workspaceId = "workspace_example";
+  const databasePath = join(directory, "memory.sqlite");
+  initializeWorkspaceProject(workspaceRoot, workspaceId);
+  assert.deepEqual(exportLegacyResearchTopicDocuments({ workspaceRoot, workspaceId, databasePath }), []);
+  const store = new ResearchTopicStore({ databasePath, workspaceRoot });
+  const topic = store.create({ workspaceId, name: "parser-review", title: "Parser review", topic: "Synthetic purpose." });
+  store.updateOverview(workspaceId, topic.id, "Synthetic overview cites claim_example_001.");
+  const page = store.savePage(workspaceId, topic.id, { title: "Open questions", contentMarkdown: "Synthetic page notes." });
+  store.archive(workspaceId, topic.id);
+  store.close();
+
+  const options = { workspaceRoot, workspaceId, databasePath };
+  const exported = exportLegacyResearchTopicDocuments(options);
+  const overviewPath = `references/research/legacy-topics/${topic.id}/overview.md`;
+  const pagePath = `references/research/legacy-topics/${topic.id}/page-${page.id}.md`;
+  assert.deepEqual(exported, [overviewPath, pagePath]);
+  assert.match(await readFile(join(workspaceRoot, overviewPath), "utf8"), /Synthetic overview cites claim_example_001/);
+  assert.match(await readFile(join(workspaceRoot, overviewPath), "utf8"), /Status: archived/);
+  assert.match(await readFile(join(workspaceRoot, pagePath), "utf8"), /Synthetic page notes/);
+  await writeFile(join(workspaceRoot, overviewPath), "Edited research document.\n");
+  assert.deepEqual(exportLegacyResearchTopicDocuments(options), []);
+  assert.equal(await readFile(join(workspaceRoot, overviewPath), "utf8"), "Edited research document.\n");
+});
+
+test("database-only legacy topics export without creating topic snapshots", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-topic-db-export-example-"));
+  const workspaceRoot = join(directory, "workspace");
+  const workspaceId = "workspace_example";
+  const databasePath = join(directory, "memory.sqlite");
+  initializeWorkspaceProject(workspaceRoot, workspaceId);
+  const store = new ResearchTopicStore({ databasePath });
+  const topic = store.create({ workspaceId, name: "parser-review", topic: "Synthetic notes." });
+  store.close();
+
+  const exported = exportLegacyResearchTopicDocuments({ workspaceRoot, workspaceId, databasePath });
+  assert.deepEqual(exported, [`references/research/legacy-topics/${topic.id}/overview.md`]);
+  await assert.rejects(readdir(join(workspaceRoot, "references", "topics")), /ENOENT/);
 });
 
 test("topic merges retain source content, resolve aliases, and can be undone after file hydration", async () => {
@@ -127,23 +170,6 @@ test("existing channel records import as topic history and links", async () => {
     assert.equal(detail.messages[0].contentMarkdown, "Historical observation");
     assert.equal(detail.links[0].resourceId, "memory_example");
   } finally { store.close(); }
-});
-
-test("hosted topic operations update pages and canonical links", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "beale-topic-protocol-"));
-  const storage = { databasePath: join(directory, "memory.sqlite"), artifactDirectoryPath: join(directory, "artifacts") };
-  const created = await invokeAppServerProtocol("topic.create", { args: [], storage, input: {
-    workspaceId: "workspace_example", name: "parser-review", topic: "Example parser work"
-  } });
-  const page = await invokeAppServerProtocol("topic.page.save", { args: [], storage, input: {
-    workspaceId: "workspace_example", topic: created.id, title: "Questions", contentMarkdown: "What remains unknown?"
-  } });
-  const link = await invokeAppServerProtocol("topic.link", { args: [], storage, input: {
-    workspaceId: "workspace_example", topic: created.id, kind: "memory", resourceId: "memory_example", title: "Example memory"
-  } });
-  const detail = await invokeAppServerProtocol("topic.get", { args: [], storage, input: { workspaceId: "workspace_example", topic: created.id } });
-  assert.equal(detail.pages[0].id, page.id);
-  assert.equal(detail.links[0].id, link.id);
 });
 
 test("session store owns creation, lifecycle, capture import, and queries as one revisioned aggregate", () => {

@@ -6,31 +6,26 @@ The app-server is the single host adapter for Desktop, iOS, and future clients. 
 
 ## Workspace change management
 
-The host owns local Git checkpoints for the single-directory research layout described in the root README. Checkpoints serialize per workspace and use a separate Git index, preserving manual staging. Schema-v2 workspaces use files as research authority; routine checkpoints ingest validated direct edits, refresh the app-server's derived query index, republish typed mutations, and commit the complete snapshot. Schema-v1 workspaces retain database-first compatibility behavior. Unexpected root entries are Git-ignored but detected directly from the filesystem, and the root agent is reactivated every turn until it classifies them. Synchronization and import run in a dedicated worker so Stop remains responsive. Filesystem publication has a recovery journal; failed checkpoints leave working files intact. Both Desktop and remote clients use the same canonical operations and host lifecycle.
+The host preserves canonical file-authority research without updating workspace Git history. New workspaces do not initialize Git; existing local history remains available for operator-managed use. Typed mutations and explicit synchronization validate supported direct edits, refresh the derived query index, and publish canonical files through a recovery journal under `.beale/publication/` for new workspaces. Existing workspaces retain their prior publication metadata location. Synchronization and import run in a dedicated worker so Stop remains responsive. Unexpected root entries are detected directly from the filesystem and surfaced to the root agent.
 
-Contract version 24 introduced reversible derived-index release through `workspace.research-project.v3`. Current hosts also advertise `workspace.checkpoint-repair.v1`. The `workspace.project` operation accepts these inputs through the normal canonical operation endpoint:
+The `workspace.project` operation accepts these inputs through the canonical operation endpoint:
 
 ```json
 {"workspaceId":"workspace-example","action":"status"}
-{"workspaceId":"workspace-example","action":"checkpoint"}
 {"workspaceId":"workspace-example","action":"release-index"}
 {"workspaceId":"workspace-example","action":"rebuild-index"}
 {"workspaceId":"workspace-example","action":"sync"}
 {"workspaceId":"workspace-example","action":"export"}
 {"workspaceId":"workspace-example","action":"import","path":"claims/claim-example.json","expectedRevision":1}
-{"workspaceId":"workspace-example","action":"repair-preview"}
-{"workspaceId":"workspace-example","action":"repair","fingerprint":"<sha256-from-preview>"}
 ```
 
-`status` returns the layout, latest checkpoint result, and derived-index state. In schema-v2 workspaces, `checkpoint` and `sync` reconcile supported file edits, refresh the derived index, republish, and commit; routine lifecycle checkpoints invoke the same path. A clean terminal checkpoint releases rebuildable research rows when no second session is active in the workspace. `release-index` provides the same explicit operation while retaining sessions, authorization, and runtime coordination. `rebuild-index` restores those rows from canonical files, and ordinary workspace operations rehydrate a released index automatically. Explicit index maintenance cannot run while research is active. `export` retains point-in-time publication for schema-v1 compatibility workspaces. `import` accepts one supported file, checks its published revision and immutable fields, applies the typed validators, republishes, and checkpoints. Full JSONL traces and raw evidence stay out of Git; retained evidence manifests remain hash-checked dependencies.
+`status` returns the layout and derived-index state. `sync` reconciles supported direct edits and republishes canonical files without committing them. `release-index` removes rebuildable research rows while retaining sessions and authorization; `rebuild-index` restores the rows from hash-validated canonical files. Ordinary workspace operations rehydrate a released index automatically. Explicit index maintenance cannot run while research is active. `export` retains point-in-time publication for schema-v1 compatibility workspaces. `import` accepts one supported file, checks its published revision and immutable fields, and applies the typed validators. Full JSONL traces and raw evidence remain outside the derived index; retained evidence manifests remain hash-checked dependencies.
 
-The `workspace.checkpoint-repair.v1` capability adds `repair-preview` and `repair`. A failed checkpoint reports oversized paths before Git staging. Preview identifies untracked investigation files that can move to `evidence/recovered/`, and separately lists tracked or canonical blockers requiring manual repair. `repair` requires the preview fingerprint, refuses changed previews or active sessions, moves eligible files, retains them through evidence manifests, and retries the checkpoint. The move changes workspace-relative paths, so callers must review the preview before submitting it.
-
-Workspace creation installs a local pre-commit hook using the host's Node/Electron runtime; it configures no remote. Reinstalling the guard preserves an existing non-Beale hook by reporting an integration error. The workspace's Git metadata contains publication, checkpoint, recovery, and quarantine journals; these are not model-facing database exports.
+Workspace housekeeping quarantines disposable scratch and cache content under `.beale/quarantine/` with a recovery journal. Research sessions have no Git checkpoint preflight, periodic commit, or terminal commit gate.
 
 ## Optional research features
 
-Eight harness features are enabled by default and appear under Optional Features in Agent Settings. Enabled features appear in the agent's `{{features}}` catalog under "Internal features" with short usage descriptions. Traditional plugins appear under "External Plugins" in `{{plugins}}`. Existing registry IDs and the native tool groups' launch field retain saved toggle compatibility.
+Fleet and the other harness features appear under Optional Features in Agent Settings. Enabled features appear in the agent's `{{features}}` catalog under "Internal features" with short usage descriptions. Traditional plugins appear under "External Plugins" in `{{plugins}}`. Existing registry IDs and the native tool groups' launch field retain saved toggle compatibility.
 
 | Feature | When to use |
 | --- | --- |
@@ -41,6 +36,7 @@ Eight harness features are enabled by default and appear under Optional Features
 | Runbooks (`beale-runbooks`) | Reusable procedure documents, feature-selected host or Tart VM cells, per-cell timeouts, explicit guest/root Tart execution, revisions, and recorded executions. |
 | Reporting (`beale-reporting`) | Report documents, revisions, and structured summaries of supported results. |
 | Browser (`beale-browser`) | Connect to compatible CDP browsers, list targets, send arbitrary protocol commands, and read events. |
+| Fleet (`beale-fleet`) | List, clone, start, and stop operator-configured VMs on a primary machine when Fleet is enabled. |
 | Introspection (`beale-introspection`) | Workspace and session inspection and control tools, including Quick Chat. |
 
 `file.read`, `file.write`, `file.edit`, and `shell.run` remain core tools, alongside session and collaboration controls. Existing profile, configuration, and governance limits still apply. File writes create candidate files; replacing an existing file requires the SHA-256 `contentHash` returned by `file.read` as `expectedHash`. File edits require one exact literal match, preserve UTF-8 bytes outside that match, and accept an optional hash check. Both mutations have a 1 MiB ceiling and honor lower host byte budgets.
@@ -49,7 +45,11 @@ Pi, Claude, and ZCode agents initially receive core tools and discovery controls
 
 Optional Feature and Plugin toggles take effect on subsequent session launches and continuations, including Quick Chat. Quick Chat requires Introspection to be enabled. The app-server retains the existing `--managed-plugins <comma-separated IDs>` launch field for the native tool groups so saved selections and captured sessions remain compatible; `none` disables all of them. A settings-read failure stops the launch instead of silently restoring defaults. Loading a schema does not enable a disabled feature or plugin or change host policy, canonical storage, or execution privileges.
 
-Browser control connects to an already running browser with CDP remote debugging enabled. The default discovery endpoint is `http://127.0.0.1:9222`; `browser.connect` also accepts a direct `ws` or `wss` debugger URL. Use `browser.targets` to inspect targets, `browser.connect` to open a run-local connection, `browser.command` for any CDP method and optional flattened `sessionId`, `browser.events` to read buffered events, and `browser.disconnect` to close it. Connections close when the run ends. Beale does not launch or isolate the browser; use an operator-managed VM or container when browser activity needs OS isolation.
+For local sessions, Browser control connects to an already running browser with CDP remote debugging enabled. The default discovery endpoint is `http://127.0.0.1:9222`; `browser.connect` also accepts a direct `ws` or `wss` debugger URL. Use `browser.targets` to inspect targets, `browser.connect` to open a run-local connection, `browser.command` for any CDP method and optional flattened `sessionId`, `browser.events` to read buffered events, and `browser.disconnect` to close it. Connections close when the run ends. Local browser execution has the current user's host privileges.
+
+For Fleet VM sessions, the guest app-server launches a session-scoped headless browser with a profile retained on the cloned VM. It uses an installed Chrome or Edge binary, or downloads Chrome for Testing on first use. The worker receives a loopback-only, session-token CDP gateway for the guest page. The primary app-server relays that page's compressed frames and researcher input over a separate, session-authenticated WebSocket; Desktop renders the frames without loading the URL itself. Guest browser context listing and opening support the Default context. Named context creation and closing remain available only for the local Desktop browser. Set `BEALE_FLEET_CHROME_PATH` in the guest to select an existing browser executable.
+
+Sessions opened through a connected primary app-server also request a session-scoped browser relay when they run directly on that primary. Desktop attaches to the remote session with a session-scoped transport token and displays the same browser stream in its remote session view. The connected primary remains the browser owner; its browser profile and page requests stay on that machine. A direct session's browser runs with that primary user's host privileges.
 
 New native tools must be assigned in `packages/research-agent/src/managed-tool-plugins.ts` to a harness feature or the explicit core list. Runtime assembly rejects unassigned host tools. Compatibility manifests and the compact discovery catalog are checked together by boundary tests.
 
@@ -127,6 +127,8 @@ Options may be supplied as CLI flags (`--host`, `--port`, `--state-file`) or env
 
 Beale Desktop persists its managed remote-access choice in `~/.beale/app-server-remote-access.json`. When enabled, Desktop launches the app-server on the stable loopback port `47173`, advertises the configured MagicDNS origin on the dedicated Tailscale Serve HTTPS port `47174`, and continues using the discovery record's `localUrl` for host-local control traffic. Explicit `BEALE_APP_SERVER_*` environment variables retain precedence for custom deployments.
 
+Normal app-server startup also launches an independent restart supervisor on loopback port `47175`. It accepts an operator-token-authenticated `POST /v1/supervisor/restart`, verifies that the discovery process owns its lock, stops only that process, launches a replacement, and waits for its health check. An unresponsive process is force-stopped after the graceful timeout; eligible active sessions recover on replacement startup. Fleet reaches a guest supervisor through SSH. Managed Tailscale remote access also publishes the supervisor on a separate HTTPS port `47176`, so a primary can restart a peer even if the peer's app-server HTTP endpoint is unavailable. Custom remote deployments must expose that supervisor route within the same tailnet to use remote restart. The supervisor does not restart VMs or physical machines.
+
 ## Authentication model
 
 Two token scopes exist:
@@ -162,13 +164,12 @@ For iOS, the recommended deployment is a loopback listener behind Tailscale Serv
       "shellSafetyMode": "auto_review",
       "researchProfileId": "security-research",
       "researchProfileHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "workflowId": "discovery",
       "generateTitle": true
     }
   }
   ```
 
-  The shared request and response DTOs and decoders live in `@beale/app-server-runtime/protocol`. Optional typed sections cover goals, logical continuation intent and collaboration. Filesystem paths, storage locations, CLI arguments, plugins, provider policy, arbitrary environment variables, and credentials are not accepted from clients. `sessionId` is optional and must match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A completed session id may be reused; an active one rejects duplicates with `409`. The `201` response contains `controlVersion`, the session catalog entry, `attemptId`, and a transport descriptor with a relative `path`, protocol/authentication metadata, replay semantics, and the per-session token.
+  The shared request and response DTOs and decoders live in `@beale/app-server-runtime/protocol`. Optional typed sections cover goals, logical continuation intent, and collaboration. `workflowId` identifies an optional research-profile suggestion category such as `discovery`; it does not assign or enforce a session workflow. Historical session records retain their category. Goal mode applies only when a goal is explicitly provided. Filesystem paths, storage locations, CLI arguments, plugins, provider policy, arbitrary environment variables, and credentials are not accepted from clients. `sessionId` is optional and must match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A completed session id may be reused; an active one rejects duplicates with `409`. The `201` response contains `controlVersion`, the session catalog entry, `attemptId`, and a transport descriptor with a relative `path`, protocol/authentication metadata, replay semantics, and the per-session token.
 - `GET /v1/sessions` — typed catalog of known sessions with state (`starting`, `running`, `completed`, `failed`, `stopped`), timestamps, exit codes, client attachment, replay-buffer counts, and a bounded diagnostic for failed app-server exits. Terminal sessions are retained up to 50 entries; `DELETE` removes them.
 - `GET /v1/sessions/<id>` — one typed live-process catalog entry, avoiding a full catalog poll.
 - `POST /v1/sessions/<id>/attachments` — mint an independent transport token for another Desktop or mobile client to join an active session. Terminal sessions return `410`.
@@ -182,15 +183,6 @@ Non-success responses use one bounded shape: `{"controlVersion":1,"error":{"code
 Canonical, path-free host reads use control contract v1:
 
 - `GET /v1/workspaces`
-- `GET /v1/workspaces/<workspace>/topics` — list active or archived topics; `query` searches titles, overviews, and pages
-- `POST /v1/workspaces/<workspace>/topics` — create a topic with a purpose and initial overview
-- `GET /v1/workspaces/<workspace>/topics/<topic>` — read the overview, pages, and typed references; `includeHistory=true` also returns bounded read-only legacy activity
-- `PATCH /v1/workspaces/<workspace>/topics/<topic>/overview` — revise the overview using `expectedUpdatedAt`
-- `PUT /v1/workspaces/<workspace>/topics/<topic>/pages` and `DELETE /v1/workspaces/<workspace>/topics/<topic>/pages/<page>` — save or remove a page
-- `POST /v1/workspaces/<workspace>/topics/<topic>/links` and `DELETE /v1/workspaces/<workspace>/topics/<topic>/links/<link>` — manage typed research references
-- `POST /v1/workspaces/<workspace>/topics/<topic>/merge` with `targetTopic`, and `/unmerge` — alias and archive a redundant topic, or restore it without discarding its content
-- `POST /v1/workspaces/<workspace>/topics/<topic>/archive` and `/restore` — hide or restore a topic
-- `DELETE /v1/workspaces/<workspace>/topics/<topic>` — explicitly delete a topic
 - `GET /v1/workspaces/<workspace>/memory` — path-free workspace memory catalog resolved through the workspace's durable research subject and active profile, with identity, type, status, confidence, tags, title/summary, timestamps, revisions, and session links; no bodies, evidence, attributes, or host paths
 - `GET /v1/workspaces/<workspace>/memory-notifications` — up to 500 newest heat-bearing memory identities, types, statuses, heat levels, title/summaries, timestamps, revisions, and session links only; no bodies, evidence, attributes, or host paths
 - `GET /v1/workspaces/<workspace>/sessions`

@@ -10,7 +10,7 @@ Use the `beale` MCP server as the durable research boundary. Use Codex-native fi
 ## Establish context
 
 1. Call `beale_list_workspaces` and resolve the exact workspace by `workspaceId`.
-2. Read recent work with `beale_list_sessions`, `beale_get_session`, `beale_list_topics`, and `beale_get_topic` for relevant topics.
+2. Read recent work with `beale_list_sessions`, `beale_get_session` and workspace Markdown under `references/research/` for reusable synthesis.
 3. Call `beale_list_research_tools` before research reads or writes. Tool availability and schemas follow the workspace's active research profile.
 4. Use `history.search`, through `beale_read_research`, before creating a memory, lead, finding, runbook, or report.
 
@@ -29,7 +29,6 @@ Use the `beale` MCP server as the durable research boundary. Use Codex-native fi
 ## Coordinate both ways
 
 - Use `beale_steer_session` for a live Beale agent and `beale_continue_session` for a terminal session.
-- Use a durable topic for shared understanding that should outlive one session. Search for an existing topic before creating one. Read it before editing its overview or pages, use current `updatedAt` values for conflict-safe revisions, and link canonical research records instead of copying their content. Merge overlapping topics only when their distinct content can remain accessible from the target; undo restores the source. Historical channel activity remains readable but is not a place for new messages.
 - Codex-written research is immediately visible to Beale because both use app-server-owned canonical storage. Read Beale again before revision-sensitive writes to avoid stale revisions.
 
 ## Safety boundaries

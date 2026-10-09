@@ -96,9 +96,9 @@ const MSRC_RULES = [
 
 export const RESEARCH_KITS: readonly ResearchKitDefinition[] = [{
   id: 'general',
-  label: 'General',
-  description: 'Build the workspace scope, resources, and rules manually.',
-  supportedResearchProfileIds: ['security-research', 'mathematics']
+  label: 'Manual Security',
+  description: 'Define an authorized security scope, resources, and rules manually.',
+  supportedResearchProfileIds: ['security-research']
 }, {
   id: 'hackerone',
   label: 'HackerOne',

@@ -18,6 +18,7 @@ import { SessionNextStepsWidget } from '../src/renderer/features/sessions/Sessio
 import { WorkspaceCreationView } from '../src/renderer/features/workspaces/WorkspaceCreationView';
 import { INSET_SCROLLBAR_SELECTOR } from '../src/renderer/hooks/useInsetScrollbarActivation';
 import { applyResearchKit, emptyWorkspaceOnboardingForm, onboardingFormFromDefaults } from '../src/renderer/view-models/workspaceOnboarding';
+import { defaultRunInput } from '../src/renderer/view-models/runSettings';
 
 describe('renderer dialog surfaces', () => {
   it('shows OpenAI Fast mode in the lead-model picker summary when enabled', () => {
@@ -150,17 +151,17 @@ describe('renderer dialog surfaces', () => {
 
   it('renders workspace creation as sequential workspace views instead of a dialog', () => {
     const form = onboardingFormFromDefaults({
-      workspacePath: '/math/erdos-straus',
-      workspaceName: 'Erdos-Straus Conjecture',
+      workspacePath: '/workspaces/example-security',
+      workspaceName: 'Example Security Workspace',
       scopeOwner: '',
       descriptionMarkdown: '',
       rules: [],
       expiresAt: null,
       assets: []
     });
-    const render = (researchProfileId: 'security-research' | 'mathematics'): string => renderToStaticMarkup(
+    const render = (): string => renderToStaticMarkup(
       createElement(WorkspaceCreationView, {
-        form: { ...form, researchProfileId },
+        form,
         busy: false,
         progress: null,
         onChange: () => undefined,
@@ -171,8 +172,7 @@ describe('renderer dialog surfaces', () => {
       })
     );
 
-    const securityHtml = render('security-research');
-    const mathematicsHtml = render('mathematics');
+    const securityHtml = render();
     const emptyHtml = renderToStaticMarkup(createElement(WorkspaceCreationView, {
       form: emptyWorkspaceOnboardingForm(),
       busy: false,
@@ -192,7 +192,8 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toContain('aria-label="New Workspace views"');
     expect(securityHtml).not.toContain('role="dialog"');
     expect(securityHtml).toContain('<select');
-    expect(securityHtml).toContain('<option value="security-research" selected="">Security</option>');
+    expect(securityHtml).not.toContain('aria-label="Research Profile"');
+    expect(securityHtml).not.toContain('Mathematics');
     expect(securityHtml).not.toContain('Authorization owner');
     expect(securityHtml).not.toContain('Authorization expires');
     expect(securityHtml).not.toContain('Index Now');
@@ -205,7 +206,7 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toContain('<option value="msrc">MSRC Windows</option>');
     expect(securityHtml).toContain('<option value="meta-bug-bounty">Meta Bug Bounty</option>');
     expect(securityHtml).toContain('<span>Settings</span>');
-    expect(securityHtml).toContain('<h2>Erdos-Straus Conjecture Settings</h2>');
+    expect(securityHtml).toContain('<h2>Example Security Workspace Settings</h2>');
     expect(emptyHtml).toContain('<h2>New Workspace Settings</h2>');
     expect(securityHtml).toContain('<span>Resources</span>');
     expect(securityHtml).toContain('<span>Rules</span>');
@@ -213,13 +214,7 @@ describe('renderer dialog surfaces', () => {
     expect(securityHtml).toMatch(/aria-controls="workspace-creation-resources-panel"[^>]*disabled=""/u);
     expect(securityHtml).toMatch(/aria-controls="workspace-creation-rules-panel"[^>]*disabled=""/u);
     expect(securityHtml).toContain('class="primary-button" type="button">Next</button>');
-    expect(mathematicsHtml).toContain('aria-label="Research Kit"');
-    expect(mathematicsHtml).toContain('<option value="general" selected="">General</option>');
-    expect(mathematicsHtml).not.toContain('<option value="hackerone">HackerOne</option>');
-    expect(mathematicsHtml).toContain('<option value="mathematics" selected="">Mathematics</option>');
-    expect(mathematicsHtml).not.toContain('<option value="apple-security-bounty">Apple Security Bounty</option>');
-    expect(mathematicsHtml).not.toContain('<option value="msrc">MSRC Windows</option>');
-    expect(mathematicsHtml).not.toContain('<option value="meta-bug-bounty">Meta Bug Bounty</option>');
+    expect(securityHtml).toContain('<option value="general" selected="">Manual Security</option>');
 
     const appleHtml = renderToStaticMarkup(createElement(WorkspaceCreationView, {
       form: applyResearchKit(form, 'apple-security-bounty'),
@@ -304,6 +299,10 @@ describe('renderer dialog surfaces', () => {
     expect(html).toContain('<span>Add Context</span>');
     expect(html).not.toContain('aria-label="Shell safety mode"');
     expect(html).toContain('aria-label="Suggestion lanes"');
+    expect(html.match(/role="tab" aria-selected=/g)).toHaveLength(4);
+    for (const category of ['Discovery', 'Chaining', 'Reporting', 'Longshot']) {
+      expect(html).toContain(`>${category}</button>`);
+    }
     expect(html).toContain('aria-label="Lead model settings"');
     expect(html).toContain('class="research-model-squircle research-lead-model-picker model-selection-picker');
     expect(html).toContain('aria-label="Add collaborator"');
@@ -320,7 +319,6 @@ describe('renderer dialog surfaces', () => {
     expect(html).not.toContain('new-research-send');
     expect(html).not.toContain('<label>Network');
     for (const suggestion of suggestions.discovery ?? []) expect(html).toContain(suggestion);
-    for (const suggestion of [...(suggestions.chaining ?? []), ...(suggestions.reporting ?? [])]) expect(html).not.toContain(suggestion);
     expect(html).not.toContain('Reviewing prior research…');
     expect(html).toContain('aria-label="Research goal"');
     expect(html).toContain('autofocus=""');
@@ -366,6 +364,7 @@ describe('renderer dialog surfaces', () => {
     expect(html).toContain('aria-label="Research suggestion categories"');
     expect(html.match(/class="new-research-workflow-option"/g)).toHaveLength(4);
     expect(html).toContain('Find a new primitive by pairing a system area with a plausible bug class');
+    expect(html).not.toContain('class="new-research-suggestion-panel"');
     expect(html).toContain('class="main-trace-footer has-pre-composer-content"');
     expect(html).toContain('class="main-steer-input-row without-trace-filters"');
     expect(html).toContain('class="new-research-options-tray"');
@@ -400,7 +399,7 @@ describe('renderer dialog surfaces', () => {
     expect(appSource).toContain('const openResearchSessionFromSidebar = useCallback');
     expect(appSource).toContain('onOpenWorkspace={openWorkspaceFromSidebar}');
     expect(appSource).toContain('onOpenResearchSession={openResearchSessionFromSidebar}');
-    expect(appSource).toContain('onCancel={closeNewResearch}');
+    expect(appSource).toContain('onCancel={cancelNewResearch}');
     expect(modalSource).not.toContain('StartRunForm');
     expect(settingsSource).toContain('collaboration={collaboration}');
     expect(composerSource).toContain('onClick={openDialog}');
@@ -411,7 +410,6 @@ describe('renderer dialog surfaces', () => {
     expect(settingsSource).not.toContain("label: 'Challenge Rounds'");
     expect(settingsSource).toContain('setSelectedWorkflowId(workflow.id)');
     expect(settingsSource).toContain('onOpenWorkflow(workflow.id)');
-    expect(settingsSource).toContain('title={null}');
   });
 
   it('changes the New Research prompt hint when context enrichment is enabled', () => {
@@ -426,7 +424,7 @@ describe('renderer dialog surfaces', () => {
     expect(toggleStyles).toContain('user-select: none');
   });
 
-  it('styles the New Research welcome as a large divided category list', () => {
+  it('styles the New Research welcome and suggestion categories', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const welcomeStyles = styles.match(/\.new-research-welcome\s*\{([^}]*)\}/)?.[1] ?? '';
     const iconStyles = styles.match(/(?:^|\n)\.new-research-welcome-icon\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -682,9 +680,6 @@ describe('renderer dialog surfaces', () => {
     expect(containerStyles).toContain('margin: 10px auto -14px');
     expect(containerStyles).not.toContain('height: 219px');
     expect(headerStyles).toContain('border-bottom: 1px solid var(--panel-border)');
-    expect(listStyles).toContain('grid-template-rows: repeat(3, auto)');
-    expect(listStyles).toContain('align-content: start');
-    expect(listStyles).toContain('--session-next-step-row-height: calc(2.6rem + 14px)');
     expect(rowStyles).toContain('background: transparent');
     expect(rowStyles).toContain('border-radius: 0');
     expect(rowStyles).toContain('border-bottom: 1px solid var(--panel-border)');

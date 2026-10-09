@@ -16,6 +16,7 @@ describe('prompt template settings', () => {
       expect(initial.overridden).toBe(false);
       const template = '{{boundary}}\nExample prompt for {{profile.name}}.\n{{identity}}';
       registry.setPromptTemplate('security-research', template);
+      expect(() => registry.getPromptTemplateSettings('mathematics')).toThrow(/Unsupported active research profile/);
       expect(registry.previewPromptTemplate('security-research', template)).toContain('Example prompt for Security.');
       const pluginPreview = registry.previewPromptTemplate('security-research', '{{boundary}}\n{{plugins}}', undefined, [{
         id: 'example-plugin', name: 'Example Plugin', mcpServers: [],
@@ -35,7 +36,6 @@ describe('prompt template settings', () => {
       expect(knowledgeOnly).not.toContain('Use one canonical, evidence-gated research claim ledger');
       expect(knowledgeOnly).not.toContain('Use runbooks as durable executable research artifacts');
       expect(knowledgeOnly).not.toContain('Use reports as durable Markdown artifacts');
-      expect(registry.getPromptTemplateSettings('mathematics').overridden).toBe(false);
       registry.close();
 
       const host = new AppServerHostRegistry({ registryDirectory: directory });
@@ -78,17 +78,17 @@ describe('prompt template settings', () => {
     try {
       const template = '{{boundary}}\nExample {{profile.id}}';
       await invokeAppServerProtocol('registry.state', {
-        args: [], input: { registryDirectory: directory, action: 'setPromptTemplate', args: ['mathematics', template] }
+        args: [], input: { registryDirectory: directory, action: 'setPromptTemplate', args: ['security-research', template] }
       });
       const preview = await invokeAppServerProtocol<string>('registry.state', {
-        args: [], input: { registryDirectory: directory, action: 'previewPromptTemplate', args: ['mathematics', template] }
+        args: [], input: { registryDirectory: directory, action: 'previewPromptTemplate', args: ['security-research', template] }
       });
-      expect(preview).toContain('Example mathematics');
+      expect(preview).toContain('Example security-research');
       await invokeAppServerProtocol('registry.state', {
-        args: [], input: { registryDirectory: directory, action: 'resetPromptTemplate', args: ['mathematics'] }
+        args: [], input: { registryDirectory: directory, action: 'resetPromptTemplate', args: ['security-research'] }
       });
       const settings = await invokeAppServerProtocol<{ overridden: boolean }>('registry.state', {
-        args: [], input: { registryDirectory: directory, action: 'getPromptTemplateSettings', args: ['mathematics'] }
+        args: [], input: { registryDirectory: directory, action: 'getPromptTemplateSettings', args: ['security-research'] }
       });
       expect(settings.overridden).toBe(false);
     } finally {

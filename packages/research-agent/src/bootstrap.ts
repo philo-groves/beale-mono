@@ -105,6 +105,9 @@ export async function runResearchAgent(
     workspaceRoot: input.workspaceRoot ?? process.cwd(),
   });
   const normalizedProfile = normalizeResearchProfile(suppliedResearchProfile.profile);
+  if (normalizedProfile.id !== "security-research") {
+    throw new Error("Beale runs only Security research sessions.");
+  }
   const computedProfileHash = researchProfileHash(normalizedProfile);
   if (suppliedResearchProfile.hash !== computedProfileHash) {
     throw new Error(

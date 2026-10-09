@@ -27,7 +27,7 @@ const state: AgentPluginRegistryState = {
 };
 
 describe('optional agent features', () => {
-  it('classifies the six internal app-server tool groups', () => {
+  it('classifies the internal app-server tool groups', () => {
     expect(OPTIONAL_AGENT_FEATURES.map((feature) => feature.id)).toEqual([...MANAGED_TOOL_PLUGIN_IDS, 'beale-introspection']);
   });
 

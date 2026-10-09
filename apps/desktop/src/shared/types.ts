@@ -1,22 +1,10 @@
 import type { ResearchProfileId, ResearchProfileSnapshot, ResolvedResearchProfile } from './researchProfile';
 import type { BrowserContextSummary, BrowserContextsUpdate } from './browserContexts';
+import type { FleetBrowserInput, FleetBrowserUpdate } from './fleetBrowser';
 import type { ResearchKitId } from './researchKits';
 import type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
-  CreateResearchTopicInput,
-  ResearchTopicDetail,
-  ResearchTopicMemberRecord,
-  ResearchTopicMemberStatus,
-  ResearchTopicMessageKind,
-  ResearchTopicMessageRecord,
-  ResearchTopicRecord,
-  ResearchTopicSharedResourceKind,
-  ResearchTopicSharedResourceRecord,
-  ResearchTopicSummary,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchClaimRating,
   ClaimBoardTransitionRequest,
   ClaimBoardMaturity,
@@ -29,23 +17,14 @@ export type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   ResourcePriorArtSummary,
-  CreateResearchTopicInput,
-  ResearchTopicDetail,
-  ResearchTopicMemberRecord,
-  ResearchTopicMemberStatus,
-  ResearchTopicMessageKind,
-  ResearchTopicMessageRecord,
-  ResearchTopicRecord,
-  ResearchTopicSharedResourceKind,
-  ResearchTopicSharedResourceRecord,
-  ResearchTopicSummary,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchClaimRating,
   ClaimBoardTransitionRequest,
   ClaimBoardMaturity,
-  SteeringSuggestionResult
+  SteeringSuggestionResult,
+  FleetState,
+  FleetMachine,
+  FleetSshTestInput,
+  FleetSshTestResult
 } from '@beale/app-server-runtime/protocol';
 
 export type ScopeAssetDirection = 'in_scope' | 'out_of_scope';
@@ -436,6 +415,7 @@ export interface ResearchSessionSummary {
   workspacePath: string;
   workspaceId: string;
   runId: string;
+  machineId?: string;
   title: string;
   status: RunStatus;
   runEngine: RunEngineKind;
@@ -1703,6 +1683,7 @@ export interface StartRunInput {
   goalEnabled: boolean;
   goalObjective: string | null;
   promptMarkdown: string;
+  machineId?: string;
   workflowId?: string;
   resourceContext?: ReportResourceContext;
   mode: string;
@@ -1725,6 +1706,7 @@ export interface StartRunInput {
     goalEnabled?: boolean;
     goalObjective?: string | null;
     researchWorkflowId?: string | null;
+    machineId?: string | null;
     collaboration?: ResearchCollaborationPreferences | null;
   };
   /** Internal host metadata. Renderer-created research sessions must not set this. */
@@ -2385,25 +2367,15 @@ export interface BealeApi {
   renameBrowserContext(id: string, label: string): Promise<BrowserContextSummary>;
   removeBrowserContext(id: string): Promise<void>;
   onBrowserContextsChanged(listener: (update: BrowserContextsUpdate) => void): () => void;
+  fleetBrowserMachine(runId: string): Promise<string | null>;
+  connectFleetBrowser(runId: string, remoteServerId?: string): Promise<void>;
+  disconnectFleetBrowser(runId: string): Promise<void>;
+  fleetBrowserInput(runId: string, input: FleetBrowserInput): Promise<void>;
+  onFleetBrowserUpdate(listener: (update: FleetBrowserUpdate) => void): () => void;
   selectWorkspace(mode: WorkspacePickerMode): Promise<WorkspacePickerResult>;
   selectWorkspaceDirectory(): Promise<WorkspaceDirectorySelection>;
   getWorkspaceRegistry(): Promise<WorkspaceRegistryState>;
-  listResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]>;
-  listArchivedResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]>;
   listArchivedQuickChats(): Promise<ResearchSessionSummary[]>;
-  getResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicDetail>;
-  createResearchTopic(workspaceId: string, input: CreateResearchTopicInput): Promise<ResearchTopicRecord>;
-  searchResearchTopics(workspaceId: string, query: string): Promise<ResearchTopicSummary[]>;
-  updateResearchTopicOverview(workspaceId: string, topicId: string, contentMarkdown: string, expectedUpdatedAt?: string): Promise<ResearchTopicRecord>;
-  saveResearchTopicPage(workspaceId: string, topicId: string, input: { id?: string; title: string; contentMarkdown: string; expectedUpdatedAt?: string }): Promise<ResearchTopicPageRecord>;
-  deleteResearchTopicPage(workspaceId: string, topicId: string, pageId: string): Promise<void>;
-  linkResearchTopicResource(workspaceId: string, topicId: string, input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }): Promise<ResearchTopicLinkRecord>;
-  unlinkResearchTopicResource(workspaceId: string, topicId: string, linkId: string): Promise<void>;
-  mergeResearchTopic(workspaceId: string, sourceTopicId: string, targetTopicId: string): Promise<{ source: ResearchTopicRecord; target: ResearchTopicRecord }>;
-  unmergeResearchTopic(workspaceId: string, sourceTopicId: string): Promise<ResearchTopicRecord>;
-  deleteResearchTopic(workspaceId: string, topicId: string): Promise<void>;
-  archiveResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord>;
-  restoreResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord>;
   archiveResearchSession(sessionId: string): Promise<WorkspaceRegistryState>;
   restoreResearchSession(sessionId: string): Promise<WorkspaceRegistryState>;
   markResearchSessionViewed(sessionId: string): Promise<WorkspaceRegistryState>;
@@ -2433,6 +2405,21 @@ export interface BealeApi {
   resetPromptTemplate(profileId: ResearchProfileId): Promise<void>;
   previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string): Promise<string>;
   getAgentPlugins(): Promise<AgentPluginRegistryState>;
+  getFleetState(): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  restartLocalAppServer(): Promise<void>;
+  restartFleetAppServer(serverId: string): Promise<void>;
+  restartFleetGuestAppServer(machineId: string): Promise<void>;
+  getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]>;
+  getFleetRemoteCatalog(serverId: string): Promise<import('@beale/app-server-runtime/protocol').FleetRemoteCatalog>;
+  getFleetRemoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown>;
+  startFleetRemoteSession(serverId: string, workspaceId: string, promptMarkdown: string, machineId: string): Promise<{ sessionId: string }>;
+  controlFleetRemoteSession(serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string): Promise<void>;
+  configureFleet(input: Record<string, unknown>): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  testFleetVmConnection(input: import('@beale/app-server-runtime/protocol').FleetSshTestInput): Promise<import('@beale/app-server-runtime/protocol').FleetSshTestResult>;
+  testFleetAppServer(input: { serverId?: string; url: string; operatorToken: string }): Promise<{ success: boolean; message: string }>;
+  cloneFleetVm(baseId: string, name: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  startFleetVm(machineId: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  stopFleetVm(machineId: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
   addAgentPluginFromFilesystem(): Promise<AgentPluginRegistryState>;
   addAgentPluginFromRepository(repositoryUrl: string): Promise<AgentPluginRegistryState>;
   setAgentPluginEnabled(pluginId: string, enabled: boolean): Promise<AgentPluginRegistryState>;
@@ -2506,7 +2493,6 @@ export interface BealeApi {
   startReportSession(input: ReportSessionStartInput): Promise<ReportSessionStartResult>;
   getWorkspaceDejunkSummary(workspaceId: string): Promise<WorkspaceDejunkSummary>;
   runWorkspaceDejunk(): Promise<WorkspaceSnapshot>;
-  repairWorkspaceCheckpoint(fingerprint: string): Promise<WorkspaceSnapshot>;
   runMemoryDreaming(): Promise<WorkspaceSnapshot>;
   onMemoryDreamingProgress(listener: (update: MemoryDreamingProgressUpdate) => void): () => void;
   restoreMemoryDreamingChange(changeId: string): Promise<WorkspaceSnapshot>;

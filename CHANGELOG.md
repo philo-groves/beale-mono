@@ -4,7 +4,24 @@
 
 ### Beale
 
+#### Added
+
+- Fleet VM sessions run a guest-owned headless browser and relay its page frames, navigation, pointer, keyboard, and text input into the primary Desktop session view. The primary does not load a second copy of the page. A session-scoped CDP gateway keeps agent browser commands on the guest, and the browser profile remains on its retained clone. Control contract v45 requires rebuilt clients and hosts.
+- Sessions opened on another connected primary app server now relay that primary's browser frames and researcher input into the remote session view, including sessions running directly on the primary. Session tokens authorize the browser stream. Control contract v46 requires rebuilt clients and hosts.
+- Fleet can restart local, guest, and same-tailnet remote app-server processes through an independent supervisor, including when the app-server HTTP endpoint is unresponsive. Restarted hosts recover eligible sessions; VM and machine power state is unchanged. Contract v42 requires rebuilt clients and hosts.
+- New Research now lists stopped Fleet base VMs and clones the selected base for each session. Existing workers stay out of the picker; the base is never started. Fleet retains the clone after result import for resume and transfer.
+- Added a local Fleet App Servers form for connecting to authenticated peers on the same Tailscale network. Home and Automations can switch between Local and saved app servers to view and control their research sessions.
+- New Research can assign a workspace session to a VM owned by another primary app server. The launching workspace keeps the session and receives changed files through the VM-owning primary.
+- Added Fleet settings for Tart and Hyper-V inventory, clone-only base VMs, SSH configuration, and workspace VM requirements. New Research selects Local or a configured worker; VM sessions stream into the launching primary workspace and return changed workspace files. Concurrent edits and guest canonical records are kept for review.
+- Added a VM settings Test SSH action that checks draft connection values without saving them. Tart connections use the dedicated known-hosts file from the Desktop SSH setup script when present.
+
 #### Removed
+
+- Removed automatic workspace Git initialization, managed commit hooks, research-session Git checkpoints, and Git checkpoint repair controls. Existing Git history is retained; canonical publication metadata for new workspaces lives under `.beale/publication/`. Control contract v44 requires rebuilt clients and hosts.
+- Removed session workflow creation, assignment, notebook execution gates, progress UI, and the built-in Repository Auditor. Existing workflow records remain in local storage but are no longer used when sessions continue.
+
+- Beale now creates and runs Security research workspaces only. Mathematics and other non-security workspaces are hidden from its workspace and session lists; their files and stored records are retained. The Mathematics choice is removed from workspace creation and prompt settings.
+- Removed Topics screens, navigation, and Codex bridge tools. Existing topic overviews and pages export once to editable workspace Markdown under `references/research/legacy-topics/`.
 
 - Removed the default Browser Use plugin, its WebDriver BiDi server and Puppeteer dependency. Existing saved built-in Browser Use entries are pruned from the plugin registry.
 - Removed the built-in Terminator plugin, its settings toggle, and native SDK dependency. Existing saved Terminator entries are pruned.
@@ -16,14 +33,28 @@
 
 #### Changed
 
+- New Research selects one execution machine per session: Local or one base VM, including bases from saved app servers. The selected base is cloned for the session.
+- The per-workspace Require a VM control now appears in the workspace Settings form alongside its other general settings, rather than in Fleet.
+- Fleet now has its own destination below Plugins in the left navigation rail. Its configuration, app servers, and virtual machines remain local to the current Beale instance.
+- The macOS development Electron bundle now signs with Beale's bundle identifier so Local Network permission applies to the app-server's SSH helper.
+- Fleet settings now separates Fleet and Virtual Machines into two settings forms. Each VM has a compact row and a configuration dialog for its SSH, base, privilege, clone, and lifecycle controls.
+- Kept Discovery, Chaining, Reporting, and Longshot as New Research suggestion categories. They shape generated ideas and optional prompt expansion without assigning a session workflow or constraining the agent's flow.
+- Agents now keep reusable research documentation in `references/research/`, with citations to canonical records and evidence.
+
+- New Research selects one execution machine per session: Local or one base VM, including bases from saved app servers. The selected base is cloned for the session.
+- The per-workspace Require a VM control now appears in the workspace Settings form alongside its other general settings, rather than in Fleet.
+- Fleet now has its own destination below Plugins in the left navigation rail. Its configuration, app servers, and virtual machines remain local to the current Beale instance.
+- The macOS development Electron bundle now signs with Beale's bundle identifier so Local Network permission applies to the app-server's SSH helper.
+- Fleet settings now separates Fleet and Virtual Machines into two settings forms. Each VM has a compact row and a configuration dialog for its SSH, base, privilege, clone, and lifecycle controls.
+- Kept Discovery, Chaining, Reporting, and Longshot as New Research suggestion categories. They shape generated ideas and optional prompt expansion without assigning a session workflow or constraining the agent's flow.
+- Agents now keep reusable research documentation in `references/research/`, with citations to canonical records and evidence.
+
 - The desktop renderer now reconnects to a workspace already open in the main process after a renderer reload, so an active browser session does not strand the app on the workspace picker.
 - A failed workspace switch now retains the previous workspace instead of leaving the desktop without a foreground workspace.
 - Browser context open requests are repeated briefly while the renderer reconnects, so a request made during a reload can still attach to its saved context.
 - The workspace editor, bottom panel, and research sidebar header buttons are available in New Research for an open workspace.
-- New Topic offers a workspace picker when no workspace is active, then opens the topic form for the chosen workspace.
-- Topics now has its own icon rail destination, a recent-topics sidebar, and an explorer with all-workspace and per-workspace filters; the session sidebar shows only Workspaces.
 - The Automations sidebar replaces its redundant All Automations row with Schedule a Job, opening New Research with the repeat schedule menu focused or a workspace picker when no workspace is active.
-- Sidebar session and topic rows no longer show relative ages; long names fade at the right edge instead of ending with ellipses.
+- Sidebar session rows no longer show relative ages; long names fade at the right edge instead of ending with ellipses.
 - Automations and Plugins now have dedicated left sidebars. Automations lists active scheduled jobs; Plugins lists installed packages and selects their catalog rows.
 - Managed plugin packages in `managed-plugins` now appear in Plugins automatically. Meta Skills retains its existing default; other packages, including Microsoft Security Devices, start disabled.
 - Source, Provenance, Knowledge, Claims, Runbooks, Reporting, and Introspection now appear as Optional Features in Agent Settings instead of Plugins. Agents see them under "Internal features" in `{{features}}` with `features.preview` and `features.load`; traditional plugins appear under "External Plugins" in `{{plugins}}` and use `plugins.preview`/`plugins.load`. Saved enabled states and registry IDs remain compatible. Quick Chat requires Introspection to be enabled.
@@ -44,14 +75,13 @@
 - Workspace views now use a reusable centered container with a 1300px maximum width, 24px side gutters, and matching top padding while the darker content surface remains full-width.
 - Active destinations in the left navigation rail now use filled icons.
 - Workspace Highlights priority claims now place the status close beneath the title, show only maturity and rating, and size cards to their content.
-- Replaced workspace collaboration channels with Topics: editable overviews and pages, typed links to canonical records, search, reversible merge aliases, and read-only imported channel activity. Agents inherit bounded topic orientation without replaying message transcripts. Desktop, iOS subagent labels, and the Codex bridge use topic names; app-server contract v28 replaces channel operations. File-authoritative workspaces store topic snapshots under `references/topics/`.
 - Workspace Highlights priority claims now sit flush vertically within the horizontal list.
 - Campaign Claims columns now start flush beneath their headings and show top and bottom fades as their lists scroll.
 - Workspace Runbooks lists now match Memories for row padding, section headings, and expandable four-item previews.
 - The workspace Campaign Memories and Runbooks lists now show top and bottom scroll fades when more items are out of view. Runbooks also use the same inset scrollbar behavior.
 - Header workspace names now preserve their saved capitalization.
 - With an open workspace and collapsed left sidebar, New Research and Quick Chat are available as header icons beside the sidebar toggle.
-- An icon navigation rail now provides Home, Automations, Plugins, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
+- An icon navigation rail now provides Home, Automations, Plugins, Fleet, and Agent Settings outside the workspace sidebar, with compact, evenly spaced icons on the window background and Settings anchored at the bottom.
 - The active icon navigation destination persists when research sessions and channels open; Home represents those views.
 - The workspace sidebar now leaves space above New Research and places Quick Chat directly beneath it.
 - New Research now uses the same neutral styling as Quick Chat.
@@ -87,10 +117,14 @@
 - Added an embedded Browser tab to the expanded research sidebar with a URL bar. The app-server Browser control tools discover and control its isolated page through a local CDP bridge when Beale Desktop is running; explicit external browser endpoints remain available.
 - Added default-on Browser control as an Optional Feature. Run-local CDP connections support target discovery, arbitrary commands, flattened sessions, and buffered events; external browsers must be launched with remote debugging enabled.
 
+- Session workflows now store Jupyter-format notebooks with ordered markdown and language-tagged code cells. The Workflows editor offers cell type and language selection with rendered previews; existing instruction steps are read as markdown cells. Code workflows attach a session runbook and require a successful execution of the exact code cell before advancing. Contract v36 requires rebuilding Beale and app-server together.
+- Workflows has an icon rail editor with workspace selection, inline name and description editing, a Workspace-style field form above editable runbook cells, and a joined Run All action that starts a session with the workflow assigned and one Advanced collaborator using the default Lead provider's large model and effort. Each field occupies one preview row; its title, description, input size, placeholder, and requirement are configured in a dialog. Entered field values remain visible after starting a session. A run selector displays the current and earlier session states, per-cell progress, and a link to each session. New Research can assign one workflow or leave the session unassigned, and active sessions show step and repository coverage progress.
 - A Meta Skills plugin provides guidance for Meta's researcher tools and a read-only Muse runtime-cell boundary harness. It is enabled by default for workspaces using the Meta Bug Bounty Research Kit, and can be disabled in Plugins.
 
 #### Changed
 
+- Assigned workflows now start in persistent Goal mode from Run All or New Research, and earlier assigned runs enter Goal mode when continued. The repository auditor's goal requires complete inventoried source coverage and a refreshed inventory before reporting completion; partial dispositions continue the session.
+- Workflow run history now reads the canonical session lifecycle, and app-server records terminal states for workers that end before their runbooks finish. Run All fetches current provider settings before launch so an unopened New Research view does not block it.
 - The MSRC Research Kit is now MSRC Windows for the Windows Insider Preview bounty. A selectable catalog of common Windows apps, services, four program-listed sandbox contexts, and repositories for shipped open-source code can be managed during workspace creation and kit refresh; existing `msrc` workspace metadata remains compatible. Catalog entries are candidates that require guest and program eligibility checks.
 - Workspace Utilities now previews oversized investigation-file checkpoint repairs and can move eligible files into retained evidence before retrying the checkpoint. Tracked and canonical files remain explicit blockers.
 - The workspace Claims view now filters visible findings as text is entered beside the Classes dropdown, alongside the existing class and rating filters.
@@ -106,9 +140,16 @@
 
 #### Fixed
 
+- New Research loads local VM choices before remote discovery completes and includes bases from reachable saved app servers even when another peer fails. Remote inventory reads have a bounded timeout.
+- The New Research Machine menu shows readiness dots and single-line options; clicking a VM name selects that VM.
+- Fleet VM rows now distinguish a saved primary-side SSH user from SSH setup inside the guest. Registered bases enable the default workspace VM requirement even before that user is saved in Beale.
+- Workspace checkpoints retain oversized untracked macOS executables in investigation directories at their existing paths, with tracked integrity manifests and exact local Git exclusions, so compiled harnesses no longer block later checkpoints.
+- Repository Auditor workflows now recognize inventoried files beneath declared scope directories on Windows, allowing the inventory step to advance.
+- Workflow Run All now uses the effective Lead provider and model shown in Provider settings when their defaults have not been explicitly saved.
 - Collapsed session and workspace summaries now provide controls to reopen every existing Browser context after its last tab is closed.
 - Embedded Browser context labels and last visited pages now survive Beale restarts. Browser contexts use persistent, isolated session storage, and reopening a tab restores its last page. Browser pages stay mounted while the research sidebar is collapsed; closing a tab retains its context, while explicitly removing a context clears its stored session data. Earlier in-memory contexts and sign-ins cannot be recovered after a prior restart.
 - Closing an embedded Browser CDP connection after its page is destroyed no longer crashes the Beale main process and interrupts the research session.
+- Workspace checkpoints now retain untracked SQLite artifacts outside Git with integrity manifests, including database files without an extension. Manual commits report SQLite content separately from credential material.
 - Sessions that fail before producing transcript events now show their stored failure reason in the commentary, and app-server response errors retain their leading diagnostic text.
 - Prompt settings always shows the current token estimate, including for the default template and unsaved edits.
 - The left icon rail keeps its 50px width and centered icons when the adjacent sidebar is collapsed.
@@ -1226,7 +1267,7 @@
 
 #### Documentation
 
-- Noted the Meta Research Kit workaround for an unavailable Whitehat Test Accounts tool: designated researcher-controlled live accounts without real user data for manual testing, subject to current program terms.
+- Clarified that the Meta Research Kit permits bounded agent research on designated, authorized live accounts when Whitehat Test Accounts are unavailable, while prohibiting communication with accounts outside the recorded authorization boundary and retaining Meta's automation limits.
 - Expanded the root README for human readers with current status, setup, safety boundaries, and known incomplete surfaces.
 - Added MIT licensing metadata and a root `LICENSE`.
 
@@ -1234,6 +1275,24 @@
 
 #### Added
 
+- Fleet recovery reuses the session's recorded clone and guest workspace after an unexpected interruption, restarting a stopped clone when needed without restaging over its in-progress files.
+- Fleet installs a built Beale app-server and Node runtime into a session clone over SSH when the guest is missing or incompatible, starts it, and configures its Fleet guest relay before launching research. VM readiness still depends on SSH setup, not an existing Beale installation.
+- Fleet guests route Pi-backed provider requests through a durable broker on the workspace-owning primary. Guest requests survive app-server restarts, use renewable leases, and replay completed results after reconnect; the broker does not copy provider credentials to guests. Anthropic and Z.ai subscription SDK sessions are rejected until those SDK paths support brokered execution. Control contract v43 requires rebuilt clients and hosts.
+- A separate localhost restart supervisor can replace the app-server process when its control plane is unavailable. Managed Tailscale remote access publishes the supervisor on a separate HTTPS port, and Fleet can reach guest supervisors through SSH.
+- Fleet adds a session clone operation for local and cross-primary launches. Control contract v41 requires rebuilding Beale and app-server together.
+- Fleet now records a durable machine-and-session owner for each VM and rejects conflicting reservations. Remote app-server connections verify a matching online Tailscale peer, and cross-primary workspace transfers use authenticated app-server operations. Control contract v40 requires rebuilding Beale and app-server together.
+- Added Fleet inventory, clone/start/stop operations, model-facing Fleet tools, SSH guest session transport, and chunked workspace transfer. External source checkouts are not copied from the primary. Registry migration records a session's machine for recovery, and control contract v38 requires rebuilding Beale and app-server together.
+- Added draft SSH connection testing and per-VM known-hosts paths. Control contract v39 requires rebuilding Beale and app-server together.
+- Tart Fleet connections now prefer guest-agent address resolution and fall back to DHCP. SSH test results report the attempted address to help diagnose connectivity after a VM restart.
+- SSH test failures now include the final SSH diagnostic line so connection and macOS permission failures can be distinguished.
+
+#### Removed
+
+- Removed session workflow operations, launch assignment, and model-facing progress tools. Contract v37 requires rebuilding Beale and app-server together; historical workflow storage is retained.
+
+#### Added
+
+- Session workflow definitions, revision-checked edits, and per-session snapshots are stored in the app-server database. Field descriptions and added auditor configuration fields persist with definition revisions; the auditor's core fields remain fixed. Assigned agents must use the progress tool before final disposition and record a completion note for each ordered step before claiming objective achievement. The built-in repository auditor maps each named system to concrete paths, inventories tracked and unignored untracked text, and records line coverage as bounded source excerpts are returned before its review step can complete. Contract v33 requires rebuilding Beale and app-server together.
 - The hosted `suggestion.steering` operation generates a bounded suggestion from canonical session context using the configured small model; Desktop and app-server must be rebuilt together.
 - `runbook.prepare` now finds or creates a cohesive workflow and returns its investigations candidate path and entry cell before implementation. `runbook.edit` revises an existing code cell under an expected runbook revision while preserving its identity and invalidating old displayed output.
 - Research workspace commits now end with a session ID trailer for history filtering. Automatic checkpoints resolve session attribution, and manual commits receive an explicit `none` value when no attribution is supplied; existing history is preserved.
@@ -1242,6 +1301,7 @@
 
 #### Fixed
 
+- Required pre-session checkpoints now ignore generated `build/` and `.libs/` trees, remove previously tracked files in those trees from Git, and retain the working files locally. Checkpoint launch failures preserve the specific diagnostic in the session summary instead of showing only a generic startup failure.
 - File-authority checkpoints now publish topic snapshots produced by typed topic operations and legacy topic migration after verifying them against canonical storage; direct topic file creation and edits remain blocked.
 - Runbook executions now attempt remaining selected cleanup cells after a proof cell fails, record their results, and preserve the failed run outcome.
 - Workspace checkpoints now detect oversized files before Git staging and retain a repair preview in the persisted failure status. The new `workspace.checkpoint-repair.v1` capability adds previewed relocation and retry for eligible untracked investigation files.
@@ -1471,5 +1531,8 @@
 - Enforced shell authorization after immutable utility and protected-directory checks but before lease acquisition or process spawn; Auto-Review uses assigned provider-small-model defaults and fails closed even when a provider ignores cancellation, Manual Approval refuses commands whose executable fields cannot be displayed exactly, and shell events/results omit raw stdin while redacting paired credential arguments, cookie values, and authorization headers.
 
 #### Removed
+
+- Non-security workspaces are omitted from host discovery and scheduled runs, and the host and worker reject new non-security research sessions. Stored records remain intact; the app-server contract requires rebuilt clients and host.
+- Removed Topics operations and model-facing collaboration tools. Legacy topic snapshots remain readable for compatibility, and the shared app-server contract requires rebuilt clients.
 
 - Removed the second-model background memory curator, its advisory `memory.request` tool, provider-model CLI options, turn queue, notifications, and synthetic activity events.

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
+import type { JSX, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { Archive, Folder, FolderInput, FolderPlus, LoaderCircle, RefreshCw, Search, SquarePen, X, Zap } from 'lucide-react';
 import type { WorkspaceRegistryEntry, WorkspaceRegistryState, ResearchSessionSummary, RunStatus, WorkspaceSnapshot } from '@shared/types';
 import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
@@ -28,7 +28,8 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   onResizePointerDown,
   onStartNewResearch,
   onOpenQuickChat = () => undefined,
-  onStartNewResearchForWorkspace
+  onStartNewResearchForWorkspace,
+  serverSelector
 }: {
   busy: boolean;
   collapsed: boolean;
@@ -50,6 +51,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   onStartNewResearch: () => void;
   onOpenQuickChat?: () => void;
   onStartNewResearchForWorkspace: (workspace: WorkspaceRegistryEntry) => void;
+  serverSelector?: ReactNode;
 }): JSX.Element {
   useDevRenderProbe('sidebar.workspaces', () => ({
     collapsed,
@@ -147,7 +149,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   return (
     <aside className="sidebar" aria-hidden={collapsed} inert={collapsed}>
       <div className="sidebar-primary-actions">
-        <div className="sidebar-wordmark">Beale</div>
+        <div className="sidebar-server-heading"><div className="sidebar-wordmark">Beale</div>{serverSelector}</div>
         <div className="sidebar-new-research-anchor" ref={newResearchPickerRef}>
           <button
             ref={newResearchButtonRef}

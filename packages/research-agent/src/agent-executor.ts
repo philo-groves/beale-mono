@@ -40,7 +40,6 @@ import {
 import {
   createSubagentRuntime,
   defaultSubagentRuntimeFactory,
-  type SubagentTopicContext,
   type SubagentRunRequest,
   type SubagentRunResult,
   type SubagentRuntimeFactory,
@@ -110,7 +109,6 @@ export interface CreatePiAgentExecutorOptions {
   };
   subagentRuntimeFactory?: SubagentRuntimeFactory;
   collaboration?: ResearchCollaborationConfig;
-  topicContext?: SubagentTopicContext;
   collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
     request: SubagentRunRequest,
@@ -426,7 +424,6 @@ export function createPiAgentExecutor(
             ...(options.subagents ? { limits: options.subagents } : {}),
             ...(collaboration ? { collaboration } : {}),
             ...(input.signal ? { signal: input.signal } : {}),
-            ...(options.topicContext ? { topicContext: options.topicContext } : {}),
             run: (request) => request.provider === "anthropic" && options.runAlternateSubagent
               ? options.runAlternateSubagent(request, input)
               : runSession(request),
@@ -707,7 +704,10 @@ export function createPiAgentExecutor(
         };
         const streamFn = createRetryingStreamFn(dynamicStreamFn, {
           signal: request.signal,
-          firstEventTimeoutMs: options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
+          // Brokered completions arrive as one durable result after the primary
+          // finishes the call. The local first-event timer must not cancel them.
+          firstEventTimeoutMs: process.env.APP_SERVER_MODEL_BROKER_URL
+            ? 0 : options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
           tryAuthenticationFallback: (errorMessage) => {
             const active = activeModelSelection();
             return authenticationRouter.tryFallback(active.model.provider, errorMessage);
@@ -894,7 +894,7 @@ export function createPiAgentExecutor(
               hasTools: tools.length > 0,
               hasSessionDispositionTool: request.root === true && !options.agentIdentity && hasSessionDispositionTool,
               ...(request.root && !options.agentIdentity ? {} : { agentPath: request.path }),
-              hasCollaborationTools: collaborationTools.some((tool) => tool.name === "create_topic" || tool.name === "topic_update"),
+              hasCollaborationTools: collaborationTools.length > 0,
               ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id, { lead: request.root === true }) } : {}),
               ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
               goalEnabled: request.root === true && goalRuntime !== null,
@@ -3073,7 +3073,11 @@ function withProviderSession(
   fastMode: boolean,
   daybreakBlue: boolean,
 ): SimpleStreamOptions {
-  const sessionOptions = withNativeOpenAiCompaction(model, { ...options, sessionId }) ?? { ...options, sessionId };
+  const brokerFlags = process.env.APP_SERVER_MODEL_BROKER_URL
+    ? { brokerNativeCompaction: isNativeOpenAiResponsesModel(model), brokerFastMode: fastMode,
+        brokerDaybreakBlue: daybreakBlue, brokerContextWindow: model.contextWindow }
+    : {};
+  const sessionOptions = withNativeOpenAiCompaction(model, { ...options, ...brokerFlags, sessionId }) ?? { ...options, ...brokerFlags, sessionId };
   if ((!fastMode && !daybreakBlue) || !isNativeOpenAiResponsesModel(model)) return sessionOptions;
   const previousOnPayload = sessionOptions.onPayload;
   return {

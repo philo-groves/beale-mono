@@ -16,7 +16,7 @@ import { ensureBealeAppServerRunning } from '../src/main/bealeAppServerClient';
 import { AppServerRunEngine } from '../src/main/appServerRunEngine';
 import { isResearchProfileMemoryStatusActive, WorkspaceService } from '../src/main/workspaceService';
 import { migrateResearchProfile, serializeResearchProfile } from '../src/shared/researchProfile';
-import type { ResearchProfile, ResearchProfileModelJob, ResolvedResearchProfile, StartRunInput } from '@shared/types';
+import type { ResearchProfile, ResolvedResearchProfile, StartRunInput } from '@shared/types';
 import {
   resolvedTestResearchProfile,
   testResearchProfile,
@@ -93,6 +93,9 @@ describe('research profile host integration', () => {
       supportedResearchProfileSchemaVersions: [2]
     })).toThrow(/schema version 1 support/);
     expect(() => decodeResearchProfileCatalogEnvelope({ ...envelope, hash: '0'.repeat(64) })).toThrow(/hash mismatch/);
+    expect(() => decodeResearchProfileCatalogEnvelope(testResearchProfileCatalogEnvelope({
+      ...testResearchProfile(), id: 'mathematics'
+    }))).toThrow(/Security research profiles only/);
   });
 
   it('migrates legacy local catalog profiles before validating the canonical hash', () => {
@@ -142,10 +145,6 @@ describe('research profile host integration', () => {
 
   it('resolves profile catalogs asynchronously in parallel and caches duplicate requests', async () => {
     const securityProfile = testResearchProfile();
-    const mathematicsProfile: ResearchProfile = {
-      ...testResearchProfile('1.0.0', 'Mathematics'),
-      id: 'mathematics'
-    };
     let calls = 0;
     let active = 0;
     let maxActive = 0;
@@ -157,29 +156,28 @@ describe('research profile host integration', () => {
         configuredBy: 'env_command',
         usesNodeRuntime: true
       }),
-      runCommandAsync: async (_command, args) => {
+      runCommandAsync: async () => {
         calls += 1;
         active += 1;
         maxActive = Math.max(maxActive, active);
         await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
         active -= 1;
-        const profileId = args[args.indexOf('--profile-id') + 1];
-        const profile = profileId === 'mathematics' ? mathematicsProfile : securityProfile;
-        return { status: 0, stdout: JSON.stringify(testResearchProfileCatalogEnvelope(profile)), stderr: '' };
+        return { status: 0, stdout: JSON.stringify(testResearchProfileCatalogEnvelope(securityProfile)), stderr: '' };
       }
     });
 
-    const [security, mathematics, duplicateSecurity] = await Promise.all([
+    const [security, secondWorkspace, duplicateSecurity] = await Promise.all([
       service.resolveAsync('C:\\workspace', 'security-research'),
-      service.resolveAsync('C:\\workspace', 'mathematics'),
+      service.resolveAsync('C:\\other-workspace', 'security-research'),
       service.resolveAsync('C:\\workspace', 'security-research')
     ]);
 
-    expect([security.profile.id, mathematics.profile.id, duplicateSecurity.profile.id]).toEqual([
+    expect([security.profile.id, secondWorkspace.profile.id, duplicateSecurity.profile.id]).toEqual([
       'security-research',
-      'mathematics',
+      'security-research',
       'security-research'
     ]);
+    expect(() => service.resolve('C:\\workspace', 'mathematics')).toThrow(/Security research profiles only/);
     expect(calls).toBe(2);
     expect(maxActive).toBe(2);
     await service.resolveAsync('C:\\workspace', 'security-research');
@@ -187,7 +185,7 @@ describe('research profile host integration', () => {
   });
 
   it('derives active recommendation memory from the profile status catalog', () => {
-    const base = generalResearchProfile();
+    const base = testResearchProfile();
     const profile: ResearchProfile = {
       ...base,
       memory: {
@@ -353,10 +351,7 @@ describe('research profile host integration', () => {
       expect(invocations[0]?.args).not.toContain('--tool-family');
       expect(invocations[0]?.args).toEqual(expect.arrayContaining(['--allowed-side-effect', 'network']));
       expect(invocations[0]?.args).not.toContain('--disable-tool-family');
-      expect(invocations[0]?.args).toEqual(expect.arrayContaining([
-        '--allow-mcp-server',
-        'beale-introspection.beale'
-      ]));
+      expect(invocations[0]?.args).not.toContain('--allow-mcp-server');
       expect(invocations[0]?.args).not.toContain('--skill');
       expect(invocations[0]?.args).not.toContain('--memory-type-descriptions');
       const detail = await service.getRunDetailForClient(firstRunId);
@@ -371,259 +366,24 @@ describe('research profile host integration', () => {
     }
   }, 90_000);
 
-  it('applies a non-security profile to recommendations and context without expanding host tool authority', async () => {
-    process.env.BEALE_OPENAI_ACCESS_TOKEN = 'profile-recommendation-test-token';
-    const root = temporaryDirectory();
-    const workspace = join(root, 'workspace');
-    const invocationLog = join(root, 'invocations.jsonl');
-    const fakeAppServer = join(root, 'fake-appServer.mjs');
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(fakeAppServer, fakeAppServerSource());
-    configureFakeAppServer(root, fakeAppServer, [invocationLog]);
-    await ensureBealeAppServerRunning();
-
-    let currentProfile = resolvedTestResearchProfile(generalResearchProfile());
-    const modelRequests: Record<string, unknown>[] = [];
-    const service = new WorkspaceService(() => undefined, {
-      workspaceRegistryDirectory: join(root, 'registry'),
-      appServerDatabasePath: join(root, 'memory.sqlite'),
-      appServerArtifactDirectory: join(root, 'artifacts'),
-      researchProfileResolver: () => currentProfile,
-      researchSubjectResolver: () => ({ id: 'climate-model', name: 'Regional Climate Model' }),
-      openAiFetch: async (_url, init) => {
-        const request = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>;
-        modelRequests.push(request);
-        const task = (request.metadata as Record<string, unknown> | undefined)?.beale_task;
-        return task === 'research_goal_suggestions'
-          ? modelGoalSuggestionResponse(request, [
-              'Compare observed rainfall bias across the recorded regional datasets.',
-              'Investigate how boundary conditions influence the recorded temperature projections.'
-            ], 'resp_general_goals')
-          : modelJsonResponse({
-              promptMarkdown: '# Comparative literature study\n\nAnalyze the recorded material using the selected synthesis workflow. Compare competing explanations, distinguish observations from inference, preserve uncertainty, and produce the profile-required annotated synthesis with source references.'
-            }, 'resp_general_prompt');
-      }
-    });
-
-    try {
-      service.createWorkspace(workspace);
-      service.saveScope({
-        workspaceName: 'Climate Literature Library',
-        scopeOwner: 'Boundary Administrator',
-        descriptionMarkdown: 'A collection of local literature and model outputs.',
-        rulesMarkdown: '',
-        expiresAt: null,
-        assets: [
-          { direction: 'in_scope', kind: 'domain', value: 'data.example.test', sensitivity: 'public' },
-          { direction: 'in_scope', kind: 'other', value: '192.0.2.15', sensitivity: 'public', attributes: { legacyKind: 'host' } },
-          { direction: 'in_scope', kind: 'service', value: 'https://catalog.example.test/api', sensitivity: 'public' },
-          { direction: 'in_scope', kind: 'repo', value: workspace, sensitivity: 'internal' },
-          {
-            direction: 'in_scope',
-            kind: 'other',
-            value: workspace,
-            sensitivity: 'internal',
-            attributes: { legacyKind: 'path', instruction: 'Preserve the recorded collection during analysis.' }
-          },
-          { direction: 'out_of_scope', kind: 'domain', value: 'misplaced.example.test', sensitivity: 'public' },
-          { direction: 'out_of_scope', kind: 'domain', value: 'excluded.example.test', sensitivity: 'public' }
-        ]
-      });
-      service.addWorkspaceRule('Stay within the recorded collection.');
-
-      expect(() => service.startRun(runInput('missing-workflow'))).toThrow(/not defined by profile general-research@1\.0\.0/);
-
-      await expect(service.generateResearchGoalSuggestions({ phase: 'literature-synthesis' })).resolves.toEqual({
-        phase: 'literature-synthesis',
-        suggestions: [
-          'Compare observed rainfall bias across the recorded regional datasets.',
-          'Investigate how boundary conditions influence the recorded temperature projections.'
-        ]
-      });
-      await expect(service.generateResearchPrompt({
-        operation: 'generate',
-        researchPhase: 'literature-synthesis',
-        mode: 'literature-synthesis',
-        attemptStrategy: 'iterative_research',
-        model: 'session-model',
-        reasoningEffort: 'medium',
-        sandboxProfile: 'host'
-      })).resolves.toMatchObject({ promptMarkdown: expect.stringContaining('Comparative literature study') });
-
-      const goalRequest = modelRequests.find((request) =>
-        (request.metadata as Record<string, unknown> | undefined)?.beale_task === 'research_goal_suggestions'
-      );
-      const promptRequest = modelRequests.find((request) =>
-        (request.metadata as Record<string, unknown> | undefined)?.beale_task === 'research_prompt_recommendation'
-      );
-      expect(goalRequest).toMatchObject({ model: 'gpt-general-goals', reasoning: { effort: 'low' } });
-      expect(promptRequest).toMatchObject({ model: 'gpt-general-prompts', reasoning: { effort: 'high' } });
-      expect(String(goalRequest?.instructions)).toContain('You are an interdisciplinary literature researcher.');
-      expect(String(goalRequest?.instructions)).toContain('Generate exactly 4 candidates');
-      expect(String(goalRequest?.instructions)).toContain('Suggest questions that compare plausible explanations.');
-      expect(String(promptRequest?.instructions)).not.toContain('Separate observations from inference.');
-      expect(String(promptRequest?.instructions)).not.toContain('Produce an annotated synthesis.');
-      expect(String(promptRequest?.instructions)).toContain('generation bias only');
-      expect(String(goalRequest?.instructions)).not.toContain('sourceCoverage');
-      expect(String(promptRequest?.instructions)).not.toContain('sourceCoverage');
-      if (!promptRequest) throw new Error('Expected a prompt recommendation request.');
-      if (!goalRequest) throw new Error('Expected a goal suggestion request.');
-      const goalPayload = modelRequestPayload(goalRequest);
-      const promptPayload = modelRequestPayload(promptRequest);
-      expect((goalPayload.coverageHints as Record<string, unknown>).sourceCoverage).toBeNull();
-      expect((promptPayload.coverageHints as Record<string, unknown>).sourceCoverage).toBeNull();
-      expect(promptPayload.researchProfile).toMatchObject({
-        id: 'general-research',
-        hash: currentProfile.hash,
-        suggestionLane: { id: 'literature-synthesis', goalSuggestionCount: 2 },
-        vocabulary: {
-          workspaceNoun: 'Library',
-          subjectNoun: 'Topic',
-          boundaryNoun: 'Collection boundary',
-          authorizationMode: 'optional'
-        }
-      });
-      expect(promptPayload.workspace).toMatchObject({
-        researchSubject: { id: 'climate-model', name: 'Regional Climate Model' },
-        rules: ['Stay within the recorded collection.'],
-        hostDiscoveredAgentInstructions: {
-          sourceFile: 'AGENTS.md',
-          content: 'A collection of local literature and model outputs.'
-        }
-      });
-      expect(promptPayload.workspace).not.toHaveProperty('descriptionMarkdown');
-      expect(readFileSync(join(workspace, 'AGENTS.md'), 'utf8'))
-        .toBe('A collection of local literature and model outputs.');
-
-      delete process.env.BEALE_OPENAI_ACCESS_TOKEN;
-      const started = service.startRun(runInput('literature-synthesis'));
-      const runId = started.runs[0]?.run.id ?? '';
-      await waitForRun(service, runId);
-      const capturedNextPrompts = [
-        {
-          title: 'Compare the nearest regional model',
-          promptMarkdown: 'Compare the completed result with the nearest regional model and preserve the established evidence.'
-        },
-        {
-          title: 'Challenge the boundary assumptions',
-          promptMarkdown: 'Challenge the completed session’s boundary assumptions with a materially different dataset.'
-        },
-        {
-          title: 'Build a reproducible comparison',
-          promptMarkdown: 'Turn the completed analysis into a bounded, reproducible comparison.'
-        }
-      ];
-      const workspaceDb = (service as unknown as { db: WorkspaceDatabase }).db;
-      workspaceDb.createTranscriptMessage({
-        runId,
-        role: 'assistant',
-        phase: 'final_answer',
-        contentMarkdown: 'Completed regional analysis.',
-        source: 'app-server',
-        metadata: { nextPromptSuggestions: capturedNextPrompts }
-      });
-      const modelRequestCount = modelRequests.length;
-      await expect(service.generateResearchGoalSuggestions({
-        phase: 'literature-synthesis',
-        sourceRunId: runId
-      })).resolves.toEqual({
-        phase: 'literature-synthesis',
-        suggestions: capturedNextPrompts.map((suggestion) => suggestion.title),
-        promptSuggestions: capturedNextPrompts
-      });
-      expect(modelRequests).toHaveLength(modelRequestCount);
-      const invocation = readInvocations(invocationLog)[0];
-      const launchArgs = invocation?.args ?? [];
-      expect(invocation?.args).toEqual(expect.arrayContaining([
-        '--profile-tool-family-ceiling',
-        'shell',
-        '--profile-tool-family-ceiling',
-        'repository-search',
-        '--profile-tool-family-ceiling',
-        'file-read',
-        '--profile-side-effect-ceiling',
-        'none',
-        '--profile-side-effect-ceiling',
-        'read',
-        '--profile-side-effect-ceiling',
-        'write',
-        '--profile-side-effect-ceiling',
-        'process'
-      ]));
-      expect(invocation?.args).not.toContain('--tool-family');
-      expect(invocation?.args).toEqual(expect.arrayContaining(['--allowed-side-effect', 'network']));
-      expect(invocation?.args).not.toContain('--skill');
-      expect(invocation?.args).toEqual(expect.arrayContaining([
-        '--allow-mcp-server',
-        'beale-introspection.beale'
-      ]));
-      expect(invocation?.args).not.toContain('profile-literature-skill');
-      expect(invocation?.args).not.toContain('profile-library-mcp');
-      expect(launchArgs).not.toContain('--title-model');
-      expect(launchArgs).not.toContain('--title-effort');
-      const shellReviewModels = JSON.parse(
-        launchArgs[launchArgs.indexOf('--shell-review-models') + 1] ?? '{}'
-      ) as Record<string, string>;
-      expect(shellReviewModels['openai-codex']).toBe('gpt-6-luna');
-      expect(shellReviewModels.anthropic).toBe('claude-haiku-4-5');
-      expect(launchArgs[launchArgs.indexOf('--shell-review-effort') + 1]).toBe('low');
-      const workspaceContext = invocation?.workspaceContext as {
-        authorization?: unknown;
-        memoryContext?: { subjectId?: string; subjectName?: string };
-        projectNotes?: string[];
-      } | undefined;
-      expect(workspaceContext?.authorization).toMatchObject({
-        recorded: true,
-        source: 'beale',
-        scopeOwner: 'Boundary Administrator'
-      });
-      expect(workspaceContext?.authorization).not.toHaveProperty('networkProfile');
-      expect(workspaceContext?.authorization).not.toHaveProperty('allowedNetworkDestinations');
-      expect(workspaceContext?.memoryContext).toMatchObject({
-        subjectId: 'climate-model',
-        subjectName: 'Regional Climate Model'
-      });
-      expect(workspaceContext?.projectNotes).toEqual(expect.arrayContaining([
-        expect.stringContaining('Library: Climate Literature Library'),
-        expect.stringContaining('Topic: Regional Climate Model'),
-        expect.stringContaining('Collection boundary instruction: Stay within the recorded collection.')
-      ]));
-      expect(JSON.stringify(workspaceContext?.projectNotes))
-        .not.toContain('A collection of local literature and model outputs.');
-      expect(JSON.stringify(workspaceContext?.projectNotes)).not.toMatch(/authorized security research|Authorization:/i);
-      const projectNotes = workspaceContext?.projectNotes?.join('\n') ?? '';
-      expect(projectNotes).toContain('Included in Collection boundary (domain, public): data.example.test');
-      expect(projectNotes).toContain('Excluded from Collection boundary (domain, public): excluded.example.test');
-      expect(projectNotes).not.toContain(`Included in Collection boundary (repo, internal): ${workspace}`);
-      expect(projectNotes).toContain(
-        `Included in Collection boundary (other, internal): ${workspace} — Preserve the recorded collection during analysis.`
-      );
-      expect(projectNotes).toContain('Included in Collection boundary (other, public): 192.0.2.15');
-      expect(invocation?.args).not.toContain('--openai-trusted-access-cyber-risk-acknowledged');
-
-      process.env.BEALE_OPENAI_ACCESS_TOKEN = 'profile-recommendation-test-token';
-      currentProfile = resolvedTestResearchProfile(generalResearchProfile({ provider: 'anthropic' }, 2, '2.0.0'));
-      await expect(service.generateResearchGoalSuggestions({ phase: 'literature-synthesis' }))
-        .resolves.toMatchObject({ phase: 'literature-synthesis' });
-      currentProfile = resolvedTestResearchProfile(generalResearchProfile(undefined, 13, '3.0.0'));
-      await expect(service.generateResearchGoalSuggestions({ phase: 'literature-synthesis' }))
-        .rejects.toThrow(/host maximum of 12/);
-    } finally {
-      service.close();
-    }
-  }, 240_000);
-
   it('keeps memory-disabled recommendation jobs isolated from app-server memory storage and context', async () => {
     process.env.BEALE_OPENAI_ACCESS_TOKEN = 'memory-disabled-recommendation-test-token';
     const root = temporaryDirectory();
     const workspace = join(root, 'workspace');
     mkdirSync(workspace, { recursive: true });
-    const baseProfile = generalResearchProfile(undefined, 2, 'memory-disabled');
+    const baseProfile = testResearchProfile('memory-disabled');
     const profile: ResearchProfile = {
       ...baseProfile,
+      workflows: baseProfile.workflows.map((workflow) => workflow.id === 'discovery'
+        ? { ...workflow, goalSuggestionCount: 2 }
+        : workflow),
       capabilities: {
         ...baseProfile.capabilities,
         memoryEnabled: false
+      },
+      modelJobs: {
+        goalSuggestions: { provider: 'openai-codex', model: 'gpt-security-goals', effort: 'low' },
+        promptGeneration: { provider: 'openai', model: 'gpt-security-prompts', effort: 'high' }
       }
     };
     const modelRequests: Record<string, unknown>[] = [];
@@ -639,18 +399,18 @@ describe('research profile host integration', () => {
         const task = (request.metadata as Record<string, unknown> | undefined)?.beale_task;
         return task === 'research_goal_suggestions'
           ? modelGoalSuggestionResponse(request, [
-              'Compare the recorded methodology assumptions across the bounded collection.',
-              'Investigate how sampling choices affect the recorded cross-study conclusions.'
+              'Review the recorded trust boundaries within the authorized scope.',
+              'Investigate how input validation affects the scoped service.'
             ], 'resp_memory_disabled_goals')
           : modelJsonResponse({
-              promptMarkdown: '# Bounded synthesis\n\nCompare the available studies under the selected workflow, distinguish observations from inference, preserve uncertainty, and produce an annotated synthesis.'
+              promptMarkdown: '# Security discovery\n\nInspect the authorized service, distinguish observations from inference, and preserve uncertainty.'
             }, 'resp_memory_disabled_prompt');
       }
     });
 
     try {
       service.createWorkspace(workspace);
-      startRunForTest(service, runInput('literature-synthesis'));
+      startRunForTest(service, runInput('discovery'));
 
       // Any accidental recommendation-path memory read now fails on the deliberately incompatible table.
       const memoryDatabase = new DatabaseSync(databasePath);
@@ -660,29 +420,24 @@ describe('research profile host integration', () => {
         memoryDatabase.close();
       }
 
-      await expect(service.generateResearchGoalSuggestions({ phase: 'literature-synthesis' }))
-        .resolves.toMatchObject({ phase: 'literature-synthesis' });
+      await expect(service.generateResearchGoalSuggestions({ phase: 'discovery' }))
+        .resolves.toMatchObject({ phase: 'discovery' });
       await expect(service.generateResearchPrompt({
         operation: 'generate',
-        researchPhase: 'literature-synthesis',
-        mode: 'literature-synthesis',
+        researchPhase: 'discovery',
+        mode: 'discovery',
         attemptStrategy: 'iterative_research',
         model: 'session-model',
         reasoningEffort: 'medium',
         sandboxProfile: 'host'
-      })).resolves.toMatchObject({ promptMarkdown: expect.stringContaining('Bounded synthesis') });
+      })).resolves.toMatchObject({ promptMarkdown: expect.stringContaining('Security discovery') });
 
       expect(modelRequests).toHaveLength(2);
       for (const request of modelRequests) {
         expect(String(request.instructions)).not.toMatch(/app-server memory|recorded memories|active memory/i);
         const payload = modelRequestPayload(request);
-        const coverageHints = payload.coverageHints as Record<string, unknown>;
-        expect(coverageHints).not.toHaveProperty('activeMemoryNodes');
-        expect(coverageHints).not.toHaveProperty('recentMemoryEvidenceRefs');
-        expect((payload.researchProfile as { presentation?: Record<string, unknown> }).presentation)
-          .not.toHaveProperty('memoryLabel');
-        const previousResearch = payload.previousResearch as Record<string, unknown>[];
-        expect(previousResearch.length).toBeGreaterThan(0);
+        expect(JSON.stringify(payload)).not.toMatch(/activeMemoryNodes|recentMemoryEvidenceRefs|memoryNodeId/);
+        const previousResearch = (payload.previousResearch ?? []) as Record<string, unknown>[];
         for (const previous of previousResearch) {
           expect(previous).not.toHaveProperty('memoryNodes');
           for (const contract of (previous.verifierContracts as Record<string, unknown>[])) {
@@ -786,77 +541,6 @@ function profileWithWorkflow(version: string, workflowId: string): ResearchProfi
       allowedSideEffects: ['read', 'write', 'network'],
       selectedSkillIds: ['profile-skill'],
       allowedMcpServerIds: ['local']
-    }
-  };
-}
-
-function generalResearchProfile(
-  goalSuggestionsJob: ResearchProfileModelJob = {
-    provider: 'openai-codex',
-    model: 'gpt-general-goals',
-    effort: 'low'
-  },
-  suggestionCount = 2,
-  version = '1.0.0'
-): ResearchProfile {
-  const base = testResearchProfile(version, 'General Research');
-  return {
-    ...base,
-    id: 'general-research',
-    description: 'A general literature and evidence synthesis profile.',
-    agent: {
-      role: 'You are an interdisciplinary literature researcher.',
-      posture: ['Compare plausible explanations before drawing conclusions.'],
-      style: ['Use precise, neutral language.'],
-      memoryInstructions: ['Retain durable observations and citations.'],
-      runbookInstructions: ['Keep repeatable synthesis methods.']
-    },
-    workflows: [{
-      id: 'literature-synthesis',
-      name: 'Literature Synthesis',
-      description: 'Compare recorded literature and evidence around a bounded topic.',
-      goalSuggestionCount: suggestionCount,
-      goalSuggestionInstructions: ['Suggest questions that compare plausible explanations.'],
-      promptInstructions: ['Separate observations from inference.'],
-      outputRequirements: ['Produce an annotated synthesis.'],
-      default: true
-    }],
-    capabilities: {
-      ...base.capabilities,
-      selectedSkillIds: ['profile-literature-skill'],
-      allowedMcpServerIds: ['profile-library-mcp']
-    },
-    workspace: {
-      workspaceNoun: 'Library',
-      subjectNoun: 'Topic',
-      boundaryNoun: 'Collection boundary',
-      authorizationMode: 'optional',
-      boundaryInstructions: ['Stay within the recorded collection.'],
-      materialKinds: ['literature', 'dataset']
-    },
-    modelJobs: {
-      goalSuggestions: goalSuggestionsJob,
-      promptGeneration: {
-        provider: 'openai',
-        model: 'gpt-general-prompts',
-        effort: 'high'
-      },
-      sessionTitle: {
-        provider: 'openai-codex',
-        model: 'gpt-general-title',
-        effort: 'low'
-      },
-      shellReview: {
-        provider: 'openai-codex',
-        model: 'gpt-general-shell-review',
-        effort: 'high'
-      }
-    },
-    presentation: {
-      newResearchLabel: 'New Study',
-      memoryLabel: 'Memory',
-      runbookLabel: 'Runbooks',
-      sessionLabel: 'Study Session'
     }
   };
 }
@@ -1022,7 +706,14 @@ function modelGoalSuggestionResponse(
 }
 
 async function waitForRun(service: WorkspaceService, runId: string): Promise<void> {
-  await waitForCondition(async () => (await service.getRunDetailForClient(runId)).run.status !== 'active', 25_000);
+  await waitForCondition(async () => {
+    try {
+      return (await service.getRunDetailForClient(runId)).run.status !== 'active';
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('workspace research index is unavailable during another workspace operation')) return false;
+      throw error;
+    }
+  }, 25_000);
   const detail = await service.getRunDetailForClient(runId);
   const run = detail.run;
   if (run.status !== 'completed') {

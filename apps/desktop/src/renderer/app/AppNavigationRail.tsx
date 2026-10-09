@@ -1,15 +1,15 @@
 import { memo } from 'react';
 import type { JSX } from 'react';
-import { BookOpen, CalendarClock, House, Plug, Settings } from 'lucide-react';
+import { CalendarClock, House, Plug, ServerCog, Settings } from 'lucide-react';
 
-export type AppNavigationDestination = 'home' | 'automations' | 'topics' | 'plugins' | 'settings';
+export type AppNavigationDestination = 'home' | 'automations' | 'plugins' | 'settings' | 'fleet';
 
 const outlineIcons = {
   home: House,
   automations: CalendarClock,
-  topics: BookOpen,
   plugins: Plug,
-  settings: Settings
+  settings: Settings,
+  fleet: ServerCog
 };
 
 function NavigationIcon({ destination, active }: { destination: AppNavigationDestination; active: boolean }): JSX.Element {
@@ -31,12 +31,6 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
           <path d="M16 13v3l2 1.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
         </>
       )}
-      {destination === 'topics' && (
-        <>
-          <path d="M3 4.5c3.2-1.2 6.2-.8 9 1.2v15c-2.8-2-5.8-2.4-9-1.2z" />
-          <path d="M21 4.5c-3.2-1.2-6.2-.8-9 1.2v15c2.8-2 5.8-2.4 9-1.2z" />
-        </>
-      )}
       {destination === 'plugins' && (
         <>
           <path d="M6 8h12v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4z" />
@@ -46,24 +40,31 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
       {destination === 'settings' && (
         <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.321-1.915zM15 12a3 3 0 1 0-6 0 3 3 0 0 0 6 0z" fillRule="evenodd" />
       )}
+      {destination === 'fleet' && (
+        <>
+          <path d="M4 3h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 10h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z" />
+          <circle cx="6" cy="7.5" fill="var(--panel)" r="1.2" />
+          <circle cx="6" cy="17.5" fill="var(--panel)" r="1.2" />
+        </>
+      )}
     </svg>
   );
 }
 
 export function resolveAppNavigationDestination({
   settingsOpen,
+  fleetOpen,
   automationsOpen,
-  topicsOpen,
   pluginsOpen
 }: {
   settingsOpen: boolean;
+  fleetOpen: boolean;
   automationsOpen: boolean;
-  topicsOpen: boolean;
   pluginsOpen: boolean;
 }): AppNavigationDestination {
   if (settingsOpen) return 'settings';
+  if (fleetOpen) return 'fleet';
   if (automationsOpen) return 'automations';
-  if (topicsOpen) return 'topics';
   if (pluginsOpen) return 'plugins';
   return 'home';
 }
@@ -72,16 +73,16 @@ export const AppNavigationRail = memo(function AppNavigationRail({
   active,
   onOpenHome,
   onOpenAutomations,
-  onOpenTopics,
   onOpenPlugins,
-  onOpenSettings
+  onOpenSettings,
+  onOpenFleet
 }: {
   active: AppNavigationDestination;
   onOpenHome: () => void;
   onOpenAutomations: () => void;
-  onOpenTopics: () => void;
   onOpenPlugins: () => void;
   onOpenSettings: () => void;
+  onOpenFleet: () => void;
 }): JSX.Element {
   return (
     <nav className="app-navigation-rail" aria-label="Main navigation">
@@ -93,11 +94,11 @@ export const AppNavigationRail = memo(function AppNavigationRail({
           <button type="button" className={`app-navigation-rail-button${active === 'automations' ? ' active' : ''}`} data-tooltip="Automations" aria-label="Automations" aria-current={active === 'automations' ? 'page' : undefined} onClick={onOpenAutomations}>
             <NavigationIcon destination="automations" active={active === 'automations'} />
           </button>
-          <button type="button" className={`app-navigation-rail-button${active === 'topics' ? ' active' : ''}`} data-tooltip="Topics" aria-label="Topics" aria-current={active === 'topics' ? 'page' : undefined} onClick={onOpenTopics}>
-            <NavigationIcon destination="topics" active={active === 'topics'} />
-          </button>
           <button type="button" className={`app-navigation-rail-button${active === 'plugins' ? ' active' : ''}`} data-tooltip="Plugins" aria-label="Plugins" aria-current={active === 'plugins' ? 'page' : undefined} onClick={onOpenPlugins}>
             <NavigationIcon destination="plugins" active={active === 'plugins'} />
+          </button>
+          <button type="button" className={`app-navigation-rail-button${active === 'fleet' ? ' active' : ''}`} data-tooltip="Fleet" aria-label="Fleet" aria-current={active === 'fleet' ? 'page' : undefined} onClick={onOpenFleet}>
+            <NavigationIcon destination="fleet" active={active === 'fleet'} />
           </button>
         </div>
       </div>

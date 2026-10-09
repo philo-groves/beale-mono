@@ -13,7 +13,6 @@ import {
   setOnboardingResourceSelected,
   workspaceCreationViewError,
   workspaceCreationViews,
-  workspaceOnboardingFormForProfile,
   type WorkspaceCreationView as WorkspaceCreationViewId,
   type WorkspaceOnboardingFormState
 } from '../../view-models/workspaceOnboarding';
@@ -245,22 +244,6 @@ function WorkspaceCreationOverview({
         <div className="workspace-overview-form">
           <div className="settings-form-squircle">
             <div className="settings-form-control-list">
-              <label className="settings-form-control-row workspace-overview-control-row">
-                <span className="settings-form-control-copy"><strong>Research Profile</strong><small>The research profile that defines this workspace.</small></span>
-                <select
-                  aria-label="Research Profile"
-                  className="workspace-overview-input"
-                  disabled={busy}
-                  onChange={(event) => {
-                    const researchProfileId = event.target.value as WorkspaceOnboardingFormState['researchProfileId'];
-                    onChange(workspaceOnboardingFormForProfile({ ...form, researchProfileId }, researchProfileId));
-                  }}
-                  value={form.researchProfileId}
-                >
-                  <option value="security-research">Security</option>
-                  <option value="mathematics">Mathematics</option>
-                </select>
-              </label>
               <label className="settings-form-control-row workspace-overview-control-row">
                 <span className="settings-form-control-copy"><strong>Research Kit</strong><small>Choose the resource, scope, and rule acquisition kit for this workspace.</small></span>
                 <select

@@ -1,17 +1,10 @@
 import type { ResearchCollaborationConfig } from "./types.js";
 
 const ALL_SUBAGENT_ROLES = ["discoverer", "prover", "reviewer", "reporter"] as const;
-const SEQUENTIAL_ADVANCED_WORKFLOWS = new Set([
-  "chaining",
-  "proof",
-  "verification",
-  "reporting",
-  "synthesis",
-]);
 
 export function createCollaborationSystemGuidance(
   config: ResearchCollaborationConfig,
-  workflowId?: string,
+  _workflowId?: string,
   options: { lead?: boolean } = {},
 ): string {
   const enabled = config.providers.filter((provider) => provider.enabled);
@@ -28,7 +21,7 @@ export function createCollaborationSystemGuidance(
     ] : []),
     "",
     "Subagent workflow:",
-    ...subagentModeGuidance(config.subagentMode, lead, workflowId),
+    ...subagentModeGuidance(config.subagentMode, lead),
     ...(lead ? ["", "Collaboration mode policy:", ...modeGuidance(config.mode)] : []),
   ].join("\n");
 }
@@ -36,15 +29,14 @@ export function createCollaborationSystemGuidance(
 function runtimeGuidance(config: ResearchCollaborationConfig): readonly string[] {
   return [
     "Parent transcript inheritance is opt-in. Omit fork_turns for a fresh child, or set it to a bounded number only when recent parent turns are necessary. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the complete parent route and history.",
-    "For independent verification, spawn a distinct Reviewer with fork_turns=none and without topic_name. The Reviewer may use the same provider and model, then must inspect canonical claims and executions through durable tools rather than inherited conversation history.",
-    `Concurrency limit: ${config.maxConcurrentRooms * config.maxMembersPerRoom} active subagent turns. Topics themselves persist and do not consume active-turn capacity.`,
+    "For independent verification, spawn a distinct Reviewer with fork_turns=none. The Reviewer may use the same provider and model, then must inspect canonical claims and executions through durable tools rather than inherited conversation history.",
+    `Concurrency limit: ${config.maxConcurrentRooms * config.maxMembersPerRoom} active subagent turns.`,
   ];
 }
 
 function subagentModeGuidance(
   mode: ResearchCollaborationConfig["subagentMode"],
   lead: boolean,
-  workflowId?: string,
 ): readonly string[] {
   if (mode === "advanced") {
     if (!lead) {
@@ -53,23 +45,18 @@ function subagentModeGuidance(
       ];
     }
     return [
-      "Advanced subagent mode coordinates a sustained role-based research team through direct spawning, messaging, follow-up, interruption, waiting, and topic collaboration, with a required role for every delegated subagent.",
-      ...advancedWorkflowGuidance(workflowId),
+      "Advanced subagent mode coordinates a sustained role-based research team through direct spawning, messaging, follow-up, interruption, and waiting, with a required role for every delegated subagent.",
+      ...advancedResearchGuidance(),
       "Use Discoverer as the scout for general analysis and discovery. Use Prover to reproduce a specific finding and record exact prerequisites, steps, results, and evidence. Use Reviewer for independent review of the finding and reproduction, including contrary evidence and an approve, reject, or needs-work decision. Use Reporter only to write a submission report for a reviewed and approved finding.",
       "Choose the role that matches the bounded assignment. Roles clarify responsibility; they do not impose a phase gate or require all four roles for every task.",
     ];
   }
   return [
-    "Simple subagent mode permits direct delegation and topic collaboration.",
+    "Simple subagent mode permits direct delegation; collaborators can read shared workspace research documents.",
   ];
 }
 
-function advancedWorkflowGuidance(workflowId: string | undefined): readonly string[] {
-  if (workflowId && SEQUENTIAL_ADVANCED_WORKFLOWS.has(workflowId)) {
-    return [
-      "For chain closure, proof, verification, reporting, synthesis, or other sequential work, continue in the lead plus bounded Prover or Reviewer assignments. Use a Discoverer only when a specific missing link has genuinely independent search space.",
-    ];
-  }
+function advancedResearchGuidance(): readonly string[] {
   return [
     "Maintain continuous discovery coverage with multiple bounded Discoverer scouts whenever material, independently explorable attack surface remains. Give every active Discoverer a distinct assignment that does not duplicate active or completed coverage, and run discovery alongside proof, review, and reporting work when those tasks are separable.",
     "When a Discoverer completes, preserve its leads, observations, coverage, and negative results, then launch a fresh non-duplicative Discoverer assignment when meaningful unexplored surface remains and capacity permits. Stop refreshing scouts when coverage is exhausted or the remaining work is sequential; do not spawn merely to fill capacity.",
@@ -85,13 +72,13 @@ function modeGuidance(
       "At major evidence or subsystem transitions, continue solo when work is sequential or coordination cost outweighs the expected gain.",
       "Prefer followup_task when an existing agent's context matches new work, and avoid duplicate assignments.",
       "Parallel source-to-sink tracing, adjacent attack-surface exploration, variant analysis, or independent challenge may be useful when they are cleanly separable; these are opportunities, not a delegation requirement.",
-      "Use a durable topic for related research that later sessions should inherit. Do not spawn merely to satisfy the mode.",
+      "Keep reusable research in references/research/ so later sessions can read it. Do not spawn merely to satisfy the mode.",
     ];
   }
   if (mode === "always") {
     return [
       "Use collaboration throughout every materially separable research stage that benefits from independent coverage or review.",
-      "Use a relevant existing topic where possible, and attach subagents whose work should become reusable workspace research.",
+      "Ask collaborators to read relevant documents under references/research/ and update them when their work produces reusable synthesis.",
     ];
   }
   return [

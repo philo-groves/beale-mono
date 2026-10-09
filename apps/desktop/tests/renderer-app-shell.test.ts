@@ -6,6 +6,8 @@ import type { HostEnvironment, RunDetail, RunRow, WorkspaceSnapshot } from '@sha
 import { AppHeaderTitle, StaticAppHeaderTitle, type AppHeaderViewIcon } from '../src/renderer/app/AppHeaderTitle';
 import { BottomPanel, DEFAULT_BOTTOM_PANEL_OPEN } from '../src/renderer/app/BottomPanel';
 import { AppNavigationRail, resolveAppNavigationDestination } from '../src/renderer/app/AppNavigationRail';
+import { FleetSidebar } from '../src/renderer/features/fleet/FleetSidebar';
+import { SettingsSidebar } from '../src/renderer/features/settings/SettingsModal';
 import { headerMenuInlineEnd, rightmostHeaderMenuControl, TopBar } from '../src/renderer/app/TopBar';
 import { SessionOverviewDialog } from '../src/renderer/features/sessions/SessionOverviewDialog';
 import {
@@ -23,7 +25,6 @@ describe('renderer app shell view model', () => {
       workspaceName: 'ExampleCo iOS Parser',
       workspaceViewTitle: 'Memory',
       detail: null,
-      topicTitle: null
     }));
     expect(workspaceHeader).toContain('lucide-folder');
     expect(workspaceHeader).toContain('aria-label="ExampleCo iOS Parser, Memory"');
@@ -34,32 +35,21 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: 'New Research',
       detail: { run: { id: 'run_old', title: 'Old Session', promptMarkdown: 'Old prompt' } } as RunDetail,
-      topicTitle: 'Old Topic'
     }));
     expect(newResearchHeader).toContain('aria-label="Parser, New Research"');
     expect(newResearchHeader).not.toContain('Old Session');
     expect(newResearchHeader).not.toContain('Old Topic');
 
-    const topicHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
-      workspaceName: 'Parser',
-      workspaceViewTitle: null,
-      detail: null,
-      topicTitle: 'parser review'
-    }));
-    expect(topicHeader).toContain('aria-label="Parser, parser review"');
-    expect(topicHeader).toContain('class="app-header-topic-title app-header-static-title"');
-
     const sessionHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       detail: { run: { id: 'run_current', title: 'Inspect parser states', promptMarkdown: 'Inspect parser states' } } as RunDetail,
-      topicTitle: null,
       onOpenSessionOverview: () => undefined
     }));
     expect(sessionHeader).toContain('class="app-header-session-title app-header-session-overview-button"');
     expect(sessionHeader).toContain('aria-label="Open Session Overview for Inspect parser states"');
     const mainTitle = 'class="app-header-workspace-title app-header-static-title"';
-    for (const header of [workspaceHeader, newResearchHeader, topicHeader, sessionHeader]) {
+    for (const header of [workspaceHeader, newResearchHeader, sessionHeader]) {
       expect(header.indexOf('class="app-header-divider"')).toBeLessThan(header.indexOf(mainTitle));
       expect(header.match(/class="app-header-divider"/gu)).toHaveLength(1);
     }
@@ -72,7 +62,6 @@ describe('renderer app shell view model', () => {
       ['settings-remote', 'lucide-wifi'],
       ['settings-ticketing', 'lucide-ticket'],
       ['automations', 'lucide-calendar-clock'],
-      ['topics', 'lucide-book-open'],
       ['reporting', 'lucide-file-text'],
       ['plugins', 'lucide-plug']
     ];
@@ -134,22 +123,21 @@ describe('renderer app shell view model', () => {
     expect(styles).toMatch(/\.session-overview-dialog \.campaign-session-projection\s*\{[^}]*height: 72px;/u);
   });
 
-  it('renders the compact navigation rail with Settings after the top destinations', () => {
+  it('renders Fleet below Plugins with Settings anchored at the bottom', () => {
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
-      active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
-      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+      onOpenPlugins: onNavigate, onOpenSettings: onNavigate, onOpenFleet: onNavigate
     }));
 
     expect(html).toContain('aria-label="Main navigation"');
-    for (const label of ['Home', 'Automations', 'Topics', 'Plugins', 'Agent Settings']) {
+    for (const label of ['Home', 'Automations', 'Plugins', 'Agent Settings', 'Fleet']) {
       expect(html).toContain(`aria-label="${label}"`);
       expect(html).toContain(`data-tooltip="${label}"`);
     }
     expect(html.indexOf('aria-label="Home"')).toBeLessThan(html.indexOf('aria-label="Automations"'));
-    expect(html.indexOf('aria-label="Automations"')).toBeLessThan(html.indexOf('aria-label="Topics"'));
-    expect(html.indexOf('aria-label="Topics"')).toBeLessThan(html.indexOf('aria-label="Plugins"'));
-    expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
+    expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Fleet"'));
+    expect(html.indexOf('aria-label="Fleet"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
     expect(html).toContain('class="app-navigation-rail-filled-icon"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('width="18"');
@@ -167,12 +155,28 @@ describe('renderer app shell view model', () => {
     expect(styles).toContain('.app-navigation-rail-button:focus-visible::after');
   });
 
+  it('shows Fleet forms outside Agent Settings', () => {
+    const onNavigate = () => undefined;
+    const settings = renderToStaticMarkup(createElement(SettingsSidebar, {
+      collapsed: false, section: 'general', error: null,
+      onChangeSection: onNavigate, onResizePointerDown: onNavigate
+    }));
+    const fleet = renderToStaticMarkup(createElement(FleetSidebar, {
+      collapsed: false, onResizePointerDown: onNavigate
+    }));
+    expect(settings).not.toContain('>Fleet</span>');
+    for (const label of ['Fleet', 'App Servers', 'Virtual Machines']) {
+      expect(fleet).toContain(`>${label}</span>`);
+    }
+    expect(fleet).toContain('aria-label="Fleet sections"');
+  });
+
   it('fills only the active navigation icon', () => {
     const onNavigate = () => undefined;
-    for (const active of ['home', 'automations', 'topics', 'plugins', 'settings'] as const) {
+    for (const active of ['home', 'automations', 'plugins', 'settings', 'fleet'] as const) {
       const html = renderToStaticMarkup(createElement(AppNavigationRail, {
-        active, onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
-        onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+        active, onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+        onOpenPlugins: onNavigate, onOpenSettings: onNavigate, onOpenFleet: onNavigate
       }));
       expect(html.match(/class="app-navigation-rail-filled-icon"/gu)).toHaveLength(1);
       expect(html.match(/class="lucide lucide-/gu)).toHaveLength(4);
@@ -180,21 +184,21 @@ describe('renderer app shell view model', () => {
     }
   });
 
-  it('keeps a navigation destination active as sessions and topics open', () => {
-    const base = { settingsOpen: false, automationsOpen: false, topicsOpen: false, pluginsOpen: false };
+  it('keeps a navigation destination active as sessions open', () => {
+    const base = { settingsOpen: false, fleetOpen: false, automationsOpen: false, pluginsOpen: false };
     expect(resolveAppNavigationDestination(base)).toBe('home');
     expect(resolveAppNavigationDestination({ ...base, automationsOpen: true })).toBe('automations');
-    expect(resolveAppNavigationDestination({ ...base, topicsOpen: true })).toBe('topics');
     expect(resolveAppNavigationDestination({ ...base, pluginsOpen: true })).toBe('plugins');
     expect(resolveAppNavigationDestination({ ...base, settingsOpen: true })).toBe('settings');
+    expect(resolveAppNavigationDestination({ ...base, fleetOpen: true })).toBe('fleet');
 
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, topicsOpen, pluginsOpen })');
+    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, fleetOpen, automationsOpen, pluginsOpen })');
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: resolveAppNavigationDestination(base),
-      onOpenHome: onNavigate, onOpenAutomations: onNavigate, onOpenTopics: onNavigate,
-      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      onOpenHome: onNavigate, onOpenAutomations: onNavigate,
+      onOpenPlugins: onNavigate, onOpenSettings: onNavigate, onOpenFleet: onNavigate
     }));
     expect(html).toContain('class="app-navigation-rail-button active" data-tooltip="Home"');
     expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
@@ -244,7 +248,7 @@ describe('renderer app shell view model', () => {
 
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const workspaceLabelStyles = styles.match(/\.app-header-workspace-title\s*\{([^}]*)\}/u)?.[1] ?? '';
-    const secondaryLabelStyles = styles.match(/\.app-header-session-title,\s*\.app-header-topic-title\s*\{([^}]*)\}/u)?.[1] ?? '';
+    const secondaryLabelStyles = styles.match(/\.app-header-session-title\s*\{([^}]*)\}/u)?.[1] ?? '';
     expect(styles).toContain('--main-content-inline-start: calc(var(--navigation-rail-width) + var(--sidebar-width))');
     expect(styles).toMatch(/\.window-menu \.sidebar-toggle-button\s*\{[^}]*margin-left: 6px;/u);
     expect(styles).toMatch(/\.app-shell\.sidebar-collapsed\s*\{\s*--main-content-inline-start: var\(--navigation-rail-width\);/u);
@@ -279,7 +283,6 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       activeRunDetail: null,
-      activeTopicTitle: null,
       profilingEnabled: false,
       bottomPanelOpen: true,
       workspaceEditors: {
@@ -324,7 +327,6 @@ describe('renderer app shell view model', () => {
       platform: 'darwin',
       workspaceName: 'Example Workspace',
       activeRunDetail: null,
-      activeTopicTitle: null,
       profilingEnabled: false,
       bottomPanelOpen: false,
       workspaceEditors: null,
@@ -362,9 +364,9 @@ describe('renderer app shell view model', () => {
       newResearchOpen: false,
       workspaceOpen: true,
       settingsOpen: false,
+      fleetOpen: false,
       reportsOpen: false,
       automationsOpen: false,
-      topicsOpen: false,
       pluginsOpen: false
     };
     expect(shouldShowHeaderResearchControls(base)).toBe(true);
@@ -372,9 +374,9 @@ describe('renderer app shell view model', () => {
     expect(shouldShowHeaderResearchControls({ ...base, researchDetailsAvailable: false, newResearchOpen: true, workspaceOpen: false })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, newResearchOpen: true, settingsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, settingsOpen: true })).toBe(false);
+    expect(shouldShowHeaderResearchControls({ ...base, fleetOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, reportsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, automationsOpen: true })).toBe(false);
-    expect(shouldShowHeaderResearchControls({ ...base, newResearchOpen: true, topicsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, pluginsOpen: true })).toBe(false);
     expect(shouldShowHeaderResearchControls({ ...base, researchDetailsAvailable: false })).toBe(false);
 
@@ -439,7 +441,6 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       activeRunDetail: null,
-      activeTopicTitle: null,
       profilingEnabled: false,
       bottomPanelOpen: false,
       workspaceEditors: null,
@@ -457,7 +458,7 @@ describe('renderer app shell view model', () => {
     expect(header).not.toContain('right-sidenav-toggle-button');
   });
 
-  it('hides panel toggles when a topic is open', () => {
+  it('hides panel toggles when research controls are unavailable', () => {
     const header = renderToStaticMarkup(createElement(TopBar, {
       sidebarCollapsed: false,
       workspaceOpen: true,
@@ -473,7 +474,6 @@ describe('renderer app shell view model', () => {
       workspaceName: 'Parser',
       workspaceViewTitle: null,
       activeRunDetail: null,
-      activeTopicTitle: 'parser-review',
       profilingEnabled: false,
       bottomPanelAvailable: false,
       bottomPanelOpen: false,

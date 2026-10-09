@@ -625,11 +625,6 @@ describe('renderer commentary projection', () => {
     expect(toolMessage(pairedEvents('finding.list', 'finding-list', {
       query: 'memory safety'
     }, { findings: [] }))).toBe('Querying findings for "memory safety"');
-    expect(toolMessage(pairedEvents('topic_list', 'topic-list', {}, { topics: [] })))
-      .toBe('Listing topics');
-    expect(toolMessage(pairedEvents('topic_read', 'topic-read', {
-      topic_name: 'parser-work'
-    }, { messages: [] }))).toBe('Perusing topic #parser-work');
     expect(toolMessage(pairedEvents('resource.catalog', 'resource-catalog', {
       operation: 'discover'
     }, { resource: {} }))).toBe('Cataloging resource with discover operation');

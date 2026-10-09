@@ -23,10 +23,12 @@ import {
   decodeAppServerSessionLaunchRequest,
   decodeWorkspaceProjectRequest,
   decodeClaimBoardTransitionRequest,
+  decodeFleetSshTestInput,
   decodeBealeAppServerSessionControlRequest,
   decodeBealeAppServerSessionControlResult,
   decodeAppServerServerMessage,
   APP_SERVER_PROTOCOL_OPERATIONS,
+  APP_SERVER_CONTRACT_VERSION,
   APP_SERVER_PROTOCOL_VERSION,
   APP_SERVER_SESSION_LAUNCH_VERSION,
   appServerProtocolFailure,
@@ -36,15 +38,12 @@ import {
 } from "../packages/app-server-runtime/dist/protocol.js";
 
 test('research workspace operations require explicit revisions for canonical imports', () => {
-  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'checkpoint' }), { workspaceId: 'workspace-example', action: 'checkpoint' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'sync' }), { workspaceId: 'workspace-example', action: 'sync' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'export' }), { workspaceId: 'workspace-example', action: 'export' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'rebuild-index' }), { workspaceId: 'workspace-example', action: 'rebuild-index' });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'release-index' }), { workspaceId: 'workspace-example', action: 'release-index' });
-  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'repair-preview' }), { workspaceId: 'workspace-example', action: 'repair-preview' });
-  assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) }), { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) });
   assert.deepEqual(decodeWorkspaceProjectRequest({ workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 }), { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 2 });
-  for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'invalid' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
+  for (const input of [null, { workspaceId: '', action: 'status' }, { workspaceId: 'workspace-example', action: 'reset' }, { workspaceId: 'workspace-example', action: 'checkpoint' }, { workspaceId: 'workspace-example', action: 'repair-preview' }, { workspaceId: 'workspace-example', action: 'repair', fingerprint: 'a'.repeat(64) }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json' }, { workspaceId: 'workspace-example', action: 'import', path: 'claims/example.json', expectedRevision: 1.5 }]) assert.throws(() => decodeWorkspaceProjectRequest(input));
 });
 
 test('claim board transitions accept only versioned finding moves to visible columns', () => {
@@ -59,6 +58,12 @@ test('claim board transitions accept only versioned finding moves to visible col
   ]) assert.throws(() => decodeClaimBoardTransitionRequest(invalid));
 });
 
+test('Fleet SSH test accepts draft settings and rejects malformed input', () => {
+  const input = { machineId: 'tart:example-worker', sshHost: '', sshUser: 'example', sshIdentityFile: '~/example-key' };
+  assert.deepEqual(decodeFleetSshTestInput(input), input);
+  assert.throws(() => decodeFleetSshTestInput({ ...input, sshKnownHostsFile: 4 }), /Invalid Fleet SSH/);
+});
+
 test("protocol envelopes are versioned, correlated, and strictly decoded", () => {
   const success = appServerProtocolSuccess("protocol.describe", { available: true }, "request-1");
   assert.deepEqual(decodeAppServerProtocolEnvelope(success), success);
@@ -71,10 +76,12 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v30 claim board, persistence, continuation, and topic contract", () => {
+test("protocol describe omits removed workflow operations", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 30);
+  assert.equal(descriptor.contractVersion, APP_SERVER_CONTRACT_VERSION);
+  assert.ok(!descriptor.capabilities.some((capability) => capability.startsWith('session.workflows.')));
+  assert.ok(!descriptor.operations.some((operation) => operation.startsWith('workflow.')));
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 13);
   assert.equal(descriptor.schemas.finding, 6);
@@ -91,17 +98,12 @@ test("protocol describe exposes a runtime-bound v30 claim board, persistence, co
   assert.ok(descriptor.capabilities.includes("session.bounded_reads"));
   assert.ok(descriptor.capabilities.includes("session.targeted_details"));
   assert.ok(descriptor.capabilities.includes("session.event_identity"));
-  assert.ok(descriptor.capabilities.includes("workspace.topics.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.goal-suggestions.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.prompt-expansion.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.state"));
   assert.ok(descriptor.capabilities.includes("registry.state"));
   assert.ok(descriptor.capabilities.includes("registry.workspace_sync.v2"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.list"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.link"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.merge"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.unmerge"));
-  assert.ok(!APP_SERVER_PROTOCOL_OPERATIONS.some((operation) => operation.startsWith("channel.")));
+  assert.ok(!APP_SERVER_PROTOCOL_OPERATIONS.some((operation) => operation.startsWith("topic.") || operation.startsWith("channel.")));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.generate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.select"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.steering"));
@@ -125,7 +127,6 @@ test("protocol describe exposes a runtime-bound v30 claim board, persistence, co
   assert.ok(descriptor.capabilities.includes("knowledge.report-triage-status.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-recording-replace.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-list.v1"));
-  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.topics.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.goal-suggestions.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.startup-recovery.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-fast-mode.v1"));
@@ -143,7 +144,7 @@ test("protocol describe exposes a runtime-bound v30 claim board, persistence, co
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-subject-mutation.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.research-project.v3"));
-  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.checkpoint-repair.v1"));
+  assert.ok(!BEALE_APP_SERVER_CAPABILITIES.includes("workspace.checkpoint-repair.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-daybreak-blue.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.state.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("registry.workspace-sync.v2"));
@@ -251,6 +252,14 @@ test("the typed session launch carries OpenAI Fast mode and Daybreak Blue", () =
     }),
     /daybreakBlue requires the openai-codex provider/,
   );
+});
+
+test("a connected primary can request a browser relay for its local session", () => {
+  const request = { launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
+    launch: { workspaceId: 'workspace-example', promptMarkdown: 'Inspect the example scope.', machineId: 'local', browserRelay: true } };
+  assert.deepEqual(decodeAppServerSessionLaunchRequest(request), request);
+  assert.throws(() => decodeAppServerSessionLaunchRequest({ ...request,
+    launch: { ...request.launch, browserRelay: 'yes' } }), /browserRelay must be a boolean/u);
 });
 
 test("app-server control DTOs share strict version, route, replay, and error semantics", () => {

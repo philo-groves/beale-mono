@@ -280,7 +280,7 @@ describe('renderer workspace display view models', () => {
 
   it('marks a workspace active only while its dashboard is selected', () => {
     const profile = testResearchProfile();
-    const registeredWorkspace = { ...workspace('workspace_test', '/workspace/test'), workspaceName: 'Snapchat' };
+    const registeredWorkspace = { ...workspace('workspace_test', '/workspace/test'), workspaceName: 'ExampleCo' };
     const registry: WorkspaceRegistryState = {
       registryPath: '/home/user/.beale/workspaces.json',
       workspaces: [registeredWorkspace],
@@ -315,11 +315,11 @@ describe('renderer workspace display view models', () => {
     expect(html).toContain('class="workspace-session-overflow" aria-hidden="true" inert=""');
     expect(html).toContain('class="session-memory-type-toggle" aria-expanded="false">Show 1 more</button>');
     expect(html).not.toContain('More Sessions...');
-    expect(html).not.toContain('More Snapchat Sessions');
+    expect(html).not.toContain('More ExampleCo Sessions');
     expect(html).not.toContain('More Research Sessions');
     expect(html).toContain('class="workspace-new-research-button"');
-    expect(html).toContain('title="Start new research in Snapchat"');
-    expect(html).toContain('aria-label="Start new research in Snapchat"');
+    expect(html).toContain('title="Start new research in ExampleCo"');
+    expect(html).toContain('aria-label="Start new research in ExampleCo"');
     expect(html.match(/lucide-square-pen/gu)).toHaveLength(2);
     expect(html).not.toContain('workspace-menu-button');
     expect(html.match(/aria-haspopup="menu"/gu)).toHaveLength(1);
@@ -327,7 +327,7 @@ describe('renderer workspace display view models', () => {
 
   it('marks only the workspace creation icon active while New Workspace is rendered', () => {
     const profile = testResearchProfile();
-    const registeredWorkspace = { ...workspace('workspace_test', '/workspace/test'), workspaceName: 'Snapchat' };
+    const registeredWorkspace = { ...workspace('workspace_test', '/workspace/test'), workspaceName: 'ExampleCo' };
     const registry: WorkspaceRegistryState = {
       registryPath: '/home/user/.beale/workspaces.json',
       workspaces: [registeredWorkspace],
@@ -372,7 +372,7 @@ describe('renderer workspace display view models', () => {
   it('shows New Research as the active placeholder session for the loaded workspace', () => {
     const profile = testResearchProfile();
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
-    const registeredWorkspace = { ...workspace('workspace_test', '/workspace/test'), workspaceName: 'Snapchat' };
+    const registeredWorkspace = { ...workspace('workspace_test', '/workspace/test'), workspaceName: 'ExampleCo' };
     const registry: WorkspaceRegistryState = {
       registryPath: '/home/user/.beale/workspaces.json',
       workspaces: [registeredWorkspace],
@@ -424,7 +424,7 @@ describe('renderer workspace display view models', () => {
       /const openNewResearchForWorkspace = useCallback[\s\S]*?const startNewResearchForWorkspace/u
     )?.[0] ?? '';
 
-    expect(appSource).toContain('const openNewResearch = useCallback((openSchedule: boolean) => {\n    setTopicsOpen(false);\n    closeWorkspaceOnboarding();');
+    expect(appSource).toContain('const openNewResearch = useCallback((openSchedule: boolean) => {\n    setNewResearchInitialInput(null);\n    closeWorkspaceOnboarding();');
     expect(actionSource).toContain('snapshot?.workspace.workspacePath === workspace.workspacePath');
     expect(actionSource).toContain('applySnapshot(await window.beale.openRegisteredWorkspace(workspace.id));');
     expect(actionSource.indexOf('applySnapshot(await window.beale.openRegisteredWorkspace(workspace.id));'))

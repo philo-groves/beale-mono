@@ -57,7 +57,7 @@ test('managed file tools enforce categories, retain overwritten bytes, and prote
     const created = await call('file.write', { path: 'investigations/example.txt', content: 'original' });
     assert.equal(created.status, 'complete');
     assert.equal((await call('file.write', { path: 'investigations/example.txt', content: 'replacement', expectedHash: created.output.contentHash })).status, 'complete');
-    assert.equal(await readFile(join(root, '.git', 'beale', 'recovery', created.output.contentHash), 'utf8'), 'original');
+    assert.equal(await readFile(join(root, '.beale', 'publication', 'recovery', created.output.contentHash), 'utf8'), 'original');
     assert.equal((await call('file.write', { path: 'scratch/example.txt', content: 'disposable' })).status, 'complete');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -105,75 +106,17 @@ test("persists the OpenAI context size provider setting", () => {
   reopened.close();
 });
 
-test('research checkpoints are host-owned and a pending milestone does not delay Stop', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-lifecycle-example-'));
+test('research starts without a workspace Git checkpoint', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-no-checkpoint-example-'));
   temporaryDirectories.push(directory);
   const upstream = await createFakeAppServerSessionHost();
   const hostService = testHostService(directory);
-  const reasons = [];
-  let releaseMilestone;
-  hostService.checkpointSession = async (_workspaceId, sessionId, reason, _cleanupScratch) => {
-    assert.equal(sessionId, 'session-checkpoint-example');
-    reasons.push(reason);
-    if (reason === 'Research milestone') await new Promise((resolve) => { releaseMilestone = resolve; });
-    return { status: 'unchanged', reason };
-  };
+  hostService.checkpointSession = async () => { throw new Error('Git checkpoint must not run.'); };
   const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
   servers.push(server);
-  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-example' }));
-  assert.deepEqual(reasons, ['Before research session']);
-  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'claim.revise', status: 'complete' } });
-  await waitFor(() => Boolean(releaseMilestone));
-  server.stopSession('session-checkpoint-example');
-  assert.equal(upstream.stopCalls(), 1);
-  releaseMilestone();
-  await waitFor(() => server.listSessions()[0]?.state === 'stopped');
-  assert.deepEqual(reasons, ['Before research session', 'Research milestone', 'Research stopped; preserve incomplete work']);
-});
-
-test('runbook checkpoints occur once after the complete execution rather than after each cell', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-runbook-checkpoint-example-'));
-  temporaryDirectories.push(directory);
-  const upstream = await createFakeAppServerSessionHost();
-  const hostService = testHostService(directory);
-  const reasons = [];
-  hostService.checkpointSession = async (_workspaceId, _sessionId, reason) => {
-    reasons.push(reason);
-    return { status: 'unchanged', reason };
-  };
-  const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: upstream.spawnSession });
-  servers.push(server);
-  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-runbook-checkpoint-example' }));
-  assert.deepEqual(reasons, ['Before research session']);
-
-  upstream.sendEvent({ kind: 'agent.event', payload: { eventType: 'runbook.execution', runId: 'runbook_run_example', cellId: 'cell-example', status: 'succeeded' } });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(reasons, ['Before research session']);
-
-  upstream.sendEvent({ kind: 'agent.event', payload: { eventType: 'runbook.execution', runId: 'runbook_run_example', cellId: null, status: 'blocked' } });
-  await waitFor(() => reasons.length === 2);
-  assert.deepEqual(reasons, ['Before research session', 'Runbook execution finished']);
-
-  upstream.sendEvent({ kind: 'tool.observed', payload: { toolName: 'runbook.run', status: 'complete' } });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(reasons, ['Before research session', 'Runbook execution finished']);
-});
-
-test('a failed pre-session checkpoint prevents worker launch without discarding files', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-failure-example-'));
-  temporaryDirectories.push(directory);
-  const hostService = testHostService(directory);
-  hostService.checkpointSession = async () => ({ status: 'failed', reason: 'Before research session', error: 'Resolve the example staged edit.' });
-  const launchFailures = [];
-  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
-  let spawned = false;
-  const server = await startAppServer({ host: '127.0.0.1', port: 0, hostService, spawnSession: async () => { spawned = true; throw new Error('Must not launch'); } });
-  servers.push(server);
-  await assert.rejects(server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-checkpoint-failed-example' })), /Resolve the example staged edit/);
-  assert.equal(spawned, false);
-  assert.equal(launchFailures.length, 1);
-  assert.equal(launchFailures[0].sessionId, 'session-checkpoint-failed-example');
-  assert.match(launchFailures[0].diagnostic, /Resolve the example staged edit/);
+  await server.startSession(sessionLaunchRequest(directory, { sessionId: 'session-no-checkpoint-example' }));
+  assert.equal(server.listSessions()[0]?.state, 'running');
+  upstream.complete();
 });
 
 test('keeps a hosted session starting until the runtime readiness handshake completes', async () => {
@@ -200,12 +143,36 @@ test('keeps a hosted session starting until the runtime readiness handshake comp
   upstream.complete();
 });
 
+test('a connected primary session gives its worker a session-scoped browser endpoint', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-remote-browser-example-'));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  let browserEndpoint;
+  const server = await startAppServer({ hostService: testHostService(directory),
+    spawnSession: async (options) => {
+      browserEndpoint = options.env.BEALE_FLEET_BROWSER_ENDPOINT;
+      return upstream.spawnSession(options);
+    } });
+  servers.push(server);
+  const request = sessionLaunchRequest(directory, { sessionId: 'session-remote-browser-example' });
+  request.launch.machineId = 'local';
+  request.launch.browserRelay = true;
+  await server.startSession(request);
+  assert.match(browserEndpoint, /^http:\/\/127\.0\.0\.1:[0-9]+\/v1\/fleet-browser\/session-remote-browser-example\?token=/u);
+  upstream.complete();
+});
+
 test('fails stalled runtime initialization with a visible bounded diagnostic', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-runtime-startup-timeout-example-'));
   temporaryDirectories.push(directory);
   const upstream = await createFakeAppServerSessionHost();
+  const hostService = testHostService(directory);
+  const launchFailures = [];
+  const terminalStates = [];
+  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
+  hostService.recordSessionTerminalState = async (input) => { terminalStates.push(input); };
   const server = await startAppServer({
-    hostService: testHostService(directory),
+    hostService,
     sessionStartupTimeoutMs: 100,
     longSessionRecovery: false,
     spawnSession: async (options) => ({
@@ -225,6 +192,11 @@ test('fails stalled runtime initialization with a visible bounded diagnostic', a
   assert.match(entry?.diagnostic ?? '', /did not become ready within 1 seconds/u);
   assert.match(entry?.diagnostic ?? '', /No model request was sent/u);
   assert.equal(upstream.stopCalls(), 1);
+  assert.equal(launchFailures.length, 1);
+  assert.equal(launchFailures[0].sessionId, 'session-runtime-timeout-example');
+  await waitFor(() => terminalStates.length === 1);
+  assert.equal(terminalStates[0].sessionId, 'session-runtime-timeout-example');
+  assert.equal(terminalStates[0].state, 'failed');
   await waitFor(() => messages.some((message) => (
     message.type === 'session.event'
       && message.event?.kind === 'model.output'
@@ -233,56 +205,32 @@ test('fails stalled runtime initialization with a visible bounded diagnostic', a
   socket.close();
 });
 
-test('a committed host checkpoint appends a valid canonical session event', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-checkpoint-event-example-'));
+test('session finalization persists early worker exits without overwriting terminal sessions', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-session-finalization-example-'));
   temporaryDirectories.push(directory);
-  await initializeWorkspaceProjectAsync(directory, 'workspace-test');
-  mkdirSync(join(directory, 'investigations', 'investigation-example'), { recursive: true });
-  writeFileSync(
-    join(directory, 'investigations', 'investigation-example', 'proof-plan.md'),
-    'Synthetic checkpoint event regression fixture.\n',
-  );
-  const sessionId = 'session-checkpoint-event-example';
-  const sessionStore = new AppServerSessionStore({ databasePath: join(directory, 'memory.sqlite') });
-  sessionStore.create({
-    id: sessionId,
-    workspaceId: 'workspace-test',
-    attemptId: 'attempt-checkpoint-event-example',
-    title: 'Checkpoint event regression',
-    prompt: 'Exercise a committed pre-session checkpoint.',
-    provider: 'openai-codex',
-    model: 'gpt-example',
-    reasoningEffort: 'high',
-  });
-  sessionStore.close();
-  const calls = [];
+  let status = 'active';
+  const transitions = [];
   const service = new AppServerHostService({
     registry: hostRegistryFixture(directory),
     invokeProtocol: async (operation, options) => {
-      calls.push({ operation, options });
-      const store = new AppServerSessionStore({ databasePath: options.storage.databasePath });
-      try {
-        return store.appendEvent(sessionId, options.input);
-      } finally {
-        store.close();
+      if (operation === 'session.get') return { status };
+      if (operation === 'session.transition') {
+        transitions.push(options.input);
+        status = options.input.status;
+        return { status };
       }
+      throw new Error(`Unexpected operation: ${operation}`);
     },
   });
-
-  const result = await service.checkpointSession(
-    'workspace-test',
-    sessionId,
-    'Before research session',
-  );
-
-  assert.equal(result.status, 'committed', result.error);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].operation, 'session.append_event');
-  assert.equal(calls[0].options.input.summary, 'Workspace checkpoint committed.');
-  assert.deepEqual(calls[0].options.input.payload, {
-    eventType: 'workspace.checkpoint',
-    ...result,
-  });
+  const input = { request: sessionLaunchRequest(directory, { sessionId: 'session-finalization-example' }),
+    sessionId: 'session-finalization-example', attemptId: 'attempt-example', state: 'failed' };
+  await service.recordSessionTerminalState(input);
+  assert.equal(status, 'failed');
+  assert.equal(transitions[0].attemptId, 'attempt-example');
+  assert.equal(transitions.length, 1);
+  await service.recordSessionTerminalState({ ...input, state: 'stopped' });
+  assert.equal(status, 'failed');
+  assert.equal(transitions.length, 1);
 });
 
 test("creates a versioned app-server pairing payload without altering credentials", () => {
@@ -376,6 +324,104 @@ test("control plane requires the operator bearer token", async () => {
     operations: "/v1/operations",
     shutdown: "/v1/server/shutdown",
   });
+});
+
+test("a primary proxies a remote-owned VM session through its guest transport", async () => {
+  const guestRequests = [];
+  let guestLaunch = null;
+  const guestSockets = new WebSocket.Server({ noServer: true });
+  const browserInputs = [];
+  const guest = createServer((request, response) => {
+    guestRequests.push({ method: request.method, path: request.url });
+    response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && request.url === "/v1/sessions") {
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        guestLaunch = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        response.statusCode = 201;
+        response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+          session: { sessionId: "session-relay", state: "running" }, attemptId: "attempt-relay",
+          transport: { path: "/v1/sessions/session-relay/transport", protocolVersion: 1,
+            authentication: "bearer", token: "guest-client-token", reconnect: "replay" } }));
+      });
+      return;
+    }
+    if (request.url === "/v1/sessions/session-relay") {
+      response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+        session: { sessionId: "session-relay", state: "running" } }));
+      return;
+    }
+    if (request.url === "/v1/sessions/session-relay/attachments") {
+      response.statusCode = 201;
+      response.end(JSON.stringify({ controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
+        transport: { path: "/v1/sessions/session-relay/transport", protocolVersion: 1,
+          authentication: "bearer", token: "attached-client-token", reconnect: "replay" } }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end("{}");
+  });
+  guest.on("upgrade", (request, socket, head) => {
+    if (request.url !== "/v1/sessions/session-relay/browser"
+      || !["Bearer guest-client-token", "Bearer attached-client-token"].includes(request.headers.authorization)) {
+      socket.destroy(); return;
+    }
+    guestSockets.handleUpgrade(request, socket, head, (client) => {
+      client.send(JSON.stringify({ type: "browser.ready", url: "https://example.test/", width: 1280, height: 800 }));
+      client.on("message", (raw) => browserInputs.push(JSON.parse(String(raw))));
+    });
+  });
+  await new Promise((resolve) => guest.listen(0, "127.0.0.1", resolve));
+  try {
+    const guestUrl = `http://127.0.0.1:${guest.address().port}`;
+    const operations = [];
+    const server = await startAppServer({ hostService: {
+      async executeOperation(request) {
+        operations.push(request);
+        if (request.operation === "fleet.state") return { role: "primary" };
+        if (request.operation === "fleet.prepare" || request.operation === "fleet.connect") {
+          return { machineId: "tart:session-clone", url: guestUrl, operatorToken: "guest-operator-token" };
+        }
+        throw new Error(`Unexpected operation ${request.operation}`);
+      },
+    } });
+    servers.push(server);
+    const auth = { authorization: `Bearer ${server.operatorToken}`, "content-type": "application/json" };
+    const request = sessionLaunchRequest(tmpdir(), { sessionId: "session-relay" });
+    request.launch.machineId = "tart:worker";
+    request.launch.fleetOwnerMachineId = "machine-source";
+    const started = await fetch(`${server.url}/v1/sessions`, { method: "POST", headers: auth, body: JSON.stringify(request) });
+    assert.equal(started.status, 201);
+    assert.equal((await started.json()).transport.token, "guest-client-token");
+    assert.equal(guestLaunch.launch.machineId, "tart:session-clone");
+    const read = await fetch(`${server.url}/v1/sessions/session-relay`, { headers: auth });
+    assert.equal(read.status, 200);
+    assert.equal((await read.json()).session.state, "running");
+    const attached = await fetch(`${server.url}/v1/sessions/session-relay/attachments`, { method: "POST", headers: auth });
+    assert.equal(attached.status, 201);
+    assert.equal((await attached.json()).transport.token, "attached-client-token");
+    const connected = await fetch(`${server.url}/v1/operations`, { method: "POST", headers: auth,
+      body: JSON.stringify({ operation: "fleet.connect", input: { runId: "session-relay", machineId: "tart:worker", proxy: true } }) });
+    assert.equal(connected.status, 200);
+    const browser = new WebSocket(`${server.url.replace(/^http/u, "ws")}/v1/sessions/session-relay/browser`, {
+      headers: { authorization: "Bearer guest-client-token" },
+    });
+    try {
+      const ready = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Fleet browser relay did not respond.")), 3000);
+        browser.once("message", (raw) => { clearTimeout(timeout); resolve(JSON.parse(String(raw))); });
+        browser.once("error", reject);
+      });
+      assert.equal(ready.url, "https://example.test/");
+      browser.send(JSON.stringify({ type: "browser.mouse", id: 1, eventType: "mouseMoved", x: 10, y: 10 }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(browserInputs[0].type, "browser.mouse");
+    } finally { browser.close(); }
+    assert.deepEqual(operations.find((operation) => operation.operation === "fleet.prepare").input,
+      { workspaceId: "workspace-test", runId: "session-relay", machineId: "tart:worker", ownerMachineId: "machine-source" });
+    assert.ok(guestRequests.some((entry) => entry.method === "GET" && entry.path === "/v1/sessions/session-relay"));
+  } finally { guestSockets.close(); await new Promise((resolve) => guest.close(resolve)); }
 });
 
 test("continues a terminal session through the authenticated control plane", async () => {
@@ -1271,8 +1317,6 @@ test("serves host workspaces and canonical app-server reads from one authenticat
     ["memory", "memory"],
     ["memory-notifications", "memory-notifications"],
     ["sessions", "sessions"],
-    ["topics", "topics"],
-    ["topics/topic-test", "topic"],
     ["sessions/session-test/update", "update"],
     ["sessions/session-test/events?stream=trace&tail=true", "events"],
     ["sessions/session-test/collaboration", "collaboration"],
@@ -1295,43 +1339,9 @@ test("serves host workspaces and canonical app-server reads from one authenticat
   assert.equal(details.status, 200);
   assert.equal((await details.json()).result.kind, "event-details");
 
-  const createdTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics`, {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ name: "new", topic: "New research" }),
-  });
-  assert.equal(createdTopic.status, 201);
-  assert.equal((await createdTopic.json()).result.kind, "topic-created");
-  const updatedOverview = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/overview`, {
-    method: "PATCH", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ contentMarkdown: "Current understanding." }),
-  });
-  assert.equal(updatedOverview.status, 200);
-  assert.equal((await updatedOverview.json()).result.kind, "topic-update_overview");
-  const savedPage = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/pages`, {
-    method: "PUT", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ title: "Open questions", contentMarkdown: "What remains?" }),
-  });
-  assert.equal(savedPage.status, 200);
-  assert.equal((await savedPage.json()).result.kind, "topic-page.save");
-  const linkedRecord = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/links`, {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ kind: "claim", resourceId: "claim_example", title: "Example claim" }),
-  });
-  assert.equal(linkedRecord.status, 201);
-  assert.equal((await linkedRecord.json()).result.kind, "topic-link");
-  const mergedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/merge`, {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ targetTopic: "another-topic" }),
-  });
-  assert.equal(mergedTopic.status, 200);
-  assert.equal((await mergedTopic.json()).result.kind, "topic-merged");
-  const unmergedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/unmerge`, { method: "POST", headers });
-  assert.equal(unmergedTopic.status, 200);
-  assert.equal((await unmergedTopic.json()).result.kind, "topic-unmerged");
-  const archivedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/archive`, { method: "POST", headers });
-  assert.equal(archivedTopic.status, 200);
-  assert.equal((await archivedTopic.json()).result.kind, "topic-archived");
-  const restoredTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/restore`, { method: "POST", headers });
-  assert.equal(restoredTopic.status, 200);
-  assert.equal((await restoredTopic.json()).result.kind, "topic-restored");
-  const deletedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test`, { method: "DELETE", headers });
-  assert.equal(deletedTopic.status, 200);
-  assert.equal((await deletedTopic.json()).result.kind, "topic-deleted");
+  const retiredTopicEndpoint = await fetch(`${server.url}/v1/workspaces/workspace-test/topics`, { headers });
+  assert.equal(retiredTopicEndpoint.status, 404);
+
 });
 
 test("resolves workspace identity and host policy from the shared Beale registry", () => {
@@ -1452,6 +1462,38 @@ test("lists older workspace registries that do not yet have session catalog meta
     lastRunAt: null,
     updatedAt: "2026-08-21T00:00:00.000Z",
   });
+});
+
+test("hides legacy non-security workspaces without deleting their registry records", () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-hidden-workspace-"));
+  temporaryDirectories.push(directory);
+  const database = new DatabaseSync(join(directory, "workspace-registry.sqlite"));
+  try {
+    database.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY, workspace_path TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        workspace_name TEXT NOT NULL, research_profile_id TEXT NOT NULL,
+        research_kit_id TEXT NOT NULL, workspace_directories_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    database.prepare(`INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "registry-legacy-example", join(directory, "legacy-workspace"), "workspace-legacy-example",
+      "Legacy example", "mathematics", "general", "[]", "2026-08-21T00:00:00.000Z",
+    );
+  } finally {
+    database.close();
+  }
+
+  const registry = new AppServerHostRegistry({ registryDirectory: directory });
+  assert.deepEqual(registry.listWorkspaces(), []);
+  assert.equal(registry.resolveWorkspace("workspace-legacy-example"), null);
+  const databaseAfter = new DatabaseSync(join(directory, "workspace-registry.sqlite"), { readOnly: true });
+  try {
+    assert.equal(databaseAfter.prepare("SELECT COUNT(*) AS count FROM workspaces").get().count, 1);
+  } finally {
+    databaseAfter.close();
+  }
 });
 
 test("enforces workspace ownership for canonical session reads", async () => {
@@ -3323,55 +3365,6 @@ test("app-server startup relaunches interrupted sessions before clients attach",
   await fakeHost.close();
 });
 
-test("app-server startup recovery finalizes a session when its checkpoint cannot launch", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "beale-app-server-startup-checkpoint-failure-"));
-  temporaryDirectories.push(directory);
-  const request = sessionLaunchRequest(directory, {
-    sessionId: "session-startup-checkpoint-failure",
-    promptMarkdown: "Resume the synthetic interrupted session.",
-  });
-  const hostService = testHostService(directory);
-  const launchFailures = [];
-  hostService.recoverInterruptedSessions = async () => ({
-    interruptedSessions: 1,
-    skippedSessions: 0,
-    errors: [],
-    recovered: [{
-      request,
-      prepared: {
-        sessionId: request.sessionId,
-        attemptId: "attempt-startup-checkpoint-failure",
-        launch: {
-          ...resolvedSessionLaunch(directory, {
-            capturePath: join(directory, "session-startup-checkpoint-failure.capture.json"),
-            promptMarkdown: request.launch.promptMarkdown,
-          }),
-          attemptId: "attempt-startup-checkpoint-failure",
-        },
-      },
-    }],
-  });
-  hostService.checkpointSession = async () => ({
-    status: "failed",
-    reason: "Before research session",
-    error: "Resolve the synthetic generated projection drift.",
-  });
-  hostService.recordSessionLaunchFailure = async (input) => { launchFailures.push(input); };
-  let spawned = false;
-  const server = await startAppServer({
-    hostService,
-    recoverInterruptedOnStart: true,
-    spawnSession: async () => { spawned = true; throw new Error("Must not launch"); },
-  });
-  servers.push(server);
-
-  assert.equal(spawned, false);
-  assert.equal(server.listSessions()[0].state, "failed");
-  assert.equal(launchFailures.length, 1);
-  assert.equal(launchFailures[0].sessionId, request.sessionId);
-  assert.match(launchFailures[0].diagnostic, /generated projection drift/u);
-});
-
 test("accepted pause and stop controls are persisted as intentional session state", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-app-server-control-state-"));
   temporaryDirectories.push(directory);
@@ -3657,16 +3650,6 @@ function testHostService(directory, options = {}) {
     async workspaceMemory() { return canonicalFixture("memory"); },
     async workspaceMemoryNotifications() { return canonicalFixture("memory-notifications"); },
     async workspaceSessions() { return canonicalFixture("sessions"); },
-    async workspaceTopics() { return canonicalFixture("topics"); },
-    async workspaceTopic() { return canonicalFixture("topic"); },
-    async createWorkspaceTopic() { return canonicalFixture("topic-created"); },
-    async mutateWorkspaceTopic(_workspaceId, _topic, operation) { return canonicalFixture(operation.replace('topic.', 'topic-')); },
-    async searchWorkspaceTopics() { return canonicalFixture("topics-search"); },
-    async archiveWorkspaceTopic() { return canonicalFixture("topic-archived"); },
-    async restoreWorkspaceTopic() { return canonicalFixture("topic-restored"); },
-    async mergeWorkspaceTopic() { return canonicalFixture("topic-merged"); },
-    async unmergeWorkspaceTopic() { return canonicalFixture("topic-unmerged"); },
-    async deleteWorkspaceTopic() { return canonicalFixture("topic-deleted"); },
     async sessionUpdate() { return canonicalFixture("update"); },
     async sessionEvents() { return canonicalFixture("events"); },
     async sessionEventDetails() { return canonicalFixture("event-details"); },

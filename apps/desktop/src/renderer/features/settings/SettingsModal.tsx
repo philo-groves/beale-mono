@@ -2,9 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import type { CSSProperties } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import {
-  DEFAULT_RESEARCH_REASONING_EFFORT
-} from '../../../shared/modelDefaults';
 import { Archive, ArchiveRestore, FileText, KeyRound, MessageSquare, Palette, Plus, RefreshCw, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
 import { OPTIONAL_AGENT_FEATURES } from '../../../shared/optionalAgentFeatures';
 import type {
@@ -33,7 +30,6 @@ import type {
   ResearchProviderReadiness,
   ResearchProviderStatus,
   ShellSafetyMode,
-  ResearchTopicSummary,
   ResearchSessionSummary,
   WorkspaceRegistryEntry,
   TicketingMode,
@@ -55,6 +51,7 @@ import {
 } from '../../../shared/optionalProviderModels';
 import { normalizeShellSafetyMode } from '../../../shared/shellSafety';
 import { permissionModeOptions } from '../../view-models/permissionSettings';
+import { preferredProviderReasoningEffort, resolvedProviderModelDefaults } from '../../view-models/providerModelDefaults';
 import {
   APPEARANCE_BACKGROUNDS,
   APPEARANCE_TRANSPARENCY_PERCENTAGES,
@@ -182,7 +179,6 @@ export function SettingsView({
   agentPluginsError,
   sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
   archivedSessions = [],
-  archivedTopics = [],
   archivedQuickChats = [],
   archiveWorkspaces = [],
   archiveLoading = false,
@@ -220,7 +216,6 @@ export function SettingsView({
   onSetSessionHeatPreference = () => undefined,
   onSetSessionHeatPalettePreference = () => undefined,
   onRestoreResearchSession = async () => undefined,
-  onRestoreResearchTopic = async () => undefined,
   onResumeQuickChat = async () => undefined
 }: {
   section: SettingsSection;
@@ -254,7 +249,6 @@ export function SettingsView({
   agentPluginsError: string | null;
   sessionHeatPreferences?: SessionHeatPreferences;
   archivedSessions?: readonly ResearchSessionSummary[];
-  archivedTopics?: readonly ResearchTopicSummary[];
   archivedQuickChats?: readonly ResearchSessionSummary[];
   archiveWorkspaces?: readonly WorkspaceRegistryEntry[];
   archiveLoading?: boolean;
@@ -310,7 +304,6 @@ export function SettingsView({
     color: string | null
   ) => void;
   onRestoreResearchSession?: (session: ResearchSessionSummary) => Promise<void>;
-  onRestoreResearchTopic?: (topic: ResearchTopicSummary) => Promise<void>;
   onResumeQuickChat?: (session: ResearchSessionSummary) => Promise<void>;
 }): JSX.Element {
   const activeSection = activeSettingsSection(section);
@@ -321,12 +314,10 @@ export function SettingsView({
         {activeSection === 'archive' ? (
           <ArchiveSettingsView
             sessions={archivedSessions}
-            topics={archivedTopics}
             quickChats={archivedQuickChats}
             workspaces={archiveWorkspaces}
             loading={archiveLoading}
             onRestoreSession={onRestoreResearchSession}
-            onRestoreTopic={onRestoreResearchTopic}
             onResumeQuickChat={onResumeQuickChat}
           />
         ) : activeSection === 'general' ? (
@@ -800,7 +791,7 @@ const PROMPT_VARIABLES = [
 ] as const;
 
 export function PromptSettingsView(): JSX.Element {
-  const [profileId, setProfileId] = useState<ResearchProfileId>('security-research');
+  const profileId: ResearchProfileId = 'security-research';
   const [saved, setSaved] = useState('');
   const [defaultTemplate, setDefaultTemplate] = useState('');
   const [draft, setDraft] = useState('');
@@ -876,15 +867,7 @@ export function PromptSettingsView(): JSX.Element {
   };
 
   return <div className="prompt-settings">
-    <div className="settings-form-heading"><h2>Agent Prompt</h2><p>Edit the template used when a new session starts. Variables expand from the selected research profile and run capabilities.</p></div>
-    <label className="prompt-settings-profile">Profile <select value={profileId} onChange={(event) => {
-      if (draft !== saved && !window.confirm('Discard unsaved prompt changes?')) return;
-      setProfileId(event.target.value as ResearchProfileId);
-      setDraft('');
-      setPreview('');
-    }}>
-      <option value="security-research">Security</option><option value="mathematics">Mathematics</option>
-    </select></label>
+    <div className="settings-form-heading"><h2>Agent Prompt</h2><p>Edit the template used when a new session starts. Variables expand from the Security profile and run capabilities.</p></div>
     <div className="prompt-settings-tabs" role="tablist" aria-label="Prompt view">
       <button type="button" role="tab" aria-selected={tab === 'template'} onClick={() => setTab('template')}>Template</button>
       <button type="button" role="tab" aria-selected={tab === 'preview'} onClick={() => setTab('preview')}>Preview</button>
@@ -962,7 +945,7 @@ export function ProfileSettingsView({
       <div className="settings-page profile-settings-page" aria-busy={loading}>
         <section className="profile-settings-empty" role="status">
           {loading ? <span className="provider-settings-loading-indicator" aria-hidden="true" /> : null}
-          <span>{loading ? 'Loading profiles...' : 'No research profiles are available.'}</span>
+          <span>{loading ? 'Loading Security profile...' : 'The Security profile is unavailable.'}</span>
         </section>
       </div>
     );
@@ -990,7 +973,7 @@ export function ProfileSettingsView({
 
   return (
     <div className="settings-page profile-settings-page">
-      <div className="profile-settings-tab-stack">
+      {profiles.length > 1 ? <div className="profile-settings-tab-stack">
         <div className="profile-settings-tab-row research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label="Research profiles">
           {profiles.map((profile) => {
             const selected = profile.profile.id === selectedProfile.profile.id;
@@ -1015,12 +998,13 @@ export function ProfileSettingsView({
           })}
           {loading ? <span className="profile-settings-loading" role="status">Loading profiles...</span> : null}
         </div>
-      </div>
+      </div> : null}
       <div
         className="profile-settings-profile-view"
         id="profile-settings-profile-panel"
         role="tabpanel"
-        aria-labelledby={`profile-settings-tab-${selectedProfile.profile.id}`}
+        aria-labelledby={profiles.length > 1 ? `profile-settings-tab-${selectedProfile.profile.id}` : undefined}
+        aria-label={profiles.length === 1 ? `${profileName} profile` : undefined}
       >
         <div className="profile-settings-tab-row profile-settings-view-tab-row research-side-view-tabs research-side-view-tabs-scrollable pill-view-tabs" role="tablist" aria-label={`${profileName} profile views`}>
           <div className={`research-side-view-tab provider-settings-tab profile-settings-tab ${selectedMemoryType ? '' : 'active'}`.trim()}>
@@ -1677,21 +1661,17 @@ export function GeneralSettingsView({
 
 export function ArchiveSettingsView({
   sessions,
-  topics,
   quickChats,
   workspaces,
   loading,
   onRestoreSession,
-  onRestoreTopic,
   onResumeQuickChat
 }: {
   sessions: readonly ResearchSessionSummary[];
-  topics: readonly ResearchTopicSummary[];
   quickChats: readonly ResearchSessionSummary[];
   workspaces: readonly WorkspaceRegistryEntry[];
   loading: boolean;
   onRestoreSession: (session: ResearchSessionSummary) => Promise<void>;
-  onRestoreTopic: (topic: ResearchTopicSummary) => Promise<void>;
   onResumeQuickChat: (session: ResearchSessionSummary) => Promise<void>;
 }): JSX.Element {
   const workspaceName = (workspaceId: string): string => (
@@ -1744,30 +1724,6 @@ export function ArchiveSettingsView({
             ))}
             {!loading && quickChats.length === 0 ? <p className="archive-settings-empty">No archived Quick Chats.</p> : null}
             {loading && quickChats.length === 0 ? <p className="archive-settings-empty">Loading archived Quick Chats…</p> : null}
-          </div>
-        </fieldset>
-      </section>
-      <section className="settings-form">
-        <header className="settings-form-heading">
-          <h2 id="archived-topics-settings-heading">Archived Topics</h2>
-          <p>Archived and merged topics keep their overviews, pages, and references.</p>
-        </header>
-        <fieldset className="settings-form-squircle" aria-labelledby="archived-topics-settings-heading">
-          <div className="settings-form-control-list archive-settings-list">
-            {topics.map((topic) => (
-              <div className="settings-form-control-row archive-settings-row" key={topic.id}>
-                <span className="settings-form-control-copy">
-                  <strong className="archive-settings-item-name"><FileText size={14} aria-hidden="true" />{topic.title}</strong>
-                  <small>{workspaceName(topic.workspaceId)}</small>
-                </span>
-                <button type="button" disabled={loading} onClick={() => void onRestoreTopic(topic)}>
-                  <ArchiveRestore size={14} aria-hidden="true" />
-                  <span>{topic.mergedIntoTopicId ? 'Undo merge' : 'Restore'}</span>
-                </button>
-              </div>
-            ))}
-            {!loading && topics.length === 0 ? <p className="archive-settings-empty">No archived topics.</p> : null}
-            {loading && topics.length === 0 ? <p className="archive-settings-empty">Loading archived topics…</p> : null}
           </div>
         </fieldset>
       </section>
@@ -2179,29 +2135,6 @@ export function nextConfiguredProviderIdAfterRemoval(
   return remainingProviderIds.includes(defaultProviderId as ResearchModelProviderId)
     ? defaultProviderId
     : remainingProviderIds[0] ?? null;
-}
-
-export function resolvedProviderModelDefaults(
-  providerId: ResearchModelProviderId,
-  catalog: ResearchProviderModelCatalog | null,
-  configuredLargeModel: string | null,
-  configuredReasoningEffort: string | null,
-  stored: ProviderModelDefaults | undefined
-): ProviderModelDefaults | null {
-  const models = catalog?.models ?? [];
-  if (models.length === 0) return null;
-  const largeModel = models.find((model) => model.id === stored?.largeModel)?.id
-    ?? models.find((model) => model.id === configuredLargeModel)?.id
-    ?? models[0]!.id;
-  const smallModel = models.find((model) => model.id === stored?.smallModel)?.id
-    ?? models.find((model) => model.id === catalog?.defaultSmallModel)?.id
-    ?? models[0]!.id;
-  const largeModelEntry = models.find((model) => model.id === largeModel)!;
-  const desiredEffort = stored?.reasoningEffort ?? normalizeReasoningEffort(configuredReasoningEffort) ?? DEFAULT_RESEARCH_REASONING_EFFORT;
-  const reasoningEffort = largeModelEntry.effortLevels.includes(desiredEffort)
-    ? desiredEffort
-    : preferredProviderReasoningEffort(largeModelEntry.effortLevels);
-  return { largeModel, smallModel, reasoningEffort };
 }
 
 export function ProvidersSettingsView({
@@ -3143,19 +3076,6 @@ function providerModelOptionLabel(providerId: ResearchModelProviderId | undefine
   return providerId ? researchModelNameLabel(providerId, model.name) : model.name;
 }
 
-function normalizeReasoningEffort(value: string | null): ResearchModelEffortLevel | null {
-  return value === 'off' || value === 'minimal' || value === 'low' || value === 'medium'
-    || value === 'high' || value === 'xhigh' || value === 'max'
-    ? value
-    : null;
-}
-
-function preferredProviderReasoningEffort(levels: readonly ResearchModelEffortLevel[]): ResearchModelEffortLevel {
-  if (levels.includes('high')) return 'high';
-  if (levels.includes('medium')) return 'medium';
-  return levels[0] ?? 'off';
-}
-
 function reasoningEffortLabel(effort: ResearchModelEffortLevel): string {
   if (effort === 'xhigh') return 'XHigh';
   return `${effort.slice(0, 1).toUpperCase()}${effort.slice(1)}`;
@@ -3190,7 +3110,7 @@ export function settingsSectionLabel(section: SettingsSection): string {
     case 'ticketing':
       return 'Ticketing';
     case 'profile':
-      return 'Profiles';
+      return 'Security Profile';
     case 'prompt':
       return 'Prompt';
     case 'archive':

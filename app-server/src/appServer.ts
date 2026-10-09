@@ -4,7 +4,6 @@ import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { installPreBealeEnvironmentAliases } from '@beale/research-agent/legacy-compatibility';
-import { WORKSPACE_CHECKPOINT_INTERVAL_MS } from '@beale/app-server-runtime/runtime-services';
 import { installUndiciTypeOfServiceCompatibility } from '@beale/app-server-runtime/node-network-compatibility';
 import {
   BEALE_APP_SERVER_CAPABILITIES,
@@ -67,6 +66,7 @@ import {
   longSessionRecoveryFallbackPrompt
 } from './sessionRecovery.js';
 import { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
+import { FleetBrowserService } from './fleetBrowser.js';
 
 installUndiciTypeOfServiceCompatibility();
 
@@ -168,9 +168,6 @@ interface SessionRuntime {
   currentAttemptWasInitial: boolean;
   recoveryCount: number;
   recoveryTimer: NodeJS.Timeout | null;
-  checkpointTimer: NodeJS.Timeout | null;
-  checkpointPending: Promise<void> | null;
-  checkpointReason: string | null;
   introspectionToken: string | null;
   readonly recentActivity: string[];
 }
@@ -209,9 +206,14 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     ? null
     : options.automationScheduler ?? {};
   const sessions = new Map<string, SessionRuntime>();
+  const fleetBrowser = new FleetBrowserService();
+  const fleetProxySessions = new Map<string, { endpoint: { url: string; operatorToken: string }; clientTokens: Set<string>; completed: boolean;
+    workspaceId: string | null; prompt: string; state: string; startedAt: string }>();
   const introspectionBindings = new Map<string, ResidentIntrospectionBinding>();
   let discoveryRecord: AppServerDiscoveryRecord | null = null;
   let automationTimer: NodeJS.Timeout | null = null;
+  let fleetProxyTimer: NodeJS.Timeout | null = null;
+  let fleetProxyScanInProgress = false;
   let automationScanInProgress = false;
   let closing = false;
 
@@ -235,6 +237,44 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   httpServer.on('upgrade', (request, socket, head) => {
     try {
+      const browserUrl = new URL(request.url ?? '/', 'http://localhost');
+      const agentBrowser = /^\/v1\/fleet-browser\/([^/]+)\/devtools\/page\/([^/]+)$/.exec(browserUrl.pathname);
+      if (agentBrowser) {
+        const sessionId = decodeURIComponent(agentBrowser[1]!);
+        if (!isLoopbackRequest(request) || !fleetBrowser.authorized(sessionId, browserUrl.searchParams.get('token') ?? '')) {
+          rejectUpgrade(socket, 401, 'Fleet browser session token is required.'); return;
+        }
+        wss.handleUpgrade(request, socket, head, (clientSocket) => {
+          void fleetBrowser.agentSocket(sessionId, decodeURIComponent(agentBrowser[2]!), clientSocket)
+            .catch(() => clientSocket.close(1011, 'Fleet browser unavailable'));
+        });
+        return;
+      }
+      const viewerMatch = /^\/v1\/sessions\/([^/]+)\/browser$/.exec(browserUrl.pathname);
+      const proxyMatch = /^\/v1\/sessions\/([^/]+)\/(?:transport|browser)$/.exec(browserUrl.pathname);
+      const proxy = proxyMatch ? fleetProxySessions.get(decodeURIComponent(proxyMatch[1] ?? '')) : null;
+      if (proxy) {
+        const token = [...proxy.clientTokens].find((value) => authorizedBearer(request.headers.authorization, value));
+        if (!token) { rejectUpgrade(socket, 401, 'A valid bearer token is required.'); return; }
+        wss.handleUpgrade(request, socket, head, (clientSocket) => attachFleetProxyClient(proxy, token, request.url ?? '', clientSocket));
+        return;
+      }
+      if (viewerMatch) {
+        const sessionId = decodeURIComponent(viewerMatch[1]!);
+        const runtime = sessions.get(sessionId);
+        if (!runtime || !fleetBrowser.hasSession(sessionId)
+          || ![...runtime.clientTokens].some((token) => authorizedBearer(request.headers.authorization, token))) {
+          rejectUpgrade(socket, 401, 'A session token is required.'); return;
+        }
+        wss.handleUpgrade(request, socket, head, (clientSocket) => {
+          void fleetBrowser.viewerSocket(sessionId, clientSocket)
+            .catch((error: unknown) => { if (clientSocket.readyState === WebSocket.OPEN) {
+              clientSocket.send(JSON.stringify({ type: 'browser.error', message: error instanceof Error ? error.message : String(error) }));
+              clientSocket.close(1011, 'Fleet browser unavailable');
+            } });
+        });
+        return;
+      }
       const runtime = authenticateUpgrade(request);
       if (!runtime) {
         rejectUpgrade(socket, 404, 'Unknown session.');
@@ -262,6 +302,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     ? publicUrl
     : localUrl;
 
+  hostService.resumeFleetModelBrokers?.();
+
   if (options.recoverInterruptedOnStart) {
     await recoverInterruptedSessions();
   }
@@ -288,6 +330,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     automationTimer.unref();
     setImmediate(() => void scanDueAutomations());
   }
+  fleetProxyTimer = setInterval(() => void scanFleetProxySessions(), 5_000);
+  fleetProxyTimer.unref();
 
   function requireOperator(request: IncomingMessage): void {
     if (!authorizedBearer(request.headers.authorization, operatorToken)) {
@@ -434,6 +478,43 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       sendJson(response, 200, healthResponse());
       return;
     }
+    const browserMatch = /^\/v1\/fleet-browser\/([^/]+)\/(json\/list|json\/version|contexts|contexts\/default\/open)$/.exec(url.pathname);
+    if (browserMatch) {
+      const sessionId = decodeURIComponent(browserMatch[1]!);
+      if (!isLoopbackRequest(request) || !fleetBrowser.authorized(sessionId, url.searchParams.get('token') ?? '')) {
+        throw new HttpError(403, 'Fleet browser session token is required.');
+      }
+      const kind = browserMatch[2]!;
+      if (kind === 'contexts/default/open' && request.method === 'POST') {
+        sendJson(response, 200, { id: 'default', label: 'Default' }); return;
+      }
+      if (request.method !== 'GET' || kind === 'contexts/default/open') throw new HttpError(405, 'Unsupported Fleet browser request.');
+      const result = await fleetBrowser.discovery(sessionId, kind === 'json/list' ? 'list' : kind === 'json/version' ? 'version' : 'contexts', `http://127.0.0.1:${address.port}`);
+      sendJson(response, 200, result);
+      return;
+    }
+    const brokerMatch = /^\/v1\/fleet-model-broker\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})(?:\/([A-Za-z0-9][A-Za-z0-9._-]{0,127}))?$/u.exec(url.pathname);
+    if (brokerMatch) {
+      if (request.socket.remoteAddress !== '127.0.0.1' && request.socket.remoteAddress !== '::1') {
+        throw new HttpError(403, 'The Fleet model broker is available on loopback only.');
+      }
+      const token = /^Bearer (.+)$/u.exec(request.headers.authorization ?? '')?.[1] ?? '';
+      const sessionId = brokerMatch[1]!;
+      if (request.method === 'POST' && !brokerMatch[2]) {
+        const body = await readJsonBody(request, 16 * 1024 * 1024);
+        if (!isRecord(body) || typeof body.id !== 'string' || !isRecord(body.model)) {
+          throw new HttpError(400, 'A model broker request is required.');
+        }
+        hostService.brokerSubmit(sessionId, token, body as unknown as import('@beale/research-agent').ModelBrokerRequest);
+        sendJson(response, 200, { submitted: true });
+        return;
+      }
+      if (request.method === 'GET' && brokerMatch[2]) {
+        sendJson(response, 200, hostService.brokerResult(sessionId, token, brokerMatch[2]));
+        return;
+      }
+      throw new HttpError(405, 'Unsupported model broker request.');
+    }
     if (request.method === 'POST' && url.pathname === '/v1/introspection/tool') {
       const binding = requireResidentIntrospection(request);
       const body = await readJsonBody(request);
@@ -455,6 +536,12 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       return;
     }
     requireOperator(request);
+    const proxiedSessionId = proxySessionId(url.pathname);
+    const proxied = proxiedSessionId ? fleetProxySessions.get(proxiedSessionId) : null;
+    if (proxied) {
+      await proxyFleetHttp(proxied, request, response, url, proxiedSessionId!);
+      return;
+    }
     if (request.method === 'GET' && url.pathname === BEALE_APP_SERVER_PROVIDERS_PATH) {
       sendJson(response, 200, hostService.providerCatalog());
       return;
@@ -466,7 +553,11 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (request.method === 'GET' && url.pathname === BEALE_APP_SERVER_SESSIONS_PATH) {
       const catalog: BealeAppServerSessionCatalog = {
         controlVersion: BEALE_APP_SERVER_CONTROL_VERSION,
-        sessions: listSessions()
+        sessions: [...listSessions(), ...[...fleetProxySessions].map(([sessionId, proxy]): BealeAppServerSessionCatalogEntry => ({
+          sessionId, state: proxySessionState(proxy.state), startedAt: proxy.startedAt, endedAt: proxy.completed ? new Date().toISOString() : null,
+          exitCode: null, clientConnected: false, diagnostic: null,
+          replay: { bufferedFrames: 0, bufferedBytes: 0, droppedFrames: 0 },
+        }))]
       };
       sendJson(response, 200, catalog);
       return;
@@ -483,6 +574,26 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       }
       if (body.args !== undefined && (!Array.isArray(body.args) || body.args.some((value) => typeof value !== 'string'))) {
         throw new HttpError(400, 'Operation args must be an array of strings.');
+      }
+      if (body.operation === 'fleet.connect' && isRecord(body.input) && body.input.proxy === true) {
+        const runId = typeof body.input.runId === 'string' ? body.input.runId : '';
+        const endpoint = await hostCall(() => hostService.executeOperation({ operation: 'fleet.connect', input: body.input })) as { url?: unknown; operatorToken?: unknown };
+        if (typeof endpoint.url !== 'string' || typeof endpoint.operatorToken !== 'string') throw new HttpError(502, 'Fleet guest connection is unavailable.');
+        const attach = await fetch(`${endpoint.url}${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(runId)}/attachments`, {
+          method: 'POST', headers: { authorization: `Bearer ${endpoint.operatorToken}` }, signal: AbortSignal.timeout(30_000),
+        });
+        if (!attach.ok) throw new HttpError(502, 'Fleet guest session could not be reattached.');
+        const attached: unknown = await attach.json();
+        const token = isRecord(attached) && isRecord(attached.transport) ? attached.transport.token : null;
+        if (typeof token !== 'string' || !token) throw new HttpError(502, 'Fleet guest session returned no transport token.');
+        const existingProxy = fleetProxySessions.get(runId);
+        fleetProxySessions.set(runId, { endpoint: { url: endpoint.url, operatorToken: endpoint.operatorToken },
+          clientTokens: new Set([...(existingProxy?.clientTokens ?? []), token]),
+          completed: existingProxy?.completed ?? false, workspaceId: existingProxy?.workspaceId ?? null,
+          prompt: existingProxy?.prompt ?? '', state: existingProxy?.state ?? 'running',
+          startedAt: existingProxy?.startedAt ?? new Date().toISOString() });
+        sendJson(response, 200, { controlVersion: BEALE_APP_SERVER_CONTROL_VERSION, result: { machineId: body.input.machineId, url: baseUrl } });
+        return;
       }
       const controller = new AbortController();
       const abortDisconnectedOperation = (): void => {
@@ -526,100 +637,18 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       ? /^\/v1\/workspaces\/([^/]+)\/sessions$/.exec(url.pathname)
       : null;
     if (workspaceSessionsMatch) {
-      sendJson(response, 200, await hostCall(() => hostService.workspaceSessions(
-        pathPart(workspaceSessionsMatch, 1),
+      const workspaceId = pathPart(workspaceSessionsMatch, 1);
+      const catalog = await hostCall(() => hostService.workspaceSessions(
+        workspaceId,
         queryInteger(url, 'limit', 200)
-      )));
+      ));
+      const proxied = [...fleetProxySessions].flatMap(([sessionId, proxy]) => proxy.workspaceId === workspaceId ? [{
+        id: sessionId, workspaceId, title: proxy.prompt.slice(0, 90), prompt: proxy.prompt, status: proxy.state,
+        createdAt: proxy.startedAt, attempts: [{ startedAt: proxy.startedAt }], metadata: {},
+      }] : []);
+      sendJson(response, 200, isRecord(catalog) && Array.isArray(catalog.result)
+        ? { ...catalog, result: [...proxied, ...catalog.result] } : catalog);
       return;
-    }
-    const workspaceTopicsMatch = /^\/v1\/workspaces\/([^/]+)\/topics$/.exec(url.pathname);
-    if (workspaceTopicsMatch) {
-      const workspaceId = pathPart(workspaceTopicsMatch, 1);
-      if (request.method === 'GET') {
-        const query = url.searchParams.get('query')?.trim();
-        sendJson(response, 200, await hostCall(() => query
-          ? hostService.searchWorkspaceTopics(workspaceId, query, queryInteger(url, 'limit', 50))
-          : hostService.workspaceTopics(workspaceId, queryInteger(url, 'limit', 200), queryBoolean(url, 'archived'))));
-        return;
-      }
-      if (request.method === 'POST') {
-        const body = await readJsonBody(request);
-        sendJson(response, 201, await hostCall(() => hostService.createWorkspaceTopic(
-          workspaceId,
-          isRecord(body) ? body : {}
-        )));
-        return;
-      }
-    }
-    const workspaceTopicActionMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)\/(overview|pages|links)(?:\/([^/]+))?$/.exec(url.pathname);
-    if (workspaceTopicActionMatch) {
-      const workspaceId = pathPart(workspaceTopicActionMatch, 1);
-      const topic = pathPart(workspaceTopicActionMatch, 2);
-      const section = workspaceTopicActionMatch[3];
-      const itemId = workspaceTopicActionMatch[4] ? pathPart(workspaceTopicActionMatch, 4) : null;
-      if (request.method === 'PATCH' && section === 'overview' && !itemId) {
-        const body = await readJsonBody(request);
-        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.update_overview', isRecord(body) ? body : {})));
-        return;
-      }
-      if (request.method === 'PUT' && section === 'pages' && !itemId) {
-        const body = await readJsonBody(request);
-        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.page.save', isRecord(body) ? body : {})));
-        return;
-      }
-      if (request.method === 'DELETE' && section === 'pages' && itemId) {
-        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.page.delete', { pageId: itemId })));
-        return;
-      }
-      if (request.method === 'POST' && section === 'links' && !itemId) {
-        const body = await readJsonBody(request);
-        sendJson(response, 201, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.link', isRecord(body) ? body : {})));
-        return;
-      }
-      if (request.method === 'DELETE' && section === 'links' && itemId) {
-        sendJson(response, 200, await hostCall(() => hostService.mutateWorkspaceTopic(workspaceId, topic, 'topic.unlink', { linkId: itemId })));
-        return;
-      }
-    }
-    const workspaceTopicMergeMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)\/(merge|unmerge)$/.exec(url.pathname);
-    if (workspaceTopicMergeMatch && request.method === 'POST') {
-      const workspaceId = pathPart(workspaceTopicMergeMatch, 1);
-      const sourceTopic = pathPart(workspaceTopicMergeMatch, 2);
-      if (workspaceTopicMergeMatch[3] === 'merge') {
-        const body = await readJsonBody(request);
-        const targetTopic = isRecord(body) && typeof body.targetTopic === 'string' ? body.targetTopic : '';
-        sendJson(response, 200, await hostCall(() => hostService.mergeWorkspaceTopic(workspaceId, sourceTopic, targetTopic)));
-      } else {
-        sendJson(response, 200, await hostCall(() => hostService.unmergeWorkspaceTopic(workspaceId, sourceTopic)));
-      }
-      return;
-    }
-    const workspaceTopicArchiveMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)\/(archive|restore)$/.exec(url.pathname);
-    if (workspaceTopicArchiveMatch && request.method === 'POST') {
-      const workspaceId = pathPart(workspaceTopicArchiveMatch, 1);
-      const topic = pathPart(workspaceTopicArchiveMatch, 2);
-      const action = workspaceTopicArchiveMatch[3];
-      sendJson(response, 200, await hostCall(() => action === 'archive'
-        ? hostService.archiveWorkspaceTopic(workspaceId, topic)
-        : hostService.restoreWorkspaceTopic(workspaceId, topic)));
-      return;
-    }
-    const workspaceTopicMatch = /^\/v1\/workspaces\/([^/]+)\/topics\/([^/]+)$/.exec(url.pathname);
-    if (workspaceTopicMatch) {
-      const workspaceId = pathPart(workspaceTopicMatch, 1);
-      const topic = pathPart(workspaceTopicMatch, 2);
-      if (request.method === 'GET') {
-        sendJson(response, 200, await hostCall(() => hostService.workspaceTopic(
-          workspaceId,
-          topic,
-          queryBoolean(url, 'includeHistory') ? queryInteger(url, 'messageLimit', 500) : 0
-        )));
-        return;
-      }
-      if (request.method === 'DELETE') {
-        sendJson(response, 200, await hostCall(() => hostService.deleteWorkspaceTopic(workspaceId, topic)));
-        return;
-      }
     }
     const canonicalSessionMatch = /^\/v1\/workspaces\/([^/]+)\/sessions\/([^/]+)\/(update|events|collaboration|captures|event-details)$/.exec(url.pathname);
     if (canonicalSessionMatch) {
@@ -823,6 +852,41 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
   ): Promise<StartedSession> {
     const normalized = normalizeSessionRequest(input);
     let request = normalized.request;
+    if (request.launch.machineId && request.launch.machineId !== 'local' && request.launch.fleetOwnerMachineId) {
+      const fleetState = await hostCall(() => hostService.executeOperation({ operation: 'fleet.state' })) as { role?: unknown };
+      if (fleetState.role === 'primary') {
+        const endpoint = await hostCall(() => hostService.executeOperation({ operation: 'fleet.prepare', input: {
+          workspaceId: request.launch.workspaceId, runId: normalized.sessionId,
+          machineId: request.launch.machineId, ownerMachineId: request.launch.fleetOwnerMachineId,
+        } })) as { url?: unknown; operatorToken?: unknown; machineId?: unknown };
+        if (typeof endpoint.url !== 'string' || typeof endpoint.operatorToken !== 'string'
+          || typeof endpoint.machineId !== 'string') throw new HttpError(502, 'Fleet guest connection is unavailable.');
+        let guestRejected = false;
+        try {
+        const guestResponse = await fetch(endpoint.url + BEALE_APP_SERVER_SESSIONS_PATH, {
+          method: 'POST', headers: { authorization: `Bearer ${endpoint.operatorToken}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ ...request, sessionId: normalized.sessionId,
+            launch: { ...request.launch, machineId: endpoint.machineId } }), redirect: 'error', signal: AbortSignal.timeout(90_000),
+        });
+        if (!guestResponse.ok) { guestRejected = true; throw new HttpError(502, `Fleet guest rejected the session (${guestResponse.status}).`); }
+        const started: unknown = await guestResponse.json();
+        const startedRecord = isRecord(started) ? started : null;
+        const token = startedRecord && isRecord(startedRecord.transport) ? startedRecord.transport.token : null;
+        const guestSession = startedRecord && isRecord(startedRecord.session) ? startedRecord.session : null;
+        if (typeof token !== 'string' || !token || guestSession?.sessionId !== normalized.sessionId) throw new HttpError(502, 'Fleet guest returned an invalid session.');
+        fleetProxySessions.set(normalized.sessionId, { endpoint: { url: endpoint.url, operatorToken: endpoint.operatorToken }, clientTokens: new Set([token]),
+          completed: false, workspaceId: request.launch.workspaceId, prompt: request.launch.promptMarkdown, state: 'running', startedAt: new Date().toISOString() });
+        return started as StartedSession;
+        } catch (error) {
+          if (guestRejected) {
+            const owner = { machineId: endpoint.machineId, ownerMachineId: request.launch.fleetOwnerMachineId, sessionId: normalized.sessionId };
+            await hostCall(() => hostService.executeOperation({ operation: 'fleet.stop', input: owner })).catch(() => undefined);
+            await hostCall(() => hostService.executeOperation({ operation: 'fleet.release', input: owner })).catch(() => undefined);
+          }
+          throw error;
+        }
+      }
+    }
     let residentIntrospectionToken: string | null = null;
     if (residentIntrospection && !request.launch.introspection) {
       residentIntrospectionToken = generateSessionToken();
@@ -853,6 +917,22 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       }
     })();
     const { sessionId, attemptId } = prepared;
+    if (hostService.brokerToken?.(sessionId)) {
+      const preferences = prepared.launch.provider.authenticationPreferences;
+      const providers = [prepared.launch.provider.id];
+      const collaboration = request.launch.collaboration;
+      if (isRecord(collaboration) && Array.isArray(collaboration.providers)) {
+        for (const candidate of collaboration.providers) {
+          if (isRecord(candidate) && candidate.enabled === true && typeof candidate.provider === 'string') {
+            providers.push(candidate.provider);
+          }
+        }
+      }
+      if (providers.some((provider) => provider === 'anthropic'
+        || provider === 'zai' && preferences.zai !== 'api_key')) {
+        throw new HttpError(409, 'This Fleet session uses a provider-specific subscription SDK that the model broker cannot yet run. Select a Pi-backed provider or Z.ai API key authentication.');
+      }
+    }
     const existing = sessions.get(sessionId);
     if (existing && !isTerminal(existing.state)) {
       if (residentIntrospectionToken) introspectionBindings.delete(residentIntrospectionToken);
@@ -880,10 +960,33 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       if (runtime.introspectionToken) introspectionBindings.delete(runtime.introspectionToken);
       notifyChange();
       const detail = error instanceof Error ? error.message : String(error);
-      runtime.diagnostic = boundedDiagnostic(detail);
-      await recordSessionLaunchFailure(runtime, detail);
-      throw new HttpError(502, `app-server session failed to start: ${detail}`);
+      const diagnostic = runtime.diagnostic ?? detail;
+      runtime.diagnostic = boundedDiagnostic(diagnostic);
+      await recordSessionLaunchFailure(runtime, diagnostic);
+      throw new HttpError(502, `app-server session failed to start: ${diagnostic}`);
     }
+  }
+
+  async function scanFleetProxySessions(): Promise<void> {
+    if (closing || fleetProxyScanInProgress) return;
+    fleetProxyScanInProgress = true;
+    try {
+    for (const [runId, proxy] of fleetProxySessions) {
+      if (proxy.completed) continue;
+      try {
+        const response = await fetch(`${proxy.endpoint.url}${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(runId)}`, {
+          headers: { authorization: `Bearer ${proxy.endpoint.operatorToken}` }, signal: AbortSignal.timeout(3_000),
+        });
+        if (!response.ok) continue;
+        const body: unknown = await response.json();
+        const state = isRecord(body) && isRecord(body.session) ? body.session.state : null;
+        if (typeof state === 'string') proxy.state = state;
+        if (state !== 'completed' && state !== 'failed' && state !== 'stopped') continue;
+        await hostCall(() => hostService.executeOperation({ operation: 'fleet.complete', input: { runId } }));
+        proxy.completed = true;
+      } catch { /* Retry after the guest or transfer becomes available. */ }
+    }
+    } finally { fleetProxyScanInProgress = false; }
   }
 
   async function scanDueAutomations(): Promise<void> {
@@ -940,9 +1043,6 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       currentAttemptWasInitial: false,
       recoveryCount: 0,
       recoveryTimer: null,
-      checkpointTimer: null,
-      checkpointPending: null,
-      checkpointReason: null,
       introspectionToken: request.launch.introspection?.runtimeMode === 'standard'
         && request.launch.introspection.url === `${localUrl}/v1/introspection`
         ? request.launch.introspection.token
@@ -1021,45 +1121,29 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
   }
 
-  async function checkpointRuntime(runtime: SessionRuntime, reason: string, required = false, cleanupScratch = false): Promise<void> {
-    runtime.checkpointReason = reason;
-    if (runtime.checkpointPending) return runtime.checkpointPending;
-    const operation = (async () => {
-      while (runtime.checkpointReason) {
-        const nextReason = runtime.checkpointReason;
-        runtime.checkpointReason = null;
-        try {
-          const result = await hostService.checkpointSession?.(runtime.request.launch.workspaceId, runtime.sessionId, nextReason, cleanupScratch);
-          if (result?.status === 'failed') throw new Error(result.error ?? 'Workspace checkpoint failed.');
-        } catch (error) {
-          const message = `Workspace checkpoint failed; working files were preserved. ${error instanceof Error ? error.message : String(error)}`;
-          runtime.diagnostic = boundedDiagnostic(message);
-          const event = { schemaVersion: 1, kind: 'model.output', timestamp: new Date().toISOString(), payload: {
-            phase: 'completed', messagePhase: 'commentary', text: message, agentPath: '/root',
-            responseId: `checkpoint-${randomUUID()}`, itemId: 'text:0',
-          } };
-          deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
-          notifyChange();
-          if (required) throw error;
-        }
-      }
-    })();
-    runtime.checkpointPending = operation;
-    try { await operation; } finally { if (runtime.checkpointPending === operation) runtime.checkpointPending = null; }
-  }
-
   async function launchPreparedSession(
     runtime: SessionRuntime,
     prepared: PreparedAppServerSession,
     attemptWasInitial = false
   ): Promise<void> {
     const { args, env } = prepareAppServerSessionLaunch(prepared.launch);
-    hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, true);
-    try { await checkpointRuntime(runtime, 'Before research session', true); }
-    catch (error) {
-      hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
-      throw error;
+    if (runtime.request.launch.browserRelay === true
+      || (runtime.request.launch.machineId && runtime.request.launch.machineId !== 'local')) {
+      const token = fleetBrowser.tokenFor(runtime.sessionId);
+      env.BEALE_FLEET_BROWSER_ENDPOINT = `http://127.0.0.1:${address.port}/v1/fleet-browser/${encodeURIComponent(runtime.sessionId)}?token=${token}`;
     }
+    delete env.APP_SERVER_MODEL_BROKER_URL;
+    delete env.APP_SERVER_MODEL_BROKER_TOKEN;
+    const brokerToken = hostService.brokerToken?.(runtime.sessionId);
+    if (brokerToken) {
+      for (const name of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'XAI_API_KEY', 'ZAI_API_KEY',
+        'OPENROUTER_API_KEY', 'APP_SERVER_CODEX_AUTH_FILE', 'BEALE_OPENAI_CODEX_AUTH_FILE']) {
+        delete env[name];
+      }
+      env.APP_SERVER_MODEL_BROKER_URL = `http://127.0.0.1:${address.port}/v1/fleet-model-broker/${encodeURIComponent(runtime.sessionId)}`;
+      env.APP_SERVER_MODEL_BROKER_TOKEN = brokerToken;
+    }
+    hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, true);
     if (runtime.stopRequested || sessions.get(runtime.sessionId) !== runtime) {
       hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
       return;
@@ -1073,7 +1157,6 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (runtime.stopRequested || sessions.get(runtime.sessionId) !== runtime) {
       session.stop();
       void session.waitExit().then(async () => {
-        await checkpointRuntime(runtime, 'Research stopped during startup');
         hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
       });
       return;
@@ -1090,20 +1173,6 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         if (runtime.recentActivity.length > 20) runtime.recentActivity.splice(0, runtime.recentActivity.length - 20);
       }
       deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
-      if (isRecord(event.payload) && !runtime.stopRequested) {
-        const payload = event.payload;
-        const toolName = typeof payload.toolName === 'string' ? payload.toolName : '';
-        if ((event.kind === 'tool.observed' && payload.status === 'complete' || payload.type === 'tool_execution_end' || payload.eventType === 'tool_execution_end') && payload.isError !== true
-          && /^(?:claim|finding|memory|runbook|report)[._]/u.test(toolName)
-          && !/^runbook[._](?:run|execute)$/u.test(toolName)
-          && /(?:create|revise|transition|save|correct|append|configure|run|execute|question|experiment|observe|next_action|review|consolidat)/u.test(toolName)) {
-          void checkpointRuntime(runtime, 'Research milestone');
-        }
-        if (payload.eventType === 'runbook.execution' && payload.cellId === null
-          && ['succeeded', 'failed', 'blocked', 'cancelled'].includes(String(payload.status))) {
-          void checkpointRuntime(runtime, 'Runbook execution finished');
-        }
-      }
     });
     runtime.state = 'starting';
     runtime.endedAt = null;
@@ -1120,11 +1189,6 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
 
   function markRuntimeReady(runtime: SessionRuntime, session: AppServerSession): void {
     if (runtime.session !== session || sessions.get(runtime.sessionId) !== runtime || runtime.stopRequested) return;
-    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
-    runtime.checkpointTimer = setInterval(() => {
-      if (!runtime.stopRequested) void checkpointRuntime(runtime, 'Periodic research checkpoint');
-    }, WORKSPACE_CHECKPOINT_INTERVAL_MS);
-    runtime.checkpointTimer.unref();
     runtime.state = 'running';
     runtime.diagnostic = null;
     runtime.startupDiagnostic = null;
@@ -1173,6 +1237,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       };
       deliverClientFrame(runtime, Buffer.from(JSON.stringify(appServerSessionEvent(runtime.sessionId, event))));
       notifyChange();
+      await recordSessionLaunchFailure(runtime, runtime.startupDiagnostic ?? detail);
       session.stop();
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -1265,11 +1330,6 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       stopRequested: runtime.stopRequested
     });
     const startupDiagnostic = runtime.startupDiagnostic;
-    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
-    runtime.checkpointTimer = null;
-    if (runtime.checkpointPending) await runtime.checkpointPending;
-    await checkpointRuntime(runtime, runtime.stopRequested ? 'Research stopped; preserve incomplete work' : 'Research worker exited', false,
-      runtime.stopRequested || completion.succeeded || !completion.recoverable || runtime.recoveryCount >= maxRecoveryAttempts);
     hostService.setWorkspaceSessionActive?.(runtime.request.launch.workspaceId, runtime.sessionId, false);
     if (sessions.get(runtime.sessionId) !== runtime) return;
     if (startupDiagnostic) {
@@ -1365,13 +1425,34 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     if (runtime.recoveryTimer) clearTimeout(runtime.recoveryTimer);
     runtime.recoveryTimer = null;
     runtime.endedAt = new Date().toISOString();
-    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
-    runtime.checkpointTimer = null;
     runtime.exitCode = exitCode;
     runtime.state = state;
     runtime.diagnostic = state === 'failed' ? boundedDiagnostic(diagnostic ?? '') : null;
     teardownRuntime(runtime, state === 'completed' ? 1000 : 1011);
     notifyChange();
+    void recordSessionTerminalState(runtime, state);
+  }
+
+  async function recordSessionTerminalState(runtime: SessionRuntime, state: 'completed' | 'failed' | 'stopped'): Promise<void> {
+    const service = hostService as AppServerHostService & {
+      recordSessionTerminalState?: (input: {
+        request: AppServerSessionLaunchRequest;
+        sessionId: string;
+        attemptId: string;
+        state: 'completed' | 'failed' | 'stopped';
+      }) => Promise<void>;
+    };
+    try {
+      await service.recordSessionTerminalState?.({
+        request: runtime.request, sessionId: runtime.sessionId, attemptId: runtime.currentAttemptId, state
+      });
+      notifyChange();
+    } catch (error) {
+      runtime.diagnostic = boundedDiagnostic(
+        `${runtime.diagnostic ? `${runtime.diagnostic} ` : ''}Could not persist ${state} session state: ${error instanceof Error ? error.message : String(error)}`
+      );
+      notifyChange();
+    }
   }
 
   function emitRecoveryCommentary(
@@ -1415,8 +1496,6 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     runtime: SessionRuntime,
     control?: Record<string, unknown>
   ): void {
-    if (runtime.checkpointTimer) clearInterval(runtime.checkpointTimer);
-    runtime.checkpointTimer = null;
     if (!runtime.stopRequested) {
       runtime.stopRequested = true;
       void recordSessionControlState(runtime, 'stopped');
@@ -1485,6 +1564,54 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       throw new Error('invalid token');
     }
     return runtime;
+  }
+
+  async function proxyFleetHttp(
+    proxy: { endpoint: { url: string; operatorToken: string }; clientTokens: Set<string> },
+    request: IncomingMessage, response: ServerResponse, url: URL, sessionId: string,
+  ): Promise<void> {
+    const body = request.method === 'POST' ? await readProxyBody(request) : undefined;
+    const upstream = await fetch(proxy.endpoint.url + url.pathname + url.search, {
+      method: request.method ?? 'GET',
+      headers: { authorization: `Bearer ${proxy.endpoint.operatorToken}`,
+        ...(body ? { 'content-type': request.headers['content-type'] ?? 'application/json' } : {}) },
+      ...(body ? { body } : {}), signal: AbortSignal.timeout(60_000),
+    });
+    const payload: unknown = await upstream.json().catch(() => null);
+    if (request.method === 'POST' && (url.pathname === `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/attachments`
+      || url.pathname === `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/continuations`)
+      && isRecord(payload) && isRecord(payload.transport) && typeof payload.transport.token === 'string') {
+      proxy.clientTokens.add(payload.transport.token);
+    }
+    sendJson(response, upstream.status, payload);
+  }
+
+  function attachFleetProxyClient(
+    proxy: { endpoint: { url: string; operatorToken: string }; clientTokens: Set<string> },
+    token: string, path: string, client: WebSocket,
+  ): void {
+    const upstreamUrl = new URL(path, proxy.endpoint.url);
+    upstreamUrl.protocol = upstreamUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    const upstream = new WebSocket(upstreamUrl, { headers: { authorization: `Bearer ${token}` }, maxPayload: MAX_FRAME_BYTES });
+    const queued: Array<{ frame: Buffer; binary: boolean }> = [];
+    let queuedBytes = 0;
+    client.on('message', (data, binary) => {
+      const frame = toBuffer(data);
+      if (frame.byteLength > MAX_FRAME_BYTES) { client.close(1009); return; }
+      if (upstream.readyState === WebSocket.OPEN) upstream.send(frame, { binary });
+      else if (upstream.readyState === WebSocket.CONNECTING && queuedBytes + frame.byteLength <= MAX_FRAME_BYTES * 4) {
+        queued.push({ frame, binary }); queuedBytes += frame.byteLength;
+      } else client.close(1011, 'Fleet guest transport unavailable');
+    });
+    upstream.on('open', () => {
+      for (const entry of queued) upstream.send(entry.frame, { binary: entry.binary });
+      queued.length = 0;
+    });
+    upstream.on('message', (data, binary) => { if (client.readyState === WebSocket.OPEN) client.send(data, { binary }); });
+    upstream.on('close', () => { if (client.readyState === WebSocket.OPEN) client.close(1001); });
+    upstream.on('error', () => { if (client.readyState === WebSocket.OPEN) client.close(1011); });
+    client.on('close', () => { if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) upstream.close(); });
+    client.on('error', () => upstream.terminate());
   }
 
   function attachFacadeClient(runtime: SessionRuntime, clientSocket: WebSocket): void {
@@ -1608,8 +1735,12 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
 
   async function close(): Promise<void> {
     closing = true;
+    fleetBrowser.close();
+    hostService.stopFleetModelBrokers?.();
     if (automationTimer) clearInterval(automationTimer);
     automationTimer = null;
+    if (fleetProxyTimer) clearInterval(fleetProxyTimer);
+    fleetProxyTimer = null;
     for (const runtime of [...sessions.values()]) {
       if (runtime.recoveryTimer) clearTimeout(runtime.recoveryTimer);
       runtime.recoveryTimer = null;
@@ -1689,14 +1820,14 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
   socket.destroy();
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readJsonBody(request: IncomingMessage, limit = MAX_REQUEST_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBufferLike);
     total += buffer.byteLength;
-    if (total > MAX_REQUEST_BODY_BYTES) {
-      throw new HttpError(413, `Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes.`);
+    if (total > limit) {
+      throw new HttpError(413, `Request body exceeds ${limit} bytes.`);
     }
     chunks.push(buffer);
   }
@@ -1709,10 +1840,39 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   }
 }
 
+async function readProxyBody(request: IncomingMessage): Promise<Buffer | undefined> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBufferLike);
+    total += buffer.byteLength;
+    if (total > MAX_REQUEST_BODY_BYTES) throw new HttpError(413, 'Fleet proxy request body is too large.');
+    chunks.push(buffer);
+  }
+  return total ? Buffer.concat(chunks) : undefined;
+}
+
+function proxySessionId(pathname: string): string | null {
+  const direct = /^\/v1\/sessions\/([^/]+)(?:\/[^/]+)?$/u.exec(pathname);
+  const canonical = /^\/v1\/workspaces\/[^/]+\/sessions\/([^/]+)\/(?:update|events|collaboration|captures|event-details)$/u.exec(pathname);
+  const encoded = direct?.[1] ?? canonical?.[1];
+  if (!encoded) return null;
+  try { return decodeURIComponent(encoded); } catch { return null; }
+}
+
+function proxySessionState(value: string): BealeAppServerSessionCatalogEntry['state'] {
+  return value === 'starting' || value === 'running' || value === 'completed' || value === 'failed' || value === 'stopped'
+    ? value : 'running';
+}
+
 function sendJson(response: ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload);
   response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
   response.end(body);
+}
+
+function isLoopbackRequest(request: IncomingMessage): boolean {
+  return request.socket.remoteAddress === '127.0.0.1' || request.socket.remoteAddress === '::1';
 }
 
 function respondWithError(response: ServerResponse, error: unknown): void {

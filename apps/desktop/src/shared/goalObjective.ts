@@ -1,4 +1,14 @@
+import type { StartRunInput } from './types';
+
 const MAX_GOAL_OBJECTIVE_CHARS = 320;
+
+export function resolveSessionGoal(input: Pick<StartRunInput, 'goalEnabled' | 'goalObjective' | 'promptMarkdown'>): {
+  enabled: boolean;
+  objective: string | null;
+} {
+  if (!input.goalEnabled) return { enabled: false, objective: null };
+  return { enabled: true, objective: resolveGoalObjective(input.goalObjective, input.promptMarkdown) };
+}
 
 const EXPLICIT_OBJECTIVE_LINE = /^\s*(?:#{1,6}\s*)?(?:(?:research|session)\s+)?(?:goal|objective|direction)\s*:?[ \t]*(.*)$/i;
 const MARKDOWN_PREFIX = /^\s*(?:(?:#{1,6}|[-*+]|\d+[.)])\s+)+/;

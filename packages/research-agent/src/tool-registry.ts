@@ -31,7 +31,7 @@ export interface ResearchToolExecutionContext {
   signal?: AbortSignal;
   agentId?: string;
   modelAuthor?: ModelAuthor;
-  /** True only for a child agent spawned without parent or topic transcript inheritance. */
+  /** True only for a child agent spawned without parent transcript inheritance. */
   freshSubagentContext?: boolean;
   runbookContext?: {
     runbookId: string;

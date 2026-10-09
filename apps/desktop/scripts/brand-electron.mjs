@@ -12,12 +12,12 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const APP_NAME = 'Beale';
 const APP_ID = 'com.beale.app';
 const LOCAL_NETWORK_USAGE_DESCRIPTION = 'Beale connects to authorized local virtual machines and research targets.';
-const BRAND_VERSION = 4;
+const BRAND_VERSION = 5;
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 export function brandProjectElectron({
@@ -38,7 +38,7 @@ export function brandProjectElectron({
     .update(readFileSync(sourceIconPath))
     .digest('hex');
 
-  if (brandingIsCurrent(markerPath, bundleIconPath, plistPath, fingerprint)) {
+  if (brandingIsCurrent(markerPath, bundleIconPath, plistPath, electronAppPath, fingerprint)) {
     return { branded: false, reason: 'current' };
   }
 
@@ -59,15 +59,15 @@ export function brandProjectElectron({
   removePlistKey(plistPath, 'NSScreenCaptureUsageDescription');
   writeFileSync(markerPath, `${JSON.stringify({ fingerprint, appName: APP_NAME, appId: APP_ID })}\n`);
 
-  // Electron releases vary between unsealed and signed bundles. Re-signing ad hoc
-  // keeps the project-local development runtime launchable after metadata changes.
-  execFileSync('codesign', ['--force', '--deep', '--sign', '-', electronAppPath], { stdio: 'ignore' });
+  // Sign the outer app with Beale's identity. Deep signing with a replacement
+  // identifier would also rewrite bundled framework identities.
+  execFileSync('codesign', ['--force', '--sign', '-', '--identifier', APP_ID, electronAppPath], { stdio: 'ignore' });
   const now = new Date();
   utimesSync(electronAppPath, now, now);
   return { branded: true, reason: 'updated' };
 }
 
-function brandingIsCurrent(markerPath, iconPath, plistPath, fingerprint) {
+function brandingIsCurrent(markerPath, iconPath, plistPath, appPath, fingerprint) {
   if (!existsSync(markerPath) || !existsSync(iconPath) || !existsSync(plistPath)) return false;
   try {
     const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
@@ -77,10 +77,17 @@ function brandingIsCurrent(markerPath, iconPath, plistPath, fingerprint) {
       && plistString(plistPath, 'CFBundleIdentifier') === APP_ID
       && plistString(plistPath, 'CFBundleIconFile') === 'beale.icns'
       && plistString(plistPath, 'NSLocalNetworkUsageDescription') === LOCAL_NETWORK_USAGE_DESCRIPTION
-      && !plistHasKey(plistPath, 'NSScreenCaptureUsageDescription');
+      && !plistHasKey(plistPath, 'NSScreenCaptureUsageDescription')
+      && signedIdentifier(appPath) === APP_ID;
   } catch {
     return false;
   }
+}
+
+function signedIdentifier(appPath) {
+  const result = spawnSync('codesign', ['-d', '--verbose=2', appPath], { encoding: 'utf8' });
+  if (result.status !== 0) return null;
+  return result.stderr.match(/^Identifier=(.+)$/mu)?.[1] ?? null;
 }
 
 function generateMacIcon(sourceIconPath, temporaryPath) {

@@ -1,6 +1,5 @@
 import {
   AppServerSessionStore,
-  ResearchTopicStore,
   ResourcePriorArtStore,
   stableResourceId,
   AgentPluginRegistry,
@@ -115,7 +114,6 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
     );
   }
   if (operation.startsWith('session.')) return sessionOperation(operation, options);
-  if (operation.startsWith('topic.')) return topicOperation(operation, options);
   if (operation === 'resource.prior_art.list' || operation === 'resource.prior_art.get') {
     const input = requiredRecord(options.input, 'resource prior art input');
     const workspaceId = requiredText(input.workspaceId, 'workspaceId');
@@ -188,76 +186,6 @@ async function researchToolOperation(
   );
 }
 
-function topicOperation(operation: AppServerProtocolOperation, options: InvokeAppServerProtocolOptions): unknown {
-  const storage = requiredStorage(options.storage);
-  const store = new ResearchTopicStore({
-    databasePath: storage.databasePath,
-    ...(option(options.args, '--workspace-root') ? { workspaceRoot: option(options.args, '--workspace-root')! } : {})
-  });
-  try {
-    const input = isRecord(options.input) ? options.input : {};
-    const workspaceId = requiredText(input.workspaceId ?? option(options.args, '--workspace-id'), 'workspaceId');
-    const topic = optionalText(input.topic ?? option(options.args, '--topic'));
-    switch (operation) {
-      case 'topic.list': return store.list(
-        workspaceId,
-        integerOption(options.args, '--limit') ?? 200,
-        input.archived === true || option(options.args, '--archived') === 'true'
-      );
-      case 'topic.search': return store.search(workspaceId, requiredText(input.query, 'query'), integerOption(options.args, '--limit') ?? 50);
-      case 'topic.get': {
-        const detail = store.get(workspaceId, requiredText(topic, 'topic'), integerOption(options.args, '--message-limit') ?? 0);
-        if (!detail) throw new Error(`Topic not found in workspace: ${String(topic)}`);
-        return detail;
-      }
-      case 'topic.create': return store.create({
-        workspaceId,
-        name: requiredText(input.name, 'name'),
-        ...(optionalText(input.title) ? { title: optionalText(input.title)! } : {}),
-        topic: requiredText(input.topic, 'topic'),
-        ...(typeof input.overviewMarkdown === 'string' ? { overviewMarkdown: input.overviewMarkdown } : {}),
-        createdBySessionId: optionalText(input.sessionId),
-        createdByAgentPath: optionalText(input.agentPath) ?? '/human'
-      });
-      case 'topic.join': return store.join({
-        workspaceId,
-        topic: requiredText(topic, 'topic'),
-        sessionId: optionalText(input.sessionId),
-        agentId: optionalText(input.agentId),
-        agentPath: requiredText(input.agentPath, 'agentPath'),
-        provider: optionalText(input.provider),
-        model: optionalText(input.model),
-        role: optionalText(input.role) ?? 'researcher'
-      });
-      case 'topic.update_overview': return store.updateOverview(
-        workspaceId, requiredText(topic, 'topic'), requiredStringContent(input.contentMarkdown, 'contentMarkdown'),
-        optionalText(input.expectedUpdatedAt) ?? undefined
-      );
-      case 'topic.page.save': return store.savePage(workspaceId, requiredText(topic, 'topic'), {
-        ...(optionalText(input.id) ? { id: optionalText(input.id)! } : {}),
-        title: requiredText(input.title, 'title'),
-        contentMarkdown: requiredStringContent(input.contentMarkdown, 'contentMarkdown'),
-        ...(optionalText(input.expectedUpdatedAt) ? { expectedUpdatedAt: optionalText(input.expectedUpdatedAt)! } : {})
-      });
-      case 'topic.page.delete': return store.deletePage(workspaceId, requiredText(topic, 'topic'), requiredText(input.pageId, 'pageId'));
-      case 'topic.link': return store.link(workspaceId, requiredText(topic, 'topic'), {
-        kind: input.kind as never,
-        resourceId: requiredText(input.resourceId, 'resourceId'),
-        title: requiredText(input.title, 'title')
-      });
-      case 'topic.unlink': return store.unlink(workspaceId, requiredText(topic, 'topic'), requiredText(input.linkId, 'linkId'));
-      case 'topic.merge': return store.merge(workspaceId, requiredText(topic, 'topic'), requiredText(input.targetTopic, 'targetTopic'));
-      case 'topic.unmerge': return store.unmerge(workspaceId, requiredText(topic, 'topic'));
-      case 'topic.archive': return store.archive(workspaceId, requiredText(topic, 'topic'));
-      case 'topic.restore': return store.restore(workspaceId, requiredText(topic, 'topic'));
-      case 'topic.delete': return store.delete(workspaceId, requiredText(topic, 'topic'));
-      default: throw new Error(`Unsupported app-server topic operation: ${operation}`);
-    }
-  } finally {
-    store.close();
-  }
-}
-
 async function profileOperation(options: InvokeAppServerProtocolOptions): Promise<unknown> {
   const workspaceRoot = option(options.args, '--workspace-root') ?? process.cwd();
   const profilePath = option(options.args, '--profile');
@@ -271,6 +199,9 @@ async function profileOperation(options: InvokeAppServerProtocolOptions): Promis
     ...(profilePath ? { profilePath } : {}),
     ...(profileId ? { bundledProfileId: profileId as (typeof BUNDLED_RESEARCH_PROFILE_IDS)[number] } : {})
   });
+  if (resolved.profile.id !== 'security-research') {
+    throw new Error('Beale resolves active Security research profiles only.');
+  }
   return {
     catalogProtocolVersion: 1,
     supportedResearchProfileSchemaVersions: [RESEARCH_PROFILE_SCHEMA_VERSION],

@@ -48,6 +48,7 @@ export class ProviderAuthenticationRouter {
       this.#methods.set(
         providerId,
         providerId !== "openrouter" && preferred === "api_key" && !this.apiKey(providerId)
+          && !process.env.APP_SERVER_MODEL_BROKER_URL
           ? "subscription"
           : preferred,
       );

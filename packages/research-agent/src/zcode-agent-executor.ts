@@ -11,7 +11,6 @@ import { createCollaborationSystemGuidance } from "./collaboration-guidance.js";
 import { researchProfileHash, researchProfileWorkflow, type ResearchProfile } from "./research-profile.js";
 import {
   createSubagentRuntime,
-  type SubagentTopicContext,
   type SubagentRunRequest,
   type SubagentRunResult,
   type SubagentRuntimeFactory,
@@ -53,7 +52,6 @@ export interface CreateZCodeAgentExecutorOptions {
   subagents?: false;
   subagentRuntimeFactory?: SubagentRuntimeFactory;
   collaboration?: ResearchCollaborationConfig;
-  topicContext?: SubagentTopicContext;
   collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
     request: SubagentRunRequest,
@@ -104,6 +102,9 @@ export function extractCompatibleZCodeAgentResumableState(
 }
 
 export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOptions): ResearchAgentExecutor {
+  if (process.env.APP_SERVER_MODEL_BROKER_URL) {
+    throw new Error("Z.ai subscription SDK requests cannot run inside a brokered Fleet guest.");
+  }
   const workflow = researchProfileWorkflow(options.researchProfile, options.workflowId);
   const profileHash = researchProfileHash(options.researchProfile);
   return {
@@ -161,7 +162,6 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
             ...(options.reasoning ? { rootReasoning: options.reasoning as never } : {}),
             ...(collaboration ? { collaboration } : {}),
             signal: abortController.signal,
-            ...(options.topicContext ? { topicContext: options.topicContext } : {}),
             run: (request) => {
               if (!options.runAlternateSubagent) throw new Error("No provider-neutral channel collaborator is configured.");
               return options.runAlternateSubagent(request, input);

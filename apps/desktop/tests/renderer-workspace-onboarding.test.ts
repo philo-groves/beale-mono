@@ -16,7 +16,7 @@ import {
   setOnboardingResourceSelected,
   workspaceCreationViewError,
   workspaceCreationViews,
-  workspaceOnboardingFormForProfile
+  workspaceOnboardingFormForProfile,
 } from '../src/renderer/view-models/workspaceOnboarding';
 
 describe('renderer workspace onboarding view model', () => {
@@ -76,9 +76,9 @@ describe('renderer workspace onboarding view model', () => {
     expect(workspaceCreationViewError(general, 'resources')).toBe('Add at least one in-scope resource for security research.');
     expect(workspaceCreationViewError(general, 'rules')).toBe('Add at least one workspace rule for security research.');
 
-    const mathematics = workspaceOnboardingFormForProfile({ ...general, researchProfileId: 'mathematics' }, 'mathematics');
-    expect(workspaceCreationViewError(mathematics, 'resources')).toBeNull();
-    expect(workspaceCreationViewError(mathematics, 'rules')).toBeNull();
+    expect(workspaceCreationViewError({ ...general, researchProfileId: 'mathematics' }, 'overview'))
+      .toBe('The selected Research Kit is not compatible with this Research Profile.');
+    expect(() => workspaceOnboardingFormForProfile(general, 'mathematics')).toThrow(/Security research workspaces only/);
 
     const hackerOne = applyResearchKit(general, 'hackerone');
     expect(workspaceCreationViews(hackerOne)).toEqual(['overview', 'kit', 'resources', 'rules']);
@@ -129,6 +129,10 @@ describe('renderer workspace onboarding view model', () => {
     expect(meta.workspaceName).toBe(base.workspaceName);
     expect(meta.researchSubjectName).toBe(base.researchSubjectName);
     expect(meta.rules).toEqual(expect.arrayContaining([expect.stringContaining('test account')]));
+    expect(meta.rules).toEqual(expect.arrayContaining([
+      expect.stringContaining('The agent may conduct bounded research and browser inspection'),
+      expect.stringContaining('do not message, friend, follow, invite, tag, mention, notify')
+    ]));
     expect(meta.descriptionMarkdown).toContain('https://bugbounty.meta.com/scope/');
     expect(meta.assets).toEqual(expect.arrayContaining([
       expect.objectContaining({ direction: 'in_scope', kind: 'domain', value: 'facebook.com' }),
@@ -166,12 +170,12 @@ describe('renderer workspace onboarding view model', () => {
     }]);
   });
 
-  it('forces mathematics workspaces back to the manual template', () => {
+  it('offers research kits only for Security workspaces', () => {
     const apple = applyResearchKit(onboardingFormFromDefaults(defaults()), 'apple-security-bounty');
 
-    expect(workspaceOnboardingFormForProfile(apple, 'mathematics').researchKitId).toBe('general');
-    expect(workspaceOnboardingFormForProfile(apple, 'security-research')).toBe(apple);
-    expect(researchKitsForProfile('mathematics').map((kit) => kit.id)).not.toContain('meta-bug-bounty');
+    expect(apple.researchKitId).toBe('apple-security-bounty');
+    expect(researchKitsForProfile('security-research').length).toBeGreaterThan(0);
+    expect(researchKitsForProfile('mathematics')).toEqual([]);
   });
 
   it('applies a HackerOne lookup without changing the workspace identity or directory', () => {

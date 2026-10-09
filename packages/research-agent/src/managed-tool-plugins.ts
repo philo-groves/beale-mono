@@ -36,8 +36,13 @@ export const MANAGED_TOOL_PLUGINS = [
   },
   {
     id: "beale-browser", name: "Browser",
-    description: "Use isolated Beale browser contexts or compatible external browsers through Chrome DevTools Protocol targets, commands, and events.",
+    description: "Use for controlling isolated Beale browser contexts or compatible external browsers through Chrome DevTools Protocol targets, commands, and events.",
     tools: ["browser.contexts", "browser.context.create", "browser.context.close", "browser.context.open", "browser.targets", "browser.connect", "browser.command", "browser.events", "browser.disconnect"],
+  },
+  {
+    id: "beale-fleet", name: "Fleet",
+    description: "Use for listing, cloning, starting, and stopping operator-configured local virtual machines.",
+    tools: ["fleet.list", "fleet.clone", "fleet.start", "fleet.stop"],
   },
 ] as const;
 

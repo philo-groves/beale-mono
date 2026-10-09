@@ -5,7 +5,6 @@ import {
   SUBAGENT_COLLABORATION_TOOLS,
   type CreateSubagentManagerOptions,
   type SubagentActivity,
-  type SubagentTopicContext,
   type SubagentRunRequest,
   type SubagentRunResult,
 } from "./subagent-runtime.js";
@@ -19,7 +18,6 @@ import { advancedSubagentRuntimeFactory } from "./advanced-subagent-runtime.js";
 export {
   SUBAGENT_COLLABORATION_TOOLS,
   type SubagentActivity,
-  type SubagentTopicContext,
   type SubagentRunRequest,
   type SubagentRunResult,
 } from "./subagent-runtime.js";
@@ -54,7 +52,6 @@ export interface CreateSubagentRuntimeOptions {
     maxDepth?: number;
   };
   collaboration?: ResearchCollaborationConfig;
-  topicContext?: SubagentTopicContext;
   signal?: AbortSignal;
   run(request: SubagentRunRequest): Promise<SubagentRunResult>;
   onActivity?: (activity: SubagentActivity) => void | Promise<void>;
@@ -95,7 +92,6 @@ export const simpleSubagentRuntimeFactory: SubagentRuntimeFactory = {
           enabled: preference.enabled,
         })),
       } : {}),
-      ...(options.topicContext ? { topicContext: options.topicContext } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       run: options.run,
       ...(options.onActivity ? { onActivity: options.onActivity } : {}),

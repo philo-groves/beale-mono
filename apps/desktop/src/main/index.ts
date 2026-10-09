@@ -54,14 +54,7 @@ import type {
   WorkspaceEditorId,
   WorkspaceMemoryBackendId,
   RepositoryCloneMode,
-  ResearchTopicSummary,
-  ResearchTopicDetail,
-  ResearchTopicRecord,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchSessionSummary,
-  CreateResearchTopicInput,
 } from '@shared/types';
 import { getHostEnvironment, WorkspaceService, type WorkspaceChange } from './workspaceService';
 import { nativeMacApplicationMenuTemplate } from './nativeApplicationMenu';
@@ -76,6 +69,8 @@ import { resolveContentLink } from './contentLinks';
 import { WorkspaceTerminalService } from './workspaceTerminalService';
 import { TicketingService } from './ticketingService';
 import { allowedBrowserUrl, InAgentBrowserBridge } from './inAgentBrowserBridge';
+import { FleetBrowserViewer } from './fleetBrowserViewer';
+import type { FleetBrowserInput } from '../shared/fleetBrowser';
 import {
   NATIVE_WINDOW_SHAPE_RADIUS_PX,
   needsExplicitRoundedWindowShape,
@@ -87,6 +82,7 @@ import {
   fetchAppServerCanonicalResultWithRecovery,
   invokeAppServerOperation,
   restartBealeAppServer,
+  restartBealeAppServerViaSupervisor,
   setBealeDesktopRestartRequiredHandler
 } from './bealeAppServerClient';
 import {
@@ -105,6 +101,9 @@ let iosDeviceCaptureService: IosDeviceCaptureService;
 let workspaceTerminalService: WorkspaceTerminalService;
 let ticketingService: TicketingService;
 let inAgentBrowserBridge: InAgentBrowserBridge | null = null;
+const fleetBrowserViewer = new FleetBrowserViewer((update) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.fleetBrowserUpdate, update);
+});
 let appServerRestartDialog: Promise<boolean> | null = null;
 const runDetailRequestControllers = new Map<string, AbortController>();
 const researchGoalSuggestionControllers = new Map<string, AbortController>();
@@ -570,6 +569,15 @@ function workspaceRegistryBroadcastMetricDetail(workspaceRegistry: WorkspaceRegi
 
 function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.listBrowserContexts, () => inAgentBrowserBridge?.listContexts() ?? []);
+  ipcMain.handle(IPC_CHANNELS.fleetBrowserMachine, (_event, runId: string) => workspaceService.fleetBrowserMachineId(runId));
+  ipcMain.handle(IPC_CHANNELS.connectFleetBrowser, (_event, runId: string, remoteServerId?: string) => {
+    if (remoteServerId) { fleetBrowserViewer.connectRemote(runId, remoteServerId); return; }
+    const machineId = workspaceService.fleetBrowserMachineId(runId);
+    if (!machineId) throw new Error('This session does not run in a Fleet VM.');
+    fleetBrowserViewer.connect(runId, machineId);
+  });
+  ipcMain.handle(IPC_CHANNELS.disconnectFleetBrowser, (_event, runId: string) => fleetBrowserViewer.disconnect(runId));
+  ipcMain.handle(IPC_CHANNELS.fleetBrowserInput, (_event, runId: string, input: FleetBrowserInput) => fleetBrowserViewer.input(runId, input));
   ipcMain.handle(IPC_CHANNELS.createBrowserContext, (_event, label: string) => {
     if (!inAgentBrowserBridge) throw new Error('The embedded browser is unavailable.');
     return inAgentBrowserBridge.createContext(label);
@@ -612,117 +620,6 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.getWorkspaceRegistry, () =>
     timedMainIpcAsync('getWorkspaceRegistry', {}, () => workspaceService.getWorkspaceRegistryStateForClient())
   );
-  ipcMain.handle(IPC_CHANNELS.listResearchTopics, async (_event, workspaceId: string): Promise<ResearchTopicSummary[]> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicSummary[]>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.listArchivedResearchTopics, async (_event, workspaceId: string): Promise<ResearchTopicSummary[]> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicSummary[]>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics?archived=true`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.listArchivedQuickChats, (): ResearchSessionSummary[] => (
-    workspaceService.listArchivedQuickChats()
-  ));
-  ipcMain.handle(IPC_CHANNELS.getResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<ResearchTopicDetail> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicDetail>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}?includeHistory=true`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.createResearchTopic, async (_event, workspaceId: string, input: CreateResearchTopicInput): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics`,
-      { method: 'POST', body: input }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.searchResearchTopics, async (_event, workspaceId: string, query: string): Promise<ResearchTopicSummary[]> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicSummary[]>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics?query=${encodeURIComponent(query)}`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.updateResearchTopicOverview, async (_event, workspaceId: string, topicId: string, contentMarkdown: string, expectedUpdatedAt?: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/overview`,
-      { method: 'PATCH', body: { contentMarkdown, expectedUpdatedAt } }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.saveResearchTopicPage, async (_event, workspaceId: string, topicId: string, input: { id?: string; title: string; contentMarkdown: string; expectedUpdatedAt?: string }): Promise<ResearchTopicPageRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicPageRecord>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/pages`,
-      { method: 'PUT', body: input }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.deleteResearchTopicPage, async (_event, workspaceId: string, topicId: string, pageId: string): Promise<void> => {
-    const server = await ensureBealeAppServerRunning();
-    await fetchAppServerCanonicalResultWithRecovery(server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/pages/${encodeURIComponent(pageId)}`,
-      { method: 'DELETE' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.linkResearchTopicResource, async (_event, workspaceId: string, topicId: string, input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }): Promise<ResearchTopicLinkRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicLinkRecord>(server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/links`,
-      { method: 'POST', body: input }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.unlinkResearchTopicResource, async (_event, workspaceId: string, topicId: string, linkId: string): Promise<void> => {
-    const server = await ensureBealeAppServerRunning();
-    await fetchAppServerCanonicalResultWithRecovery(server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/links/${encodeURIComponent(linkId)}`,
-      { method: 'DELETE' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.mergeResearchTopic, async (_event, workspaceId: string, sourceTopicId: string, targetTopicId: string): Promise<{ source: ResearchTopicRecord; target: ResearchTopicRecord }> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<{ source: ResearchTopicRecord; target: ResearchTopicRecord }>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(sourceTopicId)}/merge`,
-      { method: 'POST', body: { targetTopic: targetTopicId } }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.unmergeResearchTopic, async (_event, workspaceId: string, sourceTopicId: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(sourceTopicId)}/unmerge`,
-      { method: 'POST' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.deleteResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<void> => {
-    const server = await ensureBealeAppServerRunning();
-    await fetchAppServerCanonicalResultWithRecovery(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}`,
-      { method: 'DELETE' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.archiveResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/archive`,
-      { method: 'POST' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.restoreResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/restore`,
-      { method: 'POST' }
-    );
-  });
   ipcMain.handle(IPC_CHANNELS.archiveResearchSession, (_event, sessionId: string) =>
     workspaceService.archiveResearchSession(sessionId)
   );
@@ -800,6 +697,21 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.resetPromptTemplate, (_event, profileId: ResearchProfileId) => workspaceService.resetPromptTemplate(profileId));
   ipcMain.handle(IPC_CHANNELS.previewPromptTemplate, (_event, profileId: ResearchProfileId, template: string, agentPath?: string) => workspaceService.previewPromptTemplate(profileId, template, agentPath));
   ipcMain.handle(IPC_CHANNELS.getAgentPlugins, () => workspaceService.getAgentPlugins());
+  ipcMain.handle(IPC_CHANNELS.getFleetState, () => workspaceService.getFleetState());
+  ipcMain.handle(IPC_CHANNELS.restartLocalAppServer, async () => { await restartBealeAppServerViaSupervisor(); });
+  ipcMain.handle(IPC_CHANNELS.restartFleetAppServer, (_event, serverId: string) => workspaceService.restartFleetAppServer(serverId));
+  ipcMain.handle(IPC_CHANNELS.restartFleetGuestAppServer, (_event, machineId: string) => workspaceService.restartFleetGuestAppServer(machineId));
+  ipcMain.handle(IPC_CHANNELS.getFleetRemoteMachines, () => workspaceService.getFleetRemoteMachines());
+  ipcMain.handle(IPC_CHANNELS.getFleetRemoteCatalog, (_event, serverId: string) => workspaceService.getFleetRemoteCatalog(serverId));
+  ipcMain.handle(IPC_CHANNELS.getFleetRemoteSession, (_event, serverId: string, workspaceId: string, sessionId: string) => workspaceService.getFleetRemoteSession(serverId, workspaceId, sessionId));
+  ipcMain.handle(IPC_CHANNELS.startFleetRemoteSession, (_event, serverId: string, workspaceId: string, promptMarkdown: string, machineId: string) => workspaceService.startFleetRemoteSession(serverId, workspaceId, promptMarkdown, machineId));
+  ipcMain.handle(IPC_CHANNELS.controlFleetRemoteSession, (_event, serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string) => workspaceService.controlFleetRemoteSession(serverId, sessionId, type, instruction));
+  ipcMain.handle(IPC_CHANNELS.configureFleet, (_event, input: Record<string, unknown>) => workspaceService.configureFleet(input));
+  ipcMain.handle(IPC_CHANNELS.testFleetVmConnection, (_event, input: import('@beale/app-server-runtime/protocol').FleetSshTestInput) => workspaceService.testFleetVmConnection(input));
+  ipcMain.handle(IPC_CHANNELS.testFleetAppServer, (_event, input: { serverId?: string; url: string; operatorToken: string }) => workspaceService.testFleetAppServer(input));
+  ipcMain.handle(IPC_CHANNELS.cloneFleetVm, (_event, baseId: string, name: string) => workspaceService.cloneFleetVm(baseId, name));
+  ipcMain.handle(IPC_CHANNELS.startFleetVm, (_event, machineId: string) => workspaceService.startFleetVm(machineId));
+  ipcMain.handle(IPC_CHANNELS.stopFleetVm, (_event, machineId: string) => workspaceService.stopFleetVm(machineId));
   ipcMain.handle(IPC_CHANNELS.addAgentPluginFromFilesystem, async () => {
     const result = await dialog.showOpenDialog({
       title: 'Add Agent Plugin',
@@ -1039,9 +951,6 @@ function registerIpc(): void {
   );
   ipcMain.handle(IPC_CHANNELS.runWorkspaceDejunk, () =>
     timedMainIpc('runWorkspaceDejunk', {}, () => workspaceService.runWorkspaceDejunk())
-  );
-  ipcMain.handle(IPC_CHANNELS.repairWorkspaceCheckpoint, (_event, fingerprint: string) =>
-    timedMainIpcAsync('repairWorkspaceCheckpoint', {}, () => workspaceService.repairWorkspaceCheckpoint(fingerprint))
   );
   ipcMain.handle(IPC_CHANNELS.runMemoryDreaming, (event) =>
     timedMainIpcAsync('runMemoryDreaming', {}, () => workspaceService.runMemoryDreaming((update) => {
@@ -1332,6 +1241,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('before-quit', () => {
+    fleetBrowserViewer.close();
     inAgentBrowserBridge?.stop();
     workspaceTerminalService?.dispose();
     iosDeviceCaptureService?.dispose();

@@ -9,7 +9,7 @@ import { isManagedToolPluginId, MANAGED_TOOL_PLUGINS, type ResearchPluginCatalog
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
 import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
-import { decodeClaimBoardTransitionRequest, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
+import { decodeClaimBoardTransitionRequest, type FleetSshTestInput, type FleetSshTestResult, type FleetState, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput } from '@beale/app-server-runtime/protocol';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -109,7 +109,7 @@ import {
 } from './researchGoalSuggestions';
 import { resolveGoalObjective } from '../shared/goalObjective';
 import { normalizeResearchCollaboration } from '../shared/collaboration';
-import { isResearchProfileId, RESEARCH_PROFILE_IDS } from '../shared/researchProfile';
+import { ACTIVE_RESEARCH_PROFILE_IDS, isResearchProfileId } from '../shared/researchProfile';
 import { researchKitDefinition, researchKitResourceKey, researchKitSupportsProfile, selectedResearchKitCatalogAssets } from '../shared/researchKits';
 import { normalizeRepeatSchedule } from '../shared/repeatSchedule';
 import { DEFAULT_SHELL_SAFETY_MODE, normalizeShellSafetyMode } from '../shared/shellSafety';
@@ -733,7 +733,11 @@ export class WorkspaceService {
   public openLastWorkspaceIfAvailable(): WorkspaceSnapshot | null {
     const current = this.getSnapshot();
     if (current) return current;
-    const workspace = this.getWorkspaceRegistry().getLastKnownWorkspace();
+    const registry = this.getWorkspaceRegistry();
+    const lastKnown = registry.getLastKnownWorkspace();
+    const workspace = lastKnown?.researchProfileId === 'security-research'
+      ? lastKnown
+      : registry.getState().workspaces[0];
     if (!workspace || !isExistingWorkspace(workspace.workspacePath)) {
       return null;
     }
@@ -895,10 +899,10 @@ export class WorkspaceService {
   public async getResearchProfiles(): Promise<ResolvedResearchProfile[]> {
     const workspacePath = this.workspacePath ?? process.cwd();
     if (this.options.researchProfileResolver) {
-      return RESEARCH_PROFILE_IDS.map((profileId) => this.options.researchProfileResolver!(workspacePath, profileId));
+      return ACTIVE_RESEARCH_PROFILE_IDS.map((profileId) => this.options.researchProfileResolver!(workspacePath, profileId));
     }
     return Promise.all(
-      RESEARCH_PROFILE_IDS.map((profileId) => this.researchProfileService.resolveAsync(workspacePath, profileId))
+      ACTIVE_RESEARCH_PROFILE_IDS.map((profileId) => this.researchProfileService.resolveAsync(workspacePath, profileId))
     );
   }
 
@@ -972,6 +976,68 @@ export class WorkspaceService {
 
   public getAgentPlugins(): AgentPluginRegistryState {
     return this.getAgentPluginRegistry().getState();
+  }
+
+  public getFleetState(): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.state' });
+  }
+
+  public fleetBrowserMachineId(runId: string): string | null {
+    const run = this.runtimeForRunId(runId)?.db.getRun(runId);
+    const machineId = run?.budget.machineId;
+    return typeof machineId === 'string' && machineId.trim() && machineId !== 'local' ? machineId : null;
+  }
+
+  public async restartFleetAppServer(serverId: string): Promise<void> {
+    await invokeAppServerOperation({ operation: 'fleet.restart_app_server', input: { serverId } });
+  }
+
+  public async restartFleetGuestAppServer(machineId: string): Promise<void> {
+    await invokeAppServerOperation({ operation: 'fleet.restart_guest_app_server', input: { machineId } });
+  }
+
+  public getFleetRemoteMachines(): Promise<import('@beale/app-server-runtime/protocol').FleetMachine[]> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_machines' });
+  }
+
+  public getFleetRemoteCatalog(serverId: string): Promise<import('@beale/app-server-runtime/protocol').FleetRemoteCatalog> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_catalog', input: { serverId } });
+  }
+
+  public getFleetRemoteSession(serverId: string, workspaceId: string, sessionId: string): Promise<unknown> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_session', input: { serverId, workspaceId, sessionId } });
+  }
+
+  public startFleetRemoteSession(serverId: string, workspaceId: string, promptMarkdown: string, machineId: string): Promise<{ sessionId: string }> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_launch', input: { serverId, workspaceId, promptMarkdown, machineId } });
+  }
+
+  public controlFleetRemoteSession(serverId: string, sessionId: string, type: 'pause' | 'resume' | 'stop' | 'steer', instruction?: string): Promise<void> {
+    return invokeAppServerOperation({ operation: 'fleet.remote_control', input: { serverId, sessionId, type, instruction } });
+  }
+
+  public configureFleet(input: Record<string, unknown>): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.configure', input });
+  }
+
+  public testFleetVmConnection(input: FleetSshTestInput): Promise<FleetSshTestResult> {
+    return invokeAppServerOperation<FleetSshTestResult>({ operation: 'fleet.test_ssh', input });
+  }
+
+  public testFleetAppServer(input: { serverId?: string; url: string; operatorToken: string }): Promise<{ success: boolean; message: string }> {
+    return invokeAppServerOperation({ operation: 'fleet.test_app_server', input });
+  }
+
+  public cloneFleetVm(baseId: string, name: string): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.clone', input: { baseId, name } });
+  }
+
+  public startFleetVm(machineId: string): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.start', input: { machineId } });
+  }
+
+  public stopFleetVm(machineId: string): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.stop', input: { machineId } });
   }
 
   public addAgentPluginFromFilesystem(pluginRoot: string): AgentPluginRegistryState {
@@ -1743,23 +1809,6 @@ export class WorkspaceService {
     return summary;
   }
 
-  public async repairWorkspaceCheckpoint(fingerprint: string): Promise<WorkspaceSnapshot> {
-    const runtime = this.getForegroundRuntime();
-    if (!runtime) throw new Error('No Beale workspace is open');
-    if (runtime.db.listRunRows().some(({ run }) => isLiveResearchRunStatus(run.status))) {
-      throw new Error('Stop workspace research before repairing a checkpoint.');
-    }
-    const result = await invokeAppServerOperation<WorkspaceCheckpointResult>({
-      operation: 'workspace.project',
-      input: { workspaceId: runtime.db.getWorkspaceId(), action: 'repair', fingerprint }
-    });
-    invalidateWorkspaceDejunkSummary(runtime.workspacePath);
-    this.workspaceDejunkSummaries.set(runtime.workspacePath, await getWorkspaceDejunkSummaryAsync(runtime.workspacePath));
-    this.emitChange({ syncWorkspaceRegistry: false, workspaceRegistryChanged: false });
-    if (result.status === 'failed') throw new Error(result.error ?? 'Checkpoint repair failed.');
-    return this.requireSnapshot();
-  }
-
   public async runMemoryDreaming(onProgress: MemoryDreamingProgressHandler | null = null): Promise<WorkspaceSnapshot> {
     const runtime = this.getForegroundRuntime();
     if (!runtime) {
@@ -2158,7 +2207,7 @@ export class WorkspaceService {
     const workspacePath = initialRuntime.workspacePath;
     const researchKitId = initialRuntime.db.getResearchKitId();
     const kit = researchKitDefinition(researchKitId);
-    if (!kit.refresh) throw new Error('The General Research Kit has no imports to refresh.');
+    if (!kit.refresh) throw new Error('The Manual Security kit has no imports to refresh.');
     if (input.selectedResourceKeys && !kit.resourceCatalog) throw new Error('This Research Kit has no selectable resource catalog.');
 
     let importedAssets: ScopeAssetInput[] | null = null;
@@ -2290,6 +2339,9 @@ export class WorkspaceService {
     const profileId = input.researchProfileId ?? 'security-research';
     if (!isResearchProfileId(profileId)) {
       throw new Error(`Unsupported research profile: ${String(profileId)}`);
+    }
+    if (profileId !== 'security-research') {
+      throw new Error('New Beale workspaces require the Security research profile.');
     }
     const researchKitId = input.researchKitId ?? 'general';
     if (!isResearchKitId(researchKitId)) {
@@ -3506,7 +3558,14 @@ export class WorkspaceService {
       ...(input.collaboration ? { collaboration: normalizeResearchCollaboration(input.collaboration) } : {})
     };
     if (!runtime) throw new Error('No Beale workspace is open');
+    if (normalizedInput.machineId && normalizedInput.machineId !== 'local'
+      && normalizeRepeatSchedule(normalizedInput.budget.repeatSchedule).type !== 'none') {
+      throw new Error('Repeating research sessions are not available on Fleet VMs. Choose No repeat or Local.');
+    }
     const researchProfile = this.refreshResearchProfile(runtime);
+    if (researchProfile.profile.id !== 'security-research') {
+      throw new Error('Beale starts new research sessions only in Security workspaces.');
+    }
     const providerSettings = this.getWorkspaceRegistry().getProviderSettings();
     const requestedProvider = normalizedInput.provider?.trim() || null;
     const explicitProvider = isResearchModelProviderId(requestedProvider) ? requestedProvider : null;
@@ -4261,6 +4320,7 @@ export class WorkspaceService {
           ? run.budget.goalObjective
           : null;
         const forkInput: StartRunInput = {
+          machineId: typeof run.budget.machineId === 'string' ? run.budget.machineId : 'local',
           provider: typeof run.budget.modelProvider === 'string' ? run.budget.modelProvider : undefined,
           shellSafetyMode: run.shellSafetyMode === 'danger' ? DEFAULT_SHELL_SAFETY_MODE : run.shellSafetyMode,
           goalEnabled: run.budget.goalEnabled === true,
@@ -4456,6 +4516,7 @@ export class WorkspaceService {
             .filter((session) => session.registryWorkspaceId === workspace.id
               && session.runEngine === 'app-server'
               && session.status === 'active'
+              && (!session.machineId || session.machineId === 'local')
               && !canonicalIds.has(session.runId))
             .map((session) => session.runId);
           await registry.markAppServerSessionsInterruptedAsync(
@@ -4645,6 +4706,10 @@ export class WorkspaceService {
     syncRegistry = true
   ): WorkspaceSnapshot {
     const workspacePath = resolve(path);
+    const registered = this.getWorkspaceRegistry().getWorkspaceByPath(workspacePath);
+    if (registered && registered.researchProfileId !== 'security-research') {
+      throw new Error('This non-security workspace is hidden from Beale. Its research files and records remain on disk.');
+    }
     if (create) {
       mkdirSync(workspacePath, { recursive: true });
     } else {
@@ -4755,9 +4820,11 @@ export class WorkspaceService {
     const registryWorkspace = registry.getWorkspaceByPath(workspacePath);
     const selectedProfileId = requestedProfileId ?? registryWorkspace?.researchProfileId ?? 'security-research';
     const resolvedResearchProfile = this.resolveResearchProfile(workspacePath, selectedProfileId);
-    // Workspace-local profiles may replace the selected bundled profile with
-    // their own stable identity. Resolve that identity before choosing global
-    // storage or publishing the workspace to the app-server registry.
+    if (resolvedResearchProfile.profile.id !== 'security-research') {
+      throw new Error('This non-security workspace is hidden from Beale. Its research files and records remain on disk.');
+    }
+    // Workspace-local Security customizations retain the Security identity.
+    // Resolve that identity before choosing global storage or publishing the workspace.
     const profileId = resolvedResearchProfile.profile.id as ResearchProfileId;
     const memoryBackend = registryWorkspace?.memoryBackend ?? 'app-server';
     const databasePath = this.globalAppServerDatabasePath(profileId);
@@ -4768,6 +4835,11 @@ export class WorkspaceService {
       researchKitId: requestedResearchKitId ?? registryWorkspace?.researchKitId ?? 'general'
     });
     db.initialize();
+    const previousProfile = db.getActiveResearchProfileSnapshot();
+    if (previousProfile && previousProfile.profile.id !== 'security-research') {
+      db.close();
+      throw new Error('This non-security workspace is hidden from Beale. Its research files and records remain on disk.');
+    }
     if (createProject) db.initializeResearchProject();
     migrateWorkspaceDescription(workspacePath, db.getActiveScope().descriptionMarkdown);
     const openedAt = new Date().toISOString();
