@@ -125,16 +125,15 @@ describe('renderer app shell view model', () => {
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: 'settings', onOpenHome: onNavigate, onOpenAutomations: onNavigate,
-      onOpenWorkflows: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
 
     expect(html).toContain('aria-label="Main navigation"');
-    for (const label of ['Home', 'Automations', 'Workflows', 'Plugins', 'Agent Settings']) {
+    for (const label of ['Home', 'Automations', 'Plugins', 'Agent Settings']) {
       expect(html).toContain(`aria-label="${label}"`);
       expect(html).toContain(`data-tooltip="${label}"`);
     }
     expect(html.indexOf('aria-label="Home"')).toBeLessThan(html.indexOf('aria-label="Automations"'));
-    expect(html.indexOf('aria-label="Workflows"')).toBeLessThan(html.indexOf('aria-label="Plugins"'));
     expect(html.indexOf('aria-label="Plugins"')).toBeLessThan(html.indexOf('aria-label="Agent Settings"'));
     expect(html).toContain('class="app-navigation-rail-filled-icon"');
     expect(html).toContain('aria-current="page"');
@@ -155,13 +154,13 @@ describe('renderer app shell view model', () => {
 
   it('fills only the active navigation icon', () => {
     const onNavigate = () => undefined;
-    for (const active of ['home', 'automations', 'workflows', 'plugins', 'settings'] as const) {
+    for (const active of ['home', 'automations', 'plugins', 'settings'] as const) {
       const html = renderToStaticMarkup(createElement(AppNavigationRail, {
         active, onOpenHome: onNavigate, onOpenAutomations: onNavigate,
-        onOpenWorkflows: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+        onOpenPlugins: onNavigate, onOpenSettings: onNavigate
       }));
       expect(html.match(/class="app-navigation-rail-filled-icon"/gu)).toHaveLength(1);
-      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(4);
+      expect(html.match(/class="lucide lucide-/gu)).toHaveLength(3);
       expect(html.match(/aria-current="page"/gu)).toHaveLength(1);
     }
   });
@@ -170,17 +169,16 @@ describe('renderer app shell view model', () => {
     const base = { settingsOpen: false, automationsOpen: false, pluginsOpen: false };
     expect(resolveAppNavigationDestination(base)).toBe('home');
     expect(resolveAppNavigationDestination({ ...base, automationsOpen: true })).toBe('automations');
-    expect(resolveAppNavigationDestination({ ...base, workflowsOpen: true })).toBe('workflows');
     expect(resolveAppNavigationDestination({ ...base, pluginsOpen: true })).toBe('plugins');
     expect(resolveAppNavigationDestination({ ...base, settingsOpen: true })).toBe('settings');
 
     const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, workflowsOpen, pluginsOpen })');
+    expect(appSource).toContain('resolveAppNavigationDestination({ settingsOpen, automationsOpen, pluginsOpen })');
     const onNavigate = () => undefined;
     const html = renderToStaticMarkup(createElement(AppNavigationRail, {
       active: resolveAppNavigationDestination(base),
       onOpenHome: onNavigate, onOpenAutomations: onNavigate,
-      onOpenWorkflows: onNavigate, onOpenPlugins: onNavigate, onOpenSettings: onNavigate
+      onOpenPlugins: onNavigate, onOpenSettings: onNavigate
     }));
     expect(html).toContain('class="app-navigation-rail-button active" data-tooltip="Home"');
     expect(html.match(/aria-current="page"/gu)).toHaveLength(1);

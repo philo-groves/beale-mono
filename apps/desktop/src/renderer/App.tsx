@@ -34,9 +34,6 @@ import type {
   ResolvedResearchProfile,
   ResearchProviderStatus,
   ResearchSessionSummary,
-  SessionWorkflowDefinition,
-  SessionWorkflowDraft,
-  SessionWorkflowUpdateInput,
   StartRunInput,
   RunDetailProjection,
   RunRecord,
@@ -71,13 +68,11 @@ import { WorkspaceCreationView } from './features/workspaces/WorkspaceCreationVi
 import { MainSessionWorkspace } from './features/sessions/MainSessionWorkspace';
 import { SessionOverviewDialog } from './features/sessions/SessionOverviewDialog';
 import { StartRunForm } from './features/sessions/StartRunForm';
-import { workflowRunInput } from './view-models/runSettings';
 import { workspaceScopeDraftForConfigurationUpdate } from './features/workspaces/WorkspaceUnderstandingView';
 import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from './features/workspaces/WorkspaceUnderstandingView';
 import { ReportSessionWorkspace } from './features/reports/ReportsWorkspace';
 import { AutomationsSidebar, AutomationsWorkspace } from './features/automations/AutomationsWorkspace';
 import { PluginManagerWorkspace, PluginsSidebar } from './features/plugins/PluginManagerWorkspace';
-import { WorkflowsSidebar, WorkflowsWorkspace } from './features/workflows/WorkflowsWorkspace';
 import {
   isInlineApproval,
   pendingShellApproval,
@@ -358,54 +353,6 @@ export function App(): JSX.Element {
     const openRunIds = new Set(quickChats.flatMap((chat) => chat.runId ? [chat.runId] : []));
     return archivedQuickChats.filter((session) => !openRunIds.has(session.runId));
   }, [archivedQuickChats, quickChats]);
-  const [workflowsOpen, setWorkflowsOpen] = useState(false);
-  const [workflowScopeWorkspaceId, setWorkflowScopeWorkspaceId] = useState<string | null>(null);
-  const [sessionWorkflows, setSessionWorkflows] = useState<SessionWorkflowDefinition[]>([]);
-  const [selectedSessionWorkflowId, setSelectedSessionWorkflowId] = useState<string | null>(null);
-  const [creatingSessionWorkflow, setCreatingSessionWorkflow] = useState(false);
-  const [sessionWorkflowBusy, setSessionWorkflowBusy] = useState(false);
-  const [sessionWorkflowError, setSessionWorkflowError] = useState<string | null>(null);
-  const [workflowFieldValuesByKey, setWorkflowFieldValuesByKey] = useState<Record<string, Record<string, string>>>({});
-  const workflowFieldValuesKey = `${workflowScopeWorkspaceId ?? 'none'}:${creatingSessionWorkflow ? 'create' : selectedSessionWorkflowId ?? 'none'}`;
-  useEffect(() => {
-    if (!snapshot) { setSessionWorkflows([]); return; }
-    if (!newResearchOpen && (!workflowsOpen || workflowScopeWorkspaceId !== snapshot.workspace.workspaceId)) {
-      if (workflowsOpen) setSessionWorkflows([]);
-      return;
-    }
-    let cancelled = false;
-    window.beale.listSessionWorkflows().then((definitions) => {
-      if (cancelled) return;
-      setSessionWorkflows(definitions);
-      setSelectedSessionWorkflowId((current) => definitions.some((definition) => definition.id === current) ? current : definitions[0]?.id ?? null);
-      setSessionWorkflowError(null);
-    }).catch((caught: unknown) => { if (!cancelled) setSessionWorkflowError(errorMessage(caught)); });
-    return () => { cancelled = true; };
-  }, [snapshot?.workspace.workspaceId, workflowsOpen, workflowScopeWorkspaceId, newResearchOpen]);
-  const createSessionWorkflow = useCallback(async (input: SessionWorkflowDraft): Promise<SessionWorkflowDefinition | null> => {
-    setSessionWorkflowBusy(true);
-    setSessionWorkflowError(null);
-    try {
-      const definition = await window.beale.createSessionWorkflow(input);
-      setWorkflowFieldValuesByKey((current) => ({ ...current,
-        [`${workflowScopeWorkspaceId ?? 'none'}:${definition.id}`]: current[`${workflowScopeWorkspaceId ?? 'none'}:create`] ?? {} }));
-      setSessionWorkflows((current) => [...current, definition]);
-      setSelectedSessionWorkflowId(definition.id);
-      setCreatingSessionWorkflow(false);
-      return definition;
-    } catch (caught: unknown) { setSessionWorkflowError(errorMessage(caught)); return null; }
-    finally { setSessionWorkflowBusy(false); }
-  }, [workflowScopeWorkspaceId]);
-  const updateSessionWorkflow = useCallback(async (input: SessionWorkflowUpdateInput): Promise<SessionWorkflowDefinition | null> => {
-    setSessionWorkflowBusy(true);
-    setSessionWorkflowError(null);
-    try {
-      const definition = await window.beale.updateSessionWorkflow(input);
-      setSessionWorkflows((current) => current.map((workflow) => workflow.id === definition.id ? definition : workflow));
-      return definition;
-    } catch (caught: unknown) { setSessionWorkflowError(errorMessage(caught)); return null; }
-    finally { setSessionWorkflowBusy(false); }
-  }, []);
   const [selectedRunbookId, setSelectedRunbookId] = useState<string | null>(null);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [selectedReportWorkspaceId, setSelectedReportWorkspaceId] = useState<string | null>(null);
@@ -522,12 +469,12 @@ export function App(): JSX.Element {
   }, [researchViewContextKey]);
 
   useEffect(() => {
-    if (!newResearchOpen && !workflowsOpen && !automationsOpen && !reportsOpen && quickChats.length === 0 && !(settingsOpen && settingsSection === 'providers')) return;
+    if (!newResearchOpen && !automationsOpen && !reportsOpen && quickChats.length === 0 && !(settingsOpen && settingsSection === 'providers')) return;
     window.beale
       .getProviderSettings()
       .then(setProviderSettings)
       .catch((caught: unknown) => handleError(errorMessage(caught)));
-  }, [automationsOpen, handleError, newResearchOpen, workflowsOpen, quickChats.length, reportsOpen, settingsOpen, settingsSection]);
+  }, [automationsOpen, handleError, newResearchOpen, quickChats.length, reportsOpen, settingsOpen, settingsSection]);
 
   useEffect(() => {
     if (!settingsOpen || settingsSection !== 'profile') return;
@@ -860,7 +807,6 @@ export function App(): JSX.Element {
   }, [setWorkspaceRegistry]);
 
   const openPlugins = useCallback((): void => {
-    setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsOpen(false);
@@ -1042,13 +988,6 @@ export function App(): JSX.Element {
     .join('|') ?? '';
 
   useEffect(() => {
-    if (!workspaceRegistry || !workflowScopeWorkspaceId) return;
-    if (workspaceRegistry.workspaces.some((workspace) => workspace.workspaceId === workflowScopeWorkspaceId)) return;
-    setWorkflowScopeWorkspaceId(null);
-    setSessionWorkflows([]);
-  }, [workflowScopeWorkspaceId, workspaceRegistry]);
-
-  useEffect(() => {
     if (!automationsOpen) return undefined;
     let cancelled = false;
     setAutomationsLoading(true);
@@ -1084,7 +1023,6 @@ export function App(): JSX.Element {
   }, [automations, clearRunDetail, selectedAutomationRunId, selectedAutomationWorkspaceId, setSelectedRunId]);
 
   const openReportSession = useCallback((report: AppServerReportSummary): void => {
-    setWorkflowsOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
     setSelectedReportId(report.id);
@@ -1503,13 +1441,11 @@ export function App(): JSX.Element {
   });
   const beginWorkspaceCreation = useCallback((): void => {
     setError(null);
-    setWorkflowsOpen(false);
     setWorkspaceDashboardViewName('Settings');
     closeNewResearch();
     addWorkspace();
   }, [addWorkspace, closeNewResearch]);
   const openWorkspaceFromSidebar = useCallback((workspace: WorkspaceRegistryEntry): void => {
-    setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setReportsOpen(false);
@@ -1518,7 +1454,6 @@ export function App(): JSX.Element {
     openRegisteredWorkspace(workspace);
   }, [closeNewResearch, closeWorkspaceOnboarding, openRegisteredWorkspace]);
   const openResearchSessionFromSidebar = useCallback((workspace: WorkspaceRegistryEntry, session: ResearchSessionSummary): void => {
-    setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setReportsOpen(false);
@@ -1541,7 +1476,6 @@ export function App(): JSX.Element {
           setReportsOpen(false);
           setAutomationsOpen(false);
           setPluginsOpen(false);
-          setWorkflowsOpen(false);
           applySnapshot(next);
           setSelectedRunId(null);
         });
@@ -1928,7 +1862,7 @@ export function App(): JSX.Element {
     reportsOpen,
     automationsOpen,
     pluginsOpen
-  }) && !workflowsOpen;
+  });
   const bottomPanelVisible = bottomPanelOpen && headerResearchControlsAvailable;
   useEffect(() => {
     if (!headerResearchControlsAvailable) setBottomPanelOpen(false);
@@ -1951,14 +1885,12 @@ export function App(): JSX.Element {
     [automations, selectedAutomationRunId, selectedAutomationWorkspaceId]
   );
   const openSettings = useCallback(() => {
-    setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsSection('general');
     setSettingsOpen(true);
   }, [closeNewResearch, closeWorkspaceOnboarding]);
   const openHome = useCallback((): void => {
-    setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     clearRunDetail();
@@ -1985,7 +1917,6 @@ export function App(): JSX.Element {
   const closeProfiling = useCallback(() => setProfilingOpen(false), []);
   const openNewResearch = useCallback((openSchedule: boolean) => {
     setNewResearchInitialInput(null);
-    setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
     if (reportsOpen) {
       clearRunDetail();
@@ -2003,40 +1934,6 @@ export function App(): JSX.Element {
     setNewResearchOpen(true);
   }, [clearRunDetail, closeWorkspaceOnboarding, reportsOpen, setSelectedRunId]);
   const startNewResearch = useCallback(() => openNewResearch(false), [openNewResearch]);
-  const runAllWorkflow = useCallback(async (workflow: SessionWorkflowDefinition, values: Record<string, string>): Promise<string | null> => {
-    if (!snapshot || workflowScopeWorkspaceId !== snapshot.workspace.workspaceId) return null;
-    setSessionWorkflowBusy(true);
-    setSessionWorkflowError(null);
-    try {
-      const [currentProviderSettings, catalogs, currentOpenAiStatus, currentProviderStatuses] = await Promise.all([
-        window.beale.getProviderSettings(),
-        window.beale.getResearchProviderModelCatalog(),
-        window.beale.getOpenAiStatus(),
-        window.beale.getResearchProviderStatuses()
-      ]);
-      setProviderSettings(currentProviderSettings);
-      const input = workflowRunInput(workflow, permissionSettings.defaultShellSafetyMode, values, currentProviderSettings, {
-        catalogs,
-        openAiStatus: currentOpenAiStatus,
-        providerStatuses: currentProviderStatuses
-      });
-      const access = await window.beale.getProviderCredentialAccessRequest(
-        [input.provider]
-      );
-      if (access.providerIds.length) await window.beale.unlockProviderApiKeys(access.providerIds);
-      const existingRunIds = new Set(snapshot.runs.map((row) => row.run.id));
-      const next = await window.beale.startRun(input);
-      const run = next.runs.find((row) => !existingRunIds.has(row.run.id))?.run;
-      if (!run) throw new Error('The workflow session started without a run record.');
-      applySnapshot(next);
-      return run.id;
-    } catch (caught) {
-      setSessionWorkflowError(errorMessage(caught));
-      return null;
-    } finally {
-      setSessionWorkflowBusy(false);
-    }
-  }, [applySnapshot, permissionSettings.defaultShellSafetyMode, snapshot, workflowScopeWorkspaceId]);
   const openNewResearchForWorkspace = useCallback((workspace: WorkspaceRegistryEntry, openSchedule: boolean): void => {
     if (snapshot?.workspace.workspacePath === workspace.workspacePath) {
       openNewResearch(openSchedule);
@@ -2063,13 +1960,10 @@ export function App(): JSX.Element {
     [primeRunDetail, setSelectedRunId]
   );
   const cancelNewResearch = useCallback((): void => {
-    const returnToWorkflows = Boolean(newResearchInitialInput?.guidanceWorkflow);
     closeNewResearch();
-    if (returnToWorkflows) setWorkflowsOpen(true);
-  }, [closeNewResearch, newResearchInitialInput?.guidanceWorkflow]);
+  }, [closeNewResearch]);
   const openWorkspaceDashboardSession = useCallback(
     (runId: string): void => {
-      setWorkflowsOpen(false);
       closeNewResearch();
       setReportsOpen(false);
       setAutomationsOpen(false);
@@ -2080,7 +1974,6 @@ export function App(): JSX.Element {
     [clearRunDetail, closeNewResearch, setSelectedRunId]
   );
   const openAutomations = useCallback((): void => {
-    setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsOpen(false);
@@ -2094,38 +1987,6 @@ export function App(): JSX.Element {
     setPluginsOpen(false);
     setAutomationsOpen(true);
   }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId, snapshot?.workspace.workspaceId]);
-  const openWorkflows = useCallback((): void => {
-    closeWorkspaceOnboarding();
-    closeNewResearch();
-    clearRunDetail();
-    setSelectedRunId(null);
-    setReportsOpen(false);
-    setAutomationsOpen(false);
-    setPluginsOpen(false);
-    setSettingsOpen(false);
-    setWorkflowsOpen(true);
-    setWorkflowScopeWorkspaceId(snapshot?.workspace.workspaceId ?? null);
-    setCreatingSessionWorkflow(false);
-  }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId, snapshot?.workspace.workspaceId]);
-  const selectWorkflowWorkspace = useCallback((workspaceId: string): void => {
-    const workspace = workspaceRegistry?.workspaces.find((candidate) => candidate.workspaceId === workspaceId);
-    if (!workspace || (workflowScopeWorkspaceId === workspaceId && snapshot?.workspace.workspaceId === workspaceId)) return;
-    setWorkflowScopeWorkspaceId(workspaceId);
-    setSessionWorkflows([]);
-    setSelectedSessionWorkflowId(null);
-    setCreatingSessionWorkflow(false);
-    setSessionWorkflowError(null);
-    if (snapshot?.workspace.workspaceId === workspaceId) return;
-    let opened = false;
-    void runWorkspaceAction(async () => {
-      clearRunDetail();
-      setSelectedRunId(null);
-      applySnapshot(await window.beale.openRegisteredWorkspace(workspace.id));
-      opened = true;
-    }, { reloadRegistry: false, missingDirectoryWorkspace: workspace }).then(() => {
-      if (!opened) setSessionWorkflowError('Workspace unavailable. Select it again to retry.');
-    });
-  }, [applySnapshot, clearRunDetail, runWorkspaceAction, setSelectedRunId, snapshot?.workspace.workspaceId, workflowScopeWorkspaceId, workspaceRegistry?.workspaces]);
   const selectAutomation = useCallback((automation: AutomationSummary | null): void => {
     clearRunDetail();
     setSelectedRunId(null);
@@ -2152,7 +2013,6 @@ export function App(): JSX.Element {
   }, [applySnapshot, clearRunDetail, runWorkspaceAction, setSelectedRunId, snapshot?.workspace.workspacePath, workspaceRegistry?.workspaces]);
   const newResearchContent = newResearchOpen && snapshot ? (
     <StartRunForm
-      sessionWorkflows={sessionWorkflows}
       initialInput={newResearchInitialInput ?? undefined}
       presentation="session"
       autoOpenSchedule={openScheduleOnNewResearch}
@@ -2177,7 +2037,7 @@ export function App(): JSX.Element {
       onStarted={handleResearchStarted}
     />
   ) : null;
-  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, automationsOpen, workflowsOpen, pluginsOpen });
+  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, automationsOpen, pluginsOpen });
   return (
     <div
       ref={appShellRef}
@@ -2196,7 +2056,7 @@ export function App(): JSX.Element {
         workspaceRegistryLoading={startupPhase === 'shell' || startupPhase === 'registry'}
         rightSidenavAvailable={headerResearchControlsAvailable}
         rightSidenavExpanded={rightSidenavExpanded && headerResearchControlsAvailable}
-        contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !workflowsOpen && !pluginsOpen}
+        contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !pluginsOpen}
         staticContextTitle={settingsOpen
           ? { primary: 'Agent Settings', secondary: settingsSectionLabel(settingsSection), icon: settingsSectionHeaderIcon(settingsSection) }
           : reportsOpen
@@ -2209,8 +2069,6 @@ export function App(): JSX.Element {
               }
             : automationsOpen
               ? { primary: 'Automations', secondary: selectedAutomation?.title ?? automationScopeName, icon: 'automations' }
-              : workflowsOpen
-                ? { primary: 'Workflows', secondary: sessionWorkflows.find((workflow) => workflow.id === selectedSessionWorkflowId)?.title ?? currentWorkspaceName, icon: 'workflows' }
               : pluginsOpen
                 ? { primary: 'Plugins', secondary: 'Installed Plugins', icon: 'plugins' }
               : null}
@@ -2249,7 +2107,6 @@ export function App(): JSX.Element {
         active={navigationDestination}
         onOpenHome={openHome}
         onOpenAutomations={openAutomations}
-        onOpenWorkflows={openWorkflows}
         onOpenPlugins={openPlugins}
         onOpenSettings={openSettings}
       />
@@ -2261,10 +2118,6 @@ export function App(): JSX.Element {
           onChangeSection={setSettingsSection}
           onResizePointerDown={beginSidebarResize}
         />
-      ) : workflowsOpen ? (
-        <WorkflowsSidebar workflows={workflowScopeWorkspaceId === snapshot?.workspace.workspaceId ? sessionWorkflows : []} selectedId={selectedSessionWorkflowId} collapsed={sidebarCollapsed} canCreate={Boolean(workflowScopeWorkspaceId && workflowScopeWorkspaceId === snapshot?.workspace.workspaceId)}
-          error={sessionWorkflowError} onSelect={(id) => { setSelectedSessionWorkflowId(id); setCreatingSessionWorkflow(false); }}
-          onCreate={() => setCreatingSessionWorkflow(true)} onResizePointerDown={beginSidebarResize} />
       ) : pluginsOpen ? (
         <PluginsSidebar
           state={agentPluginState}
@@ -2303,7 +2156,7 @@ export function App(): JSX.Element {
           error={error}
           workspaceRegistry={workspaceRegistry}
           workspaceRegistryLoading={startupPhase === 'shell' || startupPhase === 'registry'}
-          selectedRunId={reportsOpen || automationsOpen || workflowsOpen || pluginsOpen ? null : selectedRunId}
+          selectedRunId={reportsOpen || automationsOpen || pluginsOpen ? null : selectedRunId}
           workspaceCreationActive={workspaceDraft !== null}
           newResearchActive={newResearchOpen}
           automationsActive={automationsOpen}
@@ -2409,18 +2262,6 @@ export function App(): JSX.Element {
                 onSubmit={submitWorkspaceOnboarding}
                 onViewChange={setWorkspaceDashboardViewName}
               />
-            ) : workflowsOpen ? (
-              <WorkflowsWorkspace key={workflowFieldValuesKey}
-                workflows={sessionWorkflows} workspaces={workspaceRegistry?.workspaces ?? []} selectedWorkspaceId={workflowScopeWorkspaceId}
-                sessions={workspaceRegistry?.researchSessions ?? []}
-                workspaceReady={Boolean(workflowScopeWorkspaceId && workflowScopeWorkspaceId === snapshot?.workspace.workspaceId)}
-                selectedId={selectedSessionWorkflowId} creating={creatingSessionWorkflow} busy={sessionWorkflowBusy || busy}
-                error={error ?? sessionWorkflowError} onScopeChange={selectWorkflowWorkspace} onRunAll={runAllWorkflow}
-                currentValues={workflowFieldValuesByKey[workflowFieldValuesKey] ?? null}
-                onCurrentValuesChange={(values) => setWorkflowFieldValuesByKey((current) => ({ ...current,
-                  [workflowFieldValuesKey]: values }))}
-                onOpenSession={openWorkspaceDashboardSession}
-                onCreate={createSessionWorkflow} onUpdate={updateSessionWorkflow} />
             ) : pluginsOpen ? (
               <PluginManagerWorkspace
                 state={agentPluginState}

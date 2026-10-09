@@ -6,6 +6,8 @@
 
 #### Removed
 
+- Removed session workflow creation, assignment, notebook execution gates, progress UI, and the built-in Repository Auditor. Existing workflow records remain in local storage but are no longer used when sessions continue.
+
 - Beale now creates and runs Security research workspaces only. Mathematics and other non-security workspaces are hidden from its workspace and session lists; their files and stored records are retained. The Mathematics choice is removed from workspace creation and prompt settings.
 - Removed Topics screens, navigation, and Codex bridge tools. Existing topic overviews and pages export once to editable workspace Markdown under `references/research/legacy-topics/`.
 
@@ -19,6 +21,7 @@
 
 #### Changed
 
+- Kept Discovery, Chaining, Reporting, and Longshot as New Research suggestion categories. They shape generated ideas and optional prompt expansion without assigning a session workflow or constraining the agent's flow.
 - Agents now keep reusable research documentation in `references/research/`, with citations to canonical records and evidence.
 
 - The workspace editor, bottom panel, and research sidebar header buttons are available in New Research for an open workspace.
@@ -1238,6 +1241,10 @@
 - Added MIT licensing metadata and a root `LICENSE`.
 
 ### app-server
+
+#### Removed
+
+- Removed session workflow operations, launch assignment, and model-facing progress tools. Contract v37 requires rebuilding Beale and app-server together; historical workflow storage is retained.
 
 #### Added
 

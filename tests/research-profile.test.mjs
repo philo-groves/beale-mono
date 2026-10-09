@@ -219,10 +219,9 @@ test("memory, claims, and runbook prompt sections follow enabled optional featur
   assert.doesNotMatch(legacy, /Use reports as durable Markdown artifacts|\{\{reports\}\}/);
 });
 
-test("the bundled Security profile gates collaboration recipes by workflow", () => {
+test("the bundled Security profile does not prescribe collaboration recipes", () => {
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
-  assert.deepEqual(security.collaboration.recipes.map((recipe) => recipe.workflowIds), [["discovery", "longshot"], ["chaining"], ["reporting"]]);
-  assert.ok(security.collaboration.recipes.every((recipe) => recipe.roles.length >= 2));
+  assert.deepEqual(security.collaboration.recipes, []);
 });
 
 test("retired bundled memory types stay out of model-facing catalogs", () => {
@@ -254,17 +253,18 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.match(securityPrompt, /workspace history search to recover prior work across sessions/);
 });
 
-test("the bundled Security profile defines a security Longshot lane", () => {
+test("the bundled Security profile offers four suggestion categories", () => {
   const security = normalizeResearchProfile(DEFAULT_SECURITY_RESEARCH_PROFILE);
   const securityLongshot = security.workflows.find((workflow) => workflow.id === "longshot");
-
-  assert.equal(security.version, "1.15.2");
+  assert.equal(security.version, "1.16.1");
+  assert.deepEqual(security.workflows.map((workflow) => workflow.id), ["discovery", "chaining", "reporting", "longshot"]);
+  assert.ok(security.workflows.every((workflow) => workflow.goalSuggestionCount === 4));
   assert.equal(securityLongshot?.name, "Longshot");
-  assert.equal(securityLongshot?.goalSuggestionCount, 4);
   assert.equal(securityLongshot?.description, "Hunt for ambitious, reportable high- or critical-severity vulnerabilities.");
   assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /broad attack surface.*explicit systemic impact ceiling/);
   assert.match(securityLongshot?.goalSuggestionInstructions.join(" ") ?? "", /not.*binary verification task/);
   assert.match(securityLongshot?.promptInstructions.join(" ") ?? "", /severity, and reportability evidence-gated/);
+  assert.ok(security.collaboration.recipes.length === 0);
 });
 
 test("suggestion lanes do not constrain live collaboration guidance", () => {
@@ -278,6 +278,7 @@ test("Longshot remains a suggestion lane and is absent from live prompts", () =>
 
   assert.doesNotMatch(securityPrompt, /Longshot|reportable high or critical impact|Security discovery cell/);
 });
+
 test("research profile validation rejects silent schema drift", () => {
   const unknownRootField = { ...structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE), typoedWorkflows: [] };
   assert.throws(() => normalizeResearchProfile(unknownRootField), /unknown field: typoedWorkflows/);
@@ -305,14 +306,6 @@ test("research profile validation rejects silent schema drift", () => {
   const duplicateClaimClassification = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
   duplicateClaimClassification.claims.classifications.push(structuredClone(duplicateClaimClassification.claims.classifications[0]));
   assert.throws(() => normalizeResearchProfile(duplicateClaimClassification), /Duplicate claim classification id/);
-
-  const unknownRecipeWorkflow = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
-  unknownRecipeWorkflow.collaboration.recipes[0].workflowIds = ["typoed-workflow"];
-  assert.throws(() => normalizeResearchProfile(unknownRecipeWorkflow), /references unknown workflow typoed-workflow/);
-
-  const duplicateRecipeWorkflow = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
-  duplicateRecipeWorkflow.collaboration.recipes[1].workflowIds = ["discovery"];
-  assert.throws(() => normalizeResearchProfile(duplicateRecipeWorkflow), /assigned to multiple collaboration recipes/);
 
   const emptyEnabledMemory = structuredClone(DEFAULT_SECURITY_RESEARCH_PROFILE);
   emptyEnabledMemory.memory.types = [];

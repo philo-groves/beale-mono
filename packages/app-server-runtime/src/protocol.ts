@@ -36,7 +36,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 36 as const;
+export const APP_SERVER_CONTRACT_VERSION = 37 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -44,7 +44,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T07:00:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T08:00:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "workspace.research-project.v3",
@@ -53,9 +53,6 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "session.openai-fast-mode.v1",
   "session.openai-daybreak-blue.v1",
   "session.introspection-runtime.v1",
-  "session.workflows.v1",
-  "session.workflows.notebook.v1",
-  "session.workflows.runs.v1",
   "session.exit-diagnostics",
   "session.transport-path.v1",
   "session.reconnect.v1",
@@ -406,9 +403,6 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "session.event_identity",
   "session.bounded_reads",
   "session.targeted_details",
-  "session.workflows.v1",
-  "session.workflows.notebook.v1",
-  "session.workflows.runs.v1",
   "workspace.goal-suggestions.v1",
   "workspace.prompt-expansion.v1",
   "knowledge.report-content-revise.v1",
@@ -431,7 +425,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
   "memory.summary", "memory.notification_feed", "history.mark_duplicate", "history.undo_duplicate", "claim.mark_duplicate", "claim.undo_duplicate", "claim.board_transition", "workspace.state", "registry.state", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
-  "dreaming.record_failure", "dreaming.restore", "runbook.get", "workflow.list", "workflow.create", "workflow.update", "workflow.session", "workflow.runs", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
+  "dreaming.record_failure", "dreaming.restore", "runbook.get", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",
   "suggestion.generate", "suggestion.select", "suggestion.steering", "prompt.expand",
   "profile.resolve", "auth.list", "auth.status", "auth.verify", "auth.logout", "model.list",
@@ -444,7 +438,6 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
 ] as const;
 
 export type AppServerProtocolOperation = (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number];
-export type { SessionWorkflowDefinition, SessionWorkflowDraft, SessionWorkflowUpdateInput, SessionWorkflowField, SessionWorkflowStep, SessionWorkflowNotebook, SessionWorkflowNotebookCell, SessionWorkflowAssignment, SessionWorkflowRunSummary } from '@beale/research-agent';
 
 export const CLAIM_BOARD_MATURITIES = ["refuted", "observed", "reproduced", "verified"] as const;
 export type ClaimBoardMaturity = (typeof CLAIM_BOARD_MATURITIES)[number];
@@ -657,8 +650,6 @@ export interface AppServerSessionLaunchIntent {
   provider?: AppServerSessionLaunchProvider;
   shellSafetyMode?: string;
   workflowId?: string;
-  /** Optional operator-assigned session runbook, distinct from the research profile suggestion lane. */
-  guidanceWorkflow?: { id: string; values: Record<string, string> };
   researchProfileId?: string;
   researchProfileHash?: string;
   collaboration?: Record<string, unknown>;
@@ -690,16 +681,6 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
   requiredBoundedString(launch, "promptMarkdown", 131_072);
   optionalBoundedString(launch, "shellSafetyMode", 64);
   optionalBoundedString(launch, "workflowId", 256);
-  if (launch.guidanceWorkflow !== undefined) {
-    const assigned = requiredRecord(launch, "guidanceWorkflow");
-    requiredBoundedString(assigned, "id", 128);
-    const values = requiredRecord(assigned, "values");
-    if (Object.keys(values).length > 20 || Object.values(values).reduce<number>((length, value) => length + (typeof value === 'string' ? value.length : 0), 0) > 16_000
-      || Object.entries(values).some(([key, value]) =>
-      !/^[a-z][a-z0-9_-]*$/u.test(key) || typeof value !== "string" || value.length > 4_000)) {
-      throw new Error("Invalid workflow configuration values.");
-    }
-  }
   optionalBoundedString(launch, "researchProfileId", 256);
   optionalBoundedString(launch, "researchProfileHash", 256);
   if (launch.generateTitle !== undefined && typeof launch.generateTitle !== "boolean") {

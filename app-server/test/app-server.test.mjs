@@ -27,7 +27,7 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION,
   MANAGED_TOOL_PLUGIN_IDS,
 } from "@beale/app-server-runtime/protocol";
-import { AppServerSessionStore, SessionWorkflowStore, WORKSPACE_DIRECTORIES } from "../../packages/research-agent/dist/index.js";
+import { AppServerSessionStore, WORKSPACE_DIRECTORIES } from "../../packages/research-agent/dist/index.js";
 import {
   AppServerWorkerDatabaseBroker,
   AppServerWorkerDatabaseCoordinator,
@@ -1811,39 +1811,6 @@ test("rejects a client profile that differs from the registered workspace profil
     }, "generated-session"),
     /uses research profile security-research, not different-profile/,
   );
-});
-
-test('assigned workflows enable Goal mode at the app-server launch boundary', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'beale-workflow-goal-example-'));
-  temporaryDirectories.push(directory);
-  const calls = [];
-  const service = new AppServerHostService({
-    registry: hostRegistryFixture(directory),
-    invokeProtocol: async (operation, options) => {
-      calls.push({ operation, options });
-      if (operation === 'provider.describe') return { defaultSmallModels: {}, sessionTitleEffort: 'medium', shellReviewEffort: 'medium' };
-      if (operation === 'plugin.runtime') return { skillDirs: [], selectedSkillIds: [], allowedMcpServers: [] };
-      if (operation === 'session.get') throw new Error('Session not found: session-workflow-goal-example');
-      if (operation === 'session.create') return { revision: 1 };
-      throw new Error(`Unexpected operation: ${operation}`);
-    },
-  });
-  const request = sessionLaunchRequest(directory, { sessionId: 'session-workflow-goal-example' });
-  request.launch.guidanceWorkflow = { id: 'beale.repository-auditor', values: { systems: 'example module' } };
-  assert.equal(request.launch.goal, undefined);
-
-  const prepared = await service.prepareSession(request, 'generated-session');
-  assert.match(prepared.launch.goal.objective, /Inspect all inventoried source lines/u);
-  assert.ok(appServerSessionArgs(prepared.launch, {}).includes('--goal'));
-  const created = calls.find((call) => call.operation === 'session.create');
-  assert.equal(created.options.input.metadata.appServerRestartLaunch.launch.goal.objective, prepared.launch.goal.objective);
-  const workflows = new SessionWorkflowStore(join(directory, 'memory.sqlite'), 'workspace-test');
-  try { assert.equal(workflows.getAssignment('session-workflow-goal-example').definition.id, 'beale.repository-auditor'); }
-  finally { workflows.close(); }
-  const continuedRequest = sessionLaunchRequest(directory, { sessionId: 'session-workflow-goal-example' });
-  continuedRequest.launch.continuation = { fallbackPrompt: 'Continue the example review.' };
-  const continued = await service.prepareSession(continuedRequest, 'generated-continuation');
-  assert.equal(continued.launch.goal.objective, prepared.launch.goal.objective);
 });
 
 test("app-server preserves OpenAI Fast mode and Daybreak Blue through restart metadata and runtime arguments", async () => {

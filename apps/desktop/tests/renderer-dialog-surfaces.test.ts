@@ -299,6 +299,10 @@ describe('renderer dialog surfaces', () => {
     expect(html).toContain('<span>Add Context</span>');
     expect(html).not.toContain('aria-label="Shell safety mode"');
     expect(html).toContain('aria-label="Suggestion lanes"');
+    expect(html.match(/role="tab" aria-selected=/g)).toHaveLength(4);
+    for (const category of ['Discovery', 'Chaining', 'Reporting', 'Longshot']) {
+      expect(html).toContain(`>${category}</button>`);
+    }
     expect(html).toContain('aria-label="Lead model settings"');
     expect(html).toContain('class="research-model-squircle research-lead-model-picker model-selection-picker');
     expect(html).toContain('aria-label="Add collaborator"');
@@ -315,27 +319,12 @@ describe('renderer dialog surfaces', () => {
     expect(html).not.toContain('new-research-send');
     expect(html).not.toContain('<label>Network');
     for (const suggestion of suggestions.discovery ?? []) expect(html).toContain(suggestion);
-    for (const suggestion of [...(suggestions.chaining ?? []), ...(suggestions.reporting ?? [])]) expect(html).not.toContain(suggestion);
     expect(html).not.toContain('Reviewing prior research…');
     expect(html).toContain('aria-label="Research goal"');
     expect(html).toContain('autofocus=""');
     expect(html).toContain('class="new-research-compose-layout"');
     expect(html).toContain('class="modal-panel wide-modal start-run-dialog"');
     expect(html).not.toContain('bottom-sheet-panel');
-  });
-
-  it('shows Goal mode as required when New Research has an assigned workflow', () => {
-    const html = renderToStaticMarkup(createElement(StartRunForm, {
-      snapshot: { workspace: { workspaceId: 'workspace-example' }, activeScope: { id: 'scope-example' } } as WorkspaceSnapshot,
-      initialInput: { ...defaultRunInput, promptMarkdown: 'Review example source.',
-        guidanceWorkflow: { id: 'beale.repository-auditor', values: { systems: 'example module' } } },
-      openAiStatus: null, defaultProviderId: 'openai-codex', providerModelDefaults: {},
-      researchProviderStatuses: [], providerModelCatalog: [],
-      researchGoalSuggestions: phaseSuggestions(), researchGoalSuggestionsLoading: phaseValues(false),
-      researchGoalSuggestionErrors: phaseValues(null), busy: false, runAction: async () => undefined,
-      onCancel: () => undefined, onRetryResearchGoalSuggestions: () => undefined, onStarted: () => undefined
-    }));
-    expect(html).toMatch(/<label class="new-research-goal-toggle"[^>]*><input type="checkbox" disabled="" checked=""\/><span>Goal<\/span><\/label>/);
   });
 
   it('opens New Research in the shared commentary session surface', () => {
@@ -375,6 +364,7 @@ describe('renderer dialog surfaces', () => {
     expect(html).toContain('aria-label="Research suggestion categories"');
     expect(html.match(/class="new-research-workflow-option"/g)).toHaveLength(4);
     expect(html).toContain('Find a new primitive by pairing a system area with a plausible bug class');
+    expect(html).not.toContain('class="new-research-suggestion-panel"');
     expect(html).toContain('class="main-trace-footer has-pre-composer-content"');
     expect(html).toContain('class="main-steer-input-row without-trace-filters"');
     expect(html).toContain('class="new-research-options-tray"');
@@ -420,7 +410,6 @@ describe('renderer dialog surfaces', () => {
     expect(settingsSource).not.toContain("label: 'Challenge Rounds'");
     expect(settingsSource).toContain('setSelectedWorkflowId(workflow.id)');
     expect(settingsSource).toContain('onOpenWorkflow(workflow.id)');
-    expect(settingsSource).toContain('title={null}');
   });
 
   it('changes the New Research prompt hint when context enrichment is enabled', () => {
@@ -435,7 +424,7 @@ describe('renderer dialog surfaces', () => {
     expect(toggleStyles).toContain('user-select: none');
   });
 
-  it('styles the New Research welcome as a large divided category list', () => {
+  it('styles the New Research welcome and suggestion categories', () => {
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     const welcomeStyles = styles.match(/\.new-research-welcome\s*\{([^}]*)\}/)?.[1] ?? '';
     const iconStyles = styles.match(/(?:^|\n)\.new-research-welcome-icon\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -691,9 +680,6 @@ describe('renderer dialog surfaces', () => {
     expect(containerStyles).toContain('margin: 10px auto -14px');
     expect(containerStyles).not.toContain('height: 219px');
     expect(headerStyles).toContain('border-bottom: 1px solid var(--panel-border)');
-    expect(listStyles).toContain('grid-template-rows: repeat(3, auto)');
-    expect(listStyles).toContain('align-content: start');
-    expect(listStyles).toContain('--session-next-step-row-height: calc(2.6rem + 14px)');
     expect(rowStyles).toContain('background: transparent');
     expect(rowStyles).toContain('border-radius: 0');
     expect(rowStyles).toContain('border-bottom: 1px solid var(--panel-border)');

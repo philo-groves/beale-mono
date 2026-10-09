@@ -822,11 +822,6 @@ function registerIpc(): void {
       workspaceService.getAppServerRunbook(runbookId)
     )
   );
-  ipcMain.handle(IPC_CHANNELS.listSessionWorkflows, () => workspaceService.listSessionWorkflows());
-  ipcMain.handle(IPC_CHANNELS.createSessionWorkflow, (_event, input) => workspaceService.createSessionWorkflow(input));
-  ipcMain.handle(IPC_CHANNELS.updateSessionWorkflow, (_event, input) => workspaceService.updateSessionWorkflow(input));
-  ipcMain.handle(IPC_CHANNELS.getSessionWorkflow, (_event, sessionId: string) => workspaceService.getSessionWorkflow(sessionId));
-  ipcMain.handle(IPC_CHANNELS.listSessionWorkflowRuns, (_event, workflowId: string) => workspaceService.listSessionWorkflowRuns(workflowId));
   ipcMain.handle(IPC_CHANNELS.listAutomations, () =>
     timedMainIpcAsync('listAutomations', {}, () => workspaceService.listAutomations())
   );

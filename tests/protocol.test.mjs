@@ -71,16 +71,12 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
   );
 });
 
-test("protocol describe exposes a runtime-bound v36 workflow run lifecycle contract", () => {
+test("protocol describe omits removed workflow operations", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 36);
-  assert.ok(descriptor.capabilities.includes('session.workflows.v1'));
-  assert.ok(descriptor.capabilities.includes('session.workflows.notebook.v1'));
-  assert.ok(descriptor.capabilities.includes('session.workflows.runs.v1'));
-  assert.ok(descriptor.operations.includes('workflow.list'));
-  assert.ok(descriptor.operations.includes('workflow.update'));
-  assert.ok(descriptor.operations.includes('workflow.runs'));
+  assert.equal(descriptor.contractVersion, 37);
+  assert.ok(!descriptor.capabilities.some((capability) => capability.startsWith('session.workflows.')));
+  assert.ok(!descriptor.operations.some((operation) => operation.startsWith('workflow.')));
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);
   assert.equal(descriptor.schemas.memorySummary, 13);
   assert.equal(descriptor.schemas.finding, 6);

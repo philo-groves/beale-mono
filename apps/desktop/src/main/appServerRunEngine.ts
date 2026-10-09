@@ -253,7 +253,6 @@ export class AppServerRunEngine {
         goalEnabled,
         goalObjective,
         researchWorkflowId: workflowId,
-        guidanceWorkflow: input.guidanceWorkflow ?? null,
         resourceContext: input.resourceContext ?? null,
         collaboration: normalizedInput.collaboration ?? null
       }
@@ -2689,7 +2688,6 @@ function appServerSessionLaunchRequest(
             workflowId: researchProfile.workflowId
           }
         : {}),
-      ...(input.guidanceWorkflow ? { guidanceWorkflow: input.guidanceWorkflow } : {}),
       ...(collaboration ? { collaboration: collaboration as Record<string, unknown> } : {}),
       ...(continuation ? { continuation } : {}),
       ...(generateTitle ? { generateTitle: true } : {}),
@@ -2702,9 +2700,8 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
   const persistedGoalObjective = typeof run.budget.goalObjective === 'string'
     ? run.budget.goalObjective
     : null;
-  const guidanceWorkflow = run.budget.guidanceWorkflow as StartRunInput['guidanceWorkflow'];
   const goal = resolveSessionGoal({ goalEnabled: run.budget.goalEnabled === true,
-    goalObjective: persistedGoalObjective, promptMarkdown: run.promptMarkdown, guidanceWorkflow });
+    goalObjective: persistedGoalObjective, promptMarkdown: run.promptMarkdown });
   return {
     provider: typeof run.budget.modelProvider === 'string' ? run.budget.modelProvider : undefined,
     shellSafetyMode: run.shellSafetyMode,
@@ -2712,7 +2709,6 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
     goalObjective: goal.objective,
     promptMarkdown,
     workflowId: researchWorkflowFromRun(run) || undefined,
-    ...(guidanceWorkflow ? { guidanceWorkflow } : {}),
     ...(isReportResourceContext(run.budget.resourceContext)
       ? { resourceContext: run.budget.resourceContext }
       : {}),

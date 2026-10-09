@@ -445,7 +445,7 @@ const SECURITY_MEMORY_TYPES: readonly ResearchProfileMemoryType[] = SECURITY_MEM
 export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   schemaVersion: RESEARCH_PROFILE_SCHEMA_VERSION,
   id: "security-research",
-  version: "1.15.2",
+  version: "1.16.1",
   name: "Security",
   description: "Authorized open-ended vulnerability discovery, high-upside longshot hunting, chaining, verification, and reporting.",
   agent: {
@@ -585,43 +585,7 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
       "Keep exploit claims tied to inspected code, bounded experiments, artifacts, or verifier results; a peer assertion is not target evidence.",
       "Preserve competing root-cause and reachability explanations until a discriminating check resolves them.",
     ],
-    recipes: [
-      {
-        id: "security-discovery-cell",
-        name: "Security discovery cell",
-        workflowIds: ["discovery", "longshot"],
-        roomKind: "exploration",
-        roles: [
-          { id: "surface-explorer", name: "Surface Explorer", description: "Map trust boundaries and pursue non-obvious bug classes without anchoring on the first lead." },
-          { id: "dataflow-analyst", name: "Dataflow Analyst", description: "Trace attacker influence through validation, transformations, mitigations, and dangerous operations." },
-          { id: "skeptic-verifier", name: "Skeptic Verifier", description: "Challenge reachability and impact assumptions with the smallest decisive experiments." },
-        ],
-        synthesisInstructions: ["Rank leads by evidence strength and discriminating value, preserving refuted paths and unresolved mitigation questions."],
-      },
-      {
-        id: "security-chaining-cell",
-        name: "Exploit-chain cell",
-        workflowIds: ["chaining"],
-        roomKind: "proving",
-        roles: [
-          { id: "reachability-analyst", name: "Reachability Analyst", description: "Establish whether authorized attacker-controlled input reaches the recorded primitive." },
-          { id: "mitigation-challenger", name: "Mitigation Challenger", description: "Test exploitability assumptions and identify defenses, environmental constraints, and broken links." },
-          { id: "chain-verifier", name: "Chain Verifier", description: "Independently reproduce the complete chain and validate its evidence references." },
-        ],
-        synthesisInstructions: ["Separate confirmed links from assumptions and require verifier-backed evidence for the final chain and impact."],
-      },
-      {
-        id: "security-reporting-cell",
-        name: "Security reporting review",
-        workflowIds: ["reporting"],
-        roomKind: "validation",
-        roles: [
-          { id: "independent-reproducer", name: "Independent Reproducer", description: "Reproduce the issue from the documented prerequisites without relying on the original investigator's unstated context." },
-          { id: "evidence-reviewer", name: "Evidence and Overclaim Reviewer", description: "Audit every material claim, scope statement, impact conclusion, and proof artifact for support." },
-        ],
-        synthesisInstructions: ["Retain reproduction failures, limitations, and dissent in the report instead of smoothing them into consensus."],
-      },
-    ],
+    recipes: [],
   },
   capabilities: {
     defaultToolFamilies: ["shell", "repository-search", "file-read"],

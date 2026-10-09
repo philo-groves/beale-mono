@@ -10,7 +10,6 @@ import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
 import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
 import { decodeClaimBoardTransitionRequest, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
-import type { SessionWorkflowAssignment, SessionWorkflowDefinition, SessionWorkflowDraft, SessionWorkflowRunSummary, SessionWorkflowUpdateInput } from '@beale/app-server-runtime/protocol';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -1334,35 +1333,6 @@ export class WorkspaceService {
     const runtime = this.getForegroundRuntime();
     if (!runtime) throw new Error('No Beale workspace is open');
     return await getAppServerRunbookDocument(runtime.db.getWorkspaceId(), runbookId, this.appServerStorage(runtime));
-  }
-
-  public async listSessionWorkflows(): Promise<SessionWorkflowDefinition[]> {
-    const runtime = this.getForegroundRuntime();
-    if (!runtime) throw new Error('No Beale workspace is open');
-    return invokeAppServerOperation({ operation: 'workflow.list', input: { workspaceId: runtime.db.getWorkspaceId() } });
-  }
-
-  public async createSessionWorkflow(input: SessionWorkflowDraft): Promise<SessionWorkflowDefinition> {
-    const runtime = this.getForegroundRuntime();
-    if (!runtime) throw new Error('No Beale workspace is open');
-    return invokeAppServerOperation({ operation: 'workflow.create', input: { ...input, workspaceId: runtime.db.getWorkspaceId() } });
-  }
-
-  public async updateSessionWorkflow(input: SessionWorkflowUpdateInput): Promise<SessionWorkflowDefinition> {
-    const runtime = this.getForegroundRuntime();
-    if (!runtime) throw new Error('No Beale workspace is open');
-    return invokeAppServerOperation({ operation: 'workflow.update', input: { ...input, workspaceId: runtime.db.getWorkspaceId() } });
-  }
-
-  public async getSessionWorkflow(sessionId: string): Promise<SessionWorkflowAssignment | null> {
-    const runtime = this.requireRuntimeForRunId(sessionId);
-    return invokeAppServerOperation({ operation: 'workflow.session', input: { workspaceId: runtime.db.getWorkspaceId(), sessionId } });
-  }
-
-  public async listSessionWorkflowRuns(workflowId: string): Promise<SessionWorkflowRunSummary[]> {
-    const runtime = this.getForegroundRuntime();
-    if (!runtime) throw new Error('No Beale workspace is open');
-    return invokeAppServerOperation({ operation: 'workflow.runs', input: { workspaceId: runtime.db.getWorkspaceId(), workflowId } });
   }
 
   public resolveAppServerReportPath(reportId: string): string {

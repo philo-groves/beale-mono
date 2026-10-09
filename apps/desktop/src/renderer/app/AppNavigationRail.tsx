@@ -1,13 +1,12 @@
 import { memo } from 'react';
 import type { JSX } from 'react';
-import { CalendarClock, House, ListChecks, Plug, Settings } from 'lucide-react';
+import { CalendarClock, House, Plug, Settings } from 'lucide-react';
 
-export type AppNavigationDestination = 'home' | 'automations' | 'workflows' | 'plugins' | 'settings';
+export type AppNavigationDestination = 'home' | 'automations' | 'plugins' | 'settings';
 
 const outlineIcons = {
   home: House,
   automations: CalendarClock,
-  workflows: ListChecks,
   plugins: Plug,
   settings: Settings
 };
@@ -31,7 +30,6 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
           <path d="M16 13v3l2 1.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
         </>
       )}
-      {destination === 'workflows' && <path d="M8 4h13v2H8zM8 11h13v2H8zM8 18h13v2H8zM2 3h4v4H2zM2 10h4v4H2zM2 17h4v4H2z" />}
       {destination === 'plugins' && (
         <>
           <path d="M6 8h12v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4z" />
@@ -48,17 +46,14 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
 export function resolveAppNavigationDestination({
   settingsOpen,
   automationsOpen,
-  workflowsOpen = false,
   pluginsOpen
 }: {
   settingsOpen: boolean;
   automationsOpen: boolean;
-  workflowsOpen?: boolean;
   pluginsOpen: boolean;
 }): AppNavigationDestination {
   if (settingsOpen) return 'settings';
   if (automationsOpen) return 'automations';
-  if (workflowsOpen) return 'workflows';
   if (pluginsOpen) return 'plugins';
   return 'home';
 }
@@ -67,14 +62,12 @@ export const AppNavigationRail = memo(function AppNavigationRail({
   active,
   onOpenHome,
   onOpenAutomations,
-  onOpenWorkflows,
   onOpenPlugins,
   onOpenSettings
 }: {
   active: AppNavigationDestination;
   onOpenHome: () => void;
   onOpenAutomations: () => void;
-  onOpenWorkflows: () => void;
   onOpenPlugins: () => void;
   onOpenSettings: () => void;
 }): JSX.Element {
@@ -87,9 +80,6 @@ export const AppNavigationRail = memo(function AppNavigationRail({
         <div className="app-navigation-rail-sections">
           <button type="button" className={`app-navigation-rail-button${active === 'automations' ? ' active' : ''}`} data-tooltip="Automations" aria-label="Automations" aria-current={active === 'automations' ? 'page' : undefined} onClick={onOpenAutomations}>
             <NavigationIcon destination="automations" active={active === 'automations'} />
-          </button>
-          <button type="button" className={`app-navigation-rail-button${active === 'workflows' ? ' active' : ''}`} data-tooltip="Workflows" aria-label="Workflows" aria-current={active === 'workflows' ? 'page' : undefined} onClick={onOpenWorkflows}>
-            <NavigationIcon destination="workflows" active={active === 'workflows'} />
           </button>
           <button type="button" className={`app-navigation-rail-button${active === 'plugins' ? ' active' : ''}`} data-tooltip="Plugins" aria-label="Plugins" aria-current={active === 'plugins' ? 'page' : undefined} onClick={onOpenPlugins}>
             <NavigationIcon destination="plugins" active={active === 'plugins'} />

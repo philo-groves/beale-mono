@@ -23,10 +23,9 @@ import type {
   RunRecord,
   ShellSafetyMode,
   StartRunInput,
-  SessionWorkflowDefinition,
   WorkspaceSnapshot
 } from '@shared/types';
-import { assignedWorkflowGoalObjective, resolveGoalObjective } from '../../../shared/goalObjective';
+import { resolveGoalObjective } from '../../../shared/goalObjective';
 import { ensureDefaultResearchCollaborator, normalizeResearchCollaboration } from '../../../shared/collaboration';
 import { Modal } from '../../app/Modal';
 import { BealeWelcomeIcon } from '../../app/BealeWelcomeIcon';
@@ -130,7 +129,6 @@ const LEGACY_RESEARCH_GOAL_WORKFLOWS: readonly ResearchProfileWorkflow[] = [
 
 interface StartRunFormProps {
   snapshot: WorkspaceSnapshot;
-  sessionWorkflows?: SessionWorkflowDefinition[];
   initialInput?: StartRunInput;
   autoOpenSchedule?: boolean;
   openAiStatus: OpenAiAccountStatus | null;
@@ -157,7 +155,6 @@ interface StartRunFormProps {
 
 export interface ResearchSettingsFormProps {
   researchProfile: ResearchProfileSnapshot | null;
-  sessionWorkflows?: SessionWorkflowDefinition[];
   formIdentity: string;
   autoOpenSchedule?: boolean;
   workspaceName?: string;
@@ -321,7 +318,6 @@ export function ProviderKeychainAccessDialog({
 
 export function ResearchSettingsForm({
   researchProfile,
-  sessionWorkflows = [],
   formIdentity,
   autoOpenSchedule = false,
   workspaceName = 'Workspace',
@@ -354,7 +350,9 @@ export function ResearchSettingsForm({
   const workflows = profile?.workflows.length ? profile.workflows : LEGACY_RESEARCH_GOAL_WORKFLOWS;
   const defaultWorkflowId = defaultResearchWorkflowId(workflows);
   const profilePresentation = profile?.presentation;
-  const initialWorkflowId = initialGoal?.phase ?? defaultWorkflowId;
+  const initialWorkflowId = workflows.some((workflow) => workflow.id === initialGoal?.phase)
+    ? initialGoal!.phase
+    : defaultWorkflowId;
   const [input, setInput] = useState<StartRunInput>(() => (
     researchSettingsInput(initialInput, initialWorkflowId, initialGoal, defaultShellSafetyMode)
   ));
@@ -528,7 +526,7 @@ export function ResearchSettingsForm({
     cancelPromptGeneration();
     const next = researchSettingsInput(
       initialInput,
-      initialGoal?.phase ?? defaultWorkflowId,
+      initialWorkflowId,
       initialGoal,
       defaultShellSafetyMode
     );
@@ -540,7 +538,7 @@ export function ResearchSettingsForm({
     modelSelectionInitializedRef.current = Boolean(initialInput?.model);
     setEditorStage(initialInput || initialGoal?.promptMarkdown ? 'prompt' : 'goal');
     setGenerationError(null);
-  }, [defaultProviderId, defaultShellSafetyMode, defaultWorkflowId, formIdentity, initialGoal, initialInput]);
+  }, [defaultProviderId, defaultShellSafetyMode, formIdentity, initialGoal, initialInput, initialWorkflowId]);
 
   useEffect(() => {
     inputRef.current = input;
@@ -671,9 +669,6 @@ export function ResearchSettingsForm({
   };
 
   const hasPromptDraft = input.promptMarkdown.trim().length > 0;
-  const assignedWorkflow = sessionWorkflows.find((workflow) => workflow.id === input.guidanceWorkflow?.id);
-  const workflowConfigurationComplete = !input.guidanceWorkflow || Boolean(assignedWorkflow && assignedWorkflow.fields.every((field) =>
-    !field.required || Boolean(input.guidanceWorkflow?.values[field.id]?.trim())));
   const activeWorkflowId = input.workflowId ?? defaultWorkflowId;
   const selectedEffort = effortLevelFromInput(input.reasoningEffort);
   const repeatSchedule = normalizeRepeatSchedule(input.budget.repeatSchedule);
@@ -699,24 +694,16 @@ export function ResearchSettingsForm({
         && (!requiresCyberPolicyAcknowledgement || providerPolicyRiskAcknowledgements?.[preference.provider] === true);
     });
   const canGenerate = hasPromptDraft && selectedProvider?.configured === true && !generatingPrompt;
-  const canStart = hasPromptDraft && workflowConfigurationComplete
+  const canStart = hasPromptDraft
     && selectedProvider?.configured === true
     && Boolean(selectedModel?.effortLevels.includes(selectedEffort))
     && collaborationReady;
 
   const startWithInput = (startInput: StartRunInput): void => {
     if (startingRun) return;
-    if (startInput.guidanceWorkflow) {
-      const definition = sessionWorkflows.find((workflow) => workflow.id === startInput.guidanceWorkflow?.id);
-      if (!definition || definition.fields.some((field) => field.required && !startInput.guidanceWorkflow?.values[field.id]?.trim())) return;
-    }
     setStartingRun(true);
-    const goalEnabled = startInput.goalEnabled || Boolean(startInput.guidanceWorkflow);
-    void Promise.resolve(onSubmit({ ...startInput, goalEnabled,
-      goalObjective: startInput.guidanceWorkflow && !startInput.goalEnabled
-        ? assignedWorkflowGoalObjective(startInput.guidanceWorkflow.id,
-          sessionWorkflows.find((workflow) => workflow.id === startInput.guidanceWorkflow?.id)?.title)
-        : goalEnabled ? resolveGoalObjective(startInput.goalObjective, startInput.promptMarkdown) : null
+    void Promise.resolve(onSubmit({ ...startInput,
+      goalObjective: startInput.goalEnabled ? resolveGoalObjective(startInput.goalObjective, startInput.promptMarkdown) : null
     })).finally(() => setStartingRun(false));
   };
 
@@ -995,12 +982,12 @@ export function ResearchSettingsForm({
               <div className="new-research-options-tray-right">
                 <label
                   className="new-research-goal-toggle"
-                  title={input.guidanceWorkflow ? 'Assigned workflows use Goal mode until their runbooks complete or an external blocker requires attention.' : 'Keep working across turns until the objective is complete or genuinely blocked.'}
+                  title="Keep working across turns until the objective is complete or genuinely blocked."
                 >
                   <input
                     type="checkbox"
-                    checked={input.goalEnabled || Boolean(input.guidanceWorkflow)}
-                    disabled={generatingPrompt || Boolean(input.guidanceWorkflow)}
+                    checked={input.goalEnabled}
+                    disabled={generatingPrompt}
                     onChange={(event) => update('goalEnabled', event.target.checked)}
                   />
                   <span>Goal</span>
@@ -1021,8 +1008,6 @@ export function ResearchSettingsForm({
                 ) : null}
               </div>
             </div>
-            <WorkflowAssignmentPicker workflows={sessionWorkflows} value={input.guidanceWorkflow}
-              disabled={generatingPrompt} onChange={(value) => update('guidanceWorkflow', value)} />
           </>
         )}
         postComposerContent={generationFeedback ? (
@@ -1090,12 +1075,12 @@ export function ResearchSettingsForm({
               />
               <label
                 className="new-research-goal-toggle"
-                title={input.guidanceWorkflow ? 'Assigned workflows use Goal mode until their runbooks complete or an external blocker requires attention.' : 'Keep working across turns until the objective is complete or genuinely blocked.'}
+                title="Keep working across turns until the objective is complete or genuinely blocked."
               >
                 <input
                   type="checkbox"
-                  checked={input.goalEnabled || Boolean(input.guidanceWorkflow)}
-                  disabled={generatingPrompt || Boolean(input.guidanceWorkflow)}
+                  checked={input.goalEnabled}
+                  disabled={generatingPrompt}
                   onChange={(event) => update('goalEnabled', event.target.checked)}
                 />
                 <span>Goal</span>
@@ -1115,17 +1100,15 @@ export function ResearchSettingsForm({
                 </label>
               ) : null}
             </div>
-            <WorkflowAssignmentPicker workflows={sessionWorkflows} value={input.guidanceWorkflow}
-              disabled={generatingPrompt} onChange={(value) => update('guidanceWorkflow', value)} />
           </section>
           {showSuggestions ? (
             <ResearchGoalChooser
               workflows={workflows}
+              selectedWorkflowId={activeWorkflowId}
+              onSelectWorkflow={selectWorkflow}
               suggestions={researchGoalSuggestions}
               loading={researchGoalSuggestionsLoading}
               errors={researchGoalSuggestionErrors}
-              selectedWorkflowId={activeWorkflowId}
-              onSelectWorkflow={selectWorkflow}
               onLoad={onLoadResearchGoalSuggestions}
               onSelect={selectGoalSentence}
               onRetry={onRetryResearchGoalSuggestions}
@@ -1600,35 +1583,6 @@ export function defaultResearchWorkflowId(workflows: readonly ResearchProfileWor
     ?? 'discovery';
 }
 
-function WorkflowAssignmentPicker({ workflows, value, disabled, onChange }: {
-  workflows: readonly SessionWorkflowDefinition[];
-  value?: StartRunInput['guidanceWorkflow'];
-  disabled: boolean;
-  onChange: (value: StartRunInput['guidanceWorkflow']) => void;
-}): JSX.Element {
-  const selected = workflows.find((workflow) => workflow.id === value?.id);
-  return <div className="workflow-assignment-picker">
-    <label>Session workflow
-      <select value={value?.id ?? ''} disabled={disabled} onChange={(event) => onChange(event.target.value ? { id: event.target.value, values: {} } : undefined)}>
-        <option value="">None</option>
-        {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.title}</option>)}
-      </select>
-    </label>
-    {selected ? <>
-      <p>{selected.description}</p>
-      {selected.fields.map((field) => <label key={field.id}>{field.label}{field.required ? ' *' : ''}
-        {field.description ? <small className="workflow-assignment-field-description">{field.description}</small> : null}
-        {field.multiline ? <textarea maxLength={4000} required={field.required} disabled={disabled}
-          placeholder={field.placeholder ?? ''} value={value?.values[field.id] ?? ''}
-          onChange={(event) => onChange({ id: selected.id, values: { ...value?.values, [field.id]: event.target.value } })} />
-          : <input type="text" maxLength={4000} required={field.required} disabled={disabled}
-            placeholder={field.placeholder ?? ''} value={value?.values[field.id] ?? ''}
-            onChange={(event) => onChange({ id: selected.id, values: { ...value?.values, [field.id]: event.target.value } })} />}
-      </label>)}
-    </> : null}
-  </div>;
-}
-
 export function researchSettingsInput(
   initialInput: StartRunInput | undefined,
   initialWorkflowId: string,
@@ -1640,7 +1594,9 @@ export function researchSettingsInput(
       ...defaultRunInput,
       ...initialInput,
       provider: initialInput.provider,
-      workflowId: initialInput.workflowId ?? initialWorkflowId,
+      workflowId: initialInput.workflowId && initialInput.workflowId !== 'research'
+        ? initialInput.workflowId
+        : initialWorkflowId,
       collaboration: initialInput.collaboration
         ? normalizeResearchCollaboration(initialInput.collaboration)
         : normalizeResearchCollaboration(defaultRunInput.collaboration),
@@ -1654,7 +1610,7 @@ export function researchSettingsInput(
   return {
     ...defaultRunInput,
     shellSafetyMode: defaultShellSafetyMode,
-    workflowId: initialGoal?.phase ?? initialWorkflowId,
+    workflowId: initialWorkflowId,
     goalObjective: initialGoal?.sentence ?? null,
     promptMarkdown: initialGoal?.promptMarkdown ?? initialGoal?.sentence ?? '',
     sandboxProfile: 'host',

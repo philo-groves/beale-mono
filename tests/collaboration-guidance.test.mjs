@@ -113,15 +113,12 @@ test("advanced discovery maintains multiple non-duplicative scouts and replenish
   }
 });
 
-test("advanced sequential workflows retain bounded proof and review closure", () => {
+test("research lanes do not change advanced collaboration guidance", () => {
   const advanced = { ...BASE_CONFIG, subagentMode: "advanced" };
-
-  for (const workflowId of ["chaining", "proof", "verification", "reporting", "synthesis"]) {
-    const guidance = createCollaborationSystemGuidance(advanced, workflowId);
-    assert.match(guidance, /continue in the lead plus bounded Prover or Reviewer assignments/);
-    assert.match(guidance, /specific missing link has genuinely independent search space/);
-    assert.doesNotMatch(guidance, /continuous discovery coverage/);
-  }
+  assert.equal(
+    createCollaborationSystemGuidance(advanced, "research"),
+    createCollaborationSystemGuidance(advanced, "chaining"),
+  );
 });
 
 test("advanced collaboration guidance describes sustained role-based orchestration", () => {

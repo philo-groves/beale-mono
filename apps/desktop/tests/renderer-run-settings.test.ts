@@ -24,15 +24,12 @@ describe('renderer run settings view model', () => {
     expect(defaultRunInput.fastMode).toBe(false);
   });
 
-  it('requires Goal mode for an assigned workflow, including continuation of an earlier run', () => {
+  it('uses the session prompt or explicit objective when Goal mode is enabled', () => {
     const input = { ...defaultRunInput, promptMarkdown: 'Review the example module.' };
     expect(resolveSessionGoal(input)).toEqual({ enabled: false, objective: null });
-    const assigned = resolveSessionGoal({ ...input,
-      guidanceWorkflow: { id: 'beale.repository-auditor', values: { systems: 'example module' } } });
-    expect(assigned.enabled).toBe(true);
-    expect(assigned.objective).toContain('Inspect all inventoried source lines');
+    expect(resolveSessionGoal({ ...input, goalEnabled: true }).objective).toBe('Review the example module.');
     expect(resolveSessionGoal({ ...input, goalEnabled: true, goalObjective: 'Investigate example source.',
-      guidanceWorkflow: { id: 'beale.repository-auditor', values: { systems: 'example module' } } }).objective)
+    }).objective)
       .toBe('Investigate example source.');
   });
 

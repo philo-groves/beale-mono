@@ -424,7 +424,7 @@ describe('renderer workspace display view models', () => {
       /const openNewResearchForWorkspace = useCallback[\s\S]*?const startNewResearchForWorkspace/u
     )?.[0] ?? '';
 
-    expect(appSource).toContain('const openNewResearch = useCallback((openSchedule: boolean) => {\n    setNewResearchInitialInput(null);\n    setWorkflowsOpen(false);\n    closeWorkspaceOnboarding();');
+    expect(appSource).toContain('const openNewResearch = useCallback((openSchedule: boolean) => {\n    setNewResearchInitialInput(null);\n    closeWorkspaceOnboarding();');
     expect(actionSource).toContain('snapshot?.workspace.workspacePath === workspace.workspacePath');
     expect(actionSource).toContain('applySnapshot(await window.beale.openRegisteredWorkspace(workspace.id));');
     expect(actionSource.indexOf('applySnapshot(await window.beale.openRegisteredWorkspace(workspace.id));'))

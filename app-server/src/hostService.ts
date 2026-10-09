@@ -20,7 +20,7 @@ import {
   type AppServerSessionLaunchRequest
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
-import { decodeResearchPluginCatalog, SessionWorkflowStore, validateResearchSystemPromptTemplate } from '@beale/research-agent';
+import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate } from '@beale/research-agent';
 import { previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance, workspaceOperationKey } from './workspaceCheckpoints.js';
 import {
   AppServerHostRegistry,
@@ -552,19 +552,7 @@ export class AppServerHostService {
         }
       : null;
     const workspaceReferences = await this.sameSubjectWorkspaceReferences(workspace, storage);
-    let goal = request.launch.goal;
-    if (request.launch.guidanceWorkflow || continuation) {
-      const workflows = new SessionWorkflowStore(storage.databasePath, workspace.workspaceId);
-      try {
-        const assignment = request.launch.guidanceWorkflow
-          ? workflows.assign(sessionId, request.launch.guidanceWorkflow.id, request.launch.guidanceWorkflow.values)
-          : workflows.getAssignment(sessionId);
-        if (assignment) goal ??= { objective: assignment.definition.kind === 'repository_auditor'
-          ? 'Complete every cell of the assigned repository auditor workflow. Inspect all inventoried source lines in every declared system, refresh the inventory, and report coverage and evidence-backed results.'
-          : `Complete every cell of the assigned ${assignment.definition.title} workflow in order, using the session configuration and recording progress after each cell.` };
-      } finally { workflows.close(); }
-    }
-    const restartLaunch = restartLaunchDescriptor({ ...request, launch: { ...request.launch, ...(goal ? { goal } : {}) } }, {
+    const restartLaunch = restartLaunchDescriptor(request, {
       providerId,
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -600,7 +588,7 @@ export class AppServerHostService {
         capturePath,
         attemptId,
         promptMarkdown: request.launch.promptMarkdown,
-        ...(goal ? { goal } : {}),
+        ...(request.launch.goal ? { goal: request.launch.goal } : {}),
         provider: {
           id: providerId,
           ...(model ? { model } : {}),
@@ -1752,7 +1740,6 @@ function restartLaunchDescriptor(
       },
       shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
       ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
-      ...(request.launch.guidanceWorkflow ? { guidanceWorkflow: request.launch.guidanceWorkflow } : {}),
       researchProfileId: request.launch.researchProfileId?.trim() || resolved.profileId,
       ...(request.launch.researchProfileHash
         ? { researchProfileHash: request.launch.researchProfileHash }

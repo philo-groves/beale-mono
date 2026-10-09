@@ -59,7 +59,6 @@ import {
   type ResearchProfileSnapshot,
   type SourceRepositoryCandidate
 } from '@beale/app-server-runtime/runtime-services';
-import { SessionWorkflowStore } from '@beale/research-agent';
 import {
   appServerProtocolDescriptor,
   decodeClaimBoardTransitionRequest,
@@ -115,27 +114,6 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
     );
   }
   if (operation.startsWith('session.')) return sessionOperation(operation, options);
-  if (operation.startsWith('workflow.')) {
-    const input = requiredRecord(options.input, 'workflow input');
-    const store = new SessionWorkflowStore(requiredStorage(options.storage).databasePath, requiredText(input.workspaceId, 'workspaceId'));
-    try {
-      if (operation === 'workflow.list') return store.list();
-      if (operation === 'workflow.create') return store.create(input as unknown as Parameters<SessionWorkflowStore['create']>[0]);
-      if (operation === 'workflow.update') return store.update(input as unknown as Parameters<SessionWorkflowStore['update']>[0]);
-      if (operation === 'workflow.session') return store.getAssignment(requiredText(input.sessionId, 'sessionId'));
-      if (operation === 'workflow.runs') {
-        const runs = store.listRuns(requiredText(input.workflowId, 'workflowId'));
-        if (runs.length === 0) return runs;
-        const sessions = new AppServerSessionStore({ databasePath: requiredStorage(options.storage).databasePath, readOnly: true });
-        try {
-          const lifecycles = sessions.getLifecycleSummaries(requiredText(input.workspaceId, 'workspaceId'), runs.map((run) => run.sessionId));
-          return runs.map((run) => ({ ...run, sessionStatus: lifecycles.get(run.sessionId)?.status ?? null,
-            sessionEndedAt: lifecycles.get(run.sessionId)?.endedAt ?? null }));
-        } finally { sessions.close(); }
-      }
-      throw new Error('Unknown workflow operation.');
-    } finally { store.close(); }
-  }
   if (operation === 'resource.prior_art.list' || operation === 'resource.prior_art.get') {
     const input = requiredRecord(options.input, 'resource prior art input');
     const workspaceId = requiredText(input.workspaceId, 'workspaceId');

@@ -14,7 +14,7 @@ import {
 } from '../view-models/researchGoalSuggestions';
 import { clientRequestId } from '../view-models/runSettings';
 
-const LEGACY_RESEARCH_GOAL_PHASES: ResearchGoalPhase[] = ['discovery', 'chaining', 'reporting', 'longshot'];
+const DEFAULT_RESEARCH_GOAL_PHASES: ResearchGoalPhase[] = ['discovery', 'chaining', 'reporting', 'longshot'];
 
 interface ActiveSuggestionRequest {
   key: string;
@@ -46,7 +46,7 @@ export function useResearchGoalSuggestions(
   const cache = useMemo(() => new ResearchGoalSuggestionCache(), []);
   const phases = useMemo(
     () => snapshot?.researchProfile?.profile.workflows.map((workflow) => workflow.id)
-      ?? LEGACY_RESEARCH_GOAL_PHASES,
+      ?? DEFAULT_RESEARCH_GOAL_PHASES,
     [snapshot?.researchProfile?.profileHash]
   );
   const activeRequestsRef = useRef(new Map<ResearchGoalPhase, ActiveSuggestionRequest>());
