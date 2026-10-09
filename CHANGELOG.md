@@ -6,6 +6,8 @@
 
 #### Removed
 
+- Removed Topics screens, navigation, and Codex bridge tools. Existing topic overviews and pages export once to editable workspace Markdown under `references/research/legacy-topics/`.
+
 - Removed the default Browser Use plugin, its WebDriver BiDi server and Puppeteer dependency. Existing saved built-in Browser Use entries are pruned from the plugin registry.
 - Removed the built-in Terminator plugin, its settings toggle, and native SDK dependency. Existing saved Terminator entries are pruned.
 - Removed Computer Permissions settings and session-wide computer-action grants. External computer actions still require individual approval.
@@ -16,11 +18,11 @@
 
 #### Changed
 
+- Agents now keep reusable research documentation in `references/research/`, with citations to canonical records and evidence.
+
 - The workspace editor, bottom panel, and research sidebar header buttons are available in New Research for an open workspace.
-- New Topic offers a workspace picker when no workspace is active, then opens the topic form for the chosen workspace.
-- Topics now has its own icon rail destination, a recent-topics sidebar, and an explorer with all-workspace and per-workspace filters; the session sidebar shows only Workspaces.
 - The Automations sidebar replaces its redundant All Automations row with Schedule a Job, opening New Research with the repeat schedule menu focused or a workspace picker when no workspace is active.
-- Sidebar session and topic rows no longer show relative ages; long names fade at the right edge instead of ending with ellipses.
+- Sidebar session rows no longer show relative ages; long names fade at the right edge instead of ending with ellipses.
 - Automations and Plugins now have dedicated left sidebars. Automations lists active scheduled jobs; Plugins lists installed packages and selects their catalog rows.
 - Managed plugin packages in `managed-plugins` now appear in Plugins automatically. Meta Skills retains its existing default; other packages, including Microsoft Security Devices, start disabled.
 - Source, Provenance, Knowledge, Claims, Runbooks, Reporting, and Introspection now appear as Optional Features in Agent Settings instead of Plugins. Agents see them under "Internal features" in `{{features}}` with `features.preview` and `features.load`; traditional plugins appear under "External Plugins" in `{{plugins}}` and use `plugins.preview`/`plugins.load`. Saved enabled states and registry IDs remain compatible. Quick Chat requires Introspection to be enabled.
@@ -41,7 +43,6 @@
 - Workspace views now use a reusable centered container with a 1300px maximum width, 24px side gutters, and matching top padding while the darker content surface remains full-width.
 - Active destinations in the left navigation rail now use filled icons.
 - Workspace Highlights priority claims now place the status close beneath the title, show only maturity and rating, and size cards to their content.
-- Replaced workspace collaboration channels with Topics: editable overviews and pages, typed links to canonical records, search, reversible merge aliases, and read-only imported channel activity. Agents inherit bounded topic orientation without replaying message transcripts. Desktop, iOS subagent labels, and the Codex bridge use topic names; app-server contract v28 replaces channel operations. File-authoritative workspaces store topic snapshots under `references/topics/`.
 - Workspace Highlights priority claims now sit flush vertically within the horizontal list.
 - Campaign Claims columns now start flush beneath their headings and show top and bottom fades as their lists scroll.
 - Workspace Runbooks lists now match Memories for row padding, section headings, and expandable four-item previews.
@@ -1478,5 +1479,7 @@
 - Enforced shell authorization after immutable utility and protected-directory checks but before lease acquisition or process spawn; Auto-Review uses assigned provider-small-model defaults and fails closed even when a provider ignores cancellation, Manual Approval refuses commands whose executable fields cannot be displayed exactly, and shell events/results omit raw stdin while redacting paired credential arguments, cookie values, and authorization headers.
 
 #### Removed
+
+- Removed Topics operations and model-facing collaboration tools. Legacy topic snapshots remain readable for compatibility, and the shared app-server contract requires rebuilt clients.
 
 - Removed the second-model background memory curator, its advisory `memory.request` tool, provider-model CLI options, turn queue, notifications, and synthetic activity events.

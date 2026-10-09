@@ -1067,80 +1067,6 @@ export class AppServerHostService {
     return canonicalResult(workspace, result);
   }
 
-  public async workspaceTopics(
-    workspaceIdentifier: string,
-    limit = 200,
-    archived = false
-  ): Promise<BealeAppServerCanonicalResult> {
-    const workspace = this.requireWorkspace(workspaceIdentifier);
-    const result = await this.invokeProtocol<unknown>('topic.list', {
-      args: ['topic', 'list', '--workspace-id', workspace.workspaceId, '--workspace-root', workspace.workspacePath, '--limit', String(boundedInteger(limit, 1, 500))],
-      input: { workspaceId: workspace.workspaceId, archived },
-      storage: this.registry.storageForProfile(workspace.researchProfileId)
-    });
-    return canonicalResult(workspace, result);
-  }
-
-  public async searchWorkspaceTopics(workspaceIdentifier: string, query: string, limit = 50): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.search', null, { query }, ['--limit', String(boundedInteger(limit, 1, 500))]);
-  }
-
-  public async mutateWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string,
-    operation: 'topic.update_overview' | 'topic.page.save' | 'topic.page.delete' | 'topic.link' | 'topic.unlink',
-    input: Record<string, unknown>
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, operation, topic, { ...input, topic });
-  }
-
-  public async workspaceTopic(
-    workspaceIdentifier: string,
-    topic: string,
-    messageLimit = 0
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.get', topic, {
-      topic,
-      messageLimit
-    }, messageLimit > 0 ? ['--message-limit', String(boundedInteger(messageLimit, 1, 2_000))] : []);
-  }
-
-  public async createWorkspaceTopic(
-    workspaceIdentifier: string,
-    input: Record<string, unknown>
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.create', null, input);
-  }
-
-  public async deleteWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.delete', topic, { topic });
-  }
-
-  public async archiveWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.archive', topic, { topic });
-  }
-
-  public async restoreWorkspaceTopic(
-    workspaceIdentifier: string,
-    topic: string
-  ): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.restore', topic, { topic });
-  }
-
-  public async mergeWorkspaceTopic(workspaceIdentifier: string, sourceTopic: string, targetTopic: string): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.merge', sourceTopic, { topic: sourceTopic, targetTopic });
-  }
-
-  public async unmergeWorkspaceTopic(workspaceIdentifier: string, sourceTopic: string): Promise<BealeAppServerCanonicalResult> {
-    return this.topicOperation(workspaceIdentifier, 'topic.unmerge', sourceTopic, { topic: sourceTopic });
-  }
-
   public async sessionUpdate(
     workspaceIdentifier: string,
     sessionId: string,
@@ -1227,27 +1153,6 @@ export class AppServerHostService {
     const result = await this.invokeProtocol<unknown>(operation, {
       args,
       storage
-    });
-    return canonicalResult(workspace, result);
-  }
-
-  private async topicOperation(
-    workspaceIdentifier: string,
-    operation: AppServerProtocolOperation,
-    topic: string | null,
-    input: Record<string, unknown>,
-    extraArgs: readonly string[] = []
-  ): Promise<BealeAppServerCanonicalResult> {
-    const workspace = this.requireWorkspace(workspaceIdentifier);
-    const result = await this.invokeProtocol<unknown>(operation, {
-      args: [
-        'topic', operation.slice('topic.'.length), '--workspace-id', workspace.workspaceId,
-        '--workspace-root', workspace.workspacePath,
-        ...(topic ? ['--topic', topic] : []),
-        ...extraArgs
-      ],
-      input: { ...input, workspaceId: workspace.workspaceId, ...(topic ? { topic } : {}) },
-      storage: this.registry.storageForProfile(workspace.researchProfileId)
     });
     return canonicalResult(workspace, result);
   }

@@ -29,14 +29,12 @@ export function shouldShowHeaderResearchControls(input: {
   settingsOpen: boolean;
   reportsOpen: boolean;
   automationsOpen: boolean;
-  topicsOpen: boolean;
   pluginsOpen: boolean;
 }): boolean {
   return (input.researchDetailsAvailable || (input.newResearchOpen && input.workspaceOpen))
     && !input.settingsOpen
     && !input.reportsOpen
     && !input.automationsOpen
-    && !input.topicsOpen
     && !input.pluginsOpen;
 }
 

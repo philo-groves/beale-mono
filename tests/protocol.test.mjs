@@ -97,17 +97,12 @@ test("protocol describe exposes a runtime-bound v36 workflow run lifecycle contr
   assert.ok(descriptor.capabilities.includes("session.bounded_reads"));
   assert.ok(descriptor.capabilities.includes("session.targeted_details"));
   assert.ok(descriptor.capabilities.includes("session.event_identity"));
-  assert.ok(descriptor.capabilities.includes("workspace.topics.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.goal-suggestions.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.prompt-expansion.v1"));
   assert.ok(descriptor.capabilities.includes("workspace.state"));
   assert.ok(descriptor.capabilities.includes("registry.state"));
   assert.ok(descriptor.capabilities.includes("registry.workspace_sync.v2"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.list"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.link"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.merge"));
-  assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("topic.unmerge"));
-  assert.ok(!APP_SERVER_PROTOCOL_OPERATIONS.some((operation) => operation.startsWith("channel.")));
+  assert.ok(!APP_SERVER_PROTOCOL_OPERATIONS.some((operation) => operation.startsWith("topic.") || operation.startsWith("channel.")));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.generate"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.select"));
   assert.ok(APP_SERVER_PROTOCOL_OPERATIONS.includes("suggestion.steering"));
@@ -131,7 +126,6 @@ test("protocol describe exposes a runtime-bound v36 workflow run lifecycle contr
   assert.ok(descriptor.capabilities.includes("knowledge.report-triage-status.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-recording-replace.v1"));
   assert.ok(descriptor.capabilities.includes("knowledge.report-list.v1"));
-  assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.topics.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("workspace.goal-suggestions.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.startup-recovery.v1"));
   assert.ok(BEALE_APP_SERVER_CAPABILITIES.includes("session.openai-fast-mode.v1"));

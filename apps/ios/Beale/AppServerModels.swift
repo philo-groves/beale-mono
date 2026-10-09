@@ -739,7 +739,6 @@ struct AppServerSubagentSummary: Identifiable, Equatable, Sendable {
     let name: String
     let provider: String?
     let model: String?
-    let topicName: String?
     let status: String
     let latestMessage: String
     let createdAt: String
@@ -778,11 +777,6 @@ enum AppServerSubagentProjection {
                 name: path.split(separator: "/").last.map(String.init) ?? path,
                 provider: event.payload.string("provider") ?? prior?.provider,
                 model: event.payload.string("model") ?? prior?.model,
-                topicName: event.payload.string("topicName")
-                    ?? event.payload.string("topic_name")
-                    ?? event.payload.string("channelName")
-                    ?? event.payload.string("channel_name")
-                    ?? prior?.topicName,
                 status: projectedStatus,
                 latestMessage: message ?? prior?.latestMessage ?? "",
                 createdAt: earlier(prior?.createdAt, eventTime),
@@ -801,7 +795,6 @@ enum AppServerSubagentProjection {
                 name: summary.name,
                 provider: summary.provider,
                 model: summary.model,
-                topicName: summary.topicName,
                 status: "interrupted",
                 latestMessage: summary.latestMessage,
                 createdAt: summary.createdAt,

@@ -1843,14 +1843,6 @@ private struct SubagentListRow: View {
         return "\(providerName) · \(modelName)"
     }
 
-    private var topicLabel: String {
-        guard let topic = agent.topicName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !topic.isEmpty else {
-            return "No Topic"
-        }
-        return topic.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-    }
-
     private var createdAt: Date? {
         ISO8601DateFormatter().date(from: agent.createdAt)
     }
@@ -1876,8 +1868,6 @@ private struct SubagentListRow: View {
                 .lineLimit(2)
 
             HStack(spacing: 8) {
-                Text(topicLabel)
-                    .lineLimit(1)
                 Spacer()
                 Image(systemName: "cpu")
                     .font(.caption)

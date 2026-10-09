@@ -36,8 +36,8 @@ export function createCollaborationSystemGuidance(
 function runtimeGuidance(config: ResearchCollaborationConfig): readonly string[] {
   return [
     "Parent transcript inheritance is opt-in. Omit fork_turns for a fresh child, or set it to a bounded number only when recent parent turns are necessary. With fork_turns=all, omit provider, model, and reasoning_effort so the child inherits the complete parent route and history.",
-    "For independent verification, spawn a distinct Reviewer with fork_turns=none and without topic_name. The Reviewer may use the same provider and model, then must inspect canonical claims and executions through durable tools rather than inherited conversation history.",
-    `Concurrency limit: ${config.maxConcurrentRooms * config.maxMembersPerRoom} active subagent turns. Topics themselves persist and do not consume active-turn capacity.`,
+    "For independent verification, spawn a distinct Reviewer with fork_turns=none. The Reviewer may use the same provider and model, then must inspect canonical claims and executions through durable tools rather than inherited conversation history.",
+    `Concurrency limit: ${config.maxConcurrentRooms * config.maxMembersPerRoom} active subagent turns.`,
   ];
 }
 
@@ -53,14 +53,14 @@ function subagentModeGuidance(
       ];
     }
     return [
-      "Advanced subagent mode coordinates a sustained role-based research team through direct spawning, messaging, follow-up, interruption, waiting, and topic collaboration, with a required role for every delegated subagent.",
+      "Advanced subagent mode coordinates a sustained role-based research team through direct spawning, messaging, follow-up, interruption, and waiting, with a required role for every delegated subagent.",
       ...advancedWorkflowGuidance(workflowId),
       "Use Discoverer as the scout for general analysis and discovery. Use Prover to reproduce a specific finding and record exact prerequisites, steps, results, and evidence. Use Reviewer for independent review of the finding and reproduction, including contrary evidence and an approve, reject, or needs-work decision. Use Reporter only to write a submission report for a reviewed and approved finding.",
       "Choose the role that matches the bounded assignment. Roles clarify responsibility; they do not impose a phase gate or require all four roles for every task.",
     ];
   }
   return [
-    "Simple subagent mode permits direct delegation and topic collaboration.",
+    "Simple subagent mode permits direct delegation; collaborators can read shared workspace research documents.",
   ];
 }
 
@@ -85,13 +85,13 @@ function modeGuidance(
       "At major evidence or subsystem transitions, continue solo when work is sequential or coordination cost outweighs the expected gain.",
       "Prefer followup_task when an existing agent's context matches new work, and avoid duplicate assignments.",
       "Parallel source-to-sink tracing, adjacent attack-surface exploration, variant analysis, or independent challenge may be useful when they are cleanly separable; these are opportunities, not a delegation requirement.",
-      "Use a durable topic for related research that later sessions should inherit. Do not spawn merely to satisfy the mode.",
+      "Keep reusable research in references/research/ so later sessions can read it. Do not spawn merely to satisfy the mode.",
     ];
   }
   if (mode === "always") {
     return [
       "Use collaboration throughout every materially separable research stage that benefits from independent coverage or review.",
-      "Use a relevant existing topic where possible, and attach subagents whose work should become reusable workspace research.",
+      "Ask collaborators to read relevant documents under references/research/ and update them when their work produces reusable synthesis.",
     ];
   }
   return [

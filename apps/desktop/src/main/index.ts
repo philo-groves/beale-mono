@@ -54,14 +54,7 @@ import type {
   WorkspaceEditorId,
   WorkspaceMemoryBackendId,
   RepositoryCloneMode,
-  ResearchTopicSummary,
-  ResearchTopicDetail,
-  ResearchTopicRecord,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchSessionSummary,
-  CreateResearchTopicInput,
 } from '@shared/types';
 import { getHostEnvironment, WorkspaceService, type WorkspaceChange } from './workspaceService';
 import { nativeMacApplicationMenuTemplate } from './nativeApplicationMenu';
@@ -612,117 +605,6 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.getWorkspaceRegistry, () =>
     timedMainIpcAsync('getWorkspaceRegistry', {}, () => workspaceService.getWorkspaceRegistryStateForClient())
   );
-  ipcMain.handle(IPC_CHANNELS.listResearchTopics, async (_event, workspaceId: string): Promise<ResearchTopicSummary[]> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicSummary[]>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.listArchivedResearchTopics, async (_event, workspaceId: string): Promise<ResearchTopicSummary[]> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicSummary[]>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics?archived=true`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.listArchivedQuickChats, (): ResearchSessionSummary[] => (
-    workspaceService.listArchivedQuickChats()
-  ));
-  ipcMain.handle(IPC_CHANNELS.getResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<ResearchTopicDetail> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicDetail>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}?includeHistory=true`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.createResearchTopic, async (_event, workspaceId: string, input: CreateResearchTopicInput): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics`,
-      { method: 'POST', body: input }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.searchResearchTopics, async (_event, workspaceId: string, query: string): Promise<ResearchTopicSummary[]> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicSummary[]>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics?query=${encodeURIComponent(query)}`
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.updateResearchTopicOverview, async (_event, workspaceId: string, topicId: string, contentMarkdown: string, expectedUpdatedAt?: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/overview`,
-      { method: 'PATCH', body: { contentMarkdown, expectedUpdatedAt } }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.saveResearchTopicPage, async (_event, workspaceId: string, topicId: string, input: { id?: string; title: string; contentMarkdown: string; expectedUpdatedAt?: string }): Promise<ResearchTopicPageRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicPageRecord>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/pages`,
-      { method: 'PUT', body: input }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.deleteResearchTopicPage, async (_event, workspaceId: string, topicId: string, pageId: string): Promise<void> => {
-    const server = await ensureBealeAppServerRunning();
-    await fetchAppServerCanonicalResultWithRecovery(server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/pages/${encodeURIComponent(pageId)}`,
-      { method: 'DELETE' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.linkResearchTopicResource, async (_event, workspaceId: string, topicId: string, input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }): Promise<ResearchTopicLinkRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicLinkRecord>(server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/links`,
-      { method: 'POST', body: input }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.unlinkResearchTopicResource, async (_event, workspaceId: string, topicId: string, linkId: string): Promise<void> => {
-    const server = await ensureBealeAppServerRunning();
-    await fetchAppServerCanonicalResultWithRecovery(server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/links/${encodeURIComponent(linkId)}`,
-      { method: 'DELETE' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.mergeResearchTopic, async (_event, workspaceId: string, sourceTopicId: string, targetTopicId: string): Promise<{ source: ResearchTopicRecord; target: ResearchTopicRecord }> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<{ source: ResearchTopicRecord; target: ResearchTopicRecord }>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(sourceTopicId)}/merge`,
-      { method: 'POST', body: { targetTopic: targetTopicId } }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.unmergeResearchTopic, async (_event, workspaceId: string, sourceTopicId: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server, `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(sourceTopicId)}/unmerge`,
-      { method: 'POST' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.deleteResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<void> => {
-    const server = await ensureBealeAppServerRunning();
-    await fetchAppServerCanonicalResultWithRecovery(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}`,
-      { method: 'DELETE' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.archiveResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/archive`,
-      { method: 'POST' }
-    );
-  });
-  ipcMain.handle(IPC_CHANNELS.restoreResearchTopic, async (_event, workspaceId: string, topicId: string): Promise<ResearchTopicRecord> => {
-    const server = await ensureBealeAppServerRunning();
-    return fetchAppServerCanonicalResultWithRecovery<ResearchTopicRecord>(
-      server,
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/topics/${encodeURIComponent(topicId)}/restore`,
-      { method: 'POST' }
-    );
-  });
   ipcMain.handle(IPC_CHANNELS.archiveResearchSession, (_event, sessionId: string) =>
     workspaceService.archiveResearchSession(sessionId)
   );

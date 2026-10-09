@@ -84,7 +84,7 @@ test("adaptive collaboration guidance makes delegation evidence-driven", () => {
   assert.match(guidance, /these are opportunities, not a delegation requirement/);
   assert.match(guidance, /Do not spawn merely to satisfy the mode/);
   assert.match(guidance, /Concurrency limit: 6 active subagent turns/);
-  assert.match(guidance, /Topics themselves persist/);
+  assert.match(guidance, /references\/research\//);
   assert.doesNotMatch(guidance, /actively use ordinary subagents/);
   assert.doesNotMatch(guidance, /no lifetime collaborator-invocation budget/i);
 });

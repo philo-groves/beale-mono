@@ -31,7 +31,7 @@ import { formatCompactTimeSince, formatSessionDateTime, researchModelDisplayName
 import { campaignClaimIsActive, campaignClaimRatingPresentation } from '../../view-models/campaignClaims';
 import { activeMemoryCount, filterMemoryCatalogNodes, groupMemoryRelationships, memoryCatalogGroupPreview, memoryCatalogUpdateKey, memoryTypeGroupsByHeat, memoryTypeSummaryPresentation, sessionMemoryActivitySummary, sessionMemoryCatalogNodes, sessionMemoryCreationCount, sessionMemoryTypeSummaries } from '../../view-models/memoryCatalog';
 import type { SessionMemoryTypeSummary } from '../../view-models/memoryCatalog';
-import { filterSubagentSummaries, subagentCatalogGroups, subagentTopicLabel, subagentDisplayName, subagentOverviewForEvents, subagentOverviewFromSummaries, subagentOverviewStatusCountSummary, subagentStatusIconKind, subagentStatusLabel, subagentSummaries, traceEventsForSubagent } from '../../view-models/subagents';
+import { filterSubagentSummaries, subagentCatalogGroups, subagentDisplayName, subagentOverviewForEvents, subagentOverviewFromSummaries, subagentOverviewStatusCountSummary, subagentStatusIconKind, subagentStatusLabel, subagentSummaries, traceEventsForSubagent } from '../../view-models/subagents';
 import type { SubagentStatus, SubagentSummary } from '../../view-models/subagents';
 import { runbookBelongsToSession, runbookDescriptionText, runbookExecutionStatus } from '../../view-models/runbooks';
 import { reportCatalogGroups } from '../../view-models/reports';
@@ -2137,7 +2137,6 @@ export function SubagentCatalogSection({
               </span>
               <span className="subagent-catalog-preview">{agent.latestMessage || 'No message yet.'}</span>
               <span className="subagent-catalog-footer">
-                <span className="subagent-catalog-topic">{subagentTopicLabel(agent.topicName)}</span>
                 <span className="subagent-catalog-model-identity">
                   <SubagentProviderIcon provider={agent.provider} model={agent.model} />
                   <span className="subagent-catalog-model">{subagentModelDisplayName(agent.provider, agent.model, providerModelCatalog)}</span>

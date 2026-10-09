@@ -1331,8 +1331,6 @@ test("serves host workspaces and canonical app-server reads from one authenticat
     ["memory", "memory"],
     ["memory-notifications", "memory-notifications"],
     ["sessions", "sessions"],
-    ["topics", "topics"],
-    ["topics/topic-test", "topic"],
     ["sessions/session-test/update", "update"],
     ["sessions/session-test/events?stream=trace&tail=true", "events"],
     ["sessions/session-test/collaboration", "collaboration"],
@@ -1355,43 +1353,9 @@ test("serves host workspaces and canonical app-server reads from one authenticat
   assert.equal(details.status, 200);
   assert.equal((await details.json()).result.kind, "event-details");
 
-  const createdTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics`, {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ name: "new", topic: "New research" }),
-  });
-  assert.equal(createdTopic.status, 201);
-  assert.equal((await createdTopic.json()).result.kind, "topic-created");
-  const updatedOverview = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/overview`, {
-    method: "PATCH", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ contentMarkdown: "Current understanding." }),
-  });
-  assert.equal(updatedOverview.status, 200);
-  assert.equal((await updatedOverview.json()).result.kind, "topic-update_overview");
-  const savedPage = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/pages`, {
-    method: "PUT", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ title: "Open questions", contentMarkdown: "What remains?" }),
-  });
-  assert.equal(savedPage.status, 200);
-  assert.equal((await savedPage.json()).result.kind, "topic-page.save");
-  const linkedRecord = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/links`, {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ kind: "claim", resourceId: "claim_example", title: "Example claim" }),
-  });
-  assert.equal(linkedRecord.status, 201);
-  assert.equal((await linkedRecord.json()).result.kind, "topic-link");
-  const mergedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/merge`, {
-    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ targetTopic: "another-topic" }),
-  });
-  assert.equal(mergedTopic.status, 200);
-  assert.equal((await mergedTopic.json()).result.kind, "topic-merged");
-  const unmergedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/unmerge`, { method: "POST", headers });
-  assert.equal(unmergedTopic.status, 200);
-  assert.equal((await unmergedTopic.json()).result.kind, "topic-unmerged");
-  const archivedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/archive`, { method: "POST", headers });
-  assert.equal(archivedTopic.status, 200);
-  assert.equal((await archivedTopic.json()).result.kind, "topic-archived");
-  const restoredTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test/restore`, { method: "POST", headers });
-  assert.equal(restoredTopic.status, 200);
-  assert.equal((await restoredTopic.json()).result.kind, "topic-restored");
-  const deletedTopic = await fetch(`${server.url}/v1/workspaces/workspace-test/topics/topic-test`, { method: "DELETE", headers });
-  assert.equal(deletedTopic.status, 200);
-  assert.equal((await deletedTopic.json()).result.kind, "topic-deleted");
+  const retiredTopicEndpoint = await fetch(`${server.url}/v1/workspaces/workspace-test/topics`, { headers });
+  assert.equal(retiredTopicEndpoint.status, 404);
+
 });
 
 test("resolves workspace identity and host policy from the shared Beale registry", () => {
@@ -3750,16 +3714,6 @@ function testHostService(directory, options = {}) {
     async workspaceMemory() { return canonicalFixture("memory"); },
     async workspaceMemoryNotifications() { return canonicalFixture("memory-notifications"); },
     async workspaceSessions() { return canonicalFixture("sessions"); },
-    async workspaceTopics() { return canonicalFixture("topics"); },
-    async workspaceTopic() { return canonicalFixture("topic"); },
-    async createWorkspaceTopic() { return canonicalFixture("topic-created"); },
-    async mutateWorkspaceTopic(_workspaceId, _topic, operation) { return canonicalFixture(operation.replace('topic.', 'topic-')); },
-    async searchWorkspaceTopics() { return canonicalFixture("topics-search"); },
-    async archiveWorkspaceTopic() { return canonicalFixture("topic-archived"); },
-    async restoreWorkspaceTopic() { return canonicalFixture("topic-restored"); },
-    async mergeWorkspaceTopic() { return canonicalFixture("topic-merged"); },
-    async unmergeWorkspaceTopic() { return canonicalFixture("topic-unmerged"); },
-    async deleteWorkspaceTopic() { return canonicalFixture("topic-deleted"); },
     async sessionUpdate() { return canonicalFixture("update"); },
     async sessionEvents() { return canonicalFixture("events"); },
     async sessionEventDetails() { return canonicalFixture("event-details"); },

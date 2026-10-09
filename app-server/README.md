@@ -183,15 +183,6 @@ Non-success responses use one bounded shape: `{"controlVersion":1,"error":{"code
 Canonical, path-free host reads use control contract v1:
 
 - `GET /v1/workspaces`
-- `GET /v1/workspaces/<workspace>/topics` — list active or archived topics; `query` searches titles, overviews, and pages
-- `POST /v1/workspaces/<workspace>/topics` — create a topic with a purpose and initial overview
-- `GET /v1/workspaces/<workspace>/topics/<topic>` — read the overview, pages, and typed references; `includeHistory=true` also returns bounded read-only legacy activity
-- `PATCH /v1/workspaces/<workspace>/topics/<topic>/overview` — revise the overview using `expectedUpdatedAt`
-- `PUT /v1/workspaces/<workspace>/topics/<topic>/pages` and `DELETE /v1/workspaces/<workspace>/topics/<topic>/pages/<page>` — save or remove a page
-- `POST /v1/workspaces/<workspace>/topics/<topic>/links` and `DELETE /v1/workspaces/<workspace>/topics/<topic>/links/<link>` — manage typed research references
-- `POST /v1/workspaces/<workspace>/topics/<topic>/merge` with `targetTopic`, and `/unmerge` — alias and archive a redundant topic, or restore it without discarding its content
-- `POST /v1/workspaces/<workspace>/topics/<topic>/archive` and `/restore` — hide or restore a topic
-- `DELETE /v1/workspaces/<workspace>/topics/<topic>` — explicitly delete a topic
 - `GET /v1/workspaces/<workspace>/memory` — path-free workspace memory catalog resolved through the workspace's durable research subject and active profile, with identity, type, status, confidence, tags, title/summary, timestamps, revisions, and session links; no bodies, evidence, attributes, or host paths
 - `GET /v1/workspaces/<workspace>/memory-notifications` — up to 500 newest heat-bearing memory identities, types, statuses, heat levels, title/summaries, timestamps, revisions, and session links only; no bodies, evidence, attributes, or host paths
 - `GET /v1/workspaces/<workspace>/sessions`

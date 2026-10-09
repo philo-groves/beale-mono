@@ -8,7 +8,7 @@ import { AppServerSessionStore, MemoryGraphStore, ResearchResourceCatalog, Resea
 import { initializeWorkspaceProjectAsync, previewWorkspaceCheckpointRepair, runWorkspaceCheckpoint, runWorkspaceMaintenance } from '../dist/workspaceCheckpoints.js';
 import { AppServerWorkerDatabaseCoordinator } from '../dist/workerDatabaseBroker.js';
 
-test('session checkpoint publishes canonical topic snapshots materialized from stored topics', async () => {
+test('session checkpoint exports legacy topic notes and preserves canonical snapshots', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-topic-checkpoint-example-'));
   const workspaceRoot = join(directory, 'workspace');
   const databasePath = join(directory, 'runtime', 'memory.sqlite');
@@ -27,6 +27,8 @@ test('session checkpoint publishes canonical topic snapshots materialized from s
     assert.equal(published.status, 'committed', published.error);
     assert.deepEqual(listWorkspaceResearchEdits(workspaceRoot), []);
     assert.match(readFileSync(join(workspaceRoot, path), 'utf8'), /workspace:\/example/);
+    const documentPath = join(workspaceRoot, 'references', 'research', 'legacy-topics', topic.id, 'overview.md');
+    assert.match(readFileSync(documentPath, 'utf8'), /Synthetic path/);
 
     const updated = new ResearchTopicStore({ databasePath, workspaceRoot });
     updated.updateOverview(options.workspaceId, topic.id, 'Revised synthetic notes.');

@@ -143,7 +143,7 @@ test("goal guidance separates session work, Goal mode, and disposition", () => {
   assert.doesNotMatch(persistent, /\n{3,}/);
 });
 
-test("collaboration guidance separates delegation, topics, profile protocol, and runtime policy", () => {
+test("collaboration guidance separates delegation, documentation, profile protocol, and runtime policy", () => {
   const options = {
     hasTools: true,
     hasCollaborationTools: true,
@@ -156,14 +156,14 @@ test("collaboration guidance separates delegation, topics, profile protocol, and
   const subagent = createResearchSystemPrompt({ ...options, hasCollaborationTools: false, agentPath: "example-agent", collaborationGuidance: undefined });
 
   assert.match(prompt, /Delegation:\nDelegate distinct, bounded work/);
-  assert.match(prompt, /Research topics:\nUse topic_search and topic_list/);
+  assert.match(prompt, /Research documentation:\nStore reusable research synthesis/);
   assert.match(prompt, /Profile collaboration protocol:\nKeep exploit claims/);
   assert.match(prompt, /Active collaboration settings:\nCollaboration mode is adaptive/);
-  assert.ok(prompt.indexOf("Delegation:") < prompt.indexOf("Research topics:"));
-  assert.ok(prompt.indexOf("Research topics:") < prompt.indexOf("Profile collaboration protocol:"));
+  assert.ok(prompt.indexOf("Delegation:") < prompt.indexOf("Research documentation:"));
+  assert.ok(prompt.indexOf("Research documentation:") < prompt.indexOf("Profile collaboration protocol:"));
   assert.ok(prompt.indexOf("Profile collaboration protocol:") < prompt.indexOf("Active collaboration settings:"));
   assert.doesNotMatch(prompt, /\n{3,}/);
-  assert.doesNotMatch(withoutTools, /Delegation:|Research topics:|Active collaboration settings:/);
+  assert.doesNotMatch(withoutTools, /Delegation:|Research documentation:|Active collaboration settings:/);
   assert.match(subagent, /Subagent assignment:\nYou are subagent example-agent/);
 });
 

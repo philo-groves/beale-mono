@@ -67,15 +67,7 @@ import type {
   WorkspaceOnboardingProgressUpdate,
   WorkspaceOnboardingSkipInput,
   WorkspaceRegistryState,
-  ResearchTopicSummary,
-  ResearchTopicDetail,
-  ResearchTopicRecord,
-  ResearchTopicMessageRecord,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchSessionSummary,
-  CreateResearchTopicInput,
   ProfilingReport,
   ProfilingState,
   WorkspaceScopeDraft,
@@ -116,8 +108,8 @@ function zoomState(): ZoomState {
   };
 }
 
-async function invokeRunDetail<T>(topic: string, ...args: unknown[]): Promise<T> {
-  const result = await ipcRenderer.invoke(topic, ...args) as
+async function invokeRunDetail<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const result = await ipcRenderer.invoke(channel, ...args) as
     | { canceled: true }
     | { canceled: false; value: T };
   if (result.canceled) throw new Error('Beale session detail request was canceled.');
@@ -151,53 +143,8 @@ const api: BealeApi = {
   getWorkspaceRegistry() {
     return ipcRenderer.invoke(IPC_CHANNELS.getWorkspaceRegistry);
   },
-  listResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]> {
-    return ipcRenderer.invoke(IPC_CHANNELS.listResearchTopics, workspaceId);
-  },
-  listArchivedResearchTopics(workspaceId: string): Promise<ResearchTopicSummary[]> {
-    return ipcRenderer.invoke(IPC_CHANNELS.listArchivedResearchTopics, workspaceId);
-  },
   listArchivedQuickChats(): Promise<ResearchSessionSummary[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.listArchivedQuickChats);
-  },
-  getResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicDetail> {
-    return ipcRenderer.invoke(IPC_CHANNELS.getResearchTopic, workspaceId, topicId);
-  },
-  createResearchTopic(workspaceId: string, input: CreateResearchTopicInput): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.createResearchTopic, workspaceId, input);
-  },
-  searchResearchTopics(workspaceId: string, query: string): Promise<ResearchTopicSummary[]> {
-    return ipcRenderer.invoke(IPC_CHANNELS.searchResearchTopics, workspaceId, query);
-  },
-  updateResearchTopicOverview(workspaceId: string, topicId: string, contentMarkdown: string, expectedUpdatedAt?: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.updateResearchTopicOverview, workspaceId, topicId, contentMarkdown, expectedUpdatedAt);
-  },
-  saveResearchTopicPage(workspaceId: string, topicId: string, input: { id?: string; title: string; contentMarkdown: string; expectedUpdatedAt?: string }): Promise<ResearchTopicPageRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.saveResearchTopicPage, workspaceId, topicId, input);
-  },
-  deleteResearchTopicPage(workspaceId: string, topicId: string, pageId: string): Promise<void> {
-    return ipcRenderer.invoke(IPC_CHANNELS.deleteResearchTopicPage, workspaceId, topicId, pageId);
-  },
-  linkResearchTopicResource(workspaceId: string, topicId: string, input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }): Promise<ResearchTopicLinkRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.linkResearchTopicResource, workspaceId, topicId, input);
-  },
-  unlinkResearchTopicResource(workspaceId: string, topicId: string, linkId: string): Promise<void> {
-    return ipcRenderer.invoke(IPC_CHANNELS.unlinkResearchTopicResource, workspaceId, topicId, linkId);
-  },
-  mergeResearchTopic(workspaceId: string, sourceTopicId: string, targetTopicId: string): Promise<{ source: ResearchTopicRecord; target: ResearchTopicRecord }> {
-    return ipcRenderer.invoke(IPC_CHANNELS.mergeResearchTopic, workspaceId, sourceTopicId, targetTopicId);
-  },
-  unmergeResearchTopic(workspaceId: string, sourceTopicId: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.unmergeResearchTopic, workspaceId, sourceTopicId);
-  },
-  deleteResearchTopic(workspaceId: string, topicId: string): Promise<void> {
-    return ipcRenderer.invoke(IPC_CHANNELS.deleteResearchTopic, workspaceId, topicId);
-  },
-  archiveResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.archiveResearchTopic, workspaceId, topicId);
-  },
-  restoreResearchTopic(workspaceId: string, topicId: string): Promise<ResearchTopicRecord> {
-    return ipcRenderer.invoke(IPC_CHANNELS.restoreResearchTopic, workspaceId, topicId);
   },
   archiveResearchSession(sessionId: string): Promise<WorkspaceRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.archiveResearchSession, sessionId);

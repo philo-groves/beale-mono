@@ -67,7 +67,7 @@ export async function generateResearchSessionTitle(
       ? [
           `Create a short title for a ${options.researchProfile.name} ${options.researchProfile.presentation.sessionLabel.toLowerCase()} from the user's research prompt.`,
           "Return only a plain-text title of 3 to 6 words.",
-          `Preserve important ${options.researchProfile.workspace.subjectNoun.toLowerCase()}, component, topic, and feature names.`,
+          `Preserve important ${options.researchProfile.workspace.subjectNoun.toLowerCase()}, component and feature names.`,
           `Do not use quotes, markdown, a trailing period, or generic wording such as ${options.researchProfile.name}.`,
         ].join(" ")
       : SECURITY_TITLE_SYSTEM_PROMPT;

@@ -18,7 +18,7 @@ const EVIDENCE_SCHEMA = {
   required: ["kind", "summary"],
   properties: {
     kind: { type: "string", enum: EVIDENCE_KINDS },
-    referenceId: { type: "string", description: "Durable evidence identity. For runbook_execution, or verification/human_review/proof with independent=true, use a successful full runId from runbook.run with matching sourceRevision and environmentFingerprint. Inspect that snapshot with runbook.get id/runId. Agent verification requires a distinct reviewer subagent spawned with fork_turns=none and no inherited topic; it may use the same provider and model. The review is bound to the current claim content. For report use reportId; for disclosure use disclosureReference." },
+    referenceId: { type: "string", description: "Durable evidence identity. For runbook_execution, or verification/human_review/proof with independent=true, use a successful full runId from runbook.run with matching sourceRevision and environmentFingerprint. Inspect that snapshot with runbook.get id/runId. Agent verification requires a distinct reviewer subagent spawned with fork_turns=none ; it may use the same provider and model. The review is bound to the current claim content. For report use reportId; for disclosure use disclosureReference." },
     contentHash: { type: "string" },
     summary: { type: "string" },
     independent: { type: "boolean", description: "Request independent-review validation. The host checks reviewer identity, claim content, and the referenced execution; this flag alone does not establish independence." },

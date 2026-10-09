@@ -26,12 +26,6 @@ test('Beale Codex MCP advertises approval-aware research and session tools', asy
   assert.equal(tools.get('beale_stop_session').annotations.destructiveHint, true);
   assert.ok(tools.has('beale_steer_session'));
   assert.ok(tools.has('beale_continue_session'));
-  assert.ok(tools.has('beale_list_topics'));
-  assert.ok(tools.has('beale_get_topic'));
-  assert.ok(tools.has('beale_update_topic'));
-  assert.ok(tools.has('beale_save_topic_page'));
-  assert.ok(tools.has('beale_merge_topic'));
-  assert.ok(tools.has('beale_unmerge_topic'));
   assert.equal(tools.has('beale_post_channel_message'), false);
 });
 
@@ -60,13 +54,7 @@ test('Beale Codex MCP keeps discovery credentials internal and routes canonical 
     sessionId: 'session-example',
     instruction: 'Verify the parser boundary.'
   });
-  await client.call('beale_get_topic', { workspaceId: 'workspace-example', topic: 'parser-review' });
-  await client.call('beale_update_topic', {
-    workspaceId: 'workspace-example', topic: 'parser-review',
-    contentMarkdown: 'Current synthetic understanding.', expectedUpdatedAt: '2026-08-01T00:00:00.000Z'
-  });
-
-  assert.equal(mock.requests.length, 6);
+  assert.equal(mock.requests.length, 4);
   assert.ok(mock.requests.every((request) => request.authorization === 'Bearer operator-secret'));
   assert.deepEqual(mock.requests[1].body, {
     operation: 'research.tools.read',
@@ -80,9 +68,6 @@ test('Beale Codex MCP keeps discovery credentials internal and routes canonical 
   assert.equal(mock.requests[2].body.operation, 'research.tools.mutate');
   assert.equal(mock.requests[2].body.input.sessionId, 'session-example');
   assert.deepEqual(mock.requests[3].body, { type: 'steer', instruction: 'Verify the parser boundary.' });
-  assert.equal(mock.requests[4].url, '/v1/workspaces/workspace-example/topics/parser-review');
-  assert.equal(mock.requests[5].method, 'PATCH');
-  assert.equal(mock.requests[5].url, '/v1/workspaces/workspace-example/topics/parser-review/overview');
 });
 
 async function createMockAppServer() {

@@ -39,7 +39,6 @@ export const TopBar = memo(function TopBar({
   workspaceName,
   workspaceViewTitle,
   activeRunDetail,
-  activeTopicTitle,
   profilingEnabled,
   bottomPanelAvailable,
   bottomPanelOpen,
@@ -69,7 +68,6 @@ export const TopBar = memo(function TopBar({
   workspaceName: string;
   workspaceViewTitle?: string | null;
   activeRunDetail: AppHeaderRun | null;
-  activeTopicTitle: string | null;
   profilingEnabled: boolean;
   bottomPanelAvailable?: boolean;
   bottomPanelOpen: boolean;
@@ -387,7 +385,6 @@ export const TopBar = memo(function TopBar({
           workspaceName={workspaceName}
           workspaceViewTitle={workspaceViewTitle}
           detail={activeRunDetail}
-          topicTitle={activeTopicTitle}
           onOpenSessionOverview={onOpenSessionOverview}
         />
       ) : staticContextTitle ? (

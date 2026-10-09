@@ -14,18 +14,6 @@ export type {
   ResourcePriorArtPage,
   ResourcePriorArtDetail,
   ResourcePriorArtSummary,
-  ResearchTopicDetail,
-  ResearchTopicMemberRecord,
-  ResearchTopicMemberStatus,
-  ResearchTopicMessageKind,
-  ResearchTopicMessageRecord,
-  ResearchTopicRecord,
-  ResearchTopicSharedResourceKind,
-  ResearchTopicSharedResourceRecord,
-  ResearchTopicSummary,
-  ResearchTopicPageRecord,
-  ResearchTopicLinkRecord,
-  ResearchTopicLinkKind,
   ResearchClaimRating,
   GeneratedResearchGoalSuggestions,
   ResearchGoalSuggestionInput,
@@ -34,13 +22,6 @@ export type {
 
 export interface SteeringSuggestionResult {
   suggestion: string | null;
-}
-
-export interface CreateResearchTopicInput {
-  name: string;
-  title?: string;
-  topic: string;
-  overviewMarkdown?: string;
 }
 
 export interface ResourcePriorArtListInput {
@@ -63,10 +44,9 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-08T00:04:38.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T00:00:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
-  "workspace.topics.v1",
   "workspace.research-project.v3",
   "workspace.checkpoint-repair.v1",
   "session.typed-launch.v2",
@@ -429,7 +409,6 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "session.workflows.v1",
   "session.workflows.notebook.v1",
   "session.workflows.runs.v1",
-  "workspace.topics.v1",
   "workspace.goal-suggestions.v1",
   "workspace.prompt-expansion.v1",
   "knowledge.report-content-revise.v1",
@@ -451,7 +430,6 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
   "session.collaboration", "session.captures", "session.capture", "session.list", "session.list_summaries",
-  "topic.list", "topic.search", "topic.get", "topic.create", "topic.join", "topic.update_overview", "topic.page.save", "topic.page.delete", "topic.link", "topic.unlink", "topic.merge", "topic.unmerge", "topic.archive", "topic.restore", "topic.delete",
   "memory.summary", "memory.notification_feed", "history.mark_duplicate", "history.undo_duplicate", "claim.mark_duplicate", "claim.undo_duplicate", "claim.board_transition", "workspace.state", "registry.state", "dreaming.prepare", "dreaming.parse_plan", "dreaming.apply",
   "dreaming.record_failure", "dreaming.restore", "runbook.get", "workflow.list", "workflow.create", "workflow.update", "workflow.session", "workflow.runs", "report.list", "report.get", "report.revise_content", "report.update_triage_status", "report.replace_packet", "report.replace_recording",
   "artifact.resolve", "provider.complete", "provider.describe", "model_job.resolve",

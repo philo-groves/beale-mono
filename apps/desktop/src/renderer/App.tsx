@@ -33,9 +33,6 @@ import type {
   ResearchKitRefreshResult,
   ResolvedResearchProfile,
   ResearchProviderStatus,
-  ResearchTopicSummary,
-  ResearchTopicDetail,
-  ResearchTopicLinkKind,
   ResearchSessionSummary,
   SessionWorkflowDefinition,
   SessionWorkflowDraft,
@@ -68,8 +65,6 @@ import { AppNavigationRail, resolveAppNavigationDestination } from './app/AppNav
 import { TopBar } from './app/TopBar';
 import { NotificationStack, type WorkspaceAlert } from './features/notifications/Notifications';
 import { WorkspaceSidebar } from './features/workspaces/WorkspaceSidebar';
-import { TopicWorkspace } from './features/topics/TopicWorkspace';
-import { TopicsExplorer, TopicsSidebar } from './features/topics/TopicsExplorer';
 import { QuickChatDock, type QuickChatDescriptor } from './features/quick-chat/QuickChatDock';
 import { WorkspaceStartupView } from './features/workspaces/WorkspaceStartupView';
 import { WorkspaceCreationView } from './features/workspaces/WorkspaceCreationView';
@@ -357,16 +352,12 @@ export function App(): JSX.Element {
   const [activeNotification, setActiveNotification] = useState<NotificationRecord | null>(null);
   const [workspaceAlerts, setWorkspaceAlerts] = useState<WorkspaceAlert[]>([]);
   const [selectedSubagentPath, setSelectedSubagentPath] = useState<string | null>(null);
-  const [researchTopics, setResearchTopics] = useState<ResearchTopicSummary[]>([]);
-  const [archivedResearchTopics, setArchivedResearchTopics] = useState<ResearchTopicSummary[]>([]);
   const [archivedQuickChats, setArchivedQuickChats] = useState<ResearchSessionSummary[]>([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const closedQuickChats = useMemo(() => {
     const openRunIds = new Set(quickChats.flatMap((chat) => chat.runId ? [chat.runId] : []));
     return archivedQuickChats.filter((session) => !openRunIds.has(session.runId));
   }, [archivedQuickChats, quickChats]);
-  const [researchTopicsLoading, setResearchTopicsLoading] = useState(false);
-  const [topicsOpen, setTopicsOpen] = useState(false);
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [workflowScopeWorkspaceId, setWorkflowScopeWorkspaceId] = useState<string | null>(null);
   const [sessionWorkflows, setSessionWorkflows] = useState<SessionWorkflowDefinition[]>([]);
@@ -415,13 +406,6 @@ export function App(): JSX.Element {
     } catch (caught: unknown) { setSessionWorkflowError(errorMessage(caught)); return null; }
     finally { setSessionWorkflowBusy(false); }
   }, []);
-  const [topicScopeWorkspaceId, setTopicScopeWorkspaceId] = useState<string | null>(null);
-  const [selectedTopicWorkspaceId, setSelectedTopicWorkspaceId] = useState<string | null>(null);
-  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
-  const [selectedTopicDetail, setSelectedTopicDetail] = useState<ResearchTopicDetail | null>(null);
-  const [topicLoading, setTopicLoading] = useState(false);
-  const [topicSaving, setTopicSaving] = useState(false);
-  const [topicError, setTopicError] = useState<string | null>(null);
   const [selectedRunbookId, setSelectedRunbookId] = useState<string | null>(null);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [selectedReportWorkspaceId, setSelectedReportWorkspaceId] = useState<string | null>(null);
@@ -493,57 +477,6 @@ export function App(): JSX.Element {
   useDevInputLatencyProbe();
   useSidebarPerformanceProbe({ appShellRef, profile: sidebarToggleProfile });
   useInsetScrollbarActivation();
-
-  const topicWorkspaceIds = (workspaceRegistry?.workspaces ?? [])
-    .map((workspace) => workspace.workspaceId)
-    .filter(Boolean)
-    .join(':');
-  useEffect(() => {
-    if (!topicsOpen) return undefined;
-    let cancelled = false;
-    const load = async (): Promise<void> => {
-      setResearchTopicsLoading(true);
-      const workspaceIds = topicWorkspaceIds.split(':').filter(Boolean);
-      const results = await Promise.allSettled(workspaceIds.map((workspaceId) => window.beale.listResearchTopics(workspaceId)));
-      if (cancelled) return;
-      setResearchTopics(results.flatMap((result) => result.status === 'fulfilled' ? result.value : []));
-      const failure = results.find((result) => result.status === 'rejected');
-      setTopicError(failure?.status === 'rejected' ? errorMessage(failure.reason) : null);
-      setResearchTopicsLoading(false);
-    };
-    void load();
-    const interval = window.setInterval(() => void load(), 10_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [topicsOpen, topicWorkspaceIds]);
-
-  useEffect(() => {
-    const workspaceId = selectedTopicWorkspaceId;
-    if (!workspaceId || !selectedTopicId) return undefined;
-    let cancelled = false;
-    const load = async (): Promise<void> => {
-      try {
-        const detail = await window.beale.getResearchTopic(workspaceId, selectedTopicId);
-        if (!cancelled) {
-          setSelectedTopicDetail(detail);
-          setTopicError(null);
-        }
-      } catch (caught: unknown) {
-        if (!cancelled) setTopicError(errorMessage(caught));
-      } finally {
-        if (!cancelled) setTopicLoading(false);
-      }
-    };
-    setTopicLoading(true);
-    void load();
-    const interval = window.setInterval(() => void load(), 3_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [selectedTopicId, selectedTopicWorkspaceId]);
 
   useEffect(() => {
     if (memoryDreamingProgressClearTimerRef.current !== null) {
@@ -887,40 +820,16 @@ export function App(): JSX.Element {
     setError(null);
   }, []);
 
-  const refreshResearchTopics = useCallback(async (): Promise<void> => {
-    const workspaceIds = workspaceRegistry?.workspaces.map((workspace) => workspace.workspaceId).filter(Boolean) ?? [];
-    setResearchTopicsLoading(true);
-    try {
-      const results = await Promise.allSettled(workspaceIds.map((workspaceId) => window.beale.listResearchTopics(workspaceId)));
-      setResearchTopics(results.flatMap((result) => result.status === 'fulfilled' ? result.value : []));
-      const failure = results.find((result) => result.status === 'rejected');
-      if (failure?.status === 'rejected') throw failure.reason;
-      setTopicError(null);
-    } catch (caught: unknown) {
-      setTopicError(errorMessage(caught));
-    } finally {
-      setResearchTopicsLoading(false);
-    }
-  }, [workspaceRegistry?.workspaces]);
-
   const loadArchiveCatalog = useCallback(async (): Promise<void> => {
-    const workspaces = workspaceRegistry?.workspaces ?? [];
     setArchiveLoading(true);
     try {
-      const [topics, quickChatSessions] = await Promise.all([
-        Promise.all(workspaces.map((workspace) => (
-          window.beale.listArchivedResearchTopics(workspace.workspaceId)
-        ))),
-        window.beale.listArchivedQuickChats()
-      ]);
-      setArchivedResearchTopics(topics.flat());
-      setArchivedQuickChats(quickChatSessions);
+      setArchivedQuickChats(await window.beale.listArchivedQuickChats());
     } catch (caught: unknown) {
       setError(errorMessage(caught));
     } finally {
       setArchiveLoading(false);
     }
-  }, [workspaceRegistry?.workspaces]);
+  }, []);
 
   useEffect(() => {
     if (!settingsOpen || settingsSection !== 'archive') return;
@@ -950,91 +859,6 @@ export function App(): JSX.Element {
     }
   }, [setWorkspaceRegistry]);
 
-  const restoreResearchTopic = useCallback(async (topic: ResearchTopicSummary): Promise<void> => {
-    try {
-      if (topic.mergedIntoTopicId) await window.beale.unmergeResearchTopic(topic.workspaceId, topic.id);
-      else await window.beale.restoreResearchTopic(topic.workspaceId, topic.id);
-      await Promise.all([loadArchiveCatalog(), refreshResearchTopics()]);
-    } catch (caught: unknown) {
-      setError(errorMessage(caught));
-    }
-  }, [loadArchiveCatalog, refreshResearchTopics]);
-
-  const refreshSelectedTopic = useCallback(async (): Promise<void> => {
-    const workspaceId = selectedTopicWorkspaceId;
-    if (!workspaceId || !selectedTopicId) return;
-    setTopicLoading(true);
-    try {
-      setSelectedTopicDetail(await window.beale.getResearchTopic(workspaceId, selectedTopicId));
-      setTopicError(null);
-    } catch (caught: unknown) {
-      setTopicError(errorMessage(caught));
-    } finally {
-      setTopicLoading(false);
-    }
-  }, [selectedTopicId, selectedTopicWorkspaceId]);
-
-  const openResearchTopic = useCallback((topic: ResearchTopicSummary): void => {
-    closeWorkspaceOnboarding();
-    closeNewResearch();
-    clearRunDetail();
-    setSelectedRunId(null);
-    setSelectedSubagentPath(null);
-    setReportsOpen(false);
-    setAutomationsOpen(false);
-    setPluginsOpen(false);
-    setSettingsOpen(false);
-    setTopicsOpen(true);
-    setTopicError(null);
-    setRightSidenavExpanded(false);
-    setSelectedTopicId(topic.id);
-    setSelectedTopicWorkspaceId(topic.workspaceId);
-    setSelectedTopicDetail(null);
-  }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId]);
-
-  const createResearchTopic = useCallback(async (workspaceId: string, input: { name: string; title: string; topic: string }): Promise<void> => {
-    try {
-      const topic = await window.beale.createResearchTopic(workspaceId, input);
-      await refreshResearchTopics();
-      openResearchTopic({ ...topic, memberCount: 0, messageCount: 0, latestMessagePreview: null });
-    } catch (caught: unknown) {
-      const message = errorMessage(caught);
-      setTopicError(message);
-      throw new Error(message);
-    }
-  }, [openResearchTopic, refreshResearchTopics]);
-
-  const mutateSelectedTopic = useCallback(async (action: (workspaceId: string, topicId: string) => Promise<unknown>): Promise<void> => {
-    const workspaceId = selectedTopicWorkspaceId;
-    if (!workspaceId || !selectedTopicId) return;
-    setTopicSaving(true);
-    try {
-      await action(workspaceId, selectedTopicId);
-      await Promise.all([refreshSelectedTopic(), refreshResearchTopics()]);
-    } catch (caught: unknown) {
-      const message = errorMessage(caught);
-      setTopicError(message);
-      throw new Error(message);
-    } finally {
-      setTopicSaving(false);
-    }
-  }, [refreshResearchTopics, refreshSelectedTopic, selectedTopicId, selectedTopicWorkspaceId]);
-
-  const deleteSelectedResearchTopic = useCallback(async (): Promise<void> => {
-    const workspaceId = selectedTopicWorkspaceId;
-    if (!workspaceId || !selectedTopicId) return;
-    try {
-      await window.beale.deleteResearchTopic(workspaceId, selectedTopicId);
-      setSelectedTopicId(null);
-      setSelectedTopicDetail(null);
-      await refreshResearchTopics();
-    } catch (caught: unknown) {
-      const message = errorMessage(caught);
-      setTopicError(message);
-      throw new Error(message);
-    }
-  }, [refreshResearchTopics, selectedTopicId, selectedTopicWorkspaceId]);
-
   const openPlugins = useCallback((): void => {
     setWorkflowsOpen(false);
     closeWorkspaceOnboarding();
@@ -1042,10 +866,8 @@ export function App(): JSX.Element {
     setSettingsOpen(false);
     clearRunDetail();
     setSelectedRunId(null);
-    setSelectedTopicId(null);
     setReportsOpen(false);
     setAutomationsOpen(false);
-    setTopicsOpen(false);
     setPluginsOpen(true);
     setSelectedPluginId(null);
     void loadAgentPlugins();
@@ -1277,7 +1099,6 @@ export function App(): JSX.Element {
     setSettingsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
-    setTopicsOpen(false);
     setReportsOpen(true);
   }, [clearRunDetail, setSelectedRunId]);
 
@@ -1683,18 +1504,14 @@ export function App(): JSX.Element {
   const beginWorkspaceCreation = useCallback((): void => {
     setError(null);
     setWorkflowsOpen(false);
-    setTopicsOpen(false);
     setWorkspaceDashboardViewName('Settings');
     closeNewResearch();
     addWorkspace();
   }, [addWorkspace, closeNewResearch]);
   const openWorkspaceFromSidebar = useCallback((workspace: WorkspaceRegistryEntry): void => {
     setWorkflowsOpen(false);
-    setTopicsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
-    setSelectedTopicId(null);
-    setSelectedTopicDetail(null);
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
@@ -1702,14 +1519,11 @@ export function App(): JSX.Element {
   }, [closeNewResearch, closeWorkspaceOnboarding, openRegisteredWorkspace]);
   const openResearchSessionFromSidebar = useCallback((workspace: WorkspaceRegistryEntry, session: ResearchSessionSummary): void => {
     setWorkflowsOpen(false);
-    setTopicsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
-    setSelectedTopicId(null);
-    setSelectedTopicDetail(null);
     openResearchSession(workspace, session);
   }, [closeNewResearch, closeWorkspaceOnboarding, openResearchSession]);
   const importWorkspace = useCallback((): void => {
@@ -1728,7 +1542,6 @@ export function App(): JSX.Element {
           setAutomationsOpen(false);
           setPluginsOpen(false);
           setWorkflowsOpen(false);
-          setTopicsOpen(false);
           applySnapshot(next);
           setSelectedRunId(null);
         });
@@ -1810,8 +1623,6 @@ export function App(): JSX.Element {
     : snapshot?.researchProfile.profile ?? null;
   const activeResearchFeatures = researchProfileFeatureAvailability(activeResearchProfile);
   const researchDetailsAvailable = !newResearchOpen
-    && !topicsOpen
-    && !selectedTopicId
     && (selectedRunId ? activeRunDetail !== null : snapshot !== null)
     && (selectedRunId
       ? hasResearchProfileDetailFeatures(activeResearchProfile)
@@ -2116,7 +1927,6 @@ export function App(): JSX.Element {
     settingsOpen,
     reportsOpen,
     automationsOpen,
-    topicsOpen,
     pluginsOpen
   }) && !workflowsOpen;
   const bottomPanelVisible = bottomPanelOpen && headerResearchControlsAvailable;
@@ -2134,19 +1944,14 @@ export function App(): JSX.Element {
   const automationScopeName = automationScopeWorkspaceId
     ? workspaceRegistry?.workspaces.find((workspace) => workspace.workspaceId === automationScopeWorkspaceId)?.workspaceName ?? 'Workspace'
     : 'All Automations';
-  const topicScopeName = topicScopeWorkspaceId
-    ? workspaceRegistry?.workspaces.find((workspace) => workspace.workspaceId === topicScopeWorkspaceId)?.workspaceName ?? 'Workspace'
-    : 'All Topics';
   const selectedAutomation = useMemo(
     () => automations.find((automation) => (
       automation.runId === selectedAutomationRunId && automation.workspaceId === selectedAutomationWorkspaceId
     )) ?? null,
     [automations, selectedAutomationRunId, selectedAutomationWorkspaceId]
   );
-  const activeTopicTitle = selectedTopicDetail?.topic.title ?? null;
   const openSettings = useCallback(() => {
     setWorkflowsOpen(false);
-    setTopicsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsSection('general');
@@ -2154,13 +1959,10 @@ export function App(): JSX.Element {
   }, [closeNewResearch, closeWorkspaceOnboarding]);
   const openHome = useCallback((): void => {
     setWorkflowsOpen(false);
-    setTopicsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     clearRunDetail();
     setSelectedRunId(null);
-    setSelectedTopicId(null);
-    setSelectedTopicDetail(null);
     setReportsOpen(false);
     setAutomationsOpen(false);
     setPluginsOpen(false);
@@ -2184,9 +1986,7 @@ export function App(): JSX.Element {
   const openNewResearch = useCallback((openSchedule: boolean) => {
     setNewResearchInitialInput(null);
     setWorkflowsOpen(false);
-    setTopicsOpen(false);
     closeWorkspaceOnboarding();
-    setSelectedTopicId(null);
     if (reportsOpen) {
       clearRunDetail();
       setSelectedRunId(null);
@@ -2270,7 +2070,6 @@ export function App(): JSX.Element {
   const openWorkspaceDashboardSession = useCallback(
     (runId: string): void => {
       setWorkflowsOpen(false);
-      setTopicsOpen(false);
       closeNewResearch();
       setReportsOpen(false);
       setAutomationsOpen(false);
@@ -2282,7 +2081,6 @@ export function App(): JSX.Element {
   );
   const openAutomations = useCallback((): void => {
     setWorkflowsOpen(false);
-    setTopicsOpen(false);
     closeWorkspaceOnboarding();
     closeNewResearch();
     setSettingsOpen(false);
@@ -2296,24 +2094,6 @@ export function App(): JSX.Element {
     setPluginsOpen(false);
     setAutomationsOpen(true);
   }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId, snapshot?.workspace.workspaceId]);
-  const openTopics = useCallback((): void => {
-    setWorkflowsOpen(false);
-    closeWorkspaceOnboarding();
-    closeNewResearch();
-    clearRunDetail();
-    setSelectedRunId(null);
-    setSelectedTopicId(null);
-    setSelectedTopicDetail(null);
-    setSelectedTopicWorkspaceId(null);
-    setTopicScopeWorkspaceId(snapshot?.workspace.workspaceId ?? null);
-    setTopicError(null);
-    setReportsOpen(false);
-    setAutomationsOpen(false);
-    setPluginsOpen(false);
-    setSettingsOpen(false);
-    setTopicsOpen(true);
-    setRightSidenavExpanded(false);
-  }, [clearRunDetail, closeNewResearch, closeWorkspaceOnboarding, setSelectedRunId, snapshot?.workspace.workspaceId]);
   const openWorkflows = useCallback((): void => {
     closeWorkspaceOnboarding();
     closeNewResearch();
@@ -2321,7 +2101,6 @@ export function App(): JSX.Element {
     setSelectedRunId(null);
     setReportsOpen(false);
     setAutomationsOpen(false);
-    setTopicsOpen(false);
     setPluginsOpen(false);
     setSettingsOpen(false);
     setWorkflowsOpen(true);
@@ -2398,7 +2177,7 @@ export function App(): JSX.Element {
       onStarted={handleResearchStarted}
     />
   ) : null;
-  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, automationsOpen, topicsOpen, workflowsOpen, pluginsOpen });
+  const navigationDestination = resolveAppNavigationDestination({ settingsOpen, automationsOpen, workflowsOpen, pluginsOpen });
   return (
     <div
       ref={appShellRef}
@@ -2417,7 +2196,7 @@ export function App(): JSX.Element {
         workspaceRegistryLoading={startupPhase === 'shell' || startupPhase === 'registry'}
         rightSidenavAvailable={headerResearchControlsAvailable}
         rightSidenavExpanded={rightSidenavExpanded && headerResearchControlsAvailable}
-        contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !topicsOpen && !workflowsOpen && !pluginsOpen}
+        contextualTitleVisible={!settingsOpen && !reportsOpen && !automationsOpen && !workflowsOpen && !pluginsOpen}
         staticContextTitle={settingsOpen
           ? { primary: 'Agent Settings', secondary: settingsSectionLabel(settingsSection), icon: settingsSectionHeaderIcon(settingsSection) }
           : reportsOpen
@@ -2432,8 +2211,6 @@ export function App(): JSX.Element {
               ? { primary: 'Automations', secondary: selectedAutomation?.title ?? automationScopeName, icon: 'automations' }
               : workflowsOpen
                 ? { primary: 'Workflows', secondary: sessionWorkflows.find((workflow) => workflow.id === selectedSessionWorkflowId)?.title ?? currentWorkspaceName, icon: 'workflows' }
-              : topicsOpen
-                ? { primary: 'Topics', secondary: (selectedTopicId ? selectedTopicDetail?.topic.title : null) ?? topicScopeName, icon: 'topics' }
               : pluginsOpen
                 ? { primary: 'Plugins', secondary: 'Installed Plugins', icon: 'plugins' }
               : null}
@@ -2441,9 +2218,8 @@ export function App(): JSX.Element {
         workspaceName={workspaceDraft && !newResearchOpen ? 'New Workspace' : currentWorkspaceName}
         workspaceViewTitle={newResearchOpen
           ? snapshot?.researchProfile.profile.presentation?.newResearchLabel ?? 'New Research'
-          : workspaceDraft ? workspaceDashboardViewName : (snapshot && !selectedRunId && !selectedTopicId ? workspaceDashboardViewName : null)}
+          : workspaceDraft ? workspaceDashboardViewName : (snapshot && !selectedRunId ? workspaceDashboardViewName : null)}
         activeRunDetail={activeRunHeaderDetail}
-        activeTopicTitle={activeTopicTitle}
         profilingEnabled={profilingState?.enabled ?? false}
         bottomPanelAvailable={headerResearchControlsAvailable}
         bottomPanelOpen={bottomPanelVisible}
@@ -2473,7 +2249,6 @@ export function App(): JSX.Element {
         active={navigationDestination}
         onOpenHome={openHome}
         onOpenAutomations={openAutomations}
-        onOpenTopics={openTopics}
         onOpenWorkflows={openWorkflows}
         onOpenPlugins={openPlugins}
         onOpenSettings={openSettings}
@@ -2498,23 +2273,6 @@ export function App(): JSX.Element {
           loading={agentPluginsLoading}
           error={agentPluginsError}
           onSelectPlugin={setSelectedPluginId}
-          onResizePointerDown={beginSidebarResize}
-        />
-      ) : topicsOpen ? (
-        <TopicsSidebar
-          topics={researchTopics}
-          workspaces={workspaceRegistry?.workspaces ?? []}
-          workspaceRegistryLoading={startupPhase === 'shell' || startupPhase === 'registry'}
-          selectedWorkspaceId={topicScopeWorkspaceId}
-          activeWorkspaceId={snapshot?.workspace.workspaceId ?? null}
-          selectedTopicId={selectedTopicId}
-          collapsed={sidebarCollapsed}
-          loading={researchTopicsLoading}
-          error={topicError}
-          onOpenExplorer={() => { setSelectedTopicId(null); setSelectedTopicDetail(null); }}
-          onOpenTopic={openResearchTopic}
-          onCreateTopic={createResearchTopic}
-          onAddWorkspace={beginWorkspaceCreation}
           onResizePointerDown={beginSidebarResize}
         />
       ) : automationsOpen ? (
@@ -2597,7 +2355,6 @@ export function App(): JSX.Element {
             agentPluginsError={agentPluginsError}
             sessionHeatPreferences={sessionHeatPreferences}
             archivedSessions={workspaceRegistry?.archivedResearchSessions ?? []}
-            archivedTopics={archivedResearchTopics}
             archivedQuickChats={closedQuickChats}
             archiveWorkspaces={workspaceRegistry?.workspaces ?? []}
             archiveLoading={archiveLoading}
@@ -2635,7 +2392,6 @@ export function App(): JSX.Element {
             onSetSessionHeatPreference={setSessionHeatPreference}
             onSetSessionHeatPalettePreference={setSessionHeatPalettePreference}
             onRestoreResearchSession={restoreResearchSession}
-            onRestoreResearchTopic={restoreResearchTopic}
             onResumeQuickChat={resumeQuickChat}
           />
         ) : (
@@ -2704,16 +2460,6 @@ export function App(): JSX.Element {
                 onShellApprovalDecision={decideInlineShellApproval}
                 onSessionAction={handleSessionAction}
                 onSteerInstruction={handleSteerInstruction}
-              />
-            ) : topicsOpen && !selectedTopicId ? (
-              <TopicsExplorer
-                topics={researchTopics}
-                workspaces={workspaceRegistry?.workspaces ?? []}
-                selectedWorkspaceId={topicScopeWorkspaceId}
-                loading={researchTopicsLoading}
-                error={topicError}
-                onScopeChange={setTopicScopeWorkspaceId}
-                onOpenTopic={openResearchTopic}
               />
             ) : reportsOpen ? (
               selectedReport ? (
@@ -2806,45 +2552,6 @@ export function App(): JSX.Element {
                   }}
                 />
               ) : null
-            ) : selectedTopicId ? (
-              <TopicWorkspace
-                detail={selectedTopicDetail}
-                loading={topicLoading}
-                error={topicError}
-                saving={topicSaving}
-                onRefresh={() => {
-                  void Promise.all([refreshSelectedTopic(), refreshResearchTopics()]);
-                }}
-                onUpdateOverview={(content, expectedUpdatedAt) => mutateSelectedTopic((workspaceId, topicId) => window.beale.updateResearchTopicOverview(workspaceId, topicId, content, expectedUpdatedAt))}
-                onSavePage={(input) => mutateSelectedTopic((workspaceId, topicId) => window.beale.saveResearchTopicPage(workspaceId, topicId, input))}
-                onDeletePage={(pageId) => mutateSelectedTopic((workspaceId, topicId) => window.beale.deleteResearchTopicPage(workspaceId, topicId, pageId))}
-                onLink={(input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }) => mutateSelectedTopic((workspaceId, topicId) => window.beale.linkResearchTopicResource(workspaceId, topicId, input))}
-                onUnlink={(linkId) => mutateSelectedTopic((workspaceId, topicId) => window.beale.unlinkResearchTopicResource(workspaceId, topicId, linkId))}
-                onArchive={async () => {
-                  if (!selectedTopicWorkspaceId || !selectedTopicId) return;
-                  setTopicSaving(true);
-                  try {
-                    await window.beale.archiveResearchTopic(selectedTopicWorkspaceId, selectedTopicId);
-                    setSelectedTopicId(null);
-                    setSelectedTopicDetail(null);
-                    await refreshResearchTopics();
-                  } catch (caught: unknown) {
-                    const message = errorMessage(caught);
-                    setTopicError(message);
-                    throw new Error(message);
-                  } finally {
-                    setTopicSaving(false);
-                  }
-                }}
-                availableTopics={researchTopics.filter((topic) => topic.workspaceId === selectedTopicWorkspaceId)}
-                onMerge={async (targetTopicId) => {
-                  await mutateSelectedTopic((workspaceId, sourceTopicId) => window.beale.mergeResearchTopic(workspaceId, sourceTopicId, targetTopicId));
-                  setSelectedTopicId(targetTopicId);
-                  setSelectedTopicDetail(null);
-                }}
-                onUnmerge={(sourceTopicId) => mutateSelectedTopic((workspaceId) => window.beale.unmergeResearchTopic(workspaceId, sourceTopicId))}
-                onOpenTopic={(topicId) => { setSelectedTopicId(topicId); setSelectedTopicDetail(null); }}
-              />
             ) : snapshot ? <MainSessionWorkspace
               workspaceId={snapshot.workspace.workspaceId}
               detail={renderedRunDetail}

@@ -20,7 +20,6 @@ import { createResearchSystemPrompt } from "./system-prompt.js";
 import { createCollaborationSystemGuidance } from "./collaboration-guidance.js";
 import {
   createSubagentRuntime,
-  type SubagentTopicContext,
   type SubagentRunRequest,
   type SubagentRunResult,
   type SubagentRuntimeFactory,
@@ -63,7 +62,6 @@ export interface CreateClaudeAgentExecutorOptions {
   subagents?: false;
   subagentRuntimeFactory?: SubagentRuntimeFactory;
   collaboration?: ResearchCollaborationConfig;
-  topicContext?: SubagentTopicContext;
   collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
     request: SubagentRunRequest,
@@ -280,7 +278,6 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             ...(options.reasoning ? { rootReasoning: options.reasoning as never } : {}),
             ...(collaboration ? { collaboration } : {}),
             signal: abortController.signal,
-            ...(options.topicContext ? { topicContext: options.topicContext } : {}),
             run: (request) => {
               if (!options.runAlternateSubagent) throw new Error("No provider-neutral channel collaborator is configured.");
               return options.runAlternateSubagent(request, input);

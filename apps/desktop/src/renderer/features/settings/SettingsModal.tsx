@@ -30,7 +30,6 @@ import type {
   ResearchProviderReadiness,
   ResearchProviderStatus,
   ShellSafetyMode,
-  ResearchTopicSummary,
   ResearchSessionSummary,
   WorkspaceRegistryEntry,
   TicketingMode,
@@ -180,7 +179,6 @@ export function SettingsView({
   agentPluginsError,
   sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
   archivedSessions = [],
-  archivedTopics = [],
   archivedQuickChats = [],
   archiveWorkspaces = [],
   archiveLoading = false,
@@ -218,7 +216,6 @@ export function SettingsView({
   onSetSessionHeatPreference = () => undefined,
   onSetSessionHeatPalettePreference = () => undefined,
   onRestoreResearchSession = async () => undefined,
-  onRestoreResearchTopic = async () => undefined,
   onResumeQuickChat = async () => undefined
 }: {
   section: SettingsSection;
@@ -252,7 +249,6 @@ export function SettingsView({
   agentPluginsError: string | null;
   sessionHeatPreferences?: SessionHeatPreferences;
   archivedSessions?: readonly ResearchSessionSummary[];
-  archivedTopics?: readonly ResearchTopicSummary[];
   archivedQuickChats?: readonly ResearchSessionSummary[];
   archiveWorkspaces?: readonly WorkspaceRegistryEntry[];
   archiveLoading?: boolean;
@@ -308,7 +304,6 @@ export function SettingsView({
     color: string | null
   ) => void;
   onRestoreResearchSession?: (session: ResearchSessionSummary) => Promise<void>;
-  onRestoreResearchTopic?: (topic: ResearchTopicSummary) => Promise<void>;
   onResumeQuickChat?: (session: ResearchSessionSummary) => Promise<void>;
 }): JSX.Element {
   const activeSection = activeSettingsSection(section);
@@ -319,12 +314,10 @@ export function SettingsView({
         {activeSection === 'archive' ? (
           <ArchiveSettingsView
             sessions={archivedSessions}
-            topics={archivedTopics}
             quickChats={archivedQuickChats}
             workspaces={archiveWorkspaces}
             loading={archiveLoading}
             onRestoreSession={onRestoreResearchSession}
-            onRestoreTopic={onRestoreResearchTopic}
             onResumeQuickChat={onResumeQuickChat}
           />
         ) : activeSection === 'general' ? (
@@ -1675,21 +1668,17 @@ export function GeneralSettingsView({
 
 export function ArchiveSettingsView({
   sessions,
-  topics,
   quickChats,
   workspaces,
   loading,
   onRestoreSession,
-  onRestoreTopic,
   onResumeQuickChat
 }: {
   sessions: readonly ResearchSessionSummary[];
-  topics: readonly ResearchTopicSummary[];
   quickChats: readonly ResearchSessionSummary[];
   workspaces: readonly WorkspaceRegistryEntry[];
   loading: boolean;
   onRestoreSession: (session: ResearchSessionSummary) => Promise<void>;
-  onRestoreTopic: (topic: ResearchTopicSummary) => Promise<void>;
   onResumeQuickChat: (session: ResearchSessionSummary) => Promise<void>;
 }): JSX.Element {
   const workspaceName = (workspaceId: string): string => (
@@ -1742,30 +1731,6 @@ export function ArchiveSettingsView({
             ))}
             {!loading && quickChats.length === 0 ? <p className="archive-settings-empty">No archived Quick Chats.</p> : null}
             {loading && quickChats.length === 0 ? <p className="archive-settings-empty">Loading archived Quick Chats…</p> : null}
-          </div>
-        </fieldset>
-      </section>
-      <section className="settings-form">
-        <header className="settings-form-heading">
-          <h2 id="archived-topics-settings-heading">Archived Topics</h2>
-          <p>Archived and merged topics keep their overviews, pages, and references.</p>
-        </header>
-        <fieldset className="settings-form-squircle" aria-labelledby="archived-topics-settings-heading">
-          <div className="settings-form-control-list archive-settings-list">
-            {topics.map((topic) => (
-              <div className="settings-form-control-row archive-settings-row" key={topic.id}>
-                <span className="settings-form-control-copy">
-                  <strong className="archive-settings-item-name"><FileText size={14} aria-hidden="true" />{topic.title}</strong>
-                  <small>{workspaceName(topic.workspaceId)}</small>
-                </span>
-                <button type="button" disabled={loading} onClick={() => void onRestoreTopic(topic)}>
-                  <ArchiveRestore size={14} aria-hidden="true" />
-                  <span>{topic.mergedIntoTopicId ? 'Undo merge' : 'Restore'}</span>
-                </button>
-              </div>
-            ))}
-            {!loading && topics.length === 0 ? <p className="archive-settings-empty">No archived topics.</p> : null}
-            {loading && topics.length === 0 ? <p className="archive-settings-empty">Loading archived topics…</p> : null}
           </div>
         </fieldset>
       </section>

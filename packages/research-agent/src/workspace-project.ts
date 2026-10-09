@@ -252,6 +252,7 @@ export function initializeWorkspaceProject(root: string, workspaceId: string): W
   const existing = readWorkspaceProject(root);
   if (existing) {
     if (existing.workspaceId !== workspaceId) throw new Error("Workspace identity does not match workspace.json.");
+    mkdirSync(join(root, "references", "research"), { recursive: true });
     if (!existsSync(join(root, '.git'))) git(root, ['init', '--initial-branch=research']);
     ensureWorkspaceGitIgnore(root);
     installWorkspaceGitHook(root);
@@ -278,6 +279,7 @@ export function initializeWorkspaceProject(root: string, workspaceId: string): W
     mkdirSync(join(root, directory), { recursive: true });
     if (directory !== "scratch" && directory !== "cache") writeFileSync(join(root, directory, ".gitkeep"), "");
   }
+  mkdirSync(join(root, "references", "research"), { recursive: true });
   if (!existsSync(join(root, "AGENTS.md"))) writeFileSync(join(root, "AGENTS.md"), WORKSPACE_INSTRUCTIONS);
   if (!existsSync(join(root, "README.md"))) writeFileSync(join(root, "README.md"), "# Beale research workspace\n\nResearch files and local Git checkpoints are managed by app-server. Repositories remain outside this directory. Remote setup and synchronization are operator-controlled.\n");
   ensureWorkspaceGitIgnore(root);
@@ -339,6 +341,7 @@ This directory is one research workspace. Source repositories belong in the host
 - memories/ and claims/: canonical file-authority records. Typed research tools trigger background synchronization; direct edits enter the derived index through validated import.
 - evidence/: retained evidence and provenance. Cited evidence is immutable; corrections require a new artifact.
 - references/: background material and the host-published research index.
+- references/research/: agent-written research documentation. Keep synthesis in Markdown files here and cite canonical claims, memories, runbooks, and evidence instead of copying their bodies.
 - traces/: session summaries and untracked raw event exports.
 - scratch/: disposable session experiments; cache/: rebuildable outputs and downloads. Both are excluded from Git.
 

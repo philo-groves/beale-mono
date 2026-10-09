@@ -49,53 +49,6 @@ const TOOLS = [
     sessionId: stringField('Terminal Beale session id.'),
     instruction: stringField('Continuation instruction.')
   }, mutating({ openWorldHint: true }), ['workspaceId', 'sessionId', 'instruction']),
-  tool('beale_list_topics', 'List durable research topics in a Beale workspace.', {
-    workspaceId: stringField('Beale workspace id.'),
-    limit: { type: 'number', minimum: 1, maximum: 1000 },
-    archived: { type: 'boolean' },
-    query: stringField('Optional text search across topics and pages.')
-  }, readOnly(), ['workspaceId']),
-  tool('beale_get_topic', 'Read a Beale research topic with its overview, pages, and canonical references.', {
-    workspaceId: stringField('Beale workspace id.'),
-    topic: stringField('Topic id or slug.')
-  }, readOnly(), ['workspaceId', 'topic']),
-  tool('beale_create_topic', 'Create a durable Beale research topic.', {
-    workspaceId: stringField('Beale workspace id.'),
-    name: stringField('Topic slug or short title.'),
-    title: stringField('Human-readable title.'),
-    topic: stringField('One-sentence purpose.'),
-    overviewMarkdown: stringField('Initial overview.')
-  }, mutating(), ['workspaceId', 'name', 'topic']),
-  tool('beale_update_topic', 'Revise a topic overview using the current topic updatedAt timestamp.', {
-    workspaceId: stringField('Beale workspace id.'),
-    topic: stringField('Topic id or slug.'),
-    contentMarkdown: stringField('New overview Markdown.'),
-    expectedUpdatedAt: stringField('Current topic updatedAt timestamp.')
-  }, mutating(), ['workspaceId', 'topic', 'contentMarkdown', 'expectedUpdatedAt']),
-  tool('beale_save_topic_page', 'Create or revise one topic page.', {
-    workspaceId: stringField('Beale workspace id.'),
-    topic: stringField('Topic id or slug.'),
-    id: stringField('Existing page id when revising.'),
-    title: stringField('Page title.'),
-    contentMarkdown: stringField('Page Markdown.'),
-    expectedUpdatedAt: stringField('Current page updatedAt when revising.')
-  }, mutating(), ['workspaceId', 'topic', 'title', 'contentMarkdown']),
-  tool('beale_link_topic_record', 'Link a canonical record or workspace file to a topic.', {
-    workspaceId: stringField('Beale workspace id.'),
-    topic: stringField('Topic id or slug.'),
-    kind: { type: 'string', enum: ['claim', 'memory', 'runbook', 'file', 'session', 'topic'] },
-    resourceId: stringField('Canonical record id or workspace-relative file path.'),
-    title: stringField('Reference title.')
-  }, mutating(), ['workspaceId', 'topic', 'kind', 'resourceId', 'title']),
-  tool('beale_merge_topic', 'Archive a redundant topic as an alias of an active topic, preserving its content for undo.', {
-    workspaceId: stringField('Beale workspace id.'),
-    sourceTopic: stringField('Source topic id.'),
-    targetTopic: stringField('Active destination topic id.')
-  }, mutating(), ['workspaceId', 'sourceTopic', 'targetTopic']),
-  tool('beale_unmerge_topic', 'Undo a topic merge and restore the preserved source topic.', {
-    workspaceId: stringField('Beale workspace id.'),
-    sourceTopic: stringField('Merged source topic id.')
-  }, mutating(), ['workspaceId', 'sourceTopic']),
   tool('beale_list_research_tools', 'List the exact in-Beale durable research tools enabled by a workspace profile.', {
     workspaceId: stringField('Beale workspace id.'),
     sessionId: stringField('Optional Beale session association for new records.'),
@@ -210,41 +163,6 @@ async function callTool(name, args) {
         instruction: required(args, 'instruction')
       }
     });
-    case 'beale_list_topics': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics${query({
-      limit: args.limit ?? 200,
-      archived: args.archived,
-      query: args.query
-    })}`);
-    case 'beale_get_topic': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics/${part(required(args, 'topic'))}`);
-    case 'beale_create_topic': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics`, {
-      method: 'POST',
-      body: {
-        name: required(args, 'name'),
-        topic: required(args, 'topic'),
-        ...(args.title ? { title: args.title } : {}),
-        ...(args.overviewMarkdown ? { overviewMarkdown: args.overviewMarkdown } : {})
-      }
-    });
-    case 'beale_update_topic': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics/${part(required(args, 'topic'))}/overview`, {
-      method: 'PATCH',
-      body: { contentMarkdown: required(args, 'contentMarkdown'), expectedUpdatedAt: required(args, 'expectedUpdatedAt') }
-    });
-    case 'beale_save_topic_page': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics/${part(required(args, 'topic'))}/pages`, {
-      method: 'PUT',
-      body: {
-        ...(args.id ? { id: args.id } : {}),
-        title: required(args, 'title'), contentMarkdown: required(args, 'contentMarkdown'),
-        ...(args.expectedUpdatedAt ? { expectedUpdatedAt: args.expectedUpdatedAt } : {})
-      }
-    });
-    case 'beale_link_topic_record': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics/${part(required(args, 'topic'))}/links`, {
-      method: 'POST',
-      body: { kind: required(args, 'kind'), resourceId: required(args, 'resourceId'), title: required(args, 'title') }
-    });
-    case 'beale_merge_topic': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics/${part(required(args, 'sourceTopic'))}/merge`, {
-      method: 'POST', body: { targetTopic: required(args, 'targetTopic') }
-    });
-    case 'beale_unmerge_topic': return request(`/v1/workspaces/${part(required(args, 'workspaceId'))}/topics/${part(required(args, 'sourceTopic'))}/unmerge`, { method: 'POST' });
     case 'beale_list_research_tools': return researchOperation('research.tools.list', args);
     case 'beale_read_research': return researchOperation('research.tools.read', args);
     case 'beale_write_research': return researchOperation('research.tools.mutate', args);

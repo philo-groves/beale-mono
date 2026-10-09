@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import { createResearchStorageLayout, loadResearchStorageManifest } from "./storage.js";
 import { assertWorkspaceChild, atomicWorkspaceWrite, checkpointWorkspace, listWorkspaceResearchEdits, publishWorkspaceFiles, readWorkspaceProject, recoverWorkspacePublication, retainWorkspaceArtifact, workspaceFileHash, workspaceContentHash, type WorkspaceCheckpointResult, type WorkspaceCommitContext } from "./workspace-project.js";
-import { matchingStoredResearchTopicSnapshots } from "./topics.js";
+import { exportLegacyResearchTopicDocuments, matchingStoredResearchTopicSnapshots } from "./topics.js";
 import { markWorkspaceResearchIndexReady } from "./workspace-research-index.js";
 
 type Row = Record<string, unknown>;
@@ -70,6 +70,7 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
   if (!project) return;
   if (project.workspaceId !== options.workspaceId) throw new Error("Canonical publication workspace identity mismatch.");
   recoverWorkspacePublication(root);
+  exportLegacyResearchTopicDocuments(options);
   const trustedTopicEdits = matchingStoredResearchTopicSnapshots(options,
     listWorkspaceResearchEdits(root).filter((edit) => edit.state === 'created' || edit.state === 'modified').map((edit) => edit.path));
   const database = openResearchDatabase(options.databasePath, { readOnly: true });

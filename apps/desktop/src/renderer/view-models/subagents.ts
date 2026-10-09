@@ -13,7 +13,6 @@ export interface SubagentSummary {
   name: string;
   provider: string | null;
   model: string | null;
-  topicName?: string | null;
   status: SubagentStatus;
   latestMessage: string;
   createdAt: string;
@@ -94,11 +93,6 @@ export function subagentDisplayName(name: string): string {
     .replace(/\S+/g, (word) => `${word[0]?.toUpperCase() ?? ''}${word.slice(1)}`);
 }
 
-export function subagentTopicLabel(topicName?: string | null): string {
-  const normalizedName = topicName?.trim().replace(/^#+/u, '') ?? '';
-  return normalizedName ? `#${normalizedName}` : 'No Topics';
-}
-
 export function filterSubagentSummaries(
   subagents: readonly SubagentSummary[],
   query: string
@@ -112,7 +106,6 @@ export function filterSubagentSummaries(
     subagentDisplayName(subagent.name),
     subagent.provider ?? '',
     subagent.model ?? '',
-    subagentTopicLabel(subagent.topicName),
     subagent.status,
     subagent.latestMessage
   ].join('\n').toLocaleLowerCase().includes(normalizedQuery));
@@ -155,13 +148,11 @@ export function subagentSummaries(
     const message = projection === 'commentary'
       ? subagentAssistantPreview(event, nativeCommentaryKeys) ?? subagentActivityMessage(event)
       : subagentMessage(event);
-    const topicName = subagentPayloadValue(event, 'topicName') ?? subagentPayloadValue(event, 'topic_name');
     summaries.set(path, {
       ...current,
       id: subagentPayloadValue(event, 'agentId') ?? current.id,
       provider: subagentPayloadValue(event, 'provider') ?? current.provider,
       model: subagentPayloadValue(event, 'model') ?? current.model,
-      ...(topicName ? { topicName } : {}),
       status: lifecycleEvent
         ? subagentLifecycleStatus(subagentPayloadValue(event, 'status'), action) ?? current.status
         : current.status,

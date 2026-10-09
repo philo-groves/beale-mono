@@ -20,8 +20,6 @@ const COMMENTARY_EVENT_PAYLOAD_KEYS = [
   'finalResultKind',
   'provider',
   'model',
-  'topicName',
-  'topic_name',
   'responseId',
   'itemId',
   'linkedTraceEventId',
@@ -81,8 +79,6 @@ const COMMENTARY_SUBAGENT_PAYLOAD_KEYS = [
   'parentAgentId',
   'provider',
   'model',
-  'topicName',
-  'topic_name',
   'status',
   'message'
 ] as const;
@@ -326,8 +322,6 @@ function toolLabelInputKeys(toolName: string): readonly string[] {
     case 'finding.transition': return ['toStatus'];
     case 'finding.completion_check': return ['targetStatus'];
     case 'finding.list': return ['query'];
-    case 'topic_list': return [];
-    case 'topic_read': return ['topic_name'];
     case 'resource.catalog': return ['operation'];
     case 'history.search':
     case 'memory.search': return ['query'];

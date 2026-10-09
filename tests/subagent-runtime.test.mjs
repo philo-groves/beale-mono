@@ -86,15 +86,6 @@ test("advanced subagent mode retains direct controls and requires explicit deleg
     tools.spawn_agent.parameters.properties.role.enum,
     ["discoverer", "prover", "reviewer", "reporter"],
   );
-  assert.deepEqual(
-    tools.create_topic.parameters.properties.members.items.required,
-    ["task_name", "message", "role"],
-  );
-  assert.deepEqual(
-    tools.create_topic.parameters.properties.members.items.properties.role.enum,
-    ["discoverer", "prover", "reviewer", "reporter"],
-  );
-
   const expectedInstructions = new Map([
     ["discoverer", /Act as a bounded discovery scout/],
     ["prover", /Reproduce a specific finding/],
@@ -177,12 +168,6 @@ test("advanced delegation rejects missing or unsupported roles while Simple rema
   const simpleTools = Object.fromEntries(simple.createTools("root").map((tool) => [tool.name, tool]));
   assert.deepEqual(simpleTools.spawn_agent.parameters.required, ["task_name", "message"]);
   assert.equal(simpleTools.spawn_agent.parameters.properties.role, undefined);
-  assert.equal(simpleTools.join_topic.parameters.properties.role, undefined);
-  assert.equal(simpleTools.create_topic.parameters.properties.members.items.properties.role, undefined);
-  assert.deepEqual(
-    simpleTools.create_topic.parameters.properties.members.items.required,
-    ["task_name", "message"],
-  );
   await simpleTools.spawn_agent.execute("simple_spawn", {
     task_name: "plain_agent",
     message: "Analyze one boundary.",
@@ -444,60 +429,6 @@ test("subagent concurrency releases capacity without a lifetime invocation budge
   await manager.settle();
 
   assert.equal(requests.length, 4);
-});
-
-test("subagents inherit bounded topic orientation without historical activity", async () => {
-  const requests = [];
-  const databasePath = join(mkdtempSync(join(tmpdir(), "beale-topic-context-")), "memory.sqlite");
-  const store = new ResearchTopicStore({ databasePath });
-  const topic = store.create({
-    workspaceId: "workspace_one", name: "parser-review", title: "Parser review", topic: "Example parser boundaries."
-  });
-  const current = store.updateOverview("workspace_one", topic.id, "Current overview cites claim_example_001.", topic.updatedAt);
-  store.link("workspace_one", topic.id, { kind: "claim", resourceId: "claim_example_001", title: "Example hypothesis" });
-  const legacyHistory = new DatabaseSync(databasePath);
-  legacyHistory.prepare(`INSERT INTO app_server_topic_messages
-    (id, topic_id, session_id, attempt_id, member_id, sender_agent_path, kind,
-     content_markdown, evidence_refs_json, metadata_json, created_at)
-    VALUES (?, ?, ?, NULL, NULL, ?, 'message', ?, '[]', '{}', ?)`)
-    .run("message_example", topic.id, "historical_session", "/historical", "Do not inherit this old transcript marker.", "2026-08-01T00:00:00.000Z");
-  legacyHistory.close();
-  const manager = new SubagentManager({
-    rootProvider: "openai", rootModel: "gpt-5.6-sol",
-    topicContext: { store, workspaceId: "workspace_one", sessionId: "current_session", attemptId: "attempt_one" },
-    async run(request) { requests.push(request); return resultFor(request, "bounded result"); },
-  });
-  const tools = toolsByName(manager, "root");
-  assert.equal((await tools.topic_list.execute("list_topics", {})).details.topics[0].id, topic.id);
-  assert.equal((await tools.topic_search.execute("search_topics", { query: "Example hypothesis" })).details.topics[0].id, topic.id);
-  const read = await tools.topic_read.execute("read_topic", { topic_name: topic.name });
-  assert.equal(read.details.topic.overviewMarkdown, current.overviewMarkdown);
-  assert.equal(read.details.links[0].resourceId, "claim_example_001");
-  assert.equal(read.details.messages, undefined);
-  const savedPage = await tools.topic_page_save.execute("save_page", {
-    topic_name: topic.name, title: "Open questions", content_markdown: "Synthetic unresolved parser question."
-  });
-  const pageId = savedPage.details.page.id;
-  const indexed = await tools.topic_read.execute("read_topic_again", { topic_name: topic.name });
-  assert.equal(indexed.details.pages[0].id, pageId);
-  assert.equal(indexed.details.pages[0].contentMarkdown, undefined);
-  const page = await tools.topic_page_read.execute("read_page", { topic_name: topic.name, page_id: pageId });
-  assert.match(page.details.page.contentMarkdown, /Synthetic unresolved/);
-  await tools.spawn_agent.execute("spawn_topic", { task_name: "variant_review", message: "Continue.", fork_turns: "none", topic_name: topic.name });
-  await manager.settle();
-  const inherited = requests[0].inheritedMessages.at(-1).content;
-  assert.match(inherited, /claim_example_001/);
-  assert.doesNotMatch(inherited, /old transcript marker/);
-  assert.equal(store.get("workspace_one", topic.id, 500).messages.length, 1);
-  await assert.rejects(() => tools.topic_update.execute("stale_update", {
-    topic_name: topic.name, content_markdown: "Stale version", expected_updated_at: topic.updatedAt
-  }), /changed since it was opened/);
-  const updated = await tools.topic_update.execute("update_topic", {
-    topic_name: topic.name, content_markdown: "Revised overview cites claim_example_001.",
-    expected_updated_at: store.get("workspace_one", topic.id).topic.updatedAt
-  });
-  assert.match(updated.details.topic.overviewMarkdown, /Revised overview/);
-  store.close();
 });
 
 test("subagent runtime normalizes exact routes and validates same-provider models", async () => {

@@ -3,35 +3,13 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { createResearchEventId, nowIso } from "./ids.js";
 import type { ResearchEvent } from "./types.js";
-import type {
-  CreateResearchTopicInput,
-  JoinResearchTopicInput,
-  ResearchTopicDetail,
-  ResearchTopicRecord,
-  ResearchTopicSummary,
-  ResearchTopicLinkKind,
-  ResearchTopicPageRecord,
-} from "./topics.js";
-
-const SPAWN_TOPIC_LINK_LIMIT = 24;
-const SPAWN_TOPIC_FIELD_MAX_CHARACTERS = 600;
-
 export const SUBAGENT_COLLABORATION_TOOLS = [
-  { name: "create_topic", description: "Create a durable workspace research topic, optionally with initial agent assignments." },
   { name: "spawn_agent", description: "Spawn a bounded child session for independent work." },
   { name: "send_message", description: "Queue a message for an existing agent." },
   { name: "followup_task", description: "Extend or restart a non-root child session." },
   { name: "interrupt_agent", description: "Interrupt a child turn while preserving its session." },
   { name: "list_agents", description: "List agents in the current session tree." },
   { name: "wait_agent", description: "Wait for mailbox or agent lifecycle activity." },
-  { name: "topic_list", description: "Discover durable research topics from this workspace, including previous sessions." },
-  { name: "topic_search", description: "Search topic titles, overviews, page text, and reference titles." },
-  { name: "topic_read", description: "Read a topic overview, page index, and canonical record links." },
-  { name: "topic_page_read", description: "Read one topic page." },
-  { name: "join_topic", description: "Associate an agent with a research topic and inherit its compact overview." },
-  { name: "topic_update", description: "Revise a topic overview using current canonical evidence." },
-  { name: "topic_page_save", description: "Create or revise a topic page." },
-  { name: "topic_link", description: "Link a canonical claim, memory, runbook, file, session, or related topic." },
 ] as const;
 
 export type SubagentStatus =
@@ -55,8 +33,6 @@ export interface SubagentRunRequest {
   collaborationTools: readonly AgentTool[];
   takeSteeringMessages?: () => AgentMessage[];
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<AgentMessage[]>;
-  topicName?: string;
-  topicTitle?: string;
   role?: string;
   signal: AbortSignal;
 }
@@ -82,7 +58,6 @@ export interface CreateSubagentManagerOptions {
   peerChallengeRounds?: number;
   requireRoomBeforeFinal?: boolean;
   delegationRoles?: readonly SubagentDelegationRole[];
-  topicContext?: SubagentTopicContext;
   providerPreferences?: readonly SubagentProviderPreference[];
   signal?: AbortSignal;
   run(request: SubagentRunRequest): Promise<SubagentRunResult>;
@@ -100,24 +75,6 @@ export interface SubagentDelegationRole {
   instruction: string;
 }
 
-export interface SubagentTopicStore {
-  list(workspaceId: string, limit?: number): ResearchTopicSummary[];
-  search(workspaceId: string, query: string, limit?: number): ResearchTopicSummary[];
-  get(workspaceId: string, topic: string, messageLimit?: number): ResearchTopicDetail | null;
-  create(input: CreateResearchTopicInput): ResearchTopicRecord;
-  join(input: JoinResearchTopicInput): unknown;
-  updateOverview(workspaceId: string, topic: string, contentMarkdown: string, expectedUpdatedAt?: string): ResearchTopicRecord;
-  savePage(workspaceId: string, topic: string, input: { id?: string; title: string; contentMarkdown: string; expectedUpdatedAt?: string }): ResearchTopicPageRecord;
-  link(workspaceId: string, topic: string, input: { kind: ResearchTopicLinkKind; resourceId: string; title: string }): unknown;
-}
-
-export interface SubagentTopicContext {
-  store: SubagentTopicStore;
-  workspaceId: string;
-  sessionId: string;
-  attemptId?: string;
-}
-
 export interface SubagentProviderPreference {
   provider: string;
   model: string;
@@ -127,7 +84,7 @@ export interface SubagentProviderPreference {
 }
 
 export interface SubagentActivity {
-  type: "spawned" | "message" | "followup" | "interrupted" | "completed" | "errored" | "topic_created" | "topic_joined" | "topic_message" | "topic_deleted" | "room_created" | "room_phase" | "room_packet" | "room_completed";
+  type: "spawned" | "message" | "followup" | "interrupted" | "completed" | "errored" | "room_created" | "room_phase" | "room_packet" | "room_completed";
   agentId: string;
   agentPath: string;
   parentId: string | null;
@@ -141,8 +98,6 @@ export interface SubagentActivity {
   roomTitle?: string;
   roomKind?: string;
   role?: string;
-  topicName?: string;
-  topicTitle?: string;
   authorAgentPath?: string;
   recipientAgentPath?: string;
   message?: string;
@@ -170,8 +125,6 @@ interface SubagentSession {
   roomTitle: string | null;
   roomKind: string | null;
   role: string | null;
-  topicName: string | null;
-  topicTitle: string | null;
   status: SubagentStatus;
   createdAt: string;
   startedAt?: string;
@@ -296,9 +249,7 @@ export class SubagentManager {
       roomTitle: null,
       roomKind: null,
       role: null,
-      topicName: null,
-      topicTitle: null,
-      status: "running",
+          status: "running",
       createdAt: new Date().toISOString(),
       startedAt: new Date().toISOString(),
       messages: [],
@@ -330,21 +281,12 @@ export class SubagentManager {
   public createTools(agentId: string): AgentTool[] {
     const session = this.ensureSession(agentId);
     const tools = [
-      ...(session.id === "root" ? [this.createTopicTool(agentId)] : []),
       ...(session.depth < this.maxDepth ? [this.createSpawnTool(agentId)] : []),
       this.createSendMessageTool(agentId),
       this.createFollowupTool(agentId),
       this.createInterruptTool(agentId),
       this.createListTool(agentId),
       this.createWaitTool(agentId),
-      this.createTopicListTool(agentId),
-      this.createTopicSearchTool(agentId),
-      this.createTopicReadTool(agentId),
-      this.createTopicPageReadTool(agentId),
-      this.createJoinTopicTool(agentId),
-      this.createTopicUpdateTool(agentId),
-      this.createTopicPageSaveTool(agentId),
-      this.createTopicLinkTool(agentId),
     ];
     return this.options.filterTools
       ? this.options.filterTools({ id: session.id, path: session.path, depth: session.depth, root: session.id === "root" }, tools)
@@ -352,7 +294,7 @@ export class SubagentManager {
   }
 
   public capturesContext(toolName: string): boolean {
-    return toolName === "spawn_agent" || toolName === "create_topic";
+    return toolName === "spawn_agent";
   }
 
   public collaborationFollowUp(agentId: string): AgentMessage[] {
@@ -361,7 +303,7 @@ export class SubagentManager {
     if (session.id === "root") {
       const collaborators = [...this.sessions.values()].filter((candidate) => candidate.id !== "root");
       if (this.requireRoomBeforeFinal && collaborators.length === 0) {
-        followUp.push(userMessage("This session requires collaboration. Inspect reusable workspace research with topic_list, then join a relevant topic or create one and spawn at least one bounded collaborator before concluding."));
+        followUp.push(userMessage("This session requires collaboration. Spawn at least one bounded collaborator before concluding."));
       }
       const active = collaborators
         .filter((candidate) => candidate.status === "pending" || candidate.status === "running")
@@ -452,8 +394,6 @@ export class SubagentManager {
         roomTitle: session.roomTitle,
         roomKind: session.roomKind,
         role: session.role,
-        topicName: session.topicName,
-        topicTitle: session.topicTitle,
         createdAt: session.createdAt,
         startedAt: session.startedAt ?? null,
         completedAt: session.completedAt ?? null,
@@ -467,7 +407,6 @@ export class SubagentManager {
       maxThreads: this.maxThreads,
       maxDepth: this.maxDepth,
       agents,
-      topics: this.options.topicContext?.store.list(this.options.topicContext.workspaceId, 200) ?? [],
     };
   }
 
@@ -486,157 +425,11 @@ export class SubagentManager {
       if (session.id !== "root" && (session.status === "running" || session.status === "pending")) {
         session.status = "interrupted";
         session.completedAt = new Date().toISOString();
-        this.syncTopicMember(session);
         session.controller?.abort();
         void this.emitSessionActivity(session, { type: "interrupted" });
       }
     }
     this.notifyActivity();
-  }
-
-  private createTopicTool(agentId: string): AgentTool {
-    return this.collaborationTool(
-      agentId,
-      "create_topic",
-      "Create research topic",
-      "Create a durable workspace research topic. First use topic_search or topic_list and reuse a relevant existing topic when possible. Initial member assignments are optional and failures never block the topic. Topic membership roles are assigned automatically; Advanced mode still requires its bounded delegation role for each spawned member.",
-      {
-        type: "object",
-        required: ["topic_name", "topic"],
-        additionalProperties: false,
-        properties: {
-          topic_name: {
-            type: "string",
-            maxLength: 64,
-            pattern: "^[a-z0-9]+(?:-[a-z0-9]+){0,7}$",
-            description: "Stable workspace-unique name with up to eight lowercase, dash-separated words.",
-          },
-          topic_title: { type: "string" },
-          topic: { type: "string", description: "The durable research subject and intended use of this topic." },
-          members: {
-            type: "array", maxItems: this.maxMembersPerRoom,
-            items: {
-              type: "object",
-              required: ["task_name", "message", ...(this.delegationRoles.size > 0 ? ["role"] : [])],
-              additionalProperties: false,
-              properties: {
-                task_name: { type: "string" },
-                message: { type: "string" },
-                ...(this.delegationRoles.size > 0 ? {
-                  role: { type: "string", enum: [...this.delegationRoles.keys()] },
-                } : {}),
-                provider: { type: "string" }, model: { type: "string" },
-                reasoning_effort: { type: "string", enum: [...REASONING_LEVELS] },
-                fork_turns: { type: "string", description: "Defaults to none; the compact topic overview is inherited separately." },
-              },
-            },
-          },
-        },
-      },
-      async (toolCallId, input) => this.createTopic(agentId, toolCallId, input),
-    );
-  }
-
-  private createTopicListTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "topic_list", "List topics", "List durable research topics from this workspace. Use this before creating a topic so relevant prior research is reused.", {
-      type: "object", additionalProperties: false, properties: {
-        limit: { type: "number", minimum: 1, maximum: 500 },
-      },
-    }, async (_toolCallId, input) => this.topicList(agentId, optionalNonNegativeInteger(input.limit)));
-  }
-
-  private createTopicSearchTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "topic_search", "Search topics", "Search durable topics across titles, overviews, pages, and reference titles before creating a duplicate.", {
-      type: "object", required: ["query"], additionalProperties: false, properties: {
-        query: { type: "string", maxLength: 512 },
-        limit: { type: "number", minimum: 1, maximum: 500 },
-      },
-    }, async (_toolCallId, input) => {
-      const context = this.requireTopicContext();
-      return { topics: context.store.search(context.workspaceId, requiredString(input.query, "query"), optionalNonNegativeInteger(input.limit) ?? 50) };
-    });
-  }
-
-  private createTopicReadTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "topic_read", "Read topic", "Read a topic overview, pages, and links to canonical research records. Historical activity is available in the app, but is not authoritative research state.", {
-      type: "object", required: ["topic_name"], additionalProperties: false, properties: {
-        topic_name: { type: "string" },
-      },
-    }, async (_toolCallId, input) => this.topicRead(
-      agentId,
-      requiredString(input.topic_name, "topic_name"),
-    ));
-  }
-
-  private createTopicPageReadTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "topic_page_read", "Read topic page", "Read one topic page after locating its ID with topic_read.", {
-      type: "object", required: ["topic_name", "page_id"], additionalProperties: false, properties: {
-        topic_name: { type: "string" },
-        page_id: { type: "string" },
-      },
-    }, async (_toolCallId, input) => {
-      const context = this.requireTopicContext();
-      const detail = context.store.get(context.workspaceId, requiredString(input.topic_name, "topic_name"));
-      const page = detail?.pages.find((entry) => entry.id === requiredString(input.page_id, "page_id"));
-      if (!page) throw new Error("Topic page not found.");
-      return { topic: detail!.topic.name, page };
-    });
-  }
-
-  private createJoinTopicTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "join_topic", "Join topic", "Associate with an existing research topic and read its compact overview and canonical record links. Joining never waits for another member.", {
-      type: "object", required: ["topic_name"], additionalProperties: false, properties: {
-        topic_name: { type: "string" },
-      },
-    }, async (_toolCallId, input) => this.joinTopic(
-      agentId,
-      requiredString(input.topic_name, "topic_name"),
-    ));
-  }
-
-  private createTopicUpdateTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "topic_update", "Update topic overview", "Revise a topic's compact current-state overview. Cite canonical claims, memories, runbooks, or workspace files for factual statements. Use the updatedAt value from topic_read for conflict detection.", {
-      type: "object", required: ["topic_name", "content_markdown", "expected_updated_at"], additionalProperties: false, properties: {
-        topic_name: { type: "string" },
-        content_markdown: { type: "string", maxLength: 128_000 },
-        expected_updated_at: { type: "string" },
-      },
-    }, async (_toolCallId, input) => this.topicUpdate(agentId, input));
-  }
-
-  private createTopicPageSaveTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "topic_page_save", "Save topic page", "Create or revise one topic page. Use the page's updatedAt timestamp when revising it; keep canonical evidence in its source record.", {
-      type: "object", required: ["topic_name", "title", "content_markdown"], additionalProperties: false, properties: {
-        topic_name: { type: "string" },
-        page_id: { type: "string" },
-        title: { type: "string", maxLength: 200 },
-        content_markdown: { type: "string", maxLength: 128_000 },
-        expected_updated_at: { type: "string" },
-      },
-    }, async (_toolCallId, input) => {
-      const context = this.requireTopicContext();
-      const pageId = optionalString(input.page_id);
-      const expectedUpdatedAt = optionalString(input.expected_updated_at);
-      if (pageId && !expectedUpdatedAt) throw new Error("expected_updated_at is required when revising a topic page.");
-      const page = context.store.savePage(context.workspaceId, requiredString(input.topic_name, "topic_name"), {
-        ...(pageId ? { id: pageId } : {}),
-        title: requiredString(input.title, "title"),
-        contentMarkdown: requiredString(input.content_markdown, "content_markdown"),
-        ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}),
-      });
-      return { topic: requiredString(input.topic_name, "topic_name"), page };
-    });
-  }
-
-  private createTopicLinkTool(agentId: string): AgentTool {
-    return this.collaborationTool(agentId, "topic_link", "Link research record", "Link an existing canonical record or workspace file to the topic. Linking does not copy or change the source record.", {
-      type: "object", required: ["kind", "resource_id", "title"], additionalProperties: false, properties: {
-        topic_name: { type: "string", description: "Optional after join_topic or when spawned into a topic." },
-        kind: { type: "string", enum: ["claim", "file", "runbook", "memory", "session", "topic"] },
-        resource_id: { type: "string", description: "Canonical ID or workspace relative file path." },
-        title: { type: "string", maxLength: 160, description: "Short human-readable resource name." },
-      },
-    }, async (_toolCallId, input) => this.topicLink(agentId, input));
   }
 
   private createSpawnTool(agentId: string): AgentTool {
@@ -646,8 +439,8 @@ export class SubagentManager {
       "spawn_agent",
       "Spawn agent",
       roleIds.length > 0
-        ? "Spawn one bounded, role-specific subagent. Select the role that matches the assigned responsibility. Optionally attach it to an existing workspace research topic so it inherits prior topic research. The child shares the authorized workspace and tool policy. Parent history is not inherited unless fork_turns is explicitly set to all or a positive integer string."
-        : "Spawn one bounded subagent. Optionally attach it to an existing workspace research topic so it inherits prior topic research. The child shares the authorized workspace and tool policy. Parent history is not inherited unless fork_turns is explicitly set to all or a positive integer string.",
+        ? "Spawn one bounded, role-specific subagent. Select the role that matches the assigned responsibility. The child shares workspace research documents and the authorized tool policy. Parent history is not inherited unless fork_turns is explicitly set to all or a positive integer string."
+        : "Spawn one bounded subagent. The child shares workspace research documents and the authorized tool policy. Parent history is not inherited unless fork_turns is explicitly set to all or a positive integer string.",
       {
         type: "object",
         required: ["task_name", "message", ...(roleIds.length > 0 ? ["role"] : [])],
@@ -659,7 +452,6 @@ export class SubagentManager {
           fork_turns: { type: "string", description: "none, all, or a positive integer string. Defaults to none." },
           model: { type: "string", description: "Optional enabled model ID for partial or fresh inheritance. Pass the provider ID separately." },
           reasoning_effort: { type: "string", enum: [...REASONING_LEVELS] },
-          topic_name: { type: "string", description: "Optional existing topic to join and inherit." },
           ...(roleIds.length > 0 ? {
             role: { type: "string", enum: roleIds, description: "Required single Advanced designation; the selected collaborator route must list it as compatible." },
           } : {}),
@@ -816,167 +608,6 @@ export class SubagentManager {
     }
   }
 
-  private createTopic(
-    parentId: string,
-    toolCallId: string,
-    input: Record<string, unknown>,
-  ): Record<string, unknown> {
-    const parent = this.ensureSession(parentId);
-    if (parent.id !== "root") throw new Error("Only the lead agent can create a research topic.");
-    const context = this.requireTopicContext();
-    const members = input.members === undefined ? [] : input.members;
-    if (!Array.isArray(members)) throw new Error("members must be an array when provided.");
-    if (members.length > this.maxMembersPerRoom) throw new Error(`A topic may start with at most ${this.maxMembersPerRoom} members.`);
-    const topic = context.store.create({
-      workspaceId: context.workspaceId,
-      name: requiredString(input.topic_name, "topic_name"),
-      ...(optionalString(input.topic_title) ? { title: optionalString(input.topic_title)! } : {}),
-      topic: requiredString(input.topic, "topic"),
-      createdBySessionId: context.sessionId,
-      createdByAgentPath: parent.path,
-    });
-    this.assignTopic(parent, topic, "lead");
-    context.store.join(this.topicMemberInput(parent));
-    const parentMessages = this.takeContextSnapshot(parentId, toolCallId);
-    const spawned: Record<string, unknown>[] = [];
-    const failures: Array<{ task_name: string; error: string }> = [];
-    for (const [index, value] of members.entries()) {
-      if (!isRecord(value)) {
-        failures.push({ task_name: `member_${index + 1}`, error: `members[${index}] must be an object.` });
-        continue;
-      }
-      const taskName = optionalString(value.task_name) ?? `member_${index + 1}`;
-      try {
-        spawned.push(this.spawn(parentId, `${toolCallId}_member_${index}`, {
-          ...value,
-          task_name: taskName,
-          fork_turns: optionalString(value.fork_turns) ?? "none",
-          topic_name: topic.name,
-        }, parentMessages));
-      } catch (error) {
-        failures.push({ task_name: taskName, error: error instanceof Error ? error.message : String(error) });
-      }
-    }
-    void this.emitTopicActivity(topic, parent, { type: "topic_created", message: topic.topic });
-    return {
-      topic,
-      inherited_message_count: 0,
-      members: spawned,
-      member_failures: failures,
-      note: "The topic persists independently of these members and does not wait for replies.",
-    };
-  }
-
-  private topicList(_agentId: string, requestedLimit?: number): Record<string, unknown> {
-    const context = this.requireTopicContext();
-    return {
-      workspace_id: context.workspaceId,
-      topics: context.store.list(context.workspaceId, requestedLimit && requestedLimit > 0 ? requestedLimit : 200),
-      reuse_guidance: "Prefer joining a relevant existing topic so prior sessions and subagent work are inherited.",
-    };
-  }
-
-  private topicRead(_agentId: string, topicName: string): Record<string, unknown> {
-    const context = this.requireTopicContext();
-    const detail = context.store.get(context.workspaceId, topicName);
-    if (!detail) throw new Error(`Topic not found in workspace: ${topicName}`);
-    return this.topicToolView(detail);
-  }
-
-  private joinTopic(agentId: string, topicName: string): Record<string, unknown> {
-    const session = this.ensureSession(agentId);
-    const context = this.requireTopicContext();
-    const detail = context.store.get(context.workspaceId, topicName);
-    if (!detail) throw new Error(`Topic not found in workspace: ${topicName}`);
-    this.assignTopic(
-      session,
-      detail.topic,
-      session.role ?? (session.id === "root" ? "lead" : "researcher"),
-    );
-    context.store.join(this.topicMemberInput(session));
-    void this.emitTopicActivity(detail.topic, session, { type: "topic_joined" });
-    return {
-      ...this.topicToolView(detail),
-      joined: true,
-      inherited_message_count: 0,
-    };
-  }
-
-  private topicUpdate(agentId: string, input: Record<string, unknown>): Record<string, unknown> {
-    const session = this.ensureSession(agentId);
-    const context = this.requireTopicContext();
-    const topicName = requiredString(input.topic_name, "topic_name");
-    const record = context.store.updateOverview(
-      context.workspaceId, topicName, requiredString(input.content_markdown, "content_markdown"),
-      requiredString(input.expected_updated_at, "expected_updated_at"),
-    );
-    this.assignTopic(session, record, session.role ?? "researcher");
-    return { topic: record, updated: true };
-  }
-
-  private topicLink(agentId: string, input: Record<string, unknown>): Record<string, unknown> {
-    const session = this.ensureSession(agentId);
-    const context = this.requireTopicContext();
-    const topicName = optionalString(input.topic_name) ?? session.topicName;
-    if (!topicName) throw new Error("topic_name is required until the agent has joined a topic.");
-    const kind = input.kind;
-    if (kind !== "claim" && kind !== "memory" && kind !== "runbook" && kind !== "file" && kind !== "session" && kind !== "topic") {
-      throw new Error(`Unsupported topic link kind: ${String(kind)}`);
-    }
-    const link = context.store.link(context.workspaceId, topicName, {
-      kind,
-      resourceId: requiredString(input.resource_id, "resource_id"),
-      title: requiredString(input.title, "title"),
-    });
-    return { link, linked: true };
-  }
-
-  private requireTopicContext(): SubagentTopicContext {
-    if (!this.options.topicContext) throw new Error("Durable research topics are unavailable for this session.");
-    return this.options.topicContext;
-  }
-
-  private topicMemberInput(session: SubagentSession): JoinResearchTopicInput {
-    const context = this.requireTopicContext();
-    if (!session.topicName) throw new Error(`Agent ${session.path} has not joined a topic.`);
-    return {
-      workspaceId: context.workspaceId,
-      topic: session.topicName,
-      sessionId: context.sessionId,
-      agentId: session.id,
-      agentPath: session.path,
-      provider: session.provider,
-      model: session.model,
-      role: session.role ?? (session.id === "root" ? "lead" : "researcher"),
-      status: session.status,
-    };
-  }
-
-  private syncTopicMember(session: SubagentSession): void {
-    if (!session.topicName || !this.options.topicContext) return;
-    try {
-      this.options.topicContext.store.join(this.topicMemberInput(session));
-    } catch {
-      // Topic status is additive metadata and must not block agent execution.
-    }
-  }
-
-  private assignTopic(session: SubagentSession, topic: ResearchTopicRecord, role: string): void {
-    session.topicName = topic.name;
-    session.topicTitle = topic.title;
-    session.role = role;
-  }
-
-  private topicToolView(detail: ResearchTopicDetail): Record<string, unknown> {
-    return {
-      topic: detail.topic,
-      pages: detail.pages.map(({ id, title, createdAt, updatedAt }) => ({ id, title, createdAt, updatedAt })),
-      links: detail.links,
-      merged_topics: detail.mergedTopics.map(({ id, name, title }) => ({ id, name, title })),
-      history_note: "Historical activity is available in the app. Verify research conclusions in canonical records.",
-    };
-  }
-
   private createRoom(
     parentId: string,
     toolCallId: string,
@@ -1115,21 +746,6 @@ export class SubagentManager {
     if (roomName && roomMemberCount >= this.maxMembersPerRoom) {
       throw new Error(`Breakout room ${roomName} member limit reached (${this.maxMembersPerRoom}).`);
     }
-    const requestedTopicName = optionalString(input.topic_name);
-    const topicDetail = requestedTopicName
-      ? this.requireTopicContext().store.get(
-          this.requireTopicContext().workspaceId,
-          requestedTopicName,
-          0,
-        )
-      : null;
-    if (requestedTopicName && !topicDetail) throw new Error(`Topic not found in workspace: ${requestedTopicName}`);
-    if (topicDetail) {
-      inheritedMessages = [
-        ...inheritedMessages,
-        userMessage(topicTranscriptContext(topicDetail)),
-      ];
-    }
     const id = `agent_${randomUUID().replaceAll("-", "")}`;
     const child: SubagentSession = {
       id,
@@ -1141,13 +757,11 @@ export class SubagentManager {
       model: preference?.model ?? parent.model,
       ...(reasoningOverride ?? preference?.reasoning ?? parent.reasoning ? { reasoning: reasoningOverride ?? preference?.reasoning ?? parent.reasoning } : {}),
       forkTurns,
-      freshSubagentContext: forkTurns === "none" && topicDetail === null,
+      freshSubagentContext: forkTurns === "none",
       roomName,
       roomTitle,
       roomKind,
       role,
-      topicName: topicDetail?.topic.name ?? null,
-      topicTitle: topicDetail?.topic.title ?? null,
       status: "pending",
       createdAt: new Date().toISOString(),
       messages: inheritedMessages,
@@ -1159,11 +773,6 @@ export class SubagentManager {
       roomCursors: new Map(),
     };
     this.sessions.set(id, child);
-    if (child.topicName) {
-      child.role = delegationRole?.id ?? "researcher";
-      this.requireTopicContext().store.join(this.topicMemberInput(child));
-      void this.emitTopicActivity(topicDetail!.topic, child, { type: "topic_joined" });
-    }
     if (roomName) this.rooms.get(roomName)?.memberIds.push(id);
     if (!deferLaunch) {
       this.launch(child, message, inheritedMessages);
@@ -1178,9 +787,6 @@ export class SubagentManager {
       room_title: child.roomTitle,
       room_kind: child.roomKind,
       role: child.role,
-      topic_name: child.topicName,
-      topic_title: child.topicTitle,
-      inherited_topic_messages: topicDetail?.messages.length ?? 0,
       reasoning_effort: child.reasoning ?? null,
       fork_turns: forkTurns,
       fresh_subagent_context: child.freshSubagentContext,
@@ -1392,7 +998,6 @@ export class SubagentManager {
     if (target.status === "running" || target.status === "pending") {
       target.status = "interrupted";
       target.completedAt = new Date().toISOString();
-      this.syncTopicMember(target);
       this.releaseContextsForAgent(target.id);
       target.controller?.abort();
       this.enqueueParentNotification(target, `Agent ${target.path} was interrupted.`);
@@ -1422,8 +1027,6 @@ export class SubagentManager {
           room_title: session.roomTitle,
           room_kind: session.roomKind,
           role: session.role,
-          topic_name: session.topicName,
-          topic_title: session.topicTitle,
           output: session.status === "completed" ? session.output ?? "" : null,
           error: session.error ?? null,
         })),
@@ -1482,7 +1085,6 @@ export class SubagentManager {
     session.startedAt = new Date().toISOString();
     delete session.completedAt;
     delete session.error;
-    this.syncTopicMember(session);
     const promise = this.options.run({
       id: session.id,
       path: session.path,
@@ -1503,16 +1105,11 @@ export class SubagentManager {
         ...(session.roomTitle ? { roomTitle: session.roomTitle } : {}),
         ...(session.roomKind ? { roomKind: session.roomKind } : {}),
       } : {}),
-      ...(session.topicName ? {
-        topicName: session.topicName,
-        ...(session.topicTitle ? { topicTitle: session.topicTitle } : {}),
-      } : {}),
       signal: controller.signal,
     }).then((result) => {
       if (session.status === "interrupted") return;
       session.status = "completed";
       session.completedAt = new Date().toISOString();
-      this.syncTopicMember(session);
       session.output = result.text;
       session.messages = [...result.messages];
       session.turnCount += result.turnCount;
@@ -1526,7 +1123,6 @@ export class SubagentManager {
       session.status = "errored";
       session.completedAt = new Date().toISOString();
       session.error = error instanceof Error ? error.message : String(error);
-      this.syncTopicMember(session);
       this.enqueueParentNotification(session, `Agent ${session.path} failed: ${session.error}`);
       void this.emitSessionActivity(session, { type: "errored", message: session.error });
     }).finally(() => {
@@ -1687,28 +1283,6 @@ export class SubagentManager {
     });
   }
 
-  private emitTopicActivity(
-    topic: ResearchTopicRecord,
-    session: SubagentSession,
-    activity: Pick<SubagentActivity, "type" | "message" | "authorAgentPath">,
-  ): Promise<void> {
-    return this.emitActivity({
-      ...activity,
-      activityId: `activity_${randomUUID().replaceAll("-", "")}`,
-      timestamp: new Date().toISOString(),
-      agentId: session.id,
-      agentPath: session.path,
-      parentId: session.parentId,
-      status: session.status,
-      provider: session.provider,
-      model: session.model,
-      reasoningEffort: session.reasoning ?? null,
-      topicName: topic.name,
-      topicTitle: topic.title,
-      role: session.role ?? (session.id === "root" ? "lead" : "researcher"),
-    });
-  }
-
   private emitSessionActivity(
     session: SubagentSession,
     activity: Pick<SubagentActivity, "type" | "message" | "authorAgentPath">,
@@ -1731,11 +1305,6 @@ export class SubagentManager {
         role: session.role ?? "researcher",
         roomPhase: this.rooms.get(session.roomName)?.phase ?? "independent",
         challengeRound: this.rooms.get(session.roomName)?.challengeRound ?? 0,
-      } : {}),
-      ...(session.topicName ? {
-        topicName: session.topicName,
-        topicTitle: session.topicTitle ?? titleFromRoomName(session.topicName),
-        role: session.role ?? (session.id === "root" ? "lead" : "researcher"),
       } : {}),
     });
   }
@@ -1858,27 +1427,6 @@ function boundedStringArray(value: unknown, maximum: number, field: string): str
 
 function userMessage(content: string): AgentMessage {
   return { role: "user", content, timestamp: Date.now() };
-}
-
-function topicTranscriptContext(detail: ResearchTopicDetail): string {
-  return [
-    `Research topic: ${boundedTopicContextField(detail.topic.name)}`,
-    `Title: ${boundedTopicContextField(detail.topic.title)}`,
-    `Overview: ${detail.topic.overviewMarkdown.slice(0, 6_000)}`,
-    detail.links.length === 0
-      ? "Linked canonical records: none."
-      : `Linked records (most recent ${Math.min(detail.links.length, SPAWN_TOPIC_LINK_LIMIT)}):\n${detail.links
-          .slice(0, SPAWN_TOPIC_LINK_LIMIT)
-          .map((link) => `- ${link.kind}: ${boundedTopicContextField(link.title)} (${boundedTopicContextField(link.resourceId)})`)
-          .join("\n")}`,
-    "This overview is synthesis, not independent evidence. Read linked canonical records before relying on factual claims.",
-  ].join("\n\n");
-}
-
-function boundedTopicContextField(value: string): string {
-  const normalized = value.trim();
-  if (normalized.length <= SPAWN_TOPIC_FIELD_MAX_CHARACTERS) return normalized;
-  return `${normalized.slice(0, SPAWN_TOPIC_FIELD_MAX_CHARACTERS - 1).trimEnd()}…`;
 }
 
 function normalizeRoomName(value: string): string {

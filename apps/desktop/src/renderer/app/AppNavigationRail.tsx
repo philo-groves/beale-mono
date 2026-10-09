@@ -1,13 +1,12 @@
 import { memo } from 'react';
 import type { JSX } from 'react';
-import { BookOpen, CalendarClock, House, ListChecks, Plug, Settings } from 'lucide-react';
+import { CalendarClock, House, ListChecks, Plug, Settings } from 'lucide-react';
 
-export type AppNavigationDestination = 'home' | 'automations' | 'topics' | 'workflows' | 'plugins' | 'settings';
+export type AppNavigationDestination = 'home' | 'automations' | 'workflows' | 'plugins' | 'settings';
 
 const outlineIcons = {
   home: House,
   automations: CalendarClock,
-  topics: BookOpen,
   workflows: ListChecks,
   plugins: Plug,
   settings: Settings
@@ -32,12 +31,6 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
           <path d="M16 13v3l2 1.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
         </>
       )}
-      {destination === 'topics' && (
-        <>
-          <path d="M3 4.5c3.2-1.2 6.2-.8 9 1.2v15c-2.8-2-5.8-2.4-9-1.2z" />
-          <path d="M21 4.5c-3.2-1.2-6.2-.8-9 1.2v15c2.8-2 5.8-2.4 9-1.2z" />
-        </>
-      )}
       {destination === 'workflows' && <path d="M8 4h13v2H8zM8 11h13v2H8zM8 18h13v2H8zM2 3h4v4H2zM2 10h4v4H2zM2 17h4v4H2z" />}
       {destination === 'plugins' && (
         <>
@@ -55,19 +48,16 @@ function NavigationIcon({ destination, active }: { destination: AppNavigationDes
 export function resolveAppNavigationDestination({
   settingsOpen,
   automationsOpen,
-  topicsOpen,
   workflowsOpen = false,
   pluginsOpen
 }: {
   settingsOpen: boolean;
   automationsOpen: boolean;
-  topicsOpen: boolean;
   workflowsOpen?: boolean;
   pluginsOpen: boolean;
 }): AppNavigationDestination {
   if (settingsOpen) return 'settings';
   if (automationsOpen) return 'automations';
-  if (topicsOpen) return 'topics';
   if (workflowsOpen) return 'workflows';
   if (pluginsOpen) return 'plugins';
   return 'home';
@@ -77,7 +67,6 @@ export const AppNavigationRail = memo(function AppNavigationRail({
   active,
   onOpenHome,
   onOpenAutomations,
-  onOpenTopics,
   onOpenWorkflows,
   onOpenPlugins,
   onOpenSettings
@@ -85,7 +74,6 @@ export const AppNavigationRail = memo(function AppNavigationRail({
   active: AppNavigationDestination;
   onOpenHome: () => void;
   onOpenAutomations: () => void;
-  onOpenTopics: () => void;
   onOpenWorkflows: () => void;
   onOpenPlugins: () => void;
   onOpenSettings: () => void;
@@ -99,9 +87,6 @@ export const AppNavigationRail = memo(function AppNavigationRail({
         <div className="app-navigation-rail-sections">
           <button type="button" className={`app-navigation-rail-button${active === 'automations' ? ' active' : ''}`} data-tooltip="Automations" aria-label="Automations" aria-current={active === 'automations' ? 'page' : undefined} onClick={onOpenAutomations}>
             <NavigationIcon destination="automations" active={active === 'automations'} />
-          </button>
-          <button type="button" className={`app-navigation-rail-button${active === 'topics' ? ' active' : ''}`} data-tooltip="Topics" aria-label="Topics" aria-current={active === 'topics' ? 'page' : undefined} onClick={onOpenTopics}>
-            <NavigationIcon destination="topics" active={active === 'topics'} />
           </button>
           <button type="button" className={`app-navigation-rail-button${active === 'workflows' ? ' active' : ''}`} data-tooltip="Workflows" aria-label="Workflows" aria-current={active === 'workflows' ? 'page' : undefined} onClick={onOpenWorkflows}>
             <NavigationIcon destination="workflows" active={active === 'workflows'} />
