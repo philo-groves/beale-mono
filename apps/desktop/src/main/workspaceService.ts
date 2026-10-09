@@ -4672,26 +4672,36 @@ export class WorkspaceService {
       return this.requireSnapshot();
     }
 
-    this.releaseForegroundForSwitch();
-    const background = this.backgroundRuntimes.get(workspacePath);
-    if (background) {
-      this.refreshResearchProfile(background);
-      this.backgroundRuntimes.delete(workspacePath);
-      this.setForegroundRuntime(background);
+    try {
+      this.releaseForegroundForSwitch();
+      const background = this.backgroundRuntimes.get(workspacePath);
+      if (background) {
+        this.refreshResearchProfile(background);
+        this.backgroundRuntimes.delete(workspacePath);
+        this.setForegroundRuntime(background);
+        this.pruneBackgroundRuntimeCache();
+        this.getWorkspaceRegistry();
+        this.scheduleWorkspaceMemorySummaryLoad(background);
+        if (syncRegistry) this.syncWorkspaceRegistryForRuntime(background, true);
+        if (emitChange) this.emitChange({ preserveSnapshotCache: true });
+        return this.requireSnapshot();
+      }
+
+      const runtime = this.createRuntime(workspacePath, bealeDir, artifactRoot, requestedProfileId, requestedResearchKitId, create);
+      this.setForegroundRuntime(runtime);
+      this.pruneBackgroundRuntimeCache();
       this.getWorkspaceRegistry();
-      this.scheduleWorkspaceMemorySummaryLoad(background);
-      if (syncRegistry) this.syncWorkspaceRegistryForRuntime(background, true);
+      this.scheduleWorkspaceMemorySummaryLoad(runtime);
+      if (syncRegistry) this.syncWorkspaceRegistryForRuntime(runtime, true);
       if (emitChange) this.emitChange({ preserveSnapshotCache: true });
       return this.requireSnapshot();
+    } catch (error) {
+      if (foreground && !this.getForegroundRuntime()) {
+        this.backgroundRuntimes.delete(foreground.workspacePath);
+        this.setForegroundRuntime(foreground);
+      }
+      throw error;
     }
-
-    const runtime = this.createRuntime(workspacePath, bealeDir, artifactRoot, requestedProfileId, requestedResearchKitId, create);
-    this.setForegroundRuntime(runtime);
-    this.getWorkspaceRegistry();
-    this.scheduleWorkspaceMemorySummaryLoad(runtime);
-    if (syncRegistry) this.syncWorkspaceRegistryForRuntime(runtime, true);
-    if (emitChange) this.emitChange({ preserveSnapshotCache: true });
-    return this.requireSnapshot();
   }
 
   private scheduleWorkspaceMemorySummaryLoad(runtime: WorkspaceRuntime): void {
@@ -4930,7 +4940,6 @@ export class WorkspaceService {
     if (!runtime) return;
     this.backgroundRuntimes.set(runtime.workspacePath, runtime);
     if (registrySyncPending) this.syncWorkspaceRegistryForRuntime(runtime, false);
-    this.pruneBackgroundRuntimeCache();
   }
 
   private hasActiveRuntimeWork(runtime: WorkspaceRuntime): boolean {

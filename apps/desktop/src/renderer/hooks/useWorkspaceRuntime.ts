@@ -43,11 +43,13 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
   const pendingSnapshotRef = useRef<WorkspaceSnapshot | null | undefined>(undefined);
   const pendingWorkspaceRegistryRef = useRef<WorkspaceRegistryState | null>(null);
   const appliedSnapshotVersionRef = useRef<string | null>(null);
+  const snapshotActivityRef = useRef(0);
   const dejunkSummaryRequestRef = useRef<string | null>(null);
   const snapshotFrameRef = useRef<number | null>(null);
   const workspaceRegistryFrameRef = useRef<number | null>(null);
 
   const applySnapshot = useCallback((next: WorkspaceSnapshot | null, selectedRunIdOverride?: string) => {
+    snapshotActivityRef.current += 1;
     const version = next?.version ?? null;
     if (version && appliedSnapshotVersionRef.current === version) {
       if (selectedRunIdOverride !== undefined) setSelectedRunId(selectedRunIdOverride);
@@ -130,6 +132,7 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
 
   useEffect(() => {
     const unsubscribeSnapshot = window.beale.onSnapshot((next) => {
+      snapshotActivityRef.current += 1;
       const applyStartedAt = performance.now();
       const detail = snapshotMetricDetail(next);
       devInstrumentation.recordPayload('ipc.snapshot.event', next, detail);
@@ -166,6 +169,16 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
     const startupFrame = window.requestAnimationFrame(() => {
       if (cancelled) return;
       setStartupPhase('registry');
+      const startupSnapshotActivity = snapshotActivityRef.current;
+      void devInstrumentation.timeAsync('ipc.getSnapshot.initial', () => window.beale.getSnapshot())
+        .then((next) => {
+          if (!cancelled && next && snapshotActivityRef.current === startupSnapshotActivity) {
+            applySnapshot(next);
+          }
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) onError(errorMessage(caught));
+        });
       void window.beale
         .getHostEnvironment()
         .then((next) => {

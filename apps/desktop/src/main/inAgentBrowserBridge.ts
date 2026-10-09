@@ -192,10 +192,17 @@ export class InAgentBrowserBridge {
     if (!context.guest || context.guest.isDestroyed()) {
       await new Promise<void>((resolve, reject) => {
         const deadline = Date.now() + 5_000;
+        let nextOpenSignalAt = Date.now() + 500;
         const check = (): void => {
           if (context.guest && !context.guest.isDestroyed()) resolve();
           else if (Date.now() >= deadline) reject(new Error('The browser context did not open in the sidebar.'));
-          else setTimeout(check, 50);
+          else {
+            if (Date.now() >= nextOpenSignalAt) {
+              this.#onChange({ contexts: this.listContexts(), openedId: id });
+              nextOpenSignalAt = Date.now() + 500;
+            }
+            setTimeout(check, 50);
+          }
         };
         check();
       });

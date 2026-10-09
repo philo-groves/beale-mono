@@ -16,6 +16,9 @@
 
 #### Changed
 
+- The desktop renderer now reconnects to a workspace already open in the main process after a renderer reload, so an active browser session does not strand the app on the workspace picker.
+- A failed workspace switch now retains the previous workspace instead of leaving the desktop without a foreground workspace.
+- Browser context open requests are repeated briefly while the renderer reconnects, so a request made during a reload can still attach to its saved context.
 - The workspace editor, bottom panel, and research sidebar header buttons are available in New Research for an open workspace.
 - New Topic offers a workspace picker when no workspace is active, then opens the topic form for the chosen workspace.
 - Topics now has its own icon rail destination, a recent-topics sidebar, and an explorer with all-workspace and per-workspace filters; the session sidebar shows only Workspaces.

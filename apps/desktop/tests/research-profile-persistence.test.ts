@@ -417,6 +417,39 @@ describe('research profile persistence', () => {
     reopened.close();
   }, 10_000);
 
+  it('keeps the foreground workspace when opening another workspace fails', () => {
+    const root = tempDirectory();
+    const primary = join(root, 'primary');
+    const unavailable = join(root, 'unavailable');
+    mkdirSync(primary, { recursive: true });
+    mkdirSync(unavailable, { recursive: true });
+    const options: WorkspaceServiceOptions = {
+      workspaceRegistryDirectory: join(root, 'registry'),
+      appServerDatabasePath: join(root, 'global', 'memory.sqlite'),
+      appServerArtifactDirectory: join(root, 'global', 'artifacts'),
+      researchProfileResolver: (workspacePath) => {
+        if (workspacePath === resolve(unavailable)) throw new Error('Profile unavailable');
+        return resolvedTestResearchProfile();
+      }
+    };
+    configureIsolatedAppServer(options);
+    const service = new WorkspaceService(() => undefined, options);
+    const opened = service.createScopedWorkspace({
+      workspacePath: primary,
+      workspaceName: 'Primary Workspace',
+      researchSubjectName: 'Primary Workspace',
+      scopeOwner: 'Example Owner',
+      descriptionMarkdown: '',
+      rules: [],
+      expiresAt: null,
+      assets: []
+    });
+
+    expect(() => service.openWorkspace(unavailable)).toThrow('Profile unavailable');
+    expect(service.getSnapshot()?.workspace.workspaceId).toBe(opened.workspace.workspaceId);
+    service.close();
+  }, 10_000);
+
   it('unregisters a workspace without deleting its files or scoped resources', () => {
     const root = tempDirectory();
     const workspacePath = join(root, 'workspace');

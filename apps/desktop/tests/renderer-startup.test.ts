@@ -49,7 +49,7 @@ describe('renderer startup', () => {
     expect(startupStyles).toMatch(/\.new-research-welcome-icon\s*\{[^}]*width: 140px;[^}]*height: 140px;/u);
   });
 
-  it('loads registry state without restoring or snapshot-loading a workspace', () => {
+  it('recovers an already open workspace after a renderer reload without reopening the last workspace', () => {
     const runtime = readFileSync(
       new URL('../src/renderer/hooks/useWorkspaceRuntime.ts', import.meta.url),
       'utf8'
@@ -63,11 +63,13 @@ describe('renderer startup', () => {
     expect(runtime).not.toContain("'workspace'");
     expect(runtime).not.toContain('nextRendererFrame');
     expect(runtime).not.toContain('restoreLastWorkspace');
-    expect(runtime).not.toContain('ipc.getSnapshot.initial');
+    expect(runtime).toContain('ipc.getSnapshot.initial');
+    expect(runtime).toContain('snapshotActivityRef.current === startupSnapshotActivity');
+    expect(runtime).toContain('if (!cancelled && next && snapshotActivityRef.current === startupSnapshotActivity)');
     expect(runtime).not.toContain('.getOpenAiStatus()');
     expect(main).toContain('IPC_CHANNELS.restoreLastWorkspace');
     expect(main).toContain('show: false');
-    expect(main).toContain('registerWindowStartupShow(window, needsNativeWindowShape)');
+    expect(main).toContain('registerWindowStartupShow(window, needsExplicitWindowShape)');
     expect(main).toContain('restoreAndFocusWindow(window)');
     expect(main).not.toContain('providerCredentialStore.initialize()');
     expect(main).not.toContain('ensureAppServerContract(providerCredentialStore.hasManagedApiKeys())');

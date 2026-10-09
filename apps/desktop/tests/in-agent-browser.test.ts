@@ -92,6 +92,29 @@ describe('in-agent browser', () => {
     expect(browserContextLabel('Default Account')).toBeNull();
   });
 
+  it('reopens a browser context when the renderer missed the first open signal', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beale-browser-reopen-test-'));
+    const discoveryFile = join(directory, 'browser.json');
+    const guest = Object.assign(new EventEmitter(), {
+      isDestroyed: () => false,
+      setWindowOpenHandler: () => undefined,
+      debugger: { isAttached: () => false }
+    }) as unknown as WebContents;
+    let openSignals = 0;
+    const bridge = new InAgentBrowserBridge(discoveryFile, (update) => {
+      if (update.openedId !== 'default') return;
+      openSignals += 1;
+      if (openSignals === 2) bridge.attach('default', guest);
+    });
+    try {
+      await expect(bridge.openContext('default')).resolves.toMatchObject({ id: 'default' });
+      expect(openSignals).toBe(2);
+    } finally {
+      bridge.stop();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps labeled browser contexts and CDP connections isolated', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'beale-browser-test-'));
     const discoveryFile = join(directory, 'browser.json');
