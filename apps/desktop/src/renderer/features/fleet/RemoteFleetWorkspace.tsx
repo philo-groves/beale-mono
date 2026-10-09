@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { JSX, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { FleetRemoteCatalog } from '@beale/app-server-runtime/protocol';
 import { MainSideScrollRegion } from '../../app/MainSideScrollRegion';
+import { FleetBrowserSideView } from '../research/FleetBrowserSideView';
 
 export function RemoteFleetSidebar({ catalog, serverName, selectedWorkspaceId, selectedSessionId, automations, collapsed, serverSelector, onSelect, onResizePointerDown }: {
   catalog: FleetRemoteCatalog | null;
@@ -53,6 +54,9 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
   const [steering, setSteering] = useState('');
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
+  const [browserSelection, setBrowserSelection] = useState<string | null>(null);
+  const browserOpen = browserSelection === `${serverId}:${sessionId ?? ''}`;
+  useEffect(() => { setBrowserSelection(null); }, [serverId, sessionId]);
   useEffect(() => {
     if (!workspaceId || !sessionId) { setDetail(null); return; }
     let active = true;
@@ -67,6 +71,7 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
   }, [serverId, workspaceId, sessionId]);
   const workspace = catalog?.workspaces.find((item) => item.workspaceId === workspaceId);
   const session = catalog?.sessions.find((item) => item.id === sessionId && item.workspaceId === workspaceId);
+  const browserAvailable = Boolean(session && !['completed', 'failed', 'stopped'].includes(session.status));
   const required = Boolean(workspaceId && catalog && (catalog.requiredWorkspaceIds.includes(workspaceId)
     || !catalog.optionalWorkspaceIds.includes(workspaceId) && catalog.hasBaseVm));
   const runnable = catalog?.machines.filter((machine) => !machine.owner) ?? [];
@@ -107,7 +112,13 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
           <button type="button" className="secondary-button" disabled={controlBusy || !steering.trim()} onClick={() => void control('steer')}>Send</button>
         </div> : null}
         {controlError ? <p className="settings-form-error" role="alert">{controlError}</p> : null}
-        {eventTexts.length ? <div className="remote-fleet-events">{eventTexts.map((value, index) => <article key={`${index}:${value.slice(0, 20)}`}><pre>{value}</pre></article>)}</div> : <p>{detail ? 'No commentary yet.' : 'Loading session…'}</p>}
+        {browserAvailable ? <div className="remote-fleet-view-switch" aria-label="Remote session view">
+          <button type="button" className="secondary-button" aria-pressed={!browserOpen} onClick={() => setBrowserSelection(null)}>Commentary</button>
+          <button type="button" className="secondary-button" aria-pressed={browserOpen} onClick={() => setBrowserSelection(`${serverId}:${sessionId ?? ''}`)}>Browser</button>
+        </div> : null}
+        {browserAvailable && browserOpen && sessionId ? <div className="remote-fleet-browser">
+          <FleetBrowserSideView runId={sessionId} remoteServerId={serverId} visible />
+        </div> : eventTexts.length ? <div className="remote-fleet-events">{eventTexts.map((value, index) => <article key={`${index}:${value.slice(0, 20)}`}><pre>{value}</pre></article>)}</div> : <p>{detail ? 'No commentary yet.' : 'Loading session…'}</p>}
       </> : workspace && !automations ? <><p>{workspace.runCount} sessions on this app server.</p>
         <label className="fleet-vm-dialog-field"><span>New Research prompt</span><textarea value={prompt} onChange={(event) => setPrompt(event.currentTarget.value)} rows={7} placeholder="Describe the authorized research task." /></label>
         <label className="fleet-vm-dialog-field"><span>Machine</span><select value={machineId} onChange={(event) => setMachineId(event.currentTarget.value)}>

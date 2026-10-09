@@ -2382,6 +2382,10 @@ body.is-resizing-sidebar .sidebar-resize-handle {
 .remote-fleet-events pre { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .remote-fleet-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 20px 0; }
 .remote-fleet-controls input { flex: 1 1 220px; }
+.remote-fleet-view-switch { display: flex; gap: 8px; margin-top: 20px; }
+.remote-fleet-view-switch button[aria-pressed="true"] { border-color: var(--text); color: var(--text); }
+.remote-fleet-browser { height: min(70vh, 700px); margin-top: 16px; border: 1px solid var(--panel-border); border-radius: 10px; overflow: hidden; }
+.remote-fleet-browser .research-browser { height: 100%; padding: 10px; }
 
 .sidebar-quick-actions {
   min-width: 0;

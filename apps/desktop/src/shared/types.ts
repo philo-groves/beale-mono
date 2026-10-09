@@ -2368,7 +2368,7 @@ export interface BealeApi {
   removeBrowserContext(id: string): Promise<void>;
   onBrowserContextsChanged(listener: (update: BrowserContextsUpdate) => void): () => void;
   fleetBrowserMachine(runId: string): Promise<string | null>;
-  connectFleetBrowser(runId: string): Promise<void>;
+  connectFleetBrowser(runId: string, remoteServerId?: string): Promise<void>;
   disconnectFleetBrowser(runId: string): Promise<void>;
   fleetBrowserInput(runId: string, input: FleetBrowserInput): Promise<void>;
   onFleetBrowserUpdate(listener: (update: FleetBrowserUpdate) => void): () => void;

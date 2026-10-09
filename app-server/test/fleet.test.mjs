@@ -5,6 +5,31 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { FleetService } from '../dist/fleet.js';
 
+test('connected primary sessions request one remote browser and attach with a session token', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'beale-fleet-browser-primary-'));
+  const requests = [];
+  const fleet = new FleetService(join(root, 'fleet.json'), 'darwin', { async run() { return '[]'; }, launch() {} });
+  fleet.connectedRemoteAppServer = async () => ({ id: 'server-example', name: 'Example',
+    url: 'https://worker.example.test', operatorToken: 'synthetic-operator-token' });
+  fleet.callRemote = async () => ({ enabled: true, role: 'primary', requiredWorkspaceIds: [], optionalWorkspaceIds: [], machines: [] });
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url: String(url), body: JSON.parse(init.body) });
+    if (String(url).endsWith('/attachments')) return Response.json({ transport: { token: 'synthetic-session-token' } });
+    return Response.json({ session: { sessionId: 'session-example' } });
+  };
+  try {
+    assert.deepEqual(await fleet.remoteLaunch('server-example', 'workspace-example', 'Research the example scope.', 'local'),
+      { sessionId: 'session-example' });
+    assert.equal(requests[0].body.launch.browserRelay, true);
+    assert.equal(requests[0].body.launch.machineId, 'local');
+    assert.deepEqual(await fleet.remoteBrowserAttach('server-example', 'session-example'), {
+      url: 'wss://worker.example.test/v1/sessions/session-example/browser', token: 'synthetic-session-token',
+    });
+    assert.equal(requests[1].url, 'https://worker.example.test/v1/sessions/session-example/attachments');
+  } finally { globalThis.fetch = previousFetch; rmSync(root, { recursive: true, force: true }); }
+});
+
 test('Fleet registers only operator-designated bases and never runs one directly', async () => {
   const root = mkdtempSync(join(tmpdir(), 'beale-fleet-test-'));
   const machines = new Map([['example-base', false]]);

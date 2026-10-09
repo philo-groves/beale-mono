@@ -6,7 +6,7 @@ interface Viewer {
   socket: WebSocket | null;
   stopped: boolean;
   nextId: number;
-  machineId: string;
+  target: { kind: 'vm'; machineId: string } | { kind: 'remote'; serverId: string };
 }
 
 /** Keeps browser pixels out of the canonical session event stream. */
@@ -18,8 +18,19 @@ export class FleetBrowserViewer {
   public connect(runId: string, machineId: string): void {
     if (!runId || !machineId || machineId === 'local') throw new Error('A Fleet session is required for guest browser viewing.');
     const existing = this.viewers.get(runId);
-    if (existing && !existing.stopped) return;
-    const viewer: Viewer = { socket: null, stopped: false, nextId: 1, machineId };
+    if (existing && !existing.stopped && existing.target.kind === 'vm' && existing.target.machineId === machineId) return;
+    if (existing) this.disconnect(runId);
+    const viewer: Viewer = { socket: null, stopped: false, nextId: 1, target: { kind: 'vm', machineId } };
+    this.viewers.set(runId, viewer);
+    void this.run(runId, viewer);
+  }
+
+  public connectRemote(runId: string, serverId: string): void {
+    if (!runId || !serverId || serverId === 'local') throw new Error('A connected remote app server is required.');
+    const existing = this.viewers.get(runId);
+    if (existing && !existing.stopped && existing.target.kind === 'remote' && existing.target.serverId === serverId) return;
+    if (existing) this.disconnect(runId);
+    const viewer: Viewer = { socket: null, stopped: false, nextId: 1, target: { kind: 'remote', serverId } };
     this.viewers.set(runId, viewer);
     void this.run(runId, viewer);
   }
@@ -47,21 +58,33 @@ export class FleetBrowserViewer {
     let attempts = 0;
     while (!viewer.stopped) {
       try {
-        const local = await ensureBealeAppServerRunning();
+        let url: string;
+        let token: string;
+        if (viewer.target.kind === 'remote') {
+          const attachment = await invokeAppServerOperation<{ url: string; token: string }>({
+            operation: 'fleet.remote_browser_attach', input: { serverId: viewer.target.serverId, sessionId: runId }
+          });
+          url = attachment.url;
+          token = attachment.token;
+        } else {
+          const local = await ensureBealeAppServerRunning();
+          if (viewer.stopped) break;
+          await invokeAppServerOperation({ operation: 'fleet.connect', input: { runId, machineId: viewer.target.machineId, proxy: true } });
+          if (viewer.stopped) break;
+          const attachment = await attachAppServerSession(local, runId);
+          url = attachment.url.replace(/\/transport$/u, '/browser');
+          if (url === attachment.url) throw new Error('Fleet browser session transport is unavailable.');
+          token = attachment.token;
+        }
         if (viewer.stopped) break;
-        await invokeAppServerOperation({ operation: 'fleet.connect', input: { runId, machineId: viewer.machineId, proxy: true } });
-        if (viewer.stopped) break;
-        const attachment = await attachAppServerSession(local, runId);
-        if (viewer.stopped) break;
-        const url = attachment.url.replace(/\/transport$/u, '/browser');
-        if (url === attachment.url) throw new Error('Fleet browser session transport is unavailable.');
-        const socket = new WebSocket(url, { headers: { authorization: `Bearer ${attachment.token}` }, maxPayload: 1_048_576 });
+        const socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` }, maxPayload: 1_048_576 });
         viewer.socket = socket;
         if (viewer.stopped) { socket.close(); break; }
         await new Promise<void>((resolveClosed, rejectOpen) => {
           let opened = false;
           socket.once('open', () => { opened = true; attempts = 0; if (viewer.stopped) socket.close(); });
           socket.on('message', (raw) => {
+            if (viewer.stopped || this.viewers.get(runId) !== viewer) return;
             let value: unknown;
             try { value = JSON.parse(String(raw)); } catch { return; }
             if (!value || typeof value !== 'object' || Array.isArray(value) || !('type' in value)) return;

@@ -296,6 +296,19 @@ export class FleetService {
     return this.remoteGet(server, `${BEALE_APP_SERVER_WORKSPACES_PATH}/${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}/update?tail=true&limit=200`);
   }
 
+  public async remoteBrowserAttach(serverId: string, sessionId: string): Promise<{ url: string; token: string }> {
+    if (!VM_NAME.test(sessionId)) throw new Error('Invalid remote session identity.');
+    const server = await this.connectedRemoteAppServer(serverId);
+    const attachment = await this.remotePost(server, `${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/attachments`, {});
+    const transport = isRecord(attachment) && isRecord(attachment.transport) ? attachment.transport : null;
+    if (!transport || typeof transport.token !== 'string' || !transport.token) {
+      throw new Error('The remote app server did not return a session attachment.');
+    }
+    const url = new URL(`${BEALE_APP_SERVER_SESSIONS_PATH}/${encodeURIComponent(sessionId)}/browser`, server.url);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return { url: url.href, token: transport.token };
+  }
+
   public async remoteLaunch(serverId: string, workspaceId: string, promptMarkdown: string, machineId = 'local'): Promise<{ sessionId: string }> {
     const server = await this.connectedRemoteAppServer(serverId);
     if (!promptMarkdown.trim() || promptMarkdown.length > 131_072) throw new Error('Enter a research prompt.');
@@ -309,7 +322,7 @@ export class FleetService {
     }
     const payload = await this.remotePost(server, BEALE_APP_SERVER_SESSIONS_PATH, {
       launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION, launch: { workspaceId, promptMarkdown: promptMarkdown.trim(),
-        machineId, ...(machineId !== 'local' ? { fleetOwnerMachineId: fleetState.machineId } : {}) },
+        machineId, browserRelay: true, ...(machineId !== 'local' ? { fleetOwnerMachineId: fleetState.machineId } : {}) },
     });
     if (!isRecord(payload) || !isRecord(payload.session) || typeof payload.session.sessionId !== 'string') {
       throw new Error('Remote app server returned an invalid session start.');

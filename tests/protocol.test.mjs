@@ -254,6 +254,14 @@ test("the typed session launch carries OpenAI Fast mode and Daybreak Blue", () =
   );
 });
 
+test("a connected primary can request a browser relay for its local session", () => {
+  const request = { launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
+    launch: { workspaceId: 'workspace-example', promptMarkdown: 'Inspect the example scope.', machineId: 'local', browserRelay: true } };
+  assert.deepEqual(decodeAppServerSessionLaunchRequest(request), request);
+  assert.throws(() => decodeAppServerSessionLaunchRequest({ ...request,
+    launch: { ...request.launch, browserRelay: 'yes' } }), /browserRelay must be a boolean/u);
+});
+
 test("app-server control DTOs share strict version, route, replay, and error semantics", () => {
   const health = {
     ok: true,

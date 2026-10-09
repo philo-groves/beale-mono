@@ -570,7 +570,8 @@ function workspaceRegistryBroadcastMetricDetail(workspaceRegistry: WorkspaceRegi
 function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.listBrowserContexts, () => inAgentBrowserBridge?.listContexts() ?? []);
   ipcMain.handle(IPC_CHANNELS.fleetBrowserMachine, (_event, runId: string) => workspaceService.fleetBrowserMachineId(runId));
-  ipcMain.handle(IPC_CHANNELS.connectFleetBrowser, (_event, runId: string) => {
+  ipcMain.handle(IPC_CHANNELS.connectFleetBrowser, (_event, runId: string, remoteServerId?: string) => {
+    if (remoteServerId) { fleetBrowserViewer.connectRemote(runId, remoteServerId); return; }
     const machineId = workspaceService.fleetBrowserMachineId(runId);
     if (!machineId) throw new Error('This session does not run in a Fleet VM.');
     fleetBrowserViewer.connect(runId, machineId);

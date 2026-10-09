@@ -143,6 +143,25 @@ test('keeps a hosted session starting until the runtime readiness handshake comp
   upstream.complete();
 });
 
+test('a connected primary session gives its worker a session-scoped browser endpoint', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-remote-browser-example-'));
+  temporaryDirectories.push(directory);
+  const upstream = await createFakeAppServerSessionHost();
+  let browserEndpoint;
+  const server = await startAppServer({ hostService: testHostService(directory),
+    spawnSession: async (options) => {
+      browserEndpoint = options.env.BEALE_FLEET_BROWSER_ENDPOINT;
+      return upstream.spawnSession(options);
+    } });
+  servers.push(server);
+  const request = sessionLaunchRequest(directory, { sessionId: 'session-remote-browser-example' });
+  request.launch.machineId = 'local';
+  request.launch.browserRelay = true;
+  await server.startSession(request);
+  assert.match(browserEndpoint, /^http:\/\/127\.0\.0\.1:[0-9]+\/v1\/fleet-browser\/session-remote-browser-example\?token=/u);
+  upstream.complete();
+});
+
 test('fails stalled runtime initialization with a visible bounded diagnostic', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-runtime-startup-timeout-example-'));
   temporaryDirectories.push(directory);

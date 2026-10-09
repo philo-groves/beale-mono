@@ -136,8 +136,8 @@ const api: BealeApi = {
   fleetBrowserMachine(runId: string): Promise<string | null> {
     return ipcRenderer.invoke(IPC_CHANNELS.fleetBrowserMachine, runId);
   },
-  connectFleetBrowser(runId: string): Promise<void> {
-    return ipcRenderer.invoke(IPC_CHANNELS.connectFleetBrowser, runId);
+  connectFleetBrowser(runId: string, remoteServerId?: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_CHANNELS.connectFleetBrowser, runId, remoteServerId);
   },
   disconnectFleetBrowser(runId: string): Promise<void> {
     return ipcRenderer.invoke(IPC_CHANNELS.disconnectFleetBrowser, runId);

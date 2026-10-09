@@ -234,6 +234,7 @@ export class AppServerHostService {
       if (request.operation === 'fleet.remote_machines') return this.fleet.remoteMachines();
       if (request.operation === 'fleet.remote_catalog') return this.fleet.remoteCatalog(nonEmpty(input.serverId) ?? '');
       if (request.operation === 'fleet.remote_session') return this.fleet.remoteSession(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.sessionId) ?? '');
+      if (request.operation === 'fleet.remote_browser_attach') return this.fleet.remoteBrowserAttach(nonEmpty(input.serverId) ?? '', nonEmpty(input.sessionId) ?? '');
       if (request.operation === 'fleet.remote_launch') return this.fleet.remoteLaunch(nonEmpty(input.serverId) ?? '', nonEmpty(input.workspaceId) ?? '', nonEmpty(input.promptMarkdown) ?? '', nonEmpty(input.machineId) ?? 'local');
       if (request.operation === 'fleet.remote_control') return this.fleet.remoteControl(nonEmpty(input.serverId) ?? '', nonEmpty(input.sessionId) ?? '', nonEmpty(input.type) ?? '', nonEmpty(input.instruction));
       if (request.operation === 'fleet.restart_app_server') return this.fleet.restartRemoteAppServer(nonEmpty(input.serverId) ?? '');

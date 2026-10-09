@@ -3,7 +3,7 @@ import type { FormEvent, JSX, KeyboardEvent, PointerEvent } from 'react';
 import { browserNavigationUrl } from './BrowserSideView';
 import type { FleetBrowserInput } from '../../../shared/fleetBrowser';
 
-export function FleetBrowserSideView({ runId, visible }: { runId: string; visible: boolean }): JSX.Element {
+export function FleetBrowserSideView({ runId, visible, remoteServerId }: { runId: string; visible: boolean; remoteServerId?: string }): JSX.Element {
   const frameRef = useRef<HTMLImageElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef({ width: 1280, height: 800 });
@@ -14,6 +14,10 @@ export function FleetBrowserSideView({ runId, visible }: { runId: string; visibl
 
   useEffect(() => {
     if (!visible) return undefined;
+    setConnected(false);
+    setStatus('Connecting to browser…');
+    setAddress('');
+    frameRef.current?.removeAttribute('src');
     const unsubscribe = window.beale.onFleetBrowserUpdate((update) => {
       if (update.runId !== runId) return;
       if (update.type === 'browser.frame') {
@@ -35,14 +39,14 @@ export function FleetBrowserSideView({ runId, visible }: { runId: string; visibl
         setStatus('Reconnecting to VM browser…');
       }
     });
-    void window.beale.connectFleetBrowser(runId).catch((error: unknown) => {
+    void window.beale.connectFleetBrowser(runId, remoteServerId).catch((error: unknown) => {
       setStatus(error instanceof Error ? error.message : 'Could not connect to VM browser.');
     });
     return () => {
       unsubscribe();
       void window.beale.disconnectFleetBrowser(runId);
     };
-  }, [runId, visible]);
+  }, [runId, visible, remoteServerId]);
 
   useEffect(() => {
     if (!visible) return undefined;

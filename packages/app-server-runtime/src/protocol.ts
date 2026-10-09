@@ -36,7 +36,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 45 as const;
+export const APP_SERVER_CONTRACT_VERSION = 46 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -44,7 +44,7 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T21:04:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T21:24:54.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
   "fleet.inventory.v1",
@@ -55,6 +55,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "fleet.session-ownership.v1",
   "fleet.model-broker.v1",
   "fleet.browser-relay.v1",
+  "fleet.remote-browser-relay.v1",
   "workspace.research-project.v3",
   "session.typed-launch.v2",
   "session.openai-fast-mode.v1",
@@ -433,7 +434,7 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "fleet.state", "fleet.configure", "fleet.test_ssh", "fleet.test_app_server", "fleet.clone", "fleet.clone_for_session", "fleet.start", "fleet.stop",
   "fleet.prepare", "fleet.connect", "fleet.complete", "fleet.stage", "fleet.export", "fleet.reserve", "fleet.release",
   "fleet.broker", "fleet.relay_broker",
-  "fleet.remote_machines", "fleet.remote_catalog", "fleet.remote_session", "fleet.remote_launch", "fleet.remote_control", "fleet.relay_stage", "fleet.relay_export",
+  "fleet.remote_machines", "fleet.remote_catalog", "fleet.remote_session", "fleet.remote_launch", "fleet.remote_control", "fleet.remote_browser_attach", "fleet.relay_stage", "fleet.relay_export",
   "fleet.restart_app_server", "fleet.restart_guest_app_server",
   "resource.prior_art.list", "resource.prior_art.get",
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
@@ -747,6 +748,8 @@ export interface AppServerSessionLaunchIntent {
   /** Beale's durable workspace id, never a host filesystem path. */
   workspaceId: string;
   machineId?: string;
+  /** Host-owned browser page for a session opened through a connected primary. */
+  browserRelay?: boolean;
   fleetOwnerMachineId?: string;
   /** Provider routing preferences of the workspace-owning primary for a brokered Fleet guest. */
   brokerAuthenticationPreferences?: Readonly<Record<string, AppServerProviderAuthenticationMethod>>;
@@ -786,6 +789,9 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
   const launch = requiredRecord(value, "launch");
   requiredBoundedString(launch, "workspaceId", 256);
   optionalBoundedString(launch, "machineId", 256);
+  if (launch.browserRelay !== undefined && typeof launch.browserRelay !== "boolean") {
+    throw new Error("launch.browserRelay must be a boolean.");
+  }
   optionalBoundedString(launch, "fleetOwnerMachineId", 128);
   if (launch.brokerAuthenticationPreferences !== undefined) {
     const preferences = requiredRecord(launch, "brokerAuthenticationPreferences");

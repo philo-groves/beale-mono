@@ -1127,7 +1127,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
     attemptWasInitial = false
   ): Promise<void> {
     const { args, env } = prepareAppServerSessionLaunch(prepared.launch);
-    if (runtime.request.launch.machineId && runtime.request.launch.machineId !== 'local') {
+    if (runtime.request.launch.browserRelay === true
+      || (runtime.request.launch.machineId && runtime.request.launch.machineId !== 'local')) {
       const token = fleetBrowser.tokenFor(runtime.sessionId);
       env.BEALE_FLEET_BROWSER_ENDPOINT = `http://127.0.0.1:${address.port}/v1/fleet-browser/${encodeURIComponent(runtime.sessionId)}?token=${token}`;
     }
