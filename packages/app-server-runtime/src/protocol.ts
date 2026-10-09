@@ -36,7 +36,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
-export const APP_SERVER_CONTRACT_VERSION = 37 as const;
+export const APP_SERVER_CONTRACT_VERSION = 39 as const;
 export const APP_SERVER_RUNTIME_VERSION = "0.1.0" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
@@ -44,9 +44,12 @@ export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as c
  * Bump this UTC timestamp whenever the Desktop/app-server control contract
  * changes. Both binaries compile the same value and compare it directionally.
  */
-export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T08:00:00.000Z" as const;
+export const BEALE_APP_SERVER_CONTRACT_TIMESTAMP = "2026-10-09T11:55:00.000Z" as const;
 export const BEALE_APP_SERVER_CONTROL_VERSION = 1 as const;
 export const BEALE_APP_SERVER_CAPABILITIES = [
+  "fleet.inventory.v1",
+  "fleet.lifecycle.v1",
+  "fleet.session.v1",
   "workspace.research-project.v3",
   "workspace.checkpoint-repair.v1",
   "session.typed-launch.v2",
@@ -420,6 +423,8 @@ export const APP_SERVER_TRANSPORT_PREFIX = APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX;
 export const APP_SERVER_TRANSPORT_PATH = APP_SERVER_PROTOCOL_WEBSOCKET_PATH;
 
 export const APP_SERVER_PROTOCOL_OPERATIONS = [
+  "fleet.state", "fleet.configure", "fleet.test_ssh", "fleet.clone", "fleet.start", "fleet.stop",
+  "fleet.prepare", "fleet.connect", "fleet.complete", "fleet.stage", "fleet.export",
   "resource.prior_art.list", "resource.prior_art.get",
   "protocol.describe", "session.create", "session.begin_attempt", "session.append_event", "session.append_event_receipt",
   "session.transition", "session.recover_interrupted", "session.import_capture", "session.get", "session.get_update", "session.events", "session.event_details",
@@ -438,6 +443,65 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
 ] as const;
 
 export type AppServerProtocolOperation = (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number];
+
+export type FleetBackend = "tart" | "hyper-v";
+export type FleetRole = "primary" | "guest";
+export type FleetMachineState = "running" | "stopped" | "unknown";
+
+export interface FleetMachine {
+  id: string;
+  name: string;
+  backend: FleetBackend;
+  state: FleetMachineState;
+  base: boolean;
+  privilege: "standard" | "elevated";
+  sshConfigured: boolean;
+  sshIdentityConfigured: boolean;
+  sshKnownHostsConfigured: boolean;
+  sshHost: string | null;
+  sshUser: string | null;
+}
+
+export interface FleetSshTestInput {
+  machineId: string;
+  sshHost: string;
+  sshUser: string;
+  sshIdentityFile?: string;
+  sshKnownHostsFile?: string;
+}
+
+export interface FleetSshTestResult {
+  success: boolean;
+  message: string;
+}
+
+export function decodeFleetSshTestInput(value: unknown): FleetSshTestInput {
+  if (!isRecord(value) || typeof value.machineId !== 'string' || !value.machineId
+    || typeof value.sshHost !== 'string' || typeof value.sshUser !== 'string'
+    || (value.sshIdentityFile !== undefined && typeof value.sshIdentityFile !== 'string')
+    || (value.sshKnownHostsFile !== undefined && typeof value.sshKnownHostsFile !== 'string')) {
+    throw new Error('Invalid Fleet SSH test settings.');
+  }
+  return {
+    machineId: value.machineId,
+    sshHost: value.sshHost,
+    sshUser: value.sshUser,
+    ...(value.sshIdentityFile === undefined ? {} : { sshIdentityFile: value.sshIdentityFile }),
+    ...(value.sshKnownHostsFile === undefined ? {} : { sshKnownHostsFile: value.sshKnownHostsFile }),
+  };
+}
+
+export interface FleetState {
+  role: FleetRole;
+  enabled: boolean;
+  available: boolean;
+  error: string | null;
+  machines: FleetMachine[];
+  primary: { name: string; sshHost: string | null } | null;
+  requiredWorkspaceIds: string[];
+  optionalWorkspaceIds: string[];
+  lastMachineByWorkspace: Record<string, string>;
+}
 
 export const CLAIM_BOARD_MATURITIES = ["refuted", "observed", "reproduced", "verified"] as const;
 export type ClaimBoardMaturity = (typeof CLAIM_BOARD_MATURITIES)[number];
@@ -644,6 +708,8 @@ export interface AppServerSessionLaunchContinuation {
 export interface AppServerSessionLaunchIntent {
   /** Beale's durable workspace id, never a host filesystem path. */
   workspaceId: string;
+  machineId?: string;
+  mode?: string;
   attemptId?: string;
   promptMarkdown: string;
   goal?: { objective?: string };
@@ -677,6 +743,8 @@ export function decodeAppServerSessionLaunchRequest(value: unknown): AppServerSe
   optionalBoundedString(value, "sessionId", 128);
   const launch = requiredRecord(value, "launch");
   requiredBoundedString(launch, "workspaceId", 256);
+  optionalBoundedString(launch, "machineId", 256);
+  optionalBoundedString(launch, "mode", 128);
   optionalBoundedString(launch, "attemptId", 128);
   requiredBoundedString(launch, "promptMarkdown", 131_072);
   optionalBoundedString(launch, "shellSafetyMode", 64);

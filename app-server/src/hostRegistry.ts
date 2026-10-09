@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
   BealeAppServerWorkspaceSummary,
@@ -114,6 +115,38 @@ export class AppServerHostRegistry {
       const workspace = row ? projectHostWorkspace(row) : null;
       return workspace?.researchProfileId === 'security-research' ? workspace : null;
     }, null);
+  }
+
+  /** Register a staged Fleet copy without exposing its path to the client protocol. */
+  public registerFleetWorkspace(workspacePath: string, workspaceId: string, name: string, researchKitId: string): void {
+    const root = resolve(workspacePath);
+    const fleetRoot = resolve(this.registryDirectory, 'fleet-workspaces');
+    if (!root.startsWith(fleetRoot + sep)) throw new Error('Fleet workspace must be inside the guest Fleet directory.');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(workspaceId)) throw new Error('Invalid Fleet workspace ID.');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(researchKitId)) throw new Error('Invalid Fleet research kit.');
+    if (!existsSync(this.registryPath)) throw new Error('Open Beale in the guest before staging Fleet research.');
+    const directories = [root];
+    const database = new DatabaseSync(this.registryPath);
+    try {
+      const now = new Date().toISOString();
+      const existing = database.prepare('SELECT id, workspace_path FROM workspaces WHERE workspace_id = ? LIMIT 1').get(workspaceId) as SqlRow | undefined;
+      if (existing && existing.workspace_path !== root) throw new Error('A different guest workspace already uses this Fleet identity.');
+      if (existing) {
+        database.prepare('UPDATE workspaces SET workspace_directories_json = ?, workspace_name = ?, research_kit_id = ?, updated_at = ? WHERE id = ?')
+          .run(JSON.stringify(directories), name, researchKitId, now, String(existing.id));
+        return;
+      }
+      database.prepare(`INSERT INTO workspaces (
+        id, workspace_path, workspace_directories_json, workspace_id, workspace_name,
+        research_profile_id, research_kit_id, scope_owner, description_markdown,
+        rules_markdown, expires_at, created_at, updated_at, last_opened_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        `workspace_${randomUUID()}`, root, JSON.stringify(directories), workspaceId, name,
+        'security-research', researchKitId, 'fleet-primary', '', '', null, now, now, now
+      );
+    } finally {
+      database.close();
+    }
   }
 
   public providerSettings(): AppServerHostProviderSettings {

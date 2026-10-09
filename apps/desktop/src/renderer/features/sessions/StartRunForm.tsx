@@ -23,9 +23,11 @@ import type {
   RunRecord,
   ShellSafetyMode,
   StartRunInput,
+  FleetState,
   WorkspaceSnapshot
 } from '@shared/types';
 import { resolveGoalObjective } from '../../../shared/goalObjective';
+import { defaultFleetMachineId, fleetVmRequired, isAllowedFleetMachine, runnableFleetMachines } from '../../../shared/fleet';
 import { ensureDefaultResearchCollaborator, normalizeResearchCollaboration } from '../../../shared/collaboration';
 import { Modal } from '../../app/Modal';
 import { BealeWelcomeIcon } from '../../app/BealeWelcomeIcon';
@@ -156,6 +158,7 @@ interface StartRunFormProps {
 export interface ResearchSettingsFormProps {
   researchProfile: ResearchProfileSnapshot | null;
   formIdentity: string;
+  fleetWorkspaceId?: string;
   autoOpenSchedule?: boolean;
   workspaceName?: string;
   openAiStatus: OpenAiAccountStatus | null;
@@ -210,6 +213,10 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
   };
   const prepareCredentials = async (input: StartRunInput): Promise<void> => {
     try {
+      if (input.machineId && input.machineId !== 'local') {
+        await launchRun(input);
+        return;
+      }
       const access = await window.beale.getProviderCredentialAccessRequest(selectedSessionProviderIds(input));
       if (access.providerIds.length > 0) {
         setCredentialAccess({ input, providerIds: access.providerIds });
@@ -225,6 +232,9 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
     if (preparingRun.current || credentialAccess) return;
     preparingRun.current = true;
     try {
+      if (input.machineId && input.machineId !== 'local') {
+        await window.beale.configureFleet({ action: 'select-machine', workspaceId: snapshot.workspace.workspaceId, machineId: input.machineId });
+      }
       await prepareCredentials(input);
     } catch (caught) {
       await runAction(async () => { throw caught; });
@@ -257,6 +267,7 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
         {...settingsProps}
         busy={props.busy}
         researchProfile={snapshot.researchProfile ?? null}
+        fleetWorkspaceId={snapshot.workspace.workspaceId}
         formIdentity={`${snapshot.workspace.workspaceId}:${snapshot.activeScope.id}:${snapshot.researchProfile?.profileHash ?? 'default'}`}
         workspaceName={snapshot.activeScope.workspaceName ?? 'Workspace'}
         showSuggestions={props.showSuggestions ?? true}
@@ -319,6 +330,7 @@ export function ProviderKeychainAccessDialog({
 export function ResearchSettingsForm({
   researchProfile,
   formIdentity,
+  fleetWorkspaceId,
   autoOpenSchedule = false,
   workspaceName = 'Workspace',
   openAiStatus,
@@ -356,6 +368,8 @@ export function ResearchSettingsForm({
   const [input, setInput] = useState<StartRunInput>(() => (
     researchSettingsInput(initialInput, initialWorkflowId, initialGoal, defaultShellSafetyMode)
   ));
+  const [fleetState, setFleetState] = useState<FleetState | null>(null);
+  const [fleetError, setFleetError] = useState<string | null>(null);
   const [startingRun, setStartingRun] = useState(false);
   const [editorStage, setEditorStage] = useState<PromptEditorStage>(initialInput || initialGoal?.promptMarkdown ? 'prompt' : 'goal');
   const [generateEnabled, setGenerateEnabled] = useState(false);
@@ -545,6 +559,27 @@ export function ResearchSettingsForm({
   }, [input]);
 
   useEffect(() => {
+    if (!fleetWorkspaceId) return;
+    let active = true;
+    void window.beale.getFleetState().then((state) => {
+      if (!active) return;
+      setFleetState(state);
+      setFleetError(null);
+      const machineId = initialInput?.machineId && isAllowedFleetMachine(state, fleetWorkspaceId, initialInput.machineId)
+        ? initialInput.machineId
+        : defaultFleetMachineId(state, fleetWorkspaceId);
+      setInput((current) => {
+        const next = { ...current, machineId: machineId ?? undefined };
+        inputRef.current = next;
+        return next;
+      });
+    }).catch((caught: unknown) => {
+      if (active) setFleetError(userFacingErrorMessage(caught));
+    });
+    return () => { active = false; };
+  }, [fleetWorkspaceId, formIdentity, initialInput?.machineId]);
+
+  useEffect(() => {
     mountedRef.current = true;
     const unsubscribe = window.beale.onResearchPromptGenerationUpdate((update) => {
       if (!mountedRef.current || generationRequestIdRef.current !== update.requestId) return;
@@ -694,7 +729,10 @@ export function ResearchSettingsForm({
         && (!requiresCyberPolicyAcknowledgement || providerPolicyRiskAcknowledgements?.[preference.provider] === true);
     });
   const canGenerate = hasPromptDraft && selectedProvider?.configured === true && !generatingPrompt;
+  const vmRepeatConflict = Boolean(input.machineId && input.machineId !== 'local' && repeatSchedule.type !== 'none');
   const canStart = hasPromptDraft
+    && (!fleetWorkspaceId || Boolean(fleetState && input.machineId && isAllowedFleetMachine(fleetState, fleetWorkspaceId, input.machineId)))
+    && !vmRepeatConflict
     && selectedProvider?.configured === true
     && Boolean(selectedModel?.effortLevels.includes(selectedEffort))
     && collaborationReady;
@@ -978,8 +1016,6 @@ export function ResearchSettingsForm({
                   autoOpen={autoOpenSchedule}
                   onChange={selectRepeatSchedule}
                 />
-              </div>
-              <div className="new-research-options-tray-right">
                 <label
                   className="new-research-goal-toggle"
                   title="Keep working across turns until the objective is complete or genuinely blocked."
@@ -1007,7 +1043,11 @@ export function ResearchSettingsForm({
                   </label>
                 ) : null}
               </div>
+              <div className="new-research-options-tray-right">
+                {fleetWorkspaceId ? <MachinePicker state={fleetState} workspaceId={fleetWorkspaceId} value={input.machineId ?? ''} disabled={generatingPrompt} error={fleetError} onChange={(machineId) => update('machineId', machineId)} /> : null}
+              </div>
             </div>
+            {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM.</div> : null}
           </>
         )}
         postComposerContent={generationFeedback ? (
@@ -1099,7 +1139,9 @@ export function ResearchSettingsForm({
                   <span>Add Context</span>
                 </label>
               ) : null}
+              {fleetWorkspaceId ? <MachinePicker state={fleetState} workspaceId={fleetWorkspaceId} value={input.machineId ?? ''} disabled={generatingPrompt} error={fleetError} onChange={(machineId) => update('machineId', machineId)} /> : null}
             </div>
+            {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM.</div> : null}
           </section>
           {showSuggestions ? (
             <ResearchGoalChooser
@@ -1574,6 +1616,26 @@ function ResearchWorkflowIcon({ workflow }: { workflow: ResearchProfileWorkflow 
   if (identity.includes('report')) return <FileText size={19} aria-hidden="true" />;
   if (identity.includes('longshot')) return <Telescope size={19} aria-hidden="true" />;
   return <Lightbulb size={19} aria-hidden="true" />;
+}
+
+function MachinePicker({ state, workspaceId, value, disabled, error, onChange }: {
+  state: FleetState | null;
+  workspaceId: string;
+  value: string;
+  disabled: boolean;
+  error: string | null;
+  onChange: (machineId: string) => void;
+}): JSX.Element {
+  const required = state ? fleetVmRequired(state, workspaceId) : false;
+  const machines = state ? runnableFleetMachines(state) : [];
+  return <label className="new-research-machine-picker" title={error ?? (required ? 'This workspace requires a VM for research.' : 'Choose where this research session runs.')}>
+    <span>Machine</span>
+    <select aria-label="Research machine" value={value} disabled={disabled || !state || (required && machines.length === 0)} onChange={(event) => onChange(event.currentTarget.value)}>
+      {!state || (required && machines.length === 0) ? <option value="">{error ?? (state ? 'No runnable VM' : 'Loading…')}</option> : null}
+      {!required ? <option value="local">Local</option> : null}
+      {machines.map((machine) => <option value={machine.id} key={machine.id}>{machine.name}{machine.state === 'stopped' ? ' (stopped)' : ''}</option>)}
+    </select>
+  </label>;
 }
 
 export function defaultResearchWorkflowId(workflows: readonly ResearchProfileWorkflow[]): string {

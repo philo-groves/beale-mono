@@ -1,0 +1,253 @@
+import { useCallback, useEffect, useState } from 'react';
+import type { FormEvent, JSX } from 'react';
+import { RefreshCw, Settings2, X } from 'lucide-react';
+import type { FleetMachine, FleetSshTestResult, FleetState } from '@shared/types';
+import { fleetVmRequired } from '../../../shared/fleet';
+
+export function FleetSettingsView({ workspaceId }: { workspaceId?: string }): JSX.Element {
+  const [state, setState] = useState<FleetState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [openMachineId, setOpenMachineId] = useState<string | null>(null);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      setState(await window.beale.getFleetState());
+      setError(null);
+    } catch (caught) {
+      setError(message(caught));
+    }
+  }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const change = async (action: () => Promise<FleetState>): Promise<boolean> => {
+    if (busy) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await action());
+      return true;
+    } catch (caught) {
+      setError(message(caught));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!state) {
+    return <div className="settings-page fleet-settings-page"><h2>Fleet</h2><p>{error ?? 'Loading machines…'}</p></div>;
+  }
+  const required = workspaceId ? fleetVmRequired(state, workspaceId) : false;
+  const openMachine = state.role === 'primary' ? state.machines.find((machine) => machine.id === openMachineId) : undefined;
+  return (
+    <div className="settings-page fleet-settings-page">
+      <section className="settings-form" aria-busy={busy}>
+        <header className="settings-form-heading">
+          <h2 id="fleet-configuration-heading">Fleet</h2>
+          <p>Choose how this Beale instance participates in Fleet research.</p>
+        </header>
+        <fieldset className="settings-form-squircle" aria-labelledby="fleet-configuration-heading" disabled={busy}>
+          <div className="settings-form-control-list">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy"><strong>Enable Fleet</strong><small>Make Fleet machines and tools available to research.</small></span>
+              <input type="checkbox" checked={state.enabled} onChange={(event) => {
+                const enabled = event.currentTarget.checked;
+                void change(() => window.beale.configureFleet({ action: 'set-enabled', enabled }));
+              }} />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy"><strong>This Beale instance</strong><small>Primary manages VMs; a guest reports its primary connection.</small></span>
+              <select aria-label="Fleet role" value={state.role} onChange={(event) => {
+                const role = event.currentTarget.value;
+                void change(() => window.beale.configureFleet({ action: 'set-role', role }));
+              }}>
+                <option value="primary">Primary</option><option value="guest">VM guest</option>
+              </select>
+            </label>
+            {state.role === 'primary' && workspaceId ? (
+              <label className="settings-form-control-row">
+                <span className="settings-form-control-copy"><strong>Require a VM for this workspace</strong><small>Defaults on when a base VM is registered.</small></span>
+                <input type="checkbox" checked={required} onChange={(event) => {
+                  const nextRequired = event.currentTarget.checked;
+                  void change(() => window.beale.configureFleet({ action: 'set-required', workspaceId, required: nextRequired }));
+                }} />
+              </label>
+            ) : null}
+            {state.role === 'guest' ? (
+              <div className="settings-form-control-row">
+                <span className="settings-form-control-copy"><strong>Primary machine</strong><small>{state.primary?.name ?? 'No primary machine has connected.'}{state.primary?.sshHost ? ` · SSH host ${state.primary.sshHost}` : ''}</small></span>
+              </div>
+            ) : null}
+          </div>
+        </fieldset>
+      </section>
+
+      <section className="settings-form" aria-busy={busy}>
+        <header className="settings-form-heading">
+          <h2 id="fleet-machines-heading">Virtual Machines</h2>
+          <p>{state.role === 'primary' ? 'Configure operator-prepared VMs and clone registered bases.' : 'The primary initiates session control and file transfers to this guest.'}</p>
+        </header>
+        <div className="settings-form-squircle" aria-labelledby="fleet-machines-heading">
+          {state.role === 'guest' ? (
+            <p className="fleet-machine-empty">Guest instances do not list child VMs.</p>
+          ) : (
+            <div className="settings-form-control-list fleet-machine-list" aria-label="Fleet machines">
+              {state.error ? <p className="fleet-machine-empty" role="status">{state.error}</p> : null}
+              {state.machines.length === 0 ? <p className="fleet-machine-empty">No VMs were found. Prepare one in Tart or Hyper-V, then refresh Fleet.</p> : null}
+              {state.machines.map((machine) => (
+                <div className="settings-form-control-row fleet-machine-row" key={machine.id}>
+                  <span className="settings-form-control-copy">
+                    <strong>{machine.name}</strong>
+                    <small>{machine.backend} · {machine.state} · {machine.base ? 'Base VM' : 'Worker'} · {machine.privilege} privilege · {machine.sshConfigured ? 'SSH user saved in Beale' : 'Set SSH user in Beale'}</small>
+                  </span>
+                  <button type="button" className="fleet-machine-configure-button" aria-label={`Configure ${machine.name}`} title={`Configure ${machine.name}`} disabled={busy} onClick={() => { setError(null); setOpenMachineId(machine.id); }}>
+                    <Settings2 size={18} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {error && !openMachine ? <p className="settings-form-error" role="alert">{error}</p> : null}
+        <div className="settings-form-actions fleet-machine-refresh">
+          <span />
+          <button type="button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} aria-hidden="true" />Refresh</button>
+        </div>
+      </section>
+
+      {openMachine ? (
+        <FleetMachineDialog
+          key={openMachine.id}
+          machine={openMachine}
+          busy={busy}
+          error={error}
+          onClose={() => { setOpenMachineId(null); setError(null); }}
+          onChange={change}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function FleetMachineDialog({ machine, busy, error, onClose, onChange }: {
+  machine: FleetMachine;
+  busy: boolean;
+  error: string | null;
+  onClose: () => void;
+  onChange: (action: () => Promise<FleetState>) => Promise<boolean>;
+}): JSX.Element {
+  const [base, setBase] = useState(machine.base);
+  const [privilege, setPrivilege] = useState(machine.privilege);
+  const [sshHost, setSshHost] = useState(machine.sshHost ?? '');
+  const [sshUser, setSshUser] = useState(machine.sshUser ?? '');
+  const [sshIdentityFile, setSshIdentityFile] = useState('');
+  const [clearIdentity, setClearIdentity] = useState(false);
+  const [sshKnownHostsFile, setSshKnownHostsFile] = useState('');
+  const [clearKnownHosts, setClearKnownHosts] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<FleetSshTestResult | null>(null);
+  const [cloneName, setCloneName] = useState('');
+  const locked = busy || testing;
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !locked) onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [locked, onClose]);
+
+  const saveConfiguration = (): Promise<boolean> => onChange(() => window.beale.configureFleet({
+      action: 'set-machine', machineId: machine.id, base, privilege,
+      sshHost: sshHost.trim(), sshUser: sshUser.trim(),
+      ...(clearIdentity || sshIdentityFile.trim() ? { sshIdentityFile: clearIdentity ? '' : sshIdentityFile.trim() } : {}),
+      ...(clearKnownHosts || sshKnownHostsFile.trim() ? { sshKnownHostsFile: clearKnownHosts ? '' : sshKnownHostsFile.trim() } : {}),
+    }));
+
+  const testConnection = async (): Promise<void> => {
+    if (locked) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult(await window.beale.testFleetVmConnection({
+        machineId: machine.id,
+        sshHost: sshHost.trim(),
+        sshUser: sshUser.trim(),
+        ...(clearIdentity || sshIdentityFile.trim() ? { sshIdentityFile: clearIdentity ? '' : sshIdentityFile.trim() } : {}),
+        ...(clearKnownHosts || sshKnownHostsFile.trim() ? { sshKnownHostsFile: clearKnownHosts ? '' : sshKnownHostsFile.trim() } : {}),
+      }));
+    } catch (caught) {
+      setTestResult({ success: false, message: message(caught) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const save = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    const saved = await saveConfiguration();
+    if (saved) onClose();
+  };
+
+  const clone = async (): Promise<void> => {
+    if (!await saveConfiguration()) return;
+    const cloned = await onChange(() => window.beale.cloneFleetVm(machine.id, cloneName.trim()));
+    if (cloned) setCloneName('');
+  };
+
+  return (
+    <div className="modal-backdrop fleet-vm-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !locked) onClose();
+    }}>
+      <form className="modal-panel fleet-vm-dialog" role="dialog" aria-modal="true" aria-label={`Configure ${machine.name}`} onSubmit={(event) => void save(event)}>
+        <header className="modal-header">
+          <h2>Configure {machine.name}</h2>
+          <button type="button" autoFocus aria-label="Close VM configuration" disabled={locked} onClick={onClose}><X size={18} aria-hidden="true" /></button>
+        </header>
+        <div className="modal-body">
+          <p className="fleet-vm-dialog-summary">{machine.backend} · {machine.state}</p>
+          <div className="fleet-vm-dialog-fields">
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy"><strong>Base VM</strong><small>Clone only; base VMs cannot run directly.</small></span>
+              <input type="checkbox" checked={base} disabled={locked || machine.state !== 'stopped' && !base} onChange={(event) => setBase(event.currentTarget.checked)} />
+            </label>
+            <label className="settings-form-control-row">
+              <span className="settings-form-control-copy"><strong>Privilege</strong><small>Label this VM's manually configured privilege level.</small></span>
+              <select value={privilege} disabled={locked} onChange={(event) => setPrivilege(event.currentTarget.value as FleetMachine['privilege'])}><option value="standard">Standard</option><option value="elevated">Elevated</option></select>
+            </label>
+            <label className="fleet-vm-dialog-field"><span>SSH host override</span><input value={sshHost} disabled={locked} placeholder="Auto-detect VM IP" onChange={(event) => { setSshHost(event.currentTarget.value); setTestResult(null); }} /></label>
+            <label className="fleet-vm-dialog-field"><span>SSH user</span><input value={sshUser} disabled={locked} placeholder="Guest account name" onChange={(event) => { setSshUser(event.currentTarget.value); setTestResult(null); }} /><small>Beale needs this account name to connect; this does not change SSH inside the VM.</small></label>
+            <label className="fleet-vm-dialog-field"><span>SSH identity file</span><input value={sshIdentityFile} disabled={locked || clearIdentity} placeholder={machine.sshIdentityConfigured ? 'Configured; enter a new path to replace' : 'Optional host path'} onChange={(event) => { setSshIdentityFile(event.currentTarget.value); setTestResult(null); }} /></label>
+            {machine.sshIdentityConfigured ? (
+              <label className="fleet-vm-clear-identity"><input type="checkbox" checked={clearIdentity} disabled={locked} onChange={(event) => { setClearIdentity(event.currentTarget.checked); setTestResult(null); }} />Clear saved SSH identity file</label>
+            ) : null}
+            <label className="fleet-vm-dialog-field"><span>SSH known-hosts file</span><input value={sshKnownHostsFile} disabled={locked || clearKnownHosts} placeholder={machine.sshKnownHostsConfigured ? 'Configured; enter a new path to replace' : 'Optional host path'} onChange={(event) => { setSshKnownHostsFile(event.currentTarget.value); setTestResult(null); }} /><small>For Tart, Beale uses ~/.ssh/tart_known_hosts when it exists. A first connection to a clone records its host key there.</small></label>
+            {machine.sshKnownHostsConfigured ? (
+              <label className="fleet-vm-clear-identity"><input type="checkbox" checked={clearKnownHosts} disabled={locked} onChange={(event) => { setClearKnownHosts(event.currentTarget.checked); setTestResult(null); }} />Clear saved known-hosts file</label>
+            ) : null}
+          </div>
+          <div className="fleet-vm-dialog-actions">
+            <button type="button" className="secondary-button" disabled={locked} onClick={() => void testConnection()}>{testing ? 'Testing…' : 'Test SSH'}</button>
+            {testResult ? <p className={testResult.success ? 'fleet-vm-test-success' : 'settings-form-error'} role="status">{testResult.message}</p> : null}
+            {machine.base ? (
+              <><label className="fleet-vm-dialog-field"><span>Clone name</span><input value={cloneName} disabled={locked} placeholder="New worker VM name" onChange={(event) => setCloneName(event.currentTarget.value)} /></label>
+                <button type="button" className="secondary-button" disabled={locked || machine.state !== 'stopped' || !base || !cloneName.trim()} onClick={() => void clone()}>Clone VM</button></>
+            ) : (
+              <button type="button" className="secondary-button" disabled={locked || machine.state === 'unknown'} onClick={() => void onChange(() => machine.state === 'running' ? window.beale.stopFleetVm(machine.id) : window.beale.startFleetVm(machine.id))}>{machine.state === 'running' ? 'Stop VM' : 'Start VM'}</button>
+            )}
+          </div>
+          {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
+        </div>
+        <footer className="modal-footer">
+          <button type="button" className="secondary-button" disabled={locked} onClick={onClose}>Cancel</button>
+          <button type="submit" className="primary-button" disabled={locked}>Save VM</button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

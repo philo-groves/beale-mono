@@ -2178,6 +2178,7 @@ export function App(): JSX.Element {
         {settingsOpen ? (
           <SettingsView
             section={settingsSection}
+            workspaceId={snapshot?.workspace.workspaceId}
             appearanceBackground={appearanceBackground}
             appearanceTransparencyPercentage={appearanceTransparencyPercentage}
             appearanceTheme={appearanceTheme}

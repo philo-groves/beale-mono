@@ -4,6 +4,11 @@
 
 ### Beale
 
+#### Added
+
+- Added Fleet settings for Tart and Hyper-V inventory, clone-only base VMs, SSH configuration, and workspace VM requirements. New Research selects Local or a configured worker; VM sessions stream into the launching primary workspace and return changed workspace files. Concurrent edits and guest canonical records are kept for review.
+- Added a VM settings Test SSH action that checks draft connection values without saving them. Tart connections use the dedicated known-hosts file from the Desktop SSH setup script when present.
+
 #### Removed
 
 - Removed session workflow creation, assignment, notebook execution gates, progress UI, and the built-in Repository Auditor. Existing workflow records remain in local storage but are no longer used when sessions continue.
@@ -21,6 +26,8 @@
 
 #### Changed
 
+- The macOS development Electron bundle now signs with Beale's bundle identifier so Local Network permission applies to the app-server's SSH helper.
+- Fleet settings now separates Fleet and Virtual Machines into two settings forms. Each VM has a compact row and a configuration dialog for its SSH, base, privilege, clone, and lifecycle controls.
 - Kept Discovery, Chaining, Reporting, and Longshot as New Research suggestion categories. They shape generated ideas and optional prompt expansion without assigning a session workflow or constraining the agent's flow.
 - Agents now keep reusable research documentation in `references/research/`, with citations to canonical records and evidence.
 
@@ -112,6 +119,7 @@
 
 #### Fixed
 
+- Fleet VM rows now distinguish a saved primary-side SSH user from SSH setup inside the guest. Registered bases enable the default workspace VM requirement even before that user is saved in Beale.
 - Workspace checkpoints retain oversized untracked macOS executables in investigation directories at their existing paths, with tracked integrity manifests and exact local Git exclusions, so compiled harnesses no longer block later checkpoints.
 - Repository Auditor workflows now recognize inventoried files beneath declared scope directories on Windows, allowing the inventory step to advance.
 - Workflow Run All now uses the effective Lead provider and model shown in Provider settings when their defaults have not been explicitly saved.
@@ -1241,6 +1249,13 @@
 - Added MIT licensing metadata and a root `LICENSE`.
 
 ### app-server
+
+#### Added
+
+- Added Fleet inventory, clone/start/stop operations, model-facing Fleet tools, SSH guest session transport, and chunked workspace transfer. Guest credentials stay in the VM; external source checkouts are not copied from the primary. Registry migration records a session's machine for recovery, and control contract v38 requires rebuilding Beale and app-server together.
+- Added draft SSH connection testing and per-VM known-hosts paths. Control contract v39 requires rebuilding Beale and app-server together.
+- Tart Fleet connections now prefer guest-agent address resolution and fall back to DHCP. SSH test results report the attempted address to help diagnose connectivity after a VM restart.
+- SSH test failures now include the final SSH diagnostic line so connection and macOS permission failures can be distinguished.
 
 #### Removed
 

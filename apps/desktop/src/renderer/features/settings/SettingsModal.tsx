@@ -4,6 +4,7 @@ import type { CSSProperties } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Archive, ArchiveRestore, FileText, KeyRound, MessageSquare, Palette, Plus, RefreshCw, ServerCog, Settings, SlidersHorizontal, Ticket, UserRoundCog, Wifi, X } from 'lucide-react';
 import { OPTIONAL_AGENT_FEATURES } from '../../../shared/optionalAgentFeatures';
+import { FleetSettingsView } from './FleetSettingsView';
 import type {
   AgentPluginRegistryState,
   AppServerRemoteAccessSettings,
@@ -78,9 +79,9 @@ import {
   type SessionHeatTheme
 } from '../../view-models/sessionHeat';
 
-export type SettingsSection = 'general' | 'appearance' | 'remote' | 'providers' | 'ticketing' | 'profile' | 'prompt' | 'optional-features' | 'archive';
+export type SettingsSection = 'general' | 'appearance' | 'remote' | 'fleet' | 'providers' | 'ticketing' | 'profile' | 'prompt' | 'optional-features' | 'archive';
 
-const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'appearance', 'remote', 'providers', 'ticketing', 'profile', 'prompt', 'optional-features', 'archive'];
+const SETTINGS_SECTIONS: SettingsSection[] = ['general', 'appearance', 'remote', 'fleet', 'providers', 'ticketing', 'profile', 'prompt', 'optional-features', 'archive'];
 
 export function SettingsSidebar({
   collapsed,
@@ -121,6 +122,8 @@ export function SettingsSidebar({
                     <Palette size={15} aria-hidden="true" />
                   ) : item === 'remote' ? (
                     <Wifi size={15} aria-hidden="true" />
+                  ) : item === 'fleet' ? (
+                    <ServerCog size={15} aria-hidden="true" />
                   ) : item === 'providers' ? (
                     <ServerCog size={15} aria-hidden="true" />
                   ) : item === 'ticketing' ? (
@@ -149,6 +152,7 @@ export function SettingsSidebar({
 
 export function SettingsView({
   section,
+  workspaceId,
   appearanceBackground,
   appearanceTransparencyPercentage,
   appearanceTheme,
@@ -219,6 +223,7 @@ export function SettingsView({
   onResumeQuickChat = async () => undefined
 }: {
   section: SettingsSection;
+  workspaceId?: string;
   appearanceBackground: AppearanceBackground;
   appearanceTransparencyPercentage: AppearanceTransparencyPercentage;
   appearanceTheme: AppearanceTheme;
@@ -351,6 +356,8 @@ export function SettingsView({
             onDetect={onDetectAppServerRemoteAccess}
             onSave={onSetAppServerRemoteAccess}
           />
+        ) : activeSection === 'fleet' ? (
+          <FleetSettingsView workspaceId={workspaceId} />
         ) : activeSection === 'providers' ? (
           <ProvidersSettingsView
             busy={busy}
@@ -3105,6 +3112,8 @@ export function settingsSectionLabel(section: SettingsSection): string {
       return 'Features';
     case 'remote':
       return 'Remote';
+    case 'fleet':
+      return 'Fleet';
     case 'providers':
       return 'Providers';
     case 'ticketing':
@@ -3128,6 +3137,8 @@ export function settingsSectionHeaderIcon(section: SettingsSection): AppHeaderVi
       return 'settings-optional-features';
     case 'remote':
       return 'settings-remote';
+    case 'fleet':
+      return 'settings-fleet';
     case 'providers':
       return 'settings-providers';
     case 'ticketing':

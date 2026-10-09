@@ -17,7 +17,8 @@ import {
   decodeAppServerSessionLaunchRequest,
   decodeWorkspaceProjectRequest,
   type AppServerProtocolOperation,
-  type AppServerSessionLaunchRequest
+  type AppServerSessionLaunchRequest,
+  decodeFleetSshTestInput
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchAuthority, workspaceResearchIndexNeedsRebuild, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/runtime-services';
 import { decodeResearchPluginCatalog, validateResearchSystemPromptTemplate } from '@beale/research-agent';
@@ -38,6 +39,9 @@ import {
 } from './sessionLaunch.js';
 import { longSessionRecoveryFallbackPrompt } from './sessionRecovery.js';
 import { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
+import { FleetService } from './fleet.js';
+import { FleetRemoteController } from './fleetRemote.js';
+import { FleetWorkspaceStore } from './fleetWorkspace.js';
 
 type ProtocolInvoker = <T>(
   operation: AppServerProtocolOperation,
@@ -134,6 +138,9 @@ export class AppServerHostService {
   private readonly workspaceWriters = new Map<string, string>();
   private readonly workspaceExclusiveOperations = new Set<string>();
   private readonly registry: AppServerHostRegistry;
+  private readonly fleet: FleetService;
+  private readonly fleetRemote: FleetRemoteController;
+  private readonly fleetWorkspace: FleetWorkspaceStore;
   private readonly invokeProtocol: ProtocolInvoker;
   private readonly databaseCoordinator: AppServerWorkerDatabaseCoordinator;
   private providerSemanticsPromise: Promise<{
@@ -144,6 +151,9 @@ export class AppServerHostService {
 
   public constructor(options: AppServerHostServiceOptions = {}) {
     this.registry = options.registry ?? new AppServerHostRegistry(options);
+    this.fleet = new FleetService(join(this.registry.registryDirectory, 'fleet.json'));
+    this.fleetWorkspace = new FleetWorkspaceStore(this.registry);
+    this.fleetRemote = new FleetRemoteController(this.fleet, this.fleetWorkspace);
     this.databaseCoordinator = options.databaseCoordinator ?? new AppServerWorkerDatabaseCoordinator();
     const invokeProtocol = options.invokeProtocol ?? invokeAppServerProtocol;
     this.invokeProtocol = (operation, invokeOptions) => invokeOptions.storage
@@ -199,6 +209,39 @@ export class AppServerHostService {
     profileId?: string;
     signal?: AbortSignal;
   }): Promise<unknown> {
+    if (request.operation.startsWith('fleet.')) {
+      const input = isRecord(request.input) ? request.input : {};
+      if (request.operation === 'fleet.state') return this.fleet.state();
+      if (request.operation === 'fleet.configure') return this.fleet.configure(input);
+      if (request.operation === 'fleet.test_ssh') return this.fleet.testSsh(decodeFleetSshTestInput(input));
+      if (request.operation === 'fleet.clone') return this.fleet.clone(nonEmpty(input.baseId) ?? '', nonEmpty(input.name) ?? '');
+      if (request.operation === 'fleet.start') return this.fleet.start(nonEmpty(input.machineId) ?? '');
+      if (request.operation === 'fleet.stop') return this.fleet.stop(nonEmpty(input.machineId) ?? '');
+      if (request.operation === 'fleet.prepare') {
+        const workspaceId = nonEmpty(input.workspaceId);
+        const runId = nonEmpty(input.runId);
+        const machineId = nonEmpty(input.machineId);
+        if (!workspaceId || !runId) throw new Error('Fleet preparation requires a workspace and run ID.');
+        const workspace = this.requireWorkspace(workspaceId);
+        if (!machineId || machineId === 'local') { await this.fleetRemote.validateLocal(workspace.workspaceId, nonEmpty(input.mode)); return { machineId: 'local' }; }
+        return this.fleetRemote.prepare(workspace, runId, machineId);
+      }
+      if (request.operation === 'fleet.connect') return this.fleetRemote.connect(nonEmpty(input.machineId) ?? '');
+      if (request.operation === 'fleet.complete') {
+        const runId = nonEmpty(input.runId);
+        if (!runId) throw new Error('Fleet completion requires a run ID.');
+        return this.fleetRemote.complete(runId);
+      }
+      if (request.operation === 'fleet.stage' || request.operation === 'fleet.export') {
+        const state = await this.fleet.state();
+        if (!state.enabled || state.role !== 'guest') throw new Error('Fleet workspace transfer is available only in a guest Beale instance.');
+        if (request.operation === 'fleet.stage' && input.action === 'begin' && typeof input.primaryName === 'string') {
+          await this.fleet.configure({ action: 'set-primary', name: input.primaryName });
+        }
+        return request.operation === 'fleet.stage' ? this.fleetWorkspace.guestStage(input) : this.fleetWorkspace.guestExport(input);
+      }
+      throw new Error('Unsupported Fleet operation.');
+    }
     if (request.operation === 'maintenance.run' && isRecord(request.input)) {
       const path = nonEmpty(request.input.workspacePath);
       if (!path) throw new Error('workspacePath is required.');
@@ -432,6 +475,7 @@ export class AppServerHostService {
   ): Promise<PreparedAppServerSession> {
     const sessionId = request.sessionId ?? generatedSessionId;
     const workspace = this.requireWorkspace(request.launch.workspaceId);
+    await this.fleetRemote.validateLocal(workspace.workspaceId, request.launch.mode ?? null);
     const attemptId = request.launch.attemptId ?? `attempt-${randomUUID()}`;
     const requestedProfileId = request.launch.researchProfileId?.trim();
     if (requestedProfileId && requestedProfileId !== workspace.researchProfileId) {
@@ -1770,6 +1814,7 @@ function dueAutomation(
   const metadata = isRecord(session.metadata) ? session.metadata : {};
   const storedRun = isRecord(metadata.bealeRun) ? metadata.bealeRun : {};
   const budget = isRecord(storedRun.budget) ? storedRun.budget : {};
+  if (typeof budget.machineId === 'string' && budget.machineId !== 'local') return null;
   const schedule = automationInterval(budget.repeatSchedule);
   if (!schedule) return null;
   const latestStartedAt = latestAutomationAttemptStartedAt(session.attempts) ?? nonEmpty(session.createdAt);

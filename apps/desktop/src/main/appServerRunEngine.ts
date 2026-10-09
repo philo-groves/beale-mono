@@ -32,7 +32,7 @@ import type {
 import { normalizeResearchCollaboration } from '../shared/collaboration';
 import { normalizeRepeatSchedule } from '../shared/repeatSchedule';
 import { generateSessionTitle, SESSION_TITLE_FALLBACK } from '../shared/sessionTitle';
-import { getAppServerProviderSemantics } from './appServerCliClient';
+import { getAppServerProviderSemantics, type AppServerSessionUpdate } from './appServerCliClient';
 import { resolveSessionGoal } from '../shared/goalObjective';
 import { redactCommandArgumentsForModel, redactForModelText, redactJsonForModel } from './redaction';
 import {
@@ -43,6 +43,8 @@ import {
   attachAppServerSession,
   ensureBealeAppServerRunning,
   fetchAppServerSession,
+  fetchAppServerCanonicalResult,
+  invokeAppServerOperation,
   startAppServerSession,
   stopAppServerSession,
   type AppServerCatalogEntry,
@@ -247,6 +249,7 @@ export class AppServerRunEngine {
       budget: {
         ...input.budget,
         runEngine: 'app-server',
+        machineId: input.machineId ?? 'local',
         modelProvider: input.provider?.trim() || null,
         fastMode: input.fastMode === true,
         ...(input.provider === 'openai-codex' ? { daybreakBlue: input.daybreakBlue === true } : {}),
@@ -274,7 +277,8 @@ export class AppServerRunEngine {
         researchProfileSnapshotId: researchProfile.id,
         researchProfileId: researchProfile.profileId,
         researchProfileVersion: researchProfile.profileVersion,
-        researchWorkflowId: workflowId
+        researchWorkflowId: workflowId,
+        machineId: input.machineId ?? 'local'
       }
     });
     this.db.appendTraceEvent({
@@ -584,12 +588,30 @@ export class AppServerRunEngine {
     request: AppServerSessionLaunchRequest;
   }): Promise<void> {
     const { active, request } = params;
-    const record = await ensureBealeAppServerRunning();
+    const machineId = machineIdFromRun(active.context.run);
+    const prepared = await invokeAppServerOperation<FleetPreparedSession>({
+      operation: 'fleet.prepare',
+      input: { workspaceId: request.launch.workspaceId, runId: active.context.run.id, machineId, mode: active.context.run.mode }
+    });
+    if (active.stopped && machineId !== 'local') { this.finishPrelaunchStop(active); return; }
+    const record = machineId === 'local'
+      ? await ensureBealeAppServerRunning()
+      : fleetRemoteRecord(prepared);
     if (this.isStale(active)) {
       return;
     }
     active.appServerRecord = record;
-    const started = await startAppServerSession(record, request);
+    if (active.stopped && machineId !== 'local') { this.finishPrelaunchStop(active); return; }
+    const guestRequest = machineId === 'local' ? request : {
+      ...request, launch: { ...request.launch, introspection: undefined }
+    };
+    const started = await startAppServerSession(record, guestRequest);
+    if (active.stopped) {
+      active.appServerSessionId = started.sessionId;
+      await stopAppServerSession(record, started.sessionId).catch(() => undefined);
+      this.handleAppServerClosure(active);
+      return;
+    }
     if (this.isStale(active)) {
       void stopAppServerSession(record, started.sessionId).catch(() => undefined);
       return;
@@ -623,6 +645,28 @@ export class AppServerRunEngine {
       || this.activeRuns.get(active.context.run.id) !== active;
   }
 
+  private finishPrelaunchStop(active: ActiveAppServerRun): void {
+    if (active.finalized) return;
+    active.finalized = true;
+    this.clearTimeLimit(active);
+    this.clearForceStopTimer(active);
+    this.settleTransportReadiness(active, false);
+    this.activeRuns.delete(active.context.run.id);
+    this.finishClosedProcess(active.context, null, null, active);
+    active.resolveCompletion();
+    this.onChange();
+  }
+
+  private async recordForRun(run: RunRecord | null): Promise<BealeAppServerDiscovery> {
+    if (!run) return ensureBealeAppServerRunning();
+    const machineId = machineIdFromRun(run);
+    if (machineId === 'local') return ensureBealeAppServerRunning();
+    const connection = await invokeAppServerOperation<FleetPreparedSession>({
+      operation: 'fleet.connect', input: { machineId }
+    });
+    return fleetRemoteRecord(connection);
+  }
+
   /**
    * Runs the shared close sequence exactly once for an app-server-hosted run.
    * The exit code comes from the app-server catalog because the host no longer
@@ -640,6 +684,21 @@ export class AppServerRunEngine {
       const state = entry?.state ?? null;
       const exitCode = entry?.exitCode ?? null;
       if (entry?.diagnostic) active.lastProcessDiagnostic = entry.diagnostic;
+      if (machineIdFromRun(active.context.run) !== 'local') {
+        try {
+          const result = await invokeAppServerOperation<{ imported: number; conflicts: number; candidateRecords: number }>({
+            operation: 'fleet.complete', input: { runId: active.context.run.id }
+          });
+          this.db.appendTraceEvent({
+            runId: active.context.run.id, attemptId: active.context.attempt.id,
+            type: 'research_event', source: 'executor',
+            summary: `Fleet returned ${result.imported} workspace files, ${result.conflicts} conflicts, and ${result.candidateRecords} guest knowledge candidates.`,
+            payload: result, modelVisible: false,
+          });
+        } catch (error) {
+          active.lastProcessDiagnostic = `Fleet result transfer failed: ${errorMessage(error)}`;
+        }
+      }
       if (!this.disposed) {
         if (state === 'failed' && exitCode === null) {
           active.lastProcessDiagnostic = active.lastProcessDiagnostic ?? 'The app-server session ended with an error.';
@@ -703,13 +762,30 @@ export class AppServerRunEngine {
     // the operation the user needs to cancel. The app-server reserves the
     // caller-selected run ID before that checkpoint begins.
     void active?.launchReady?.catch(() => undefined);
-    const record = active?.appServerRecord ?? await ensureBealeAppServerRunning();
-    await stopAppServerSession(record, active?.appServerSessionId ?? runId);
+    const priorStopped = active?.stopped;
+    const priorStopReason = active?.stopReason;
     if (active) {
       active.stopped = true;
       active.stopReason = 'user';
       this.clearTimeLimit(active);
       this.clearForceStopTimer(active);
+    }
+    try {
+      if (active && !active.appServerRecord) {
+        if (machineIdFromRun(active.context.run) === 'local') {
+          const record = await ensureBealeAppServerRunning();
+          await stopAppServerSession(record, runId);
+        }
+        return;
+      }
+      const record = active?.appServerRecord ?? await this.recordForRun(this.db?.getRun(runId) ?? null);
+      await stopAppServerSession(record, active?.appServerSessionId ?? runId);
+    } catch (error) {
+      if (active) {
+        active.stopped = priorStopped ?? false;
+        active.stopReason = priorStopReason ?? null;
+      }
+      throw error;
     }
   }
 
@@ -768,8 +844,17 @@ export class AppServerRunEngine {
       if (this.completions.get(runId) === completion) this.completions.delete(runId);
     });
     try {
-      const record = await ensureBealeAppServerRunning();
+      const record = await this.recordForRun(run);
       const entry = await fetchAppServerSession(record, runId);
+      if (machineIdFromRun(run) !== 'local' && (!entry || TERMINAL_APP_SERVER_STATES.has(entry.state))) {
+        const canonical = await fetchAppServerCanonicalResult<AppServerSessionUpdate>(record,
+          `/v1/workspaces/${encodeURIComponent(this.db.getWorkspaceId())}/sessions/${encodeURIComponent(runId)}/update?limit=1`);
+        const terminal = canonical.session.status;
+        if (terminal === 'completed' || terminal === 'failed' || terminal === 'stopped') {
+          await this.recoverTerminalFleetRun(active, record, terminal, entry?.diagnostic ?? null);
+          return true;
+        }
+      }
       if (!entry || (entry.state !== 'starting' && entry.state !== 'running')) throw new Error('Recovered app-server session is not active.');
       const attachment = await attachAppServerSession(record, runId);
       if (this.isStale(active)) return false;
@@ -788,6 +873,84 @@ export class AppServerRunEngine {
       resolveCompletion();
       return false;
     }
+  }
+
+  private async recoverTerminalFleetRun(
+    active: ActiveAppServerRun,
+    record: BealeAppServerDiscovery,
+    terminalState: 'completed' | 'failed' | 'stopped',
+    diagnostic: string | null,
+  ): Promise<void> {
+    const runId = active.context.run.id;
+    const workspaceId = this.db.getWorkspaceId();
+    const knownIds = appServerEventIdsFromDetail(this.db.getRunDetail(runId));
+    let afterEventId: string | null = null;
+    let latest: AppServerSessionUpdate | null = null;
+    for (let page = 0; page < 100; page += 1) {
+      const query = new URLSearchParams({ limit: '2000', maxBytes: '4000000' });
+      if (afterEventId) query.set('afterEventId', afterEventId);
+      const update = await fetchAppServerCanonicalResult<AppServerSessionUpdate>(record,
+        `/v1/workspaces/${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(runId)}/update?${query}`);
+      latest = update;
+      for (const event of update.events) {
+        if (knownIds.has(event.id)) continue;
+        knownIds.add(event.id);
+        const trace = this.db.appendTraceEvent({
+          runId, attemptId: active.context.attempt.id, type: 'research_event', source: 'executor',
+          summary: event.summary.slice(0, MAX_SUMMARY_CHARS),
+          payload: { appServerEventId: event.id, appServerKind: event.kind, recoveredFromFleet: true },
+          modelVisible: false,
+        });
+        const transcript = recordValue(recordValue(event.payload)?.record);
+        const role = stringPayload(transcript ?? {}, 'role');
+        const content = stringPayload(transcript ?? {}, 'contentMarkdown');
+        const phase = stringPayload(transcript ?? {}, 'phase');
+        if (event.kind === 'beale.transcript' && content && (role === 'assistant' || role === 'user' || role === 'system')) {
+          this.db.createTranscriptMessage({
+            runId, attemptId: active.context.attempt.id, traceEventId: trace.id,
+            role, contentMarkdown: content.slice(0, 131_072), source: 'app-server',
+            ...(phase === 'commentary' || phase === 'final_answer' ? { phase } : {}),
+            metadata: { appServerEventId: event.id, recoveredFromFleet: true, truncated: content.length > 131_072 },
+          });
+        }
+      }
+      if (!update.hasMore || !update.nextAfterEventId) break;
+      afterEventId = update.nextAfterEventId;
+    }
+    if (latest?.hasMore) throw new Error('Fleet session history exceeded the recovery page limit.');
+    const finalResponse = latest?.finalResponse?.trim() ?? '';
+    const hasFinal = this.db.getRunDetail(runId).transcriptMessages.some((message) => message.phase === 'final_answer');
+    if (finalResponse && !hasFinal) {
+      this.db.createTranscriptMessage({ runId, attemptId: active.context.attempt.id, traceEventId: null,
+        role: 'assistant', phase: 'final_answer', contentMarkdown: finalResponse.slice(0, 131_072), source: 'app-server',
+        metadata: { recoveredFromFleet: true, truncated: finalResponse.length > 131_072 } });
+    }
+    const status = terminalState;
+    const summary = latest?.session.summary || diagnostic || `Fleet guest session ${status}.`;
+    this.db.updateAttemptState(active.context.attempt.id, status, summary);
+    this.db.updateRunStatus(runId, status, summary,
+      latest?.session.finalDisposition && typeof latest.session.finalDisposition === 'object'
+        ? latest.session.finalDisposition : undefined);
+    this.db.updateModelSessionByRun(runId, { status, metadata: { recoveredFromFleet: true } });
+    try {
+      const returned = await invokeAppServerOperation<{ imported: number; conflicts: number; candidateRecords: number }>({
+        operation: 'fleet.complete', input: { runId }
+      });
+      this.db.appendTraceEvent({ runId, attemptId: active.context.attempt.id,
+        type: 'research_event', source: 'executor',
+        summary: `Fleet returned ${returned.imported} workspace files, ${returned.conflicts} conflicts, and ${returned.candidateRecords} guest knowledge candidates.`,
+        payload: returned, modelVisible: false });
+    } catch (error) {
+      this.db.appendTraceEvent({ runId, attemptId: active.context.attempt.id,
+        type: 'research_event', source: 'executor', summary: 'Fleet result transfer needs retry.',
+        payload: { error: errorMessage(error) }, modelVisible: false });
+    }
+    active.finalized = true;
+    this.activeRuns.delete(runId);
+    this.settleTransportReadiness(active, false);
+    active.resolveCompletion();
+    this.notifySessionLifecycleChanged();
+    this.onChange({ workspaceRegistryChanged: true });
   }
 
   public activeRunIds(): string[] {
@@ -1487,10 +1650,21 @@ export class AppServerRunEngine {
     if (active.finalized || active.transportReconnectInProgress) return;
     active.transportReconnectInProgress = true;
     void (async (): Promise<void> => {
+      let reconnectBootstrap = bootstrap;
       for (let attempt = 0; attempt < 4; attempt += 1) {
-        const entry = active.appServerRecord && active.appServerSessionId
+        let entry = active.appServerRecord && active.appServerSessionId
           ? await fetchAppServerSession(active.appServerRecord, active.appServerSessionId)
           : null;
+        if (!entry && machineIdFromRun(active.context.run) !== 'local' && active.appServerSessionId) {
+          try {
+            const record = await this.recordForRun(active.context.run);
+            const attachment = await attachAppServerSession(record, active.appServerSessionId);
+            active.appServerRecord = record;
+            active.appServerClientToken = attachment.token;
+            reconnectBootstrap = { protocolVersion: 1, transport: 'websocket', url: attachment.url, sessionId: active.appServerSessionId };
+            entry = await fetchAppServerSession(record, active.appServerSessionId);
+          } catch { /* Retry within the bounded reconnect window. */ }
+        }
         if (entry && !TERMINAL_APP_SERVER_STATES.has(entry.state) && !active.stopped) {
           await new Promise((resolveDelay) => setTimeout(resolveDelay, 250 * (attempt + 1)));
           if (this.isStale(active)) return;
@@ -1504,7 +1678,7 @@ export class AppServerRunEngine {
             payload: { attempt: attempt + 1 },
             modelVisible: false
           });
-          this.connectWebSocketTransport(active, bootstrap);
+          this.connectWebSocketTransport(active, reconnectBootstrap);
           return;
         }
         if (entry && TERMINAL_APP_SERVER_STATES.has(entry.state)) break;
@@ -2661,6 +2835,8 @@ function appServerSessionLaunchRequest(
     sessionId,
     launch: {
       workspaceId,
+      machineId: input.machineId ?? 'local',
+      mode: input.mode,
       ...(attemptId ? { attemptId } : {}),
       promptMarkdown: input.promptMarkdown,
       ...(goal.enabled ? { goal: { ...(goal.objective ? { objective: goal.objective } : {}) } } : {}),
@@ -2703,6 +2879,7 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
   const goal = resolveSessionGoal({ goalEnabled: run.budget.goalEnabled === true,
     goalObjective: persistedGoalObjective, promptMarkdown: run.promptMarkdown });
   return {
+    machineId: machineIdFromRun(run),
     provider: typeof run.budget.modelProvider === 'string' ? run.budget.modelProvider : undefined,
     shellSafetyMode: run.shellSafetyMode,
     goalEnabled: goal.enabled,
@@ -2731,6 +2908,35 @@ function startRunInputFromRun(run: RunRecord, promptMarkdown: string): StartRunI
       repeatSchedule: normalizeRepeatSchedule(run.budget.repeatSchedule)
     },
     runEngine: 'app-server'
+  };
+}
+
+interface FleetPreparedSession {
+  machineId: string;
+  url?: string;
+  operatorToken?: string;
+}
+
+function machineIdFromRun(run: RunRecord): string {
+  return typeof run.budget.machineId === 'string' && run.budget.machineId.trim()
+    ? run.budget.machineId : 'local';
+}
+
+function fleetRemoteRecord(endpoint: FleetPreparedSession): BealeAppServerDiscovery {
+  if (!endpoint.url || !endpoint.operatorToken) throw new Error('Fleet did not provide a guest Beale connection.');
+  const url = new URL(endpoint.url);
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) {
+    throw new Error('Fleet guest control connection must use a local SSH tunnel.');
+  }
+  return {
+    version: 1,
+    pid: 0,
+    host: '127.0.0.1',
+    port: Number(url.port),
+    url: endpoint.url,
+    localUrl: endpoint.url,
+    operatorToken: endpoint.operatorToken,
+    startedAt: new Date().toISOString(),
   };
 }
 

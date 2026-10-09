@@ -682,6 +682,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.resetPromptTemplate, (_event, profileId: ResearchProfileId) => workspaceService.resetPromptTemplate(profileId));
   ipcMain.handle(IPC_CHANNELS.previewPromptTemplate, (_event, profileId: ResearchProfileId, template: string, agentPath?: string) => workspaceService.previewPromptTemplate(profileId, template, agentPath));
   ipcMain.handle(IPC_CHANNELS.getAgentPlugins, () => workspaceService.getAgentPlugins());
+  ipcMain.handle(IPC_CHANNELS.getFleetState, () => workspaceService.getFleetState());
+  ipcMain.handle(IPC_CHANNELS.configureFleet, (_event, input: Record<string, unknown>) => workspaceService.configureFleet(input));
+  ipcMain.handle(IPC_CHANNELS.testFleetVmConnection, (_event, input: import('@beale/app-server-runtime/protocol').FleetSshTestInput) => workspaceService.testFleetVmConnection(input));
+  ipcMain.handle(IPC_CHANNELS.cloneFleetVm, (_event, baseId: string, name: string) => workspaceService.cloneFleetVm(baseId, name));
+  ipcMain.handle(IPC_CHANNELS.startFleetVm, (_event, machineId: string) => workspaceService.startFleetVm(machineId));
+  ipcMain.handle(IPC_CHANNELS.stopFleetVm, (_event, machineId: string) => workspaceService.stopFleetVm(machineId));
   ipcMain.handle(IPC_CHANNELS.addAgentPluginFromFilesystem, async () => {
     const result = await dialog.showOpenDialog({
       title: 'Add Agent Plugin',

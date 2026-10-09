@@ -54,7 +54,7 @@ Component documentation:
 - **The Beale research runtime is the research engine.** It owns context compilation, tool execution, durable-knowledge semantics, orchestration, live events, and flow captures. Records retain workspace, subject, and research-profile ownership.
 - **Integration and runtime storage are server-mediated.** Desktop, iOS, and hosted research workers use the Beale app-server. Only the resident app-server process opens or writes the user-global SQLite database at `~/.beale/memory.sqlite`; schema-v2 workspace research is authoritative in workspace files, while SQLite supplies session state and a synchronized query index. No app-server CLI process or private loopback WebSocket sits between the server and engine.
 - **The App Server is the client-neutral host.** It fans worker events out over per-session authenticated WebSockets and accepts correlated controls from multiple attached clients.
-- **No managed sandbox.** All of these programs run with the current user's host privileges. Launch them inside your own VM or container when OS isolation is required.
+- **Fleet VM execution.** The primary app-server can clone operator-prepared Tart or Hyper-V base VMs and run research in a guest Beale instance over SSH. Local sessions still use the current user's host privileges; Fleet depends on the VM's isolation rather than an application sandbox.
 
 Workspace memory is independently selectable in Desktop's Workspace Overview:
 

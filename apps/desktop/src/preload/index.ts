@@ -19,6 +19,9 @@ import type {
   TicketingTarget,
   TicketSubmissionResult,
   AgentPluginRegistryState,
+  FleetState,
+  FleetSshTestInput,
+  FleetSshTestResult,
   AppServerRemoteAccessSettings,
   AppServerRemoteAccessUpdate,
   MemorySettings,
@@ -237,6 +240,24 @@ const api: BealeApi = {
   },
   getAgentPlugins(): Promise<AgentPluginRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.getAgentPlugins);
+  },
+  getFleetState(): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getFleetState);
+  },
+  configureFleet(input: Record<string, unknown>): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.configureFleet, input);
+  },
+  testFleetVmConnection(input: FleetSshTestInput): Promise<FleetSshTestResult> {
+    return ipcRenderer.invoke(IPC_CHANNELS.testFleetVmConnection, input);
+  },
+  cloneFleetVm(baseId: string, name: string): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.cloneFleetVm, baseId, name);
+  },
+  startFleetVm(machineId: string): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.startFleetVm, machineId);
+  },
+  stopFleetVm(machineId: string): Promise<FleetState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.stopFleetVm, machineId);
   },
   addAgentPluginFromFilesystem(): Promise<AgentPluginRegistryState> {
     return ipcRenderer.invoke(IPC_CHANNELS.addAgentPluginFromFilesystem);

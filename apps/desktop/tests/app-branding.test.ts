@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -43,6 +43,7 @@ describe('desktop app branding', () => {
     expect(plistValue('NSLocalNetworkUsageDescription')).toBe(
       'Beale connects to authorized local virtual machines and research targets.'
     );
+    expect(spawnSync('codesign', ['-d', '--verbose=2', join(projectRoot, 'node_modules/electron/dist/Electron.app')], { encoding: 'utf8' }).stderr).toContain('Identifier=com.beale.app');
     expect(() => plistValue('NSScreenCaptureUsageDescription')).toThrow();
     expect(readFileSync(join(contentsPath, 'Resources/beale.icns')).byteLength).toBeGreaterThan(0);
   });

@@ -13,6 +13,7 @@ import {
   readWorkspaceProject,
   WORKSPACE_INSTRUCTIONS,
   createFileMutationTools,
+  createFleetTools,
   MANAGED_TOOL_PLUGIN_IDS,
   managedToolPluginId,
   managedToolPluginOptions,
@@ -116,6 +117,34 @@ import {
   AppServerSessionStore,
   installPreBealeEnvironmentAliases,
 } from "@beale/research-agent";
+import { BEALE_APP_SERVER_CONTROL_VERSION, BEALE_APP_SERVER_OPERATIONS_PATH, type FleetState } from './protocol.js';
+
+async function invokeResidentFleetOperation(
+  operation: 'fleet.state' | 'fleet.clone' | 'fleet.start' | 'fleet.stop',
+  input: Record<string, unknown> = {},
+): Promise<FleetState> {
+  const path = process.env.BEALE_APP_SERVER_STATE_FILE?.trim() || resolve(homedir(), '.beale', 'app-server.json');
+  const discovery: unknown = JSON.parse(await readFile(path, 'utf8'));
+  if (!discovery || typeof discovery !== 'object' || Array.isArray(discovery)) throw new Error('Beale app-server discovery is unavailable.');
+  const record = discovery as Record<string, unknown>;
+  const rawUrl = typeof record.localUrl === 'string' ? record.localUrl : record.url;
+  const url = new URL(String(rawUrl));
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+    || typeof record.operatorToken !== 'string' || !record.operatorToken) {
+    throw new Error('Beale app-server local Fleet control is unavailable.');
+  }
+  const response = await fetch(new URL(BEALE_APP_SERVER_OPERATIONS_PATH, url), {
+    method: 'POST', headers: { authorization: `Bearer ${record.operatorToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ operation, input }), signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) throw new Error(`Fleet operation failed (${response.status}).`);
+  const payload: unknown = await response.json();
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || (payload as Record<string, unknown>).controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION) {
+    throw new Error('Fleet operation returned an incompatible response.');
+  }
+  return (payload as { result: FleetState }).result;
+}
 import type {
   AuthEvent,
   AuthLoginCallbacks,
@@ -3839,6 +3868,16 @@ async function createRuntimeConfig(args: {
   cleanupCallbacks.push(async () => findingStore.close());
   cleanupCallbacks.push(async () => memoryGraph.close());
   const enabledPluginIds = runtimeTools.managedPluginIds ?? MANAGED_TOOL_PLUGIN_IDS;
+  if (enabledPluginIds.includes('beale-fleet')) {
+    try {
+      const state = await invokeResidentFleetOperation('fleet.state');
+      if (state.enabled && state.role === 'primary' && state.available) {
+        const fleetTools = createFleetTools(invokeResidentFleetOperation);
+        executableTools.push(...fleetTools);
+        toolDescriptors.push(...fleetTools.map((tool) => tool.descriptor));
+      }
+    } catch { /* Fleet is optional and may be disabled or unavailable. */ }
+  }
   if (resolvedResearchProfile.profile.capabilities.runbooksEnabled) {
     const runbooks = new RunbookStore(
       memoryGraph.databasePath,

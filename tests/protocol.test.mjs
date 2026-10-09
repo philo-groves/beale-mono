@@ -23,6 +23,7 @@ import {
   decodeAppServerSessionLaunchRequest,
   decodeWorkspaceProjectRequest,
   decodeClaimBoardTransitionRequest,
+  decodeFleetSshTestInput,
   decodeBealeAppServerSessionControlRequest,
   decodeBealeAppServerSessionControlResult,
   decodeAppServerServerMessage,
@@ -59,6 +60,12 @@ test('claim board transitions accept only versioned finding moves to visible col
   ]) assert.throws(() => decodeClaimBoardTransitionRequest(invalid));
 });
 
+test('Fleet SSH test accepts draft settings and rejects malformed input', () => {
+  const input = { machineId: 'tart:example-worker', sshHost: '', sshUser: 'example', sshIdentityFile: '~/example-key' };
+  assert.deepEqual(decodeFleetSshTestInput(input), input);
+  assert.throws(() => decodeFleetSshTestInput({ ...input, sshKnownHostsFile: 4 }), /Invalid Fleet SSH/);
+});
+
 test("protocol envelopes are versioned, correlated, and strictly decoded", () => {
   const success = appServerProtocolSuccess("protocol.describe", { available: true }, "request-1");
   assert.deepEqual(decodeAppServerProtocolEnvelope(success), success);
@@ -74,7 +81,7 @@ test("protocol envelopes are versioned, correlated, and strictly decoded", () =>
 test("protocol describe omits removed workflow operations", () => {
   const descriptor = appServerProtocolDescriptor();
   assert.deepEqual(descriptor.operations, APP_SERVER_PROTOCOL_OPERATIONS);
-  assert.equal(descriptor.contractVersion, 37);
+  assert.equal(descriptor.contractVersion, 39);
   assert.ok(!descriptor.capabilities.some((capability) => capability.startsWith('session.workflows.')));
   assert.ok(!descriptor.operations.some((operation) => operation.startsWith('workflow.')));
   assert.match(descriptor.runtime.buildId, /^[a-f0-9]{24}$/);

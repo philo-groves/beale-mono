@@ -30,7 +30,7 @@ Workspace creation installs a local pre-commit hook using the host's Node/Electr
 
 ## Optional research features
 
-Eight harness features are enabled by default and appear under Optional Features in Agent Settings. Enabled features appear in the agent's `{{features}}` catalog under "Internal features" with short usage descriptions. Traditional plugins appear under "External Plugins" in `{{plugins}}`. Existing registry IDs and the native tool groups' launch field retain saved toggle compatibility.
+Fleet and the other harness features appear under Optional Features in Agent Settings. Enabled features appear in the agent's `{{features}}` catalog under "Internal features" with short usage descriptions. Traditional plugins appear under "External Plugins" in `{{plugins}}`. Existing registry IDs and the native tool groups' launch field retain saved toggle compatibility.
 
 | Feature | When to use |
 | --- | --- |
@@ -41,6 +41,7 @@ Eight harness features are enabled by default and appear under Optional Features
 | Runbooks (`beale-runbooks`) | Reusable procedure documents, feature-selected host or Tart VM cells, per-cell timeouts, explicit guest/root Tart execution, revisions, and recorded executions. |
 | Reporting (`beale-reporting`) | Report documents, revisions, and structured summaries of supported results. |
 | Browser (`beale-browser`) | Connect to compatible CDP browsers, list targets, send arbitrary protocol commands, and read events. |
+| Fleet (`beale-fleet`) | List, clone, start, and stop operator-configured VMs on a primary machine when Fleet is enabled. |
 | Introspection (`beale-introspection`) | Workspace and session inspection and control tools, including Quick Chat. |
 
 `file.read`, `file.write`, `file.edit`, and `shell.run` remain core tools, alongside session and collaboration controls. Existing profile, configuration, and governance limits still apply. File writes create candidate files; replacing an existing file requires the SHA-256 `contentHash` returned by `file.read` as `expectedHash`. File edits require one exact literal match, preserve UTF-8 bytes outside that match, and accept an optional hash check. Both mutations have a 1 MiB ceiling and honor lower host byte budgets.

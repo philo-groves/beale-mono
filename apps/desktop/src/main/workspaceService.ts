@@ -9,7 +9,7 @@ import { isManagedToolPluginId, MANAGED_TOOL_PLUGINS, type ResearchPluginCatalog
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { findingRevisionContext } from './findingRevisionContext';
 import { AppServerReadTransportError, invokeAppServerOperation } from './bealeAppServerClient';
-import { decodeClaimBoardTransitionRequest, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
+import { decodeClaimBoardTransitionRequest, type FleetSshTestInput, type FleetSshTestResult, type FleetState, type ResourcePriorArtPage, type ResourcePriorArtDetail, type ResourcePriorArtListInput, type WorkspaceCheckpointResult } from '@beale/app-server-runtime/protocol';
 import {
   WorkspaceDatabase,
   type ProjectSourceCoveragePathRecord,
@@ -976,6 +976,30 @@ export class WorkspaceService {
 
   public getAgentPlugins(): AgentPluginRegistryState {
     return this.getAgentPluginRegistry().getState();
+  }
+
+  public getFleetState(): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.state' });
+  }
+
+  public configureFleet(input: Record<string, unknown>): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.configure', input });
+  }
+
+  public testFleetVmConnection(input: FleetSshTestInput): Promise<FleetSshTestResult> {
+    return invokeAppServerOperation<FleetSshTestResult>({ operation: 'fleet.test_ssh', input });
+  }
+
+  public cloneFleetVm(baseId: string, name: string): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.clone', input: { baseId, name } });
+  }
+
+  public startFleetVm(machineId: string): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.start', input: { machineId } });
+  }
+
+  public stopFleetVm(machineId: string): Promise<FleetState> {
+    return invokeAppServerOperation<FleetState>({ operation: 'fleet.stop', input: { machineId } });
   }
 
   public addAgentPluginFromFilesystem(pluginRoot: string): AgentPluginRegistryState {
@@ -3513,6 +3537,10 @@ export class WorkspaceService {
       ...(input.collaboration ? { collaboration: normalizeResearchCollaboration(input.collaboration) } : {})
     };
     if (!runtime) throw new Error('No Beale workspace is open');
+    if (normalizedInput.machineId && normalizedInput.machineId !== 'local'
+      && normalizeRepeatSchedule(normalizedInput.budget.repeatSchedule).type !== 'none') {
+      throw new Error('Repeating research sessions are not available on Fleet VMs. Choose No repeat or Local.');
+    }
     const researchProfile = this.refreshResearchProfile(runtime);
     if (researchProfile.profile.id !== 'security-research') {
       throw new Error('Beale starts new research sessions only in Security workspaces.');
@@ -3538,7 +3566,8 @@ export class WorkspaceService {
       ...(!explicitProvider && leadDefaults?.reasoningEffort ? { reasoningEffort: leadDefaults.reasoningEffort } : {})
     };
     const selectedProviderIds = selectedRunProviderIds(normalizedInput, leadProvider);
-    const lockedProviderIds = this.providerCredentials.providersRequiringUnlock(selectedProviderIds);
+    const remoteFleetRun = Boolean(normalizedInput.machineId && normalizedInput.machineId !== 'local');
+    const lockedProviderIds = remoteFleetRun ? [] : this.providerCredentials.providersRequiringUnlock(selectedProviderIds);
     if (lockedProviderIds.length > 0) {
       throw new Error('Confirm Beale Safe Storage access before starting this session.');
     }
@@ -4271,6 +4300,7 @@ export class WorkspaceService {
           ? run.budget.goalObjective
           : null;
         const forkInput: StartRunInput = {
+          machineId: typeof run.budget.machineId === 'string' ? run.budget.machineId : 'local',
           provider: typeof run.budget.modelProvider === 'string' ? run.budget.modelProvider : undefined,
           shellSafetyMode: run.shellSafetyMode === 'danger' ? DEFAULT_SHELL_SAFETY_MODE : run.shellSafetyMode,
           goalEnabled: run.budget.goalEnabled === true,
@@ -4466,6 +4496,7 @@ export class WorkspaceService {
             .filter((session) => session.registryWorkspaceId === workspace.id
               && session.runEngine === 'app-server'
               && session.status === 'active'
+              && (!session.machineId || session.machineId === 'local')
               && !canonicalIds.has(session.runId))
             .map((session) => session.runId);
           await registry.markAppServerSessionsInterruptedAsync(

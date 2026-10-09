@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WorkspaceRegistry } from '../../../app-server/src/workspaceRegistryStore';
+import { AppServerHostRegistry } from '../../../app-server/src/hostRegistry';
 import type { AppServerSessionSummary } from '../src/main/appServerCliClient';
 import type { WorkspaceSnapshot } from '../src/shared/types';
 
@@ -15,6 +16,35 @@ afterEach(() => {
 });
 
 describe('workspace registry synchronization', () => {
+  it('registers a staged Fleet workspace with its research kit', () => {
+    const registryDirectory = mkdtempSync(join(tmpdir(), 'beale-registry-fleet-guest-'));
+    temporaryDirectories.push(registryDirectory);
+    const registry = new WorkspaceRegistry(registryDirectory);
+    registry.close();
+    const root = join(registryDirectory, 'fleet-workspaces', 'workspace-example');
+    mkdirSync(root, { recursive: true });
+    const host = new AppServerHostRegistry({ registryDirectory });
+    host.registerFleetWorkspace(root, 'workspace-example', 'Example workspace', 'meta-bug-bounty');
+    const staged = host.resolveWorkspace('workspace-example');
+    expect(staged?.researchKitId).toBe('meta-bug-bounty');
+    expect(staged?.workspaceDirectories).toEqual([root]);
+  });
+
+  it('retains a Fleet machine assignment for remote session recovery', () => {
+    const registryDirectory = mkdtempSync(join(tmpdir(), 'beale-registry-fleet-'));
+    temporaryDirectories.push(registryDirectory);
+    const registry = new WorkspaceRegistry(registryDirectory);
+    const snapshot = registrySnapshot();
+    snapshot.runs[0]!.run.budget = { ...snapshot.runs[0]!.run.budget, machineId: 'tart:example-worker' };
+    try {
+      registry.syncWorkspace(snapshot);
+      expect(registry.getState().researchSessions[0]?.machineId).toBe('tart:example-worker');
+    } finally { registry.close(); }
+    const reopened = new WorkspaceRegistry(registryDirectory);
+    try { expect(reopened.getState().researchSessions[0]?.machineId).toBe('tart:example-worker'); }
+    finally { reopened.close(); }
+  });
+
   it('does not duplicate the AGENTS.md-backed description in registry metadata', () => {
     const registryDirectory = mkdtempSync(join(tmpdir(), 'beale-registry-description-'));
     temporaryDirectories.push(registryDirectory);

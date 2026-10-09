@@ -13440,6 +13440,142 @@ button.runbook-catalog-item:not(.breakout-room-catalog-item):hover:not(:disabled
   grid-row: auto;
 }
 
+.new-research-machine-picker {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--steer-control-font-size, 13px);
+}
+
+.new-research-machine-picker select {
+  max-width: 210px;
+  height: 31px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 7px;
+}
+
+.fleet-machine-list > * + * {
+  border-top: 1px solid var(--line);
+}
+
+.fleet-settings-page .settings-form-control-list > * + * {
+  border-top: 1px solid var(--line);
+}
+
+.fleet-machine-empty {
+  margin: 0;
+  padding: 16px 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.fleet-machine-row {
+  cursor: default;
+}
+
+.fleet-machine-configure-button {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--panel-strong);
+}
+
+.fleet-machine-configure-button:hover:not(:disabled),
+.fleet-machine-configure-button:focus-visible {
+  color: var(--text);
+  background: var(--panel);
+}
+
+.fleet-machine-refresh button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fleet-vm-backdrop {
+  z-index: 30;
+}
+
+.modal-panel.fleet-vm-dialog {
+  width: min(520px, 100%);
+  border: 0;
+  border-radius: 24px;
+  corner-shape: squircle;
+  background: var(--panel-raised);
+}
+
+.fleet-vm-dialog .modal-header,
+.fleet-vm-dialog .modal-footer {
+  padding: 16px 20px;
+}
+
+.fleet-vm-dialog .modal-body {
+  display: grid;
+  gap: 16px;
+  padding: 0 20px 20px;
+}
+
+.fleet-vm-dialog-summary {
+  margin: 0;
+  color: var(--muted);
+}
+
+.fleet-vm-dialog-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.fleet-vm-dialog-fields > .settings-form-control-row {
+  border-bottom: 1px solid var(--line);
+}
+
+.fleet-vm-dialog-field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.fleet-vm-dialog-field input {
+  width: 100%;
+}
+
+.fleet-vm-clear-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.fleet-vm-dialog-actions {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.fleet-vm-dialog-actions button {
+  justify-self: start;
+}
+
+.fleet-vm-test-success {
+  margin: 0;
+  color: var(--success, #2a7850);
+}
+
+.new-research-composer-actions > .new-research-machine-picker {
+  grid-column: 4;
+  justify-self: end;
+}
+
 @keyframes new-research-options-tray-reveal {
   from {
     opacity: 0;
@@ -14477,7 +14613,8 @@ button.research-goal-choice:focus-visible {
 }
 
 .general-settings-page,
-.remote-access-settings-page {
+.remote-access-settings-page,
+.fleet-settings-page {
   --settings-view-font-size: 14px;
   width: 100%;
   max-width: var(--session-content-max-width);
@@ -14533,7 +14670,8 @@ button.research-goal-choice:focus-visible {
 }
 
 .general-settings-page .settings-form,
-.profile-settings-page .settings-form {
+.profile-settings-page .settings-form,
+.fleet-settings-page .settings-form {
   font-size: var(--settings-view-font-size);
 }
 
@@ -14543,16 +14681,19 @@ button.research-goal-choice:focus-visible {
 
 .general-settings-page .settings-form-heading h2,
 .remote-access-settings-page .settings-form-heading h2,
-.profile-settings-page .settings-form-heading h2 {
+.profile-settings-page .settings-form-heading h2,
+.fleet-settings-page .settings-form-heading h2 {
   font-size: 26px;
 }
 
 .general-settings-page .settings-form-control-row,
 .remote-access-settings-page .settings-form-control-row,
+.fleet-settings-page .settings-form-control-row,
 .general-settings-page .settings-form-radio-list,
 .profile-settings-page .settings-form-control-row,
 .general-settings-page .settings-form-heading p,
 .remote-access-settings-page .settings-form-heading p,
+.fleet-settings-page .settings-form-heading p,
 .profile-settings-page .settings-form-heading p {
   font-size: var(--settings-view-font-size);
 }
@@ -17427,6 +17568,11 @@ button.research-goal-choice:focus-visible {
 
   .new-research-composer-actions {
     grid-template-columns: auto auto auto;
+  }
+
+  .new-research-composer-actions > .new-research-machine-picker {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 
   .research-goal-chooser {

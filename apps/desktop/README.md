@@ -34,7 +34,7 @@ The guiding philosophy is **human-steered, verifiable research** rather than ful
 - **Authorization first** — everything stays within the operator-recorded authorized scope
 - **References over unsupported claims** — durable conclusions should point to observable tool results, files, commands, or artifacts
 - **Traceability** — full append-only audit trail of sessions, tool calls, observations, artifacts, and verifier outcomes
-- **Operator-controlled isolation** — Beale/app-server run with the user's host privileges; launch them inside your own VM or container when isolation is required
+- **Operator-controlled isolation** — Fleet runs sessions in operator-prepared Tart or Hyper-V guests; Local sessions retain the current user's host privileges
 - **Human in the loop** — steering, review, app-server memory validation, and patch checking remain researcher-driven
 
 ---
@@ -54,12 +54,24 @@ The guiding philosophy is **human-steered, verifiable research** rather than ful
 
 - **Trusted Host** (Electron main): Credentials, authorized-scope policy, artifact acceptance, and typed access to app-server's versioned client protocol
 - **Renderer UI**: React + TypeScript interface for visualization and interaction
-- **Execution Posture**: app-server runs as a host process. Beale does not create or manage a VM/container sandbox.
+- **Execution Posture**: the primary app-server manages configured VM clones and SSH session transport; it cannot create an unconfigured VM or provide isolation for Local sessions.
 - **Agent Integration**: app-server launches as the research engine; Beale displays workspace-scoped traces, durable knowledge, context, and artifacts from the active research-profile database
 
 ---
 
 ## Current State
+
+### Fleet VM sessions
+
+Settings > Fleet lists local Tart VMs on macOS and Hyper-V VMs on Windows. Mark a stopped, manually prepared VM as a base to enable cloning. A base needs SSH access, Beale and its app-server, a provider login, and the **VM guest** Fleet role before cloning. The primary never starts a base directly. Clones inherit the guest setup; set an SSH user and, if needed, an identity file or host override on the primary. The primary uses SSH host-key verification and initiates all control and file transfers. For Tart, it uses `~/.ssh/tart_known_hosts` when present, accepting a new clone address into that file while rejecting a changed key for a known address. It prefers Tart guest-agent IP resolution and falls back to DHCP. The VM dialog also accepts a per-VM known-hosts path. Test SSH checks draft settings on a running worker without saving them and reports the address it tried; a stopped base must be cloned and the worker started before testing. The guest Fleet view displays the primary's reported name and does not expose child VMs.
+
+On macOS, Beale's app-server needs Local Network access to reach Tart VM addresses. If Terminal can SSH to a VM but Test SSH reports “No route to host,” check Beale under System Settings > Privacy & Security > Local Network. Terminal access alone does not establish the app-server's permission.
+
+When Fleet is enabled and a registered base exists, New Research requires a VM by default for each workspace. Settings > Fleet can make a workspace optional. The Machine selector then defaults to Local; required workspaces default to the last selected worker or the first alphabetically. A stopped worker starts when selected for a session. The primary stages the research workspace in the guest, then attaches to its app-server through a local SSH tunnel. The session's prompt, status, events, controls, and result remain in the launching primary workspace. The guest app-server must be running before launch, and guest provider authentication remains local to the VM. The VM row reports whether a guest SSH user is saved in the primary Beale instance; it does not inspect the guest's SSH service. Beale checks SSH connectivity when connecting to a worker.
+
+Repeating research sessions use the primary app-server's Local scheduler. Select No repeat for a VM session; Fleet blocks scheduled VM launches so they cannot later repeat on the primary by accident.
+
+After a VM session ends, Fleet copies changed research-workspace files back to the primary. Concurrent edits to the same file are preserved under `.beale/fleet-conflicts/<run-id>/` for review. Guest claims, memories, runbooks, and reports are returned under `.beale/fleet-guest-records/<run-id>/` rather than written into the primary's canonical research index; the guest's canonical knowledge remains in its own database. Guest trace exports and derived research indexes are omitted because the primary already records the session trace. Workspace `.git` and `.beale` metadata are not staged. External source repositories must be available or materialized independently in the guest; Fleet does not copy primary-machine checkouts. Transfers reject symlinks and special files and have a 2 GiB per-file and 100,000-file workspace limit.
 
 - Electron + Vite + TypeScript foundation
 - User-global registry of local Beale workspaces

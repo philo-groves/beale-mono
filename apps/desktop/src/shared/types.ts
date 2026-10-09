@@ -19,7 +19,11 @@ export type {
   ResearchClaimRating,
   ClaimBoardTransitionRequest,
   ClaimBoardMaturity,
-  SteeringSuggestionResult
+  SteeringSuggestionResult,
+  FleetState,
+  FleetMachine,
+  FleetSshTestInput,
+  FleetSshTestResult
 } from '@beale/app-server-runtime/protocol';
 
 export type ScopeAssetDirection = 'in_scope' | 'out_of_scope';
@@ -410,6 +414,7 @@ export interface ResearchSessionSummary {
   workspacePath: string;
   workspaceId: string;
   runId: string;
+  machineId?: string;
   title: string;
   status: RunStatus;
   runEngine: RunEngineKind;
@@ -1677,6 +1682,7 @@ export interface StartRunInput {
   goalEnabled: boolean;
   goalObjective: string | null;
   promptMarkdown: string;
+  machineId?: string;
   workflowId?: string;
   resourceContext?: ReportResourceContext;
   mode: string;
@@ -1699,6 +1705,7 @@ export interface StartRunInput {
     goalEnabled?: boolean;
     goalObjective?: string | null;
     researchWorkflowId?: string | null;
+    machineId?: string | null;
     collaboration?: ResearchCollaborationPreferences | null;
   };
   /** Internal host metadata. Renderer-created research sessions must not set this. */
@@ -2392,6 +2399,12 @@ export interface BealeApi {
   resetPromptTemplate(profileId: ResearchProfileId): Promise<void>;
   previewPromptTemplate(profileId: ResearchProfileId, template: string, agentPath?: string): Promise<string>;
   getAgentPlugins(): Promise<AgentPluginRegistryState>;
+  getFleetState(): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  configureFleet(input: Record<string, unknown>): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  testFleetVmConnection(input: import('@beale/app-server-runtime/protocol').FleetSshTestInput): Promise<import('@beale/app-server-runtime/protocol').FleetSshTestResult>;
+  cloneFleetVm(baseId: string, name: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  startFleetVm(machineId: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
+  stopFleetVm(machineId: string): Promise<import('@beale/app-server-runtime/protocol').FleetState>;
   addAgentPluginFromFilesystem(): Promise<AgentPluginRegistryState>;
   addAgentPluginFromRepository(repositoryUrl: string): Promise<AgentPluginRegistryState>;
   setAgentPluginEnabled(pluginId: string, enabled: boolean): Promise<AgentPluginRegistryState>;
