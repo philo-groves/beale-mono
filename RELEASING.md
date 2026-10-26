@@ -1,12 +1,13 @@
 # Releasing Beale
 
-Beale, app-server, and the two runtime packages advance together. The current coordinated candidate is `0.9.0`. A version number in source is not a published release. There is no installer, signing, notarization, auto-update, or public distribution workflow yet.
+Beale, app-server, and the two runtime packages advance together. The current coordinated candidate is `0.9.0`. A version number in source is not a published release. The macOS and Windows source installer clones the `release` branch and builds locally; there is no native installer, signing, notarization, or auto-update workflow yet.
 
 ## Change lanes
 
 - Pull requests and pushes to `main` run `.github/workflows/ci.yml`: frozen install, version consistency, TypeScript build, fast suites, and Desktop production bundle.
 - Before a release tag, run the **Release gate** workflow on the candidate commit from the Actions tab. It runs `pnpm release:verify` on macOS and Windows, including the hosted integration suites.
 - A `vX.Y.Z` tag repeats the release gate. The tag must be annotated, match every package and release-facing version, point to the tested commit, and be reachable from `main`. The workflow only verifies; it does not publish or upload an installer.
+- After merging verified source into `release`, zip the `website/beale-source-installer` directory and update the WordPress plugin on beale.ai. Check that `https://beale.ai/i` returns the exact `install.mjs` content before advertising the command.
 
 Protect `main` with the CI `fast` check and require review before merging. Restrict who may create or replace `v*` tags. Keep the release gate result attached to the exact candidate commit; rerun it after any candidate change.
 

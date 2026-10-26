@@ -6,6 +6,7 @@
 
 #### Added
 
+- Added a macOS and Windows source installer that builds the `release` branch locally and creates a desktop launcher.
 - Provider settings can connect multiple custom OpenAI Chat Completions endpoints, fetch their available models, choose Lead and small models, and keep optional API keys in Beale Safe Storage.
 
 #### Changed

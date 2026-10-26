@@ -38,4 +38,6 @@ jobs:
           node scripts/release-version.mjs check "$GITHUB_REF_NAME"
           git merge-base --is-ancestor HEAD origin/main
       - run: pnpm install --frozen-lockfile
+      - name: Check source installer on both OSes
+        run: node website/beale-source-installer/install.mjs --dry-run --dir beale-source-check
       - run: pnpm release:verify

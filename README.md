@@ -90,6 +90,16 @@ Operators can use `workspace.project release-index` to remove rebuildable resear
 
 Requirements: Node.js >= 22.19.0 and pnpm 11 (see `packageManager` in `package.json`).
 
+### Install from source (macOS and Windows)
+
+Install Node.js 22.19.0 or newer, Git, and pnpm 11.7.0 first. The source installer clones the `release` branch, installs locked dependencies, builds the runtime and Desktop, and creates a launcher. Review [`website/beale-source-installer/install.mjs`](website/beale-source-installer/install.mjs) before running it.
+
+```sh
+curl -fsSL https://beale.ai/i | node --input-type=module -
+```
+
+On Windows, run this in PowerShell with `curl.exe` in place of `curl`. The default location is `~/Beale` on macOS or `%USERPROFILE%\Beale` on Windows; pass `--dir <empty-directory>` after the final `-` to choose another location. Start with `Beale.command` or `Beale.cmd` in that directory. The installer refuses to change a nonempty directory or an existing installation. This source flow requires the build toolchain and does not provide an automatic updater.
+
 ```sh
 pnpm install
 ```
