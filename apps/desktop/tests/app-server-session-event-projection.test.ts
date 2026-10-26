@@ -3,6 +3,8 @@ import type { RunDetail } from '@shared/types';
 import { sessionRun, traceFromSessionEvent } from '../src/main/appServerSessionBoundary';
 import { projectRunDetailForRenderer } from '../src/shared/runDetailProjection';
 import { contextMeterForDetail } from '../src/renderer/features/momentum/contextMeter';
+import { buildTraceDisplayEventsForAgentPath } from '../src/renderer/view-models/traceDisplay';
+import { commentaryMessagesForSession } from '../src/renderer/view-models/commentary';
 
 describe('canonical session model usage projection', () => {
   it('recovers collaboration choices from existing track restart metadata', () => {
@@ -46,5 +48,34 @@ describe('canonical session model usage projection', () => {
     expect(meter.tokenLimit).toBe(400_000);
     expect(meter.fraction).toBe(0.15);
     expect(meter.totalSessionTokens).toBe(65_000);
+  });
+
+  it('shows a canonical provider safeguard retry as a session marker', () => {
+    const [trace] = traceFromSessionEvent('session_example', {
+      id: 'event_safeguard', kind: 'agent.event', timestamp: '2026-01-01T00:00:00.000Z',
+      summary: 'Model retry.',
+      payload: {
+        type: 'model_retry', agentPath: '/root', recoveryKind: 'safety_guardrail',
+        errorMessage: 'Sensitive provider diagnostic.'
+      }
+    }, 1);
+    const detail = {
+      run: {
+        id: 'session_example', status: 'active', model: 'example-model',
+        promptMarkdown: 'Review the authorized example service.', createdAt: '2026-01-01T00:00:00.000Z'
+      },
+      attempts: [], traceEvents: [trace], transcriptMessages: [], breakoutRoomMessages: [],
+      modelSessions: [], contextCompactions: []
+    } as unknown as RunDetail;
+    const projected = projectRunDetailForRenderer(detail, { mode: 'commentary', agentPath: null });
+    const messages = commentaryMessagesForSession(
+      projected, buildTraceDisplayEventsForAgentPath(projected, null), { includeInitialPrompt: false }
+    );
+
+    expect(messages.map(({ kind, markerType, contentMarkdown }) => ({ kind, markerType, contentMarkdown }))).toEqual([{
+      kind: 'marker', markerType: 'safeguard_recovery',
+      contentMarkdown: 'Cybersecurity safeguard encountered · Beale recovering'
+    }]);
+    expect(JSON.stringify(messages)).not.toContain('Sensitive provider diagnostic.');
   });
 });

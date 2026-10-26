@@ -124,13 +124,18 @@ export function commentaryMessagesForSession(
 }
 
 function sessionEventMarker(event: TraceDisplayEvent): CommentaryMessage | null {
-  if (event.source !== 'system') return null;
-  const type = payloadString(event, 'type');
+  const payload = event.source === 'system'
+    ? event.payload
+    : event.source === 'executor' && event.type === 'research_event'
+      && payloadString(event, 'appServerKind') === 'agent.event'
+      ? recordValue(event.payload, 'payload') : null;
+  if (!payload) return null;
+  const type = stringValue(payload.type);
   const markerType = type === 'context_compacted'
-    || type === 'research_checkpoint' && payloadString(event, 'reason') === 'native'
+    || type === 'research_checkpoint' && stringValue(payload.reason) === 'native'
     ? 'compaction'
-    : type === 'model_retry' && payloadString(event, 'recoveryKind') === 'safety_guardrail'
-      && event.payload.awaitingSteering !== true
+    : type === 'model_retry' && stringValue(payload.recoveryKind) === 'safety_guardrail'
+      && payload.awaitingSteering !== true
       ? 'safeguard_recovery' : null;
   if (!markerType) return null;
   return {
