@@ -65,6 +65,7 @@ import {
   createSurfaceTools,
   ResearchTrackStore,
   createResearchTrackTool,
+  createResearchTrackHandoffTool,
   createResearchResourceScopeAuthorizer,
   reviewResearchResourceFirstTouch,
   createResearchAgentFlowCapture,
@@ -347,6 +348,7 @@ interface ParsedArgs {
   sessionId: string | undefined;
   attemptId: string | undefined;
   resumeCapturePath: string | undefined;
+  pluginStateCapturePath: string | undefined;
   resumeFallbackPrompt: string | undefined;
   resumeFallbackPromptPath: string | undefined;
   hostedSession: boolean;
@@ -468,6 +470,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let sessionId: string | undefined;
   let attemptId: string | undefined;
   let resumeCapturePath: string | undefined;
+  let pluginStateCapturePath: string | undefined;
   let resumeFallbackPrompt: string | undefined;
   let resumeFallbackPromptPath: string | undefined;
   let hostedSession = false;
@@ -760,6 +763,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     } else if (arg === "--resume-capture") {
       resumeCapturePath = readOptionValue(argv, index, arg);
       index += 1;
+    } else if (arg === "--restore-plugin-state") {
+      pluginStateCapturePath = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--resume-fallback-prompt") {
       resumeFallbackPrompt = readOptionValue(argv, index, arg);
       index += 1;
@@ -876,6 +882,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     sessionId,
     attemptId,
     resumeCapturePath,
+    pluginStateCapturePath,
     resumeFallbackPrompt,
     resumeFallbackPromptPath,
     hostedSession,
@@ -2297,6 +2304,7 @@ export async function main(
           dispositionRecorder,
           controlStream,
           resumableState,
+          args.pluginStateCapturePath ? await loadCapturedPluginIds(args.pluginStateCapturePath) : [],
           collaborationConfig,
           runtimeConfig.getContinuityContext,
           promptTemplate,
@@ -2484,6 +2492,18 @@ async function loadCompatibleResumeState(
   }
 }
 
+async function loadCapturedPluginIds(capturePath: string): Promise<string[]> {
+  try {
+    const capture = JSON.parse(await readFile(resolve(capturePath), "utf8")) as unknown;
+    if (!isRecord(capture) || !isRecord(capture.agent) || !isRecord(capture.agent.raw)
+      || !isRecord(capture.agent.raw.resumableState)) return [];
+    const ids = capture.agent.raw.resumableState.loadedPluginIds;
+    return Array.isArray(ids) && ids.length <= 128
+      ? [...new Set(ids.filter((id): id is string => typeof id === "string" && /^[a-z0-9._-]{1,128}$/u.test(id)))]
+      : [];
+  } catch { return []; }
+}
+
 function createRealAgentExecutor(
   args: ParsedArgs,
   resolvedResearchProfile: ResolvedResearchProfile,
@@ -2493,6 +2513,7 @@ function createRealAgentExecutor(
   dispositionRecorder: ResearchDispositionRecorder,
   controlStream: AppServerControlStream | undefined,
   resumableState?: PiAgentResumableState | ClaudeAgentResumableState | ZCodeAgentResumableState,
+  initialLoadedPluginIds: readonly string[] = [],
   collaboration?: ResearchCollaborationConfig,
   getContinuityContext?: () => unknown,
   promptTemplate?: string,
@@ -2547,6 +2568,7 @@ function createRealAgentExecutor(
       ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
       ...(subagentRuntimeFactory ? { subagentRuntimeFactory } : {}),
       ...(claudeResumableState ? { resumableState: claudeResumableState } : {}),
+      initialLoadedPluginIds,
       ...(controlStream
         ? {
             waitForSteeringMessages: (signal?: AbortSignal) =>
@@ -2574,6 +2596,7 @@ function createRealAgentExecutor(
       ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
       ...(subagentRuntimeFactory ? { subagentRuntimeFactory } : {}),
       ...(zcodeResumableState ? { resumableState: zcodeResumableState } : {}),
+      initialLoadedPluginIds,
       ...(controlStream
         ? {
             waitForSteeringMessages: (signal?: AbortSignal) =>
@@ -2616,6 +2639,7 @@ function createRealAgentExecutor(
       ? {}
       : { subagents: false as const }),
     ...(piResumableState ? { resumableState: piResumableState } : {}),
+    initialLoadedPluginIds,
     ...(controlStream
       ? {
           getModelSelection: () => controlStream.getModelSelection(),
@@ -3993,13 +4017,14 @@ async function createRuntimeConfig(args: {
       workspaceId: workspaceContext.memoryContext?.workspaceId ?? `workspace:${workspaceRoot}`,
       sessionId: args.sessionId });
     if (trackStore.get()?.activeSessionId === args.sessionId) {
+      const handoffTool = createResearchTrackHandoffTool(trackStore);
       const trackTool = createResearchTrackTool(trackStore, (id) => {
         const current = surfaceStore.require(id, true);
         return { id: current.id, parentId: current.parentId, name: current.name,
           coverageState: surfaceStore.coverageState(id), progressBlocker: current.progressBlocker };
       });
-      executableTools.push(trackTool);
-      toolDescriptors.push(trackTool.descriptor);
+      executableTools.push(handoffTool, trackTool);
+      toolDescriptors.push(handoffTool.descriptor, trackTool.descriptor);
     }
     cleanupCallbacks.push(async () => trackStore.close());
   }

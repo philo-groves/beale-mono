@@ -212,6 +212,15 @@ export class ResearchTrackStore {
     };
   }
 
+  public currentAssignment(): { track: ResearchTrackSnapshot; surface: ResearchTrackSurfaceState } {
+    const track = this.get();
+    const surface = track?.surfaces.find((work) => work.surfaceId === track.activeSurfaceId);
+    if (!track || !surface || !this.#sessionId || track.activeSessionId !== this.#sessionId) {
+      throw new Error("The active research track assigned a different surface to this session.");
+    }
+    return { track, surface };
+  }
+
   public start(input: {
     scopeId: string;
     provider: ResearchTrackSnapshot["provider"];
@@ -715,6 +724,32 @@ export function createResearchTrackTool(store: ResearchTrackStore, surface: (id:
           summary: "Research track checkpoint failed.", error: { message: error instanceof Error ? error.message : String(error) }, followUpActions: [] };
       }
     } };
+}
+
+export function createResearchTrackHandoffTool(store: ResearchTrackStore): ResearchExecutableTool {
+  const parameters = { type: "object", additionalProperties: false, properties: {} };
+  return {
+    descriptor: { name: "track.handoff", transportName: "track_handoff",
+      description: "Read the current epoch assignment and durable progress from the app-server. Call at the start of a research track epoch instead of reconstructing the prior transcript.",
+      actionClasses: ["recall"], sideEffects: "read", requiredPermissions: ["research-resource:inventory"], inputSchema: parameters },
+    parameters,
+    async execute(action: ResearchToolAction) {
+      const startedAt = new Date().toISOString();
+      try {
+        const { track, surface } = store.currentAssignment();
+        return { action, status: "complete", startedAt, completedAt: new Date().toISOString(),
+          summary: "Current research track handoff loaded.",
+          output: { trackId: track.id, pass: track.pass, epochCount: track.epochCount,
+            surface, progress: researchTrackProgress(track),
+            interrupted: track.lastError === "The research worker ended without a terminal session record." },
+          followUpActions: [] };
+      } catch (error) {
+        return { action, status: "error", startedAt, completedAt: new Date().toISOString(),
+          summary: "Research track handoff unavailable.",
+          error: { message: error instanceof Error ? error.message : String(error) }, followUpActions: [] };
+      }
+    },
+  };
 }
 
 function required(value: unknown, label: string): string {

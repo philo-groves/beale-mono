@@ -74,6 +74,7 @@ export interface ResolvedAppServerSessionLaunch {
   collaborationConfigPath?: string;
   promptTemplatePath?: string;
   resumeCapturePath?: string;
+  pluginStateCapturePath?: string;
   resumeFallbackPromptPath?: string;
   workflowId?: string;
   researchProfileId?: string;
@@ -137,6 +138,7 @@ export function appServerSessionArgs(
   }
 
   if (launch.resumeCapturePath) args.push('--resume-capture', launch.resumeCapturePath);
+  if (launch.pluginStateCapturePath) args.push('--restore-plugin-state', launch.pluginStateCapturePath);
   if (launch.resumeFallbackPromptPath) {
     args.push('--resume-fallback-prompt-file', launch.resumeFallbackPromptPath);
   }

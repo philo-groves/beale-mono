@@ -20,6 +20,7 @@ export interface CreateResearchSystemPromptOptions {
   workflowId?: string;
   promptTemplate?: string;
   pluginCatalog?: readonly ResearchPluginCatalogEntry[];
+  restoredPluginInstructions?: string;
 }
 
 const PROMPT_SECTIONS = ["identity", "style", "boundary", "tools", "features", "plugins", "collaboration", "goal", "session", "prompt_extensions", "memory", "claims", "runbooks"] as const;
@@ -373,7 +374,8 @@ export function createResearchSystemPrompt(
   }));
   const missingSession = template !== DEFAULT_PROMPT_TEMPLATE && /\{\{\s*goal\s*\}\}/u.test(template)
     && !/\{\{\s*session\s*\}\}/u.test(template) ? variables.session : "";
-  const systemPrompt = [renderedPrompt, ...missingCatalogs, missingExtensions, missingSession].filter(Boolean).join("\n\n");
+  const systemPrompt = [renderedPrompt, ...missingCatalogs, missingExtensions, missingSession,
+    options.restoredPluginInstructions].filter(Boolean).join("\n\n");
   return appendResearchAgentInstructions(systemPrompt, options.agentInstructions);
 }
 

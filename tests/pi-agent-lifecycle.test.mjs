@@ -173,6 +173,40 @@ test("Pi loads only requested optional feature schemas on the next turn and pres
   assert.equal(resumedContexts[0].toolNames.includes("repository_search"), false);
 });
 
+test("a fresh epoch restores selected feature and plugin tools without prior messages", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "beale-epoch-plugin-example-"));
+  try {
+    const skillPath = join(directory, "SKILL.md");
+    writeFileSync(skillPath, "Inspect only synthetic example material.");
+    const knowledge = createFixtureInspectTool([]);
+    knowledge.descriptor.name = "memory.get";
+    knowledge.descriptor.transportName = "memory_get";
+    const mcpTool = createFixtureInspectTool([]);
+    mcpTool.descriptor.name = "mcp.example.tools.inspect";
+    mcpTool.descriptor.transportName = "mcp_example_tools_inspect";
+    const registry = createResearchToolRegistry([knowledge, mcpTool], {
+      managedPlugins: managedToolPluginOptions([knowledge], ["beale-knowledge"]),
+    });
+    const contexts = [];
+    const result = await runResearchAgent({
+      prompt: "Continue the synthetic assignment.",
+      pluginCatalog: [{ id: "example-plugin", name: "Example Plugin", mcpServers: ["example.tools"],
+        skills: [{ id: "example-skill", name: "Example Skill", useWhen: "Inspect an example.", path: skillPath }] }],
+      tools: registry.listDescriptors(),
+      executor: createPiAgentExecutor({
+        provider: "faux", model: "faux-model", subagents: false, toolRegistry: registry,
+        initialLoadedPluginIds: ["beale-knowledge", "example-plugin", "missing-plugin"],
+        models: createScriptedModels([assistant("Synthetic epoch complete.")], contexts),
+      }),
+    });
+    assert.equal(result.agentRun.status, "complete");
+    assert.ok(contexts[0].toolNames.includes("memory_get"));
+    assert.ok(contexts[0].toolNames.includes("mcp_example_tools_inspect"));
+    assert.match(contexts[0].systemPrompt, /Inspect only synthetic example material/);
+    assert.match(contexts[0].messageContents.join("\n"), /Continue the synthetic assignment/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("Pi defers an external plugin's MCP schema and skill body until plugins.load", async () => {
   const directory = mkdtempSync(join(tmpdir(), "beale-plugin-pi-example-"));
   try {

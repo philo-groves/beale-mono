@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ResearchTrackStore, createResearchTrackTool, researchTrackProgress } from '../packages/research-agent/dist/index.js';
-import { AppServerHostService } from '../app-server/dist/hostService.js';
+import { ResearchTrackStore, createResearchTrackTool, createResearchTrackHandoffTool, researchTrackProgress } from '../packages/research-agent/dist/index.js';
+import { AppServerHostService, researchTrackPluginCapturePath } from '../app-server/dist/hostService.js';
+import { appServerSessionArgs } from '../app-server/dist/sessionLaunch.js';
 
 const workspaceId = 'workspace-example-track';
 const covered = { covered: true, unmetRequirements: [] };
@@ -46,6 +47,32 @@ function interruptedTrackSession(guardianEnabled) {
       launch: { workspaceId, mode: 'research-track', machineId: 'local', targetIds: ['local'],
         promptMarkdown: 'Continue synthetic surface research.', provider: { id: 'openai-codex' }, guardianEnabled } } } };
 }
+
+test('track plugin selection reads the last attempt capture without replaying an earlier epoch', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-track-capture-example-'));
+  try {
+    const sessionId = 'session-example-track';
+    const initial = join(directory, `${sessionId}.capture.json`);
+    const later = join(directory, `${sessionId}.attempt-example-two.capture.json`);
+    writeFileSync(initial, '{}');
+    assert.equal(researchTrackPluginCapturePath(directory, sessionId, [{ id: 'attempt-example-one' }]), initial);
+    assert.equal(researchTrackPluginCapturePath(directory, sessionId,
+      [{ id: 'attempt-example-one' }, { id: 'attempt-example-two' }]), undefined);
+    writeFileSync(later, '{}');
+    assert.equal(researchTrackPluginCapturePath(directory, sessionId,
+      [{ id: 'attempt-example-one' }, { id: 'attempt-example-two' }]), later);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('track launch passes plugin state separately from model resume', () => {
+  const args = appServerSessionArgs({ workspaceRoot: '/example/workspace', capturePath: '/example/current.capture.json',
+    attemptId: 'attempt-example-two', promptMarkdown: 'Continue the example assignment.',
+    pluginStateCapturePath: '/example/prior.capture.json', provider: { id: 'openai-codex', riskAcknowledgements: [] },
+    memoryBackend: 'app-server', profileAware: true, shellSafetyMode: 'auto_review' }, {});
+  assert.deepEqual(args.slice(args.indexOf('--restore-plugin-state'), args.indexOf('--restore-plugin-state') + 2),
+    ['--restore-plugin-state', '/example/prior.capture.json']);
+  assert.equal(args.includes('--resume-capture'), false);
+});
 
 test('existing track tables gain optional launch configuration columns', () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-track-migration-example-'));
@@ -94,7 +121,7 @@ test('existing track tables gain optional launch configuration columns', () => {
   } finally { database.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('track reserves bounded surface epochs and requires canonical evidence for completion', () => {
+test('track reserves bounded surface epochs and requires canonical evidence for completion', async () => {
   const state = fixture();
   try {
     const started = state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex', model: 'example-model' },
@@ -125,6 +152,11 @@ test('track reserves bounded surface epochs and requires canonical evidence for 
           angle('example parser entry', 'ruled_out', ['memory:memory-example-a']),
           angle('example state transition', 'ruled_out', ['memory:memory-example-a'])
         ] }, { ...first.surface, coverageState: covered });
+      const handoff = await createResearchTrackHandoffTool(worker).execute({ input: {} });
+      assert.equal(handoff.status, 'complete');
+      assert.equal(handoff.output.surface.surfaceId, first.surface.id);
+      assert.equal(handoff.output.surface.angles.length, 2);
+      assert.equal(handoff.output.surface.nextAction.startsWith('Revisit this high-impact surface'), true);
     } finally { worker.close(); }
     state.store.finishEpoch('session-example-one', true);
     assert.equal(state.store.get().surfaces.find((work) => work.surfaceId === first.surface.id).status, 'deferred');
@@ -619,15 +651,9 @@ test('track epochs share a session, wait for worker exit, and ignore an obsolete
     const [first] = await service.dueResearchTracks();
     assert.equal(first.request.sessionId, started.id);
     assert.deepEqual(first.request.launch.collaboration, collaboration);
-    assert.match(first.request.launch.promptMarkdown, /Selected execution targets: local/);
-    assert.match(first.request.launch.promptMarkdown, /compare eligible roots across resource kinds with surface.list/);
-    assert.match(first.request.launch.promptMarkdown, /listed resources are an inventory/);
-    assert.match(first.request.launch.promptMarkdown, /authorized physical iPhone/);
-    assert.match(first.request.launch.promptMarkdown, /localhost run alone does not validate target behavior/);
-    assert.match(first.request.launch.promptMarkdown, /Official vendor APIs and SDKs may be covered/);
-    assert.match(first.request.launch.promptMarkdown, /Third-party applications, customers, and accounts are not authorized/);
-    assert.match(first.request.launch.promptMarkdown, /Seek at least three credible, materially different causal attacker paths/);
-    assert.match(first.request.launch.promptMarkdown, /Checkpoint earlier when all plausible high-impact paths lack an accessible proof step/);
+    assert.match(first.request.launch.promptMarkdown, /Call track.handoff first/);
+    assert.match(first.request.launch.promptMarkdown, /recorded authorized scope/);
+    assert.ok(first.request.launch.promptMarkdown.length < 1_500);
     assert.equal(first.request.launch.generateTitle, true);
     assert.equal(first.request.launch.continuation, undefined);
     assert.deepEqual(await service.dueResearchTracks(new Date(), new Set([started.id])), []);
@@ -763,7 +789,7 @@ test('Guardian recovers an orphaned track epoch and reviews the interrupted work
     assert.equal(transitions.length, 1);
     assert.equal(transitions[0].status, 'failed');
     assert.equal(transitions[0].attemptId, 'attempt-example-interrupted');
-    assert.match(next.request.launch.promptMarkdown, /Guardian recovery review: The prior worker ended/u);
+    assert.match(next.request.launch.promptMarkdown, /previous worker ended without a terminal record/u);
   } finally { state.close(); }
 });
 
@@ -794,7 +820,7 @@ test('Guardian resumes a track paused by the earlier orphan policy after reviewi
     assert.equal(state.store.get().status, 'running');
     assert.equal(state.store.get().activeSessionId, track.id);
     assert.equal(transitions.length, 1);
-    assert.match(next.request.launch.promptMarkdown, /Guardian recovery review: The prior worker ended/u);
+    assert.match(next.request.launch.promptMarkdown, /previous worker ended without a terminal record/u);
   } finally { state.close(); }
 });
 

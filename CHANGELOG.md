@@ -50,6 +50,7 @@
 
 #### Changed
 
+- Research epochs now start with a short assignment prompt, read persisted progress through `track.handoff`, and restore available feature and plugin selections from the preceding capture without replaying its model messages.
 - App-server launches register custom providers from the host registry and route their model requests through the existing research runtime. Custom provider metadata stays separate from host-only API keys.
 
 - Research tracks reserve recurring epochs for distinct eligible resources and favor underexplored resource kinds, including reviewed discoveries outside configured source repositories. Surface lists expose resource kind filters, and epoch guidance records newly identified in-scope services and binaries as independent resources. Control contract v65 requires rebuilt Beale and app-server clients; no storage migration is needed.

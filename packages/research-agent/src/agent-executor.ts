@@ -121,6 +121,7 @@ export interface CreatePiAgentExecutorOptions {
   agentIdentity?: { id: string; path: string; parentId: string; freshSubagentContext?: boolean };
   goal?: CreateResearchGoalRuntimeOptions;
   resumableState?: PiAgentResumableState;
+  initialLoadedPluginIds?: readonly string[];
   memoryTypeDescriptions?: MemoryTypeDescriptionsInput;
   researchProfile?: ResearchProfile;
   promptTemplate?: string;
@@ -605,8 +606,11 @@ export function createPiAgentExecutor(
         };
         const pluginCatalog = mergeResearchPluginCatalog(input.modelInput.pluginCatalog, options.toolRegistry?.managedPlugins, options.toolRegistry?.listTools());
         const pluginSession = pluginCatalog.length > 0
-          ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], request.root ? options.resumableState?.loadedPluginIds : [], pluginCatalog)
+          ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], request.root
+            ? options.resumableState?.loadedPluginIds ?? options.initialLoadedPluginIds : [], pluginCatalog)
           : undefined;
+        const restoredPluginInstructions = request.root && !options.resumableState && options.initialLoadedPluginIds?.length
+          ? pluginSession?.restoredSkillInstructions(options.initialLoadedPluginIds) : undefined;
         const agentToolRegistry = pluginSession
           ? options.toolRegistry!.fork(pluginSession.createControlTools(options.toolRegistry!.listTools()))
           : options.toolRegistry;
@@ -913,6 +917,7 @@ export function createPiAgentExecutor(
               hasCollaborationTools: collaborationTools.length > 0,
               ...(collaboration ? { collaborationGuidance: createCollaborationSystemGuidance(collaboration, workflow.id, { lead: request.root === true }) } : {}),
               ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
+              ...(restoredPluginInstructions ? { restoredPluginInstructions } : {}),
               goalEnabled: request.root === true && goalRuntime !== null,
               researchProfile,
               ...(options.promptTemplate !== undefined ? { promptTemplate: options.promptTemplate } : {}),

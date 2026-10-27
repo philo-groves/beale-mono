@@ -60,6 +60,7 @@ export interface CreateClaudeAgentExecutorOptions {
   promptTemplate?: string;
   workflowId?: string;
   resumableState?: ClaudeAgentResumableState;
+  initialLoadedPluginIds?: readonly string[];
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<readonly string[]>;
   subagents?: false;
   subagentRuntimeFactory?: SubagentRuntimeFactory;
@@ -234,8 +235,11 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
       let toolCallCount = 0;
       const pluginCatalog = mergeResearchPluginCatalog(input.modelInput.pluginCatalog, options.toolRegistry?.managedPlugins, options.toolRegistry?.listTools());
       const pluginSession = pluginCatalog.length > 0
-        ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [], options.resumableState?.loadedPluginIds, pluginCatalog)
+        ? new ManagedToolPluginSession(options.toolRegistry?.managedPlugins ?? [],
+          options.resumableState?.loadedPluginIds ?? options.initialLoadedPluginIds, pluginCatalog)
         : undefined;
+      const restoredPluginInstructions = !options.resumableState && options.initialLoadedPluginIds?.length
+        ? pluginSession?.restoredSkillInstructions(options.initialLoadedPluginIds) : undefined;
       const agentToolRegistry = pluginSession ? options.toolRegistry?.fork([
         ...pluginSession.createControlTools(options.toolRegistry.listTools()),
       ]) : options.toolRegistry;
@@ -377,6 +381,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                       ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
                       researchProfile: options.researchProfile,
                       ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
+                      ...(restoredPluginInstructions ? { restoredPluginInstructions } : {}),
                       ...(options.promptTemplate !== undefined ? { promptTemplate: options.promptTemplate } : {}),
                       workflowId: workflow.id,
                       ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),
@@ -471,6 +476,7 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
                     ...(options.agentIdentity ? { agentPath: options.agentIdentity.path } : {}),
                     researchProfile: options.researchProfile,
                     ...(pluginCatalog.length > 0 ? { pluginCatalog } : {}),
+                    ...(restoredPluginInstructions ? { restoredPluginInstructions } : {}),
                     ...(options.promptTemplate !== undefined ? { promptTemplate: options.promptTemplate } : {}),
                     workflowId: workflow.id,
                     ...(input.modelInput.agentInstructions ? { agentInstructions: input.modelInput.agentInstructions } : {}),

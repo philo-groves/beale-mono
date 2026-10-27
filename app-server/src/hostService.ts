@@ -32,7 +32,7 @@ import {
   decodeFleetSshTestInput
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, refreshOpenRouterModels, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchIndexNeedsRebuild } from '@beale/app-server-runtime/runtime-services';
-import { applyFeaturePromptOverrides, bundledPluginsRequiredByResearchKit, decodeResearchPluginCatalog, researchKitsRequiringBundledPlugin, validateResearchSystemPromptTemplate, verifyBrokerModelAccess, ResearchResourceCatalog, ResearchTrackStore, type ResearchTrackSurfaceState, type ResearchTrackSurfaceProjection } from '@beale/research-agent';
+import { applyFeaturePromptOverrides, bundledPluginsRequiredByResearchKit, decodeResearchPluginCatalog, researchKitsRequiringBundledPlugin, validateResearchSystemPromptTemplate, verifyBrokerModelAccess, ResearchResourceCatalog, ResearchTrackStore, type ResearchTrackSurfaceProjection } from '@beale/research-agent';
 import { runWorkspaceCheckpoint, workspaceOperationKey } from './workspaceCheckpoints.js';
 import { projectWorkspaceDetails } from './workspaceDetails.js';
 import { readWorkspaceSurfaceMap } from './surfaceMap.js';
@@ -842,6 +842,13 @@ export class AppServerHostService {
     const continuation = request.launch.continuation;
     const fileStem = continuation ? `${sessionId}.${attemptId}` : sessionId;
     const capturePath = join(runDirectory, `${fileStem}.capture.json`);
+    let pluginStateCapturePath: string | undefined;
+    if (request.launch.mode === 'research-track' && continuation) {
+      const prior = await this.invokeProtocol<AppServerSessionSummaryProjection>('session.get', {
+        args: ['session', 'get', '--session-id', sessionId], storage
+      }).catch(() => null);
+      pluginStateCapturePath = researchTrackPluginCapturePath(runDirectory, sessionId, prior?.attempts);
+    }
     await mkdir(runDirectory, { recursive: true });
     const promptTemplate = this.registry.promptTemplateOverride(profileId);
     if (promptTemplate !== null) validateResearchSystemPromptTemplate(promptTemplate);
@@ -1049,6 +1056,7 @@ export class AppServerHostService {
         ...(collaborationConfigPath ? { collaborationConfigPath } : {}),
         ...(promptTemplatePath ? { promptTemplatePath } : {}),
         ...(resumeCapturePath ? { resumeCapturePath } : {}),
+        ...(pluginStateCapturePath ? { pluginStateCapturePath } : {}),
         ...(resumeFallbackPromptPath ? { resumeFallbackPromptPath } : {}),
         ...(request.launch.workflowId ? { workflowId: request.launch.workflowId } : {}),
         researchProfileId: profileId,
@@ -1505,10 +1513,8 @@ export class AppServerHostService {
         const sessionId = track.id;
         const assignment = store.reserveNext(sessionId, details.surfaceMap.surfaces);
         if (!assignment) continue;
-        const work = assignment.track.surfaces.find((item) => item.surfaceId === assignment.surface.id)!;
-        const promptMarkdown = researchTrackEpochPrompt(assignment.track.id, assignment.track.pass,
-          assignment.surface, work, details.surfaceMap.surfaces.length, assignment.track.targetIds,
-          workspace.researchKitId, recoveringPriorOrphan || assignment.track.lastError === ORPHANED_TRACK_EPOCH_DIAGNOSTIC);
+        const promptMarkdown = researchTrackEpochPrompt(assignment.track.id, assignment.surface,
+          recoveringPriorOrphan || assignment.track.lastError === ORPHANED_TRACK_EPOCH_DIAGNOSTIC);
         const continuing = assignment.track.epochCount > 1;
         due.push({ dueAt: at.toISOString(), request: { launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
           sessionId, launch: { workspaceId: workspace.workspaceId,
@@ -2689,6 +2695,15 @@ function latestAttempt(value: unknown): { id: string; parentAttemptId: string | 
   return null;
 }
 
+export function researchTrackPluginCapturePath(runDirectory: string, sessionId: string, attempts: unknown): string | undefined {
+  const previousAttempt = latestAttempt(attempts);
+  if (!previousAttempt) return undefined;
+  const firstAttempt = Array.isArray(attempts) ? latestAttempt(attempts.slice(0, 1)) : null;
+  const capturePath = join(runDirectory, previousAttempt.id === firstAttempt?.id
+    ? `${sessionId}.capture.json` : `${sessionId}.${previousAttempt.id}.capture.json`);
+  return existsSync(capturePath) ? capturePath : undefined;
+}
+
 function manualContinuationFallbackPrompt(
   session: AppServerSessionSummaryProjection,
   value: unknown,
@@ -2765,43 +2780,18 @@ function stringArray(value: unknown): string[] {
 
 function researchTrackEpochPrompt(
   trackId: string,
-  pass: number,
   surface: ResearchTrackSurfaceProjection,
-  work: ResearchTrackSurfaceState,
-  surfaceCount: number,
-  targetIds: readonly string[],
-  researchKitId?: string,
   reviewInterruptedEpoch = false
 ): string {
   return [
     '# Continuous research track',
-    `Track ${trackId}, pass ${pass}. The workspace currently contains ${surfaceCount} eligible security surfaces.`,
-    `Assigned surface: ${surface.name} (${surface.id}).`,
-    `Work direction: ${surface.parentId ? 'depth on a mapped attacker path' : 'threat-model the resource from distinct attacker routes'}.`,
-    `Prior impact estimate: ${work.impact}. Prior theory: ${work.theory || 'Unexamined.'}`,
-    `Current actionability: ${work.actionabilityScore}/100.`,
-    `Prior validation: ${work.validation ? `${work.validation.environment}; target-dependent=${work.validation.targetDependent}; ${work.validation.reason}` : 'No target-validation result recorded.'}`,
-    `Next action: ${work.nextAction}`,
-    ...(work.angles.length ? [
-      'Prior attacker paths:',
-      ...work.angles.map((angle) => `- ${angle.name} [${angle.status}]: ${angle.vector
-        ? `Control: ${angle.vector.attackerControl}; boundary: ${angle.vector.trustBoundary}; possible failure: ${angle.vector.failureMode}; effect: ${angle.vector.unauthorizedEffect}.`
-        : 'Causal vector not yet recorded; map it before relying on this path.'} Proof: ${angle.proofQuestion} Next: ${angle.nextAction} Evidence: ${angle.evidenceRefs.join(', ') || 'none'}.`)
-    ] : ['No attacker paths have been recorded yet.']),
-    `Selected execution targets: ${targetIds.join(', ')}.`,
+    `Track ${trackId}. Assigned surface: ${surface.name} (${surface.id}).`,
+    'Call track.handoff first. It returns the current assignment, prior attacker paths, evidence references, validation gap, and next action from durable app-server state. Use surface.get for the current foundation and scope. Do not reconstruct prior epochs from transcript text.',
     ...(reviewInterruptedEpoch ? [
-      'Guardian recovery review: The prior worker ended without a terminal session record. Inspect the available prior attempt and durable workspace state before continuing. Identify work that was recorded, work that remains unverified, and the next safe proof step. Do not infer progress from the missing terminal record or repeat completed work merely to reconstruct context. Record the recovery assessment in the next durable checkpoint.'
+      'The previous worker ended without a terminal record. Check durable state and the prior attempt before continuing; do not assume unfinished work was completed.'
     ] : []),
-    '',
-    'Conduct one bounded, reasoning-based security research epoch on this assigned surface. For a previously unexamined resource root, compare eligible roots across resource kinds with surface.list, using its resourceKind filter and pagination when needed, before deep work. A configured source index is not the workspace inventory. Use surface.get to inspect the current foundation, coverage gaps, and mapped connections; use surface.focus and coordinate with its first-touch foundation scout when one starts. Identify the protected operation and the security invariant it should preserve. Work backward from a consequential unauthorized effect to the authority, identity, or data boundary, then to concrete attacker control and required prerequisites. Seek at least three credible, materially different causal attacker paths, varying the trust boundary, failure mode, lifecycle transition, or cross-surface chain rather than merely changing inputs. If fewer are plausible within scope and available prerequisites, record why instead of inventing filler. Rank the credible paths by impact ceiling, plausible reachability, and an accessible discriminating proof. Deeply test the strongest path; if its proof obligation fails, try a different mechanism. Do not treat files, routes, or unit tests as surfaces merely because they exist; use tests only when they provide security evidence or a focused proof harness.',
-    'The listed resources are an inventory, not the whole authorization boundary. When source research reveals a distinct covered daemon, service, executable, API, or SDK, record it with resource.catalog discover and request Auto-Reviewed touch before substantive research. Do not leave a separate in-scope target only as a note beneath the current repository surface: an approved discovered resource becomes eligible for a later track epoch. Record the scope link; explicit exclusions still control. Official vendor APIs and SDKs may be covered even when their source was not attached. Third-party applications, customers, and accounts are not authorized just because they integrate with an in-scope vendor. Treat sample implementations as context unless independently included; prioritize the vendor-owned API or SDK behavior and impacts.',
-    'For a web-facing theory, use available browser tools to inspect the actual application behavior and test discriminating requests within the recorded authorization. Browser tools are exposed when the Browser feature is enabled; if no usable browser target exists, record that limit in the surface checkpoint. Do not substitute a broad crawl for threat-model reasoning.',
-    'Favor concrete source-to-sink reasoning and discriminating experiments over inventory scans. Follow privilege changes, object ownership, state transitions, and cross-component handoffs beyond obvious entry points. For the chosen path, state the observation that would support the suspected failure, an alternative harmless explanation, and a control or comparison that separates them. A missing prerequisite or unreachable target leaves the path open or blocked; it does not refute the mechanism. Search existing findings before creating a new one. Advance a candidate through the existing evidence, reproduction, independent-review, and report gates when authorized work can do so. A negative result must name its bounds and be recorded in durable memory before it supports ruling out an attacker path.',
-    'For target-dependent theories, prioritize a discriminating test on the authorized target or faithful device/VM. Localhost is useful for building harnesses and source-level checks, but a localhost run alone does not validate target behavior. Check target availability once, then use the target where possible. If unavailable, complete bounded source-level work that can still change the theory, record the exact target-validation gap in surface.update and the checkpoint next action, and defer to another in-scope surface when no distinct accessible proof step remains. Do not repeatedly run localhost proxies for the same blocked target question.',
-    ...(researchKitId === 'apple-security-bounty' ? [
-      'For iOS-specific behavior, inspect the Apple security device capability and use an authorized physical iPhone when one is available. Listing or describing a device is availability checking, not testing: when the theory can be exercised through an operator-built app, use the physical-iPhone install and launch tools and capture the observed result. The iOS Simulator is not a supported substitute. If device testing cannot be performed, state why in surface.update and the checkpoint next action; do not infer a negative on-device result from host tests.'
-    ] : []),
-    'After approximately 30 minutes or 25 substantive research actions, checkpoint at a safe boundary. Checkpoint earlier when all plausible high-impact paths lack an accessible proof step; continue an actively progressing proof instead of rotating only because the action count was reached. Record surface.update and then track.checkpoint with impact, tested theory, canonical evidence references, 1 to 4 attacker-path updates, validation (whether target behavior is required, where testing actually ran, and a concrete reason), and the next action. Each path must map attacker control, trust boundary, possible failure mode, and unauthorized effect; update an older path by name to fill a missing causal vector. Mark it supported or ruled_out only with cited canonical evidence, and keep a concrete proof question and next action for open paths. Previously recorded paths remain available in later epochs. Listing a device is validation environment none. If target behavior is required but only localhost or no test was possible, explain the gap in the next action. Use complete only when threat-model coverage and evidence are durable; high-impact work without a finding must test at least two distinct paths. Use blocked only for a concrete external dependency after accessible work is exhausted. Otherwise defer with a useful next action. Then give a concise final response so the host can select the next surface.',
+    'Research the strongest credible attacker path within the recorded authorized scope. Compare distinct causal paths, test a discriminating proof where possible, and record negative results with their bounds. For target-dependent behavior, use the authorized target or faithful device or VM when available; a localhost result alone does not validate target behavior.',
+    'After about 30 minutes or 25 substantive actions, or sooner when progress is blocked, update the surface and call track.checkpoint. Include the tested theory, canonical evidence, attacker paths, actual validation environment, and a concrete next action. Use complete only with durable coverage and evidence; otherwise defer or record a concrete blocker. End with a concise status.',
   ].join('\n');
 }
 
