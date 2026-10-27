@@ -39,7 +39,7 @@ import { redactCommandArgumentsForModel, redactForModelText, redactJsonForModel 
 import {
   AppServerWebSocketClient
 } from './appServerWebSocketClient';
-import { resolveAppServerInvocation, type AppServerInvocation } from './appServerInvocation';
+import { appServerNodeEnvironment, resolveAppServerInvocation, type AppServerInvocation } from './appServerInvocation';
 import {
   attachAppServerSession,
   ensureBealeAppServerRunning,
@@ -3221,7 +3221,7 @@ export function invokeAppServerToolsList(
   const result = spawnSync(invocation.command, fullArgs, {
     cwd: invocation.cwd,
     encoding: 'utf8',
-    env: { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' },
+    env: appServerNodeEnvironment(invocation.command, { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' }),
     timeout: 30_000,
     windowsHide: true
   });
@@ -3246,7 +3246,7 @@ export function invokeAppServerToolsConfig(workspacePath: string, args: readonly
   const result = spawnSync(invocation.command, fullArgs, {
     cwd: invocation.cwd,
     encoding: 'utf8',
-    env: { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' },
+    env: appServerNodeEnvironment(invocation.command, { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' }),
     timeout: 15_000,
     windowsHide: true
   });

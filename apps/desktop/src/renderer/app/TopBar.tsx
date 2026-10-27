@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { JSX, MouseEvent } from 'react';
 import { ChevronDown, Code2, Minus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Square, SquarePen, X, Zap } from 'lucide-react';
-import type { HostEnvironment, WorkspaceEditorCatalog, WorkspaceEditorId, WorkspaceEditorSummary, WorkspaceRegistryEntry, ZoomState } from '@shared/types';
+import type { DesktopUpdateState, HostEnvironment, WorkspaceEditorCatalog, WorkspaceEditorId, WorkspaceEditorSummary, WorkspaceRegistryEntry, ZoomState } from '@shared/types';
 import { useDevRenderProbe } from '../devInstrumentation';
 import { AppHeaderTitle, StaticAppHeaderTitle } from './AppHeaderTitle';
 import type { AppHeaderRun, AppHeaderViewIcon } from './AppHeaderTitle';
@@ -17,6 +17,51 @@ export function headerMenuInlineEnd(topBarLeft: number, menuRight: number): numb
 
 export function rightmostHeaderMenuControl(menuLeft: number, controlRights: readonly number[]): number {
   return Math.max(menuLeft, ...controlRights);
+}
+
+export interface DesktopUpdateAction {
+  label: string;
+  title: string;
+  run: (() => Promise<DesktopUpdateState>) | null;
+}
+
+/**
+ * The header shows an update control only once there is something to act on;
+ * checks and their failures stay silent so a missing network does not nag.
+ */
+export function desktopUpdateAction(state: DesktopUpdateState): DesktopUpdateAction | null {
+  const failure = state.message ? ` ${state.message}` : '';
+  switch (state.status) {
+    case 'available':
+      return {
+        label: `Update to ${state.availableVersion}`,
+        title: `Download Beale ${state.availableVersion}. You are on ${state.currentVersion}.${failure}`,
+        run: () => window.beale.downloadDesktopUpdate()
+      };
+    case 'downloading':
+      return { label: `Downloading ${state.downloadPercent ?? 0}%`, title: `Downloading Beale ${state.availableVersion}.`, run: null };
+    case 'ready':
+      return {
+        label: 'Restart to update',
+        title: `Stop the local app-server and restart into Beale ${state.availableVersion}.${failure}`,
+        run: () => window.beale.installDesktopUpdate()
+      };
+    case 'installing':
+      return { label: 'Restarting…', title: 'Stopping the local app-server before installing.', run: null };
+    default:
+      return null;
+  }
+}
+
+function useDesktopUpdateState(): DesktopUpdateState | null {
+  const [state, setState] = useState<DesktopUpdateState | null>(null);
+  // Subscribes to the main-process updater, which runs outside React.
+  useEffect(() => {
+    // A pushed state is newer than the initial read, so the read never replaces it.
+    void window.beale.getDesktopUpdateState().then((initial) => setState((current) => current ?? initial));
+    return window.beale.onDesktopUpdateState(setState);
+  }, []);
+  return state;
 }
 
 function WorkspaceEditorIcon({ editor, size = 15 }: { editor: WorkspaceEditorSummary; size?: number }): JSX.Element {
@@ -82,6 +127,8 @@ export const TopBar = memo(function TopBar({
   const SidebarToggleIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
   const RightSidenavToggleIcon = rightSidenavExpanded ? PanelRightClose : PanelRightOpen;
   const isMac = platform === 'darwin';
+  const desktopUpdate = useDesktopUpdateState();
+  const updateAction = desktopUpdate ? desktopUpdateAction(desktopUpdate) : null;
   const showCollapsedWorkspaceActions = sidebarCollapsed;
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
   const [editorMenuOpen, setEditorMenuOpen] = useState(false);
@@ -384,8 +431,19 @@ export const TopBar = memo(function TopBar({
       ) : staticContextTitle ? (
         <StaticAppHeaderTitle primaryTitle={staticContextTitle.primary} secondaryTitle={staticContextTitle.secondary} icon={staticContextTitle.icon} />
       ) : null}
-      {profilingEnabled || defaultEditor || rightSidenavAvailable || !isMac ? (
+      {updateAction || profilingEnabled || defaultEditor || rightSidenavAvailable || !isMac ? (
         <div className="window-controls" aria-label="Header controls">
+          {updateAction ? (
+            <button
+              type="button"
+              className="window-debug-button desktop-update-button"
+              title={updateAction.title}
+              disabled={!updateAction.run}
+              onClick={() => void updateAction.run?.()}
+            >
+              {updateAction.label}
+            </button>
+          ) : null}
           {profilingEnabled ? (
             <button type="button" className="window-debug-button" title="Open profiling overview" onClick={onOpenProfiling}>
               Debug

@@ -1700,6 +1700,10 @@ code {
   color: var(--text);
 }
 
+.desktop-update-button {
+  color: var(--text);
+}
+
 .window-control-button:hover:not(:disabled) {
   border: 0;
   background: var(--gray-24);

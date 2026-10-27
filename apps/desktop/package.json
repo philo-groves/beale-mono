@@ -22,11 +22,26 @@
     "test:all": "pnpm run test && pnpm run test:integration",
     "test:architecture": "vitest run tests/architecture-conformance.test.ts",
     "test:openai:live": "BEALE_LIVE_OPENAI_TEST=1 vitest run tests/openai-live.test.ts",
-    "build": "pnpm run typecheck && electron-vite build"
+    "build": "pnpm run typecheck && electron-vite build",
+    "stage:runtime": "node scripts/stage-runtime.mjs",
+    "package": "pnpm run build && pnpm run stage:runtime && electron-builder --publish never"
   },
   "dependencies": {
-    "@beale/research-agent": "workspace:*",
+    "electron-updater": "6.8.11",
+    "tree-sitter-wasm": "1.1.1",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
     "@beale/app-server-runtime": "workspace:*",
+    "@beale/research-agent": "workspace:*",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.6",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "^41.3.0",
+    "electron-builder": "26.18.0",
+    "electron-vite": "^5.0.0",
     "katex": "^0.18.4",
     "lucide-react": "^0.554.0",
     "react": "^19.2.0",
@@ -38,17 +53,6 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "typescript": "^5.9.3",
-    "tree-sitter-wasm": "1.1.1",
-    "ws": "^8.21.3"
-  },
-  "devDependencies": {
-    "@types/node": "^24.10.1",
-    "@types/react": "^19.2.6",
-    "@types/react-dom": "^19.2.3",
-    "@types/ws": "^8.18.1",
-    "@vitejs/plugin-react": "^5.1.4",
-    "electron": "^41.3.0",
-    "electron-vite": "^5.0.0",
     "vite": "^7.3.2",
     "vitest": "^4.1.5"
   }

@@ -22,6 +22,7 @@
     "dev:desktop": "pnpm --filter @beale/desktop dev",
     "build:desktop": "pnpm --filter @beale/desktop build",
     "start:desktop": "pnpm --filter @beale/desktop start",
+    "package:desktop": "pnpm build && pnpm --filter @beale/desktop package",
     "test:app-server": "pnpm --filter @beale/app-server test",
     "release:check": "node scripts/release-version.mjs check",
     "release:version": "node scripts/release-version.mjs set",

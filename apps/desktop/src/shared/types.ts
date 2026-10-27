@@ -2286,7 +2286,24 @@ export interface FeaturePromptSettings {
   overridden: boolean;
 }
 
+/**
+ * Installed-build update progress. `disabled` covers source checkouts, which
+ * update through git rather than the release feed.
+ */
+export interface DesktopUpdateState {
+  status: 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'error';
+  currentVersion: string;
+  availableVersion: string | null;
+  downloadPercent: number | null;
+  /** The last failure, shown beside the update button until the next step. */
+  message: string | null;
+}
+
 export interface BealeApi {
+  getDesktopUpdateState(): Promise<DesktopUpdateState>;
+  downloadDesktopUpdate(): Promise<DesktopUpdateState>;
+  installDesktopUpdate(): Promise<DesktopUpdateState>;
+  onDesktopUpdateState(listener: (state: DesktopUpdateState) => void): () => void;
   listBrowserContexts(): Promise<BrowserContextSummary[]>;
   createBrowserContext(label: string): Promise<BrowserContextSummary>;
   renameBrowserContext(id: string, label: string): Promise<BrowserContextSummary>;

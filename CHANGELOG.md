@@ -7,6 +7,8 @@
 #### Added
 
 - Added a macOS and Windows source installer that builds the `release` branch locally and creates a desktop launcher.
+- Installed builds check GitHub Releases for new versions and show an **Update to X.Y.Z** header button. Beale downloads only on request, and **Restart to update** first stops the local app-server, waiting while research sessions are active.
+- `pnpm package:desktop` builds macOS and Windows installers that bundle the app-server runtime and run it with Beale's Electron binary, and a tag-triggered Release workflow publishes them after environment approval.
 - Provider settings can connect multiple custom OpenAI Chat Completions endpoints, fetch their available models, choose Lead and small models, and keep optional API keys in Beale Safe Storage.
 
 #### Changed

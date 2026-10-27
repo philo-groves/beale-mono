@@ -11,11 +11,26 @@ export interface AppServerInvocation {
 }
 
 /**
- * Walk up from the current directory to locate the enclosing monorepo root
- * that carries the optional app-server client at packages/app-server-runtime/dist/cli.js. Returns null
- * when no workspace root is found.
+ * Packaged installers stage the app-server runtime in Electron's resources
+ * directory with the same layout as the monorepo (see
+ * apps/desktop/scripts/stage-runtime.mjs). Returns that directory, or null when
+ * running from a source checkout, where Electron's resources hold no runtime.
+ */
+export function packagedAppServerRuntimeRoot(): string | null {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (!resourcesPath) return null;
+  return existsSync(join(resourcesPath, 'packages', 'app-server-runtime', 'dist', 'cli.js')) ? resourcesPath : null;
+}
+
+/**
+ * Locate the root that carries the optional app-server client at
+ * packages/app-server-runtime/dist/cli.js: the packaged runtime when present,
+ * otherwise the monorepo root found by walking up from the current directory.
+ * Returns null when neither exists.
  */
 export function resolveAppServerWorkspaceRoot(): string | null {
+  const packagedRoot = packagedAppServerRuntimeRoot();
+  if (packagedRoot) return packagedRoot;
   let directory = process.cwd();
   for (;;) {
     if (existsSync(join(directory, 'packages', 'app-server-runtime', 'dist', 'cli.js'))) return directory;
@@ -104,21 +119,39 @@ export function resolveAppServerProtocolInvocation(): AppServerInvocation {
 }
 
 export function resolveAppServerNodeCommand(): string {
-  const candidates = [
+  const configured = [
     process.env.BEALE_APP_SERVER_NODE_COMMAND?.trim(),
-    process.env.BEALE_NODE_COMMAND?.trim(),
-    process.env.npm_node_execpath?.trim(),
-    process.env.NODE?.trim(),
-    'node',
-    isPlainNodeExecutable(process.execPath) ? process.execPath : ''
+    process.env.BEALE_NODE_COMMAND?.trim()
   ];
+  // An installed build cannot assume a system Node.js (GUI launches often lack
+  // the shell PATH, and an old Node may lack built-in SQLite). It runs the bundled
+  // runtime with Beale's own Electron binary instead; see appServerNodeEnvironment.
+  const candidates = packagedAppServerRuntimeRoot()
+    ? configured
+    : [
+        ...configured,
+        process.env.npm_node_execpath?.trim(),
+        process.env.NODE?.trim(),
+        'node',
+        isPlainNodeExecutable(process.execPath) ? process.execPath : ''
+      ];
   const seen = new Set<string>();
   for (const candidate of candidates) {
     if (!candidate || seen.has(candidate)) continue;
     seen.add(candidate);
     if (nodeCommandAvailable(candidate)) return candidate;
   }
-  return 'node';
+  return packagedAppServerRuntimeRoot() ? process.execPath : 'node';
+}
+
+/**
+ * Electron's binary only behaves as Node.js when ELECTRON_RUN_AS_NODE is set.
+ * Every spawn that may receive process.execPath from resolveAppServerNodeCommand
+ * must pass its environment through this helper; without it the child would
+ * start a second Beale window instead of the app-server.
+ */
+export function appServerNodeEnvironment(command: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return command === process.execPath && process.versions.electron ? { ...env, ELECTRON_RUN_AS_NODE: '1' } : env;
 }
 
 function nodeCommandAvailable(command: string): boolean {

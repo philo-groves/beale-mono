@@ -27,7 +27,7 @@ import {
   type AppServerSessionLaunchRequest
   ,type AppServerProtocolOperation
 } from '@beale/app-server-runtime/protocol';
-import { resolveAppServerNodeCommand, resolveAppServerWorkspaceRoot } from './appServerInvocation';
+import { appServerNodeEnvironment, resolveAppServerNodeCommand, resolveAppServerWorkspaceRoot } from './appServerInvocation';
 import { appServerRemoteAccessLaunchEnvironment } from './appServerRemoteAccess';
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 2_000;
@@ -612,7 +612,7 @@ function launchAppServerProcess(
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],
     windowsHide: true,
-    env: childEnv
+    env: appServerNodeEnvironment(launch.command, childEnv)
   });
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {
@@ -780,9 +780,17 @@ export function appServerControlUrl(record: BealeAppServerDiscovery): string {
 }
 
 export async function restartBealeAppServer(): Promise<BealeAppServerDiscovery> {
+  await stopBealeAppServer();
+  return ensureBealeAppServerRunning();
+}
+
+/**
+ * Stops the local app-server if one is running. Rejects and leaves it running
+ * while research sessions are active.
+ */
+export async function stopBealeAppServer(): Promise<void> {
   const existing = readBealeAppServerDiscovery();
   if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
-  return ensureBealeAppServerRunning();
 }
 
 export async function restartBealeAppServerViaSupervisor(): Promise<BealeAppServerDiscovery> {

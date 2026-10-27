@@ -62,6 +62,7 @@ import type {
   WorkspaceOnboardingProgressUpdate,
   WorkspaceOnboardingSkipInput,
   WorkspaceRegistryState,
+  DesktopUpdateState,
   ResearchSessionSummary,
   ProfilingReport,
   ProfilingState,
@@ -111,6 +112,20 @@ async function invokeRunDetail<T>(channel: string, ...args: unknown[]): Promise<
 }
 
 const api: BealeApi = {
+  getDesktopUpdateState(): Promise<DesktopUpdateState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getDesktopUpdateState);
+  },
+  downloadDesktopUpdate(): Promise<DesktopUpdateState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.downloadDesktopUpdate);
+  },
+  installDesktopUpdate(): Promise<DesktopUpdateState> {
+    return ipcRenderer.invoke(IPC_CHANNELS.installDesktopUpdate);
+  },
+  onDesktopUpdateState(listener: (state: DesktopUpdateState) => void) {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: DesktopUpdateState): void => listener(state);
+    ipcRenderer.on(IPC_CHANNELS.desktopUpdateState, wrapped);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.desktopUpdateState, wrapped);
+  },
   listBrowserContexts(): Promise<BrowserContextSummary[]> {
     return ipcRenderer.invoke(IPC_CHANNELS.listBrowserContexts);
   },
