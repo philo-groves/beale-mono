@@ -163,7 +163,7 @@ The desktop integration tests (`pnpm --filter @beale/desktop test:integration`) 
 
 Live provider tests remain opt-in because they require local credentials.
 
-Version 0.9.0 is the current release candidate baseline. The release procedure, CI gates, data backup, and tag rules are in [`RELEASING.md`](RELEASING.md). Desktop currently produces a production bundle, not a signed installer.
+Version 0.9.3 is the current release candidate baseline. The release procedure, CI gates, data backup, signing setup, and tag rules are in [`RELEASING.md`](RELEASING.md). The tagged Release workflow builds signed macOS and Windows installers when the release environment has the required credentials.
 
 ---
 

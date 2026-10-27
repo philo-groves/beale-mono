@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readReleaseNotes } from './release-notes.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const manifests = [
@@ -47,6 +48,7 @@ function check(tag) {
   if (changelogHeadings[0] !== '## Unreleased' || !changelogHeadings.includes(`## ${version}`)) {
     throw new Error(`CHANGELOG.md must start with Unreleased and include a ## ${version} section.`);
   }
+  readReleaseNotes(version);
   if (tag !== undefined) {
     if (tag !== `v${version}`) throw new Error(`Tag ${tag} does not match v${version}.`);
     const type = execFileSync('git', ['cat-file', '-t', `refs/tags/${tag}`], { cwd: root, encoding: 'utf8' }).trim();

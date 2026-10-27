@@ -1,6 +1,6 @@
 {
   "name": "@beale/app-server-runtime",
-  "version": "0.9.0",
+  "version": "0.9.4",
   "description": "Shared app-server protocol and hosted runtime, with an optional app-server client.",
   "type": "module",
   "main": "./dist/cli.js",

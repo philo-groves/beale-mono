@@ -2,14 +2,53 @@
 
 ## Unreleased
 
+## 0.9.4
+
+### Beale
+
+#### Fixed
+
+- Installed Windows builds now launch the app-server tray host from the bundled runtime.
+- Desktop updates show a regular-weight pill control labeled **Restart Now** and stop the app-server restart supervisor before installation.
+
+## 0.9.3
+
+### Beale
+
+#### Changed
+
+- beale.ai now has a 29-page product handbook covering current Desktop, app-server, and iOS companion behavior. The iOS guide states that no App Store download is available.
+- beale.ai now leads with the latest signed macOS and Windows desktop downloads, while keeping source installation available. The WordPress plugin resolves versioned installer assets from the latest published GitHub Release.
+
+#### Removed
+
+- Removed the animated aurora layers from active session backgrounds. The session heat gradient and color transitions remain.
+
+## 0.9.2
+
+### Beale
+
+#### Fixed
+
+- Windows NSIS installers use a GitHub-safe filename that matches the generated update feed, correcting the Windows update URL published in 0.9.1. Packaging checks release filenames, feed URLs, sizes, and SHA-512 hashes before upload.
+- Release checks reject oversized GitHub Release notes before tagging. A concise reviewed notes file can be used when the numbered changelog section is too long.
+
+## 0.9.1
+
 ### Beale
 
 #### Added
 
 - Added a macOS and Windows source installer that builds the `release` branch locally and creates a desktop launcher.
+- Installed builds check GitHub Releases for new versions and show an **Update to X.Y.Z** header button. Beale downloads only on request, and **Restart to update** first stops the local app-server, waiting while research sessions are active.
+- `pnpm package:desktop` builds macOS and Windows installers that bundle the app-server runtime and run it with Beale's Electron binary, and a tag-triggered Release workflow publishes them after environment approval.
 - Provider settings can connect multiple custom OpenAI Chat Completions endpoints, fetch their available models, choose Lead and small models, and keep optional API keys in Beale Safe Storage.
 
 #### Changed
+
+- Installer staging now uses the reviewed dependency lockfile. The release workflow verifies the tag on macOS and Windows before requesting signing approval, requires signed installers, and checks signatures and macOS notarization before publishing.
+- The release workflow can publish macOS alone while Windows signing is disabled; incomplete enabled Windows configuration fails the release.
+- Windows release packaging uses Azure Artifact Signing with GitHub OIDC instead of exported certificate keys. It verifies the signed app and installer publisher and timestamps before publishing.
 
 - Track progress lists retained attacker paths and outcomes, and shows automatic pause reasons directly.
 - Active sessions animate overlapping aurora ribbons through the window's profile-colored heat gradient; reduced-motion settings keep them still.
@@ -26,6 +65,7 @@
 
 #### Fixed
 
+- Windows Desktop releases now pass cross-platform verification; local file links with drive letters open correctly, and editor icon discovery uses macOS paths consistently.
 - Provider cybersecurity safeguard retries in canonical app-server sessions now appear as session markers, including after reopening the session.
 - Aurora ribbons darken the window background in dark themes and lighten it in light themes to preserve text contrast.
 - The session context usage tooltip has a larger hover target while the circle stays in place.
@@ -46,27 +86,11 @@
 - Session and workspace memory summaries exclude Rejected records from totals and per-type counts, including when profile metadata is unavailable.
 - Stopping a running research track session now ends the current epoch while the track continues; Pause still pauses the track. The track controls show paused state explicitly.
 
-### app-server
+#### Security
 
-#### Changed
-
-- App-server launches register custom providers from the host registry and route their model requests through the existing research runtime. Custom provider metadata stays separate from host-only API keys.
-
-- Research tracks reserve recurring epochs for distinct eligible resources and favor underexplored resource kinds, including reviewed discoveries outside configured source repositories. Surface lists expose resource kind filters, and epoch guidance records newly identified in-scope services and binaries as independent resources. Control contract v65 requires rebuilt Beale and app-server clients; no storage migration is needed.
-- Source research can materialize any repository verified under the recorded workspace scope and search its managed checkout; the configured source list is no longer treated as the scope boundary. Materialization performs Auto-Review before cloning.
-- Track checkpoints now map attacker control, trust boundary, possible failure mode, and unauthorized effect for each new path, and reject renamed copies of the same vector. Older paths remain readable and can be updated in place.
-
-#### Fixed
-
-- Research track scheduling retains testable high-impact paths for deeper work and moves to another available surface after three unproductive epochs on one surface. Checkpoints preserve distinct attacker paths with evidence-backed outcomes across epochs. Existing track surfaces gain an empty attacker-path ledger; control contract v64 requires rebuilt Beale and app-server clients.
-- Research tracks continue with another eligible surface when an agent retires the assigned surface. Automatic pause reasons remain visible after the worker exits.
-- Guardian-enabled tracks recover worker exits without terminal session records, close the interrupted attempt, and review durable progress in the next epoch instead of pausing. The selected Guardian setting persists across epochs; existing track rows gain a default-enabled column. Rebuild Beale and app-server together for the updated control contract.
-- Stopping an individual research epoch no longer pauses its track; an explicit track pause still does.
-- Sessions stopped after a track pause record the track-control cause even when the scheduler observes the pause first.
-
-## 0.9.0
-
-### Beale
+- Release actions use fixed commit references. macOS packaging checks the expected signing team and the app inside the DMG and ZIP; publication checks artifact digests and requires a second protected-environment approval.
+- Tag-triggered release jobs use the fixed checkout version that preserves annotated tags for release validation.
+- Workspace publication replaces known host paths even when nested JSON has escaped Windows separators, keeping those paths out of exported execution evidence.
 
 #### Changed
 
@@ -1505,6 +1529,23 @@
 
 #### Changed
 
+- App-server launches register custom providers from the host registry and route their model requests through the existing research runtime. Custom provider metadata stays separate from host-only API keys.
+
+- Research tracks reserve recurring epochs for distinct eligible resources and favor underexplored resource kinds, including reviewed discoveries outside configured source repositories. Surface lists expose resource kind filters, and epoch guidance records newly identified in-scope services and binaries as independent resources. Control contract v65 requires rebuilt Beale and app-server clients; no storage migration is needed.
+- Source research can materialize any repository verified under the recorded workspace scope and search its managed checkout; the configured source list is no longer treated as the scope boundary. Materialization performs Auto-Review before cloning.
+- Track checkpoints now map attacker control, trust boundary, possible failure mode, and unauthorized effect for each new path, and reject renamed copies of the same vector. Older paths remain readable and can be updated in place.
+
+#### Fixed
+
+- Failed topic-store initialization closes its SQLite handle, avoiding locked database files on Windows.
+- Research track scheduling retains testable high-impact paths for deeper work and moves to another available surface after three unproductive epochs on one surface. Checkpoints preserve distinct attacker paths with evidence-backed outcomes across epochs. Existing track surfaces gain an empty attacker-path ledger; control contract v64 requires rebuilt Beale and app-server clients.
+- Research tracks continue with another eligible surface when an agent retires the assigned surface. Automatic pause reasons remain visible after the worker exits.
+- Guardian-enabled tracks recover worker exits without terminal session records, close the interrupted attempt, and review durable progress in the next epoch instead of pausing. The selected Guardian setting persists across epochs; existing track rows gain a default-enabled column. Rebuild Beale and app-server together for the updated control contract.
+- Stopping an individual research epoch no longer pauses its track; an explicit track pause still does.
+- Sessions stopped after a track pause record the track-control cause even when the scheduler observes the pause first.
+
+#### Changed
+
 - App-server handshakes report the coordinated 0.9.0 runtime version.
 
 #### Added
@@ -1821,3 +1862,7 @@
 - Removed Topics operations and model-facing collaboration tools. Legacy topic snapshots remain readable for compatibility, and the shared app-server contract requires rebuilt clients.
 
 - Removed the second-model background memory curator, its advisory `memory.request` tool, provider-model CLI options, turn queue, notifications, and synthetic activity events.
+
+## 0.9.0
+
+The release tag was not published. Its workflow stopped during annotated-tag validation before either platform signed an installer.

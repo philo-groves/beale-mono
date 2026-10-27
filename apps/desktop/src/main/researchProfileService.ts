@@ -11,7 +11,7 @@ import {
 } from '../shared/researchProfile';
 import type { ResearchProfileId, ResolvedResearchProfile } from '@shared/types';
 import { redactForModelText } from './redaction';
-import { resolveAppServerWorkspaceRoot } from './appServerInvocation';
+import { appServerNodeEnvironment, packagedAppServerRuntimeRoot, resolveAppServerWorkspaceRoot } from './appServerInvocation';
 import type { AppServerInvocation } from './appServerRunEngine';
 
 export const RESEARCH_PROFILE_CATALOG_PROTOCOL_VERSION = 1 as const;
@@ -165,7 +165,7 @@ export function resolveAppServerProfileInvocation(options: { defaultRoot?: strin
     return {
       command: process.env.BEALE_APP_SERVER_PROFILE_NODE_COMMAND?.trim()
         || process.env.npm_node_execpath?.trim()
-        || 'node',
+        || (packagedAppServerRuntimeRoot() ? process.execPath : 'node'),
       prefixArgs: [cliPath],
       cwd: root,
       configuredBy: configuredProfileRoot ? 'env_root' : 'workspace_root',
@@ -202,7 +202,7 @@ function runResearchProfileCommand(
   const result = spawnSync(command, args, {
     cwd: invocation.cwd,
     encoding: 'utf8',
-    env: { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' },
+    env: appServerNodeEnvironment(command, { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' }),
     timeout: RESEARCH_PROFILE_RESOLUTION_TIMEOUT_MS,
     maxBuffer: RESEARCH_PROFILE_RESOLUTION_MAX_BYTES,
     windowsHide: true
@@ -228,7 +228,7 @@ function runResearchProfileCommandAsync(
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const child = spawn(command, args, {
       cwd: invocation.cwd,
-      env: { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' },
+      env: appServerNodeEnvironment(command, { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' }),
       windowsHide: true
     });
     const finish = (status: number | null, error?: Error): void => {

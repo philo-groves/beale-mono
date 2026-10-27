@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
@@ -17,6 +17,7 @@ import {
   BEALE_APP_SERVER_SHUTDOWN_PATH,
   BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT,
   BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH,
+  BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH,
   decodeBealeAppServerSessionCatalog,
   decodeBealeAppServerSessionAttachResult,
   decodeBealeAppServerSessionResult,
@@ -27,7 +28,7 @@ import {
   type AppServerSessionLaunchRequest
   ,type AppServerProtocolOperation
 } from '@beale/app-server-runtime/protocol';
-import { resolveAppServerNodeCommand, resolveAppServerWorkspaceRoot } from './appServerInvocation';
+import { appServerNodeEnvironment, packagedAppServerRuntimeRoot, resolveAppServerNodeCommand, resolveAppServerWorkspaceRoot } from './appServerInvocation';
 import { appServerRemoteAccessLaunchEnvironment } from './appServerRemoteAccess';
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 2_000;
@@ -169,6 +170,7 @@ async function ensureBealeAppServerRunningOnce(options: EnsureBealeAppServerOpti
     }
   }
 
+  await stopOrphanedPackagedSupervisor(stateFile);
   const launch: LaunchDiagnostics = { stderrTail: '', launchError: null };
   launchAppServerProcess(launch);
   const deadline = Date.now() + (options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
@@ -599,11 +601,10 @@ function launchAppServerProcess(
   if (launch.trayIconPath && !childEnv.BEALE_APP_SERVER_ICON?.trim()) {
     childEnv.BEALE_APP_SERVER_ICON = launch.trayIconPath;
   }
-  if (launch.trayHost) delete childEnv.ELECTRON_RUN_AS_NODE;
-
   let launchEnvironmentDirectory: string | null = null;
+  const processEnvironment = appServerProcessEnvironment(launch.command, launch.trayHost, childEnv);
   if (launch.launchServices) {
-    const launchEnvironment = writePrivateAppServerLaunchEnvironment(childEnv);
+    const launchEnvironment = writePrivateAppServerLaunchEnvironment(processEnvironment);
     launchEnvironmentDirectory = launchEnvironment.directory;
     launch.args.push(APP_SERVER_LAUNCH_ENVIRONMENT_FLAG, launchEnvironment.path);
   }
@@ -612,7 +613,7 @@ function launchAppServerProcess(
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],
     windowsHide: true,
-    env: childEnv
+    env: processEnvironment
   });
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {
@@ -639,6 +640,17 @@ function launchAppServerProcess(
   return true;
 }
 
+export function appServerProcessEnvironment(
+  command: string,
+  trayHost: boolean,
+  environment: NodeJS.ProcessEnv
+): NodeJS.ProcessEnv {
+  if (!trayHost) return appServerNodeEnvironment(command, environment);
+  const trayEnvironment = { ...environment };
+  delete trayEnvironment.ELECTRON_RUN_AS_NODE;
+  return trayEnvironment;
+}
+
 function launchAppServerTrayController(): void {
   launchAppServerProcess({ stderrTail: '', launchError: null }, { attachExisting: true });
 }
@@ -649,6 +661,10 @@ function defaultAppServerLaunch(): AppServerLaunch {
     throw new Error('The Beale app-server is not running and no workspace root was found to launch one. Start it with `pnpm --filter @beale/app-server start` or set BEALE_APP_SERVER_COMMAND.');
   }
   const appServerRoot = join(workspaceRoot, 'app-server');
+  if (process.platform === 'win32' && packagedAppServerRuntimeRoot() && typeof process.versions.electron === 'string') {
+    requireBuiltAppServerTrayEntry(appServerRoot);
+    return { command: process.execPath, args: ['--beale-app-server-tray'], trayHost: true };
+  }
   if (isAppServerTrayPlatform(process.platform) && typeof process.versions.electron === 'string') {
     const electronPath = process.platform === 'win32'
       ? ['dist', 'electron.exe']
@@ -780,23 +796,176 @@ export function appServerControlUrl(record: BealeAppServerDiscovery): string {
 }
 
 export async function restartBealeAppServer(): Promise<BealeAppServerDiscovery> {
+  await stopBealeAppServer();
+  return ensureBealeAppServerRunning();
+}
+
+/**
+ * Stops the local app-server if one is running. Rejects and leaves it running
+ * while research sessions are active.
+ */
+export async function stopBealeAppServer(): Promise<void> {
   const existing = readBealeAppServerDiscovery();
   if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
-  return ensureBealeAppServerRunning();
+}
+
+/** Stops both processes that run from the installed Beale executable. */
+export async function stopBealeAppServerForUpdate(): Promise<void> {
+  const stateFile = bealeAppServerStateFilePath();
+  const existing = readBealeAppServerDiscovery(stateFile);
+  const token = appServerSupervisorToken(stateFile, existing);
+  if (existing && isBealeAppServerAlive(existing)) await stopAppServerForUpgrade(existing);
+  if (process.env.BEALE_APP_SERVER_COMMAND?.trim()) return;
+  if (!token) return;
+  try {
+    const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(2_000)
+    });
+    if (response.status === 404 && isAppServerTrayPlatform(process.platform) && packagedAppServerRuntimeRoot()) {
+      await stopLegacyPackagedSupervisor();
+    } else if (!response.ok && response.status !== 404) {
+      throw new Error(`The app-server restart supervisor refused shutdown (HTTP ${response.status}).`);
+    } else if (response.ok) {
+      await waitForLocalSupervisorShutdown();
+    }
+  } catch (error) {
+    if (error instanceof TypeError && error.message === 'fetch failed') return;
+    throw error;
+  }
+}
+
+async function stopOrphanedPackagedSupervisor(stateFile: string): Promise<void> {
+  if (process.env.BEALE_APP_SERVER_COMMAND?.trim()
+    || !isAppServerTrayPlatform(process.platform) || !packagedAppServerRuntimeRoot()) return;
+  try {
+    const health = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}/health`, {
+      signal: AbortSignal.timeout(500)
+    });
+    if (!health.ok) return;
+  } catch (error) {
+    if (error instanceof TypeError) return;
+    throw error;
+  }
+  const token = appServerSupervisorToken(stateFile, readBealeAppServerDiscovery(stateFile));
+  if (!token) throw new Error('The existing app-server supervisor has no local restart token.');
+  const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH}`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2_000)
+  });
+  if (response.status === 404) await stopLegacyPackagedSupervisor();
+  else if (!response.ok) throw new Error(`The existing app-server supervisor refused shutdown (HTTP ${response.status}).`);
+  else await waitForLocalSupervisorShutdown();
+}
+
+async function waitForLocalSupervisorShutdown(): Promise<void> {
+  const deadline = Date.now() + APP_SERVER_SHUTDOWN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}/health`, {
+        signal: AbortSignal.timeout(500)
+      });
+    } catch (error) {
+      if (error instanceof TypeError) return;
+    }
+    await delay(100);
+  }
+  throw new Error('The app-server restart supervisor did not stop before updating Beale.');
+}
+
+async function stopLegacyPackagedSupervisor(): Promise<void> {
+  const runtimeRoot = packagedAppServerRuntimeRoot();
+  if (!runtimeRoot) return;
+  const expectedEntry = join(runtimeRoot, 'app-server', 'dist', 'restartSupervisorMain.js');
+  const pid = process.platform === 'win32'
+    ? legacyWindowsSupervisorPid(expectedEntry)
+    : legacyMacSupervisorPid(expectedEntry);
+  process.kill(pid, 'SIGTERM');
+  const deadline = Date.now() + APP_SERVER_SHUTDOWN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); }
+    catch { return; }
+    await delay(100);
+  }
+  throw new Error('The older app-server supervisor did not stop before updating Beale.');
+}
+
+function legacyWindowsSupervisorPid(expectedEntry: string): number {
+  const script = `$ownerPid = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($ownerPid) { Get-CimInstance Win32_Process -Filter "ProcessId = $ownerPid" | Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress }`;
+  let details: unknown;
+  try {
+    details = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', timeout: 5_000, windowsHide: true
+    }));
+  } catch {
+    throw new Error('The older app-server supervisor could not be identified before updating Beale.');
+  }
+  if (!isLegacyPackagedWindowsSupervisor(details, process.execPath, expectedEntry)) {
+    throw new Error('The app-server supervisor is not the expected Beale process; the update was stopped.');
+  }
+  return details.ProcessId;
+}
+
+function legacyMacSupervisorPid(expectedEntry: string): number {
+  let pid: number;
+  let command: string;
+  try {
+    const listener = execFileSync('lsof', ['-nP', `-iTCP:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}`, '-sTCP:LISTEN', '-Fp'], {
+      encoding: 'utf8', timeout: 5_000
+    });
+    pid = Number(/^p(\d+)$/mu.exec(listener)?.[1]);
+    command = execFileSync('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 5_000 });
+  } catch {
+    throw new Error('The older app-server supervisor could not be identified before updating Beale.');
+  }
+  if (!isLegacyPackagedMacSupervisor(pid, command, process.execPath, expectedEntry)) {
+    throw new Error('The app-server supervisor is not the expected Beale process; the update was stopped.');
+  }
+  return pid;
+}
+
+export function isLegacyPackagedWindowsSupervisor(
+  value: unknown,
+  executablePath: string,
+  expectedEntry: string
+): value is { ProcessId: number; ExecutablePath: string; CommandLine: string } {
+  if (!value || typeof value !== 'object') return false;
+  const details = value as Record<string, unknown>;
+  const normalize = (path: string): string => path.replaceAll('/', '\\').toLowerCase();
+  return Number.isInteger(details.ProcessId) && Number(details.ProcessId) > 0
+    && details.ProcessId !== process.pid
+    && typeof details.ExecutablePath === 'string'
+    && normalize(details.ExecutablePath) === normalize(executablePath)
+    && typeof details.CommandLine === 'string'
+    && normalize(details.CommandLine).includes(normalize(expectedEntry));
+}
+
+export function isLegacyPackagedMacSupervisor(
+  pid: number,
+  command: string,
+  executablePath: string,
+  expectedEntry: string
+): boolean {
+  return Number.isInteger(pid) && pid > 0 && pid !== process.pid
+    && command.includes(executablePath) && command.includes(expectedEntry);
 }
 
 export async function restartBealeAppServerViaSupervisor(): Promise<BealeAppServerDiscovery> {
   const stateFile = bealeAppServerStateFilePath();
   const discovery = readBealeAppServerDiscovery(stateFile);
-  const tokenFile = join(dirname(stateFile), `${basename(stateFile, extname(stateFile))}.token`);
-  const token = discovery?.operatorToken || process.env.BEALE_APP_SERVER_TOKEN?.trim()
-    || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
+  const token = appServerSupervisorToken(stateFile, discovery);
   if (!token) throw new Error('The local app-server restart token is unavailable.');
   const response = await fetch(`http://127.0.0.1:${BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT}${BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH}`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(90_000)
   });
   if (!response.ok) throw new Error(`The local app-server restart supervisor refused the request (HTTP ${response.status}).`);
   return ensureBealeAppServerRunning();
+}
+
+function appServerSupervisorToken(stateFile: string, discovery: BealeAppServerDiscovery | null): string {
+  const tokenFile = join(dirname(stateFile), `${basename(stateFile, extname(stateFile))}.token`);
+  return discovery?.operatorToken || process.env.BEALE_APP_SERVER_TOKEN?.trim()
+    || (existsSync(tokenFile) ? readFileSync(tokenFile, 'utf8').trim() : '');
 }
 
 function delay(ms: number): Promise<void> {

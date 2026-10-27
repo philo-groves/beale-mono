@@ -58,6 +58,18 @@ function fileIdentifier(value: unknown): string {
     : `encoded-${workspaceContentHash(id)}`;
 }
 
+function replaceSerializedPath(content: string, absolute: string, replacement: string): string {
+  let portable = content.replaceAll(absolute, replacement);
+  if (!absolute.includes("\\")) return portable;
+  let encoded = absolute;
+  while (encoded.length <= content.length) {
+    encoded = encoded.replaceAll("\\", "\\\\");
+    if (encoded.length > content.length) break;
+    portable = portable.replaceAll(encoded, replacement);
+  }
+  return portable;
+}
+
 /**
  * Materializes one workspace-scoped derived-index snapshot into canonical research files.
  * Schema-v2 workspaces treat the completed files as authority; schema-v1 workspaces
@@ -256,14 +268,15 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
       pins[evidencePath] = workspaceContentHash(files[evidencePath]!);
       artifactPaths.set(resolve(entry.path), path);
     }
-    // Exact known storage paths become portable references; never publish database or credential material.
+    // Exact known storage paths become portable references; nested JSON strings
+    // can escape Windows separators more than once.
     for (const [path, content] of Object.entries(files)) {
       if (path.endsWith('.ipynb') || path.endsWith('.md') || PRIOR_ART_PAYLOAD_PATH.test(path)) continue;
       let portable = content;
       for (const [absolute, exported] of artifactPaths) {
-        portable = portable.split(absolute).join(exported).split(absolute.replace(/\\/gu, "\\\\")).join(exported);
+        portable = replaceSerializedPath(portable, absolute, exported);
       }
-      portable = portable.split(root).join("workspace:").split(root.replace(/\\/gu, "\\\\")).join("workspace:");
+      portable = replaceSerializedPath(portable, root, "workspace:");
       files[path] = portable;
       if (path in pins) pins[path] = workspaceContentHash(portable);
     }

@@ -31,7 +31,7 @@ export function resolveContentLink(value: string, workspacePath: string | null):
     if (url.protocol !== 'file:') throw new Error('Unsupported file link.');
     path = fileURLToPath(url);
   } else {
-    if (/^[a-z][a-z\d+.-]*:/i.test(link) || link.startsWith('//')) throw new Error('Unsupported link.');
+    if ((!isAbsolute(link) && /^[a-z][a-z\d+.-]*:/i.test(link)) || link.startsWith('//')) throw new Error('Unsupported link.');
     const encodedPath = link.split(/[?#]/, 1)[0] ?? '';
     const localPath = decodeURIComponent(encodedPath);
     if (!localPath) throw new Error('Invalid file link.');

@@ -113,7 +113,7 @@ describe('renderer app shell view model', () => {
     expect(html).toContain('class="app-navigation-rail-filled-icon"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('width="18"');
-    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+    const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const railStyles = styles.match(/\.app-navigation-rail\s*\{([^}]*)\}/u)?.[1] ?? '';
     const topStyles = styles.match(/\.app-navigation-rail-top,\s*\.app-navigation-rail-sections\s*\{([^}]*)\}/u)?.[1] ?? '';
     expect(styles).toContain('--navigation-rail-width: 50px');

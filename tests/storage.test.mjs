@@ -43,7 +43,9 @@ test("storage manifest registers, lists, resolves, and reloads artifacts", async
 
     assert.equal(manifest.manifestPath, getResearchStorageManifestPath(layout));
     assert.equal(manifest.artifacts.length, 1);
-    assert.equal((await stat(manifest.manifestPath)).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal((await stat(manifest.manifestPath)).mode & 0o777, 0o600);
+    }
     assert.equal(listed.length, 1);
     assert.equal(resolved?.id, entry.id);
     assert.equal(entry.relativePath, "artifacts/reports/summary.txt");
@@ -75,7 +77,9 @@ test("storage manifest reports incomplete JSON without replacing the damaged fil
   }
 });
 
-test("storage manifest replaces a complete file without truncating existing readers", async () => {
+test("storage manifest replaces a complete file without truncating existing readers", {
+  skip: process.platform === "win32" ? "Windows cannot rename over a file held open by this reader" : false,
+}, async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-storage-atomic-"));
   try {
     const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));

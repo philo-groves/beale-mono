@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getWorkspaceEditorCatalog, getWorkspaceEditorCatalogForHost } from '../src/main/workspaceEditors';
 
@@ -96,8 +96,8 @@ describe('workspace editor discovery', () => {
   it('uses the bundled VS Code artwork instead of the macOS application bundle icon', async () => {
     const home = '/Users/researcher';
     const application = '/Applications/Visual Studio Code.app';
-    const executable = join(application, 'Contents', 'Resources', 'app', 'bin', 'code');
-    const artwork = join(application, 'Contents', 'Resources', 'Code.icns');
+    const executable = posix.join(application, 'Contents', 'Resources', 'app', 'bin', 'code');
+    const artwork = posix.join(application, 'Contents', 'Resources', 'Code.icns');
     const available = new Set([executable, artwork]);
     const iconPaths: string[] = [];
 

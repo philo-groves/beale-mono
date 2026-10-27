@@ -420,7 +420,7 @@ describe('renderer workspace display view models', () => {
   });
 
   it('switches workspaces before opening New Research from a workspace row', () => {
-    const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
+    const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const actionSource = appSource.match(
       /const openNewResearchForWorkspace = useCallback[\s\S]*?const startNewResearchForWorkspace/u
     )?.[0] ?? '';

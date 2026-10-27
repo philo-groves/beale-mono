@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { extname, join, posix } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { WorkspaceEditorCatalog, WorkspaceEditorId } from '@shared/types';
@@ -224,7 +224,7 @@ function nativeIconPath(
   const appBundlePath = editor.executablePath.slice(0, appBundleEnd + 4);
   const iconFile = MAC_EDITOR_ICON_FILES[editor.id];
   if (!iconFile) return appBundlePath;
-  const iconPath = join(appBundlePath, 'Contents', 'Resources', iconFile);
+  const iconPath = posix.join(appBundlePath, 'Contents', 'Resources', iconFile);
   return pathExists(iconPath) ? iconPath : appBundlePath;
 }
 
