@@ -13,6 +13,7 @@
 
 #### Changed
 
+- Installer staging now uses the reviewed dependency lockfile. The release workflow verifies the tag on macOS and Windows before requesting signing approval, requires signed installers, and checks signatures and macOS notarization before publishing.
 - Track progress lists retained attacker paths and outcomes, and shows automatic pause reasons directly.
 - Active sessions animate overlapping aurora ribbons through the window's profile-colored heat gradient; reduced-motion settings keep them still.
 - The active session stop icon makes a brief quarter turn followed by a longer pause to indicate ongoing work.

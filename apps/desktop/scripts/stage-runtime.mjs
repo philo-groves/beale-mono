@@ -31,17 +31,20 @@ for (const entry of ['app-server/dist/headlessMain.js', 'packages/app-server-run
 rmSync(runtimeRoot, { recursive: true, force: true });
 mkdirSync(runtimeRoot, { recursive: true });
 
-// `pnpm deploy` installs app-server's production dependency closure from the
-// frozen lockfile, with workspace packages copied in rather than linked. The
-// hoisted linker yields a plain node_modules tree with no symlinks, which
-// installers copy reliably on every platform.
+// Use the lockfile-backed deploy implementation. Legacy deploy resolves again
+// from the registry and can package dependencies absent from the reviewed lock.
+// The hoisted linker keeps runtime imports in a portable node_modules tree.
 const appServerRoot = join(runtimeRoot, 'app-server');
 execFileSync('pnpm', [
   '--filter', '@beale/app-server',
-  'deploy', '--prod', '--legacy', '--frozen-lockfile',
+  'deploy', '--prod', '--frozen-lockfile',
+  '--config.inject-workspace-packages=true',
   '--config.node-linker=hoisted',
   appServerRoot
 ], { cwd: repoRoot, stdio: 'inherit', shell: process.platform === 'win32' });
+if (!existsSync(join(appServerRoot, 'pnpm-lock.yaml'))) {
+  throw new Error('The staged app-server has no deployment lockfile.');
+}
 
 // Share one node_modules at the root so both app-server/dist and
 // packages/app-server-runtime/dist resolve dependencies by walking upward.

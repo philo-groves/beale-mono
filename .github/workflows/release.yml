@@ -1,8 +1,6 @@
 # Builds installers for a release tag and publishes them, with the update feed
 # files electron-updater reads, to the matching GitHub Release. The `release`
-# environment must require reviewer approval: that approval is the explicit
-# publication step RELEASING.md calls for. Approve only after the Release gate
-# run for the same tag has passed.
+# environment must require reviewer approval before signing and publication.
 name: Release
 
 on:
@@ -17,12 +15,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - name: Validate release tag
+        shell: bash
+        run: |
+          node scripts/release-version.mjs check "$GITHUB_REF_NAME"
+          git merge-base --is-ancestor HEAD origin/main
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:verify
+
   package:
+    needs: verify
     strategy:
       fail-fast: true
       matrix:
         os: [macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
+    environment: release
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +67,26 @@ jobs:
           node scripts/release-version.mjs check "$GITHUB_REF_NAME"
           git merge-base --is-ancestor HEAD origin/main
       - run: pnpm install --frozen-lockfile
+      - name: Require signing credentials
+        shell: bash
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD APPLE_API_KEY_CONTENT APPLE_API_KEY_ID APPLE_API_ISSUER; do
+              if [[ -z "${!name}" ]]; then echo "Missing signing credential: $name"; exit 1; fi
+            done
+          else
+            for name in WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD; do
+              if [[ -z "${!name}" ]]; then echo "Missing signing credential: $name"; exit 1; fi
+            done
+          fi
       - name: Write the App Store Connect API key
         if: runner.os == 'macOS'
         shell: bash
@@ -51,8 +97,6 @@ jobs:
             printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/apple-api-key.p8"
             echo "APPLE_API_KEY=$RUNNER_TEMP/apple-api-key.p8" >> "$GITHUB_ENV"
           fi
-      # Without signing secrets electron-builder still produces installers, but
-      # macOS will refuse to apply updates to an unsigned app.
       - run: pnpm package:desktop
         env:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
@@ -61,6 +105,23 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           WIN_CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Verify macOS app signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          codesign --verify --deep --strict apps/desktop/release/mac-arm64/Beale.app
+          xcrun stapler validate apps/desktop/release/mac-arm64/Beale.app
+      - name: Verify Windows app and installer signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = @('apps/desktop/release/win-unpacked/Beale.exe') +
+            @(Get-ChildItem apps/desktop/release -Filter '*.exe' -File | Select-Object -ExpandProperty FullName)
+          if ($files.Count -lt 2) { throw 'Windows app or installer is missing.' }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne 'Valid') { throw "Invalid signature on $file`: $($signature.Status)" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.os }}
@@ -75,7 +136,6 @@ jobs:
   publish:
     needs: package
     runs-on: ubuntu-latest
-    environment: release
     permissions:
       contents: write
     steps:

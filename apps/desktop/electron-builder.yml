@@ -35,6 +35,8 @@ publish:
   repo: beale-mono
   releaseType: release
 mac:
+  forceCodeSigning: true
+  notarize: true
   category: public.app-category.developer-tools
   icon: resources/app-icon.png
   # Squirrel.Mac needs the zip to apply updates; the dmg is for first installs.
@@ -46,10 +48,11 @@ mac:
   hardenedRuntime: true
   extendInfo:
     NSLocalNetworkUsageDescription: Beale connects to authorized local virtual machines and research targets.
-  # Signing and notarization run when the release workflow provides
-  # CSC_LINK/CSC_KEY_PASSWORD and APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER;
-  # without them electron-builder logs a skip and produces an unsigned app.
+  # The release workflow provides CSC_LINK/CSC_KEY_PASSWORD and the Apple
+  # notarization credentials. Missing signing material fails the build.
 win:
+  forceCodeSigning: true
+  verifyUpdateCodeSignature: true
   icon: resources/app-icon.png
   target:
     - target: nsis

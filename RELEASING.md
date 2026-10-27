@@ -8,7 +8,7 @@ Beale, app-server, and the two runtime packages advance together. The current co
 - Before a release tag, run the **Release gate** workflow on the candidate commit from the Actions tab. It runs `pnpm release:verify` on macOS and Windows, including the hosted integration suites.
 - A `vX.Y.Z` tag repeats the release gate. The tag must be annotated, match every package and release-facing version, point to the tested commit, and be reachable from `main`. The workflow only verifies; it does not publish or upload an installer.
 - After merging verified source into `release`, zip the `website/beale-source-installer` directory and update the WordPress plugin on beale.ai. Check that `https://beale.ai/i` returns the exact `install.mjs` content before advertising the command.
-- The same tag starts `.github/workflows/release.yml`, which builds a macOS arm64 dmg and zip and a Windows x64 NSIS installer with `pnpm package:desktop`. Its publish job waits for approval in the `release` environment, then creates the GitHub Release with the installers, `latest*.yml` update feed files, and `SHA256SUMS.txt`. Installed builds read that feed.
+- The same tag starts `.github/workflows/release.yml`. It runs `pnpm release:verify` on both operating systems, then waits for `release` environment approval before signing and packaging a macOS arm64 dmg and zip and a Windows x64 NSIS installer. Publication depends on both signed packages succeeding and includes the `latest*.yml` update feed files and `SHA256SUMS.txt`.
 
 Protect `main` with the CI `fast` check and require review before merging. Restrict who may create or replace `v*` tags. Keep the release gate result attached to the exact candidate commit; rerun it after any candidate change.
 
@@ -21,7 +21,7 @@ Protect `main` with the CI `fast` check and require review before merging. Restr
 5. Stop all app-server processes before taking a restorable backup of `~/.beale/memory.sqlite` and the affected research workspaces. Verify the backup can be read. Test any migration on a copy before upgrading an irreplaceable workspace.
 6. Create an annotated `vX.Y.Z` tag on the verified commit and push it. Confirm the tag-triggered Release gate passes.
 
-Do not treat a green source gate as installer validation. Approve the `release` environment only after the tag's Release gate passes on both operating systems.
+Do not treat a green source gate as installer validation. The Release workflow verifies the same tag on both operating systems before requesting approval to sign and publish. Inspect the verification results before approving the `release` environment.
 
 ## Installers and updates
 
@@ -31,9 +31,11 @@ Installed builds check the latest GitHub Release a few seconds after launch and 
 
 One-time repository setup:
 
-- Create a `release` environment with required reviewers.
-- For macOS, add `MACOS_CERTIFICATE` (base64 Developer ID Application .p12), `MACOS_CERTIFICATE_PASSWORD`, `APPLE_API_KEY` (App Store Connect .p8 contents), `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`. macOS applies updates only to signed apps; unsigned builds install but cannot update in place.
-- For Windows, optionally add `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD`. Unsigned installers update but show SmartScreen warnings.
+- Create a `release` environment with required reviewers and store all signing secrets there. The packaging jobs cannot access those secrets until approval.
+- For macOS, add `MACOS_CERTIFICATE` (base64 Developer ID Application .p12), `MACOS_CERTIFICATE_PASSWORD`, `APPLE_API_KEY` (App Store Connect .p8 contents), `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`.
+- For Windows, add `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD`. Published installers require a valid Authenticode signature so the Windows updater can verify the publisher. Source installs remain available without a signing certificate.
+
+The Release workflow fails rather than publishing an unsigned installer when signing credentials are missing or invalid. A local `pnpm package:desktop` build for macOS or Windows also requires signing credentials; use the source installer for unsigned development setups.
 
 Before the first public release, install the previous published build on each OS, publish the candidate, and confirm the in-app update relaunches into the new version, reconnects to app-server, and keeps workspaces intact.
 
