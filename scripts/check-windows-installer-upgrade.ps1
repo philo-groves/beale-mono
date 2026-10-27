@@ -31,9 +31,9 @@ function Assert-SignedInstaller([string]$path) {
   }
 }
 
-function Installed-Beale {
+function Installed-Beale([string]$version) {
   $entries = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
-    Where-Object { $_.DisplayName -eq 'Beale' })
+    Where-Object { $_.DisplayName -eq "Beale $version" })
   if ($entries.Count -ne 1) {
     foreach ($hive in @('HKCU', 'HKLM')) {
       $matches = @(Get-ItemProperty "${hive}:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
@@ -57,7 +57,7 @@ $first = Start-Process -FilePath $previousInstaller -ArgumentList @('/S', '/curr
 Write-Host "Previous installer exited with $($first.ExitCode)."
 if ($first.ExitCode -ne 0) { throw "The previous per-user installer exited with $($first.ExitCode)." }
 Write-Host 'Checking the previous installation.'
-$installed = Installed-Beale
+$installed = Installed-Beale $previousVersion
 if ($installed.Version -ne $previousVersion) { throw "Expected previous version $previousVersion; found $($installed.Version)." }
 
 # The former app-server supervisor also ran from Beale.exe. Keep one process
@@ -79,7 +79,7 @@ try {
   }
   if ($upgrade.ExitCode -ne 0) { throw "The silent upgrade exited with $($upgrade.ExitCode)." }
   Write-Host 'Checking the upgraded installation.'
-  $installed = Installed-Beale
+  $installed = Installed-Beale $ExpectedVersion
   if ($installed.Version -ne $ExpectedVersion) {
     throw "Expected upgraded version $ExpectedVersion; found $($installed.Version)."
   }
