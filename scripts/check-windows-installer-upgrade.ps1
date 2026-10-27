@@ -34,7 +34,15 @@ function Assert-SignedInstaller([string]$path) {
 function Installed-Beale {
   $entries = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
     Where-Object { $_.DisplayName -eq 'Beale' })
-  if ($entries.Count -ne 1) { throw "Expected one per-user Beale installation; found $($entries.Count)." }
+  if ($entries.Count -ne 1) {
+    foreach ($hive in @('HKCU', 'HKLM')) {
+      $matches = @(Get-ItemProperty "${hive}:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like '*Beale*' } |
+        ForEach-Object { "$($_.DisplayName) ($($_.DisplayVersion))" })
+      Write-Host "$hive Beale uninstall entries: $($matches -join ', ')"
+    }
+    throw "Expected one per-user Beale installation; found $($entries.Count)."
+  }
   if ($entries[0].UninstallString -notmatch '^"([^"]+\.exe)"') {
     throw 'The Beale uninstaller path is missing from the per-user registry entry.'
   }
@@ -46,7 +54,9 @@ function Installed-Beale {
 Assert-SignedInstaller $previousInstaller
 Assert-SignedInstaller $CurrentInstaller
 $first = Start-Process -FilePath $previousInstaller -ArgumentList @('/S', '/currentuser') -Wait -PassThru
+Write-Host "Previous installer exited with $($first.ExitCode)."
 if ($first.ExitCode -ne 0) { throw "The previous per-user installer exited with $($first.ExitCode)." }
+Write-Host 'Checking the previous installation.'
 $installed = Installed-Beale
 if ($installed.Version -ne $previousVersion) { throw "Expected previous version $previousVersion; found $($installed.Version)." }
 
@@ -68,6 +78,7 @@ try {
     throw 'The silent upgrade did not finish within two minutes.'
   }
   if ($upgrade.ExitCode -ne 0) { throw "The silent upgrade exited with $($upgrade.ExitCode)." }
+  Write-Host 'Checking the upgraded installation.'
   $installed = Installed-Beale
   if ($installed.Version -ne $ExpectedVersion) {
     throw "Expected upgraded version $ExpectedVersion; found $($installed.Version)."
