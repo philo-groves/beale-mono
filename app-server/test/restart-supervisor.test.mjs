@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { restartSupervisedAppServer } from '../dist/restartSupervisor.js';
+import { restartSupervisedAppServer, startRestartSupervisor } from '../dist/restartSupervisor.js';
+import { BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH } from '@beale/app-server-runtime/protocol';
 
 async function waitFor(check, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
@@ -57,6 +58,35 @@ test('restart supervisor replaces only the process that owns the discovery lock'
     globalThis.fetch = originalFetch;
     if (replacementPid) process.kill(replacementPid, 'SIGTERM');
     if (first.exitCode === null) first.kill('SIGTERM');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('restart supervisor shuts down only for its operator token', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-supervisor-shutdown-'));
+  const server = await startRestartSupervisor({
+    discoveryFile: join(directory, 'app-server.json'),
+    command: process.execPath,
+    args: [],
+    hostMode: 'headless',
+    operatorToken: 'synthetic-operator-token-00000000',
+    port: 0
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const url = `http://127.0.0.1:${address.port}${BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH}`;
+  try {
+    const denied = await fetch(url, { method: 'POST', headers: { authorization: 'Bearer wrong-token' } });
+    assert.equal(denied.status, 401);
+    const closed = new Promise((resolve) => server.once('close', resolve));
+    const allowed = await fetch(url, {
+      method: 'POST', headers: { authorization: 'Bearer synthetic-operator-token-00000000' }
+    });
+    assert.equal(allowed.status, 200);
+    await closed;
+  } finally {
+    server.closeAllConnections();
+    server.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

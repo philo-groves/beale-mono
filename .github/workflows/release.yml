@@ -1,0 +1,285 @@
+# Builds installers for a release tag and publishes them, with the update feed
+# files electron-updater reads, to the matching GitHub Release. The `release`
+# environment must require reviewer approval before signing and publication.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - name: Validate release tag
+        shell: bash
+        run: |
+          node scripts/release-version.mjs check "$GITHUB_REF_NAME"
+          git merge-base --is-ancestor HEAD origin/main
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:verify
+
+  package-macos:
+    needs: verify
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - name: Validate release tag
+        shell: bash
+        run: |
+          node scripts/release-version.mjs check "$GITHUB_REF_NAME"
+          git merge-base --is-ancestor HEAD origin/main
+      - run: pnpm install --frozen-lockfile
+      - name: Require signing credentials
+        id: signing
+        shell: bash
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          MACOS_SIGNING_TEAM_ID: ${{ vars.MACOS_SIGNING_TEAM_ID }}
+        run: |
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD APPLE_API_KEY_CONTENT APPLE_API_KEY_ID APPLE_API_ISSUER MACOS_SIGNING_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then echo "Missing signing credential: $name"; exit 1; fi
+          done
+      - name: Write the App Store Connect API key
+        shell: bash
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [[ -n "$APPLE_API_KEY_CONTENT" ]]; then
+            umask 077
+            printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/apple-api-key.p8"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/apple-api-key.p8" >> "$GITHUB_ENV"
+          fi
+      - run: pnpm package:desktop
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Verify macOS release artifacts
+        shell: bash
+        env:
+          MACOS_SIGNING_TEAM_ID: ${{ vars.MACOS_SIGNING_TEAM_ID }}
+        run: |
+          bash scripts/verify-macos-release.sh
+          node scripts/check-release-artifacts.mjs apps/desktop/release "${GITHUB_REF_NAME#v}" macos
+      - name: Remove temporary notarization key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/apple-api-key.p8"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installers-macos
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+
+  package-windows:
+    needs: verify
+    runs-on: windows-2022
+    environment: release
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - name: Validate release tag
+        shell: bash
+        run: |
+          node scripts/release-version.mjs check "$GITHUB_REF_NAME"
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Check Windows signing configuration
+        id: signing
+        shell: bash
+        env:
+          WINDOWS_SIGNING_ENABLED: ${{ vars.WINDOWS_SIGNING_ENABLED }}
+          WINDOWS_AZURE_CLIENT_ID: ${{ vars.WINDOWS_AZURE_CLIENT_ID }}
+          WINDOWS_AZURE_TENANT_ID: ${{ vars.WINDOWS_AZURE_TENANT_ID }}
+          WINDOWS_AZURE_SUBSCRIPTION_ID: ${{ vars.WINDOWS_AZURE_SUBSCRIPTION_ID }}
+          WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+          WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER }}
+        run: |
+          if [[ "$WINDOWS_SIGNING_ENABLED" == false || -z "$WINDOWS_SIGNING_ENABLED" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Windows signing is not enabled; skipping Windows installer."
+            exit 0
+          fi
+          if [[ "$WINDOWS_SIGNING_ENABLED" != true ]]; then
+            echo "WINDOWS_SIGNING_ENABLED must be true or false."
+            exit 1
+          fi
+          for name in WINDOWS_AZURE_CLIENT_ID WINDOWS_AZURE_TENANT_ID WINDOWS_AZURE_SUBSCRIPTION_ID WINDOWS_SIGNING_ENDPOINT WINDOWS_SIGNING_ACCOUNT WINDOWS_SIGNING_PROFILE WINDOWS_SIGNING_PUBLISHER; do
+            if [[ -z "${!name}" ]]; then echo "Missing Windows signing variable: $name"; exit 1; fi
+          done
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+      - run: pnpm install --frozen-lockfile
+        if: steps.signing.outputs.enabled == 'true'
+      - name: Sign in to Azure with GitHub OIDC
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.WINDOWS_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.WINDOWS_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.WINDOWS_AZURE_SUBSCRIPTION_ID }}
+      - name: Package signed Windows installer
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+          WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER }}
+        run: |
+          pnpm build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @beale/desktop build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @beale/desktop stage:runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm --filter @beale/desktop exec electron-builder --publish never `
+            "-c.win.azureSignOptions.endpoint=$env:WINDOWS_SIGNING_ENDPOINT" `
+            "-c.win.azureSignOptions.codeSigningAccountName=$env:WINDOWS_SIGNING_ACCOUNT" `
+            "-c.win.azureSignOptions.certificateProfileName=$env:WINDOWS_SIGNING_PROFILE" `
+            "-c.win.azureSignOptions.publisherName=$env:WINDOWS_SIGNING_PUBLISHER"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify Windows app and installer signatures
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER }}
+        run: |
+          $files = @('apps/desktop/release/win-unpacked/Beale.exe') +
+            @(Get-ChildItem apps/desktop/release -Filter '*.exe' -File | Select-Object -ExpandProperty FullName)
+          if ($files.Count -lt 2) { throw 'Windows app or installer is missing.' }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file
+            if ($signature.Status -ne 'Valid') { throw "Invalid signature on $file`: $($signature.Status)" }
+            $publisher = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            if ($publisher -ne $env:WINDOWS_SIGNING_PUBLISHER) { throw "Unexpected signer on $file`: $publisher" }
+            if (-not $signature.TimeStamperCertificate) { throw "Missing timestamp on $file" }
+          }
+          node scripts/check-release-artifacts.mjs apps/desktop/release $env:GITHUB_REF_NAME.Substring(1) windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          name: installers-windows
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+
+  publish:
+    needs: [package-macos, package-windows]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: installers
+          pattern: installers-*
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_SIGNING_ENABLED: ${{ vars.WINDOWS_SIGNING_ENABLED }}
+        run: |
+          shopt -s nullglob
+          mac_dmg=(installers/*.dmg)
+          mac_zip=(installers/*.zip)
+          win_exe=(installers/*.exe)
+          if [[ ${#mac_dmg[@]} -ne 1 || ${#mac_zip[@]} -ne 1 || ! -f installers/latest-mac.yml ]]; then
+            echo "Expected one macOS DMG, one ZIP, and latest-mac.yml."
+            exit 1
+          fi
+          if [[ "$WINDOWS_SIGNING_ENABLED" == true ]]; then
+            if [[ ${#win_exe[@]} -ne 1 || ! -f installers/latest.yml ]]; then
+              echo "Expected one signed Windows installer and latest.yml."
+              exit 1
+            fi
+          elif [[ ${#win_exe[@]} -ne 0 ]]; then
+            echo "Windows installer present while signing is disabled."
+            exit 1
+          fi
+          for file in installers/*; do
+            if [[ ! -f "$file" || -L "$file" ]]; then
+              echo "Unexpected release artifact type: $file"
+              exit 1
+            fi
+            case "$file" in
+              *.dmg|*.zip|*.exe|*.blockmap|*/latest.yml|*/latest-mac.yml) ;;
+              *) echo "Unexpected release artifact: $file"; exit 1 ;;
+            esac
+          done
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.mjs "$version" notes.md
+          (cd installers && sha256sum * > SHA256SUMS.txt)
+          gh release create "$GITHUB_REF_NAME" installers/* \
+            --verify-tag \
+            --title "Beale $version" \
+            --notes-file notes.md \
+            --latest

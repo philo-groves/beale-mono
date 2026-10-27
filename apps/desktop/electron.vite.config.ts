@@ -21,7 +21,7 @@ export default defineConfig({
       rollupOptions: {
         external: ['tree-sitter-wasm'],
         input: {
-          index: resolve(__dirname, 'src/main/index.ts')
+          index: resolve(__dirname, 'src/main/bootstrap.ts')
         }
       }
     }

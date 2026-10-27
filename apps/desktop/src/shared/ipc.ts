@@ -1,4 +1,8 @@
 export const IPC_CHANNELS = {
+  getDesktopUpdateState: 'beale:get-desktop-update-state',
+  downloadDesktopUpdate: 'beale:download-desktop-update',
+  installDesktopUpdate: 'beale:install-desktop-update',
+  desktopUpdateState: 'beale:desktop-update-state',
   listBrowserContexts: 'beale:list-browser-contexts',
   createBrowserContext: 'beale:create-browser-context',
   renameBrowserContext: 'beale:rename-browser-context',

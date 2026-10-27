@@ -104,7 +104,7 @@ For active runs, Beale sends only logical session intent to the Beale app-server
 
 app-server protocol v1 is the transport boundary, while contract v65 identifies the executing runtime build, current finding and memory-summary schemas, live workspace surface maps with resource kinds and research tracks with durable causal attacker paths, file-authority workspace synchronization, reversible derived-index release, and required capabilities. Beale validates the app-server descriptor and WebSocket hello. Session persistence and derived research queries, findings, campaign projection, knowledge and artifact operations, auxiliary model jobs and provider semantics, Agent Plugins, and source materialization are app-server-owned operations hosted by app-server.
 
-Beale is at a 0.9.0 release candidate baseline and uses append-only component-scoped migrations.
+Beale is at a 0.9.2 release candidate baseline and uses append-only component-scoped migrations.
 
 The sidebar Skills and MCP Servers views request hosted tool discovery and configuration from app-server, so persisted skill directories, selected skill ids, MCP config paths, allowlists, and default timeouts remain in app-server's `.beale/tools.json`. Every discovered MCP tool also exposes an optional `bealeTimeoutMs` control (1 second through 30 minutes) that the research agent can use for an individual slow call; Beale strips that field before provider dispatch. Legacy synchronous Desktop call sites may use the packaged app-server client, but that executable cannot host research or access app-server storage directly.
 

@@ -1,0 +1,777 @@
+[
+  {
+    "slug": "start-here",
+    "title": "Overview",
+    "summary": "Install Desktop, create an authorized workspace, and start a research session.",
+    "pages": [
+      {
+        "slug": "overview",
+        "title": "Overview",
+        "summary": "The shortest path from installation to evidence you can revisit.",
+        "blocks": [
+          {
+            "heading": "What Beale does",
+            "paragraphs": [
+              "Beale is a workbench for authorized, human-steered vulnerability research. Desktop is the trusted interface; the app-server runs sessions and owns research storage; the research agent supplies tools, context, and durable research records. You choose the workspace, target, provider, and permission posture before a session starts.",
+              "A workspace records the authorization boundary and keeps its research in one directory. Sessions explore a question. Findings, memories, runbooks, reports, and traces help you inspect what happened later. A model statement alone is not a confirmed vulnerability: conclusions need supporting tool, artifact, or verifier evidence."
+            ]
+          },
+          {
+            "heading": "Start researching",
+            "steps": [
+              "Install Beale Desktop for macOS or Windows from Downloads, then open it and configure a model provider in Settings → Providers.",
+              "Create a Workspace. Enter a research subject and name, select a Research Kit if useful, review resources and rules, and record the authorized scope.",
+              "Open New Research in that workspace. Describe a bounded question, choose a model and local or Fleet target, review Goal Mode, Repeat, and permissions, then start the session.",
+              "Review the session commentary and trace. Save observations as memories, build evidence-backed findings, and turn repeatable procedures into runbooks or reports."
+            ],
+            "note": "Beale runs target code with the host privileges you give it. Launch Beale and app-server inside your own VM or container when OS isolation is required.",
+            "links": [
+              {
+                "label": "Download Desktop",
+                "url": "/downloads/"
+              },
+              {
+                "label": "Read the Sessions guide",
+                "url": "/docs/ways-to-work/sessions/"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "architecture",
+    "title": "Architecture",
+    "summary": "How Desktop, app-server, the research runtime, and the iOS companion fit together.",
+    "pages": [
+      {
+        "slug": "app-server",
+        "title": "App Server",
+        "summary": "The resident host for sessions, canonical operations, transport, and storage.",
+        "blocks": [
+          {
+            "heading": "The runtime boundary",
+            "paragraphs": [
+              "The app-server is a separate resident process. On macOS and Windows it has an Electron tray host; a headless Node host is also implemented. It starts research workers, dispatches canonical operations, publishes the local connection descriptor, and streams run events to clients. Desktop connects to it rather than hosting the research engine or opening its database.",
+              "The shared app-server runtime defines the versioned client protocol and worker behavior. The research-agent package supplies model-facing tools, research context, and durable semantics. The app-server owns host lifecycle, provider policy, storage routing, and the global database at ~/.beale/memory.sqlite; records retain workspace ownership."
+            ]
+          },
+          {
+            "heading": "Local and remote clients",
+            "paragraphs": [
+              "A local Desktop client discovers the app-server from the workspace root or BEALE_APP_SERVER_* overrides. Remote app-servers can be added through Fleet. Remote access and network isolation are operator-managed boundaries; enabling a remote endpoint does not create an application sandbox.",
+              "Keep the app-server running for scheduled work and session recovery. If Desktop is closed while work is hosted, reopen it to inspect the app-server's recorded sessions and events."
+            ],
+            "links": [
+              {
+                "label": "Fleet connections",
+                "url": "/docs/ways-to-work/fleet/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "desktop-agent",
+        "title": "Desktop Agent",
+        "summary": "The macOS and Windows workbench for steering research and reviewing evidence.",
+        "blocks": [
+          {
+            "heading": "What Desktop owns",
+            "paragraphs": [
+              "Beale Desktop is the trusted Electron host harness. Its renderer presents workspaces, sessions, Fleet, automations, plugins, reports, and settings. The main process handles host-facing services such as provider sign-in, browser integration, local filesystem selection, and the app-server client boundary; the preload bridge exposes typed operations to the renderer.",
+              "Desktop can launch New Research, steer a running session, review tool traces and approvals, open side panels, manage workspace records, and inspect remote work. The actual research run and durable research database remain app-server-owned."
+            ]
+          },
+          {
+            "heading": "Install and update",
+            "paragraphs": [
+              "The Downloads page always resolves the latest public macOS or Windows release. The macOS build is signed and notarized; the Windows installer uses the release signing flow. Source installation is available for development and for platforms without a packaged Desktop release."
+            ],
+            "links": [
+              {
+                "label": "Desktop downloads",
+                "url": "/downloads/"
+              },
+              {
+                "label": "Build from source",
+                "url": "https://github.com/philo-groves/beale-mono"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "ios-agent",
+        "title": "iOS Agent",
+        "summary": "Current iPhone companion capabilities and availability.",
+        "blocks": [
+          {
+            "heading": "Current state",
+            "paragraphs": [
+              "The iOS application is developed in a separate repository and is not available for download on the iOS App Store. Do not treat the Desktop download or the source installer as an iPhone app installer.",
+              "The current iOS companion implementation can capture user-selected iPhone screen content and stream transient frames to Desktop through a USB tunnel. It also has remote settings for a Tailscale host and a read-only Research view: it lists remote workspaces and can search and inspect workspace memories. Other workspace views in that companion remain initial skeletons. The full research runtime is hosted by app-server, not on the phone."
+            ]
+          },
+          {
+            "heading": "For developers",
+            "paragraphs": [
+              "The separate iOS project requires Xcode and a connected supported iPhone for local builds. The screen-capture picker grants consent on the device. A remote host must be configured and reachable before the read-only Research view can load data. This is development functionality, not a public mobile release."
+            ],
+            "note": "No App Store availability or public iOS installation path is offered at this time."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "ways-to-work",
+    "title": "Ways to Work",
+    "summary": "Choose a conversation, sustained goal, scheduled run, research track, or remote target.",
+    "pages": [
+      {
+        "slug": "sessions",
+        "title": "Sessions",
+        "summary": "Start, steer, inspect, and resume a research conversation.",
+        "blocks": [
+          {
+            "heading": "Start a session",
+            "paragraphs": [
+              "Select a workspace and choose New Research. Enter the question or outcome in the composer, select an available provider and model, and choose the local machine or an allowed Fleet target. The New Research settings menu controls Goal Mode, Add Context, and Repeat. The composer also exposes the session permission mode and collaboration choices.",
+              "A session captures its workspace context, authorized boundary, provider selection, and prompt when it starts. Be specific about the question and expected evidence. Keep a separate workspace for a separate authorization boundary."
+            ],
+            "steps": [
+              "Open the workspace in the sidebar and choose New Research.",
+              "Write a bounded objective and review the selected model, target, and permissions.",
+              "Start the session; follow live commentary and open detailed tool events when you need provenance.",
+              "Send a follow-up to steer the active session, or return later to inspect its recorded history."
+            ]
+          },
+          {
+            "heading": "Read the result",
+            "paragraphs": [
+              "The session view combines live commentary, trace events, tool details, context and usage indicators, and a side panel for workspace memory, findings, runbooks, reports, subagents, and browser contexts. Older history can be loaded when available. Stop or steer a running session from its controls; an archived session can be restored from Settings → Archives.",
+              "A final answer is a summary of the work. For a vulnerability conclusion, open the linked evidence and verifier output before treating it as confirmed."
+            ],
+            "links": [
+              {
+                "label": "Goal Mode",
+                "url": "/docs/ways-to-work/goal-mode/"
+              },
+              {
+                "label": "Findings",
+                "url": "/docs/information/findings/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "goal-mode",
+        "title": "Goal Mode",
+        "summary": "Keep a session pursuing a defined outcome across turns.",
+        "blocks": [
+          {
+            "heading": "Enable a sustained goal",
+            "paragraphs": [
+              "In New Research, open the settings menu and enable Goal Mode before starting. The first objective becomes the goal for that session. Goal Mode tracks whether work is active, complete, or blocked across turns and stores that state with the run. You can still send follow-ups; the agent uses them as authoritative steering for the same goal.",
+              "Use a concrete, testable outcome: for example, identify and validate an in-scope trust-boundary failure, or document why a specific path is ruled out. A broad request can lead to broad work, so name the authorized scope and the evidence you expect."
+            ],
+            "steps": [
+              "Enable Goal Mode in New Research.",
+              "Write the outcome and start the session.",
+              "Review progress, evidence, and any stated blocker after each turn.",
+              "Send a follow-up to narrow or redirect the goal; mark it complete only when the intended outcome is actually reached."
+            ],
+            "note": "A blocked or uncertain result is not automatically a verified finding. Check the underlying evidence and the authorized scope."
+          }
+        ]
+      },
+      {
+        "slug": "quick-chats",
+        "title": "Quick Chats",
+        "summary": "Use a lightweight conversation for a question outside a research session.",
+        "blocks": [
+          {
+            "heading": "Open a Quick Chat",
+            "paragraphs": [
+              "Quick Chat is a docked conversation with an “Any topic, any workspace” composer. Use it for a short question, orientation, or a task that does not need a full workspace research session. It can be collapsed, expanded, or resized without leaving the current view.",
+              "Closing a Quick Chat archives its history automatically. Open Settings → Archives to resume it later. In a remote context, the dock also offers recent Quick Chats for that app-server. Report editing uses a similar dock, but its messages are scoped to the open report."
+            ],
+            "note": "Use a workspace session for work that must carry authorization, research context, and durable evidence."
+          }
+        ]
+      },
+      {
+        "slug": "automations",
+        "title": "Automations",
+        "summary": "Repeat a workspace research session on a schedule.",
+        "blocks": [
+          {
+            "heading": "Schedule work",
+            "paragraphs": [
+              "A scheduled job starts from New Research: choose Repeat, then select a minute, hour, day, week, or month interval. The Automations area lists jobs across workspaces, shows whether each is active, and provides an editor. A scheduled job retains the workspace, provider and model, prompt, and repeat settings used to create it.",
+              "The app-server hosts scheduled runs and records attempts. Open an automation to review each attempt's session commentary and trace. You can disable a job without deleting its history."
+            ],
+            "steps": [
+              "Choose a workspace and open New Research, or select Schedule a Job in Automations.",
+              "Write the repeatable objective, choose an interval, then start the job.",
+              "Inspect runs under Automations and disable or edit the schedule when the task changes."
+            ],
+            "note": "Repeating sessions are available on Local only in the current New Research flow; a remote VM target conflicts with Repeat."
+          }
+        ]
+      },
+      {
+        "slug": "tracks",
+        "title": "Tracks",
+        "summary": "Work through a workspace's security surfaces over successive epochs.",
+        "blocks": [
+          {
+            "heading": "Coverage over time",
+            "paragraphs": [
+              "A Research Track coordinates repeated work on the workspace surface map. The app-server stores track status, active session and surface, pass and epoch counts, and per-surface state. Each surface can record the current theory, distinct attacker paths, validation environment, evidence references, next action, and revisit timing.",
+              "Track status can be running, paused, waiting, complete, or stopped. The workspace Track view has controls to pause, resume, stop, and open the current session. Use the surface map to see coverage and blockers rather than treating an epoch summary as the entire research record."
+            ],
+            "steps": [
+              "Define workspace scope and surfaces first.",
+              "Start a Track from the workspace and choose the model, permissions, and target.",
+              "Inspect surface progress and the active session. Pause or steer when a path needs operator input.",
+              "Review linked memories, findings, runbooks, and reports before marking coverage complete."
+            ],
+            "note": "A negative result should be recorded as evidence-backed memory; a tested path is not a finding merely because a Track visited it."
+          }
+        ]
+      },
+      {
+        "slug": "fleet",
+        "title": "Fleet",
+        "summary": "Choose local, browser, VM, and remote app-server surfaces for research.",
+        "blocks": [
+          {
+            "heading": "Configure targets",
+            "paragraphs": [
+              "Fleet exposes the local machine, separate browser profiles, supported VMs, and remote app-servers. On macOS, VM integration uses Tart; on Windows, Hyper-V is supported. VM command execution uses SSH and, where available, guest-agent or remote-control surfaces. There is no Fleet guest install path for research commands.",
+              "In Fleet settings, configure a VM's SSH/run/clone options or add an app-server on a Tailscale network. Browser settings choose the default page and enabled browsers. In a workspace's Targets view, select which of those targets may appear in New Research; a session can only choose targets allowed for that workspace."
+            ]
+          },
+          {
+            "heading": "Keep the boundary explicit",
+            "paragraphs": [
+              "Local target execution uses the current host's privileges. A VM or remote host is an operator-provided execution environment; Beale does not claim to manage network isolation or destination control. Verify SSH identity, scope, and reachability before sending research work to a machine.",
+              "Remote app-servers expose their own workspaces and runs. Pairing and remote access are configured per server; do not assume a local workspace is automatically synchronized to a remote host."
+            ],
+            "links": [
+              {
+                "label": "Workspace Targets",
+                "url": "/docs/workspaces/targets/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "collaboration",
+        "title": "Collaboration",
+        "summary": "Use configured subagents to divide research and review work.",
+        "blocks": [
+          {
+            "heading": "Configure collaborators",
+            "paragraphs": [
+              "New Research exposes collaboration choices alongside the lead model. Beale can assign configured models to subagent roles such as discoverer, prover, reviewer, and reporter. Simple and advanced subagent modes are represented in the current configuration; enabled provider/model entries determine which collaborators are available.",
+              "The lead agent remains responsible for integrating results. Open the session's Subagents side view to inspect delegated work and its trace. Independent subagent output is a candidate observation until it has supporting evidence and fits the workspace authorization boundary."
+            ]
+          },
+          {
+            "heading": "Use it deliberately",
+            "steps": [
+              "Configure at least one provider and model in Settings → Providers.",
+              "Select collaboration preferences in New Research and start a bounded task.",
+              "Inspect each subagent's work, then verify any claim through the linked tools or artifacts."
+            ],
+            "links": [
+              {
+                "label": "Providers",
+                "url": "/docs/agent-settings/providers/"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "workspaces",
+    "title": "Workspaces",
+    "summary": "Record authorization, guidance, resources, surfaces, and target choices in one place.",
+    "pages": [
+      {
+        "slug": "rules-settings",
+        "title": "Rules & Settings",
+        "summary": "Set the research boundary and workspace-wide operating choices.",
+        "blocks": [
+          {
+            "heading": "Create the workspace",
+            "paragraphs": [
+              "New Workspace walks through Settings, a Research Kit when selected, Resources, and Rules. Choose a research subject shared across related workspaces, a workspace name, and the directory that will hold the project. Workspace Guidance becomes the primary AGENTS.md content. Review the authorized program or scope before you start a run.",
+              "The Settings view later shows the fixed research profile and Research Kit, research subject, workspace name, directories, guidance, and memory setting. A Research Kit is selected at creation and cannot be switched in that existing workspace. Some fields are locked while research is active so a running session's context cannot silently change."
+            ]
+          },
+          {
+            "heading": "Rules and memory",
+            "paragraphs": [
+              "The Rules tab holds concise operating constraints appended for research in this workspace. Keep program-specific testing limits here and verify current program terms yourself. The recorded authorization boundary controls live-target testing; adding a discovered resource does not expand it.",
+              "Memory can be enabled or disabled in workspace Settings. Disabling it keeps existing stored data but removes recall, claim, and campaign tools from new sessions. It cannot be changed while a research session is queued, active, or paused."
+            ],
+            "links": [
+              {
+                "label": "AGENTS.md guidance",
+                "url": "/docs/workspaces/agents-md/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "resources",
+        "title": "Resources",
+        "summary": "Inventory domains, repositories, binaries, services, tools, and documents.",
+        "blocks": [
+          {
+            "heading": "Explicit scope and discovered material",
+            "paragraphs": [
+              "A workspace resource has a kind such as domain, repository, binary, service, tool, documentation, or other. At creation, select resources imported by the Research Kit and add the authorized material you intend to examine. The Resources view lets you inspect the catalog later.",
+              "Resources explicitly recorded as in scope or out of scope are different from ambient items discovered during a session. Discovery adds an item to the research inventory; it does not grant permission to test it. The research tool requests a scope review before substantive first touch of a newly discovered resource."
+            ]
+          },
+          {
+            "heading": "History and prior art",
+            "paragraphs": [
+              "A resource can have saved public-history searches and source documents. Open Prior art from the resource to inspect saved search parameters, coverage, source records, and retrieval limits. A match needs applicability review; an empty search is not proof that a bug is novel."
+            ],
+            "note": "Use synthetic test inputs when exploring untrusted targets, and stay within the workspace's recorded authorization boundary."
+          }
+        ]
+      },
+      {
+        "slug": "surfaces",
+        "title": "Surfaces",
+        "summary": "Map trust boundaries and see which parts of a target have evidence-backed coverage.",
+        "blocks": [
+          {
+            "heading": "Build a surface map",
+            "paragraphs": [
+              "A surface is a workspace-scoped security area linked to a resource. Root surfaces can have child surfaces. Beale records a threat-model foundation: attacker control, trust boundaries, assets at risk, assumptions, known bug history, mapping state, and open questions. The workspace Surfaces view displays the map and each surface's current coverage state.",
+              "Coverage has explicit requirements. Missing foundation, incomplete mapping, unexplored sinks or connections, open questions, unblocked findings, and incomplete child surfaces keep a surface from being marked covered. A progress blocker is visible separately."
+            ],
+            "steps": [
+              "Open the workspace Surfaces view and select a resource-linked surface.",
+              "Read its threat model, open questions, children, and coverage gaps.",
+              "Use a Session or Track to test a concrete attacker path, then attach canonical evidence references.",
+              "Return to the surface to review remaining requirements and the next action."
+            ],
+            "links": [
+              {
+                "label": "Tracks",
+                "url": "/docs/ways-to-work/tracks/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "targets",
+        "title": "Targets",
+        "summary": "Select which machines and browsers appear for New Research.",
+        "blocks": [
+          {
+            "heading": "Choose execution surfaces",
+            "paragraphs": [
+              "The workspace Targets tab lists the local machine, enabled Fleet browser profiles, and configured VM targets that the current app-server can offer. Check the targets you want available for that workspace. In New Research, choose from the allowed targets; unavailable or unready machines cannot start work.",
+              "A target is an execution destination, not an authorization grant. The workspace's recorded research scope still applies. A local run has your current host privileges; SSH, VM, browser, and remote app-server paths use their own operator-managed boundaries."
+            ],
+            "steps": [
+              "Configure the machine or browser in Fleet first.",
+              "Open the workspace Targets tab and enable the destinations you intend to use.",
+              "Review the chosen destination in New Research before starting."
+            ],
+            "links": [
+              {
+                "label": "Fleet",
+                "url": "/docs/ways-to-work/fleet/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "research-kits",
+        "title": "Research Kits",
+        "summary": "Start from a supported public program or use manual scope entry.",
+        "blocks": [
+          {
+            "heading": "Choose a kit",
+            "paragraphs": [
+              "Research Kits help acquire resources, public scope, guidance, and rules during workspace creation. The implemented choices include Manual Security, HackerOne, Bugcrowd, Apple Security Bounty, Google OSS VRP, MSRC, and Meta Bug Bounty. A kit can supply a public program lookup, a bundled repository or resource catalog, or starting rules, depending on the integration.",
+              "Review every imported item before creating the workspace. Public program terms, eligible assets, and reward rules can change; the kit provides a starting point and does not authorize an unlisted target. The Research Kit view can refresh supported imports later, while the selected kit identity remains fixed for the workspace."
+            ]
+          },
+          {
+            "heading": "When to use Manual Security",
+            "paragraphs": [
+              "Choose Manual Security when no bundled program matches. Enter the authorized scope, resources, and constraints yourself. Keep precise target identifiers in the private workspace, never in reusable public documentation."
+            ],
+            "links": [
+              {
+                "label": "Rules & Settings",
+                "url": "/docs/workspaces/rules-settings/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "agents-md",
+        "title": "AGENTS.md",
+        "summary": "Write workspace instructions that the host adds to research sessions.",
+        "blocks": [
+          {
+            "heading": "Workspace Guidance",
+            "paragraphs": [
+              "The Workspace Guidance editor reads and writes the primary workspace's AGENTS.md. Use it for stable instructions such as testing boundaries, evidence standards, preferred tools, repository layout, and escalation points. New research sessions receive workspace instructions from the host in addition to the selected prompt template.",
+              "The instruction loader also recognizes AGENTS.override.md or AGENTS.md along a project directory path, with a configured size cap. Keep guidance concise and review what files are in the actual workspace tree. It is not a substitute for the recorded authorization boundary or the Rules tab."
+            ],
+            "steps": [
+              "Open Workspace → Settings → Workspace Guidance.",
+              "Write short, specific rules and preview the Markdown.",
+              "Save, then start a new session so it captures the updated instructions."
+            ],
+            "links": [
+              {
+                "label": "Prompt settings",
+                "url": "/docs/agent-settings/prompt/"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "information",
+    "title": "Information",
+    "summary": "Turn session observations into evidence, reusable knowledge, and reviewable output.",
+    "pages": [
+      {
+        "slug": "findings",
+        "title": "Findings",
+        "summary": "Track a claim from lead to observed, reproduced, and verified evidence.",
+        "blocks": [
+          {
+            "heading": "A claim is a record, not a verdict",
+            "paragraphs": [
+              "The campaign board separates leads from findings and shows maturity lanes: lead, observed, reproduced, verified, and refuted. A finding also has status, severity rating, classification, impact, reproduction steps, affected assets and surfaces, provenance, and a revision history. The rating is a qualitative research estimate; it is not by itself an evidence-backed risk assessment.",
+              "Attach specific evidence such as code, commands, artifacts, proof, runbook executions, independent verification, or human review. The record keeps references, content hashes when available, the originating session, actor, and transitions. Confirmed conclusions require those references to support the claim; a user-supplied assertion or a model answer is only a starting hypothesis."
+            ]
+          },
+          {
+            "heading": "Review and advance",
+            "steps": [
+              "Open the workspace campaign board or a session's Findings side view.",
+              "Read the claim, linked evidence, reachability assessment, source revision, and environment identity.",
+              "Move the claim only to the maturity justified by the observations; record a contrary or negative result instead of silently dropping it.",
+              "Link a reproduction runbook and report when the result is repeatable and ready for review."
+            ],
+            "note": "An operator override is recorded separately from normal evidence-backed transitions. Recheck a stale finding against the current target revision."
+          }
+        ]
+      },
+      {
+        "slug": "memories",
+        "title": "Memories",
+        "summary": "Keep compact, workspace-owned observations available for later sessions.",
+        "blocks": [
+          {
+            "heading": "Durable research context",
+            "paragraphs": [
+              "Beale stores research memory in the app-server-owned global database while retaining workspace ownership on each record. The workspace Memory view groups and searches nodes; a session's side panel can open them beside the trace. Memories preserve useful facts, negative results, constraints, and links to evidence without forcing every observation into a vulnerability claim.",
+              "New sessions may recall relevant workspace memory when the workspace setting is enabled. Disabling memory leaves existing data intact but removes recall, claim, and campaign tools from future sessions; it does not erase history."
+            ]
+          },
+          {
+            "heading": "Write useful memory",
+            "steps": [
+              "Record the observation, source revision, test environment, and what was actually measured.",
+              "Link the canonical tool, artifact, or verifier reference when available.",
+              "State limitations and contrary evidence, especially when a path was ruled out.",
+              "Search or open the record in the workspace Memory view before reusing the conclusion."
+            ],
+            "links": [
+              {
+                "label": "Workspace settings",
+                "url": "/docs/workspaces/rules-settings/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "reports",
+        "title": "Reports",
+        "summary": "Draft and review a coherent account of a finding and its evidence.",
+        "blocks": [
+          {
+            "heading": "Create a reviewable document",
+            "paragraphs": [
+              "Reports collect an investigation into a document that can be read outside the live session. The Reports area lists documents; opening one shows its content and summary. You can request an inline edit for selected lines through the report editing composer, change the report's triage status, and associate a submission packet file.",
+              "A report can link back to claims and evidence. Review the exact reproduction steps, affected revision, prerequisites, observed and expected behavior, impact, and limitations before using it for a program submission. The report is a draft until you have checked its evidence and program requirements yourself."
+            ]
+          },
+          {
+            "heading": "Practical workflow",
+            "steps": [
+              "Open a report from the workspace or Reports area.",
+              "Read the cited finding and evidence references, not just the prose summary.",
+              "Use the inline edit control to request a focused change, then inspect the resulting document.",
+              "Set its status and choose a submission packet when appropriate."
+            ],
+            "note": "Beale does not submit a report merely because its status changes or a packet is attached."
+          }
+        ]
+      },
+      {
+        "slug": "runbooks",
+        "title": "Runbooks",
+        "summary": "Save a repeatable research procedure with its cells and execution results.",
+        "blocks": [
+          {
+            "heading": "Notebook-backed procedures",
+            "paragraphs": [
+              "A runbook is stored as a Jupyter nbformat 4 notebook with Markdown, code, or raw cells. The detail view shows cells, purpose, authors, output, and latest execution status. Setup, runtime, and cleanup features mark which cells are active. A runbook can serve as a reproduction procedure linked from a finding.",
+              "From an active app-server session, run the whole notebook, one code cell, or a selected cell range. Supported cells execute on the configured host or VM executor and record outputs and errors. Stored output is evidence to review, not a guarantee that a result reproduces on a changed target."
+            ]
+          },
+          {
+            "heading": "Run safely",
+            "steps": [
+              "Read every executable cell and its target or executor settings.",
+              "Choose the intended range and confirm the active session and execution environment.",
+              "Run it, then inspect exit status, output, timestamps, and proof target.",
+              "Link the relevant execution to the finding and report; update the procedure when the environment changes."
+            ],
+            "note": "Runbook code uses the user's chosen host or VM privileges. Use an externally managed VM or container for risky target code."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "agent-settings",
+    "title": "Agent Settings",
+    "summary": "Choose permission behavior, provider access, suggestions, appearance, and prompts.",
+    "pages": [
+      {
+        "slug": "permissions",
+        "title": "Permissions",
+        "summary": "Control how shell commands are reviewed when a session starts.",
+        "blocks": [
+          {
+            "heading": "Session permission modes",
+            "paragraphs": [
+              "Open Settings → General → Permissions to set the default for new research sessions. Manual Approval asks for an operator decision on shell commands. Auto-Review sends a command through the configured reviewer and fails closed when that review cannot run. Danger Mode permits shell execution without per-command approval and must first be enabled in Settings.",
+              "Guardian is a separate option: when Auto-Review denies a command, the lead model may independently review the complete command and approve it once if safe. If it denies the override, the reason returns to the session agent. Review the selected mode in New Research before starting a session; a default does not make target code safe."
+            ]
+          },
+          {
+            "heading": "Execution posture",
+            "paragraphs": [
+              "Beale and app-server run with the privileges of the current host user. Builds, tests, generated proof code, fuzzing, and closed-source executables use those privileges unless you launch the host inside your own VM or container. Authorized scope is recorded in the workspace; network controls and isolation belong to the environment you manage."
+            ],
+            "note": "Use Auto-Review or Manual Approval for ordinary work. Danger Mode removes the command-review layer."
+          }
+        ]
+      },
+      {
+        "slug": "suggestions",
+        "title": "Suggestions",
+        "summary": "Turn optional response and new-research prompt ideas on or off.",
+        "blocks": [
+          {
+            "heading": "Two independent controls",
+            "paragraphs": [
+              "Settings → General → Suggestions has Response Suggestions and New Research Prompt Suggestions. Response Suggestions appear in session and report composers. New Research Prompt Suggestions show generated ideas in the New Research welcome view, organized by research workflow.",
+              "Click an idea to place it in the research composer, then edit it to fit the current authorized scope. Suggestions are optional UI aids; they do not change the stored scope, grant permission, or verify an observation."
+            ]
+          },
+          {
+            "heading": "When to disable them",
+            "paragraphs": [
+              "Turn off either switch if you prefer a quieter composer or already have a precise objective. The other switch remains independent. A session can still be started with your own prompt."
+            ],
+            "links": [
+              {
+                "label": "Sessions",
+                "url": "/docs/ways-to-work/sessions/"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "appearance",
+        "title": "Appearance",
+        "summary": "Select a theme and tune the colors used for session activity.",
+        "blocks": [
+          {
+            "heading": "Choose a theme",
+            "paragraphs": [
+              "Settings → Appearance offers Light, Dark, Cream, and Midnight themes. The choice changes the Desktop interface immediately. You can also tune the palette used for session heat levels, which indicate relative activity in research lists and timelines.",
+              "Heat color is a visual activity signal, not vulnerability severity, confidence, or proof. Open the underlying session or finding to understand the work represented by a color."
+            ],
+            "steps": [
+              "Open Settings → Appearance.",
+              "Choose the theme you prefer.",
+              "Adjust heat colors only if the default palette is hard to read or distinguish."
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "providers",
+        "title": "Providers",
+        "summary": "Connect a model provider and set the lead model defaults.",
+        "blocks": [
+          {
+            "heading": "Connect a provider",
+            "paragraphs": [
+              "Settings → Providers supports OpenAI, Anthropic, xAI, Z.ai, OpenRouter, and custom OpenAI Chat Completions compatible endpoints. The available authentication method depends on the provider. Subscription sign-in is shown where implemented; API keys are stored using the operating system's encrypted storage and retained by the host process. Custom endpoints can provide a base URL, optional key, context window, and token limit; Beale fetches their model catalog from /models.",
+              "Review the provider's cybersecurity use requirements in the app before connecting. A Beale acknowledgement is not an entitlement to a provider program or an override of its policies. OpenAI OAuth credentials stay on the host."
+            ]
+          },
+          {
+            "heading": "Select models",
+            "steps": [
+              "Add or sign in to a provider in Settings → Providers.",
+              "Choose the default Lead provider and its model and reasoning settings.",
+              "In New Research, review the selected provider and model for that specific session.",
+              "If using collaboration, enable the models and roles you want available to subagents."
+            ],
+            "note": "Provider availability, model catalogs, and policy eligibility can change; use the live settings view as the current source for what your account can run."
+          }
+        ]
+      },
+      {
+        "slug": "prompt",
+        "title": "Prompt",
+        "summary": "Preview and edit the template captured by new sessions.",
+        "blocks": [
+          {
+            "heading": "Edit the Agent Prompt",
+            "paragraphs": [
+              "Settings → Prompt has Template and Preview tabs. Edit the template used when a new session starts, insert supported variables such as identity, style, boundary, tools, features, plugins, collaboration, session, and profile fields, then preview the expanded result as Lead or Subagent. Save to affect future sessions; Reset to Default restores the shipped template.",
+              "The authorization boundary is required. Workspace instructions are appended by the host, and run capabilities can change the final prompt. An existing session keeps the template it captured at launch, so restart research to apply a saved change."
+            ]
+          },
+          {
+            "heading": "Keep it short",
+            "paragraphs": [
+              "Use the workspace's AGENTS.md and Rules for target-specific operating constraints. Keep the global template focused on stable agent behavior. Optional feature prompt extensions are managed separately and are included only for the relevant feature, such as Goal Mode."
+            ],
+            "links": [
+              {
+                "label": "AGENTS.md",
+                "url": "/docs/workspaces/agents-md/"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "other-features",
+    "title": "Other Features",
+    "summary": "Use the embedded browser, recover archived conversations, and manage plugins.",
+    "pages": [
+      {
+        "slug": "web-browser",
+        "title": "Web Browser (desktop)",
+        "summary": "Open an embedded browser and optionally let a session control it.",
+        "blocks": [
+          {
+            "heading": "Browser side view",
+            "paragraphs": [
+              "Desktop has an embedded Browser side view with an address field for HTTP and HTTPS pages. It can keep multiple named browser contexts. Each context has separate cookies and site storage; the Default context cannot be removed. Closing a tab keeps its context for later, while removing a context clears its stored site data.",
+              "Fleet can also expose separate configured browser profiles as research targets. Set the page opened by new browser sessions in Fleet → Browsers and allow the intended browser in the workspace Targets tab."
+            ]
+          },
+          {
+            "heading": "Agent control",
+            "paragraphs": [
+              "The research runtime provides browser tools for listing contexts and targets, connecting to a page, and issuing Chrome DevTools Protocol commands. Inspecting or connecting to the embedded page may request one-time approval for full browser control on that machine. The model-visible browser output is research data; review source and scope before acting on it."
+            ],
+            "steps": [
+              "Open the Browser side view and navigate to an in-scope site.",
+              "Create a named context when you need separate site state.",
+              "Approve browser control only for a session that should operate that page.",
+              "Close the tab or remove the context when finished."
+            ],
+            "note": "Browser contexts separate site storage; they are not OS sandboxes or network authorization controls."
+          }
+        ]
+      },
+      {
+        "slug": "archives",
+        "title": "Archives",
+        "summary": "Restore hidden sessions and resume closed Quick Chats.",
+        "blocks": [
+          {
+            "heading": "Recover prior work",
+            "paragraphs": [
+              "Archiving a research session hides it from normal workspace lists without discarding its recorded history. Open Settings → Archives → Archived Sessions and choose Restore to show it again. Closed Quick Chats are archived automatically and appear separately under Archived Quick Chats; choose Resume to continue the same conversation.",
+              "Archives are an organization tool, not an evidence deletion or a replacement for workspace records. Findings, memories, reports, and runbooks remain discoverable through their workspace views according to the current storage state."
+            ],
+            "steps": [
+              "Open Settings → Archives.",
+              "Find the session by title and workspace, or the Quick Chat by title and first message.",
+              "Choose Restore or Resume, then inspect the conversation history before continuing."
+            ]
+          }
+        ]
+      },
+      {
+        "slug": "plugins",
+        "title": "Plugins",
+        "summary": "Install skills and MCP servers, then enable them for the right workspaces.",
+        "blocks": [
+          {
+            "heading": "Add and inspect",
+            "paragraphs": [
+              "The Plugins area lists installed and available agent plugins. Add a plugin from a local filesystem directory or a Git repository, then inspect its source, version, skills, scripts, references, assets, MCP servers, warnings, and errors before installing or enabling it. Invalid plugins cannot be enabled.",
+              "Use the scope tabs to enable a plugin for all workspaces or a selected workspace. Some bundled plugins apply only to matching Research Kits. Settings also exposes optional agent feature plugins separately from the main Plugins area."
+            ]
+          },
+          {
+            "heading": "Trust boundary",
+            "paragraphs": [
+              "A plugin can add model-facing skills and MCP tools, and may include scripts or server commands. Install only code you trust for the privileges of the Beale host. A workspace toggle controls where a plugin is available; it does not sandbox that plugin. Review the specific tools a session gains before running target work."
+            ],
+            "steps": [
+              "Open Plugins and choose Add from Filesystem or Add from Git Repository.",
+              "Inspect the plugin's skills, MCP servers, source, and any warnings.",
+              "Install it and enable it only for the intended workspace scope.",
+              "Start a new session to use the selected plugin set."
+            ],
+            "links": [
+              {
+                "label": "Permissions",
+                "url": "/docs/agent-settings/permissions/"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

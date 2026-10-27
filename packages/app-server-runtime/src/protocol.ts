@@ -49,7 +49,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
 export const APP_SERVER_CONTRACT_VERSION = 64 as const;
-export const APP_SERVER_RUNTIME_VERSION = "0.9.0" as const;
+export const APP_SERVER_RUNTIME_VERSION = "0.9.4" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
 /**
@@ -144,6 +144,7 @@ export const BEALE_APP_SERVER_SHUTDOWN_PATH = "/v1/server/shutdown" as const;
 export const BEALE_APP_SERVER_SUPERVISOR_LOCAL_PORT = 47_175 as const;
 export const BEALE_APP_SERVER_SUPERVISOR_HTTPS_PORT = 47_176 as const;
 export const BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH = "/v1/supervisor/restart" as const;
+export const BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH = "/v1/supervisor/shutdown" as const;
 export const BEALE_APP_SERVER_MAX_REPLAY_BYTES = 4_194_304 as const;
 export const BEALE_APP_SERVER_MAX_REPLAY_FRAMES = 256 as const;
 

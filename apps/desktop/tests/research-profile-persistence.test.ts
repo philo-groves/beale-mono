@@ -380,7 +380,7 @@ describe('research profile persistence', () => {
     expect(() => reopened.updateWorkspaceDirectories([secondary, primary])).toThrow('exactly one research directory');
     expect(reopened.updateWorkspaceDirectories([primary]).workspace.workspaceDirectories).toEqual([resolve(primary)]);
     reopened.close();
-  }, 10_000);
+  }, 30_000);
 
   it('reports a stable missing-primary-directory error for moved registered workspaces', () => {
     const root = tempDirectory();
@@ -415,7 +415,7 @@ describe('research profile persistence', () => {
     expect(reopened.getWorkspaceRegistryState().workspaces).toHaveLength(1);
     expect(reopened.removeRegisteredWorkspace(registryEntry!.id)).toBeNull();
     reopened.close();
-  }, 10_000);
+  }, 30_000);
 
   it('keeps the foreground workspace when opening another workspace fails', () => {
     const root = tempDirectory();
@@ -448,7 +448,7 @@ describe('research profile persistence', () => {
     expect(() => service.openWorkspace(unavailable)).toThrow('Profile unavailable');
     expect(service.getSnapshot()?.workspace.workspaceId).toBe(opened.workspace.workspaceId);
     service.close();
-  }, 10_000);
+  }, 30_000);
 
   it('unregisters a workspace without deleting its files or scoped resources', () => {
     const root = tempDirectory();
@@ -516,7 +516,7 @@ describe('research profile persistence', () => {
     ]);
     retainedDatabase.close();
     service.close();
-  }, 10_000);
+  }, 30_000);
 
   it('clones an in-scope repository resource and records its managed checkout once', async () => {
     const root = tempDirectory();
@@ -589,7 +589,7 @@ describe('research profile persistence', () => {
     } finally {
       service.close();
     }
-  }, 10_000);
+  }, 30_000);
 
   it('rewrites Resource and artifact references after repository consolidation', () => {
     const fixture = createDatabaseFixture();

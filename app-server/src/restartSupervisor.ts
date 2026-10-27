@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH } from '@beale/app-server-runtime/protocol';
+import { BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH, BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH } from '@beale/app-server-runtime/protocol';
 import { discoveryLockPath, isProcessAlive, readDiscoveryLockPid, readDiscoveryRecord } from './discovery.js';
 
 export interface RestartSupervisorConfig {
@@ -90,7 +90,8 @@ export async function startRestartSupervisor(config: RestartSupervisorConfig): P
       response.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
       return;
     }
-    if (request.method !== 'POST' || request.url !== BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH) {
+    if (request.method !== 'POST' || (request.url !== BEALE_APP_SERVER_SUPERVISOR_RESTART_PATH
+      && request.url !== BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH)) {
       response.writeHead(404).end();
       return;
     }
@@ -100,6 +101,14 @@ export async function startRestartSupervisor(config: RestartSupervisorConfig): P
     }
     if (restarting) {
       response.writeHead(409, { 'content-type': 'application/json' }).end('{"error":"Restart already in progress."}');
+      return;
+    }
+    if (request.url === BEALE_APP_SERVER_SUPERVISOR_SHUTDOWN_PATH) {
+      response.on('finish', () => {
+        server.closeAllConnections();
+        server.close();
+      });
+      response.writeHead(200, { 'content-type': 'application/json' }).end('{"stopped":true}');
       return;
     }
     restarting = true;

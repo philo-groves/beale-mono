@@ -13,7 +13,7 @@ import type {
   ResearchProviderStatus
 } from '@shared/types';
 import { appServerProcessEnvironment, resolveAppServerInvocation } from './appServerRunEngine';
-import { resolveAppServerWorkspaceRoot } from './appServerInvocation';
+import { appServerNodeEnvironment, resolveAppServerWorkspaceRoot } from './appServerInvocation';
 
 const SUPPORTED_PROVIDERS: readonly ResearchProviderId[] = ['anthropic', 'xai', 'zai', 'openrouter'];
 const MODEL_PROVIDERS: readonly ResearchModelProviderId[] = ['openai-codex', 'anthropic', 'xai', 'zai', 'openrouter'];
@@ -163,7 +163,7 @@ export class ResearchProviderAuthService {
         };
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
-      env: providerAuthProcessEnvironment(providerId),
+      env: appServerNodeEnvironment(invocation.command, providerAuthProcessEnvironment(providerId)),
       windowsHide: true
     });
     this.loginProcesses.set(providerId, child);
@@ -386,7 +386,7 @@ async function runAppServerCommand(
   const invocation = resolveAppServerInvocation();
   const child = spawn(invocation.command, [...invocation.prefixArgs, ...args], {
     cwd: invocation.cwd,
-    env: appServerProcessEnvironment(),
+    env: appServerNodeEnvironment(invocation.command, appServerProcessEnvironment()),
     windowsHide: true
   });
   return collectCommandOutput(child, STATUS_TIMEOUT_MS, maxOutputChars);

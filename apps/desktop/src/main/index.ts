@@ -52,6 +52,7 @@ import type {
   WorkspaceMemoryBackendId,
   RepositoryCloneMode,
   ResearchSessionSummary,
+  DesktopUpdateState,
 } from '@shared/types';
 import { getHostEnvironment, WorkspaceService, type WorkspaceChange } from './workspaceService';
 import { nativeMacApplicationMenuTemplate } from './nativeApplicationMenu';
@@ -62,6 +63,8 @@ import {
 import { restoreAndFocusWindow } from './windowLifecycle';
 import { rendererRecoveryDecision } from './rendererRecovery';
 import { DesktopRestartPromptController } from './desktopRestartPrompt';
+import { autoUpdater } from 'electron-updater';
+import { DesktopUpdater } from './desktopUpdater';
 import { IosDeviceCaptureService } from './iosDeviceCaptureService';
 import { getWorkspaceEditorCatalogForHost, openWorkspaceInEditor } from './workspaceEditors';
 import { resolveContentLink } from './contentLinks';
@@ -82,6 +85,8 @@ import {
   restartBealeAppServer,
   restartBealeAppServerViaSupervisor,
   setBealeDesktopRestartRequiredHandler,
+  stopBealeAppServer,
+  stopBealeAppServerForUpdate,
   testLocalAppServerConnection
 } from './bealeAppServerClient';
 import {
@@ -104,6 +109,11 @@ const fleetBrowserViewer = new FleetBrowserViewer((update) => {
 const runDetailRequestControllers = new Map<string, AbortController>();
 const researchGoalSuggestionControllers = new Map<string, AbortController>();
 const smokeTestMode = process.argv.includes('--smoke-test');
+// Installed builds check the GitHub release feed shortly after launch and then
+// every few hours. Source checkouts and smoke tests never contact the feed.
+const DESKTOP_UPDATE_FIRST_CHECK_DELAY_MS = 10_000;
+const DESKTOP_UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+let desktopUpdater: DesktopUpdater | null = null;
 
 // Keep the established storage location stable while correcting the displayed app identity.
 app.setPath('userData', join(app.getPath('appData'), 'beale'));
@@ -629,6 +639,9 @@ function workspaceRegistryBroadcastMetricDetail(workspaceRegistry: WorkspaceRegi
 }
 
 function registerIpc(): void {
+  ipcMain.handle(IPC_CHANNELS.getDesktopUpdateState, () => desktopUpdateState());
+  ipcMain.handle(IPC_CHANNELS.downloadDesktopUpdate, () => desktopUpdater?.download() ?? desktopUpdateState());
+  ipcMain.handle(IPC_CHANNELS.installDesktopUpdate, () => desktopUpdater?.install() ?? desktopUpdateState());
   ipcMain.handle(IPC_CHANNELS.listBrowserContexts, () => inAgentBrowserBridge?.listContexts() ?? []);
   ipcMain.handle(IPC_CHANNELS.fleetBrowserMachine, (_event, runId: string) => workspaceService.fleetBrowserMachineId(runId));
   ipcMain.handle(IPC_CHANNELS.connectFleetBrowser, (_event, runId: string, remoteServerId?: string) => {
@@ -1244,6 +1257,7 @@ if (!hasSingleInstanceLock) {
     }
     registerIpc();
     createWindow();
+    if (app.isPackaged && !smokeTestMode) startDesktopUpdater();
     if (smokeTestMode) {
       setTimeout(() => app.quit(), 1500);
     }
@@ -1263,6 +1277,30 @@ if (!hasSingleInstanceLock) {
     iosDeviceCaptureService?.dispose();
     workspaceService?.dispose();
   });
+}
+
+function startDesktopUpdater(): void {
+  desktopUpdater = new DesktopUpdater({
+    backend: autoUpdater,
+    currentVersion: app.getVersion(),
+    stopLocalAppServer: stopBealeAppServerForUpdate,
+    onChange: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC_CHANNELS.desktopUpdateState, state);
+    }
+  });
+  const check = (): void => { void desktopUpdater?.check(); };
+  setTimeout(check, DESKTOP_UPDATE_FIRST_CHECK_DELAY_MS).unref();
+  setInterval(check, DESKTOP_UPDATE_CHECK_INTERVAL_MS).unref();
+}
+
+function desktopUpdateState(): DesktopUpdateState {
+  return desktopUpdater?.state() ?? {
+    status: 'disabled',
+    currentVersion: app.getVersion(),
+    availableVersion: null,
+    downloadPercent: null,
+    message: null
+  };
 }
 
 async function ensureAppServerContract(refreshProviderEnvironment = false): Promise<boolean> {

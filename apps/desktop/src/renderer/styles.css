@@ -1136,8 +1136,6 @@ code {
 .app-shell {
   --session-heat-edge: var(--panel-border);
   --session-heat-window-surface: var(--chrome-soft);
-  --session-heat-aurora-color: color-mix(in srgb, var(--session-heat-window-surface) 40%, var(--panel) 60%);
-  --session-heat-aurora-blend: multiply;
   --main-content-inline-start: calc(var(--navigation-rail-width) + var(--sidebar-width));
   height: 100%;
   position: relative;
@@ -1176,78 +1174,6 @@ code {
     var(--session-heat-window-surface) 88%,
     transparent
   );
-}
-
-.app-shell:is([data-theme='light'], [data-theme='cream']) {
-  --session-heat-aurora-blend: screen;
-}
-
-.app-shell::before,
-.app-shell::after {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  inset: -24%;
-  pointer-events: none;
-  opacity: 0;
-  mix-blend-mode: var(--session-heat-aurora-blend);
-  transform-origin: center;
-  filter: blur(8px);
-  transition: opacity 900ms ease;
-}
-
-.app-shell::before {
-  background:
-    radial-gradient(ellipse 68% 50% at 24% 12%,
-      transparent 30%,
-      color-mix(in srgb, var(--session-heat-window-surface) 18%, transparent) 39%,
-      color-mix(in srgb, var(--session-heat-aurora-color) 82%, transparent) 48%,
-      color-mix(in srgb, var(--session-heat-window-surface) 36%, transparent) 55%,
-      transparent 67%),
-    radial-gradient(ellipse 54% 62% at 88% 88%,
-      transparent 32%,
-      color-mix(in srgb, var(--session-heat-aurora-color) 38%, transparent) 48%,
-      transparent 65%);
-  animation: session-heat-aurora-fold 19s ease-in-out -7s infinite;
-  animation-play-state: paused;
-}
-
-.app-shell::after {
-  background:
-    radial-gradient(ellipse 64% 58% at 78% 24%,
-      transparent 34%,
-      color-mix(in srgb, var(--session-heat-window-surface) 22%, transparent) 41%,
-      color-mix(in srgb, var(--session-heat-aurora-color) 64%, transparent) 46%,
-      transparent 57%),
-    radial-gradient(ellipse 48% 72% at 20% 72%,
-      transparent 30%,
-      color-mix(in srgb, var(--session-heat-aurora-color) 46%, transparent) 45%,
-      color-mix(in srgb, var(--session-heat-window-surface) 24%, transparent) 52%,
-      transparent 64%);
-  mask-image: repeating-conic-gradient(from -24deg at 78% 24%,
-    #000 0deg, rgb(0 0 0 / 86%) 1.2deg, #000 2.7deg,
-    rgb(0 0 0 / 94%) 4deg, #000 6deg);
-  animation: session-heat-aurora-unfurl 29s ease-in-out -17s infinite;
-  animation-play-state: paused;
-}
-
-.app-shell.session-in-progress::before,
-.app-shell.session-in-progress::after {
-  opacity: 1;
-  animation-play-state: running;
-}
-
-@keyframes session-heat-aurora-fold {
-  0%, 100% { transform: translate3d(-6%, -4%, 0) rotate(-12deg) skewX(-12deg) scale(1.08, 0.86); }
-  25% { transform: translate3d(3%, 2%, 0) rotate(3deg) skewX(8deg) scale(0.95, 1.1); }
-  50% { transform: translate3d(-2%, 6%, 0) rotate(12deg) skewX(-5deg) scale(1.14, 1); }
-  75% { transform: translate3d(4%, -3%, 0) rotate(-3deg) skewX(14deg) scale(1, 0.9); }
-}
-
-@keyframes session-heat-aurora-unfurl {
-  0%, 100% { transform: translate3d(4%, 3%, 0) rotate(9deg) skewY(6deg) scale(1.08, 1); }
-  33% { transform: translate3d(-5%, -4%, 0) rotate(-8deg) skewY(-9deg) scale(0.94, 1.12); }
-  66% { transform: translate3d(2%, 5%, 0) rotate(4deg) skewY(4deg) scale(1.16, 0.92); }
 }
 
 .app-shell.window-edge-flush {
@@ -1698,6 +1624,29 @@ code {
   border: 0;
   background: var(--gray-24);
   color: var(--text);
+}
+
+.desktop-update-button {
+  height: 28px;
+  min-height: 28px;
+  align-self: center;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 400;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.desktop-update-button:hover:not(:disabled) {
+  background: var(--gray-24);
+}
+
+.desktop-update-button:disabled {
+  opacity: 0.65;
 }
 
 .window-control-button:hover:not(:disabled) {
@@ -18422,11 +18371,6 @@ button.research-goal-choice:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-shell::before,
-  .app-shell::after {
-    animation: none;
-  }
-
   .main-steer-stop svg {
     animation: none;
   }

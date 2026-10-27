@@ -1,0 +1,71 @@
+# Installer and update-feed configuration. Run `pnpm package:desktop` from the
+# repository root; .github/workflows/release.yml publishes the output.
+appId: com.beale.app
+productName: Beale
+directories:
+  output: release
+  buildResources: resources
+# out/ is the electron-vite bundle. package.json `dependencies` lists only the
+# modules the bundle loads at runtime; everything bundled at build time is a
+# devDependency so it is not copied into app.asar a second time.
+# The app.asar dependencies have no native addons. Rebuilding would also run a
+# production-only pnpm install that strips devDependencies from the checkout.
+npmRebuild: false
+files:
+  - out/**
+  - package.json
+# The app-server runtime runs as a separate process with Beale's Electron
+# binary (tray mode on Windows, Node mode elsewhere), so it ships outside app.asar. See
+# scripts/stage-runtime.mjs for the layout.
+extraResources:
+  - from: build/runtime
+    to: .
+  # extraResources skips node_modules unless a pattern names it explicitly.
+  - from: build/runtime/node_modules
+    to: node_modules
+  - from: resources/app-icon.png
+    to: app-icon.png
+  - from: resources/MenuBarIcon.svg
+    to: MenuBarIcon.svg
+# electron-updater reads the generated app-update.yml to find this feed. The
+# release workflow uploads installers and latest*.yml to the matching release.
+publish:
+  provider: github
+  owner: philo-groves
+  repo: beale-mono
+  releaseType: release
+mac:
+  forceCodeSigning: true
+  notarize: true
+  category: public.app-category.developer-tools
+  icon: resources/app-icon.png
+  # Squirrel.Mac needs the zip to apply updates; the dmg is for first installs.
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  hardenedRuntime: true
+  extendInfo:
+    NSLocalNetworkUsageDescription: Beale connects to authorized local virtual machines and research targets.
+  # The release workflow provides CSC_LINK/CSC_KEY_PASSWORD and the Apple
+  # notarization credentials. Missing signing material fails the build.
+win:
+  forceCodeSigning: true
+  verifyUpdateCodeSignature: true
+  icon: resources/app-icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  # Use the same GitHub-safe name for the asset and generated latest.yml URL.
+  artifactName: 'Beale-Setup-${version}.${ext}'
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+linux:
+  # The npm package name (@beale/desktop) is not a valid file name.
+  executableName: beale
+  icon: resources/app-icon.png
+  category: Development
+  target: [AppImage]

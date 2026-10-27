@@ -12,6 +12,7 @@ import {
   BEALE_APP_SERVER_CONTROL_VERSION
 } from '@beale/app-server-runtime/protocol';
 import {
+  appServerProcessEnvironment,
   attachAppServerSession,
   BealeDesktopRestartRequiredError,
   ensureBealeAppServerRunning,
@@ -19,6 +20,8 @@ import {
   fetchExistingAppServerCanonicalResult,
   fetchAppServerSession,
   invokeAppServerOperation,
+  isLegacyPackagedWindowsSupervisor,
+  isLegacyPackagedMacSupervisor,
   inspectAppServerCompatibility,
   probeAppServerHealth,
   probeAppServerCompatibility,
@@ -29,6 +32,7 @@ import {
   shouldLaunchAppServerTrayController,
   shouldReplaceAppServerWithTray,
   startAppServerSession,
+  stopBealeAppServerForUpdate,
   stopAppServerSession,
   testLocalAppServerConnection,
   writePrivateAppServerLaunchEnvironment,
@@ -72,14 +76,77 @@ afterEach(async () => {
 });
 
 describe('beale app-server client', () => {
+  it('never starts a tray process in Electron Node mode', () => {
+    const original = { ELECTRON_RUN_AS_NODE: '1', BEALE_APP_SERVER_HOST: '127.0.0.1' };
+    const launched = appServerProcessEnvironment(process.execPath, true, original);
+    expect(launched.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(launched.BEALE_APP_SERVER_HOST).toBe('127.0.0.1');
+    expect(original.ELECTRON_RUN_AS_NODE).toBe('1');
+  });
+
+  it('identifies only the legacy packaged Windows supervisor on the expected executable and entry path', () => {
+    const executable = 'C:\\Example\\Beale\\Beale.exe';
+    const entry = 'C:\\Example\\Beale\\resources\\app-server\\dist\\restartSupervisorMain.js';
+    const details = {
+      ProcessId: process.pid + 1000,
+      ExecutablePath: executable,
+      CommandLine: `"${executable}" "${entry}"`
+    };
+    expect(isLegacyPackagedWindowsSupervisor(details, executable, entry)).toBe(true);
+    expect(isLegacyPackagedWindowsSupervisor({ ...details, ExecutablePath: 'C:\\Example\\Other.exe' }, executable, entry)).toBe(false);
+    expect(isLegacyPackagedWindowsSupervisor({ ...details, CommandLine: `"${executable}"` }, executable, entry)).toBe(false);
+    expect(isLegacyPackagedWindowsSupervisor({ ...details, ProcessId: process.pid }, executable, entry)).toBe(false);
+  });
+
+  it('identifies only the legacy packaged macOS supervisor command', () => {
+    const executable = '/Applications/Example.app/Contents/MacOS/Beale';
+    const entry = '/Applications/Example.app/Contents/Resources/app-server/dist/restartSupervisorMain.js';
+    expect(isLegacyPackagedMacSupervisor(process.pid + 1000, `${executable} ${entry}`, executable, entry)).toBe(true);
+    expect(isLegacyPackagedMacSupervisor(process.pid + 1000, `${executable} other.js`, executable, entry)).toBe(false);
+    expect(isLegacyPackagedMacSupervisor(process.pid, `${executable} ${entry}`, executable, entry)).toBe(false);
+  });
+
+  it('stops a remaining supervisor through its private token even when the app-server already exited', async () => {
+    writeFileSync(join(temporaryDirectory, 'app-server.token'), 'synthetic-operator-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('{"stopped":true}', { status: 200 }))
+      .mockRejectedValueOnce(new TypeError('fetch failed'));
+    try {
+      await stopBealeAppServerForUpdate();
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:47175/v1/supervisor/shutdown',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { authorization: 'Bearer synthetic-operator-token' }
+        })
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('leaves a custom app-server launcher supervisor under operator control during updates', async () => {
+    process.env.BEALE_APP_SERVER_COMMAND = 'custom-app-server';
+    writeFileSync(join(temporaryDirectory, 'app-server.token'), 'synthetic-operator-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    try {
+      await stopBealeAppServerForUpdate();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it('writes a private one-shot environment envelope for LaunchServices startup', () => {
     const launchEnvironment = writePrivateAppServerLaunchEnvironment({
       BEALE_APP_SERVER_STATE_FILE: '/tmp/beale-state.json',
       PROVIDER_TOKEN: 'host-only-test-value'
     });
     try {
-      expect(statSync(launchEnvironment.directory).mode & 0o777).toBe(0o700);
-      expect(statSync(launchEnvironment.path).mode & 0o777).toBe(0o600);
+      if (process.platform !== 'win32') {
+        expect(statSync(launchEnvironment.directory).mode & 0o777).toBe(0o700);
+        expect(statSync(launchEnvironment.path).mode & 0o777).toBe(0o600);
+      }
       expect(JSON.parse(readFileSync(launchEnvironment.path, 'utf8'))).toEqual({
         BEALE_APP_SERVER_STATE_FILE: '/tmp/beale-state.json',
         PROVIDER_TOKEN: 'host-only-test-value'

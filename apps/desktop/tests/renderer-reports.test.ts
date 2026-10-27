@@ -65,7 +65,7 @@ describe('reports resource views', () => {
   it('moves report refinement into a locked report-editing quick chat', () => {
     const source = readFileSync(new URL('../src/renderer/features/reports/ReportsWorkspace.tsx', import.meta.url), 'utf8');
     const quickChatSource = readFileSync(new URL('../src/renderer/features/quick-chat/QuickChatDock.tsx', import.meta.url), 'utf8');
-    const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
+    const appSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
     const styles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
     expect(source).not.toContain('<CommentaryView');
     expect(appSource).toContain("kind: 'report-edit'");

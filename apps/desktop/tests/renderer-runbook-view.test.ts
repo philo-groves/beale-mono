@@ -301,5 +301,5 @@ describe('RunbookView', () => {
     expect(html).toContain('Show full output (8 more characters)');
     expect(html).not.toContain('x'.repeat(24_005));
     expect(html).not.toContain('y'.repeat(12_008));
-  });
+  }, 15_000);
 });

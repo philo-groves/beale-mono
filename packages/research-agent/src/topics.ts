@@ -474,12 +474,17 @@ export class ResearchTopicStore {
       ?? getDefaultMemoryDatabasePath(options.workspaceRoot ?? process.cwd());
     if (this.databasePath !== ":memory:") mkdirSync(dirname(this.databasePath), { recursive: true });
     this.database = openResearchDatabase(this.databasePath);
-    if (this.databasePath !== ":memory:" && existsSync(this.databasePath)) chmodSync(this.databasePath, 0o600);
-    this.database.exec("PRAGMA busy_timeout = 5000;");
-    this.database.exec("PRAGMA foreign_keys = ON;");
-    this.database.exec("PRAGMA journal_mode = WAL;");
-    applyDatabaseMigrations(this.database, "app_server_topics", TOPIC_MIGRATIONS);
-    if (this.workspaceRoot) this.hydrateWorkspaceFiles();
+    try {
+      if (this.databasePath !== ":memory:" && existsSync(this.databasePath)) chmodSync(this.databasePath, 0o600);
+      this.database.exec("PRAGMA busy_timeout = 5000;");
+      this.database.exec("PRAGMA foreign_keys = ON;");
+      this.database.exec("PRAGMA journal_mode = WAL;");
+      applyDatabaseMigrations(this.database, "app_server_topics", TOPIC_MIGRATIONS);
+      if (this.workspaceRoot) this.hydrateWorkspaceFiles();
+    } catch (error) {
+      try { this.database.close(); } catch { /* Preserve the initialization error. */ }
+      throw error;
+    }
   }
 
   public close(): void {
