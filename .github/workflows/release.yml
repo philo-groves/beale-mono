@@ -217,6 +217,17 @@ jobs:
           }
           node scripts/check-release-artifacts.mjs apps/desktop/release $env:GITHUB_REF_NAME.Substring(1) windows
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installed Windows upgrade
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER }}
+        run: |
+          ./scripts/check-windows-installer-upgrade.ps1 `
+            -CurrentInstaller "apps/desktop/release/Beale-Setup-$($env:GITHUB_REF_NAME.Substring(1)).exe" `
+            -ExpectedVersion $env:GITHUB_REF_NAME.Substring(1) `
+            -ExpectedPublisher $env:WINDOWS_SIGNING_PUBLISHER
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.signing.outputs.enabled == 'true'
         with:

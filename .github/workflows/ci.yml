@@ -15,7 +15,7 @@ concurrency:
 jobs:
   source-installer:
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -27,6 +27,19 @@ jobs:
         with:
           node-version: 22.19.0
       - run: node website/beale-source-installer/install.mjs --dry-run --dir beale-source-check
+      - name: Reproduce released Windows upgrade
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.9.4 --pattern 'Beale-Setup-0.9.4.exe' --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installer = Join-Path $env:RUNNER_TEMP 'Beale-Setup-0.9.4.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer
+          if ($signature.Status -ne 'Valid') { throw 'The released installer signature is invalid.' }
+          $publisher = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+          ./scripts/check-windows-installer-upgrade.ps1 -CurrentInstaller $installer -ExpectedVersion '0.9.4' -ExpectedPublisher $publisher
 
   fast:
     runs-on: ubuntu-latest
