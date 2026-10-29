@@ -3,6 +3,7 @@ import {
   commentaryMessageCorrelationKey,
   nativeCommentaryCorrelationKeys
 } from './commentaryCorrelation';
+import { traceEventMatchesAgentPath } from './traceDisplay';
 
 export type SubagentStatus = 'pending' | 'running' | 'completed' | 'interrupted' | 'errored';
 export type SubagentMessageProjection = 'commentary' | 'full';
@@ -275,13 +276,7 @@ export function subagentOverviewForEvents(
 }
 
 export function traceEventsForSubagent<TEvent extends TraceEventRecord>(events: readonly TEvent[], path: string | null): TEvent[] {
-  if (!path) {
-    return events.filter((event) => {
-      const agentPath = traceAgentPath(event);
-      return !agentPath || agentPath === '/root';
-    });
-  }
-  return events.filter((event) => traceAgentPath(event) === path);
+  return events.filter((event) => traceEventMatchesAgentPath(event, path));
 }
 
 export function traceAgentPath(event: TraceEventRecord): string | null {

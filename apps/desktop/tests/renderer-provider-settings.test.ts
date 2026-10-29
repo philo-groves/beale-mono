@@ -26,17 +26,20 @@ describe('renderer provider settings', () => {
       .toContainEqual({ value: 'custom-example', label: 'Example API' });
   });
 
-  it('shows custom provider models and editable endpoint settings', () => {
+  it.each([false, true])('shows custom provider models and editable endpoint settings (reasoning=%s)', (reasoning) => {
     const html = renderToStaticMarkup(createElement(ProvidersSettingsView, {
       openAiStatus: null,
       openAiOAuthResult: null,
       researchProviderOAuthResults: {},
       researchProviderStatuses: [],
-      researchProviderModelCatalog: [],
+      researchProviderModelCatalog: [{ providerId: 'custom-example', providerName: 'Example API', models: [{
+        id: 'model-example', name: 'Example Model', reasoning, effortLevels: reasoning ? ['off', 'low', 'high', 'max'] : ['off'],
+        contextWindow: 128_000, maxTokens: 16_000
+      }] }],
       providerSettings: {
         defaultProviderId: 'custom-example',
         customProviders: [{ id: 'custom-example', name: 'Example API', baseUrl: 'https://api.example.test/v1',
-          contextWindow: 128_000, maxTokens: 16_000, models: [{ id: 'model-example', name: 'Example Model' }] }],
+          contextWindow: 128_000, maxTokens: 16_000, reasoning, models: [{ id: 'model-example', name: 'Example Model' }] }],
         modelDefaults: { 'custom-example': { largeModel: 'model-example', smallModel: 'model-example', reasoningEffort: 'off' } }
       },
       providerStatusesLoaded: true,
@@ -51,6 +54,8 @@ describe('renderer provider settings', () => {
     expect(html).toContain('model-example');
     expect(html).toContain('https://api.example.test/v1');
     expect(html).toContain('Save and refresh models');
+    expect(html.includes('aria-label="Large model reasoning"')).toBe(reasoning);
+    if (reasoning) expect(html).toContain('<option value="max">Max</option>');
   });
   it('replaces the provider removal control with progress text while removing', () => {
     const html = renderToStaticMarkup(createElement(ProviderRemoveControl, {

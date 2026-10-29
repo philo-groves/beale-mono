@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { JSX, ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, BookOpen, Bot, Brain, ChevronRight, CircleAlert, Database, FileText, Terminal, Wrench } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, Bot, Brain, ChevronRight, CircleAlert, Database, FileText, Mail, Terminal, Wrench } from 'lucide-react';
 import type {
   ApprovalRecord,
   PolicyReviewDecision,
@@ -17,12 +17,14 @@ import type {
 import { renderSearchHighlightedText, searchHighlightTerms } from '../search/searchHighlight';
 import { renderTraceProseText } from '../traces/traceMarkup';
 import { MainSteerArea, SessionLoadingState } from '../sessions/SessionComposer';
+import { SurfaceThreatDiagram } from '../workspaces/SurfaceThreatDiagram';
 import { HarnessFeedbackViewer } from './HarnessFeedbackViewer';
 import { devInstrumentation, useDevRenderProbe } from '../../devInstrumentation';
 import {
   commentaryMessagesForSession,
   commentaryRepositoryMetadataForScope,
   hydrateCommentaryToolCall,
+  surfaceDiagramToolLine,
   type CommentaryToolCall,
   type CommentaryMessage
 } from '../../view-models/commentary';
@@ -71,6 +73,7 @@ export const CommentaryView = memo(function CommentaryView({
   providerModelDefaults,
   selectedRunId,
   showBackToMain,
+  viewedAgentPath = '/root',
   showBackButton = showBackToMain,
   scrollScopeKey = selectedRunId,
   searchHighlightQuery,
@@ -108,6 +111,7 @@ export const CommentaryView = memo(function CommentaryView({
   providerModelDefaults?: Partial<Record<ResearchModelProviderId, ProviderModelDefaults>>;
   selectedRunId: string | null;
   showBackToMain: boolean;
+  viewedAgentPath?: string;
   showBackButton?: boolean;
   scrollScopeKey?: string | null;
   searchHighlightQuery: string;
@@ -726,6 +730,7 @@ export const CommentaryView = memo(function CommentaryView({
               <CommentaryMessageRow
                 key={message.id}
                 message={message}
+                viewedAgentPath={viewedAgentPath}
                 animateIcon={streamingState.animatedIds.has(message.id)}
                 searchHighlightQuery={searchHighlightQuery}
                 selected={false}
@@ -753,6 +758,7 @@ export const CommentaryView = memo(function CommentaryView({
                       <CommentaryMessageRow
                         key={message.id}
                         message={message}
+                        viewedAgentPath={viewedAgentPath}
                         animateIcon={streamingState.animatedIds.has(message.id)}
                         windowed
                         searchHighlightQuery={searchHighlightQuery}
@@ -771,6 +777,7 @@ export const CommentaryView = memo(function CommentaryView({
                   <CommentaryMessageRow
                     key={message.id}
                     message={message}
+                    viewedAgentPath={viewedAgentPath}
                     animateIcon={streamingState.animatedIds.has(message.id)}
                     windowed
                     searchHighlightQuery={searchHighlightQuery}
@@ -785,6 +792,7 @@ export const CommentaryView = memo(function CommentaryView({
               <CommentaryMessageRow
                 key={message.id}
                 message={message}
+                viewedAgentPath={viewedAgentPath}
                 animateIcon={streamingState.animatedIds.has(message.id)}
                 searchHighlightQuery={searchHighlightQuery}
                 selected={false}
@@ -811,6 +819,8 @@ export const CommentaryView = memo(function CommentaryView({
           initialInstruction={initialInstruction}
           preComposerContent={preComposerContent}
           postComposerContent={postComposerContent}
+          contextUsageAccessory={import.meta.env.DEV && detail && !isRunWorkingStatus(detail.run.status)
+            ? <HarnessFeedbackViewer key={detail.run.id} runId={detail.run.id} /> : null}
           responseSuggestionsEnabled={responseSuggestionsEnabled}
           shellApproval={shellApproval}
           shellApprovalBusy={shellApprovalBusy}
@@ -822,8 +832,6 @@ export const CommentaryView = memo(function CommentaryView({
           onSteerInstruction={onSteerInstruction}
         />
       ) : null}
-      {import.meta.env.DEV && !showBackToMain && detail && !isRunWorkingStatus(detail.run.status)
-        ? <HarnessFeedbackViewer key={detail.run.id} runId={detail.run.id} /> : null}
     </section>
   );
 });
@@ -942,6 +950,7 @@ export function isRunWorkingStatus(status: RunDetail['run']['status']): boolean 
 
 export const CommentaryMessageRow = memo(function CommentaryMessageRow({
   message,
+  viewedAgentPath = '/root',
   animateIcon = false,
   windowed = false,
   searchHighlightQuery,
@@ -949,6 +958,7 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
   onRequestToolCallDetail = returnToolCallWithoutLoading
 }: {
   message: CommentaryMessage;
+  viewedAgentPath?: string;
   animateIcon?: boolean;
   windowed?: boolean;
   searchHighlightQuery: string;
@@ -959,23 +969,43 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
   const label = commentaryMessageLabel(message.kind, message.taskAction);
   const icon = commentaryMessageIcon(message.kind, message.toolName);
   const hasAgentHeader = message.kind === 'task' && message.taskAction !== 'spawn';
+  const isAgentMessage = message.kind === 'task' && (message.taskAction === 'message' || message.taskAction === 'room_message');
+  const originIsCurrentAgent = message.taskAuthorAgentPath === viewedAgentPath
+    || !message.taskAuthorAgentPath && viewedAgentPath === '/root' && message.taskOrigin === 'Lead';
+  const destinationIsCurrentAgent = message.taskRecipientAgentPath === viewedAgentPath;
   const communicationClass = message.kind === 'task'
-    ? (message.taskAuthorAgentPath && message.taskAuthorAgentPath !== '/root') || message.taskRecipientAgentPath === '/root'
-      ? 'agent-communication-inbound'
-      : 'agent-communication-outbound'
+    ? hasAgentHeader
+      ? originIsCurrentAgent ? 'agent-communication-outbound' : 'agent-communication-inbound'
+      : (message.taskAuthorAgentPath && message.taskAuthorAgentPath !== '/root') || message.taskRecipientAgentPath === '/root'
+        ? 'agent-communication-inbound'
+        : 'agent-communication-outbound'
     : '';
   const reasoningTraceLines = message.kind === 'progress'
     ? message.reasoningTraceLines?.length ? message.reasoningTraceLines : [message.contentMarkdown]
     : [];
   const messageContent = message.kind === 'marker' || message.kind === 'progress' ? null : (
     <div className="main-commentary-message-content">
-      {message.kind === 'tool' ? (
+      {message.kind === 'diagram' && message.surfaceDiagram ? (
+        <>
+          <div className="main-commentary-diagram-tool-line">
+            <Wrench size={16} aria-hidden="true" />
+            <span>{message.contentMarkdown}</span>
+          </div>
+          {message.contentMarkdown === surfaceDiagramToolLine(message.surfaceDiagram) ? (
+            <SurfaceThreatDiagram source={message.surfaceDiagram.source}
+              surfaceName={message.surfaceDiagram.surfaceName} />
+          ) : null}
+        </>
+      ) : message.kind === 'tool' ? (
         <CommentaryToolMessageContent
           message={message}
           hasSearchHighlight={hasSearchHighlight}
           searchHighlightQuery={searchHighlightQuery}
           onRequestToolCallDetail={onRequestToolCallDetail}
         />
+      ) : isAgentMessage ? (
+        <CollapsibleAgentMessage contentMarkdown={message.contentMarkdown}
+          searchHighlightQuery={searchHighlightQuery} hasSearchHighlight={hasSearchHighlight} />
       ) : hasSearchHighlight ? (
         renderSearchHighlightedText(message.contentMarkdown, searchHighlightQuery)
       ) : (
@@ -1014,9 +1044,12 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
         <div className="main-commentary-agent-card">
           <div className="main-commentary-agent-header">
             <div className="main-commentary-agent-route">
-              <span className="main-commentary-agent-name" title={message.taskOrigin}>{message.taskOrigin ?? 'Lead'}</span>
+              <Mail size={14} aria-hidden="true" />
+              <span className={`main-commentary-agent-name${originIsCurrentAgent ? ' is-current-agent' : ''}`}
+                title={message.taskOrigin}>{message.taskOrigin ?? 'Lead'}</span>
               <ArrowRight size={14} aria-hidden="true" />
-              <span className="main-commentary-agent-name" title={message.taskDestination}>{message.taskDestination ?? 'Unknown recipient'}</span>
+              <span className={`main-commentary-agent-name${destinationIsCurrentAgent ? ' is-current-agent' : ''}`}
+                title={message.taskDestination}>{message.taskDestination ?? 'Unknown recipient'}</span>
             </div>
             <span className="main-commentary-agent-type">{label}</span>
           </div>
@@ -1032,6 +1065,48 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
     </article>
   );
 }, commentaryMessageRowPropsEqual);
+
+function CollapsibleAgentMessage({ contentMarkdown, searchHighlightQuery, hasSearchHighlight }: {
+  contentMarkdown: string;
+  searchHighlightQuery: string;
+  hasSearchHighlight: boolean;
+}): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const bodyId = useId();
+
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const measure = (): void => {
+      const lineHeight = Number.parseFloat(window.getComputedStyle(body).lineHeight);
+      setOverflows(Number.isFinite(lineHeight) && body.scrollHeight > lineHeight * 4 + 1);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    if (body.firstElementChild instanceof HTMLElement) observer.observe(body.firstElementChild);
+    return () => observer.disconnect();
+  }, [contentMarkdown, searchHighlightQuery]);
+
+  return (
+    <>
+      <div id={bodyId} ref={bodyRef} className={`main-commentary-agent-message-body${expanded ? ' is-expanded' : ''}`}>
+        {hasSearchHighlight
+          ? renderSearchHighlightedText(contentMarkdown, searchHighlightQuery)
+          : renderTraceProseText(contentMarkdown, 'agent_output')}
+      </div>
+      {overflows ? (
+        <button type="button" className="main-commentary-agent-message-toggle"
+          aria-controls={bodyId} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </>
+  );
+}
 
 function CommentaryToolMessageContent({
   message,
@@ -1258,10 +1333,11 @@ function captureCommentaryScrollAnchor(
 }
 
 function commentaryMessageRowPropsEqual(
-  left: { message: CommentaryMessage; animateIcon?: boolean; windowed?: boolean; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> },
-  right: { message: CommentaryMessage; animateIcon?: boolean; windowed?: boolean; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> }
+  left: { message: CommentaryMessage; viewedAgentPath?: string; animateIcon?: boolean; windowed?: boolean; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> },
+  right: { message: CommentaryMessage; viewedAgentPath?: string; animateIcon?: boolean; windowed?: boolean; searchHighlightQuery: string; selected: boolean; onRequestToolCallDetail?: (toolCall: CommentaryToolCall) => Promise<CommentaryToolCall> }
 ): boolean {
   if (
+    left.viewedAgentPath !== right.viewedAgentPath ||
     left.animateIcon !== right.animateIcon ||
     left.windowed !== right.windowed ||
     left.searchHighlightQuery !== right.searchHighlightQuery ||
@@ -1286,7 +1362,11 @@ function commentaryMessagesRenderEqual(left: CommentaryMessage, right: Commentar
     left.toolName !== right.toolName ||
     left.toolCount !== right.toolCount ||
     left.contentMarkdown !== right.contentMarkdown ||
-    left.abortNotice !== right.abortNotice
+    left.abortNotice !== right.abortNotice ||
+    left.surfaceDiagram?.source !== right.surfaceDiagram?.source ||
+    left.surfaceDiagram?.surfaceId !== right.surfaceDiagram?.surfaceId ||
+    left.surfaceDiagram?.surfaceName !== right.surfaceDiagram?.surfaceName ||
+    left.surfaceDiagram?.changeKind !== right.surfaceDiagram?.changeKind
   ) return false;
   if (!stringArraysEqual(left.reasoningTraceLines, right.reasoningTraceLines)) return false;
   const leftCalls = left.toolCalls ?? [];
@@ -1435,7 +1515,7 @@ export function commentaryMessageLabel(
     if (taskAction === 'spawn') return 'New subagent task';
     if (taskAction === 'followup') return 'Follow-up task';
     if (taskAction === 'room_message') return 'Room message';
-    return 'Message';
+    return 'Inter-Agent Message';
   }
   return null;
 }

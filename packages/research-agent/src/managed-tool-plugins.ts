@@ -159,7 +159,7 @@ function boundedSkillUseWhen(skills: ResearchPluginCatalogEntry["skills"]): stri
   return descriptions.map((description, index) => description.slice(0, allocations[index]!).join(""));
 }
 
-export const CORE_TOOL_NAMES = ["file.read", "file.write", "file.edit", "shell.run", "session.disposition", "harness.feedback", "tool_result.page", "surface.list", "surface.get", "surface.query", "surface.create", "surface.update", "surface.focus", "track.checkpoint"] as const;
+export const CORE_TOOL_NAMES = ["file.read", "file.write", "file.edit", "shell.run", "session.disposition", "harness.feedback", "tool_result.page", "surface.list", "surface.get", "surface.views", "surface.search", "surface.query", "surface.breakdown", "surface.recon", "surface.analysis", "surface.threat_model", "surface.resources", "surface.create", "surface.update", "surface.focus", "track.checkpoint"] as const;
 
 /** New host tools must explicitly join a harness feature or the small core surface. */
 export function assertManagedToolOwnership(tools: readonly ResearchExecutableTool[]): void {

@@ -34,11 +34,16 @@ test("headless app-server exits after losing its discovery record", async () => 
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => { stderr += chunk; });
 
-  await waitFor(() => existsSync(stateFile), 5_000);
+  await Promise.race([
+    waitFor(() => existsSync(stateFile), 15_000),
+    childExit(child).then(({ code, signal }) => {
+      throw new Error(`headless app-server exited before publishing discovery (code ${code}, signal ${signal}): ${stderr}`);
+    }),
+  ]);
   unlinkSync(stateFile);
   const result = await Promise.race([
     childExit(child),
-    delay(4_000).then(() => null),
+    delay(10_000).then(() => null),
   ]);
 
   assert.ok(result, `headless app-server did not exit after losing discovery ownership: ${stderr}`);

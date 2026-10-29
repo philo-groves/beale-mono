@@ -28,6 +28,7 @@ const COMMENTARY_EVENT_PAYLOAD_KEYS = [
   'action',
   'authorAgentPath',
   'recipientAgentPath',
+  'participantAgentPaths',
   'roomName',
   'roomTitle',
   'packetKind',
@@ -82,6 +83,7 @@ const COMMENTARY_SUBAGENT_PAYLOAD_KEYS = [
   'action',
   'authorAgentPath',
   'recipientAgentPath',
+  'participantAgentPaths',
   'roomName',
   'roomTitle',
   'packetKind',
@@ -285,6 +287,8 @@ export function projectCommentaryTraceEvent(
         ? pickRecordValues(nestedPayload, COMMENTARY_SUBAGENT_PAYLOAD_KEYS)
         : nestedPayload.type === 'model_retry'
           ? pickRecordValues(nestedPayload, COMMENTARY_MODEL_RETRY_PAYLOAD_KEYS)
+        : nestedPayload.type === 'track_epoch_resolving'
+          ? pickRecordValues(nestedPayload, ['type', 'agentPath'] as const)
         : pickRecordValues(nestedPayload, ['agentPath', 'contextUsageEligible'] as const)
       : {};
     if (Object.keys(contextScaffold).length > 0) payload.payload = contextScaffold;
@@ -312,6 +316,7 @@ function includedInAgentCommentaryProjection(event: TraceEventRecord, agentPath:
     || eventAgentPath === agentPath
     || isSubagentActivityEvent(event)
     || isSurfaceFocusObservation(event)
+    || isSurfaceDiagramObservation(event)
     || isCollaboratorUsageTelemetryEvent(event, eventAgentPath);
 }
 
@@ -403,7 +408,31 @@ function projectToolPayloadScaffold(
       if (surfaceTrail.length > 0) scaffold.result = { surfaceTrail };
     }
   }
+  const surfaceDiagram = surfaceDiagramFromToolObservation(event, toolPayload);
+  if (surfaceDiagram) scaffold.surfaceDiagram = surfaceDiagram;
   return scaffold;
+}
+
+function isSurfaceDiagramObservation(event: TraceEventRecord): boolean {
+  return surfaceDiagramFromToolObservation(event, recordValue(event.payload.payload) ?? {}) !== null;
+}
+
+function surfaceDiagramFromToolObservation(event: TraceEventRecord, toolPayload: Record<string, unknown>):
+  { source: string; surfaceId: string; surfaceName: string; changeKind?: 'created' | 'updated' } | null {
+  if (event.payload.appServerKind !== 'tool.observed' || toolPayload.status !== 'complete'
+    || (stringValue(event.payload.toolName) ?? stringValue(toolPayload.toolName)) !== 'surface.update') return null;
+  const observed = recordValue(toolPayload.surfaceDiagram);
+  const inputs = recordValue(toolPayload.normalizedInputs);
+  const foundation = recordValue(inputs?.foundation);
+  const threatModel = recordValue(foundation?.threatModel);
+  const source = stringValue(observed?.source) ?? stringValue(threatModel?.diagram);
+  const surfaceId = stringValue(observed?.surfaceId) ?? stringValue(inputs?.surfaceId);
+  if (!source?.trim() || source.length > 50_000 || !surfaceId) return null;
+  const result = recordValue(toolPayload.result);
+  const changeKind = stringValue(observed?.changeKind) ?? stringValue(result?.diagramChange);
+  return { source, surfaceId,
+    surfaceName: boundedScaffoldText(stringValue(observed?.surfaceName) ?? stringValue(result?.name) ?? stringValue(inputs?.name) ?? 'Surface'),
+    ...(changeKind === 'created' || changeKind === 'updated' ? { changeKind } : {}) };
 }
 
 function isSurfaceFocusObservation(event: TraceEventRecord): boolean {
@@ -446,9 +475,17 @@ function toolLabelInputKeys(toolName: string): readonly string[] {
     case 'runbook.run': return ['id', 'cellId', 'startCellId', 'endCellId'];
     case 'file.read':
     case 'file.edit': return ['path'];
+    case 'surface.views': return ['surfaceId', 'views'];
     case 'surface.get':
+    case 'surface.breakdown':
+    case 'surface.recon':
+    case 'surface.analysis':
+    case 'surface.threat_model':
+    case 'surface.resources':
     case 'surface.focus': return ['surfaceId'];
     case 'surface.list': return ['parentId', 'resourceId'];
+    case 'surface.search':
+    case 'surface.query': return ['query'];
     case 'features.load': return ['features'];
     case 'plugins.load': return ['plugins'];
     case 'features.preview': return ['feature'];
@@ -472,7 +509,13 @@ function toolLabelResultKeys(toolName: string): readonly string[] {
     case 'runbook.run': return ['runbookId', 'title'];
     case 'shell.run': return ['command', 'utility', 'args'];
     case 'repository.search': return ['query', 'roots', 'attemptedRoots'];
-    case 'surface.get': return ['name'];
+    case 'surface.get':
+    case 'surface.views':
+    case 'surface.breakdown':
+    case 'surface.recon':
+    case 'surface.analysis':
+    case 'surface.threat_model':
+    case 'surface.resources': return ['name'];
     case 'workspace.search': return ['workspace', 'query', 'matches', 'nextOffset', 'visitedFiles', 'partial'];
     case 'list_agents': return [];
     default: return [];

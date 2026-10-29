@@ -89,6 +89,12 @@ test("adaptive collaboration guidance makes delegation evidence-driven", () => {
   assert.doesNotMatch(guidance, /no lifetime collaborator-invocation budget/i);
 });
 
+test("subagent guidance reserves track checkpoints for the lead", () => {
+  const guidance = createCollaborationSystemGuidance(BASE_CONFIG, "discovery", { lead: false });
+  assert.match(guidance, /lead owns research-track checkpoints/);
+  assert.match(guidance, /do not checkpoint the track from a subagent/);
+});
+
 test("discovery-specific collaboration guidance does not leak into other workflows", () => {
   const guidance = createCollaborationSystemGuidance(BASE_CONFIG, "verification");
 

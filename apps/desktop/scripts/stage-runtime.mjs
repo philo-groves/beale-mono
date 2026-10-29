@@ -27,6 +27,8 @@ for (const entry of ['app-server/dist/headlessMain.js', 'packages/app-server-run
     throw new Error(`Missing ${entry}. Run \`pnpm build\` at the repository root before staging the runtime.`);
   }
 }
+const { stageIpswBinary } = await import('../../../packages/research-agent/dist/ipsw-binary.js');
+const { stagePortableBinary } = await import('../../../packages/research-agent/dist/portable-binaries.js');
 
 rmSync(runtimeRoot, { recursive: true, force: true });
 mkdirSync(runtimeRoot, { recursive: true });
@@ -51,6 +53,16 @@ if (!existsSync(join(appServerRoot, 'pnpm-lock.yaml'))) {
 renameSync(join(appServerRoot, 'node_modules'), join(runtimeRoot, 'node_modules'));
 rmSync(join(runtimeRoot, 'node_modules', '.bin'), { recursive: true, force: true });
 rmSync(join(runtimeRoot, 'node_modules', '.pnpm'), { recursive: true, force: true });
+
+// Match the architecture configured in electron-builder.yml, not the runner.
+const packagedArch = process.platform === 'darwin' ? 'arm64'
+  : process.platform === 'win32' ? 'x64' : process.arch;
+await stageIpswBinary(join(runtimeRoot, 'node_modules', '@beale', 'research-agent', 'tools', 'ipsw'),
+  { platform: process.platform, arch: packagedArch });
+for (const name of ['jq', 'fd', 'opengrep']) {
+  await stagePortableBinary(name, join(runtimeRoot, 'node_modules', '@beale', 'research-agent', 'tools', name),
+    { platform: process.platform, arch: packagedArch });
+}
 
 cpSync(
   join(runtimeRoot, 'node_modules', '@beale', 'app-server-runtime'),

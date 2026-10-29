@@ -51,6 +51,7 @@ export interface FindingEvidenceInput {
 }
 
 export interface CreateFindingInput {
+  surfaceId?: string | null;
   /** Optional source for compatibility with migrated memory-backed records. */
   memoryNodeId?: string;
   classification?: string;
@@ -92,6 +93,7 @@ export interface TransitionFindingInput {
 export interface ReviseResearchClaimInput {
   expectedRevision: number;
   reason: string;
+  surfaceId?: string | null;
   title?: string;
   summary?: string;
   impact?: string;
@@ -227,8 +229,8 @@ export class ResearchClaimStore {
   }
 
   /** Legacy import path for historical hypothesis records. Model tools create observed findings. */
-  public create(input: CreateFindingInput, author?: ModelAuthor, actorId?: string): FindingSummary {
-    return this.createWithStatus(input, "hypothesis", author, actorId);
+  public create(input: CreateFindingInput, author?: ModelAuthor, actorId?: string, surfaceId?: string): FindingSummary {
+    return this.createWithStatus(input, "hypothesis", author, actorId, surfaceId);
   }
 
   public createObserved(input: CreateFindingInput, author?: ModelAuthor, actorId?: string, surfaceId?: string): FindingSummary {
@@ -253,22 +255,24 @@ export class ResearchClaimStore {
       throw new Error("Observed findings require direct code, artifact, command, URL, calculation, proof, or publication evidence.");
     }
     const classification = claimClassification(input.classification ?? legacyClaimClassification(memory?.type));
+    const assignedSurfaceId = input.surfaceId ?? surfaceId ?? memory?.surfaceId ?? null;
     const securityTracking = securityClassification(classification)
-      ? { ...emptyFindingSecurityTracking(), surfaceIds: surfaceId ? [surfaceId] : [] } : null;
+      ? { ...emptyFindingSecurityTracking(), surfaceIds: assignedSurfaceId ? [assignedSurfaceId] : [] } : null;
     this.database.exec("BEGIN IMMEDIATE");
     try {
       this.database.prepare(`INSERT INTO app_server_research_claims (
-        id, workspace_id, subject_id, legacy_memory_node_id, origin_session_id, classification,
+        id, workspace_id, subject_id, legacy_memory_node_id, origin_session_id, surface_id, classification,
         title, summary, impact, steps_to_reproduce, rating, status, stale_from_status, confidence,
         source_revision, environment_fingerprint, reproduction_runbook_id,
         report_id, disclosure_reference, stale_reason, security_tracking_json,
         created_at, updated_at, revision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, 1)`).run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, 1)`).run(
         id,
         context.workspaceId,
         context.subjectId ?? `subject_workspace:${context.workspaceId}`,
         memory?.id ?? null,
         context.sessionId ?? null,
+        assignedSurfaceId,
         classification,
         requiredText(input.title, status === "observed" ? "Finding title" : "Lead title"),
         normalizedText(input.summary) ?? memory?.summary ?? "",
@@ -362,6 +366,7 @@ export class ResearchClaimStore {
       const result = this.database.prepare(`UPDATE app_server_research_claims SET
         status = ?, stale_from_status = ?, classification = ?, source_revision = ?, environment_fingerprint = ?,
         reproduction_runbook_id = ?, steps_to_reproduce = ?, report_id = ?, disclosure_reference = ?, stale_reason = ?, security_tracking_json = ?,
+        surface_id = COALESCE(surface_id, ?),
         updated_at = ?, revision = ? WHERE id = ? AND revision = ?`).run(
         input.toStatus,
         staleFromStatus,
@@ -378,6 +383,7 @@ export class ResearchClaimStore {
         input.disclosureReference === undefined ? current.disclosureReference : nullableText(input.disclosureReference),
         input.toStatus === "stale" ? requiredText(input.reason, "Staleness reason") : null,
         stableJson(securityTracking),
+        input.surfaceId ?? null,
         now,
         nextRevision,
         id,
@@ -655,7 +661,7 @@ export class ResearchClaimStore {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const result = this.database.prepare(`UPDATE app_server_research_claims SET
-        title = ?, summary = ?, impact = ?, steps_to_reproduce = ?, rating = ?, confidence = ?, classification = ?, security_tracking_json = ?, updated_at = ?, revision = ?
+        title = ?, summary = ?, impact = ?, steps_to_reproduce = ?, rating = ?, confidence = ?, classification = ?, security_tracking_json = ?, surface_id = ?, updated_at = ?, revision = ?
         WHERE id = ? AND revision = ?`).run(
         input.title === undefined ? current.title : requiredText(input.title, "Claim title"),
         input.summary === undefined ? current.summary : normalizedText(input.summary) ?? "",
@@ -665,6 +671,7 @@ export class ResearchClaimStore {
         input.confidence === undefined ? current.confidence : confidence(input.confidence),
         input.classification === undefined ? storedFindingClassification(this.database, id) : classification,
         stableJson(securityTracking),
+        input.surfaceId === undefined ? current.surfaceId : input.surfaceId,
         now,
         nextRevision,
         id,
@@ -1103,6 +1110,15 @@ export function initializeFindingSchema(database: DatabaseSync): void {
         db.exec("ALTER TABLE app_server_research_claims ADD COLUMN steps_to_reproduce TEXT NOT NULL DEFAULT '';");
       }
     },
+  }, {
+    version: 10,
+    name: "claim_surface_association",
+    up(db) {
+      if (!tableHasColumn(db, "app_server_research_claims", "surface_id")) {
+        db.exec("ALTER TABLE app_server_research_claims ADD COLUMN surface_id TEXT;");
+      }
+      db.exec("CREATE INDEX IF NOT EXISTS app_server_research_claims_surface_idx ON app_server_research_claims(workspace_id, surface_id) WHERE surface_id IS NOT NULL;");
+    },
   }]);
 }
 
@@ -1127,6 +1143,7 @@ export function readFindings(database: DatabaseSync, workspaceId: string, findin
     const classification = claimClassification(row.classification);
     const claim: FindingSummary = {
     id,
+    surfaceId: optionalSqlText(row.surface_id),
     workspaceId: requiredSqlText(row.workspace_id),
     subjectId: requiredSqlText(row.subject_id),
     memoryNodeId: optionalSqlText(row.legacy_memory_node_id),

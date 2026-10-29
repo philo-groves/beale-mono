@@ -15,7 +15,7 @@ describe('desktop app branding', () => {
     expect(packageJson.productName).toBe('Beale');
     expect(packageJson.scripts.postinstall).toBe('pnpm run brand:electron');
     expect(packageJson.scripts.prestart).toBe('pnpm run brand:electron');
-    expect(packageJson.scripts.predev).toBe('pnpm run brand:electron');
+    expect(packageJson.scripts.predev).toBe('pnpm -w build && pnpm run brand:electron');
     expect(packageJson.scripts.prepreview).toBe('pnpm run brand:electron');
 
     const appServerPackageJson = JSON.parse(readFileSync(join(projectRoot, '..', '..', 'app-server', 'package.json'), 'utf8')) as {

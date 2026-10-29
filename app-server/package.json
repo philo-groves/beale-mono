@@ -1,6 +1,6 @@
 {
   "name": "@beale/app-server",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "private": true,
   "description": "Standalone tray-resident Beale execution host and client-neutral control plane.",
   "type": "module",

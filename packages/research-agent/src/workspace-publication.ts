@@ -237,6 +237,7 @@ export function publishWorkspaceResearch(options: WorkspacePublicationOptions): 
         surfaceTouches: owned('app_server_surface_touches'),
         surfaceFocus: owned('app_server_surface_focus'),
         surfaceFocusEvents: owned('app_server_surface_focus_events'),
+        surfaceUpdateEvents: owned('app_server_surface_update_events'),
       });
     }
     const executions = owned("app_server_runbook_executions");

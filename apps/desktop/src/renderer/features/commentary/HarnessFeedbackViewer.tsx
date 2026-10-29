@@ -49,7 +49,7 @@ export function HarnessFeedbackViewer({ runId }: { runId: string }): JSX.Element
   };
 
   return (
-    <div className="harness-feedback-footer">
+    <div className="harness-feedback-control">
       <button type="button" className="harness-feedback-button" onClick={() => void showFeedback()}>Agent feedback</button>
       {open ? (
         <div className="harness-feedback-backdrop" onKeyDown={(event) => {

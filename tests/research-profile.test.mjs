@@ -83,11 +83,11 @@ test("default prompt uses plain guidance lines and bullets only for feature and 
   ));
   assert.match(prompt, /Scope and authority:\nThe host-supplied workspace context/);
   assert.match(prompt, /Tool routing:\nProfile-recognized material kinds/);
-  assert.match(prompt, /Define child surfaces around distinct attacker-controlled entry paths, trust boundaries, privilege contexts, or security-relevant sinks and effects/);
-  assert.match(prompt, /connect attacker control through reachable transformations and boundaries to a plausible unauthorized effect/);
-  assert.match(prompt, /do not promote them as security findings without evidence of a security consequence/);
-  assert.match(prompt, /Unknown reachability and unexplored chains remain open questions, not blocked findings/);
-  assert.match(prompt, /pursue all authorized work available without it first, including pre-auth research/);
+  assert.match(prompt, /Child surfaces are stable, concrete components or subcomponents/);
+  assert.match(prompt, /Keep those in research notes and records/);
+  assert.match(prompt, /Substantiated conclusions still need evidence/);
+  assert.match(prompt, /New research may change that state, and completion does not restrict further work/);
+  assert.match(prompt, /A progressBlocker records a concrete external dependency/);
   assert.match(prompt, /Prefer core APIs, SDKs, and trust boundaries over low-impact examples/);
   assert.match(prompt, /third party's application or account does not become authorized merely because it uses an in-scope vendor product/);
   assert.match(prompt, /discover covered official components through their provenance and recorded scope rules/);
@@ -337,7 +337,7 @@ test("retired bundled memory types stay out of model-facing catalogs", () => {
   assert.doesNotMatch(securityPrompt, /- procedure \(Procedure\)/);
   assert.match(securityPrompt, /Ambient resources are non-authoring inventory/);
   assert.match(securityPrompt, /Auto-Reviewed first touch/);
-  assert.match(securityPrompt, /provenance and build identity; check CVEs, advisories, vendor releases/);
+  assert.match(securityPrompt, /provenance and build identity, relevant advisories and fixes/);
   assert.match(securityPrompt, /does not expand that boundary/);
   assert.match(securityPrompt, /Execution dependencies:/);
   assert.match(securityPrompt, /lifecycle and ownership, route and address, listening service, host identity, then authentication/);

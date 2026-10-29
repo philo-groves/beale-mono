@@ -138,17 +138,27 @@ export async function resolveStoredResearchProfile(
   let snapshot: Record<string, unknown> | undefined;
 
   if (databasePath !== ":memory:" && existsSync(databasePath)) {
-    let database: DatabaseSync | undefined;
-    try {
-      database = openResearchDatabase(databasePath, { readOnly: true });
-      const workspace = readStoredWorkspace(database, workspaceRoot);
-      snapshot = workspace
-        ? readResearchProfileSnapshot(database, workspace.id, options)
-        : undefined;
-    } catch {
-      throw new Error("Stored research profile could not be resolved.");
-    } finally {
-      database?.close();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      let database: DatabaseSync | undefined;
+      let retry = false;
+      try {
+        database = openResearchDatabase(databasePath, { readOnly: true });
+        const workspace = readStoredWorkspace(database, workspaceRoot);
+        snapshot = workspace
+          ? readResearchProfileSnapshot(database, workspace.id, options)
+          : undefined;
+        break;
+      } catch (error) {
+        if (attempt === 4 || !isTransientSqliteReadError(error)) {
+          throw new Error("Stored research profile could not be resolved.");
+        }
+        retry = true;
+      } finally {
+        database?.close();
+      }
+      if (retry) {
+        await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50 * (attempt + 1)));
+      }
     }
   }
 
@@ -167,6 +177,11 @@ export async function resolveStoredResearchProfile(
   } catch {
     throw new Error("Workspace research profile could not be resolved.");
   }
+}
+
+function isTransientSqliteReadError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("errcode" in error)) return false;
+  return error.errcode === 5 || error.errcode === 6 || error.errcode === 14;
 }
 
 function deterministicBinding(

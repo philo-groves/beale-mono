@@ -392,6 +392,21 @@ describe('renderer session composer', () => {
     expect(html).toContain('class="main-steer-input-row without-trace-filters"');
   });
 
+  it('places an accessory inside the input actions before context usage', () => {
+    const html = renderToStaticMarkup(createElement(MainSteerArea, {
+      busy: false,
+      detail: composerDetail('stopped'),
+      providerModelCatalog: providerModelCatalog(),
+      runId: 'run_composer',
+      contextUsageAccessory: createElement('button', { type: 'button' }, 'Agent feedback'),
+      onSessionAction: () => undefined,
+      onSteerInstruction: () => undefined
+    }));
+
+    expect(html).toMatch(/main-steer-input-row[\s\S]*main-steer-context-accessory[\s\S]*Agent feedback[\s\S]*main-steer-context-usage/);
+    expect(html).not.toContain('harness-feedback-footer');
+  });
+
   it('allows an empty first instruction for a configured research track', () => {
     const html = renderToStaticMarkup(createElement(MainSteerArea, {
       busy: false, detail: null, runId: null,

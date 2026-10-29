@@ -202,10 +202,10 @@ test('the app-server reserves a safe research-track epoch and retains its pause 
   assert.deepEqual(due[0].request.launch.targetIds, ['local']);
   assert.deepEqual(due[0].request.launch.collaboration, collaboration);
   assert.match(due[0].request.launch.promptMarkdown, /Assigned surface: Example service/u);
-  assert.match(due[0].request.launch.promptMarkdown, /three credible, materially different causal attacker paths/u);
-  assert.match(due[0].request.launch.promptMarkdown, /1 to 4 attacker-path updates/u);
-  assert.match(due[0].request.launch.promptMarkdown, /security invariant/u);
-  assert.match(due[0].request.launch.promptMarkdown, /possible failure mode/u);
+  assert.match(due[0].request.launch.promptMarkdown, /Map concrete subcomponents with stable noun names/u);
+  assert.match(due[0].request.launch.promptMarkdown, /Compare alternative explanations/u);
+  assert.match(due[0].request.launch.promptMarkdown, /Add structured attacker-path updates or validation details when they clarify the work/u);
+  assert.match(due[0].request.launch.promptMarkdown, /A bounded review can complete with open leads/u);
   assert.match(due[0].request.launch.promptMarkdown, /use available browser tools/u);
   assert.equal((await hostService.workspaceResearchTrack('workspace-test', 'status')).activeSessionId,
     due[0].request.sessionId);
@@ -1924,7 +1924,10 @@ test("workspace details use the owning app-server state and configured targets",
         researchSubject: { name: "ExampleCo" },
         workspaceRules: [{ id: "rule-example", text: "Stay in scope." }],
       };
-      if (operation === "memory.summary") return { status: "empty", nodeCount: 0, nodes: [], leads: [], findings: [],
+      if (operation === "memory.summary") return { status: "ready", nodeCount: 1,
+        nodes: [{ id: "memory-example", type: "invariant", title: "Example memory", surfaceId: "surface-example" }],
+        leads: [{ id: "claim-example", projection: "lead", classification: "security.vulnerability",
+          title: "Example lead", surfaceId: "surface-example" }], findings: [],
         runbooks: [{ id: "runbook-example", title: "Example runbook", purpose: "Synthetic check", updatedAt: "2026-01-01T00:00:00.000Z" }], reports: [] };
       throw new Error(`Unexpected operation ${operation}`);
     },
@@ -1934,6 +1937,8 @@ test("workspace details use the owning app-server state and configured targets",
   assert.equal(details.scope.resources[0].value, "example.test");
   assert.equal(details.rules[0].text, "Stay in scope.");
   assert.equal(details.runbooks[0].title, "Example runbook");
+  assert.equal(details.memory.nodes[0].surfaceId, "surface-example");
+  assert.equal(details.memory.leads[0].surfaceId, "surface-example");
   assert.deepEqual(details.targets, [{ id: "local", name: "Local", ready: true }]);
   assert.equal(calls[0].operation, "workspace.state");
   assert.equal(calls[0].options.input.workspacePath, directory);
@@ -2511,11 +2516,12 @@ test("research track launch retains collaboration settings and enabled browser t
   const createCall = calls.find((call) => call.operation === "session.create");
 
   assert.deepEqual(createCall.options.input.metadata.bealeRun.budget.collaboration, collaboration);
-  assert.equal(createCall.options.input.title, 'Map the attacker path and highest-impact');
+  assert.equal(createCall.options.input.title, 'Inspect the component and choose a');
   assert.equal(prepared.launch.provider.title.model, 'example-small-model');
   assert.equal(prepared.launch.provider.title.style, 'research-track');
   const launchArgs = appServerSessionArgs(prepared.launch, {});
   assert.equal(launchArgs[launchArgs.indexOf('--title-style') + 1], 'research-track');
+  assert.ok(launchArgs.includes('--track-epoch'));
   const titleCall = calls.find((call) => call.operation === "session.append_event");
   assert.equal(titleCall, undefined);
   assert.deepEqual(createCall.options.input.metadata.appServerRestartLaunch.launch.collaboration, collaboration);
@@ -3628,6 +3634,7 @@ test("expands typed session intent into app-server-owned runtime policy", () => 
   assert.ok(args.includes("--profile-side-effect-ceiling"));
   assert.equal(args.includes("--disable-tool-family"), false);
   assert.equal(args.includes("--dev-harness-feedback"), false);
+  assert.equal(args.includes("--track-epoch"), false);
   assert.equal(args[args.indexOf("--tool-max-bytes") + 1], "123456");
   assert.throws(() => appServerSessionArgs(launch, {
     BEALE_APP_SERVER_PROFILE_TOOL_FAMILY_CEILING_JSON: JSON.stringify(["unknown-family"]),

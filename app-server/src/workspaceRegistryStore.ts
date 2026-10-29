@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { applyDatabaseMigrations, applyFeaturePromptOverrides, bundledResearchProfile, createResearchSystemPrompt, decodeFeaturePromptOverrides, defaultFeaturePromptSettings, defaultResearchSystemPromptTemplate, normalizeCustomProviderDefinition, validateResearchSystemPromptTemplate, type CustomProviderDefinition, type ResearchPluginCatalogEntry } from '@beale/research-agent';
+import { applyDatabaseMigrations, applyFeaturePromptOverrides, bundledResearchProfile, createCustomProviderModel, getSupportedThinkingLevels, createResearchSystemPrompt, decodeFeaturePromptOverrides, defaultFeaturePromptSettings, defaultResearchSystemPromptTemplate, normalizeCustomProviderDefinition, validateResearchSystemPromptTemplate, type CustomProviderDefinition, type ResearchPluginCatalogEntry } from '@beale/research-agent';
 import {
   DEFAULT_MEMORY_TYPE_DESCRIPTIONS,
   MEMORY_NODE_TYPES,
@@ -261,10 +261,13 @@ export class WorkspaceRegistry {
     const normalized = normalizeProviderModelDefaults(defaults);
     if (providerId.startsWith('custom-')) {
       const provider = settings.customProviders?.find((candidate) => candidate.id === providerId);
-      if (!provider || normalized.reasoningEffort !== 'off'
+      if (!provider
+        || !getSupportedThinkingLevels(createCustomProviderModel(provider, { id: normalized.largeModel, name: normalized.largeModel })).includes(normalized.reasoningEffort)
         || !provider.models.some((model) => model.id === normalized.largeModel)
         || !provider.models.some((model) => model.id === normalized.smallModel)) {
-        throw new Error('Custom provider defaults must select available models without reasoning effort.');
+        throw new Error(provider?.reasoning === true
+          ? 'Custom provider defaults must select available models and supported reasoning effort.'
+          : 'Custom provider defaults must select available models without reasoning effort.');
       }
     }
     settings.modelDefaults[providerId] = normalized;

@@ -105,7 +105,7 @@ export class ProviderAuthenticationRouter {
   }
 
   claudeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...base, CLAUDE_AGENT_SDK_CLIENT_APP: "appServer/0.9.4" };
+    const env: NodeJS.ProcessEnv = { ...base, CLAUDE_AGENT_SDK_CLIENT_APP: "appServer/0.9.5" };
     if (this.method("anthropic") === "subscription") delete env.ANTHROPIC_API_KEY;
     return env;
   }

@@ -47,3 +47,33 @@ test('custom provider metadata persists in the registry and reaches the host cat
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('reasoning custom providers persist and accept reasoning defaults', () => {
+  const root = mkdtempSync(join(tmpdir(), 'beale-custom-provider-reasoning-'));
+  const reasoningDefinition = { id: 'custom-reasoning', name: 'Reasoning API', baseUrl: 'https://api.example.test/v1',
+    contextWindow: 128_000, maxTokens: 16_000, reasoning: true,
+    models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }] };
+  const flatDefinition = { id: 'custom-flat', name: 'Flat API', baseUrl: 'https://api.example.test/v1',
+    contextWindow: 128_000, maxTokens: 16_000,
+    models: [{ id: 'model-example', name: 'Example Model' }] };
+  try {
+    const registry = new WorkspaceRegistry(root);
+    registry.saveCustomProvider(reasoningDefinition);
+    registry.saveCustomProvider(flatDefinition);
+    assert.deepEqual(registry.getProviderSettings().customProviders, [reasoningDefinition, flatDefinition]);
+    registry.setProviderModelDefaults(reasoningDefinition.id,
+      { largeModel: 'deepseek-v4.1-flash', smallModel: 'deepseek-v4.1-flash', reasoningEffort: 'high' });
+    assert.equal(registry.getProviderSettings().modelDefaults[reasoningDefinition.id].reasoningEffort, 'high');
+    assert.throws(() => registry.setProviderModelDefaults(reasoningDefinition.id,
+      { largeModel: 'deepseek-v4.1-flash', smallModel: 'deepseek-v4.1-flash', reasoningEffort: 'medium' }), /supported reasoning effort/);
+    assert.throws(() => registry.setProviderModelDefaults(flatDefinition.id,
+      { largeModel: 'model-example', smallModel: 'model-example', reasoningEffort: 'high' }), /without reasoning effort/);
+    registry.close();
+    const reopened = new WorkspaceRegistry(root);
+    assert.equal(reopened.getProviderSettings().customProviders?.[0].reasoning, true);
+    assert.equal(reopened.getProviderSettings().modelDefaults[reasoningDefinition.id].reasoningEffort, 'high');
+    reopened.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

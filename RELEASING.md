@@ -1,6 +1,6 @@
 # Releasing Beale
 
-Beale, app-server, and the two runtime packages advance together. The current coordinated candidate is `0.9.4`. A version number in source is not a published release. The macOS and Windows source installer clones the `release` branch and builds locally. Native installers with in-app updates are published by the Release workflow on a version tag.
+Beale, app-server, and the two runtime packages advance together. The current coordinated candidate is `0.9.5`. A version number in source is not a published release. The macOS and Windows source installer clones the `release` branch and builds locally. Native installers with in-app updates are published by the Release workflow on a version tag.
 
 ## Change lanes
 
@@ -9,6 +9,8 @@ Beale, app-server, and the two runtime packages advance together. The current co
 - A `vX.Y.Z` tag repeats the release gate. The tag must be annotated, match every package and release-facing version, point to the tested commit, and be reachable from `main`. The workflow only verifies; it does not publish or upload an installer.
 - After merging verified source into `release`, zip the `website/beale-source-installer` directory and update the WordPress plugin on beale.ai. Check that `https://beale.ai/i` returns the exact `install.mjs` content before advertising the command. The same plugin redirects `/download/macos` and `/download/windows` to the matching assets in GitHub's latest published release. It caches the release lookup for five minutes and falls back to the latest release page if GitHub is unavailable or an expected asset is missing. Verify both links after publication.
 - The same tag starts `.github/workflows/release.yml`. It runs `pnpm release:verify` on both operating systems, then waits for `release` environment approval before signing and packaging a macOS arm64 dmg and zip. When Windows signing is enabled, it also builds a Windows x64 NSIS installer. After artifact verification, the protected environment requires a second approval before publication. The release includes the `latest*.yml` update feed files and `SHA256SUMS.txt`.
+
+Desktop packaging downloads pinned `ipsw`, `jq`, `fd`, and `opengrep` releases for the installer target architecture, verifies their SHA-256 digests, and stages their executables and licenses with the app-server runtime. Packaging needs access to those upstream releases; source checkouts make the same verified download when a missing utility is first used.
 
 Protect `main` with the CI `fast` check and require review before merging. The `v*` tag ruleset prevents updates and deletions; restrict tag creation to trusted maintainers as repository access expands. Enable immutable releases so published assets and their tags cannot be changed. Keep the release gate result attached to the exact candidate commit; rerun it after any candidate change.
 

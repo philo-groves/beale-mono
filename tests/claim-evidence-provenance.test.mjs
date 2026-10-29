@@ -239,6 +239,7 @@ test("provenance migrations preserve old rows and do not backfill invented execu
   const claim = claims.create({ title: "Example historical claim", classification: "security.vulnerability" }, undefined, "author-example");
   const book = books.create({ title: "Example historical procedure", purpose: "Preserve the existing record." }).runbook;
   books.close(); claims.close(); graph.close();
+  books = null; claims = null; graph = null;
   const database = new DatabaseSync(databasePath);
   try {
     database.prepare(`INSERT INTO app_server_runbook_executions
@@ -250,7 +251,7 @@ test("provenance migrations preserve old rows and do not backfill invented execu
       database.exec(`ALTER TABLE app_server_runbook_executions DROP COLUMN ${column}`);
     }
     database.exec("ALTER TABLE app_server_claim_evidence DROP COLUMN claim_binding_hash");
-    database.exec("DELETE FROM schema_migrations WHERE (component = 'app_server_core' AND version = 18) OR (component = 'app_server_research_claims' AND version IN (7, 8, 9))");
+    database.exec("DELETE FROM schema_migrations WHERE (component = 'app_server_core' AND version IN (18, 19)) OR (component = 'app_server_research_claims' AND version IN (7, 8, 9, 10))");
   } finally { database.close(); }
   try {
     graph = new MemoryGraphStore({ workspaceRoot: root, context });
@@ -264,7 +265,7 @@ test("provenance migrations preserve old rows and do not backfill invented execu
     assert.equal(claims.get(claim.id).evidence[0].independent, true);
     assert.equal(claims.get(claim.id).evidence[0].validated, false);
   } finally {
-    books.close(); claims.close(); graph.close();
+    books?.close(); claims?.close(); graph?.close();
     await rm(root, { recursive: true, force: true });
   }
 });

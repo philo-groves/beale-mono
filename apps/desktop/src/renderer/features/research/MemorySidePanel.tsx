@@ -1,5 +1,6 @@
 import { Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { CSSProperties, JSX, ReactNode } from 'react';
+import type { BealeWorkspaceSurfaceMap } from '@beale/app-server-runtime/protocol';
 import { browserContextLabel, browserSideViewId, DEFAULT_BROWSER_CONTEXT, isBrowserSideView } from '../../../shared/browserContexts';
 import type { BrowserContextSummary } from '../../../shared/browserContexts';
 import { ArrowLeft, BadgeCheck, BookOpen, Bot, ChevronDown, ChevronRight, Copy, Database, FileText, GitBranch, Globe2, History, Lightbulb, Link2, ListChecks, LoaderCircle, OctagonMinus, Plus, Search, X } from 'lucide-react';
@@ -48,6 +49,9 @@ import { ReportView } from './ReportView';
 import { BrowserSideView } from './BrowserSideView';
 import { FleetBrowserSideView } from './FleetBrowserSideView';
 import { renderInlineCodeText, renderTraceProseText } from '../traces/traceMarkup';
+import { WorkspaceSurfaceMap } from '../workspaces/WorkspaceSurfaceMap';
+import { WorkspaceSurfaceDetails } from '../workspaces/WorkspaceSurfaceDetails';
+import { sessionSurfaceCounts, sessionSurfaceHierarchy } from '../../view-models/surfaceMap';
 
 const EMPTY_SUBAGENT_OVERVIEW = { count: 0, activeCount: 0, completedCount: 0 };
 const EMPTY_MEMORY_NODES: AppServerMemoryNodeSummary[] = [];
@@ -91,7 +95,7 @@ export type RunbookScopeFilter = 'session' | 'workspace';
 export const DEFAULT_RUNBOOK_SCOPE_FILTER: RunbookScopeFilter = 'session';
 export const DEFAULT_WORKSPACE_RUNBOOK_SCOPE_FILTER: RunbookScopeFilter = 'workspace';
 export type ResearchViewSpace = 'session' | 'workspace';
-export type ResearchSideView = 'memory' | 'reports' | 'subagents' | `browser:${string}`;
+export type ResearchSideView = 'memory' | 'reports' | 'subagents' | 'surfaces' | `browser:${string}`;
 
 export interface ResearchSideNavigationState {
   openViews: ResearchSideView[];
@@ -302,6 +306,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   researchProfile = null,
   sessionHeatPreferences = EMPTY_SESSION_HEAT_PREFERENCES,
   runId,
+  surfaceWorkspaceId = '',
   runStatus,
   providerModelCatalog,
   selectedRunbook,
@@ -342,6 +347,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   researchProfile?: ResearchProfile | null;
   sessionHeatPreferences?: SessionHeatPreferences;
   runId: string;
+  surfaceWorkspaceId?: string;
   runStatus: RunStatus | null;
   providerModelCatalog: ResearchProviderModelCatalog[];
   selectedRunbook: AppServerRunbookSummary | null;
@@ -384,6 +390,35 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   const [fleetBrowserUrl, setFleetBrowserUrl] = useState('about:blank');
   const [mountedBrowserContextIds, setMountedBrowserContextIds] = useState<ReadonlySet<string>>(new Set());
   const [fleetBrowserMachine, setFleetBrowserMachine] = useState<string | null | undefined>(undefined);
+  const [sessionSurfaceMap, setSessionSurfaceMap] = useState<BealeWorkspaceSurfaceMap | null>(null);
+  const [sessionSurfaceError, setSessionSurfaceError] = useState<string | null>(null);
+  const [selectedSessionSurfaceId, setSelectedSessionSurfaceId] = useState<string | null>(null);
+  useEffect(() => {
+    setSessionSurfaceMap(null);
+    setSelectedSessionSurfaceId(null);
+  }, [viewSpace, surfaceWorkspaceId, runId]);
+  useEffect(() => {
+    if (viewSpace !== 'session' || !surfaceWorkspaceId || !runId) {
+      setSessionSurfaceMap(null);
+      return;
+    }
+    let active = true;
+    setSessionSurfaceError(null);
+    const refresh = (): void => {
+      void window.beale.getWorkspaceSurfaceMap(surfaceWorkspaceId, runId).then((map) => {
+        if (active) { setSessionSurfaceMap(map); setSessionSurfaceError(null); }
+      }).catch((cause: unknown) => {
+        if (active) setSessionSurfaceError(cause instanceof Error ? cause.message : String(cause));
+      });
+    };
+    refresh();
+    const interval = runStatus === 'active' || runStatus === 'queued' ? window.setInterval(refresh, 5000) : null;
+    return () => { active = false; if (interval !== null) window.clearInterval(interval); };
+  }, [viewSpace, surfaceWorkspaceId, runId, runStatus]);
+  const sessionSurfaceSummary = useMemo(() => sessionSurfaceCounts(sessionSurfaceMap), [sessionSurfaceMap]);
+  const sessionHierarchyMap = useMemo(() => sessionSurfaceMap ? sessionSurfaceHierarchy(sessionSurfaceMap, runId) : null,
+    [sessionSurfaceMap, runId]);
+  const selectedSessionSurface = sessionSurfaceMap?.surfaces.find((surface) => surface.id === selectedSessionSurfaceId) ?? null;
   useEffect(() => {
     if (!browserContextsEnabled || viewSpace !== 'session' || !runId) { setFleetBrowserMachine(null); return; }
     let active = true;
@@ -398,6 +433,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   const enabledViews = [
     ...researchSideViewsForProfile(researchProfile).filter((view) => (viewSpace === 'session' || view !== 'subagents')
       && (browserContextsEnabled || !isBrowserSideView(view))),
+    ...(viewSpace === 'session' && sessionSurfaceSummary.total > 0 ? ['surfaces' as const] : []),
     ...(browserContextsEnabled ? visibleBrowserContexts.filter((context) => context.id !== DEFAULT_BROWSER_CONTEXT.id).map((context) => browserSideViewId(context.id)) : [])
   ];
   const browserContextLabels = Object.fromEntries(visibleBrowserContexts.map((context) => [browserSideViewId(context.id), context.label]));
@@ -691,7 +727,8 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   const hasSessionMetadata = Boolean(detail);
   const hasSessionResources = (featureAvailability.runbooks && sessionRunbooks > 0)
     || (featureAvailability.reports && sessionReports.length > 0)
-    || (featureAvailability.collaboration && subagentOverview.count > 0);
+    || (featureAvailability.collaboration && subagentOverview.count > 0)
+    || sessionSurfaceSummary.total > 0;
   const hasSessionMemories = featureAvailability.memory;
 
   useEffect(() => {
@@ -702,6 +739,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
     setExpandedMemoryGroups(new Set());
     setSelectedNodeId(null);
     setSelectedClaimIdState(null);
+    setSelectedSessionSurfaceId(null);
     setScope(viewSpace === 'workspace' ? DEFAULT_WORKSPACE_MEMORY_LEVEL_FILTER : DEFAULT_MEMORY_LEVEL_FILTER);
     setReportScope(viewSpace === 'workspace' ? DEFAULT_WORKSPACE_RUNBOOK_SCOPE_FILTER : DEFAULT_RUNBOOK_SCOPE_FILTER);
   }, [runId, viewSpace]);
@@ -884,6 +922,28 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
     </section>
   ) : null;
 
+  if (selectedSessionSurface && sessionSurfaceMap && viewSpace === 'session') {
+    return <WorkspaceSurfaceDetails
+      surface={selectedSessionSurface}
+      map={sessionSurfaceMap}
+      workspaceId={surfaceWorkspaceId}
+      providerModelCatalog={providerModelCatalog}
+      leads={leads}
+      findings={findings}
+      memories={nodes}
+      readOnly
+      onOpenClaim={(claimId) => { setSelectedSessionSurfaceId(null); openDetails('memory'); openClaimDetail(claimId); }}
+      onOpenMemory={(nodeId) => {
+        setSelectedSessionSurfaceId(null);
+        openDetails('memory');
+        setScope('workspace');
+        setSelectedClaimIdState(null);
+        setSelectedNodeId(nodeId);
+      }}
+      onClose={() => setSelectedSessionSurfaceId(null)}
+    />;
+  }
+
   if (!detailsOpen) {
     if (viewSpace === 'workspace') {
       return (
@@ -1010,6 +1070,14 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
                 <ChevronRight className="session-summary-chevron" size={15} aria-hidden="true" />
               </button>
             ) : null}
+            {sessionSurfaceSummary.total > 0 ? (
+              <button type="button" className="session-summary-item" onClick={() => openDetails('surfaces')}>
+                <GitBranch size={15} aria-hidden="true" />
+                <span>{sessionSurfaceSummary.total} Surfaces</span>
+                <span className="session-summary-meta">{sessionSurfaceSummary.touched} Touched, {sessionSurfaceSummary.completed} Completed</span>
+                <ChevronRight className="session-summary-chevron" size={15} aria-hidden="true" />
+              </button>
+            ) : null}
             {featureAvailability.memory && activeSessionLeads.length > 0 ? (
               <button type="button" className="session-summary-item" onClick={() => openDetails('memory', 'leads')}>
                 <CampaignClaimProjectionIcon projection="lead" />
@@ -1036,6 +1104,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
                 </button>
                 <MemoryTypeSummaryRows
                   summaries={sessionMemoryTypes.summaries}
+                  collapsible
                 />
               </>
             ) : null}
@@ -1179,6 +1248,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
               showBackToMain
               showBackButton={false}
               scrollScopeKey={visibleSelectedSubagentPath}
+              viewedAgentPath={visibleSelectedSubagentPath}
               searchHighlightQuery={searchHighlightQuery}
               onBackToMain={closeSubagentDetail}
               onSessionAction={() => undefined}
@@ -1251,6 +1321,10 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
               onUndoDuplicate={onUndoHistoryDuplicate ? (id, revision) => onUndoHistoryDuplicate('claim', id, revision) : undefined}
             />
           </MainSideScrollRegion>
+        ) : activeView === 'surfaces' ? (
+          <WorkspaceSurfaceMap context="session" map={sessionHierarchyMap} workspaceName="Session"
+            error={sessionSurfaceError} selectedSurfaceId={selectedSessionSurfaceId}
+            onSelectSurface={(surface) => setSelectedSessionSurfaceId(surface.id)} />
         ) : activeView === 'memory' ? (
           <>
             <div className="memory-catalog-controls">
@@ -1574,13 +1648,35 @@ function CatalogSearch({
   );
 }
 
-function MemoryTypeSummaryRows({ summaries }: {
+function MemoryTypeSummaryRows({ summaries, collapsible = false }: {
   summaries: readonly SessionMemoryTypeSummary[];
+  collapsible?: boolean;
 }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const overflowId = useId();
   return (
-    <div className="session-memory-type-list">
-      {summaries.map((memoryType) => <MemoryTypeSummaryRow memoryType={memoryType} key={memoryType.type} />)}
-    </div>
+    <>
+      {collapsible ? summaries.length > 0 ? (
+        <div id={overflowId} className={`session-memory-type-overflow${expanded ? ' expanded' : ''}`}
+          aria-hidden={!expanded} inert={!expanded}>
+          <div className="session-memory-type-overflow-inner">
+            <div className="session-memory-type-list">
+              {summaries.map((memoryType) => <MemoryTypeSummaryRow memoryType={memoryType} key={memoryType.type} />)}
+            </div>
+          </div>
+        </div>
+      ) : null : (
+        <div className="session-memory-type-list">
+          {summaries.map((memoryType) => <MemoryTypeSummaryRow memoryType={memoryType} key={memoryType.type} />)}
+        </div>
+      )}
+      {collapsible && summaries.length > 0 ? (
+        <button type="button" className="session-memory-type-toggle" aria-expanded={expanded} aria-controls={overflowId}
+          onClick={() => setExpanded((current) => !current)}>
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </>
   );
 }
 
@@ -1684,6 +1780,7 @@ export function SubagentDetailPanel({
             showBackToMain
             showBackButton={false}
             scrollScopeKey={subagent.path}
+            viewedAgentPath={subagent.path}
             searchHighlightQuery=""
             onBackToMain={onBack}
             onSessionAction={() => undefined}
@@ -2074,6 +2171,8 @@ function researchSideViewLabel(
     ? 'Campaign'
     : view === 'reports'
       ? 'Reports'
+      : view === 'surfaces'
+        ? 'Surfaces'
       : isBrowserSideView(view)
         ? 'Browser'
         : 'Subagents');
@@ -2132,6 +2231,7 @@ function unknownProfileValueLabel(kind: string, id: string): string {
 function researchSideViewIcon(view: ResearchSideView, size: number): JSX.Element {
   if (view === 'memory') return <Database size={size} aria-hidden="true" />;
   if (view === 'reports') return <FileText size={size} aria-hidden="true" />;
+  if (view === 'surfaces') return <GitBranch size={size} aria-hidden="true" />;
   if (isBrowserSideView(view)) return <Globe2 size={size} aria-hidden="true" />;
   return <Bot size={size} aria-hidden="true" />;
 }

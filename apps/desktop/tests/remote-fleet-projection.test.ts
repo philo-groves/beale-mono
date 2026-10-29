@@ -58,7 +58,13 @@ test('remote workspace details render the workspace dashboard from the shared de
     memory: { schemaVersion: 4, workspaceId: 'workspace-example', status: 'ready', nodeCount: 0, nodeTypeCounts: {}, nodes: [], leads: [], findings: [] },
     runbooks: [{ id: 'runbook-example', title: 'Example runbook', purpose: 'Verify example.test.', updatedAt: '2026-01-01T00:00:00.000Z' }],
     reports: [{ id: 'report-example', title: 'Example report', summary: 'Synthetic report.', status: 'complete', updatedAt: '2026-01-01T00:00:00.000Z' }],
-    surfaceMap: { schemaVersion: 1, workspaceId: 'workspace-example', surfaces: [], agents: [] },
+    surfaceMap: { schemaVersion: 1, workspaceId: 'workspace-example', surfaces: [{
+      id: 'resource-example', parentId: null, resourceId: 'resource-example', name: 'example.test', description: '',
+      resourceKind: 'domain', resourceSource: 'explicit_scope', resourceDirection: 'in_scope',
+      resourceLocator: 'example.test', scopeAssetId: 'resource-example', firstTouchedAt: null,
+      foundation: null, progressBlocker: null,
+      coverageState: { covered: false, unmetRequirements: ['foundation'], unblockedFindingIds: [] }
+    }], agents: [] },
     targets: [{ id: 'local', name: 'Local', ready: true }]
   };
   const html = renderToStaticMarkup(createElement(RemoteWorkspaceDetails, { serverId: 'server-example', details }));
@@ -68,7 +74,7 @@ test('remote workspace details render the workspace dashboard from the shared de
   expect(html).not.toContain('role="dialog"');
   expect(html).not.toContain('Open Browser');
   expect(html).toContain('Campaign');
-  expect(html).toContain('Resources');
+  expect(html).not.toContain('<span>Resources</span>');
   expect(html).toContain('Surfaces');
   expect(html).toContain('Rules');
   expect(html).toContain('Targets');
@@ -88,7 +94,7 @@ test('remote workspace details render the workspace dashboard from the shared de
   expect(settings).not.toContain('workspace-directories-field');
 
   const resources = renderToStaticMarkup(createElement(RemoteWorkspaceDetails, { serverId: 'server-example', details, initialView: 'resources' }));
-  expect(resources).toContain('workspace-surface-item');
+  expect(resources).toContain('workspace-surface-node');
   expect(resources).toContain('example.test');
   expect(resources).not.toContain('Add resource type');
 

@@ -358,7 +358,8 @@ describe('renderer trace display view models', () => {
       action: 'message' | 'room_packet',
       agentPath: string,
       authorAgentPath: string,
-      recipientAgentPath?: string
+      recipientAgentPath?: string,
+      participantAgentPaths?: string[]
     ): TraceEventRecord => traceEvent({
       id,
       sequence,
@@ -366,6 +367,7 @@ describe('renderer trace display view models', () => {
       payload: {
         type: 'subagent.activity', action, agentPath, authorAgentPath,
         ...(recipientAgentPath ? { recipientAgentPath } : {}),
+        ...(participantAgentPaths ? { participantAgentPaths } : {}),
         message: 'Synthetic peer update.'
       }
     });
@@ -374,17 +376,20 @@ describe('renderer trace display view models', () => {
       communication('root-to-reviewer', 2, 'message', '/root/reviewer', '/root'),
       communication('reviewer-to-root', 3, 'message', '/root', '/root/reviewer'),
       communication('reviewer-to-builder', 4, 'message', '/root/builder', '/root/reviewer'),
-      communication('reviewer-room-packet', 5, 'room_packet', '/root/reviewer', '/root/reviewer')
+      communication('reviewer-room-packet', 5, 'room_packet', '/root/reviewer', '/root/reviewer'),
+      communication('builder-room-broadcast', 6, 'room_packet', '/root/builder', '/root/builder', undefined,
+        ['/root/reviewer', '/root/builder'])
     ] });
 
     expect(buildTraceDisplayEventsForAgentPath(detail, null).map((event) => event.id)).toEqual([
-      'root-to-reviewer', 'reviewer-to-root', 'reviewer-to-builder', 'reviewer-room-packet'
+      'root-to-reviewer', 'reviewer-to-root'
     ]);
     expect(buildTraceDisplayEventsForAgentPath(detail, '/root/reviewer').map((event) => event.id)).toEqual([
-      'child-reasoning', 'root-to-reviewer', 'reviewer-to-root', 'reviewer-to-builder', 'reviewer-room-packet'
+      'child-reasoning', 'root-to-reviewer', 'reviewer-to-root', 'reviewer-to-builder',
+      'reviewer-room-packet', 'builder-room-broadcast'
     ]);
     expect(buildTraceDisplayEventsForAgentPath(detail, '/root/builder').map((event) => event.id)).toEqual([
-      'reviewer-to-builder'
+      'reviewer-to-builder', 'builder-room-broadcast'
     ]);
   });
 });

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
-import { Binary, BookOpen, Boxes, Brain, Columns3, Download, FileText, GitBranch, Globe2, Info, Layers3, ListChecks, Network, Plus, RefreshCw, Server, Settings, Trash2 } from 'lucide-react';
+import { BookOpen, Brain, Columns3, FileText, GitBranch, Info, ListChecks, Network, Plus, RefreshCw, Server, Settings, Trash2 } from 'lucide-react';
 import type { BealeWorkspaceResearchTrack, BealeWorkspaceSurfaceMap } from '@beale/app-server-runtime/protocol';
 import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../shared/types';
 import { researchKitDefinition, researchKitLabel, researchKitResourceKey } from '../../../shared/researchKits';
@@ -13,7 +13,6 @@ import type {
   ResearchKitId,
   ResearchKitRefreshInput,
   ResearchKitRefreshResult,
-  RepositoryCloneMode,
   ResearchProviderModelCatalog,
   RunRow,
   ScopeAsset,
@@ -31,30 +30,31 @@ import { MemoryCatalogItem, ReportCatalogItem, RunbookCatalogItem } from '../res
 import { memoryTypeGroupsByHeat } from '../../view-models/memoryCatalog';
 import { EMPTY_SESSION_HEAT_PREFERENCES } from '../../view-models/sessionHeat';
 import type { SessionHeatPreferences } from '../../view-models/sessionHeat';
+import type { MapSurface } from '../../view-models/surfaceMap';
 import { errorMessage } from '../../lib/errors';
 import { renderTraceProseText } from '../traces/traceMarkup';
 import { WorkspaceDirectoriesField } from './WorkspaceDirectoriesWidget';
 import { WorkspaceTargetsPanel } from './WorkspaceTargetsPanel';
 import { CampaignBoardView } from './CampaignGraphView';
-import { ResourcePriorArtView } from './ResourcePriorArtView';
 import { WorkspaceSurfaceMap } from './WorkspaceSurfaceMap';
+import { WORKSPACE_ASSET_KINDS, WorkspaceAssetIcon, workspaceAssetKindLabel } from './WorkspaceResourceKinds';
+export { WORKSPACE_ASSET_KINDS, WorkspaceAssetIcon, workspaceAssetKindLabel } from './WorkspaceResourceKinds';
 import { WorkspaceResearchTrack } from './WorkspaceResearchTrack';
 import { WorkspaceTitleSearch, workspaceCatalogMatchesQuery } from './WorkspaceTitleSearch';
 
 const WORKSPACE_ACTIVITY_DAY_COUNT = 365;
 const DAY_DURATION_MS = 24 * 60 * 60 * 1_000;
-const WORKSPACE_DASHBOARD_VIEWS = ['campaign', 'resources', 'surfaces', 'rules', 'targets', 'overview', 'kit'] as const;
+const WORKSPACE_DASHBOARD_VIEWS = ['campaign', 'surfaces', 'rules', 'targets', 'overview', 'kit'] as const;
 const WORKSPACE_CAMPAIGN_VIEWS = ['board', 'memory', 'runbooks', 'reports'] as const;
 
 type WorkspaceTopLevelView = typeof WORKSPACE_DASHBOARD_VIEWS[number];
 type WorkspaceCampaignView = typeof WORKSPACE_CAMPAIGN_VIEWS[number];
-export type WorkspaceDashboardView = WorkspaceTopLevelView | WorkspaceCampaignView | 'activity';
+export type WorkspaceDashboardView = WorkspaceTopLevelView | WorkspaceCampaignView | 'activity' | 'resources';
 
 const WORKSPACE_DASHBOARD_VIEW_ICONS: Record<WorkspaceTopLevelView, typeof Info> = {
   overview: Settings,
   targets: Server,
   campaign: GitBranch,
-  resources: Boxes,
   surfaces: Network,
   kit: RefreshCw,
   rules: ListChecks
@@ -197,8 +197,6 @@ export function WorkspaceUnderstandingView({
   workspaceName,
   runs,
   onAddResource = async () => undefined,
-  onChangeResource = async () => undefined,
-  onCloneRepository = async () => undefined,
   onRefreshResearchKit = async () => { throw new Error('Research Kit refresh is unavailable.'); },
   onAddRule = async () => undefined,
   onSaveConfiguration = async () => undefined,
@@ -223,6 +221,9 @@ export function WorkspaceUnderstandingView({
   remoteTargets,
   trackServerId,
   surfaceMap,
+  selectedSurfaceId = null,
+  onOpenSurface,
+  onSurfaceMapChange,
   researchProfileLabel,
   nowMs
 }: {
@@ -247,10 +248,11 @@ export function WorkspaceUnderstandingView({
   remoteTargets?: readonly { id: string; name: string; ready: boolean }[];
   trackServerId?: string;
   surfaceMap?: BealeWorkspaceSurfaceMap | null;
+  selectedSurfaceId?: string | null;
+  onOpenSurface?: (surface: MapSurface) => void;
+  onSurfaceMapChange?: (map: BealeWorkspaceSurfaceMap | null) => void;
   researchProfileLabel?: string;
   onAddResource?: (asset: ScopeAssetInput) => Promise<void>;
-  onChangeResource?: (assetIds: string[], asset: ScopeAssetInput | null) => Promise<void>;
-  onCloneRepository?: (assetId: string, cloneMode: RepositoryCloneMode) => Promise<void>;
   onRefreshResearchKit?: (input: ResearchKitRefreshInput) => Promise<ResearchKitRefreshResult>;
   onAddRule?: (text: string) => Promise<void>;
   onSaveConfiguration?: (configuration: WorkspaceConfigurationInput) => Promise<void>;
@@ -272,8 +274,10 @@ export function WorkspaceUnderstandingView({
   nowMs?: number;
 }): JSX.Element {
   const [activeView, setActiveView] = useState<WorkspaceTopLevelView>(() => workspaceTopLevelView(initialView));
-  const [resourceEditState, setResourceEditState] = useState({ dirty: false, pending: false });
-  const [pendingResourceNavigation, setPendingResourceNavigation] = useState<WorkspaceTopLevelView | null>(null);
+  const [addResourceKind, setAddResourceKind] = useState<ScopeAssetKind | null>(null);
+  const [activeSurfaceKind, setActiveSurfaceKind] = useState<ScopeAssetKind | null>(null);
+  const [surfaceKindPickerOpen, setSurfaceKindPickerOpen] = useState(false);
+  const surfaceKindPickerRef = useRef<HTMLDivElement>(null);
   const [activeCampaignView, setActiveCampaignView] = useState<WorkspaceCampaignView>(() => workspaceCampaignView(initialView));
   const [focusedBoardMaturity, setFocusedBoardMaturity] = useState<ClaimBoardMaturity>('lead');
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
@@ -314,6 +318,20 @@ export function WorkspaceUnderstandingView({
     const timer = window.setInterval(refresh, 5_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [activeView, surfaceMap, workspaceId]);
+  const visibleSurfaceMap = surfaceMap === undefined ? localSurfaceMap : surfaceMap;
+  useEffect(() => {
+    if (!surfaceKindPickerOpen) return undefined;
+    const close = (event: PointerEvent): void => {
+      if (!surfaceKindPickerRef.current?.contains(event.target as Node)) setSurfaceKindPickerOpen(false);
+    };
+    const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') setSurfaceKindPickerOpen(false); };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', escape);
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', escape); };
+  }, [surfaceKindPickerOpen]);
+  useEffect(() => {
+    if (activeView === 'surfaces') onSurfaceMapChange?.(visibleSurfaceMap);
+  }, [activeView, onSurfaceMapChange, visibleSurfaceMap]);
   const workspaceMemoryNodes = useMemo(
     () => campaignActive && activeCampaignView === 'memory'
       ? (appServerMemory?.nodes ?? [])
@@ -340,7 +358,7 @@ export function WorkspaceUnderstandingView({
   );
 
   return (
-    <main className={`workspace-dashboard wide-content-container${campaignActive ? ' campaign-active' : ''}`} aria-label="Workspace dashboard">
+    <main className={`workspace-dashboard wide-content-container${campaignActive ? ' campaign-active' : ''}${activeView === 'surfaces' ? ' surfaces-active' : ''}`} aria-label="Workspace dashboard">
       <div className="workspace-dashboard-tabs research-side-view-tabs pill-view-tabs" role="tablist" aria-label="Workspace dashboard views">
         {dashboardViews.map((view) => {
           const selected = activeView === view;
@@ -351,8 +369,7 @@ export function WorkspaceUnderstandingView({
                 aria-controls={view === 'campaign' ? 'workspace-dashboard-campaign-subviews' : `workspace-dashboard-${view}-panel`}
                 aria-selected={selected}
                 className="research-side-view-tab-activate"
-                disabled={resourceEditState.pending}
-                onClick={() => activeView === 'resources' && view !== 'resources' && resourceEditState.dirty ? setPendingResourceNavigation(view) : setActiveView(view)}
+                onClick={() => setActiveView(view)}
                 role="tab"
                 type="button"
               >
@@ -393,6 +410,31 @@ export function WorkspaceUnderstandingView({
         </div>
       ) : null}
 
+      {activeView === 'surfaces' ? <div className="workspace-surface-subview-navigation" ref={surfaceKindPickerRef}>
+        <div className="workspace-surface-subview-tabs research-side-view-tabs pill-view-tabs" role="tablist" aria-label="Surface resource types">
+          <div className={`research-side-view-tab workspace-resource-tab${activeSurfaceKind === null ? ' active' : ''}`}>
+            <button className="research-side-view-tab-activate" type="button" role="tab" aria-selected={activeSurfaceKind === null}
+              onClick={() => setActiveSurfaceKind(null)}><Network aria-hidden="true" size={14} /><span>All Surfaces</span></button>
+            {!readOnly ? <button className="research-side-view-tab-close workspace-resource-tab-add" type="button"
+              aria-label="Add resource" title="Add resource" aria-haspopup="menu" aria-expanded={surfaceKindPickerOpen}
+              onClick={() => setSurfaceKindPickerOpen((open) => !open)}><Plus aria-hidden="true" size={14} /></button> : null}
+          </div>
+          {WORKSPACE_ASSET_KINDS.map((kind) => <div className={`research-side-view-tab workspace-resource-tab${activeSurfaceKind === kind ? ' active' : ''}`} key={kind}>
+            <button className="research-side-view-tab-activate" type="button" role="tab" aria-selected={activeSurfaceKind === kind}
+              onClick={() => setActiveSurfaceKind(kind)}><WorkspaceAssetIcon kind={kind} size={14} /><span>{workspaceAssetKindLabel(kind)}</span></button>
+            {!readOnly ? <button className="research-side-view-tab-close workspace-resource-tab-add" type="button"
+              aria-label={`Add ${workspaceAssetKindLabel(kind).toLowerCase()}`} title={`Add ${workspaceAssetKindLabel(kind).toLowerCase()}`}
+              onClick={() => setAddResourceKind(kind)}><Plus aria-hidden="true" size={14} /></button> : null}
+          </div>)}
+        </div>
+        {surfaceKindPickerOpen ? <div className="research-side-view-picker-menu workspace-resource-kind-menu workspace-surface-add-menu" role="menu">
+          {WORKSPACE_ASSET_KINDS.map((kind) => <button type="button" role="menuitem" key={kind}
+            onClick={() => { setSurfaceKindPickerOpen(false); setAddResourceKind(kind); }}>
+            <WorkspaceAssetIcon kind={kind} /><span>{workspaceAssetKindLabel(kind)}</span>
+          </button>)}
+        </div> : null}
+      </div> : null}
+
       {activeView === 'overview' ? <WorkspaceOverviewPanel
         activeScope={activeScope}
         busy={busy}
@@ -418,32 +460,22 @@ export function WorkspaceUnderstandingView({
 
       {activeView === 'targets' ? <WorkspaceTargetsPanel workspaceId={workspaceId} workspaceName={activeScope?.workspaceName || workspaceName} disabled={busy} remoteTargets={remoteTargets} /> : null}
 
-      {activeView === 'resources' ? <WorkspaceResearchSurface
-        onEditStateChange={setResourceEditState}
-        workspaceId={workspaceId}
-        activeScope={activeScope}
-        hidden={false}
-        appServerMemory={appServerMemory}
-        nowMs={timelineNowMs}
-        runs={runs}
-        onAddResource={onAddResource}
-        onChangeResource={onChangeResource}
-        onCloneRepository={onCloneRepository}
-        workspaceName={activeScope?.workspaceName || workspaceName}
-        readOnly={readOnly}
-      /> : null}
-
       {activeView === 'surfaces' ? <WorkspaceSurfaceMap
-        map={surfaceMap === undefined ? localSurfaceMap : surfaceMap}
+        map={visibleSurfaceMap}
+        resourceKind={activeSurfaceKind}
         workspaceName={activeScope?.workspaceName || workspaceName}
         loading={surfaceMap === undefined && localSurfaceMap === null && !surfaceMapError}
         error={surfaceMapError}
+        selectedSurfaceId={selectedSurfaceId}
+        onSelectSurface={onOpenSurface}
       /> : null}
 
-      {pendingResourceNavigation ? <Modal title="Discard resource changes?" onClose={() => setPendingResourceNavigation(null)} footer={<>
-        <button className="secondary-button" onClick={() => setPendingResourceNavigation(null)} type="button">Keep editing</button>
-        <button className="primary-button" onClick={() => { setActiveView(pendingResourceNavigation); setPendingResourceNavigation(null); }} type="button">Discard changes</button>
-      </>}><p>Your unsaved resource edits will be discarded.</p></Modal> : null}
+      {activeView === 'surfaces' && addResourceKind ? <WorkspaceResourceDialog
+        initialAsset={null}
+        kind={addResourceKind}
+        onClose={() => setAddResourceKind(null)}
+        onSubmit={onAddResource}
+      /> : null}
 
       {campaignActive && activeCampaignView === 'board' ? <CampaignBoardView
         compact={rightAreaExpanded}
@@ -513,7 +545,7 @@ function workspaceDashboardViewLabel(view: WorkspaceDashboardView, researchKitId
 }
 
 function workspaceTopLevelView(initialView: WorkspaceDashboardView): WorkspaceTopLevelView {
-  return initialView === 'activity' || initialView === 'board' || initialView === 'memory' || initialView === 'runbooks' || initialView === 'reports'
+  return initialView === 'resources' ? 'surfaces' : initialView === 'activity' || initialView === 'board' || initialView === 'memory' || initialView === 'runbooks' || initialView === 'reports'
     ? 'campaign'
     : initialView;
 }
@@ -1534,45 +1566,23 @@ function normalizedWorkspaceRemovalName(value: string): string {
     .trim();
 }
 
-interface WorkspaceResearchSurfaceItem {
+export interface WorkspaceResearchSurfaceItem {
   asset: ScopeAsset;
   assetIds: string[];
   label: string;
   repositoryCloned: boolean | null;
   repositoryCloneAssetId: string | null;
   repositoryLocalPath: string | null;
-  sessionCount: number;
-  memoryCount: number;
-  lastResearchedAt: string | null;
 }
 
 export function workspaceResearchSurfaceItems(
   assets: readonly ScopeAsset[],
-  runs: readonly RunRow[],
-  memory: AppServerMemorySummary | null | undefined
+  repositoryCheckouts?: Readonly<Record<string, string>>
 ): WorkspaceResearchSurfaceItem[] {
   const assetGroups = new Map<string, ScopeAsset[]>();
   for (const asset of assets) {
     const key = workspaceAssetGroupKey(asset);
     assetGroups.set(key, [...(assetGroups.get(key) ?? []), asset]);
-  }
-  const runStatsByAssetId = new Map<string, { count: number; lastResearchedAt: string | null }>();
-  for (const { run } of runs) {
-    if (!run.targetAssetId) continue;
-    const researchedAt = run.startedAt ?? run.createdAt;
-    const current = runStatsByAssetId.get(run.targetAssetId) ?? { count: 0, lastResearchedAt: null };
-    runStatsByAssetId.set(run.targetAssetId, {
-      count: current.count + 1,
-      lastResearchedAt: latestTimestamp(current.lastResearchedAt, researchedAt)
-    });
-  }
-  const memoryIdsByAssetId = new Map<string, Set<string>>();
-  for (const node of memory?.nodes ?? []) {
-    for (const assetId of node.assetIds) {
-      const memoryIds = memoryIdsByAssetId.get(assetId) ?? new Set<string>();
-      memoryIds.add(node.id);
-      memoryIdsByAssetId.set(assetId, memoryIds);
-    }
   }
   return [...assetGroups.values()].map((groupAssets) => {
     const asset = preferredWorkspaceSurfaceAsset(groupAssets);
@@ -1584,36 +1594,23 @@ export function workspaceResearchSurfaceItems(
       ? groupAssets.find((candidate) => !repositoryNameFromUrl(candidate.value) && repositoryIdentityFromPath(candidate.value)) ?? null
       : null;
     const clonedDirectory = asset.kind === 'repo'
-      ? repositoryClonedDirectory(repositorySourceAsset ?? asset) ?? repositoryLocalAsset?.value ?? null
+      ? repositoryCheckouts
+        ? groupAssets.map((candidate) => repositoryCheckouts[candidate.id]).find(Boolean) ?? null
+        : repositoryClonedDirectory(repositorySourceAsset ?? asset) ?? repositoryLocalAsset?.value ?? null
       : null;
-    const memoryIds = new Set(assetIds.flatMap((assetId) => [...(memoryIdsByAssetId.get(assetId) ?? [])]));
-    const runStats = assetIds.map((assetId) => runStatsByAssetId.get(assetId));
     return {
       asset,
       assetIds,
       label: workspaceAssetLabel(asset),
       repositoryCloned: asset.kind === 'repo' ? clonedDirectory !== null : null,
       repositoryCloneAssetId: repositorySourceAsset?.id ?? null,
-      repositoryLocalPath: clonedDirectory,
-      sessionCount: runStats.reduce((count, stats) => count + (stats?.count ?? 0), 0),
-      memoryCount: memoryIds.size,
-      lastResearchedAt: runStats.reduce<string | null>(
-        (latest, stats) => latestTimestamp(latest, stats?.lastResearchedAt ?? null),
-        null
-      )
+      repositoryLocalPath: clonedDirectory
     };
   }).sort((left, right) => {
     if (left.asset.direction !== right.asset.direction) return left.asset.direction === 'in_scope' ? -1 : 1;
     return workspaceAssetKindOrder(left.asset.kind) - workspaceAssetKindOrder(right.asset.kind)
       || left.label.localeCompare(right.label);
   });
-}
-
-function latestTimestamp(left: string | null, right: string | null): string | null {
-  const leftMs = left ? Date.parse(left) : Number.NaN;
-  const rightMs = right ? Date.parse(right) : Number.NaN;
-  if (!Number.isFinite(rightMs)) return Number.isFinite(leftMs) ? left : null;
-  return !Number.isFinite(leftMs) || rightMs > leftMs ? right : left;
 }
 
 function workspaceAssetGroupKey(asset: ScopeAsset): string {
@@ -1630,359 +1627,9 @@ function preferredWorkspaceSurfaceAsset(assets: ScopeAsset[]): ScopeAsset {
     ?? assets[0];
 }
 
-export const WORKSPACE_ASSET_KINDS: ScopeAssetKind[] = [
-  'repo',
-  'documentation',
-  'binary',
-  'service',
-  'domain',
-  'other'
-];
-
 export function workspaceResearchSurfaceKinds(items: readonly WorkspaceResearchSurfaceItem[]): ScopeAssetKind[] {
   const representedKinds = new Set(items.map((item) => item.asset.kind));
   return WORKSPACE_ASSET_KINDS.filter((kind) => representedKinds.has(kind));
-}
-
-function workspaceResourceMatchesQuery(item: WorkspaceResearchSurfaceItem, query: string): boolean {
-  return workspaceCatalogMatchesQuery(query, [
-    item.label, item.asset.value, item.asset.id, workspaceAssetKindLabel(item.asset.kind),
-    item.asset.direction === 'in_scope' ? 'In scope' : 'Out of scope'
-  ]);
-}
-
-function WorkspaceResearchSurface({
-  onEditStateChange,
-  workspaceId,
-  activeScope,
-  hidden,
-  appServerMemory,
-  nowMs,
-  runs,
-  onAddResource,
-  onChangeResource,
-  onCloneRepository,
-  readOnly,
-  workspaceName
-}: {
-  onEditStateChange: (state: { dirty: boolean; pending: boolean }) => void;
-  workspaceId: string;
-  activeScope: WorkspaceScopeVersion | null;
-  hidden: boolean;
-  appServerMemory: AppServerMemorySummary | null;
-  nowMs: number;
-  runs: RunRow[];
-  onAddResource: (asset: ScopeAssetInput) => Promise<void>;
-  onChangeResource: (assetIds: string[], asset: ScopeAssetInput | null) => Promise<void>;
-  onCloneRepository: (assetId: string, cloneMode: RepositoryCloneMode) => Promise<void>;
-  readOnly: boolean;
-  workspaceName: string;
-}): JSX.Element {
-  const items = useMemo(
-    () => workspaceResearchSurfaceItems(activeScope?.assets ?? [], runs, appServerMemory),
-    [activeScope?.assets, appServerMemory, runs]
-  );
-  const resourceActivity = useMemo(
-    () => workspaceCreationActivity(items.map((item) => item.asset), nowMs),
-    [items, nowMs]
-  );
-  const representedKinds = useMemo(() => workspaceResearchSurfaceKinds(items), [items]);
-  const [query, setQuery] = useState('');
-  const matchingItems = useMemo(() => items.filter((item) => workspaceResourceMatchesQuery(item, query)), [items, query]);
-  const [activeKind, setActiveKind] = useState<ScopeAssetKind | null>(() => representedKinds[0] ?? null);
-  const [selectedResource, setSelectedResource] = useState<{ kind: ScopeAssetKind; value: string; direction: ScopeAssetInput['direction'] } | null>(null);
-  const selectedItem = selectedResource ? items.find((item) => item.asset.kind === selectedResource.kind && item.asset.value === selectedResource.value && item.asset.direction === selectedResource.direction) : null;
-  const [dialogState, setDialogState] = useState<ScopeAssetKind | null>(null);
-  const [cloneDialogState, setCloneDialogState] = useState<{ item: WorkspaceResearchSurfaceItem; mode: RepositoryCloneMode } | null>(null);
-  const [kindPickerOpen, setKindPickerOpen] = useState(false);
-  const [cloningAssetIds, setCloningAssetIds] = useState<Set<string>>(() => new Set());
-  const [cloneErrors, setCloneErrors] = useState<Map<string, string>>(() => new Map());
-  const kindPickerRef = useRef<HTMLDivElement>(null);
-  const visibleItems = activeKind ? matchingItems.filter((item) => item.asset.kind === activeKind) : [];
-  const updateQuery = (nextQuery: string): void => {
-    setQuery(nextQuery);
-    if (!nextQuery.trim()) return;
-    const matchingKinds = workspaceResearchSurfaceKinds(items.filter((item) => workspaceResourceMatchesQuery(item, nextQuery)));
-    if (!activeKind || !matchingKinds.includes(activeKind)) setActiveKind(matchingKinds[0] ?? activeKind);
-  };
-  const missingKinds = WORKSPACE_ASSET_KINDS.filter((kind) => !representedKinds.includes(kind));
-  const surfaceScrollRef = useRef<HTMLDivElement>(null);
-  const surfaceListRef = useRef<HTMLDivElement>(null);
-  const updateScrollFades = useCallback((): void => {
-    const scroll = surfaceScrollRef.current;
-    const list = surfaceListRef.current;
-    if (!scroll || !list) return;
-    const scrollableDistance = list.scrollHeight - list.clientHeight;
-    const canScroll = scrollableDistance > 8;
-    scroll.classList.toggle('has-top-fade', canScroll && list.scrollTop > 8);
-    scroll.classList.toggle('has-bottom-fade', canScroll && list.scrollTop < scrollableDistance - 8);
-  }, []);
-
-  useEffect(() => {
-    updateScrollFades();
-    const list = surfaceListRef.current;
-    if (!list || typeof ResizeObserver === 'undefined') return undefined;
-    const observer = new ResizeObserver(updateScrollFades);
-    observer.observe(list);
-    return () => observer.disconnect();
-  }, [activeKind, query, visibleItems.length, updateScrollFades]);
-
-  useEffect(() => {
-    if (activeKind && representedKinds.includes(activeKind)) return;
-    setActiveKind(representedKinds[0] ?? null);
-  }, [activeKind, representedKinds]);
-
-  useEffect(() => {
-    if (!kindPickerOpen) return undefined;
-    const closeOnOutsidePointer = (event: PointerEvent): void => {
-      if (!kindPickerRef.current?.contains(event.target as Node)) setKindPickerOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setKindPickerOpen(false);
-    };
-    window.addEventListener('pointerdown', closeOnOutsidePointer);
-    window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      window.removeEventListener('pointerdown', closeOnOutsidePointer);
-      window.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [kindPickerOpen]);
-
-  const openResourceDialog = (kind: ScopeAssetKind): void => {
-    setKindPickerOpen(false);
-    setDialogState(kind);
-  };
-  const cloneRepository = async (item: WorkspaceResearchSurfaceItem, cloneMode: RepositoryCloneMode): Promise<void> => {
-    const assetId = item.repositoryCloneAssetId;
-    if (!assetId || cloningAssetIds.has(assetId)) return;
-    setCloningAssetIds((current) => new Set(current).add(assetId));
-    setCloneErrors((current) => {
-      const next = new Map(current);
-      next.delete(assetId);
-      return next;
-    });
-    try {
-      await onCloneRepository(assetId, cloneMode);
-    } catch (caught) {
-      setCloneErrors((current) => new Map(current).set(assetId, errorMessage(caught)));
-    } finally {
-      setCloningAssetIds((current) => {
-        const next = new Set(current);
-        next.delete(assetId);
-        return next;
-      });
-    }
-  };
-
-  if (selectedItem && !readOnly) return (
-    <section key="resource-detail" className="workspace-dashboard-panel workspace-resource-detail" aria-label="Resource details" id="workspace-dashboard-resources-panel" role="tabpanel">
-      <WorkspaceResourceEditor
-        key={`editor:${selectedItem.asset.id}`}
-        presentation="page"
-        onEditStateChange={onEditStateChange}
-        initialAsset={selectedItem.asset}
-        initialClonedDirectory={selectedItem.repositoryLocalPath}
-        kind={selectedItem.asset.kind}
-        onClose={() => setSelectedResource(null)}
-        onRemove={() => onChangeResource(selectedItem.assetIds, null)}
-        onSubmit={async (asset) => {
-          await onChangeResource(selectedItem.assetIds, asset);
-          setSelectedResource({ kind: asset.kind, value: asset.value, direction: asset.direction });
-        }}
-      />
-      <ResourcePriorArtView key={`history:${selectedItem.asset.id}`} workspaceId={workspaceId} assetIds={selectedItem.assetIds} />
-    </section>
-  );
-
-  return (
-    <section
-      aria-label="Workspace resources"
-      className="workspace-dashboard-panel workspace-surface-area"
-      hidden={hidden}
-      id="workspace-dashboard-resources-panel"
-      role="tabpanel"
-    >
-      <WorkspaceActivityForm activity={resourceActivity} metric="resources" showGrid={false} viewLabel="Resources" workspaceName={workspaceName}
-        search={{ query, onChange: updateQuery }} />
-      <div className="workspace-resource-tabs-bar">
-        <div className="research-side-view-tabs workspace-resource-tabs" role="tablist" aria-label="Workspace resource types">
-          {representedKinds.map((kind) => (
-            <div className={`research-side-view-tab workspace-resource-tab ${activeKind === kind ? 'active' : ''}`.trim()} key={kind}>
-              <button
-                aria-selected={activeKind === kind}
-                className="research-side-view-tab-activate"
-                onClick={() => setActiveKind(kind)}
-                role="tab"
-                type="button"
-              >
-                <WorkspaceAssetIcon kind={kind} size={14} />
-                <span>{workspaceAssetKindLabel(kind)}</span>
-              </button>
-              {!readOnly ? <button
-                aria-label={`Add ${workspaceAssetKindLabel(kind).toLowerCase()}`}
-                className="research-side-view-tab-close workspace-resource-tab-add"
-                onClick={() => openResourceDialog(kind)}
-                title={`Add ${workspaceAssetKindLabel(kind).toLowerCase()}`}
-                type="button"
-              >
-                <Plus aria-hidden="true" size={14} />
-              </button> : null}
-            </div>
-          ))}
-        </div>
-        {!readOnly ? <div className="research-side-view-picker workspace-resource-kind-picker" ref={kindPickerRef}>
-          <button
-            aria-expanded={kindPickerOpen}
-            aria-haspopup="menu"
-            aria-label="Add resource type"
-            className="research-side-view-picker-trigger"
-            disabled={missingKinds.length === 0}
-            onClick={() => setKindPickerOpen((open) => !open)}
-            title="Add resource type"
-            type="button"
-          >
-            <Plus aria-hidden="true" size={16} />
-          </button>
-          {kindPickerOpen ? (
-            <div className="research-side-view-picker-menu workspace-resource-kind-menu" role="menu">
-              {missingKinds.map((kind) => (
-                <button key={kind} onClick={() => openResourceDialog(kind)} role="menuitem" type="button">
-                  <WorkspaceAssetIcon kind={kind} />
-                  <span>{workspaceAssetKindLabel(kind)}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div> : null}
-      </div>
-      {visibleItems.length > 0 ? (
-        <div className="workspace-surface-scroll" ref={surfaceScrollRef}>
-          <div
-            aria-label={`${workspaceAssetKindLabel(activeKind as ScopeAssetKind)} resources`}
-            className="workspace-surface-list"
-            onScroll={updateScrollFades}
-            ref={surfaceListRef}
-            role="tabpanel"
-          >
-            {visibleItems.map((item) => (
-              <article
-                className={`workspace-surface-item is-${item.asset.direction}${item.asset.direction === 'in_scope' && item.repositoryCloned === false && item.repositoryCloneAssetId ? ' has-repository-action' : ''}`}
-                key={item.asset.id}
-              >
-                <button
-                  className="workspace-surface-item-open"
-                  onClick={readOnly ? undefined : () => setSelectedResource({ kind: item.asset.kind, value: item.asset.value, direction: item.asset.direction })}
-                  disabled={readOnly}
-                  title={`Open ${item.label}`}
-                  type="button"
-                >
-                  <span className="workspace-surface-item-icon" aria-hidden="true">
-                    <WorkspaceAssetIcon kind={item.asset.kind} />
-                  </span>
-                  <div className="workspace-surface-item-main">
-                    <div className="workspace-surface-item-heading">
-                      <strong title={item.asset.value}>{item.label}</strong>
-                      <span>{workspaceAssetKindLabel(item.asset.kind)}</span>
-                    </div>
-                    <small title={item.asset.value}>{item.asset.value}</small>
-                    <div className="workspace-surface-item-meta">
-                      <span>{item.asset.direction === 'in_scope' ? 'In scope' : 'Out of scope'}</span>
-                      {item.repositoryCloned !== null ? (
-                        <span title={item.repositoryLocalPath ?? undefined}>{item.repositoryCloned ? 'Cloned' : 'Not cloned'}</span>
-                      ) : null}
-                      <span>{item.sessionCount} {item.sessionCount === 1 ? 'session' : 'sessions'}</span>
-                      <span>{item.memoryCount} {item.memoryCount === 1 ? 'memory' : 'memories'}</span>
-                      <span>{item.lastResearchedAt ? `Last ${formatSurfaceRecency(item.lastResearchedAt, nowMs)}` : 'Never researched'}</span>
-                    </div>
-                  </div>
-                </button>
-                {!readOnly && item.asset.direction === 'in_scope' && item.repositoryCloned === false && item.repositoryCloneAssetId ? (
-                  <button
-                    className="workspace-repository-clone-button"
-                    disabled={cloningAssetIds.has(item.repositoryCloneAssetId)}
-                    onClick={() => setCloneDialogState({ item, mode: 'deep' })}
-                    title="Clone this repository into Beale source storage"
-                    type="button"
-                  >
-                    <Download aria-hidden="true" size={14} />
-                    <span>{cloningAssetIds.has(item.repositoryCloneAssetId) ? 'Cloning…' : 'Clone'}</span>
-                  </button>
-                ) : null}
-                {item.repositoryCloneAssetId && cloneErrors.has(item.repositoryCloneAssetId) ? (
-                  <small className="workspace-repository-clone-error" role="alert">
-                    {cloneErrors.get(item.repositoryCloneAssetId)}
-                  </small>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="workspace-surface-empty">
-          {query.trim() ? 'No resources match this search.' : items.length > 0 ? 'No resources of this type recorded.' : 'No workspace resources recorded.'}
-        </div>
-      )}
-      {dialogState ? (
-        <WorkspaceResourceDialog
-          initialAsset={null}
-          kind={dialogState}
-          onClose={() => setDialogState(null)}
-          onSubmit={onAddResource}
-        />
-      ) : null}
-      {cloneDialogState ? (
-        <Modal
-          className="workspace-repository-clone-dialog"
-          footer={(
-            <>
-              <button className="secondary-button" onClick={() => setCloneDialogState(null)} type="button">Cancel</button>
-              <button
-                className="primary-button"
-                onClick={() => {
-                  const { item, mode } = cloneDialogState;
-                  setCloneDialogState(null);
-                  void cloneRepository(item, mode);
-                }}
-                type="button"
-              >Clone repository</button>
-            </>
-          )}
-          onClose={() => setCloneDialogState(null)}
-          title="Clone repository"
-        >
-          <p className="workspace-repository-clone-description">Choose how much Git history to keep for {cloneDialogState.item.label}.</p>
-          <div className="settings-form-radio-list workspace-repository-clone-options">
-            <label className="settings-form-control-row">
-              <span className="settings-form-radio-copy">
-                <strong>Deep clone</strong>
-                <small>Complete history for research, blame, and prior-fix analysis. Recommended by default.</small>
-              </span>
-              <input
-                checked={cloneDialogState.mode === 'deep'}
-                name="repository-clone-mode"
-                onChange={() => setCloneDialogState((current) => current ? { ...current, mode: 'deep' } : null)}
-                type="radio"
-                value="deep"
-              />
-            </label>
-            <label className="settings-form-control-row">
-              <span className="settings-form-radio-copy">
-                <strong>Shallow clone</strong>
-                <small>Current history tip only. Reserve this for repositories whose full history is prohibitively large.</small>
-              </span>
-              <input
-                checked={cloneDialogState.mode === 'shallow'}
-                name="repository-clone-mode"
-                onChange={() => setCloneDialogState((current) => current ? { ...current, mode: 'shallow' } : null)}
-                type="radio"
-                value="shallow"
-              />
-            </label>
-          </div>
-        </Modal>
-      ) : null}
-    </section>
-  );
 }
 
 export function WorkspaceResourceDialog(props: Omit<Parameters<typeof WorkspaceResourceEditor>[0], 'presentation'>): JSX.Element {
@@ -2000,7 +1647,7 @@ export function WorkspaceResourceEditor({
   onSubmit
 }: {
   onEditStateChange?: (state: { dirty: boolean; pending: boolean }) => void;
-  presentation?: 'dialog' | 'page';
+  presentation?: 'dialog' | 'page' | 'sidebar';
   initialClonedDirectory?: string | null;
   initialAsset: ScopeAsset | null;
   kind: ScopeAssetKind;
@@ -2099,7 +1746,7 @@ export function WorkspaceResourceEditor({
           </button>
         </>
   );
-  const pageLayout = presentation === 'page';
+  const pageLayout = presentation !== 'dialog';
   const form = (
     <form className={`modal-form workspace-resource-form${pageLayout ? ' is-page' : ''}`} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <fieldset className={pageLayout ? 'settings-form-squircle' : undefined} disabled={pendingAction !== null}>
@@ -2160,6 +1807,12 @@ export function WorkspaceResourceEditor({
     </div>
   ) : null;
   if (presentation === 'dialog') return <Modal className="start-run-dialog workspace-resource-dialog" closeDisabled={pendingAction !== null} footer={footer} onClose={onClose} title={`${editing ? 'Edit' : 'Add'} ${workspaceAssetKindLabel(kind)}`}>{form}{removal}</Modal>;
+  if (presentation === 'sidebar') return <div className="workspace-resource-editor is-sidebar">
+    {form}
+    {value.trim() !== initialAsset?.value.trim() ? <p>Changing the reference opens history for the new resource. Existing history remains associated with the previous reference.</p> : null}
+    <div className="resource-detail-actions">{footer}</div>
+    {removal}
+  </div>;
   return (
     <div className="workspace-resource-editor">
       <header className="resource-detail-header">
@@ -2185,15 +1838,6 @@ function workspaceAssetPlaceholder(kind: ScopeAssetKind): string {
   if (kind === 'service') return 'https://service.example.com';
   if (kind === 'documentation') return 'https://docs.example.com';
   return `Enter ${workspaceAssetKindLabel(kind).toLowerCase()} reference`;
-}
-
-export function WorkspaceAssetIcon({ kind, size = 16 }: { kind: ScopeAssetKind; size?: number }): JSX.Element {
-  if (kind === 'repo') return <GitBranch size={size} />;
-  if (kind === 'documentation') return <BookOpen size={size} />;
-  if (kind === 'binary') return <Binary size={size} />;
-  if (kind === 'service') return <Server size={size} />;
-  if (kind === 'domain') return <Globe2 size={size} />;
-  return <Layers3 size={size} />;
 }
 
 function workspaceAssetLabel(asset: ScopeAsset): string {
@@ -2281,11 +1925,6 @@ function workspaceAssetKindOrder(kind: ScopeAssetKind): number {
   return order.indexOf(kind);
 }
 
-export function workspaceAssetKindLabel(kind: ScopeAssetKind): string {
-  if (kind === 'repo') return 'Repository';
-  return `${kind.slice(0, 1).toUpperCase()}${kind.slice(1)}`;
-}
-
 function clearRepositoryCheckoutAttributes(attributes: Record<string, unknown>): void {
   for (const key of [
     'clonedDirectory',
@@ -2302,15 +1941,4 @@ function clearRepositoryCheckoutAttributes(attributes: Record<string, unknown>):
   ]) {
     delete attributes[key];
   }
-}
-
-function formatSurfaceRecency(value: string, nowMs: number): string {
-  const elapsedMs = Math.max(0, nowMs - Date.parse(value));
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 60) return `${Math.max(1, minutes)}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(Date.parse(value));
 }

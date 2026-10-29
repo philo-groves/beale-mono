@@ -3,11 +3,12 @@ import type { JSX } from 'react';
 import type { BealeAppServerWorkspaceDetails, BealeAppServerWorkspaceDocument, BealeWorkspaceResearchClaim, BealeWorkspaceResearchTrack } from '@beale/app-server-runtime/protocol';
 import type {
   AppServerFindingSummary, AppServerMemorySummary, AppServerMemoryNodeSummary,
-  AppServerReportSummary, AppServerRunbookSummary, ScopeAssetKind, WorkspaceScopeVersion
+  AppServerReportSummary, AppServerRunbookSummary, ResearchProviderModelCatalog, ScopeAssetKind, WorkspaceScopeVersion
 } from '../../../shared/types';
 import { isResearchKitId } from '../../../shared/researchKits';
 import { ResearchSidePanel } from '../research/MemorySidePanel';
 import { WorkspaceUnderstandingView } from '../workspaces/WorkspaceUnderstandingView';
+import { WorkspaceSurfaceDetails } from '../workspaces/WorkspaceSurfaceDetails';
 import type { WorkspaceDashboardView } from '../workspaces/WorkspaceUnderstandingView';
 
 const RESOURCE_KINDS: readonly ScopeAssetKind[] = ['repo', 'documentation', 'binary', 'service', 'domain', 'other'];
@@ -37,7 +38,7 @@ function remoteClaim(claim: BealeWorkspaceResearchClaim, workspaceId: string): A
   const status = ['hypothesis', 'observed', 'reproduced', 'verified', 'report_ready', 'disclosed', 'stale', 'rejected'].includes(claim.status)
     ? claim.status as AppServerFindingSummary['status'] : 'hypothesis';
   return {
-    id: claim.id, workspaceId, subjectId: '', memoryNodeId: null, originSessionId: null,
+    id: claim.id, surfaceId: claim.surfaceId ?? null, workspaceId, subjectId: '', memoryNodeId: null, originSessionId: null,
     projection: claim.projection, maturity,
     rating: claim.rating, classification: claim.classification,
     title: claim.title, summary: claim.summary, impact: claim.impact,
@@ -67,7 +68,7 @@ function remoteMemory(details: BealeAppServerWorkspaceDetails): AppServerMemoryS
   const { workspaceId } = details.workspace;
   const name = details.scope?.name ?? details.workspace.name;
   const nodes: AppServerMemoryNodeSummary[] = details.memory.nodes.map((node) => ({
-    id: node.id, sessionIds: node.sessionIds, workspaces: [{ id: workspaceId, name }],
+    id: node.id, surfaceId: node.surfaceId ?? null, sessionIds: node.sessionIds, workspaces: [{ id: workspaceId, name }],
     subjectId: '', subjectName: details.researchSubject, type: node.type, title: node.title,
     summary: node.summary, body: '', status: node.status, confidence: node.confidence,
     assetIds: [], tags: node.tags, attributes: {}, evidenceRefs: [],
@@ -109,26 +110,31 @@ function remoteMemory(details: BealeAppServerWorkspaceDetails): AppServerMemoryS
   };
 }
 
-export function RemoteWorkspaceDetails({ serverId, details, initialView = 'board', onViewChange, onOpenSession, onStartTrack, onTrackResumed }: {
+export function RemoteWorkspaceDetails({ serverId, details, providerModelCatalog = [], initialView = 'board', onViewChange, onOpenSession, onStartTrack, onTrackResumed }: {
   serverId: string; details: BealeAppServerWorkspaceDetails; initialView?: WorkspaceDashboardView;
+  providerModelCatalog?: readonly ResearchProviderModelCatalog[];
   onViewChange?: (viewName: string) => void;
   onOpenSession?: (sessionId: string) => void;
   onStartTrack?: () => void;
   onTrackResumed?: (track: BealeWorkspaceResearchTrack) => void;
 }): JSX.Element {
-  const [selected, setSelected] = useState<{ kind: 'claim' | 'memory' | 'runbook' | 'report'; id: string } | null>(null);
+  const [selected, setSelected] = useState<{ kind: 'claim' | 'memory' | 'runbook' | 'report' | 'surface'; id: string } | null>(null);
   const [documentState, setDocumentState] = useState<{ key: string; value: BealeAppServerWorkspaceDocument | null; error: string | null } | null>(null);
   const scope = useMemo(() => remoteScope(details), [details]);
   const memory = useMemo(() => remoteMemory(details), [details]);
   const workspaceName = scope?.workspaceName ?? details.workspace.name;
   const selectedRunbook = selected?.kind === 'runbook' ? memory.runbooks.find((item) => item.id === selected.id) ?? null : null;
   const selectedReport = selected?.kind === 'report' ? memory.reports.find((item) => item.id === selected.id) ?? null : null;
+  const selectedSurface = selected?.kind === 'surface' ? details.surfaceMap.surfaces.find((item) => item.id === selected.id) ?? null : null;
   const documentKey = selectedRunbook ? `runbook:${selectedRunbook.id}` : selectedReport ? `report:${selectedReport.id}` : null;
-  const open = (kind: 'claim' | 'memory' | 'runbook' | 'report', id: string): void => {
+  const open = (kind: 'claim' | 'memory' | 'runbook' | 'report' | 'surface', id: string): void => {
     setDocumentState(null);
     setSelected({ kind, id });
   };
   const close = (): void => { setSelected(null); setDocumentState(null); };
+  useEffect(() => {
+    if (selected?.kind === 'surface' && !selectedSurface) close();
+  }, [selected, selectedSurface]);
   useEffect(() => {
     if (!documentKey || !selected || (selected.kind !== 'runbook' && selected.kind !== 'report')) return undefined;
     let active = true;
@@ -165,6 +171,9 @@ export function RemoteWorkspaceDetails({ serverId, details, initialView = 'board
       onStartTrack={onStartTrack}
       onTrackResumed={onTrackResumed}
       onActiveViewChange={onViewChange}
+      onViewSelectionChange={(view) => { if (view !== 'surfaces' && selected?.kind === 'surface') close(); }}
+      selectedSurfaceId={selectedSurface?.id ?? null}
+      onOpenSurface={(surface) => open('surface', surface.id)}
       onOpenClaim={(id) => open('claim', id)}
       openClaimId={selected?.kind === 'claim' ? selected.id : null}
       onOpenMemory={(id) => open('memory', id)}
@@ -173,7 +182,9 @@ export function RemoteWorkspaceDetails({ serverId, details, initialView = 'board
     />
     <div className="research-side-resize-handle" aria-hidden="true" />
     <div className="research-side-column">
-      <ResearchSidePanel
+      {selectedSurface ? <WorkspaceSurfaceDetails surface={selectedSurface} map={details.surfaceMap}
+        workspaceId={details.workspace.workspaceId} activeScope={scope} providerModelCatalog={providerModelCatalog}
+        leads={memory.leads} findings={memory.findings} onOpenClaim={(id) => open('claim', id)} readOnly onClose={close} /> : <ResearchSidePanel
         browserContextsEnabled={false}
         detail={null}
         events={[]}
@@ -207,7 +218,7 @@ export function RemoteWorkspaceDetails({ serverId, details, initialView = 'board
         onBackToSubagents={() => undefined}
         onExpandedChange={(expanded) => { if (!expanded) close(); }}
         viewSpace="workspace"
-      />
+      />}
     </div>
   </div>;
 }

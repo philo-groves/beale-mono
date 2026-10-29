@@ -78,4 +78,54 @@ describe('canonical session model usage projection', () => {
     }]);
     expect(JSON.stringify(messages)).not.toContain('Sensitive provider diagnostic.');
   });
+
+  it('keeps a canonical track epoch boundary visible in the session transcript', () => {
+    const [trace] = traceFromSessionEvent('session_example', {
+      id: 'track_epoch_resolving_attempt-example', kind: 'agent.event', timestamp: '2026-01-01T00:01:00.000Z',
+      summary: 'Research track epoch resolved.',
+      payload: { type: 'track_epoch_resolving', attemptId: 'attempt-example', agentPath: '/root',
+        internalDetail: 'Hidden example detail.' }, agentPath: '/root'
+    }, 2);
+    const detail = {
+      run: { id: 'session_example', status: 'active', model: 'example-model',
+        promptMarkdown: 'Review the authorized example service.', createdAt: '2026-01-01T00:00:00.000Z' },
+      attempts: [], traceEvents: [trace], transcriptMessages: [], breakoutRoomMessages: [],
+      modelSessions: [], contextCompactions: []
+    } as unknown as RunDetail;
+    const projected = projectRunDetailForRenderer(detail, { mode: 'commentary', agentPath: null });
+    expect(projected.traceEvents[0]?.payload.payload).toEqual({ type: 'track_epoch_resolving', agentPath: '/root' });
+    const messages = commentaryMessagesForSession(
+      projected, buildTraceDisplayEventsForAgentPath(projected, null), { includeInitialPrompt: false }
+    );
+    expect(messages.map(({ kind, markerType, contentMarkdown }) => ({ kind, markerType, contentMarkdown }))).toEqual([{
+      kind: 'marker', markerType: 'epoch', contentMarkdown: 'Resolving Epoch'
+    }]);
+    expect(JSON.stringify(messages)).not.toContain('Hidden example detail.');
+  });
+
+  it('renders a child agent diagram update from a canonical tool observation in the root session', () => {
+    const source = 'flowchart LR\n  input["Example input"] --> parser["Example parser"]';
+    const [trace] = traceFromSessionEvent('session_example', {
+      id: 'event_diagram', kind: 'research.event', timestamp: '2026-01-01T00:00:00.000Z',
+      summary: 'Surface updated.',
+      payload: { agentPath: '/root/scout', event: {
+        id: 'research_event_diagram', kind: 'tool.observed', timestamp: '2026-01-01T00:00:00.000Z',
+        payload: { toolActionId: 'action_diagram', toolName: 'surface.update', status: 'complete',
+          normalizedInputs: { surfaceId: 'surface-example' },
+          surfaceDiagram: { source, surfaceId: 'surface-example', surfaceName: 'Example parser', changeKind: 'created' } }
+      } }
+    }, 1);
+    const detail = {
+      run: { id: 'session_example', status: 'active', model: 'example-model',
+        promptMarkdown: 'Review the authorized example service.', createdAt: '2026-01-01T00:00:00.000Z' },
+      attempts: [], traceEvents: [trace], transcriptMessages: [], breakoutRoomMessages: [],
+      modelSessions: [], contextCompactions: []
+    } as unknown as RunDetail;
+    const projected = projectRunDetailForRenderer(detail, { mode: 'commentary', agentPath: null });
+    const messages = commentaryMessagesForSession(
+      projected, buildTraceDisplayEventsForAgentPath(projected, null), { includeInitialPrompt: false }
+    );
+    expect(messages.find((message) => message.kind === 'diagram')?.surfaceDiagram)
+      .toEqual({ source, surfaceId: 'surface-example', surfaceName: 'Example parser', changeKind: 'created' });
+  });
 });

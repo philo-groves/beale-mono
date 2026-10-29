@@ -206,6 +206,20 @@ describe('subagent trace view models', () => {
     expect(traceEventsForSubagent(events, null).map((event) => event.id)).toEqual(['setup', 'root']);
   });
 
+  it('shows only communications involving the viewed agent', () => {
+    const message = (id: string, authorAgentPath: string, recipientAgentPath: string) => traceEvent({
+      id, payload: { type: 'subagent.activity', action: 'message', agentPath: recipientAgentPath,
+        authorAgentPath, recipientAgentPath, message: 'Synthetic update.' }
+    });
+    const events = [message('lead-to-one', '/root', '/root/one'),
+      message('one-to-two', '/root/one', '/root/two'),
+      message('two-to-three', '/root/two', '/root/three')];
+    expect(traceEventsForSubagent(events, null).map((event) => event.id)).toEqual(['lead-to-one']);
+    expect(traceEventsForSubagent(events, '/root/one').map((event) => event.id)).toEqual([
+      'lead-to-one', 'one-to-two'
+    ]);
+  });
+
   it('counts only pending and running subagents as active', () => {
     const base = {
       id: null,

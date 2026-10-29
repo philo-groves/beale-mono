@@ -145,6 +145,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       required: ["title", "classification", "rating"],
       properties: {
         title: { type: "string" },
+        surfaceId: { type: "string", description: "Surface this lead belongs to. Defaults to the agent's current surface." },
         classification: { type: "string", ...(defaults.classifications?.length ? { enum: [...defaults.classifications] } : {}), description: "A classification declared by the active research profile." },
         summary: { type: "string" }, impact: { type: "string" },
         rating: { type: "string", enum: RESEARCH_CLAIM_RATINGS, description: "Untrusted qualitative estimate: informational, low, medium, high, or critical." },
@@ -156,6 +157,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
     }, (input, context) => {
       const draft = {
         title: requiredString(input.title, "title"),
+        ...(input.surfaceId !== undefined ? { surfaceId: selectedSurfaceId(input.surfaceId, defaults.surfaceStore) } : {}),
         classification: requiredClassification(input.classification, defaults.classifications),
         rating: requiredResearchClaimRating(input.rating),
         ...(string(input.summary) ? { summary: string(input.summary)! } : {}),
@@ -175,7 +177,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       return store.create({
         ...draft,
         ...(matches.length > 0 ? { creationReason: `Lead created as distinct from ${matches.map((match) => match.id).join(", ")}: ${requiredString(input.distinctReason, "distinctReason")}` } : {}),
-      }, context?.modelAuthor, context?.agentId);
+      }, context?.modelAuthor, context?.agentId, defaults.surfaceStore?.current(context?.agentId ?? "root")?.id);
     }),
     findingTool("finding.list", "finding_list", "Browse a paged catalog of evidence-backed findings; use history.search for search and claim.get for evidence, provenance, and transition history.", "read", {
       type: "object",
@@ -203,7 +205,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       type: "object",
       required: ["title", "classification", "rating", "evidence"],
       properties: {
-        title: { type: "string" }, classification: { type: "string", ...(defaults.classifications?.length ? { enum: [...defaults.classifications] } : {}), description: "A classification declared by the active research profile." },
+        title: { type: "string" }, surfaceId: { type: "string", description: "Surface this finding belongs to. Defaults to the agent's current surface." }, classification: { type: "string", ...(defaults.classifications?.length ? { enum: [...defaults.classifications] } : {}), description: "A classification declared by the active research profile." },
         summary: { type: "string" }, impact: { type: "string" },
         stepsToReproduce: { type: "string", description: "Concrete reproduction steps. Optional while observed; required from reproduced onward." },
         rating: { type: "string", enum: RESEARCH_CLAIM_RATINGS, description: "Untrusted qualitative estimate: informational, low, medium, high, or critical." },
@@ -217,6 +219,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
     }, (input, context) => {
       const draft = {
         title: requiredString(input.title, "title"),
+        ...(input.surfaceId !== undefined ? { surfaceId: selectedSurfaceId(input.surfaceId, defaults.surfaceStore) } : {}),
         classification: requiredClassification(input.classification, defaults.classifications),
         rating: requiredResearchClaimRating(input.rating),
         ...(string(input.summary) ? { summary: string(input.summary)! } : {}),
@@ -246,6 +249,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       required: ["id", "expectedRevision", "reason"],
       properties: {
         id: { type: "string" }, expectedRevision: { type: "number" }, reason: { type: "string" },
+        surfaceId: { type: ["string", "null"], description: "Surface this claim belongs to. Null clears the association." },
         title: { type: "string" }, summary: { type: "string" }, impact: { type: "string" },
         stepsToReproduce: { type: "string", description: "Concrete reproduction steps. Required from reproduced onward." },
         rating: { type: "string", enum: RESEARCH_CLAIM_RATINGS, description: "Untrusted qualitative estimate for prioritization and notifications." },
@@ -255,6 +259,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
     }, (input, context) => store.revise(requiredString(input.id, "id"), {
       expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision"),
       reason: requiredString(input.reason, "reason"),
+      ...(input.surfaceId !== undefined ? { surfaceId: input.surfaceId === null ? null : selectedSurfaceId(input.surfaceId, defaults.surfaceStore) } : {}),
       ...(input.title !== undefined ? { title: requiredString(input.title, "title") } : {}),
       ...(input.summary !== undefined ? { summary: string(input.summary) ?? "" } : {}),
       ...(input.impact !== undefined ? { impact: string(input.impact) ?? "" } : {}),
@@ -470,6 +475,10 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
 function requiredRecord(value: unknown, field: string): Record<string, unknown> { if (!isRecord(value)) throw new Error(`${field} must be an object.`); return value; }
 function string(value: unknown): string | null { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function requiredString(value: unknown, field: string): string { const result = string(value); if (!result) throw new Error(`${field} must be a non-empty string.`); return result; }
+function selectedSurfaceId(value: unknown, surfaceStore: SurfaceStore | undefined): string {
+  const id = requiredString(value, "surfaceId");
+  return surfaceStore?.require(id, true).id ?? id;
+}
 function requiredInteger(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error(`${field} must be an integer.`); return value; }
 function requiredNumber(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${field} must be a number.`); return value; }
 function requiredReachabilityState(value: unknown): "not_assessed" | "unreachable" | "conditional" | "reachable" { if (value === "not_assessed" || value === "unreachable" || value === "conditional" || value === "reachable") return value; throw new Error("securityTracking.reachability.state is invalid."); }

@@ -205,7 +205,7 @@ const api: BealeApi = {
   setDefaultProviderId(providerId: ResearchModelProviderId | null): Promise<ProviderSettings> {
     return ipcRenderer.invoke(IPC_CHANNELS.setDefaultProviderId, providerId);
   },
-  saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }): Promise<ProviderSettings> {
+  saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }): Promise<ProviderSettings> {
     return ipcRenderer.invoke(IPC_CHANNELS.saveCustomProvider, input);
   },
   removeCustomProvider(providerId: `custom-${string}`): Promise<ProviderSettings> {
@@ -317,8 +317,8 @@ const api: BealeApi = {
   getFleetRemoteWorkspaceDetails(serverId: string, workspaceId: string): Promise<import('@beale/app-server-runtime/protocol').BealeAppServerWorkspaceDetails> {
     return ipcRenderer.invoke(IPC_CHANNELS.getFleetRemoteWorkspaceDetails, serverId, workspaceId);
   },
-  getWorkspaceSurfaceMap(workspaceId: string): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceSurfaceMap> {
-    return ipcRenderer.invoke(IPC_CHANNELS.getWorkspaceSurfaceMap, workspaceId);
+  getWorkspaceSurfaceMap(workspaceId: string, sessionId?: string): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceSurfaceMap> {
+    return ipcRenderer.invoke(IPC_CHANNELS.getWorkspaceSurfaceMap, workspaceId, sessionId);
   },
   getResearchTrack(workspaceId: string, serverId?: string): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrack | null> {
     return ipcRenderer.invoke(IPC_CHANNELS.getResearchTrack, workspaceId, serverId);

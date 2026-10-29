@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, JSX, ReactNode } from 'react';
-import type { BealeWorkspaceResearchTrack } from '@beale/app-server-runtime/protocol';
+import type { BealeWorkspaceResearchTrack, BealeWorkspaceSurfaceMap } from '@beale/app-server-runtime/protocol';
 import type { ApprovalRecord, AppServerFindingSummary, AppServerMemorySummary, AppServerReportDocument, AppServerReportSummary, AppServerRunbookDocument, AppServerRunbookSummary, ClaimBoardMaturity, PolicyReviewDecision, ProviderModelDefaults, RepositoryCloneMode, ResearchKitId, ResearchKitRefreshInput, ResearchKitRefreshResult, ResearchModelProviderId, ResearchModelSelection, ResearchProfile, ResearchProviderModelCatalog, RunDetail, RunRow, RunbookExecutionSelection, RunbookProofTarget, ScopeAssetInput, SteeringAction, TraceEventRecord, WorkspaceMemoryBackendId, WorkspaceRule, WorkspaceScopeVersion } from '@shared/types';
 import { WorkspaceUnderstandingView } from '../workspaces/WorkspaceUnderstandingView';
+import { WorkspaceSurfaceDetails } from '../workspaces/WorkspaceSurfaceDetails';
 import type { WorkspaceConfigurationInput, WorkspaceDashboardView } from '../workspaces/WorkspaceUnderstandingView';
 import { ResearchSidePanel } from '../research/MemorySidePanel';
 import { CommentaryView } from '../commentary/CommentaryView';
@@ -10,6 +11,7 @@ import { ConnectedDeviceCapture } from '../deviceCapture/ConnectedDeviceCapture'
 import { EMPTY_SESSION_HEAT_PREFERENCES } from '../../view-models/sessionHeat';
 import type { SessionHeatPreferences } from '../../view-models/sessionHeat';
 import type { TraceDisplayEvent } from '../../view-models/traceDisplay';
+import type { MapSurface } from '../../view-models/surfaceMap';
 import {
   MIN_TRACE_PANEL_WIDTH,
   RESEARCH_SIDE_RESIZE_HANDLE_WIDTH,
@@ -40,6 +42,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   providerModelDefaults,
   appServerMemory,
   activeScope = null,
+  repositoryCheckouts = {},
   workspaceRules = [],
   researchProfile,
   researchKitId = 'general',
@@ -113,6 +116,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   providerModelDefaults?: Partial<Record<ResearchModelProviderId, ProviderModelDefaults>>;
   appServerMemory: AppServerMemorySummary | null;
   activeScope?: WorkspaceScopeVersion | null;
+  repositoryCheckouts?: Readonly<Record<string, string>>;
   workspaceRules?: WorkspaceRule[];
   researchProfile: ResearchProfile | null;
   researchKitId?: ResearchKitId;
@@ -180,6 +184,8 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
 }): JSX.Element | null {
   const [selectedWorkspaceClaimId, setSelectedWorkspaceClaimId] = useState<string | null>(null);
   const [selectedWorkspaceMemoryId, setSelectedWorkspaceMemoryId] = useState<string | null>(null);
+  const [selectedWorkspaceSurfaceId, setSelectedWorkspaceSurfaceId] = useState<string | null>(null);
+  const [workspaceSurfaceMap, setWorkspaceSurfaceMap] = useState<BealeWorkspaceSurfaceMap | null>(null);
   const [connectedDeviceCaptureVisible, setConnectedDeviceCaptureVisible] = useState(false);
   const [connectedDeviceCaptureExpanded, setConnectedDeviceCaptureExpanded] = useState(false);
   const [connectedDeviceAspectRatio, setConnectedDeviceAspectRatio] = useState(CONNECTED_DEVICE_DEFAULT_ASPECT_RATIO);
@@ -225,6 +231,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     return () => observer.disconnect();
   }, [containerRef]);
   const viewSpace = viewState === 'session' ? 'session' : 'workspace';
+  const selectedWorkspaceSurface = workspaceSurfaceMap?.surfaces.find((surface) => surface.id === selectedWorkspaceSurfaceId) ?? null;
   const researchSidePanelKey = sidePanelRunId ?? `workspace:${appServerMemory?.contextWorkspaceId ?? 'current'}`;
   const researchSideData = useCoalescedResearchSideData({
     detail: sidePanelRunId ? detail : null,
@@ -235,6 +242,8 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   useEffect(() => {
     setSelectedWorkspaceClaimId(null);
     setSelectedWorkspaceMemoryId(null);
+    setSelectedWorkspaceSurfaceId(null);
+    setWorkspaceSurfaceMap(null);
   }, [appServerMemory?.contextWorkspaceId, selectedRunId]);
   useEffect(() => {
     if (!workspaceSideView) {
@@ -253,6 +262,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
         setWorkspaceSidePanelMounted(false);
         setSelectedWorkspaceClaimId(null);
         setSelectedWorkspaceMemoryId(null);
+        setSelectedWorkspaceSurfaceId(null);
       }, WORKSPACE_DETAIL_TRANSITION_MS);
     }
     return () => {
@@ -264,12 +274,14 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   const openWorkspaceClaim = (claimId: string): void => {
     onBackToRunbooks();
     setSelectedWorkspaceMemoryId(null);
+    setSelectedWorkspaceSurfaceId(null);
     setSelectedWorkspaceClaimId(claimId);
     onResearchDetailsOpenChange(true);
   };
   const openWorkspaceMemory = (nodeId: string): void => {
     onBackToRunbooks();
     setSelectedWorkspaceClaimId(null);
+    setSelectedWorkspaceSurfaceId(null);
     setSelectedWorkspaceMemoryId(nodeId);
     onResearchDetailsOpenChange(true);
   };
@@ -290,8 +302,28 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     onResearchDetailsOpenChange(false);
   };
   const changeResearchDetailsOpen = useCallback((expanded: boolean): void => {
+    if (!expanded) setSelectedWorkspaceSurfaceId(null);
     onResearchDetailsOpenChange(expanded);
   }, [onResearchDetailsOpenChange]);
+  const openWorkspaceSurface = useCallback((surface: MapSurface): void => {
+    onBackToRunbooks();
+    onBackToReports?.();
+    setSelectedWorkspaceClaimId(null);
+    setSelectedWorkspaceMemoryId(null);
+    setSelectedWorkspaceSurfaceId(surface.id);
+    onResearchDetailsOpenChange(true);
+  }, [onBackToReports, onBackToRunbooks, onResearchDetailsOpenChange]);
+  const closeWorkspaceSurface = useCallback((): void => {
+    setSelectedWorkspaceSurfaceId(null);
+    onResearchDetailsOpenChange(false);
+  }, [onResearchDetailsOpenChange]);
+  const changeWorkspaceViewSelection = useCallback((view: WorkspaceDashboardView): void => {
+    if (view !== 'surfaces' && selectedWorkspaceSurfaceId) closeWorkspaceSurface();
+    onWorkspaceViewSelectionChange?.(view);
+  }, [closeWorkspaceSurface, onWorkspaceViewSelectionChange, selectedWorkspaceSurfaceId]);
+  useEffect(() => {
+    if (selectedWorkspaceSurfaceId && workspaceSurfaceMap && !selectedWorkspaceSurface) closeWorkspaceSurface();
+  }, [closeWorkspaceSurface, selectedWorkspaceSurface, selectedWorkspaceSurfaceId, workspaceSurfaceMap]);
   useEffect(() => {
     if (researchDetailsOpen) {
       autoExpandedRunbookRunIdRef.current = null;
@@ -343,7 +375,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
   return (
     <div
       ref={containerRef}
-      className={`main-session-grid${workspaceSideView ? ' workspace-context' : ''}${visibleResearchDetails || (viewState === 'session' && connectedDeviceCaptureExpanded) ? ' research-details-open' : ''}${workspaceView && visibleResearchDetails && selectedWorkspaceClaimId ? ' finding-details-open' : ''}${workspaceView && visibleResearchDetails && selectedWorkspaceMemoryId ? ' memory-details-open' : ''}${visibleResearchDetails && selectedRunbookId ? ' runbook-details-open' : ''}${workspaceSideView && !visibleResearchDetails ? ' workspace-main-only' : ''}${(viewState === 'new-research' && !visibleResearchDetails) || (viewState === 'session' && selectedRunId !== null && !sessionHasContent) ? ' session-main-only' : ''}`}
+      className={`main-session-grid${workspaceSideView ? ' workspace-context' : ''}${visibleResearchDetails || (viewState === 'session' && connectedDeviceCaptureExpanded) ? ' research-details-open' : ''}${workspaceView && visibleResearchDetails && selectedWorkspaceSurface ? ' surface-details-open' : ''}${workspaceView && visibleResearchDetails && selectedWorkspaceClaimId ? ' finding-details-open' : ''}${workspaceView && visibleResearchDetails && selectedWorkspaceMemoryId ? ' memory-details-open' : ''}${visibleResearchDetails && selectedRunbookId ? ' runbook-details-open' : ''}${workspaceSideView && !visibleResearchDetails ? ' workspace-main-only' : ''}${(viewState === 'new-research' && !visibleResearchDetails) || (viewState === 'session' && selectedRunId !== null && !sessionHasContent) ? ' session-main-only' : ''}`}
       data-session-view-state={viewState}
       style={{
         '--research-side-panel-width': `${panelWidth}px`,
@@ -373,8 +405,6 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           rightAreaExpanded={researchDetailsOpen}
           runs={runs}
           onAddResource={onAddWorkspaceResource}
-          onChangeResource={onChangeWorkspaceResource}
-          onCloneRepository={onCloneWorkspaceRepository}
           onRefreshResearchKit={onRefreshWorkspaceResearchKit}
           onAddRule={onAddWorkspaceRule}
           onSaveConfiguration={onSaveWorkspaceConfiguration}
@@ -386,7 +416,10 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           onStartTrack={onStartTrack}
           onTrackResumed={onTrackResumed}
           onActiveViewChange={onWorkspaceViewChange}
-          onViewSelectionChange={onWorkspaceViewSelectionChange}
+          onViewSelectionChange={changeWorkspaceViewSelection}
+          selectedSurfaceId={selectedWorkspaceSurfaceId}
+          onOpenSurface={openWorkspaceSurface}
+          onSurfaceMapChange={setWorkspaceSurfaceMap}
           onOpenClaim={openWorkspaceClaim}
           openClaimId={researchDetailsOpen ? selectedWorkspaceClaimId : null}
           onTransitionClaim={onTransitionClaim}
@@ -432,7 +465,22 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
         />
       ) : null}
       {showResearchSidePanel ? <div ref={researchSideColumnRef} className={`research-side-column${connectedDeviceCaptureVisible ? ' has-connected-device-capture' : ''}${connectedDeviceCaptureExpanded ? ' device-capture-expanded' : ''}`}>
-        <ResearchSidePanel
+        {selectedWorkspaceSurface && workspaceSurfaceMap && workspaceView ? <WorkspaceSurfaceDetails
+          surface={selectedWorkspaceSurface}
+          map={workspaceSurfaceMap}
+          workspaceId={workspaceId}
+          activeScope={activeScope}
+          repositoryCheckouts={repositoryCheckouts}
+          providerModelCatalog={providerModelCatalog}
+          leads={appServerMemory?.leads ?? []}
+          findings={appServerMemory?.findings ?? []}
+          memories={appServerMemory?.nodes ?? []}
+          onChangeResource={onChangeWorkspaceResource}
+          onCloneRepository={onCloneWorkspaceRepository}
+          onOpenClaim={openWorkspaceClaim}
+          onOpenMemory={openWorkspaceMemory}
+          onClose={closeWorkspaceSurface}
+        /> : <ResearchSidePanel
           detail={researchSideData.detail}
           events={researchSideData.events}
           memory={viewSpace === 'workspace' ? appServerMemory : researchSideData.detail?.appServerMemory ?? null}
@@ -440,6 +488,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           sessionHeatPreferences={sessionHeatPreferences}
           providerModelCatalog={providerModelCatalog}
           runId={researchSidePanelKey}
+          surfaceWorkspaceId={workspaceId}
           runStatus={researchSideData.detail?.run.status ?? null}
           expanded={expandedResearchSidePanel}
           selectedRunbook={selectedRunbook}
@@ -471,7 +520,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
           onBackToSubagents={onBackToSubagents}
           onExpandedChange={changeResearchDetailsOpen}
           viewSpace={viewSpace}
-        />
+        />}
         {viewState === 'session' && selectedRunId ? (
           <ConnectedDeviceCapture
             active={connectedDeviceCaptureEnabled}

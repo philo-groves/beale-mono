@@ -291,6 +291,7 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
       {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
       {showingWorkspaceDetails ? workspaceDetails?.workspace.workspaceId === workspaceId
         ? <RemoteWorkspaceDetails key={`${serverId}:${workspaceId}`} serverId={serverId} details={workspaceDetails}
+          providerModelCatalog={providerCatalog}
           onViewChange={onWorkspaceViewChange} onOpenSession={(id) => onLaunched(workspaceId, id)}
           onStartTrack={onStartTrack} onTrackResumed={onTrackResumed} />
         : <p className="remote-fleet-details-status" role={workspaceDetailsError ? 'alert' : 'status'}>{workspaceDetailsError ?? 'Loading workspace details…'}</p>

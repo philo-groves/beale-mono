@@ -424,18 +424,23 @@ function readSuggestionSurfaces(database: DatabaseSync, workspaceId: string): Ar
       foundation = isRecord(parsed) ? parsed : null;
     } catch { /* Unknown foundation. */ }
     const threatModel = isRecord(foundation?.threatModel) ? foundation.threatModel : null;
-    const coverage = isRecord(foundation?.coverage) ? foundation.coverage : null;
     return {
       id: String(row.id),
       name: boundedText(String(row.name), 100),
       description: boundedText(String(row.description ?? ""), 180),
       ...(threatModel ? { attackerControl: boundedText(String(threatModel.attackerControl ?? ""), 180),
         trustBoundaries: boundedText(String(threatModel.trustBoundaries ?? ""), 180),
-        plausibleImpacts: boundedText(String(threatModel.plausibleImpacts ?? ""), 180) } : {}),
-      ...(coverage ? { openQuestions: Array.isArray(coverage.openQuestions)
-        ? coverage.openQuestions.filter((value): value is string => typeof value === "string").slice(0, 2).map((value) => boundedText(value, 160)) : [] } : {}),
+        securityObjectives: boundedText(threatModelSummary(threatModel.securityObjectives), 180),
+        invariants: boundedText(String(threatModel.invariants ?? ""), 180),
+        sinks: boundedText(String(threatModel.sinks ?? ""), 180),
+        plausibleImpacts: boundedText(threatModelSummary(threatModel.risks ?? threatModel.riskImpact ?? threatModel.plausibleImpacts), 180) } : {}),
     };
   });
+}
+
+function threatModelSummary(value: unknown): string {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").join("; ")
+    : typeof value === "string" ? value : "";
 }
 
 function readSuggestionFindings(database: DatabaseSync, workspaceId: string): Array<Record<string, string>> {

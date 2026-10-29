@@ -257,7 +257,7 @@ export function SettingsView({
   onRemoveProvider?: (providerId: ResearchModelProviderId) => Promise<void>;
   onConfigureProviderApiKey?: (providerId: ResearchModelProviderId, apiKey: string) => Promise<void>;
   onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
-  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }) => Promise<void>;
+  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) => Promise<void>;
   onRemoveCustomProvider?: (providerId: `custom-${string}`) => Promise<void>;
   onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
   onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
@@ -2098,7 +2098,7 @@ export function ProvidersSettingsView({
   onRemoveProvider?: (providerId: ResearchModelProviderId) => Promise<void>;
   onConfigureProviderApiKey?: (providerId: ResearchModelProviderId, apiKey: string) => Promise<void>;
   onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
-  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }) => Promise<void>;
+  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) => Promise<void>;
   onRemoveCustomProvider?: (providerId: `custom-${string}`) => Promise<void>;
   onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
   onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
@@ -2271,6 +2271,7 @@ export function ProvidersSettingsView({
           busy={busy}
           provider={providerSettings?.customProviders?.find((provider) => provider.id === activeProvider.id)}
           defaults={providerSettings?.modelDefaults[activeProvider.id]}
+          modelCatalog={activeEnabledModelCatalog}
           onSave={onSaveCustomProvider}
           onRemove={async () => {
             await onRemoveCustomProvider(activeProvider.id as `custom-${string}`);
@@ -2495,11 +2496,12 @@ function ProviderSettingsTabs({
   );
 }
 
-function CustomProviderCard({ provider, defaults, busy, onSave, onCancel, onRemove, onSetDefaults }: {
+function CustomProviderCard({ provider, defaults, modelCatalog, busy, onSave, onCancel, onRemove, onSetDefaults }: {
   provider?: CustomProviderDefinition;
   defaults?: ProviderModelDefaults;
+  modelCatalog?: ResearchProviderModelCatalog | null;
   busy: boolean;
-  onSave: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }) => Promise<void>;
+  onSave: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) => Promise<void>;
   onCancel?: () => void;
   onRemove?: () => Promise<void>;
   onSetDefaults?: (defaults: ProviderModelDefaults) => Promise<void>;
@@ -2508,16 +2510,18 @@ function CustomProviderCard({ provider, defaults, busy, onSave, onCancel, onRemo
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '');
   const [contextWindow, setContextWindow] = useState(provider?.contextWindow ?? 128_000);
   const [maxTokens, setMaxTokens] = useState(provider?.maxTokens ?? 16_000);
+  const [reasoning, setReasoning] = useState(provider?.reasoning === true);
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const largeEffortLevels = modelCatalog?.models.find((model) => model.id === defaults?.largeModel)?.effortLevels ?? [];
   const submit = async (): Promise<void> => {
     setSaving(true);
     setError(null);
     try {
       await onSave({ ...(provider ? { id: provider.id } : {}), name, baseUrl, contextWindow, maxTokens,
-        ...(apiKey ? { apiKey } : {}) });
+        ...(apiKey ? { apiKey } : {}), reasoning });
       setApiKey('');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -2566,6 +2570,13 @@ function CustomProviderCard({ provider, defaults, busy, onSave, onCancel, onRemo
               <span className="settings-form-control-copy"><strong>Maximum output tokens</strong><small>Upper limit for a model response.</small></span>
               <input type="number" min={256} max={contextWindow} value={maxTokens} disabled={busy || saving} onChange={(event) => setMaxTokens(Number(event.target.value))} />
             </label>
+            <label className="settings-form-control-row provider-custom-field">
+              <span className="settings-form-control-copy">
+                <strong>Reasoning models</strong>
+                <small>Enable OpenAI-compatible reasoning effort controls. DeepSeek model IDs also use DeepSeek thinking controls.</small>
+              </span>
+              <input type="checkbox" checked={reasoning} disabled={busy || saving} onChange={(event) => setReasoning(event.target.checked)} />
+            </label>
           </div>
         </div>
         {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
@@ -2584,9 +2595,29 @@ function CustomProviderCard({ provider, defaults, busy, onSave, onCancel, onRemo
               <div className="provider-model-defaults-controls">
                 <label className="provider-model-default-row">
                   <span className="provider-model-default-copy"><strong>Large Model</strong><small>Primary model for complex research work.</small></span>
-                  <select aria-label="Large model" value={defaults.largeModel} disabled={busy || saving || removing} onChange={(event) => void onSetDefaults({ ...defaults, largeModel: event.target.value })}>
-                    {provider.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-                  </select>
+                  <span className="provider-model-default-row-controls">
+                    <select aria-label="Large model" value={defaults.largeModel} disabled={busy || saving || removing} onChange={(event) => {
+                      const largeModel = event.target.value;
+                      const effortLevels = modelCatalog?.models.find((model) => model.id === largeModel)?.effortLevels ?? [];
+                      const reasoningEffort = effortLevels.includes(defaults.reasoningEffort)
+                        ? defaults.reasoningEffort
+                        : preferredProviderReasoningEffort(effortLevels);
+                      void onSetDefaults({ ...defaults, largeModel, reasoningEffort });
+                    }}>
+                      {provider.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                    </select>
+                    {provider.reasoning ? (
+                      <select
+                        className="provider-model-reasoning-select"
+                        aria-label="Large model reasoning"
+                        value={defaults.reasoningEffort}
+                        disabled={busy || saving || removing || largeEffortLevels.length === 0}
+                        onChange={(event) => void onSetDefaults({ ...defaults, reasoningEffort: event.target.value as ResearchModelEffortLevel })}
+                      >
+                        {largeEffortLevels.map((effort) => <option value={effort} key={effort}>{reasoningEffortLabel(effort)}</option>)}
+                      </select>
+                    ) : null}
+                  </span>
                 </label>
                 <label className="provider-model-default-row">
                   <span className="provider-model-default-copy"><strong>Small Model</strong><small>Lighter model for supporting research tasks.</small></span>

@@ -551,8 +551,17 @@ function handle(message) {
       client.callTool({ serverName: "fixture", toolName: "pending", arguments: {}, timeoutMs: 50 }),
       /exceeded timeout 50ms/,
     );
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
-    assert.match(await readFile(cancellationPath, "utf8"), /^\d+$/u);
+    let cancellation = "";
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        cancellation = await readFile(cancellationPath, "utf8");
+        break;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+      }
+    }
+    assert.match(cancellation, /^\d+$/u);
   } finally {
     await client.close();
     await rm(root, { recursive: true, force: true });

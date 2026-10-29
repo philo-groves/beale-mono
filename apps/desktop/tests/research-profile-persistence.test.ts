@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WorkspaceDatabase, type StartRunRecordInput } from '../src/main/database';
-import { WorkspaceService, type WorkspaceServiceOptions } from '../src/main/workspaceService';
+import { repositoryCheckoutsForScope, WorkspaceService, type WorkspaceServiceOptions } from '../src/main/workspaceService';
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../src/shared/ipc';
 import {
   decodeResearchProfile,
@@ -582,10 +582,20 @@ describe('research profile persistence', () => {
         cloneSource: 'beale_workspace_resource'
       });
       expect(existsSync(join(String(clonedRepository?.attributes?.clonedDirectory ?? ''), '.git'))).toBe(true);
+      expect(cloned.repositoryCheckouts[clonedRepository!.id]).toBe(clonedRepository?.attributes?.clonedDirectory);
 
       const currentSourceAssetId = cloned.activeScope.assets.find((asset) => asset.value === 'https://gitlab.com/gitlab-org/gitlab')?.id;
       const clonedAgain = await service.cloneWorkspaceRepository(currentSourceAssetId as string);
       expect(clonedAgain.activeScope.assets.filter((asset) => asset.kind === 'repo')).toHaveLength(2);
+      const checkoutWithoutMetadata = {
+        ...clonedRepository!,
+        attributes: { repositoryUrl: clonedRepository?.attributes?.repositoryUrl }
+      };
+      expect(repositoryCheckoutsForScope([checkoutWithoutMetadata], repositoryStoreDirectory)).toEqual({
+        [checkoutWithoutMetadata.id]: clonedRepository?.attributes?.clonedDirectory
+      });
+      rmSync(join(String(clonedRepository?.attributes?.clonedDirectory), '.git'), { recursive: true });
+      expect(repositoryCheckoutsForScope([checkoutWithoutMetadata], repositoryStoreDirectory)).toEqual({});
     } finally {
       service.close();
     }

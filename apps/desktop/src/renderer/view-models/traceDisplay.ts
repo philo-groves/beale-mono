@@ -311,23 +311,25 @@ function buildTraceDisplayEventsFromRecords(
     .map(({ event }) => event);
 }
 
-function traceEventMatchesAgentPath(event: TraceEventRecord, agentPath: string | null): boolean {
+export function traceEventMatchesAgentPath(event: TraceEventRecord, agentPath: string | null): boolean {
   const eventAgentPath = traceAgentPath(event);
   const communication = subagentCommunication(event);
   if (communication) {
-    return !agentPath
-      || eventAgentPath === agentPath
-      || communication.authorAgentPath === agentPath
-      || communication.recipientAgentPath === agentPath;
+    const viewerPath = agentPath ?? '/root';
+    return communication.authorAgentPath === viewerPath
+      || communication.recipientAgentPath === viewerPath
+      || communication.participantAgentPaths.includes(viewerPath);
   }
   return agentPath
     ? eventAgentPath === agentPath
-    : !eventAgentPath || eventAgentPath === '/root';
+    : !eventAgentPath || eventAgentPath === '/root'
+      || Boolean(tracePayloadRecord(tracePayloadRecord(event.payload, 'payload') ?? {}, 'surfaceDiagram'));
 }
 
 function subagentCommunication(event: TraceEventRecord): {
   authorAgentPath: string | null;
   recipientAgentPath: string | null;
+  participantAgentPaths: string[];
 } | null {
   const payload = event.payload.type === 'subagent.activity'
     ? event.payload
@@ -337,7 +339,9 @@ function subagentCommunication(event: TraceEventRecord): {
   if (action !== 'message' && action !== 'followup' && action !== 'room_packet') return null;
   return {
     authorAgentPath: stringRecordValue(payload, 'authorAgentPath') ?? (action === 'room_packet' ? stringRecordValue(payload, 'agentPath') : null),
-    recipientAgentPath: stringRecordValue(payload, 'recipientAgentPath') ?? (action === 'room_packet' ? null : stringRecordValue(payload, 'agentPath'))
+    recipientAgentPath: stringRecordValue(payload, 'recipientAgentPath') ?? (action === 'room_packet' ? null : stringRecordValue(payload, 'agentPath')),
+    participantAgentPaths: (tracePayloadArray(payload, 'participantAgentPaths') ?? [])
+      .filter((path): path is string => typeof path === 'string')
   };
 }
 

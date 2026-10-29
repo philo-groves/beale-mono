@@ -29,6 +29,8 @@ export const commentaryStreamingModeForUserAgent = (userAgent: string): Commenta
 const messageText = (message: CommentaryMessage): string => message.kind === 'progress'
   ? (message.reasoningTraceLines ?? [message.contentMarkdown]).join('\n')
   : message.contentMarkdown;
+const isInterAgentMessage = (message: CommentaryMessage): boolean => message.kind === 'task'
+  && (message.taskAction === 'message' || message.taskAction === 'room_message');
 
 function visiblePartialReasoningLine(line: string): string {
   if (line === '*') return '';
@@ -65,6 +67,7 @@ export function reconcileCommentaryStreaming(
     entry.id === state.source[index]?.id && entry.text === state.source[index]?.text
   );
   const kindById = new Map(messages.map((message) => [message.id, message.kind]));
+  const instantMessageIds = new Set(messages.filter(isInterAgentMessage).map((message) => message.id));
   const hasHiddenTerminalActivity = terminal && state.pending.some((entry) => {
     const kind = kindById.get(entry.id);
     return kind !== 'final_answer' && kind !== 'error';
@@ -75,6 +78,7 @@ export function reconcileCommentaryStreaming(
   const previousById = new Map(state.source.map((entry) => [entry.id, entry.text]));
   const currentById = new Map(source.map((entry) => [entry.id, entry.text]));
   const pending = state.pending.flatMap((entry) => {
+    if (instantMessageIds.has(entry.id)) return [];
     const text = currentById.get(entry.id);
     if (text === undefined) return [];
     const kind = kindById.get(entry.id);
@@ -85,7 +89,7 @@ export function reconcileCommentaryStreaming(
   });
   const queuedIds = new Set(pending.map((entry) => entry.id));
   const lastPrevious = state.source.at(-1);
-  if (lastPrevious && !queuedIds.has(lastPrevious.id)
+  if (lastPrevious && !queuedIds.has(lastPrevious.id) && !instantMessageIds.has(lastPrevious.id)
     && (!terminal || kindById.get(lastPrevious.id) === 'final_answer' || kindById.get(lastPrevious.id) === 'error')) {
     const updatedText = currentById.get(lastPrevious.id);
     if (updatedText?.startsWith(lastPrevious.text) && updatedText.length > lastPrevious.text.length) {
@@ -102,6 +106,10 @@ export function reconcileCommentaryStreaming(
   for (const message of messages.slice(lastKnownIndex + 1)) {
     if (previousById.has(message.id) || queuedIds.has(message.id)) continue;
     if (terminal && message.kind !== 'final_answer' && message.kind !== 'error') continue;
+    if (isInterAgentMessage(message)) {
+      animatedIds.add(message.id);
+      continue;
+    }
     const units = unitsOf(messageText(message), mode);
     pending.push({
       id: message.id,

@@ -18,7 +18,9 @@ export function createCollaborationSystemGuidance(
     "Startup context is bounded. Query relevant memory, claims, runbooks, reports, and workspace history as needed.",
     ...(lead ? [
       "Before sending the final response, resolve every active delegated subagent by waiting for its result or explicitly interrupting it when its result is no longer needed. After a reviewer or other subagent can mutate durable state, re-read the canonical record and base the final response on that current revision rather than the pre-delegation snapshot.",
-    ] : []),
+    ] : [
+      "The lead owns research-track checkpoints for its assigned surface. Record your evidence, leads, and findings in the canonical workspace records and send your result to the lead; do not checkpoint the track from a subagent.",
+    ]),
     "",
     "Subagent workflow:",
     ...subagentModeGuidance(config.subagentMode, lead),

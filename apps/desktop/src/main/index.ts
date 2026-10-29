@@ -61,6 +61,7 @@ import {
   unlockProviderApiKeysForAppServerStartup
 } from './providerCredentialStore';
 import { restoreAndFocusWindow } from './windowLifecycle';
+import { desktopBundlePath } from './desktopBundlePath';
 import { rendererRecoveryDecision } from './rendererRecovery';
 import { DesktopRestartPromptController } from './desktopRestartPrompt';
 import { autoUpdater } from 'electron-updater';
@@ -204,7 +205,7 @@ function createWindow(): void {
           frame: false
         }),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: desktopBundlePath(app.getAppPath(), 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -265,7 +266,7 @@ function createWindow(): void {
   if (process.env.ELECTRON_RENDERER_URL) {
     window.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
-    window.loadFile(join(__dirname, '../renderer/index.html'));
+    window.loadFile(desktopBundlePath(app.getAppPath(), 'renderer', 'index.html'));
   }
   installApplicationMenu();
 }
@@ -285,7 +286,7 @@ function recordRendererExit(reason: string, exitCode: number): void {
 function registerRendererNavigationPolicy(window: BrowserWindow): void {
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   const allowedOrigin = rendererUrl ? new URL(rendererUrl).origin : null;
-  const allowedFile = join(__dirname, '../renderer/index.html').replaceAll('\\', '/');
+  const allowedFile = desktopBundlePath(app.getAppPath(), 'renderer', 'index.html').replaceAll('\\', '/');
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, target) => {
     let allowed = false;
@@ -390,7 +391,6 @@ function appIconSourcePath(): string | null {
   const candidates = [
     join(app.getAppPath(), 'resources/app-icon.png'),
     join(process.cwd(), 'resources/app-icon.png'),
-    join(__dirname, '../../resources/app-icon.png'),
     join(process.resourcesPath, 'app-icon.png'),
     join(process.resourcesPath, 'resources/app-icon.png')
   ];
@@ -721,7 +721,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC_CHANNELS.getProviderSettings, () => workspaceService.getProviderSettings());
   ipcMain.handle(IPC_CHANNELS.setDefaultProviderId, (_event, providerId: ResearchModelProviderId | null) => workspaceService.setDefaultProviderId(providerId));
-  ipcMain.handle(IPC_CHANNELS.saveCustomProvider, (_event, input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }) =>
+  ipcMain.handle(IPC_CHANNELS.saveCustomProvider, (_event, input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) =>
     workspaceService.saveCustomProvider(input));
   ipcMain.handle(IPC_CHANNELS.removeCustomProvider, (_event, providerId: `custom-${string}`) =>
     workspaceService.removeCustomProvider(providerId));
@@ -789,7 +789,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.getFleetRemoteMachines, () => workspaceService.getFleetRemoteMachines());
   ipcMain.handle(IPC_CHANNELS.getFleetRemoteCatalog, (_event, serverId: string) => workspaceService.getFleetRemoteCatalog(serverId));
   ipcMain.handle(IPC_CHANNELS.getFleetRemoteWorkspaceDetails, (_event, serverId: string, workspaceId: string) => workspaceService.getFleetRemoteWorkspaceDetails(serverId, workspaceId));
-  ipcMain.handle(IPC_CHANNELS.getWorkspaceSurfaceMap, (_event, workspaceId: string) => workspaceService.getWorkspaceSurfaceMap(workspaceId));
+  ipcMain.handle(IPC_CHANNELS.getWorkspaceSurfaceMap, (_event, workspaceId: string, sessionId?: string) => workspaceService.getWorkspaceSurfaceMap(workspaceId, sessionId));
   ipcMain.handle(IPC_CHANNELS.getResearchTrack, (_event, workspaceId: string, serverId?: string) => workspaceService.getResearchTrack(workspaceId, serverId));
   ipcMain.handle(IPC_CHANNELS.controlResearchTrack, (_event, workspaceId: string, action: 'start' | 'pause' | 'resume' | 'stop', serverId?: string,
     configuration?: import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrackRequest['configuration']) => workspaceService.controlResearchTrack(workspaceId, action, serverId, configuration));

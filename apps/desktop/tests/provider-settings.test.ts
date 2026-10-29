@@ -1,5 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ProviderCredentialStore } from '../src/main/providerCredentialStore';
@@ -21,33 +23,51 @@ describe('provider settings', () => {
     process.env.BEALE_APP_SERVER_PARENT_PID = String(process.pid);
     process.env.BEALE_APP_SERVER_PORT = '0';
     let variable: string | undefined;
-    const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ data: [{ id: 'model-example', name: 'Example Model' }] }), { status: 200 }));
-    vi.stubGlobal('fetch', fetcher);
+    const server = createServer((request, response) => {
+      expect(request.url).toBe('/v1/models');
+      expect(request.headers.authorization).toBe('Bearer example-secret');
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'model-example', name: 'Example Model' }] }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP listener.');
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     const credentials = new ProviderCredentialStore(path, {
       available: () => true,
       encrypt: (value) => Buffer.from(`encrypted:${value}`, 'utf8'),
       decrypt: (value) => value.toString('utf8').replace(/^encrypted:/u, '')
     });
-    const providerEnvironmentChanged = vi.fn();
+    let environmentChanges = 0;
+    const providerEnvironmentChanged = (): void => { environmentChanges += 1; };
     const service = new WorkspaceService(() => undefined, {
       workspaceRegistryDirectory: join(root, 'registry'),
       providerCredentialStore: credentials,
       providerEnvironmentChanged
     });
     try {
-      const settings = await service.saveCustomProvider({ name: 'Example API', baseUrl: 'https://api.example.test/v1', apiKey: 'example-secret' });
+      const settings = await service.saveCustomProvider({ name: 'Example API', baseUrl, apiKey: 'example-secret' });
       const provider = settings.customProviders?.[0];
       expect(provider?.id).toMatch(/^custom-/u);
       variable = `BEALE_CUSTOM_PROVIDER_KEY_${provider!.id.slice(7).replaceAll('-', '_').toUpperCase()}`;
       expect(provider?.models).toEqual([{ id: 'model-example', name: 'Example Model' }]);
       expect(settings.modelDefaults[provider!.id]).toEqual({ largeModel: 'model-example', smallModel: 'model-example', reasoningEffort: 'off' });
-      expect(fetcher.mock.calls[0]?.[0]).toBe('https://api.example.test/v1/models');
       expect(readFileSync(path, 'utf8')).not.toContain('example-secret');
-      expect(providerEnvironmentChanged).toHaveBeenCalledOnce();
+      expect(environmentChanges).toBe(1);
       expect((await service.getResearchProviderModelCatalog()).find((catalog) => catalog.providerId === provider!.id)?.models[0]?.id).toBe('model-example');
+      await service.saveCustomProvider({ id: provider!.id, name: 'Example API', baseUrl, reasoning: true });
+      service.setProviderModelDefaults(provider!.id, { largeModel: 'model-example', smallModel: 'model-example', reasoningEffort: 'high' });
+      const refreshed = await service.saveCustomProvider({ id: provider!.id, name: 'Example API', baseUrl });
+      expect(refreshed.customProviders?.[0]?.reasoning).toBe(true);
+      expect(refreshed.modelDefaults[provider!.id]?.reasoningEffort).toBe('high');
+      const catalog = (await service.getResearchProviderModelCatalog()).find((entry) => entry.providerId === provider!.id);
+      expect(catalog?.models[0]?.effortLevels).toContain('high');
+      const disabled = await service.saveCustomProvider({ id: provider!.id, name: 'Example API', baseUrl, reasoning: false });
+      expect(disabled.modelDefaults[provider!.id]?.reasoningEffort).toBe('off');
     } finally {
+      server.close();
       service.close();
-      vi.unstubAllGlobals();
       if (variable) delete process.env[variable];
       if (existsSync(stateFile)) {
         const record = JSON.parse(readFileSync(stateFile, 'utf8')) as { pid?: unknown };

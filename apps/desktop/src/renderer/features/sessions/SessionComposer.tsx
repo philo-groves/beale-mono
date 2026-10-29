@@ -60,6 +60,7 @@ export const MainSteerArea = memo(function MainSteerArea({
   instructionLocked = false,
   preComposerContent,
   postComposerContent,
+  contextUsageAccessory,
   ariaLabel = 'Steer research session',
   showCollaboration = true,
   responseSuggestionsEnabled = true,
@@ -85,6 +86,7 @@ export const MainSteerArea = memo(function MainSteerArea({
   instructionLocked?: boolean;
   preComposerContent?: ReactNode;
   postComposerContent?: ReactNode;
+  contextUsageAccessory?: ReactNode;
   ariaLabel?: string;
   showCollaboration?: boolean;
   responseSuggestionsEnabled?: boolean;
@@ -473,6 +475,7 @@ export const MainSteerArea = memo(function MainSteerArea({
             providerModelCatalog={providerOptions}
           />
         ) : null}
+        {contextUsageAccessory ? <div className="main-steer-context-accessory">{contextUsageAccessory}</div> : null}
         <ContextUsageDonut detail={detail} />
         {sessionActive ? (
           <button

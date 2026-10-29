@@ -2698,6 +2698,7 @@ export function App(): JSX.Element {
               providerModelDefaults={providerSettings?.modelDefaults}
               appServerMemory={selectedRunId && !newResearchOpen ? null : snapshot?.appServerMemory ?? null}
               activeScope={snapshot?.activeScope ?? null}
+              repositoryCheckouts={snapshot?.repositoryCheckouts}
               workspaceRules={selectedRunId && !newResearchOpen ? [] : snapshot?.workspaceRules ?? []}
               researchProfile={selectedRunId && !newResearchOpen ? renderedRunDetail?.researchProfile?.profile ?? null : snapshot?.researchProfile.profile ?? null}
               researchKitId={snapshot.workspace.researchKitId}

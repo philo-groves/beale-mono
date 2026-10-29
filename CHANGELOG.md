@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+## 0.9.5
+
+### Beale
+
+#### Added
+
+- Session summaries count surfaces created, focused, or updated during that session and open a session-scoped surface hierarchy with the existing surface details view.
+- Surface threat model diagrams can be expanded into a window-sized dialog with zoom and drag controls from the sidebar.
+- Successful surface threat model diagram updates appear in the live session transcript and open the same inspection dialog when clicked.
+- Surface Recon tracks general research assets with Untouched, In Progress, and Complete states. Existing surface foundations load with an empty asset list.
+- New memories and claims persist a nullable surface association in the global database. Model tools default it to the agent's current surface and allow an explicit surface ID. Existing records migrate with no association.
+
+#### Changed
+
+- Surface Breakdown now plots five grounded 1–10 priority factors in a pentagon. Research Track scheduling uses scored factors when available; existing track rows migrate without scores and retain the prior impact heuristic until assessed.
+- Inter-agent messages in session transcripts use a flat style with a mail icon and appear only for the lead or subagent participating in the exchange. Broadcast room messages remain visible to room members.
+- Research Track progress shows each surface's base priority score and its actionability, impact, testable path, validation, and stalled-work adjustments.
+- Session threat model diagrams show a tool line identifying whether the agent created or updated the diagram for its surface.
+- Research track epochs end with a brief handoff and show a Resolving Epoch marker in the session transcript.
+- Surface model tools now use compact get and update results plus Breakdown, Recon, Analysis, Threat Model, and Resources lookups. The view lookups include linked leads, findings, typed memories, and saved resource prior art; `surface.search` searches the full surface map and is preferred over paged listing for targeted discovery.
+- Surface tools can read up to five selected views of one surface in a single `surface.views` call, with the same linked records as the individual lookups.
+- Agent Feedback sits inside the session input controls beside context usage instead of taking a separate row.
+- Session threat model diagrams fill the transcript width and grow with their content, with a circular expand control instead of a preview card.
+- Session inter-agent messages appear immediately and show up to four lines by default, with Show more and Show less controls for longer messages.
+- Session summary memory-type counts start collapsed behind a Show more control and slide open or closed when toggled.
+- Surface progress reaches 100% after a recorded threat-model review when no assigned leads remain active and no assigned findings await verification or a blocker. Refuted, verified, report-ready, and disclosed claims no longer block progress; new claims can lower it again. Existing threat-model notes count as prior review, while legacy mapping flags remain stored without controlling progress.
+- Surface threat models store Mermaid diagrams and Security Objectives, Risks, and Assumptions lists. The sidebar shows surface-linked Invariant, Sink, and Mitigation memories, and retains older freeform notes as earlier context. Existing Risk Impact and other legacy notes remain readable.
+- Surface Threat Model lists use full-width bordered pills, with detail arrows for linked memories and no diagram heading.
+- Surface Recon assets display as flat, bordered pills with their status labels.
+- Finding and memory detail sidenavs use one divider below their view tabs and consistent gaps between content sections.
+- Surface first-touch attribution shows the provider icon and model display name when available.
+- Workspace Resources now live under Surfaces. A resource-type row filters the map and adds resources; root surface details expose the resource form, checkout state, and saved prior art. Out-of-scope resources remain visible for management but are excluded from research tracks.
+- Surface details use Breakdown, Recon, Analysis, Threat Model, and a conditional Resources tab. Recon holds a full discovery note, structured technology mapping, and individual advisory history with impact; Analysis lists findings and trajectories assigned to the surface or its child components, with findings needing resolution shown below Findings. Existing Bug History notes remain readable. The History and Hierarchy views have been removed.
+- Surface Breakdown omits coverage prose and the Open Questions and Related Components lists. Recon shows saved proposal findings assigned to the surface as its Leads list; older coverage notes remain stored.
+- Surface maps now describe concrete component hierarchies. Foundation notes can be partial, and research track checkpoints no longer require a fixed number of attacker paths or evidence updates for completion; cited claims and evidence still receive validation.
+
+#### Fixed
+
+- Session threat model tool lines type into the transcript before their diagrams appear.
+- Threat model diagrams with Mermaid-generated HTML line breaks now load as SVG images in session and surface views; image decode failures show the diagram source instead of a broken image icon.
+- The workspace Surfaces hierarchy now fills the main content area, fades at its top and bottom edges, and reveals its scrollbar on hover or scroll. Selecting a surface opens a right sidebar with a circular back control, component title, inline status, first-touch model attribution, last-update time, and sections for its recorded context and state. Older app-server responses without a model show Unknown for recorded touches.
+- Surface cards have a transparent unfilled background, progress shading, and 1px outlines matching the hierarchy links. They show up to three regular-weight name lines and mark blockers with an orange warning icon. Cards and the detail sidebar omit visible percentage labels and inferred type labels.
+- Workspace resource cards no longer show incomplete per-resource research counts or recency, and repository clone status reflects existing local Git checkouts, including managed checkouts created outside the resource clone button.
+- Custom OpenAI-compatible providers can opt into reasoning controls and persist their effort selection. DeepSeek model IDs use explicit thinking toggles and preserve reasoning content for tool calls.
+- Desktop dev mode rebuilds the shared runtime and app-server after source updates, preventing stale protocol output from blocking startup.
+- Packaged Desktop builds load the renderer and preload from the app root after the main process is split into a chunk, so the window opens after an update.
+
+### app-server
+
+#### Changed
+
+- Research Track epochs retain compatible model context between attempts by default and add only bounded new context to resumed attempts. At each transition, the host reviews the prior capture and context signals, starts fresh when the capture is unavailable or context remains crowded, and marks the current assignment as authoritative.
+- Research Track epochs now distinguish breadth from depth, prioritize actionable open leads and findings during depth work, and prompt a complementary collaborator when collaboration is enabled. Periodic breadth rotation remains in place.
+- Research Track actionability gains require new source evidence on a cited finding or memory, or a completed runbook result from the active epoch. Record edits and report citations remain valid context but do not raise priority.
+- Child surfaces record their creating session. Existing surface rows migrate with no creation attribution, and session surface maps include creation, focus, and update activity.
+- Research track checkpoints now explain the required workspace record reference format, report invalid references clearly, and include attacker-path references without requiring duplicate checkpoint entries.
+- Successful surface diagram updates now carry an explicit session event marker so the live transcript can render the diagram from the recorded tool observation.
+
+#### Fixed
+
+- Stored research-profile resolution retries brief SQLite read contention when a session starts.
+- Recovered host shell utilities retain standard POSIX paths during login-shell startup, preventing profile errors from appearing in otherwise successful tool results.
+- Host shell calls to `ipsw` recover through a pinned, checksum-verified local binary when the utility is absent. Packaged Desktop runtimes include the installer architecture's binary and its license; source checkouts provision it on first use.
+- Missing host `jq` and `fd` commands recover through pinned, checksum-verified binaries. Desktop packages include matching executables and licenses; source checkouts provision them on first use.
+- Missing host `opengrep` commands recover through a pinned, checksum-verified binary. Desktop packages include the matching executable and license; source checkouts provision them on first use.
+- Shell commands that need `rg` use the bundled local ripgrep when the host lacks it. Direct calls retry internally, and compound shell commands receive the bundled tool before execution.
+- Complementary subagents no longer receive or mutate the lead-only Research Track checkpoint tool. Recent canonical session activity prevents startup recovery from falsely orphaning a long-running epoch.
+
 ## 0.9.4
 
 ### Beale

@@ -3,10 +3,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import type { ResearchExecutableTool, ResearchToolExecutionContext } from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
+import type { SurfaceRanking } from "./surfaces.js";
 
 export type ResearchTrackStatus = "running" | "paused" | "waiting" | "complete" | "stopped";
 export type ResearchTrackWorkStatus = "unexamined" | "active" | "deferred" | "blocked" | "complete" | "excluded";
 export type ResearchTrackImpact = "unknown" | "low" | "medium" | "high" | "critical";
+export type ResearchTrackEpochFocus = "breadth" | "depth";
 export type ResearchTrackValidationEnvironment = "device" | "vm" | "web" | "localhost" | "none";
 export interface ResearchTrackValidation {
   targetDependent: boolean;
@@ -30,7 +32,19 @@ export interface ResearchTrackAngle {
   nextAction: string;
 }
 
+export interface ResearchTrackPriorityBreakdown {
+  baseScore: number;
+  actionability: number;
+  impactAdjustment: number;
+  surfaceRankingAdjustment: number;
+  testableAngleBonus: number;
+  targetValidationPenalty: number;
+  noProgressPenalty: number;
+}
+
 type StoredResearchTrackAngle = Omit<ResearchTrackAngle, "vector"> & { vector?: ResearchTrackVector };
+const TRACK_EVIDENCE_REF = /^(finding|memory|runbook|report):([A-Za-z0-9_-]{1,160})$/u;
+const TRACK_EVIDENCE_REF_GUIDANCE = "Use finding:<claim ID>, memory:<memory ID>, runbook:<runbook ID>, or report:<report ID> from this workspace. Cite the parent record, not an evidence entry ID, trace ID, artifact ID, or file path.";
 
 export interface ResearchTrackSurfaceState {
   surfaceId: string;
@@ -42,6 +56,7 @@ export interface ResearchTrackSurfaceState {
   evidenceRefs: string[];
   angles: StoredResearchTrackAngle[];
   actionabilityScore: number;
+  priority: ResearchTrackPriorityBreakdown;
   validation: ResearchTrackValidation | null;
   epochs: number;
   noProgressEpochs: number;
@@ -75,9 +90,11 @@ export interface ResearchTrackSurfaceProjection {
   resourceId?: string;
   resourceKind?: string;
   resourceSource?: string;
+  resourceDirection?: string;
   parentId: string | null;
   name: string;
-  coverageState: { covered: boolean; unmetRequirements: string[]; unblockedFindingIds?: string[] };
+  foundation?: { ranking?: SurfaceRanking | null } | null;
+  coverageState: { covered: boolean; unmetRequirements: string[]; openLeadIds?: string[]; unblockedFindingIds?: string[] };
   progressBlocker: { reason: string } | null;
 }
 
@@ -88,15 +105,27 @@ const INITIAL_ROOT_ACTIONABILITY = 35;
 const INITIAL_CHILD_ACTIONABILITY = 55;
 const ACTIONABILITY_DECAY_INTERVAL_MS = 6 * 60 * 60_000;
 
-function schedulingScore(work: ResearchTrackSurfaceState): number {
+function priorityBreakdown(work: Pick<ResearchTrackSurfaceState,
+  "actionabilityScore" | "angles" | "impact" | "validation" | "noProgressEpochs">,
+  ranking: SurfaceRanking | null): ResearchTrackPriorityBreakdown {
   const testableAngle = work.angles.some((angle) => angle.status === "open" || angle.status === "supported");
-  const impact = { unknown: 0, low: -25, medium: 0,
+  const impactAdjustment = ranking ? 0 : { unknown: 0, low: -25, medium: 0,
     high: testableAngle ? 30 : 10, critical: testableAngle ? 40 : 20 }[work.impact];
-  const targetValidationGap = work.validation?.targetDependent
+  // Each factor contributes equally; a score of five is neutral. The scored impact
+  // replaces the legacy qualitative impact adjustment so impact is counted once.
+  const surfaceRankingAdjustment = ranking
+    ? 2 * (Object.values(ranking).reduce((sum, factor) => sum + factor.score, 0) - 25) : 0;
+  const targetValidationPenalty = work.validation?.targetDependent
     && (work.validation.environment === "none" || work.validation.environment === "localhost") ? 50 : 0;
-  return work.actionabilityScore + impact + (testableAngle && targetValidationGap === 0 ? 15 : 0)
-    - targetValidationGap - work.noProgressEpochs * 10;
+  const testableAngleBonus = testableAngle && targetValidationPenalty === 0 ? 15 : 0;
+  const noProgressPenalty = work.noProgressEpochs * 10;
+  return { baseScore: work.actionabilityScore + impactAdjustment + surfaceRankingAdjustment + testableAngleBonus
+      - targetValidationPenalty - noProgressPenalty,
+    actionability: work.actionabilityScore, impactAdjustment, surfaceRankingAdjustment, testableAngleBonus,
+    targetValidationPenalty, noProgressPenalty };
 }
+
+function schedulingScore(work: ResearchTrackSurfaceState): number { return work.priority.baseScore; }
 
 export function researchTrackProgress(track: Pick<ResearchTrackSnapshot, "surfaces">): {
   investigated: number; complete: number; total: number;
@@ -140,7 +169,7 @@ export class ResearchTrackStore {
         evidence_refs_json TEXT NOT NULL, epochs INTEGER NOT NULL, no_progress_epochs INTEGER NOT NULL,
         revisits INTEGER NOT NULL, revisit_after TEXT, last_worked_at TEXT, updated_at TEXT NOT NULL,
         actionability_score INTEGER NOT NULL DEFAULT 35, score_updated_at TEXT, validation_json TEXT,
-        angles_json TEXT NOT NULL DEFAULT '[]',
+        angles_json TEXT NOT NULL DEFAULT '[]', ranking_json TEXT,
         PRIMARY KEY(workspace_id, surface_id)
       );
       CREATE TABLE IF NOT EXISTS app_server_research_track_history (
@@ -177,6 +206,9 @@ export class ResearchTrackStore {
     if (!surfaceColumns.some((column) => column.name === "angles_json")) {
       this.#database.exec("ALTER TABLE app_server_research_track_surfaces ADD COLUMN angles_json TEXT NOT NULL DEFAULT '[]'");
     }
+    if (!surfaceColumns.some((column) => column.name === "ranking_json")) {
+      this.#database.exec("ALTER TABLE app_server_research_track_surfaces ADD COLUMN ranking_json TEXT");
+    }
   }
 
   public close(): void { this.#database.close(); }
@@ -197,18 +229,22 @@ export class ResearchTrackStore {
       activeSessionId: nullable(row.active_session_id), activeSurfaceId: nullable(row.active_surface_id),
       epochCount: Number(row.epoch_count), lastError: nullable(row.last_error),
       createdAt: String(row.created_at), updatedAt: String(row.updated_at),
-      surfaces: surfaces.map((surface) => ({
-        surfaceId: String(surface.surface_id), name: String(surface.name), status: surface.status as ResearchTrackWorkStatus,
-        impact: surface.impact as ResearchTrackImpact, theory: String(surface.theory),
-        nextAction: String(surface.next_action), evidenceRefs: JSON.parse(String(surface.evidence_refs_json)) as string[],
-        angles: JSON.parse(String(surface.angles_json)) as StoredResearchTrackAngle[],
-        epochs: Number(surface.epochs), noProgressEpochs: Number(surface.no_progress_epochs),
-        actionabilityScore: decayedActionability(Number(surface.actionability_score),
-          nullable(surface.score_updated_at) ?? String(surface.updated_at), Date.now()),
-        validation: surface.validation_json ? JSON.parse(String(surface.validation_json)) as ResearchTrackValidation : null,
-        revisits: Number(surface.revisits), revisitAfter: nullable(surface.revisit_after),
-        lastWorkedAt: nullable(surface.last_worked_at), updatedAt: String(surface.updated_at),
-      })),
+      surfaces: surfaces.map((surface) => {
+        const work = {
+          surfaceId: String(surface.surface_id), name: String(surface.name), status: surface.status as ResearchTrackWorkStatus,
+          impact: surface.impact as ResearchTrackImpact, theory: String(surface.theory),
+          nextAction: String(surface.next_action), evidenceRefs: JSON.parse(String(surface.evidence_refs_json)) as string[],
+          angles: JSON.parse(String(surface.angles_json)) as StoredResearchTrackAngle[],
+          epochs: Number(surface.epochs), noProgressEpochs: Number(surface.no_progress_epochs),
+          actionabilityScore: decayedActionability(Number(surface.actionability_score),
+            nullable(surface.score_updated_at) ?? String(surface.updated_at), Date.now()),
+          validation: surface.validation_json ? JSON.parse(String(surface.validation_json)) as ResearchTrackValidation : null,
+          revisits: Number(surface.revisits), revisitAfter: nullable(surface.revisit_after),
+          lastWorkedAt: nullable(surface.last_worked_at), updatedAt: String(surface.updated_at),
+        };
+        const ranking = surface.ranking_json ? JSON.parse(String(surface.ranking_json)) as SurfaceRanking : null;
+        return { ...work, priority: priorityBreakdown(work, ranking) };
+      }),
     };
   }
 
@@ -221,7 +257,8 @@ export class ResearchTrackStore {
     surfaces: readonly ResearchTrackSurfaceProjection[];
     replaceUnfinished?: boolean;
   }): ResearchTrackSnapshot {
-    if (input.surfaces.length === 0) throw new Error("A research track requires an eligible scope surface.");
+    const eligibleSurfaces = input.surfaces.filter((surface) => surface.resourceDirection !== "out_of_scope");
+    if (eligibleSurfaces.length === 0) throw new Error("A research track requires an eligible scope surface.");
     if (input.targetIds.length === 0 || input.targetIds.length > 16
       || new Set(input.targetIds).size !== input.targetIds.length) {
       throw new Error("A research track requires 1 to 16 distinct research targets.");
@@ -254,7 +291,7 @@ export class ResearchTrackStore {
           JSON.stringify(input.provider), JSON.stringify(input.targetIds),
           input.collaboration ? JSON.stringify(input.collaboration) : null, input.guardianEnabled === false ? 0 : 1, now, now);
       if (existing) this.#database.prepare("DELETE FROM app_server_research_track_surfaces WHERE workspace_id = ?").run(this.#workspaceId);
-      this.#insertSurfaces(input.surfaces, now);
+      this.#insertSurfaces(eligibleSurfaces, now);
       this.#database.exec("COMMIT");
     } catch (error) { this.#database.exec("ROLLBACK"); throw error; }
     return this.get()!;
@@ -263,6 +300,7 @@ export class ResearchTrackStore {
   public syncSurfaces(surfaces: readonly ResearchTrackSurfaceProjection[]): ResearchTrackSnapshot | null {
     const track = this.get();
     if (!track) return null;
+    surfaces = surfaces.filter((surface) => surface.resourceDirection !== "out_of_scope");
     const now = new Date().toISOString();
     const visibleIds = new Set(surfaces.map((surface) => surface.id));
     const newSurface = surfaces.some((surface) => !track.surfaces.some((work) => work.surfaceId === surface.id));
@@ -274,8 +312,9 @@ export class ResearchTrackStore {
       }
     }
     for (const surface of surfaces) {
-      this.#database.prepare(`UPDATE app_server_research_track_surfaces SET name=?
-        WHERE workspace_id=? AND surface_id=?`).run(surface.name, this.#workspaceId, surface.id);
+      this.#database.prepare(`UPDATE app_server_research_track_surfaces SET name=?, ranking_json=?
+        WHERE workspace_id=? AND surface_id=?`).run(surface.name,
+          surface.foundation?.ranking ? JSON.stringify(surface.foundation.ranking) : null, this.#workspaceId, surface.id);
       const work = track.surfaces.find((item) => item.surfaceId === surface.id);
       if (!work) continue;
       if (work.status === "excluded") {
@@ -287,9 +326,6 @@ export class ResearchTrackStore {
       } else if (!surface.progressBlocker && work.status === "blocked") {
         this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status='deferred', updated_at=?
           WHERE workspace_id=? AND surface_id=?`).run(now, this.#workspaceId, surface.id);
-      } else if (work.status === "complete" && !this.#coverageSatisfied(surface, track)) {
-        this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status='deferred', next_action=?, updated_at=?
-          WHERE workspace_id=? AND surface_id=?`).run("Revisit changed or incomplete security coverage.", now, this.#workspaceId, surface.id);
       }
     }
     if (newSurface && track.status === "complete") this.pauseWithError("A new eligible security surface appeared. Resume for another pass.");
@@ -332,17 +368,15 @@ export class ResearchTrackStore {
     return this.get();
   }
 
-  public reserveNext(sessionId: string, surfaces: readonly ResearchTrackSurfaceProjection[]): { track: ResearchTrackSnapshot; surface: ResearchTrackSurfaceProjection } | null {
+  public reserveNext(sessionId: string, surfaces: readonly ResearchTrackSurfaceProjection[]): {
+    track: ResearchTrackSnapshot; surface: ResearchTrackSurfaceProjection; focus: ResearchTrackEpochFocus;
+  } | null {
     const track = this.syncSurfaces(surfaces);
     if (!track || track.status !== "running" || track.activeSessionId) return null;
     const byId = new Map(surfaces.map((surface) => [surface.id, surface]));
     const actionable = track.surfaces.filter((work) => {
       const surface = byId.get(work.surfaceId);
       if (!surface || work.status === "complete" || work.status === "blocked" || work.status === "excluded") return false;
-      if (surface.parentId === null && surface.coverageState.unmetRequirements.length > 0
-        && surface.coverageState.unmetRequirements.every((item) => item === "child_surfaces")
-        && track.surfaces.some((child) => byId.get(child.surfaceId)?.parentId === surface.id
-          && child.status !== "complete" && child.status !== "excluded")) return false;
       return true;
     });
     const ready = actionable.filter((work) => !work.revisitAfter || work.revisitAfter <= new Date().toISOString());
@@ -356,10 +390,20 @@ export class ResearchTrackStore {
       const recentParent = parent?.lastWorkedAt && Date.now() - Date.parse(parent.lastWorkedAt) < 60 * 60_000;
       return schedulingScore(work) + (surface?.parentId && work.epochs === 0 && recentParent ? 10 : 0);
     };
+    const claimWorkBonus = (work: ResearchTrackSurfaceState): number => {
+      const claims = byId.get(work.surfaceId)?.coverageState;
+      const bonus = Math.min(claims?.unblockedFindingIds?.length ?? 0, 2) * 25
+        + Math.min(claims?.openLeadIds?.length ?? 0, 2) * 15;
+      // An unavailable target does not become actionable merely because claims remain open.
+      return work.priority.targetValidationPenalty > 0 ? Math.min(bonus, 10) : bonus;
+    };
+    const depthScore = (work: ResearchTrackSurfaceState): number => score(work) + claimWorkBonus(work);
     const rank = (left: ResearchTrackSurfaceState, right: ResearchTrackSurfaceState): number =>
       score(right) - score(left)
       || (left.lastWorkedAt ?? "").localeCompare(right.lastWorkedAt ?? "")
       || left.surfaceId.localeCompare(right.surfaceId);
+    const depthRank = (left: ResearchTrackSurfaceState, right: ResearchTrackSurfaceState): number =>
+      depthScore(right) - depthScore(left) || rank(left, right);
     const resourceIdForSurface = (surfaceId: string): string => {
       const surface = byId.get(surfaceId);
       if (surface?.resourceId) return surface.resourceId;
@@ -395,8 +439,10 @@ export class ResearchTrackStore {
     };
     const breadthRank = (left: ResearchTrackSurfaceState, right: ResearchTrackSurfaceState): number =>
       breadthScore(right) - breadthScore(left) || rank(left, right);
-    const breadth = eligible.filter((work) => !byId.get(work.surfaceId)?.parentId && work.epochs === 0).sort(breadthRank);
-    const depth = eligible.filter((work) => byId.get(work.surfaceId)?.parentId || work.epochs > 0).sort(rank);
+    const breadth = eligible.filter((work) => !byId.get(work.surfaceId)?.parentId && work.epochs === 0
+      && claimWorkBonus(work) === 0).sort(breadthRank);
+    const depth = eligible.filter((work) => byId.get(work.surfaceId)?.parentId || work.epochs > 0
+      || claimWorkBonus(work) > 0).sort(depthRank);
     const strongestDepth = depth[0];
     const unexploredKind = breadth.some((work) => resourceKind(work) !== "unknown"
       && !kindEpochs.has(resourceKind(work)));
@@ -404,7 +450,7 @@ export class ResearchTrackStore {
     // Keep three epochs available for depth, then give another resource a turn.
     // Escape a one-kind streak immediately when a reviewed new kind appears.
     const explorationDue = track.epochCount >= 3 && (track.epochCount % 4 === 3 || kindStarvation);
-    const exploreBreadth = breadth.length > 0 && (!strongestDepth || score(strongestDepth) < 45 || explorationDue);
+    const exploreBreadth = breadth.length > 0 && (!strongestDepth || depthScore(strongestDepth) < 20 || explorationDue);
     const history = this.#database.prepare("SELECT last_surface_id, consecutive_surface_epochs FROM app_server_research_tracks WHERE workspace_id=?")
       .get(this.#workspaceId) as { last_surface_id: string | null; consecutive_surface_epochs: number };
     const lastResourceId = history.last_surface_id ? resourceIdForSurface(history.last_surface_id) : null;
@@ -415,13 +461,16 @@ export class ResearchTrackStore {
     const candidates = exploreBreadth ? breadth
       : explorationDue && breadth.length === 0 && alternateResources.length > 0 ? alternateResources
         : depth.length > 0 ? depth : breadth;
-    const selected = history.consecutive_surface_epochs >= 2 && candidates.length > 1 && score(candidates[0]!) < 80
+    const focus: ResearchTrackEpochFocus = exploreBreadth || explorationDue && breadth.length === 0
+      && alternateResources.length > 0 ? "breadth" : depth.length > 0 ? "depth" : "breadth";
+    const selected = history.consecutive_surface_epochs >= 2 && candidates.length > 1
+      && (focus === "depth" ? depthScore(candidates[0]!) : score(candidates[0]!)) < 80
       ? candidates.find((candidate) => candidate.surfaceId !== history.last_surface_id) ?? candidates[0]
       : candidates[0];
     if (!selected) {
       const status = track.surfaces.every((work) => work.status === "complete" || work.status === "excluded") ? "complete"
         : track.surfaces.some((work) => work.status === "blocked") ? "waiting" : "paused";
-      const error = status === "paused" ? "No actionable surface could be selected; review remaining coverage gaps." : null;
+      const error = status === "paused" ? "No actionable component could be selected; review the current research state." : null;
       this.#database.prepare("UPDATE app_server_research_tracks SET status=?, last_error=?, updated_at=? WHERE workspace_id=?")
         .run(status, error, new Date().toISOString(), this.#workspaceId);
       return null;
@@ -440,7 +489,7 @@ export class ResearchTrackStore {
         .run(now, now, this.#workspaceId, selected.surfaceId);
       this.#database.exec("COMMIT");
     } catch (error) { this.#database.exec("ROLLBACK"); throw error; }
-    return { track: this.get()!, surface: byId.get(selected.surfaceId)! };
+    return { track: this.get()!, surface: byId.get(selected.surfaceId)!, focus };
   }
 
   public checkpoint(input: {
@@ -458,35 +507,23 @@ export class ResearchTrackStore {
       || track.activeSurfaceId !== input.surfaceId || surface.id !== input.surfaceId) {
       throw new Error("The active research track assigned a different surface to this session.");
     }
-    if (input.outcome === "complete" && (!this.#coverageSatisfied(surface, track) || input.evidenceRefs.length === 0)) {
-      throw new Error("A surface needs complete threat-model coverage, report-ready findings, and durable evidence before track completion.");
-    }
     if (input.outcome === "blocked" && !surface.progressBlocker) {
       throw new Error("Set a concrete surface progress blocker before marking track work blocked.");
     }
-    const evidenceRefs = [...new Set(input.evidenceRefs.map((ref) => required(ref, "evidenceRef")))].slice(0, 32);
     const work = track.surfaces.find((item) => item.surfaceId === input.surfaceId)!;
-    if (evidenceRefs.some((ref) => !this.#validEvidenceRef(ref))) {
-      throw new Error("Track checkpoints may cite only existing canonical evidence in this workspace.");
-    }
-    const angles = this.#mergeAngles(work.angles, input.angles, evidenceRefs);
-    if (input.outcome === "complete" && !evidenceRefs.some((ref) => this.#validEvidenceRef(ref, work.lastWorkedAt))) {
-      throw new Error("Completed track work must cite canonical evidence updated during this research epoch.");
-    }
-    if (input.outcome === "complete" && (input.impact === "high" || input.impact === "critical")
-      && !evidenceRefs.some((ref) => ref.startsWith("finding:"))
-      && angles.filter((angle) => angle.status === "supported" || angle.status === "ruled_out").length < 2) {
-      throw new Error("Complete high-impact track work only after testing two distinct attacker paths or citing a finding.");
-    }
-    const secondLook = input.outcome === "complete" && (input.impact === "high" || input.impact === "critical") && work.revisits === 0;
-    const status = input.outcome === "continue" || input.outcome === "defer" || secondLook ? "deferred" : input.outcome;
+    const angles = this.#mergeAngles(work.angles, input.angles);
+    const evidenceRefs = [...new Set([
+      ...input.evidenceRefs.map((ref) => required(ref, "evidenceRef")),
+      ...(input.angles ?? []).flatMap((angle) => angle.evidenceRefs),
+    ])];
+    if (evidenceRefs.length > 32) throw new Error("A track checkpoint can cite at most 32 evidence records.");
+    for (const ref of evidenceRefs) this.#assertEvidenceRef(ref);
+    const status = input.outcome === "continue" || input.outcome === "defer" ? "deferred" : input.outcome;
     const prior = work;
     const now = new Date().toISOString();
-    const revisitAfter = secondLook ? new Date(Date.now() + 30 * 60_000).toISOString() : null;
-    const nextAction = secondLook
-      ? `Revisit this high-impact surface from a different attacker path after other surface work. ${input.nextAction}`
-      : input.nextAction;
-    const freshEvidence = evidenceRefs.some((ref) => this.#validEvidenceRef(ref, work.lastWorkedAt));
+    const revisitAfter = null;
+    const nextAction = input.nextAction;
+    const freshEvidence = evidenceRefs.some((ref) => this.#freshEvidenceRef(ref, work.lastWorkedAt, now));
     const changed = freshEvidence || status === "complete" || status === "blocked";
     const validation = input.validation ?? null;
     if (validation) {
@@ -519,9 +556,8 @@ export class ResearchTrackStore {
     return this.get()!.surfaces.find((work) => work.surfaceId === input.surfaceId)!;
   }
 
-  #mergeAngles(previous: readonly StoredResearchTrackAngle[], updates: readonly ResearchTrackAngle[] | undefined,
-    checkpointEvidence: readonly string[]): StoredResearchTrackAngle[] {
-    if (updates === undefined) return [...previous];
+  #mergeAngles(previous: readonly StoredResearchTrackAngle[], updates: readonly ResearchTrackAngle[] | undefined): StoredResearchTrackAngle[] {
+    if (updates === undefined || updates.length === 0) return [...previous];
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 4) {
       throw new Error("Record 1 to 4 distinct attacker paths at each track checkpoint.");
     }
@@ -551,9 +587,7 @@ export class ResearchTrackStore {
       if (seen.has(key)) throw new Error("A track checkpoint cannot repeat an attacker path.");
       seen.add(key);
       const refs = [...new Set(angle.evidenceRefs as string[])];
-      if (refs.some((ref) => !checkpointEvidence.includes(ref) || !this.#validEvidenceRef(ref))) {
-        throw new Error("Track attacker path evidence must be cited by the checkpoint and exist in this workspace.");
-      }
+      for (const ref of refs) this.#assertEvidenceRef(ref);
       if ((angle.status === "supported" || angle.status === "ruled_out") && refs.length === 0) {
         throw new Error("A tested attacker path needs canonical evidence; record negative evidence in memory.");
       }
@@ -606,14 +640,23 @@ export class ResearchTrackStore {
     const insert = this.#database.prepare(`INSERT OR IGNORE INTO app_server_research_track_surfaces
       (workspace_id, surface_id, name, status, impact, theory, next_action, evidence_refs_json,
        epochs, no_progress_epochs, revisits, revisit_after, last_worked_at, updated_at,
-       actionability_score, score_updated_at)
-      VALUES (?, ?, ?, 'unexamined', 'unknown', '', 'Map the attacker path and highest-impact plausible effect.', '[]', 0, 0, 0, NULL, NULL, ?, ?, ?)`);
+       actionability_score, score_updated_at, ranking_json)
+      VALUES (?, ?, ?, 'unexamined', 'unknown', '', 'Inspect the component and choose a promising research question.', '[]', 0, 0, 0, NULL, NULL, ?, ?, ?, ?)`);
     for (const surface of surfaces) insert.run(this.#workspaceId, surface.id, surface.name, now,
-      surface.parentId ? INITIAL_CHILD_ACTIONABILITY : INITIAL_ROOT_ACTIONABILITY, now);
+      surface.parentId ? INITIAL_CHILD_ACTIONABILITY : INITIAL_ROOT_ACTIONABILITY, now,
+      surface.foundation?.ranking ? JSON.stringify(surface.foundation.ranking) : null);
   }
 
-  #validEvidenceRef(ref: string, since?: string | null): boolean {
-    const match = /^(finding|memory|runbook|report):([A-Za-z0-9_-]{1,160})$/u.exec(ref);
+  #assertEvidenceRef(ref: string): void {
+    const match = TRACK_EVIDENCE_REF.exec(ref);
+    if (!match) throw new Error(`Invalid track evidence reference. ${TRACK_EVIDENCE_REF_GUIDANCE}`);
+    if (!this.#validEvidenceRef(ref)) {
+      throw new Error(`The cited ${match[1]} record does not exist in this workspace. ${TRACK_EVIDENCE_REF_GUIDANCE}`);
+    }
+  }
+
+  #validEvidenceRef(ref: string): boolean {
+    const match = TRACK_EVIDENCE_REF.exec(ref);
     if (!match) return false;
     const kind = match[1] as "finding" | "memory" | "runbook" | "report";
     const table = { finding: "app_server_research_claims", memory: "memory_nodes",
@@ -627,43 +670,71 @@ export class ResearchTrackStore {
       : `SELECT updated_at FROM ${table} WHERE id=? AND workspace_id=? LIMIT 1`;
     const row = this.#database.prepare(query)
       .get(match[2]!, this.#workspaceId) as { updated_at?: unknown } | undefined;
-    return typeof row?.updated_at === "string" && (!since || row.updated_at >= since);
+    return typeof row?.updated_at === "string";
   }
 
-  #coverageSatisfied(surface: ResearchTrackSurfaceProjection, track: ResearchTrackSnapshot): boolean {
-    if (surface.coverageState.covered) return true;
-    if (surface.coverageState.unmetRequirements.length === 0) return false;
-    return surface.coverageState.unmetRequirements.every((requirement) => {
-      if (requirement === "unblocked_findings") {
-        const ids = surface.coverageState.unblockedFindingIds ?? [];
-        if (ids.length === 0) return false;
-        return ids.every((id) => {
-          const row = this.#database.prepare(`SELECT status FROM app_server_research_claims
-            WHERE id=? AND workspace_id=?`).get(id, this.#workspaceId) as { status?: unknown } | undefined;
-          return row?.status === "report_ready" || row?.status === "disclosed";
-        });
-      }
-      if (requirement === "child_surfaces") {
-        const children = this.#database.prepare(`SELECT id FROM app_server_surfaces
-          WHERE workspace_id=? AND parent_id=?`).all(this.#workspaceId, surface.id) as { id: string }[];
-        return children.length > 0 && children.every((child) => track.surfaces.some((work) =>
-          work.surfaceId === child.id && (work.status === "complete" || work.status === "excluded")));
-      }
-      return false;
-    });
+  /** A citation remains valid for context, but only newly recorded source evidence raises actionability. */
+  #freshEvidenceRef(ref: string, since: string | null, until: string): boolean {
+    const match = TRACK_EVIDENCE_REF.exec(ref);
+    if (!match || !since) return false;
+    const id = match[2]!;
+    const tableExists = (table: string): boolean => Boolean(this.#database.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
+    const hasColumn = (table: string, column: string): boolean => (this.#database.prepare(
+      `PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((entry) => entry.name === column);
+    if (match[1] === "finding" && tableExists("app_server_claim_evidence") && tableExists("app_server_research_claims")) {
+      const canonical = hasColumn("app_server_research_claims", "duplicate_of_claim_id")
+        ? "AND claim.duplicate_of_claim_id IS NULL" : "";
+      return Boolean(this.#database.prepare(`SELECT 1 FROM app_server_claim_evidence evidence
+        JOIN app_server_research_claims claim ON claim.id = evidence.claim_id
+        WHERE claim.id = ? AND claim.workspace_id = ? ${canonical}
+          AND claim.status IN ('observed', 'reproduced', 'verified', 'report_ready', 'disclosed')
+          AND evidence.created_at > ? AND evidence.created_at <= ?
+          AND evidence.kind IN ('code', 'artifact', 'command', 'proof',
+            'runbook_execution', 'independent_verification')
+          AND (NULLIF(trim(evidence.reference_id), '') IS NOT NULL
+            OR NULLIF(trim(evidence.content_hash), '') IS NOT NULL) LIMIT 1`)
+        .get(id, this.#workspaceId, since, until));
+    }
+    if (match[1] === "memory" && tableExists("memory_evidence_refs") && tableExists("memory_nodes")
+      && tableExists("memory_node_workspaces")) {
+      const canonical = hasColumn("memory_nodes", "duplicate_of_memory_id")
+        ? "AND node.duplicate_of_memory_id IS NULL" : "";
+      return Boolean(this.#database.prepare(`SELECT 1 FROM memory_evidence_refs evidence
+        JOIN memory_nodes node ON node.id = evidence.node_id
+        JOIN memory_node_workspaces membership ON membership.node_id = node.id
+        WHERE node.id = ? AND membership.workspace_id = ? ${canonical}
+          AND node.status NOT IN ('rejected', 'stale')
+          AND evidence.created_at > ? AND evidence.created_at <= ?
+          AND evidence.kind IN ('code', 'artifact', 'command')
+          AND (NULLIF(trim(evidence.path), '') IS NOT NULL
+            OR trim(evidence.locator_json) NOT IN ('', '{}', 'null', '[]')) LIMIT 1`)
+        .get(id, this.#workspaceId, since, until));
+    }
+    if (match[1] === "runbook" && tableExists("app_server_runbook_executions")
+      && tableExists("app_server_runbook_cell_executions")) {
+      return Boolean(this.#database.prepare(`SELECT 1 FROM app_server_runbook_executions execution
+        JOIN app_server_runbook_cell_executions cell ON cell.run_id = execution.run_id
+        WHERE execution.runbook_id = ? AND execution.workspace_id = ?
+          AND execution.completed_at > ? AND execution.completed_at <= ?
+          AND execution.status IN ('succeeded', 'failed') AND cell.status IN ('succeeded', 'failed') LIMIT 1`)
+        .get(id, this.#workspaceId, since, until));
+    }
+    return false;
   }
+
 }
 
 export function createResearchTrackTool(store: ResearchTrackStore, surface: (id: string) => ResearchTrackSurfaceProjection): ResearchExecutableTool {
-  const parameters = { type: "object", required: ["surfaceId", "outcome", "impact", "theory", "nextAction", "evidenceRefs", "angles", "validation"],
+  const parameters = { type: "object", required: ["surfaceId", "outcome", "impact", "theory", "nextAction"],
     additionalProperties: false, properties: {
       surfaceId: { type: "string" }, outcome: { type: "string", enum: ["continue", "defer", "blocked", "complete"] },
       impact: { type: "string", enum: ["unknown", "low", "medium", "high", "critical"] },
       theory: { type: "string", description: "The concrete attacker-control-to-impact theory tested this epoch, including contrary evidence." },
       nextAction: { type: "string", description: "The next positive proof step, revisit trigger, or unblock condition." },
-      evidenceRefs: { type: "array", items: { type: "string" }, description: "Existing canonical IDs as finding:id, memory:id, runbook:id, or report:id. A negative result should be recorded in a memory first." },
-      angles: { type: "array", minItems: 1, maxItems: 4,
-        description: "Update 1 to 4 distinct causal attacker paths. Preserve earlier paths by name; tested outcomes need canonical evidence cited in evidenceRefs.",
+      evidenceRefs: { type: "array", items: { type: "string" }, description: `Optional canonical record references supporting this checkpoint. ${TRACK_EVIDENCE_REF_GUIDANCE} Leave empty when no such record exists. Attacker-path references are included automatically. A citation is valid context, but only new source evidence attached since this epoch began or a completed runbook result raises actionability; metadata edits and report citations do not.` },
+      angles: { type: "array", maxItems: 4,
+        description: "Optional structured leads. Preserve earlier leads by name; supported or ruled-out outcomes need evidence from a canonical workspace record.",
         items: { type: "object", required: ["name", "status", "vector", "proofQuestion", "evidenceRefs", "nextAction"],
           additionalProperties: false, properties: {
             name: { type: "string", description: "Distinct attacker-controlled route or trust boundary, not a file or test name." },
@@ -676,7 +747,7 @@ export function createResearchTrackTool(store: ResearchTrackStore, surface: (id:
                 unauthorizedEffect: { type: "string", description: "Protected asset and unauthorized effect if the path succeeds." },
               } },
             proofQuestion: { type: "string", description: "The observation that would distinguish this path from a harmless behavior." },
-            evidenceRefs: { type: "array", items: { type: "string" } },
+            evidenceRefs: { type: "array", items: { type: "string" }, description: `Canonical record references for this attacker path. ${TRACK_EVIDENCE_REF_GUIDANCE} These are added to the checkpoint automatically.` },
             nextAction: { type: "string", description: "Specific next proof step, or why this path was ruled out or blocked." }
           } } },
       validation: { type: "object", required: ["targetDependent", "environment", "reason"], additionalProperties: false,
@@ -684,25 +755,29 @@ export function createResearchTrackTool(store: ResearchTrackStore, surface: (id:
         properties: { targetDependent: { type: "boolean" }, environment: { type: "string", enum: ["device", "vm", "web", "localhost", "none"] }, reason: { type: "string" } } },
     } };
   return { descriptor: { name: "track.checkpoint", transportName: "track_checkpoint",
-    description: "Record substantive progress and distinct attacker paths on the assigned surface. Completing high-impact work without a finding requires two evidence-backed tested paths. Use defer when rotation is due; ordinary uncertainty is not a blocker.",
+    description: `Record a bounded assessment and useful next step on the assigned component. Structured leads and validation details are optional. ${TRACK_EVIDENCE_REF_GUIDANCE} Use blocked for a concrete external dependency.`,
     actionClasses: ["synthesize"], sideEffects: "write", requiredPermissions: ["research-resource:inventory"], inputSchema: parameters },
-    parameters, async execute(action: ResearchToolAction, _context?: ResearchToolExecutionContext) {
+    parameters, async execute(action: ResearchToolAction, context?: ResearchToolExecutionContext) {
       const startedAt = new Date().toISOString();
       try {
+        if (context?.agentId && context.agentId !== "root") {
+          throw new Error("Only the lead agent can checkpoint the assigned research track surface. Record durable research and send the result to the lead.");
+        }
         const input = action.input;
         const surfaceId = required(input.surfaceId, "surfaceId");
         const outcome = input.outcome;
         const impact = input.impact;
         if (outcome !== "continue" && outcome !== "defer" && outcome !== "blocked" && outcome !== "complete") throw new Error("Invalid track outcome.");
         if (impact !== "unknown" && impact !== "low" && impact !== "medium" && impact !== "high" && impact !== "critical") throw new Error("Invalid impact estimate.");
-        if (!Array.isArray(input.evidenceRefs) || !input.evidenceRefs.every((ref) => typeof ref === "string")) throw new Error("evidenceRefs must be strings.");
-        if (!Array.isArray(input.angles)) throw new Error("angles must contain 1 to 4 attacker paths.");
+        if (input.evidenceRefs !== undefined && (!Array.isArray(input.evidenceRefs) || !input.evidenceRefs.every((ref) => typeof ref === "string"))) throw new Error("evidenceRefs must be strings.");
+        if (input.angles !== undefined && !Array.isArray(input.angles)) throw new Error("angles must be an array.");
         const validation = input.validation;
-        if (!validation || typeof validation !== "object" || Array.isArray(validation)) throw new Error("validation is required.");
+        if (validation !== undefined && (!validation || typeof validation !== "object" || Array.isArray(validation))) throw new Error("validation must be an object.");
         const output = store.checkpoint({ surfaceId, outcome, impact,
           theory: required(input.theory, "theory"), nextAction: required(input.nextAction, "nextAction"),
-          evidenceRefs: input.evidenceRefs as string[], angles: input.angles as ResearchTrackAngle[],
-          validation: validation as ResearchTrackValidation }, surface(surfaceId));
+          evidenceRefs: (input.evidenceRefs ?? []) as string[],
+          ...(input.angles === undefined ? {} : { angles: input.angles as ResearchTrackAngle[] }),
+          ...(validation === undefined ? {} : { validation: validation as ResearchTrackValidation }) }, surface(surfaceId));
         return { action, status: "complete", startedAt, completedAt: new Date().toISOString(),
           summary: "Research track checkpoint recorded.", output, followUpActions: [] };
       } catch (error) {

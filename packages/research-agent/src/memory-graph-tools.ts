@@ -20,6 +20,7 @@ import type {
   ResearchToolExecutionResult,
 } from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
+import type { SurfaceStore } from "./surfaces.js";
 
 const GET_PARAMETERS = { type: "object", required: ["id"], properties: { id: { type: "string" } } };
 interface MemoryToolSchemas {
@@ -50,6 +51,7 @@ function createMemoryToolSchemas(memory: ResearchProfileMemory): MemoryToolSchem
   };
   const sharedSaveProperties = {
     id: { type: "string" },
+    surfaceId: { type: ["string", "null"], description: "Surface this memory belongs to. Defaults to the agent's current surface when creating a new memory; null clears an association during correction." },
     type: { type: "string", enum: creatableTypeIds, description: typeDescription },
     title: { type: "string" },
     summary: { type: "string" },
@@ -287,7 +289,7 @@ function attributeSchema(
   };
 }
 
-export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecutableTool[] {
+export function createMemoryGraphTools(store: MemoryGraphStore, surfaceStore?: SurfaceStore): ResearchExecutableTool[] {
   const memory = store.getProfileMemory();
   const schemas = createMemoryToolSchemas(memory);
   const typeCatalog = formatResearchProfileMemoryTypes(memory, { creatableOnly: true }).join("\n");
@@ -295,8 +297,12 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
     createMemoryGetTool(store),
     tool("memory.save", "memory_save", `Create or additively refine concise reusable knowledge with links and evidence references. Saving automatically associates the memory with the current session, workspace, and subject; updating it from another session or workspace adds that association. Exact subject-visible type-and-title identities are refined in place. Use the active memory catalog below and do not store transcripts, routine narration, or bulk output.\n${typeCatalog}`, "write", schemas.save, (input, context) => {
       const id = string(input.id);
+      const surfaceId = input.surfaceId === undefined
+        ? surfaceStore?.current(context?.agentId ?? "root")?.id
+        : selectedSurfaceId(input.surfaceId, surfaceStore);
       return store.save({
         ...(id ? { id } : {}),
+        ...(surfaceId !== undefined ? { surfaceId } : {}),
         type: requiredString(input.type, "type") as MemoryNodeType,
         title: requiredString(input.title, "title"),
         ...(input.summary !== undefined ? { summary: requiredString(input.summary, "summary", true) } : {}),
@@ -312,6 +318,7 @@ export function createMemoryGraphTools(store: MemoryGraphStore): ResearchExecuta
     }),
     tool("memory.correct", "memory_correct", "Exactly correct supplied fields or reclassify a memory node using its current revision. Supplied evidence replaces the full evidence list; omit evidence to preserve it, or use memory.save to append. Reclassification preserves evidence and relationships unless replacement evidence is supplied, and returns a new type-derived id. Retired and non-creatable types remain readable but cannot be reclassification targets.", "write", schemas.correct, (input, context) => {
       const patch: Partial<Omit<SaveMemoryNodeInput, "id">> = {};
+      if (input.surfaceId !== undefined) patch.surfaceId = selectedSurfaceId(input.surfaceId, surfaceStore);
       if ("type" in input) patch.type = requiredString(input.type, "type") as MemoryNodeType;
       if ("title" in input) patch.title = requiredString(input.title, "title");
       if ("summary" in input) patch.summary = requiredString(input.summary, "summary", true);
@@ -385,6 +392,11 @@ function record(value: unknown): Record<string, unknown> | null { return isRecor
 function string(value: unknown): string | null { return typeof value === "string" ? value.trim() : null; }
 function strings(value: unknown): string[] { return Array.isArray(value) ? value.flatMap((item) => typeof item === "string" && item.trim() ? [item.trim()] : []) : []; }
 function requiredString(value: unknown, field: string, allowEmpty = false): string { if (typeof value !== "string" || (!allowEmpty && !value.trim())) throw new Error(`${field} must be a ${allowEmpty ? "string" : "non-empty string"}.`); return value.trim(); }
+function selectedSurfaceId(value: unknown, surfaceStore?: SurfaceStore): string | null {
+  if (value === null) return null;
+  const id = requiredString(value, "surfaceId");
+  return surfaceStore?.require(id, true).id ?? id;
+}
 function requiredInteger(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error(`${field} must be an integer.`); return value; }
 function requiredNumber(value: unknown, field: string): number { if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${field} must be a number.`); return value; }
 function requiredRecord(value: unknown, field: string): Record<string, unknown> { if (!isRecord(value)) throw new Error(`${field} must be an object.`); return value; }

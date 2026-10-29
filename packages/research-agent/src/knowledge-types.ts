@@ -209,6 +209,7 @@ export interface ResearchClaimDuplicateSummary {
 
 export interface FindingSummary {
   id: string;
+  surfaceId: string | null;
   workspaceId: string;
   subjectId: string;
   /** Legacy memory identity retained only for migration/audit. New claims do not require a memory node. */

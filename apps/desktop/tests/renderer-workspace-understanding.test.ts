@@ -345,25 +345,24 @@ describe('workspace dashboard', () => {
     expect(html).toContain('class="workspace-dashboard-tabs research-side-view-tabs pill-view-tabs"');
     expect(html).toContain('<span>Campaign</span>');
     expect(html).toContain('<span>Settings</span>');
-    expect(html).toContain('<span>Resources</span>');
+    expect(html).not.toContain('<span>Resources</span>');
     expect(html).toContain('<span>Surfaces</span>');
     expect(html).toContain('<span>Rules</span>');
     expect(html).not.toContain('<span>Utilities</span>');
     expect(html).toContain('<span>Targets</span>');
-    expect(html.indexOf('<span>Campaign</span>')).toBeLessThan(html.indexOf('<span>Resources</span>'));
-    expect(html.indexOf('<span>Resources</span>')).toBeLessThan(html.indexOf('<span>Surfaces</span>'));
+    expect(html.indexOf('<span>Campaign</span>')).toBeLessThan(html.indexOf('<span>Surfaces</span>'));
     expect(html.indexOf('<span>Surfaces</span>')).toBeLessThan(html.indexOf('<span>Rules</span>'));
     expect(html.indexOf('<span>Targets</span>')).toBeLessThan(html.indexOf('<span>Settings</span>'));
     expect(html.indexOf('<span>Settings</span>')).toBeLessThan(html.indexOf('<span>Apple Security Bounty</span>'));
     expect(html).toContain('lucide-settings');
-    expect(html).toContain('lucide-boxes');
+    expect(html).toContain('lucide-network');
     expect(html).toContain('lucide-list-checks');
     expect(html).toContain('<span>Apple Security Bounty</span>');
     expect(html).toContain('workspace-dashboard-tab workspace-dashboard-kit-tab');
     expect(html).not.toContain('<span>HackerOne</span>');
     expect(html).not.toContain('<span>MSRC Windows</span>');
     expect(html).toContain('lucide-refresh-cw');
-    expect(html.match(/workspace-dashboard-tab-icon/g)).toHaveLength(7);
+    expect(html.match(/workspace-dashboard-tab-icon/g)).toHaveLength(6);
     expect(html).not.toContain('aria-label="Campaign views"');
     expect(html).toContain('aria-controls="workspace-dashboard-overview-panel" aria-selected="true"');
     expect(html).not.toContain('id="workspace-dashboard-campaign-activity-panel"');
@@ -496,7 +495,7 @@ describe('workspace dashboard', () => {
     expect(html).toContain('id="workspace-campaign-board-heading">Parser Workspace Findings</h2>');
     expect(html).not.toContain('Research campaign');
     expect(html).not.toContain('The harness prioritizes uncovered or weakly supported territory');
-    expect(html.indexOf('<span>Campaign</span>')).toBeLessThan(html.indexOf('<span>Resources</span>'));
+    expect(html.indexOf('<span>Campaign</span>')).toBeLessThan(html.indexOf('<span>Surfaces</span>'));
     expect(html).not.toContain('id="workspace-dashboard-overview-panel"');
 
     const boardHtml = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
@@ -576,8 +575,8 @@ describe('workspace dashboard', () => {
     }
   });
 
-  it('places title search beside Resources, Rules, and Targets', () => {
-    for (const view of ['resources', 'rules', 'targets'] as const) {
+  it('places title search beside Surfaces, Rules, and Targets', () => {
+    for (const view of ['surfaces', 'rules', 'targets'] as const) {
       const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
         busy: false,
         initialView: view,
@@ -1007,16 +1006,11 @@ describe('workspace dashboard', () => {
     expect(html).not.toContain('campaign-tree-track');
   });
 
-  it('shows workspace sources with session, memory, and recency coverage', () => {
-    const run = runRow('run_surface', [['2026-08-12T10:00:00.000Z', '2026-08-12T11:00:00.000Z']]);
-    run.run.targetAssetId = 'asset_repo';
-    const memory = memorySummary({
-      nodes: [{ id: 'memory_repo', assetIds: ['asset_repo'], createdAt: '2026-08-12T11:30:00.000Z' }]
-    });
+  it('opens a saved Resources selection on Surfaces with resource-type controls', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
       busy: false,
       initialView: 'resources',
-      appServerMemory: memory,
+      appServerMemory: null,
       activeScope: {
         id: 'scope_surface',
         version: 1,
@@ -1041,25 +1035,31 @@ describe('workspace dashboard', () => {
         }]
       },
       researchProfile: testResearchProfile(),
+      surfaceMap: { schemaVersion: 1, workspaceId: 'workspace-example', agents: [], surfaces: [{
+        id: 'resource-example', resourceId: 'resource-example', resourceKind: 'repository', resourceSource: 'explicit_scope',
+        scopeAssetId: 'asset_repo', parentId: null, name: 'parser', description: 'Example parser.', firstTouchedAt: null,
+        foundation: null, progressBlocker: null,
+        coverageState: { covered: false, unmetRequirements: [], unblockedFindingIds: [] }
+      }] },
       workspaceName: 'Parser Workspace',
-      runs: [run],
+      runs: [],
       nowMs: NOW,
     }));
 
-    expect(html).toContain('>parser</strong>');
-    expect(html).toContain('<h2>Parser Workspace Resources</h2>');
-    expect(html).toContain('1 resource created over the past year.');
+    expect(html).toContain('<h2>Parser Workspace Surfaces</h2>');
+    expect(html).toContain('aria-label="Surface resource types"');
+    expect(html).toContain('<span>All Surfaces</span>');
+    expect(html).toContain('aria-label="Add resource"');
     expect(html).not.toContain('workspace-activity-grid');
-    expect(html).toContain('class="workspace-surface-scroll"');
+    expect(html).toContain('class="workspace-surface-map-scroll"');
     expect(html).toContain('>Repository</span>');
     expect(html).toContain('role="tab"');
     expect(html).toContain('aria-label="Add repository"');
-    expect(html).toContain('>1 session</span>');
-    expect(html).toContain('>1 memory</span>');
-    expect(html).toContain('>Last 2h ago</span>');
-    expect(html).toContain('>Not cloned</span>');
-    expect(html).toContain('>Clone</span>');
-    expect(html).toContain('title="Open parser"');
+    expect(html).toContain('aria-label="Add domain"');
+    expect(html).not.toContain('>0 sessions</span>');
+    expect(html).not.toContain('>0 memories</span>');
+    expect(html).not.toContain('Never researched');
+    expect(html).toContain('title="parser"');
     expect(workspaceResearchSurfaceKinds(workspaceResearchSurfaceItems([{
       id: 'asset_repo',
       scopeVersionId: 'scope_surface',
@@ -1069,7 +1069,7 @@ describe('workspace dashboard', () => {
       sensitivity: 'public',
       attributes: {},
       createdAt: '2026-08-12T00:00:00.000Z'
-    }], [run], memory))).toEqual(['repo']);
+    }]))).toEqual(['repo']);
   });
 
   it('prefills the resource dialog for editing and offers removal', () => {
@@ -1106,11 +1106,6 @@ describe('workspace dashboard', () => {
   });
 
   it('labels materialized repository checkouts from repository metadata instead of the checkout folder', () => {
-    const run = runRow('run_gitlab', [['2026-08-12T10:00:00.000Z', '2026-08-12T11:00:00.000Z']]);
-    run.run.targetAssetId = 'asset_gitlab_disk';
-    const memory = memorySummary({
-      nodes: [{ id: 'memory_gitlab', assetIds: ['asset_gitlab_url'], createdAt: '2026-08-12T11:30:00.000Z' }]
-    });
     const assets: ScopeAsset[] = [{
       id: 'asset_gitlab_url',
       scopeVersionId: 'scope_surface',
@@ -1152,14 +1147,15 @@ describe('workspace dashboard', () => {
       createdAt: '2026-08-12T00:00:00.000Z'
     }];
 
-    const items = workspaceResearchSurfaceItems(assets, [run], memory);
+    const items = workspaceResearchSurfaceItems(assets, {
+      asset_gitlab_url: 'C:\\Users\\research\\.beale\\repositories\\gitlab.com_gitlab-org_gitlab\\default'
+    });
+    expect(workspaceResearchSurfaceItems(assets, {}).find((item) => item.label === 'gitlab')?.repositoryCloned).toBe(false);
     const labels = items.map((item) => item.label);
 
     expect(labels).toEqual(['gitaly', 'gitlab']);
     expect(labels).not.toContain('default');
     expect(items.find((item) => item.label === 'gitlab')).toMatchObject({
-      sessionCount: 1,
-      memoryCount: 1,
       repositoryCloned: true,
       repositoryCloneAssetId: 'asset_gitlab_url',
       repositoryLocalPath: 'C:\\Users\\research\\.beale\\repositories\\gitlab.com_gitlab-org_gitlab\\default'
@@ -1172,15 +1168,15 @@ describe('workspace dashboard', () => {
     const preloadSource = readFileSync(new URL('../src/preload/index.ts', import.meta.url), 'utf8');
     const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
     const rendererSource = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-    const workspaceSource = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceUnderstandingView.tsx', import.meta.url), 'utf8');
+    const surfaceDetailsSource = readFileSync(new URL('../src/renderer/features/workspaces/WorkspaceSurfaceDetails.tsx', import.meta.url), 'utf8');
 
     expect(ipcSource).toContain("cloneWorkspaceRepository: 'beale:clone-workspace-repository'");
     expect(preloadSource).toContain('ipcRenderer.invoke(IPC_CHANNELS.cloneWorkspaceRepository, assetId, cloneMode)');
     expect(mainSource).toContain('workspaceService.cloneWorkspaceRepository(assetId, cloneMode)');
     expect(rendererSource).toContain('window.beale.cloneWorkspaceRepository(assetId, cloneMode)');
-    expect(workspaceSource).toContain("mode: 'deep'");
-    expect(workspaceSource).toContain('<strong>Deep clone</strong>');
-    expect(workspaceSource).toContain('<strong>Shallow clone</strong>');
+    expect(surfaceDetailsSource).toContain("setCloneMode('deep')");
+    expect(surfaceDetailsSource).toContain("(['deep', 'shallow'] as const)");
+    expect(surfaceDetailsSource).toContain('onCloneRepository(resourceItem.repositoryCloneAssetId!, cloneMode)');
   });
 
   it('routes Research Subject changes through the typed host IPC boundary', () => {

@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { dirname, join } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
+import { ensureSurfaceSchema } from "./surfaces.js";
 import { assertWorkspaceChild, readWorkspaceProject, workspaceContentHash, type WorkspaceResearchIndex } from "./workspace-project.js";
 import type { WorkspacePublicationOptions } from "./workspace-publication.js";
 
@@ -286,6 +287,7 @@ function rebuild(database: DatabaseSync, options: WorkspacePublicationOptions, i
     affected += insertRows(database, "app_server_surface_touches", nested(resources, "surfaceTouches"));
     affected += insertRows(database, "app_server_surface_focus", nested(resources, "surfaceFocus"));
     affected += insertRows(database, "app_server_surface_focus_events", nested(resources, "surfaceFocusEvents"));
+    affected += insertRows(database, "app_server_surface_update_events", nested(resources, "surfaceUpdateEvents"));
   }
   const executions = canonicalPaths(index, /^evidence\/execution-[^/]+\.json$/u).map((path) => readJson(root, path, options.workspaceId));
   affected += insertRows(database, "app_server_runbook_executions", executions.map((row) => baseRow(row, ["cells"])));
@@ -327,6 +329,7 @@ function prune(database: DatabaseSync, workspaceId: string): number {
   affected += deleteWhere(database, "app_server_research_resources", "workspace_id=?", workspaceId);
   affected += deleteWhere(database, "resource_prior_art", "workspace_id=?", workspaceId);
   affected += deleteWhere(database, "app_server_surface_focus_events", "workspace_id=?", workspaceId);
+  affected += deleteWhere(database, "app_server_surface_update_events", "workspace_id=?", workspaceId);
   affected += deleteWhere(database, "app_server_surface_focus", "workspace_id=?", workspaceId);
   affected += deleteWhere(database, "app_server_surface_touches", "workspace_id=?", workspaceId);
   affected += deleteWhere(database, "app_server_surfaces", "workspace_id=?", workspaceId);
@@ -358,6 +361,7 @@ export function rebuildWorkspaceResearchIndex(options: WorkspacePublicationOptio
   const database = openResearchDatabase(options.databasePath);
   try {
     database.exec("BEGIN IMMEDIATE");
+    ensureSurfaceSchema(database);
     const affectedRows = rebuild(database, options, current.index);
     database.exec("COMMIT");
     writeCacheState(options.workspaceRoot, { schemaVersion: 1, workspaceId: options.workspaceId, publicationHash: current.hash, state: "ready", updatedAt: new Date().toISOString() });

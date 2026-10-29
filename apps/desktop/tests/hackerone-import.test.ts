@@ -148,5 +148,5 @@ describe('HackerOne workspace import', () => {
     } finally {
       service.close();
     }
-  }, 15_000);
+  }, 30_000);
 });

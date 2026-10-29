@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, posix, relative, resolve, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, win32 } from "node:path";
 import { nowIso } from "./ids.js";
+import { bundledToolForBareUtility, bundledToolForFailedCommand, bundledToolForMissingCommand,
+  environmentWithBundledTool } from "./local-shell-tools.js";
 import { PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 import type {
   ResearchExecutableTool,
@@ -326,10 +328,22 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
           deadline,
         );
         try {
-          return await runUtility({
+          const baseEnvironment = shellEnvironment();
+          const command = requested.kind === "command" ? requested.args[1] ?? "" : null;
+          const canUseLocalTools = !options.remote && invocation.runtime === "host" && platform === process.platform;
+          const localToolOptions = { ...(context?.signal ? { signal: context.signal } : {}), deadline };
+          const preparedTool = canUseLocalTools && command
+            ? await bundledToolForMissingCommand(command, baseEnvironment, invocation.cwd, localToolOptions) : null;
+          if (preparedTool && "failure" in preparedTool) return errorResult(action, startedAt, preparedTool.failure);
+          const environment = preparedTool
+            ? environmentWithBundledTool(baseEnvironment, preparedTool) : baseEnvironment;
+          const runInput = {
             action,
             utility: invocation.utility,
-            args: invocation.args,
+            args: command && preparedTool
+              ? commandArgsWithBundledTool(invocation.args, preparedTool.executable, platform)
+              : invocation.args,
+            reportedArgs: invocation.args,
             logicalUtility: invocation.policyUtility,
             logicalArgs: invocation.policyArgs,
             displayUtility: invocation.displayUtility,
@@ -344,6 +358,23 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
             authorization,
             ...(options.remote ? { remote: options.remote } : {}),
             ...(context?.signal ? { signal: context.signal } : {}),
+          };
+          const first = await runUtility({ ...runInput, environment });
+          if (!canUseLocalTools || context?.signal?.aborted || Date.now() >= deadline) return first;
+          const output = isRecord(first.output) ? first.output : null;
+          const recovery = requested.kind === "utility" && output?.spawnErrorCode === "ENOENT"
+            ? await bundledToolForBareUtility(requested.utility, localToolOptions)
+            : command && typeof output?.stderr === "string"
+              ? await bundledToolForFailedCommand(command, output.stderr, localToolOptions)
+              : null;
+          if (recovery && "failure" in recovery) return errorResult(action, startedAt, recovery.failure);
+          if (!recovery) return first;
+          return runUtility({ ...runInput,
+            utility: requested.kind === "utility" ? recovery.executable : invocation.utility,
+            args: command ? commandArgsWithBundledTool(invocation.args, recovery.executable, platform) : invocation.args,
+            reportedUtility: invocation.utility,
+            environment: environmentWithBundledTool(environment, recovery),
+            timeoutMs: Math.max(1, deadline - Date.now()),
           });
         } finally {
           await lease.release();
@@ -353,6 +384,14 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       }
     },
   };
+}
+
+function commandArgsWithBundledTool(args: string[], executable: string, platform: NodeJS.Platform): string[] {
+  if (platform === "win32" || args[0] !== "-lc" || args.length !== 2) return args;
+  // A login shell can reset PATH before evaluating -c. Restore the trusted
+  // tool directory after its profile runs, preserving the rest of login PATH.
+  const directory = `'${dirname(executable).replace(/'/gu, "'\\''")}'`;
+  return ["-lc", `PATH=${directory}:$PATH; ${args[1]}`];
 }
 
 function assertRemoteFolderDeleteAllowed(utility: string, args: readonly string[], cwd: string, platform: NodeJS.Platform, guestHome: string): void {
@@ -720,7 +759,9 @@ function waitForRetry(signal: AbortSignal | undefined): Promise<void> {
 async function runUtility(input: {
   action: ResearchToolAction;
   utility: string;
+  reportedUtility?: string;
   args: string[];
+  reportedArgs?: string[];
   logicalUtility: string;
   logicalArgs: string[];
   displayUtility: string;
@@ -737,6 +778,7 @@ async function runUtility(input: {
   maxOutputBytes: number;
   authorization: ShellAuthorizationDecision;
   signal?: AbortSignal;
+  environment?: NodeJS.ProcessEnv;
   remote?: { sshArgs: readonly string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string; sshExecutable?: string };
 }): Promise<ResearchToolExecutionResult> {
   return new Promise((resolvePromise) => {
@@ -750,7 +792,7 @@ async function runUtility(input: {
     const child = spawn(input.remote ? input.remote.sshExecutable ?? 'ssh' : input.utility,
       input.remote ? [...input.remote.sshArgs, remoteCommand!] : input.args, {
       ...(input.remote ? {} : { cwd: input.cwd }),
-      env: shellEnvironment(),
+      env: input.environment ?? shellEnvironment(),
       detached: process.platform !== "win32",
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
@@ -810,14 +852,16 @@ async function runUtility(input: {
       clearTimeout(timeout);
       if (forceStop) clearTimeout(forceStop);
       input.signal?.removeEventListener("abort", abort);
-      const message = (error as NodeJS.ErrnoException).code === "ENOENT"
-        ? unavailableUtilityMessage(input.utility, input.runtime, input.platform)
+      const spawnErrorCode = (error as NodeJS.ErrnoException).code;
+      const message = spawnErrorCode === "ENOENT"
+        ? unavailableUtilityMessage(input.reportedUtility ?? input.utility, input.runtime, input.platform)
         : errorMessage(error);
       resolvePromise(errorResult(input.action, input.startedAt, message, {
-        utility: input.utility,
-        args: redactShellArguments(input.args),
+        utility: input.reportedUtility ?? input.utility,
+        args: redactShellArguments(input.reportedArgs ?? input.args),
         cwd: input.cwd,
         runtime: input.runtime,
+        ...(spawnErrorCode ? { spawnErrorCode } : {}),
         ...(input.remote ? { executionTarget: 'fleet-vm' } : {}),
         ...(input.wsl ? { wsl: input.wsl } : {}),
         authorization: input.authorization,
@@ -831,8 +875,8 @@ async function runUtility(input: {
       input.signal?.removeEventListener("abort", abort);
       const captured = output.value();
       const resultOutput = {
-        utility: input.utility,
-        args: redactShellArguments(input.args),
+        utility: input.reportedUtility ?? input.utility,
+        args: redactShellArguments(input.reportedArgs ?? input.args),
         cwd: input.cwd,
         runtime: input.runtime,
         ...(input.remote ? { executionTarget: 'fleet-vm' } : {}),

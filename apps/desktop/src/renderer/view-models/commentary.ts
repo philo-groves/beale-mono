@@ -11,13 +11,13 @@ import { appServerToolTraceSubtext } from './traceContent';
 import type { TraceDisplayEvent } from './traceDisplay';
 import { compactUserPath } from '../lib/paths';
 
-export type CommentaryMessageKind = 'user' | 'task' | 'commentary' | 'progress' | 'tool' | 'marker' | 'final_answer' | 'error';
+export type CommentaryMessageKind = 'user' | 'task' | 'commentary' | 'progress' | 'tool' | 'diagram' | 'marker' | 'final_answer' | 'error';
 
 export interface CommentaryMessage {
   id: string;
   traceEventId: string | null;
   kind: CommentaryMessageKind;
-  markerType?: 'compaction' | 'safeguard_recovery';
+  markerType?: 'compaction' | 'safeguard_recovery' | 'epoch';
   taskAction?: 'spawn' | 'followup' | 'message' | 'room_message';
   taskAuthorAgentPath?: string;
   taskRecipientAgentPath?: string;
@@ -27,10 +27,15 @@ export interface CommentaryMessage {
   toolName?: string;
   toolCount?: number;
   toolCalls?: CommentaryToolCall[];
+  surfaceDiagram?: { source: string; surfaceId: string; surfaceName: string; changeKind?: 'created' | 'updated' };
   reasoningTraceLines?: string[];
   contentMarkdown: string;
   abortNotice?: string;
   createdAt: string;
+}
+
+export function surfaceDiagramToolLine(diagram: NonNullable<CommentaryMessage['surfaceDiagram']>): string {
+  return `${diagram.changeKind === 'created' ? 'Creating' : 'Updating'} threat model diagram for "${diagram.surfaceName}"`;
 }
 
 export interface CommentaryToolCall {
@@ -81,6 +86,8 @@ export function commentaryMessagesForSession(
     if (marker) return [marker];
     const activity = subagentActivityMessage(event);
     if (activity) return [activity];
+    const diagram = surfaceDiagramMessage(event);
+    if (diagram) return [diagram];
     const toolUsage = toolUsageMessage(event, toolCallsByPrimaryEventId, useActiveToolTense);
     if (toolUsage) return [toolUsage];
     const kind = commentaryMessageKind(event);
@@ -99,6 +106,7 @@ export function commentaryMessagesForSession(
     message.kind === 'commentary' ||
     message.kind === 'progress' ||
     message.kind === 'tool' ||
+    message.kind === 'diagram' ||
     message.kind === 'marker' ||
     message.kind === 'final_answer' ||
     message.kind === 'error'
@@ -123,6 +131,26 @@ export function commentaryMessagesForSession(
   }, ...messages];
 }
 
+function surfaceDiagramMessage(event: TraceDisplayEvent): CommentaryMessage | null {
+  if (appServerToolEventKind(event) !== 'tool.observed') return null;
+  const diagram = recordValue(appServerToolPayload(event), 'surfaceDiagram');
+  const source = stringValue(diagram?.source);
+  const surfaceId = stringValue(diagram?.surfaceId);
+  const surfaceName = stringValue(diagram?.surfaceName);
+  const changeKind = stringValue(diagram?.changeKind);
+  if (!source?.trim() || !surfaceId || !surfaceName) return null;
+  const surfaceDiagram: NonNullable<CommentaryMessage['surfaceDiagram']> = { source, surfaceId, surfaceName,
+    ...(changeKind === 'created' || changeKind === 'updated' ? { changeKind } : {}) };
+  return {
+    id: `surface-diagram:${event.id}`,
+    traceEventId: event.id,
+    kind: 'diagram',
+    surfaceDiagram,
+    contentMarkdown: surfaceDiagramToolLine(surfaceDiagram),
+    createdAt: event.createdAt
+  };
+}
+
 function sessionEventMarker(event: TraceDisplayEvent): CommentaryMessage | null {
   const payload = event.source === 'system'
     ? event.payload
@@ -136,7 +164,8 @@ function sessionEventMarker(event: TraceDisplayEvent): CommentaryMessage | null 
     ? 'compaction'
     : type === 'model_retry' && stringValue(payload.recoveryKind) === 'safety_guardrail'
       && payload.awaitingSteering !== true
-      ? 'safeguard_recovery' : null;
+      ? 'safeguard_recovery'
+      : type === 'track_epoch_resolving' ? 'epoch' : null;
   if (!markerType) return null;
   return {
     id: `session-marker:${event.id}`,
@@ -144,8 +173,10 @@ function sessionEventMarker(event: TraceDisplayEvent): CommentaryMessage | null 
     kind: 'marker',
     markerType,
     contentMarkdown: markerType === 'compaction'
-      ? 'Context compacted'
-      : 'Cybersecurity safeguard encountered · Beale recovering',
+      ? 'Context Compacted'
+      : markerType === 'epoch'
+        ? 'Resolving Epoch'
+        : 'Cybersecurity safeguard encountered · Beale recovering',
     createdAt: event.createdAt
   };
 }
@@ -576,6 +607,14 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'features.load': { singular: 'Loading Features', plural: (count) => `Loading Features ${count} Times` },
   'features.preview': { singular: 'Previewing a Feature', plural: (count) => `Previewing ${count} Features` },
   'surface.get': { singular: 'Inspecting a Surface', plural: (count) => `Inspecting ${count} Surfaces` },
+  'surface.views': { singular: 'Inspecting Surface Views', plural: (count) => `Inspecting Surface Views ${count} Times` },
+  'surface.search': { singular: 'Searching Surfaces', plural: (count) => `Searching Surfaces ${count} Times` },
+  'surface.query': { singular: 'Searching Surfaces', plural: (count) => `Searching Surfaces ${count} Times` },
+  'surface.breakdown': { singular: 'Inspecting Surface Breakdown', plural: (count) => `Inspecting ${count} Surface Breakdowns` },
+  'surface.recon': { singular: 'Inspecting Surface Recon', plural: (count) => `Inspecting ${count} Surface Recon Views` },
+  'surface.analysis': { singular: 'Inspecting Surface Analysis', plural: (count) => `Inspecting ${count} Surface Analysis Views` },
+  'surface.threat_model': { singular: 'Inspecting a Surface Threat Model', plural: (count) => `Inspecting ${count} Surface Threat Models` },
+  'surface.resources': { singular: 'Inspecting Surface Resources', plural: (count) => `Inspecting ${count} Surface Resource Views` },
   'surface.list': { singular: 'Listing Surfaces', plural: (count) => `Listing Surfaces ${count} Times` },
   'surface.focus': { singular: 'Focusing on a Surface', plural: (count) => `Focusing on ${count} Surfaces` },
   'plugins.load': { singular: 'Loading Plugins', plural: (count) => `Loading Plugins ${count} Times` },
@@ -704,6 +743,14 @@ const STRUCTURED_SINGULAR_TOOL_NAMES = new Set([
   'runbook.run',
   'resource.catalog',
   'surface.get',
+  'surface.views',
+  'surface.search',
+  'surface.query',
+  'surface.breakdown',
+  'surface.recon',
+  'surface.analysis',
+  'surface.threat_model',
+  'surface.resources',
   'surface.list',
   'surface.focus',
   'features.load',
@@ -739,6 +786,23 @@ function commentarySurfaceCallLabel(toolName: string, inputValue: unknown, outpu
     ?? firstStringValue(focusedSurface, ['name'])
     ?? firstStringValue(input, ['name', 'surfaceId']);
   if (toolName === 'surface.get') return name ? `Inspecting surface "${name}"` : 'Inspecting a surface';
+  if (toolName === 'surface.search' || toolName === 'surface.query') {
+    const query = firstStringValue(input, ['query']);
+    return query ? `Searching surfaces for "${query}"` : 'Searching surfaces';
+  }
+  const viewNames: Readonly<Record<string, string>> = {
+    'surface.breakdown': 'breakdown', 'surface.recon': 'recon', 'surface.analysis': 'analysis',
+    'surface.threat_model': 'threat model', 'surface.resources': 'resources'
+  };
+  if (toolName === 'surface.views') {
+    const names = Array.isArray(input.views) ? input.views
+      .filter((view): view is string => typeof view === 'string')
+      .map((view) => viewNames[`surface.${view}`]).filter((view): view is string => Boolean(view)) : [];
+    return names.length > 0
+      ? `Inspecting ${names.join(', ')} for "${name ?? 'a surface'}"`
+      : name ? `Inspecting views for "${name}"` : 'Inspecting surface views';
+  }
+  if (viewNames[toolName]) return name ? `Inspecting ${viewNames[toolName]} for "${name}"` : `Inspecting surface ${viewNames[toolName]}`;
   if (toolName === 'surface.focus') return name ? `Focusing on surface "${name}"` : 'Focusing on a surface';
   if (toolName === 'surface.list') {
     const parentId = firstStringValue(input, ['parentId']);

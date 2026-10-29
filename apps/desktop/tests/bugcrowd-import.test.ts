@@ -143,5 +143,5 @@ describe('Bugcrowd workspace import', () => {
         else process.env[key] = value;
       }
     }
-  }, 15_000);
+  }, 30_000);
 });

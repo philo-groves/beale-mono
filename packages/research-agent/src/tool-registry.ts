@@ -473,6 +473,7 @@ export function createToolObservedEvent(
   options: ResearchToolExecutionContext = {},
 ): ResearchEvent {
   const projectedResult = projectToolResult(result);
+  const surfaceDiagram = observedSurfaceDiagram(projectedResult);
   const fullResultCharacters = serializedContentCharacters(
     createModelToolResultContent(projectedResult, projectedResult.output, false),
   );
@@ -501,8 +502,29 @@ export function createToolObservedEvent(
       ...(projectedResult.rawOutputRef ? { rawOutputRef: projectedResult.rawOutputRef } : {}),
       ...(projectedResult.error ? { error: projectedResult.error } : {}),
       ...(projectedResult.output !== undefined ? { result: projectedResult.output } : {}),
+      ...(surfaceDiagram ? { surfaceDiagram } : {}),
     },
   };
+}
+
+function observedSurfaceDiagram(result: ResearchToolExecutionResult): {
+  source: string; surfaceId: string; surfaceName: string; changeKind?: "created" | "updated";
+} | null {
+  if (result.status !== "complete" || result.action.toolName !== "surface.update") return null;
+  const foundation = isRecord(result.action.input.foundation) ? result.action.input.foundation : null;
+  const threatModel = isRecord(foundation?.threatModel) ? foundation.threatModel : null;
+  const source = threatModel?.diagram;
+  const surfaceId = result.action.input.surfaceId;
+  if (typeof source !== "string" || !source.trim() || source.length > 50_000
+    || typeof surfaceId !== "string" || !surfaceId.trim()) return null;
+  const output = isRecord(result.output) ? result.output : null;
+  const surfaceName = typeof output?.name === "string" && output.name.trim()
+    ? output.name.trim()
+    : typeof result.action.input.name === "string" && result.action.input.name.trim()
+      ? result.action.input.name.trim() : "Surface";
+  const changeKind = output?.diagramChange;
+  return { source, surfaceId, surfaceName,
+    ...(changeKind === "created" || changeKind === "updated" ? { changeKind } : {}) };
 }
 
 export function createToolResultMessage(

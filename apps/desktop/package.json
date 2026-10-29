@@ -1,7 +1,7 @@
 {
   "name": "@beale/desktop",
   "productName": "Beale",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "private": true,
   "license": "MIT",
   "description": "Beale authorized vulnerability research workbench",
@@ -11,7 +11,7 @@
     "postinstall": "pnpm run brand:electron",
     "prestart": "pnpm run brand:electron",
     "start": "electron out/main/index.js",
-    "predev": "pnpm run brand:electron",
+    "predev": "pnpm -w build && pnpm run brand:electron",
     "dev": "electron-vite dev",
     "prepreview": "pnpm run brand:electron",
     "preview": "electron-vite preview",
@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "electron-updater": "6.8.11",
+    "mermaid": "12.2.0",
     "tree-sitter-wasm": "1.1.1",
     "ws": "^8.21.3"
   },

@@ -14,6 +14,7 @@ import {
   resolveStoredResearchProfile,
   resolveStoredResearchWorkspaceBinding,
 } from "../packages/research-agent/dist/index.js";
+import { installResearchDatabaseFactory } from "../packages/research-agent/dist/database.js";
 import * as workspaceTools from "../packages/research-agent/dist/workspace-tools.js";
 
 test("stored workspace binding derives path-stable identity without exposing storage paths", async () => {
@@ -258,6 +259,22 @@ test("stored workspace binding prefers the Beale research subject and redacts cr
     const serializedProfile = JSON.stringify(profile);
     assert.equal(serializedProfile.includes(databasePath), false);
     assert.equal(serializedProfile.includes(profileSourcePath), false);
+
+    let openAttempts = 0;
+    const restoreDatabaseFactory = installResearchDatabaseFactory((path, options) => {
+      openAttempts += 1;
+      if (openAttempts === 1) {
+        throw Object.assign(new Error("Transient SQLite open failure"), { errcode: 14 });
+      }
+      return new DatabaseSync(path, options);
+    });
+    try {
+      const retriedProfile = await resolveStoredResearchProfile({ workspaceRoot, databasePath });
+      assert.equal(retriedProfile.hash, storedProfileHash);
+      assert.equal(openAttempts, 2);
+    } finally {
+      restoreDatabaseFactory();
+    }
 
     const store = new MemoryGraphStore({ workspaceRoot, databasePath });
     try {

@@ -332,12 +332,18 @@ describe('renderer research profile presentation', () => {
       expect(html.slice(browserSection, resourceSection)).toContain('session-summary-divider');
       expect(html).toContain('<span>2 Memories</span>');
       expect(html.indexOf('aria-label="Open Browser Default"')).toBeLessThan(html.indexOf('<span>2 Memories</span>'));
-      expect(html).toContain('<div class="session-memory-type-item"><span>1 Note</span>');
-      expect(html).toContain('<div class="session-memory-type-item"><span>1 Archived Note</span>');
-      expect(html).toContain('<div class="session-memory-type-item"><span>0 References</span>');
+      if (viewSpace === 'session') {
+        expect(html).toContain('class="session-memory-type-overflow" aria-hidden="true" inert=""');
+        expect(html).toContain('class="session-memory-type-toggle" aria-expanded="false"');
+        expect(html).toContain('>Show more</button>');
+      } else {
+        expect(html).toContain('<div class="session-memory-type-item"><span>1 Note</span>');
+        expect(html).toContain('<div class="session-memory-type-item"><span>1 Archived Note</span>');
+        expect(html).toContain('<div class="session-memory-type-item"><span>0 References</span>');
+        expect(html).not.toContain('session-memory-type-toggle');
+        expect(html).not.toContain('session-memory-type-overflow');
+      }
       expect(html).not.toContain('Boring');
-      expect(html).not.toContain('session-memory-type-toggle');
-      expect(html).not.toContain('session-memory-type-overflow');
     }
   });
 

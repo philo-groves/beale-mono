@@ -1,124 +1,114 @@
+<p align="center">
+    <img align="center" width="160" height="160" src="https://github.com/philo-groves/beale-mono/blob/main/apps/desktop/resources/app-icon.png?raw=true">
+</p>
+
+<p align="center">
+    <a href="https://github.com/philo-groves/beale-mono/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
+     • <a href="https://beale.ai/blog/" target="_blank">Blog</a>
+     • <a href="https://beale.ai/docs/" target="_blank">Docs</a>
+     • <a href="https://beale.ai/downloads/" target="_blank">Downloads</a>
+</p>
+
 # Beale
 
-**Not a coding agent; a decoding agent.**
+A decoding agent, now in beta!
 
-![Screenshot](https://i.ibb.co/qL9PDnGt/beale-sc.jpg)
+## Projects
 
-This monorepo contains:
+### App Server
 
-- **Beale Desktop** (`apps/desktop`) — an Electron-based desktop workbench for authorized vulnerability research.
-- **Beale iOS** (`apps/ios`) — a basic native SwiftUI client for connecting to the app-server through tailnet-only Tailscale Serve HTTPS.
-- **Beale research runtime** (`packages/research-agent`, `packages/app-server-runtime`) — the research engine plus its shared protocol and app-server-hosted worker runtime.
-- **App Server** (`app-server`) — the standalone tray-resident app-server host and common control plane for Desktop and iOS.
-- **Integrations** (`integrations`) — first-party client integrations, including the local `beale-codex` Codex plugin.
+The app server (`app-server/`) is the main processing unit of the Beale ecosystem. It contains all business logic of the agent, workspaces, research, permissions, and providers. The app server shares APIs that are consumed by various clients for security research.
 
----
+### Desktop App
 
-## Status
+The desktop app (`apps/desktop/`) is the primary client user interface of Beale; there is no CLI or TUI. It allows for security research understanding and steering both locally and remotely. Features usually arrive in the desktop app before other clients.
 
-**Very early stage / pre-alpha.**
+### iOS App
 
-The project is under heavy development. The agent is not ready for real use; expect incomplete, unstable behavior and frequent change. Feedback and ideas are welcome, but large changes are best discussed in an issue first.
+The iOS app (`apps/ios/`) is a secondary client user interface and it is a work in progress. It is not yet available on the app store, but may be installed and used through developer tools. The iOS app focus is security research and notifications on the go.
 
----
+## Top Features
 
-## Repository Layout
+Beale has many features, so only the top features are mentioned here. See https://beale.ai/docs/ for additional information.
 
-| Path | Contents |
-| --- | --- |
-| `apps/desktop` | `@beale/desktop` — Beale Electron workbench (React + TypeScript, electron-vite) |
-| `apps/ios` | Native SwiftUI app-server client and Xcode project |
-| `packages/app-server-runtime` | Shared protocol, app-server session runtime, and optional app-server client |
-| `app-server` | `@beale/app-server` — standalone tray-resident app-server execution host and control plane |
-| `app-server/resources/harness-features` | Built-in harness feature manifests and Introspection runtime |
-| `managed-plugins` | Portable Agent Plugin packages, including Meta Skills |
-| `integrations/beale-codex` | Codex plugin with a Beale research skill and local stdio MCP server |
-| `packages/research-agent` | `@beale/research-agent` — workspace context, durable memory, tools, and the Pi-backed agent runtime |
-| `tests` | app-server test suite (`node:test`, runs against built packages) |
-| `patches` | pnpm patches for Pi dependencies |
-| `planning` | app-server architecture notes |
+### Permissions
 
-Component documentation:
+A multi-layer permission model is enforced through Beale. A scope is maintained in each workspace for the agent to work within. An auto-review feature flags potentially harmful commands and those outside of scope. A guardian feature fully inspects flagged commands for a blocking decision.
 
-- [`apps/desktop/README.md`](apps/desktop/README.md) — Beale product overview, architecture, and execution notes.
-- [`apps/ios/README.md`](apps/ios/README.md) — iOS build, Tailscale Serve, authentication, and security notes.
-- [`packages/app-server-runtime/README.md`](packages/app-server-runtime/README.md) — shared app-server host-runtime and protocol boundary.
-- [`app-server/README.md`](app-server/README.md) — App Server control surface and session transport.
-- [`planning/ARCHITECTURE.md`](planning/ARCHITECTURE.md) — app-server runtime architecture and ownership boundaries.
+### Collaboration
 
----
+Multi-provider support is central to the harness; default provider support includes OpenAI, Anthropic, xAI, and Open Router. Custom providers may also be imported. Each research session allows for configuration of main + subagent models and their roles.
 
-## How the Pieces Fit Together
+### Fleet
 
-- **Beale is the trusted host harness.** It owns workspace setup, authorization recording, provider credentials, tool-family and side-effect grants, shell policy, and presentation.
-- **The Beale research runtime is the research engine.** It owns context compilation, tool execution, durable-knowledge semantics, orchestration, live events, and flow captures. Records retain workspace, subject, and research-profile ownership.
-- **Integration and runtime storage are server-mediated.** Desktop, iOS, and hosted research workers use the Beale app-server. Only the resident app-server process opens or writes the user-global SQLite database at `~/.beale/memory.sqlite`; schema-v2 workspace research is authoritative in workspace files, while SQLite supplies session state and a synchronized query index. No app-server CLI process or private loopback WebSocket sits between the server and engine.
-- **The App Server is the client-neutral host.** It fans worker events out over per-session authenticated WebSockets and accepts correlated controls from multiple attached clients.
-- **Fleet VM execution.** A workspace's Targets tab enables direct-run and clone choices for configured Tart or Hyper-V VMs. The primary app-server keeps the research session and storage on the primary machine, while shell commands execute in the selected VM over SSH. A guest app-server is not installed for these sessions.
-- **Fleet browsers.** The global Fleet settings detect installed CDP-compatible browsers on Windows and macOS, with the In-Agent Browser first. A workspace can enable browsers as session targets. An external browser target launches a separate profile for that session.
+Easily work across app servers, browsers, and virtual machines with a central configuration. One desktop or iOS app may connect to several app servers. All cross-device networking with an app server is protected with Tailscale + operator token enforcement.
 
-Workspace memory is independently selectable in Desktop's Workspace Overview:
+### Surfaces
 
-- **Enabled** uses one canonical research system: concise knowledge memory, a stable claim ledger projected as Leads and Findings, reversible duplicate coalescing, durable runbooks, and one workspace-history search across those records.
-- **Disabled** removes memory behavior from new sessions while retaining stored data.
+A hierarchy of surfaces is maintained for each workspace. Beale ranks these surfaces, then explores each with recon, threat modeling, and analysis. Each bit of persistent knowledge is categorized under a surface.
 
-Beale runs authorized security research. Findings enter durable storage after direct observation under one security classification (`security.vulnerability`). Reachability, exploit paths, and impact stay with the finding as evidence develops. Legacy v1/v2/shadow memory selections migrate to Enabled, and legacy claim-shaped memory rows remain available for compatibility without exposing proposed leads as new findings.
+### Findings
 
-During development, Desktop discovers and launches the workspace app-server. `BEALE_APP_SERVER_COMMAND` and related environment variables override this for packaged builds and custom setups.
+Security findings are tracked in a column-based board, making it easy to understand the state of research. Each finding moves through states: lead, observed, reproduced, and verified. Verified findings are rated for CVSS 3.1 impact.
 
-### Codex integration
+### Memories
 
-Install `integrations/beale-codex` as a local Codex plugin and start Beale or the app-server before using it. The plugin reads the private `~/.beale/app-server.json` discovery record internally, uses its loopback endpoint by default, and exposes path-free workspace/session controls plus the active research profile's durable tools. Codex-native filesystem, terminal, browser, computer-use, and approval behavior remains the execution boundary; research results written through the plugin immediately enter Beale's canonical app-server storage.
+A security-focused memory system helps to align research and enrich context. Several memory types are available. Invariants, sinks, and mitigations assist with surface threat modeling, while trajectories assist with their analysis.
 
----
+### Runbooks
 
-## Research workspaces
+A runbook is a Beale-managed Jupyter notebook. Supporting 40+ programming languages and providing step-based execution, runbooks are ideal for security research because they allow procedures to easily be resused, understood, and documented along the way.
 
-New Beale workspaces use one dedicated research directory. Creation does not initialize Git or require Git on the app-server host. Existing workspace Git history remains intact and can be managed by the operator. Existing workspaces can also be opened as reference material without automatic layout conversion.
+### Browser
 
-The root holds `AGENTS.md`, optional `AGENTS.override.md`, `README.md`, and `workspace.json`. Research lives in `investigations/`, `runbooks/`, `reports/`, `evidence/`, `references/`, `memories/`, `claims/`, and `traces/`. Keep candidate code and fixtures with their investigation, and reusable procedures with their runbook. Source repositories stay in the user-global repository store. `scratch/` holds disposable session work and `cache/` holds rebuildable resources. A direct filesystem guard reactivates the root agent every turn until unexpected top-level entries are classified into an approved directory.
+A built-in browser allows Beale to perform web-based research and obtain information when needed. Each browser tab is labeled with its own self-contained context, allowing the agent to manage multiple test account sessions concurrently.
 
-New schema-v2 workspaces declare `researchAuthority: "files"`. Claims, memory Markdown, notebooks, reports, scope records, evidence manifests, and session summaries are primary workspace records. App-server keeps a derived SQLite query index synchronized through the same typed validators used by research tools. Publication metadata and recovery copies live under `.beale/publication/`; existing workspaces retain their prior metadata location. Schema-v1 workspaces remain database-authoritative and can still create an explicit compatibility export.
+### Plugins
 
-Research sessions no longer require or create Git checkpoints. Typed research mutations refresh the canonical file publication and derived query index without a Git commit. `workspace.project sync` explicitly reconciles supported direct edits. Direct imports support claim prose, memory prose, report content, and existing runbook cell sources; evidence, ownership, execution results, and claim status cannot be forged through file edits. Runbook source imports create a new content revision. Raw evidence is retained under `evidence/raw/` with verified hashes and full event exports are paged JSONL under `traces/<session-id>/`.
+Beale implements the Agent Plugins 1.0 standard, meaning you can bring the plugins from your other agents, or create your own with a known format. Several built-in optional plugins are offered for common use cases.
 
-`workspace.search` defaults to the active workspace. Its input schema advertises the exact IDs and names of registered workspaces that app-server has verified share the active research Subject, even when a schema-v2 reference has released its derived SQLite rows. Selecting one searches it read-only and omits its host path from results. `history.search scope=subject` separately discovers compact prior canonical records currently loaded in the query index.
+## Installation
 
-Operators can use `workspace.project release-index` to remove rebuildable research rows from SQLite while retaining sessions, authorization scope, workspace/session bindings, and runtime coordination. `workspace.project rebuild-index` restores the query index from hash-validated canonical files, and ordinary operations do the same automatically when the index is released. Releasing rows makes SQLite pages reusable but does not run `VACUUM` or promise an immediate reduction in the database file's physical size.
+### Install from Source
 
-## Development
-
-Requirements: Node.js >= 22.19.0 and pnpm 11 (see `packageManager` in `package.json`).
-
-### Install from source (macOS and Windows)
-
-Install Node.js 22.19.0 or newer, Git, and pnpm 11.7.0 first. The source installer clones the `release` branch, installs locked dependencies, builds the runtime and Desktop, and creates a launcher. Review [`website/beale-source-installer/install.mjs`](website/beale-source-installer/install.mjs) before running it.
-
-```sh
+```
 curl -fsSL https://beale.ai/i | node --input-type=module -
 ```
 
-On Windows, run this in PowerShell with `curl.exe` in place of `curl`. The default location is `~/Beale` on macOS or `%USERPROFILE%\Beale` on Windows; pass `--dir <empty-directory>` after the final `-` to choose another location. Start with `Beale.command` or `Beale.cmd` in that directory. The installer refuses to change a nonempty directory or an existing installation. This source flow requires the build toolchain and does not provide an automatic updater.
+Additional Notes:
+- On Windows, run this in PowerShell with curl.exe in place of curl.
+- The default location is `~/Beale` on macOS or `%USERPROFILE%\Beale` on Windows; pass `--dir <empty-directory>` after the final `-` to choose another location.
+- Start with `Beale.command` or `Beale.cmd` in that directory.
+- The installer refuses to change a nonempty directory or an existing installation. This source flow requires the build toolchain and does not provide an automatic updater.
 
-```sh
+### Install from Web
+
+An standard installer for each available operating system is located at https://beale.ai/downloads/
+
+## Development
+
+Requirements:
+- Node.js >= 22.19.0
+- pnpm 11
+
+### Install Dependencies
+
+```
 pnpm install
 ```
 
-Dependency build scripts are denied by default; `electron` is explicitly allowed because it needs native install steps. See `pnpm-workspace.yaml`.
+### Quick Start
 
-### Research runtime and app-server
-
-```sh
+```
+pnpm run dev:desktop  # start the app-server and desktop app in dev mode
 pnpm build            # tsc -b across runtime packages and app-server
 pnpm check            # typecheck only
 pnpm start            # start the app-server tray host
 ```
 
-The app-server is the research runtime's execution host. Any retained command-line adapter is only a client of its authenticated `/v1/operations` surface.
+### Test Tiers
 
-### Test tiers
-
-```sh
+```
 pnpm test                         # default fast monorepo gate
 pnpm test:integration             # hosted-worker and real-session Desktop coverage
 pnpm test:all                     # both tiers
@@ -128,30 +118,18 @@ pnpm test:runtime:fast            # isolated research-runtime tests
 pnpm test:runtime:integration     # hosted-runtime integration cases
 ```
 
-Keep isolated logic, protocol, persistence, and host-policy checks in the fast tier. Use the integration tier when a hosted worker or Desktop/app-server session boundary is essential.
-
-The tier split and integration consolidation produced the following same-machine Windows timings on 2026-08-22:
-
-| Suite | Before | After | Change |
-| --- | ---: | ---: | ---: |
-| Desktop integration | 436.09 s | 125.53 s | 71% faster |
-| Desktop research-profile integration | 259.58 s | 65.38 s | 75% faster |
-| Profile snapshot replacement case | 82.50 s | 29.16 s | 65% faster |
-
 ### App Server
 
-```sh
+```
 pnpm build            # built together with the packages by tsc -b
 pnpm --filter @beale/app-server start            # tray host (Windows, macOS)
 pnpm --filter @beale/app-server start:headless   # plain Node process
 pnpm test:app-server  # node:test suite against the hosted runtime
 ```
 
-See `app-server/README.md` for configuration, the discovery record at `~/.beale/app-server.json`, and the operator/per-session token model.
+### Desktop App
 
-### Beale Desktop (apps/desktop)
-
-```sh
+```
 pnpm --filter @beale/desktop dev          # Electron dev mode
 pnpm --filter @beale/desktop build        # typecheck + production bundle
 pnpm --filter @beale/desktop start        # run the built app
@@ -159,22 +137,14 @@ pnpm --filter @beale/desktop typecheck
 pnpm --filter @beale/desktop test         # unit tests (vitest)
 ```
 
-The desktop integration tests (`pnpm --filter @beale/desktop test:integration`) exercise real app-server sessions and require the packages to be built first. `pnpm --filter @beale/desktop test:fast` is an explicit alias for the unit tier.
+### Releases
 
-Live provider tests remain opt-in because they require local credentials.
-
-Version 0.9.3 is the current release candidate baseline. The release procedure, CI gates, data backup, signing setup, and tag rules are in [`RELEASING.md`](RELEASING.md). The tagged Release workflow builds signed macOS and Windows installers when the release environment has the required credentials.
-
----
+The release procedure, CI gates, data backup, signing setup, and tag rules are in [RELEASING.md](https://github.com/philo-groves/beale-mono/blob/main/RELEASING.md). The tagged Release workflow builds signed macOS and Windows installers when the release environment has the required credentials.
 
 ## Safety
 
-This tool is intended **only** for authorized vulnerability research and testing. Always respect scope, legal boundaries, and responsible disclosure practices. Beale runs with the current user's host privileges; operator-managed VMs, containers, firewalls, and proxies are the isolation boundary.
-
-Development rules, terminology, and security-model invariants live in [`AGENTS.md`](AGENTS.md). Product changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
-
----
+This tool is intended only for authorized vulnerability research and testing. Always respect scope, legal boundaries, and responsible disclosure practices.
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See [LICENSE](https://github.com/philo-groves/beale-mono/blob/main/LICENSE).

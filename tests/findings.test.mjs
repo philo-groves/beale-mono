@@ -805,7 +805,8 @@ test("claim schema initializes before a workspace has any knowledge-memory table
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM app_server_research_claims").get().count, 0);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'security_tracking_json'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'rating'").get().count, 1);
-      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 9);
+      assert.equal(database.prepare("SELECT MAX(version) AS version FROM schema_migrations WHERE component = 'app_server_research_claims'").get().version, 10);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'surface_id'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'steps_to_reproduce'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'session_id'").get().count, 1);
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'operator_override'").get().count, 1);
@@ -817,7 +818,9 @@ test("claim schema initializes before a workspace has any knowledge-memory table
     try {
       oldDatabase.exec("ALTER TABLE app_server_claim_transitions DROP COLUMN operator_override");
       oldDatabase.exec("ALTER TABLE app_server_research_claims DROP COLUMN steps_to_reproduce");
-      oldDatabase.exec("DELETE FROM schema_migrations WHERE component = 'app_server_research_claims' AND version IN (8, 9)");
+      oldDatabase.exec("DROP INDEX IF EXISTS app_server_research_claims_surface_idx");
+      oldDatabase.exec("ALTER TABLE app_server_research_claims DROP COLUMN surface_id");
+      oldDatabase.exec("DELETE FROM schema_migrations WHERE component = 'app_server_research_claims' AND version IN (8, 9, 10)");
     } finally {
       oldDatabase.close();
     }
@@ -826,6 +829,7 @@ test("claim schema initializes before a workspace has any knowledge-memory table
     try {
       assert.equal(upgraded.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_claim_transitions') WHERE name = 'operator_override'").get().count, 1);
       assert.equal(upgraded.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'steps_to_reproduce'").get().count, 1);
+      assert.equal(upgraded.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('app_server_research_claims') WHERE name = 'surface_id'").get().count, 1);
     } finally {
       upgraded.close();
     }

@@ -8,6 +8,8 @@ export interface CustomProviderDefinition {
   contextWindow: number;
   maxTokens: number;
   models: { id: string; name: string }[];
+  /** Enable OpenAI-compatible reasoning controls, with DeepSeek wire semantics for DeepSeek model IDs. */
+  reasoning?: boolean;
 }
 
 const ID_PATTERN = /^custom-[a-z0-9][a-z0-9-]{0,63}$/u;
@@ -44,7 +46,8 @@ export function normalizeCustomProviderDefinition(value: unknown): CustomProvide
     throw new Error("Invalid custom provider token limits.");
   }
   return { id: value.id, name: value.name.trim(), baseUrl: url.href.replace(/\/$/u, ''),
-    contextWindow: Number(contextWindow), maxTokens: Number(maxTokens), models };
+    contextWindow: Number(contextWindow), maxTokens: Number(maxTokens), models,
+    ...(value.reasoning === true ? { reasoning: true } : {}) };
 }
 
 export function readCustomProviderDefinitions(value = process.env.APP_SERVER_CUSTOM_PROVIDERS): CustomProviderDefinition[] {
@@ -90,21 +93,42 @@ export async function discoverCustomProviderModels(
   });
 }
 
+export function createCustomProviderModel(
+  definition: CustomProviderDefinition,
+  model: { id: string; name: string },
+): Model<'openai-completions'> {
+  const reasoning = definition.reasoning === true;
+  const deepSeek = reasoning && model.id.toLowerCase().includes('deepseek');
+  return {
+    ...model,
+    provider: definition.id,
+    api: 'openai-completions',
+    baseUrl: definition.baseUrl,
+    reasoning,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: definition.contextWindow,
+    maxTokens: definition.maxTokens,
+    ...(deepSeek ? {
+      thinkingLevelMap: { minimal: null, low: 'low', medium: null, high: 'high', max: 'max' } as const,
+    } : {}),
+    compat: {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: reasoning,
+      ...(deepSeek ? {
+        maxTokensField: 'max_tokens' as const,
+        requiresReasoningContentOnAssistantMessages: true,
+        thinkingFormat: 'deepseek' as const,
+      } : {}),
+    },
+  };
+}
+
 export function registerCustomProviders(models: MutableModels, definitions = readCustomProviderDefinitions()): void {
   for (const definition of definitions) {
     const keyVariable = customProviderKeyEnvironmentVariable(definition.id);
-    const providerModels: Model<'openai-completions'>[] = definition.models.map((model) => ({
-      ...model,
-      provider: definition.id,
-      api: 'openai-completions',
-      baseUrl: definition.baseUrl,
-      reasoning: false,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: definition.contextWindow,
-      maxTokens: definition.maxTokens,
-      compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false },
-    }));
+    const providerModels = definition.models.map((model) => createCustomProviderModel(definition, model));
     models.setProvider(createProvider({
       id: definition.id,
       name: definition.name,

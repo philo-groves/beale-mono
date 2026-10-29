@@ -91,6 +91,153 @@ test('Fleet shell routes authorized commands through the configured remote trans
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('shell recovers a missing host rg before returning the tool result', { skip: process.platform === 'win32' }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beale-local-rg-example-'));
+  const previousPath = process.env.PATH;
+  const reviews = [];
+  try {
+    await writeFile(join(root, 'fixture.txt'), 'synthetic needle\nother line\n');
+    process.env.PATH = root;
+    const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root,
+      authorize: async (request) => { reviews.push(request); return approvedAuthorization(request); } })]);
+    const direct = await registry.execute({ id: 'shell_rg_direct', actionClass: 'search', toolName: 'shell.run',
+      input: { utility: 'rg', args: ['-n', 'needle', 'fixture.txt'] } });
+    assert.equal(direct.result.status, 'complete');
+    assert.equal(direct.result.output.stdout.trim(), '1:synthetic needle');
+    assert.equal(direct.result.output.utility, 'rg');
+    assert.doesNotMatch(JSON.stringify(direct.result), /not available|command not found/);
+    const noMatches = await registry.execute({ id: 'shell_rg_no_matches', actionClass: 'search', toolName: 'shell.run',
+      input: { utility: 'rg', args: ['absent-example', 'fixture.txt'] } });
+    assert.equal(noMatches.result.status, 'complete');
+    assert.equal(noMatches.result.output.exitCode, 1);
+
+    const pipeline = await registry.execute({ id: 'shell_rg_pipeline', actionClass: 'search', toolName: 'shell.run',
+      input: { command: "rg -n needle fixture.txt | { IFS= read -r line; printf '%s\\n' \"$line\"; }" } });
+    assert.equal(pipeline.result.status, 'complete');
+    assert.equal(pipeline.result.output.stdout.trim(), '1:synthetic needle');
+    assert.equal(pipeline.result.output.stderr, '');
+    const pipedSearch = await registry.execute({ id: 'shell_rg_piped_search', actionClass: 'search', toolName: 'shell.run',
+      input: { command: "printf 'synthetic needle\\n' | rg needle" } });
+    assert.equal(pipedSearch.result.status, 'complete');
+    assert.equal(pipedSearch.result.output.stdout.trim(), 'synthetic needle');
+    assert.equal(pipedSearch.result.output.stderr, '');
+    assert.equal(reviews.length, 4, 'recovery stays inside each approved shell call');
+
+    const optionsPath = join(root, 'shell-options.json');
+    await writeFile(optionsPath, JSON.stringify({ schemaVersion: 1, defaultConcurrency: 2,
+      utilities: { rg: 0 }, leaseDirectory: join(root, 'blocked-leases') }));
+    const blocked = createResearchToolRegistry([createShellTool({ workspaceRoot: root,
+      shellOptionsPath: optionsPath, authorize: allowShell })]);
+    const disabled = await blocked.execute({ id: 'shell_rg_disabled', actionClass: 'search', toolName: 'shell.run',
+      input: { utility: 'rg', args: ['needle', 'fixture.txt'] } });
+    assert.equal(disabled.result.status, 'error');
+    assert.match(disabled.result.summary, /disabled by the harness-wide Shell Options policy/);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('shell retries a simple command after a missing-rg error without exposing the first failure', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beale-local-rg-retry-example-'));
+  const previousPath = process.env.PATH;
+  try {
+    await writeFile(join(root, 'fixture.txt'), 'synthetic needle\n');
+    await writeFile(join(root, 'rg'), '#!/bin/sh\nprintf "rg: command not found\\n" >&2\nexit 127\n', { mode: 0o755 });
+    process.env.PATH = root;
+    const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root, authorize: allowShell })]);
+    const result = await registry.execute({ id: 'shell_rg_retry', actionClass: 'search', toolName: 'shell.run',
+      input: { command: 'rg -n needle fixture.txt' } });
+    assert.equal(result.result.status, 'complete');
+    assert.equal(result.result.output.stdout.trim(), '1:synthetic needle');
+    assert.equal(result.result.output.stderr, '');
+    assert.doesNotMatch(JSON.stringify(result.result), /command not found/);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('shell recovers a missing host ipsw from the verified local cache before returning the result', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beale-local-ipsw-example-'));
+  const previousPath = process.env.PATH;
+  const previousHome = process.env.HOME;
+  try {
+    const directory = join(root, '.beale', 'tools', 'ipsw', 'v3.1.739', `${process.platform}-${process.arch}`);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'ipsw'), '#!/bin/sh\nprintf "synthetic ipsw %s\\n" "$1"\n', { mode: 0o755 });
+    await writeFile(join(directory, 'LICENSE'), 'synthetic license');
+    process.env.HOME = root;
+    process.env.PATH = root;
+    const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root, authorize: allowShell })]);
+    const direct = await registry.execute({ id: 'shell_ipsw_direct', actionClass: 'inspect', toolName: 'shell.run',
+      input: { utility: 'ipsw', args: ['version'] } });
+    assert.equal(direct.result.status, 'complete');
+    assert.equal(direct.result.output.stdout.trim(), 'synthetic ipsw version');
+    assert.equal(direct.result.output.utility, 'ipsw');
+    assert.doesNotMatch(JSON.stringify(direct.result), /not available|command not found/u);
+    const pipeline = await registry.execute({ id: 'shell_ipsw_pipeline', actionClass: 'inspect', toolName: 'shell.run',
+      input: { command: "ipsw version | { IFS= read -r line; printf '%s\\n' \"$line\"; }" } });
+    assert.equal(pipeline.result.status, 'complete');
+    assert.equal(pipeline.result.output.stdout.trim(), 'synthetic ipsw version');
+    assert.equal(pipeline.result.output.stderr, '');
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('shell recovers missing host jq, fd, and opengrep without exposing the initial missing-command result', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beale-local-portable-tools-example-'));
+  const previousPath = process.env.PATH;
+  const previousHome = process.env.HOME;
+  try {
+    for (const [name, version, licenses] of [
+      ['jq', '1.8.2', ['COPYING']],
+      ['fd', '10.5.0', ['LICENSE-MIT', 'LICENSE-APACHE']],
+      ['opengrep', '1.33.0', ['LICENSE']],
+    ]) {
+      const directory = join(root, '.beale', 'tools', name, `v${version}`, `${process.platform}-${process.arch}`);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, name), `#!/bin/sh\nprintf 'synthetic ${name} %s\\n' "$1"\n`, { mode: 0o755 });
+      for (const license of licenses) await writeFile(join(directory, license), `synthetic ${license}`);
+    }
+    process.env.HOME = root;
+    process.env.PATH = root;
+    const registry = createResearchToolRegistry([createShellTool({ workspaceRoot: root, authorize: allowShell })]);
+    for (const name of ['jq', 'fd', 'opengrep']) {
+      const direct = await registry.execute({ id: `shell_${name}_direct`, actionClass: 'inspect', toolName: 'shell.run',
+        input: { utility: name, args: ['--version'] } });
+      assert.equal(direct.result.status, 'complete');
+      assert.equal(direct.result.output.stdout.trim(), `synthetic ${name} --version`);
+      assert.equal(direct.result.output.utility, name);
+      assert.doesNotMatch(JSON.stringify(direct.result), /not available|command not found/u);
+      const pipeline = await registry.execute({ id: `shell_${name}_pipeline`, actionClass: 'inspect', toolName: 'shell.run',
+        input: { command: `${name} --version | { IFS= read -r line; printf '%s\\n' "$line"; }` } });
+      assert.equal(pipeline.result.status, 'complete');
+      assert.equal(pipeline.result.output.stdout.trim(), `synthetic ${name} --version`);
+      assert.equal(pipeline.result.output.stderr, '');
+    }
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('one shell tool routes each command to its selected target', async () => {
   const root = await mkdtemp(join(tmpdir(), 'beale-multi-target-shell-'));
   try {

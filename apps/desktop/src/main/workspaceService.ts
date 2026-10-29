@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { bundledPluginsRequiredByResearchKit, composeResearchPromptWithContext, customProviderKeyEnvironmentVariable, discoverCustomProviderModels, isManagedToolPluginId, MANAGED_TOOL_PLUGINS, normalizeCustomProviderDefinition, type ResearchPluginCatalogEntry } from '@beale/research-agent';
+import { bundledPluginsRequiredByResearchKit, composeResearchPromptWithContext, createCustomProviderModel, customProviderKeyEnvironmentVariable, discoverCustomProviderModels, getSupportedThinkingLevels, isManagedToolPluginId, MANAGED_TOOL_PLUGINS, normalizeCustomProviderDefinition, sourceRepositoryCheckoutPath, type ResearchPluginCatalogEntry } from '@beale/research-agent';
 import { WORKSPACE_PRIMARY_DIRECTORY_MISSING_MESSAGE } from '../shared/ipc';
 import { fleetBrowserViewerTargetId } from '../shared/fleet';
 import { findingRevisionContext } from './findingRevisionContext';
@@ -846,7 +846,7 @@ export class WorkspaceService {
     return this.getWorkspaceRegistry().setDefaultProviderId(providerId);
   }
 
-  public async saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }): Promise<ProviderSettings> {
+  public async saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }): Promise<ProviderSettings> {
     const id = input.id ?? `custom-${randomUUID()}` as const;
     const existing = this.getProviderSettings().customProviders?.find((provider) => provider.id === id);
     if (input.id && !existing) throw new Error('Unknown custom provider.');
@@ -855,20 +855,27 @@ export class WorkspaceService {
     if (existing && !apiKey) this.providerCredentials.unlockApiKeys([id]);
     const effectiveKey = apiKey ?? process.env[customProviderKeyEnvironmentVariable(id)];
     const models = await discoverCustomProviderModels(input.baseUrl, effectiveKey);
+    const reasoning = input.reasoning ?? (existing?.reasoning === true);
     const definition = normalizeCustomProviderDefinition({ id, name: input.name, baseUrl: input.baseUrl,
       contextWindow: input.contextWindow ?? existing?.contextWindow,
-      maxTokens: input.maxTokens ?? existing?.maxTokens, models }) as CustomProviderDefinition;
+      maxTokens: input.maxTokens ?? existing?.maxTokens, models,
+      ...(reasoning ? { reasoning: true } : {}) }) as CustomProviderDefinition;
     if (apiKey) this.providerCredentials.setApiKey(id, apiKey);
     const registry = this.getWorkspaceRegistry();
     registry.saveCustomProvider(definition);
     const currentDefaults = registry.getProviderSettings().modelDefaults[id];
     const available = new Set(models.map((model) => model.id));
+    const largeModel = models.find((model) => model.id === currentDefaults?.largeModel) ?? models[0]!;
+    const effortLevels = getSupportedThinkingLevels(createCustomProviderModel(definition, largeModel));
+    const desiredEffort = currentDefaults && effortLevels.includes(currentDefaults.reasoningEffort)
+      ? currentDefaults.reasoningEffort
+      : reasoning ? 'high' : 'off';
     if (!currentDefaults || !available.has(currentDefaults.largeModel) || !available.has(currentDefaults.smallModel)
-      || currentDefaults.reasoningEffort !== 'off') {
+      || currentDefaults.reasoningEffort !== desiredEffort) {
       registry.setProviderModelDefaults(id, {
         largeModel: currentDefaults && available.has(currentDefaults.largeModel) ? currentDefaults.largeModel : models[0]!.id,
         smallModel: currentDefaults && available.has(currentDefaults.smallModel) ? currentDefaults.smallModel : models[0]!.id,
-        reasoningEffort: 'off'
+        reasoningEffort: desiredEffort
       });
     }
     await this.options.providerEnvironmentChanged?.();
@@ -1085,10 +1092,10 @@ export class WorkspaceService {
     return invokeAppServerOperation({ operation: 'fleet.remote_workspace_details', input: { serverId, workspaceId } });
   }
 
-  public getWorkspaceSurfaceMap(workspaceId: string): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceSurfaceMap> {
+  public getWorkspaceSurfaceMap(workspaceId: string, sessionId?: string): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceSurfaceMap> {
     const runtime = this.getForegroundRuntime();
     if (!runtime || runtime.db.getWorkspaceId() !== workspaceId) throw new Error('The workspace is not open.');
-    return invokeAppServerOperation({ operation: 'workspace.surface_map', input: { workspaceId } }).then(decodeBealeWorkspaceSurfaceMap);
+    return invokeAppServerOperation({ operation: 'workspace.surface_map', input: { workspaceId, ...(sessionId ? { sessionId } : {}) } }).then(decodeBealeWorkspaceSurfaceMap);
   }
 
   public async getResearchTrack(workspaceId: string, serverId?: string): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrack | null> {
@@ -2762,7 +2769,16 @@ export class WorkspaceService {
       providerId: provider.id,
       providerName: provider.name,
       defaultSmallModel: settings.modelDefaults[provider.id]?.smallModel ?? provider.models[0]?.id,
-      models: provider.models.map((model) => ({ ...model, reasoning: false, effortLevels: ['off'], contextWindow: provider.contextWindow, maxTokens: provider.maxTokens }))
+      models: provider.models.map((model) => {
+        const definitionModel = createCustomProviderModel(provider, model);
+        return {
+          ...model,
+          reasoning: definitionModel.reasoning,
+          effortLevels: getSupportedThinkingLevels(definitionModel),
+          contextWindow: provider.contextWindow,
+          maxTokens: provider.maxTokens
+        };
+      })
     }));
     return [...builtins, ...custom];
   }
@@ -5173,15 +5189,22 @@ export class WorkspaceService {
   }
 
   private snapshotForRuntime(runtime: WorkspaceRuntime): WorkspaceSnapshot {
-    const fingerprint = [
+    const baseFingerprint = [
       appServerStorageFingerprint(this.appServerStorage(runtime)),
       fileFingerprint(join(runtime.workspacePath, WORKSPACE_DESCRIPTION_FILE)),
       runtime.memoryBackend
     ].join('|');
     const cached = this.snapshotCache.get(runtime.workspacePath);
+    const detail = { workspace: basename(runtime.workspacePath) };
+    const storedScope = cached?.fingerprint.startsWith(`${baseFingerprint}|`)
+      ? cached.snapshot.activeScope
+      : this.profileMainTiming('snapshot.activeScope', detail, () => runtime.db.getActiveScope());
+    const repositoryCheckouts = repositoryCheckoutsForScope(
+      storedScope.assets,
+      this.options.repositoryStoreDirectory ?? defaultSourceRepositoryStoreDirectory(this.options.workspaceRegistryDirectory)
+    );
+    const fingerprint = `${baseFingerprint}|${JSON.stringify(repositoryCheckouts)}`;
     if (cached?.fingerprint === fingerprint) return cached.snapshot;
-    const detail = { workspace: runtime.workspacePath.split(/[\\/]/).pop() ?? 'workspace' };
-    const storedScope = this.profileMainTiming('snapshot.activeScope', detail, () => runtime.db.getActiveScope());
     const activeScope: WorkspaceScopeVersion = {
       ...storedScope,
       descriptionMarkdown: readWorkspaceDescription(runtime.workspacePath),
@@ -5193,6 +5216,7 @@ export class WorkspaceService {
       openAi: this.profileMainTiming('snapshot.openAiStatus', detail, () => this.openAiStatusWithStoredCredential()),
       executor: this.profileMainTiming('snapshot.executorStatus', detail, () => hostExecutionStatus()),
       activeScope,
+      repositoryCheckouts,
       workspaceRules: this.profileMainTiming('snapshot.workspaceRules', detail, () => runtime.db.listWorkspaceRules()),
       researchSubject: this.profileMainTiming('snapshot.researchSubject', detail, () => runtime.db.getResearchSubject()),
       researchProfile: runtime.researchProfile,
@@ -6352,6 +6376,46 @@ function repositoryResourceUrl(asset: Pick<ScopeAssetInput, 'kind' | 'value' | '
 function repositoryCheckoutExists(asset: Pick<ScopeAssetInput, 'kind' | 'value' | 'attributes'>): boolean {
   const directory = repositoryClonedDirectory(asset) ?? (isAbsolute(asset.value) ? asset.value : null);
   return Boolean(directory && existsSync(join(directory, '.git')));
+}
+
+export function repositoryCheckoutsForScope(assets: readonly ScopeAsset[], repositoryStoreDirectory: string): Record<string, string> {
+  const checkouts: Record<string, string> = {};
+  for (const asset of assets) {
+    if (asset.kind !== 'repo') continue;
+    const recordedPath = repositoryClonedDirectory(asset) ?? (isAbsolute(asset.value) ? asset.value : null);
+    if (recordedPath && isAbsolute(recordedPath) && existsSync(join(recordedPath, '.git'))) {
+      checkouts[asset.id] = recordedPath;
+      continue;
+    }
+    const source = typeof asset.attributes?.repositoryUrl === 'string' && asset.attributes.repositoryUrl.trim()
+      ? asset.attributes.repositoryUrl : asset.value;
+    let repositoryUrl: URL;
+    try {
+      repositoryUrl = new URL(source);
+    } catch {
+      continue;
+    }
+    if (repositoryUrl.protocol !== 'https:' && repositoryUrl.protocol !== 'http:') continue;
+    const managedPath = sourceRepositoryCheckoutPath(repositoryUrl.href, '', repositoryStoreDirectory);
+    const managedParent = dirname(managedPath);
+    if (existsSync(join(managedPath, '.git'))) {
+      checkouts[asset.id] = managedPath;
+      continue;
+    }
+    if (!existsSync(managedParent)) continue;
+    let checkout: string | undefined;
+    try {
+      checkout = readdirSync(managedParent, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map((entry) => join(managedParent, entry.name))
+        .sort()
+        .find((path) => existsSync(join(path, '.git')));
+    } catch {
+      continue;
+    }
+    if (checkout) checkouts[asset.id] = checkout;
+  }
+  return checkouts;
 }
 
 function preferredRepositoryResourceId(assets: readonly ScopeAsset[], repositoryUrl: string): string | null {

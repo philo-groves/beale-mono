@@ -2411,10 +2411,12 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   const liveEvents = [];
   const calls = [];
   const tool = createFixtureInspectTool(calls);
+  const trackTool = { ...tool, descriptor: { ...tool.descriptor,
+    name: "track.checkpoint", transportName: "track_checkpoint", description: "Synthetic lead checkpoint." } };
   const result = await runResearchAgent({
     prompt: "Delegate a bounded parser review, then incorporate the result.",
     agentInstructions: WORKSPACE_AGENT_INSTRUCTIONS,
-    tools: [tool.descriptor],
+    tools: [tool.descriptor, trackTool.descriptor],
     governance: {
       allowedActionClasses: ["inspect"],
       allowedSideEffects: ["read"],
@@ -2430,7 +2432,7 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
       reasoning: "high",
       sessionId: "run_subagent_affinity",
       models: createSubagentModels(contexts),
-      toolRegistry: createResearchToolRegistry([tool]),
+      toolRegistry: createResearchToolRegistry([tool, trackTool]),
     }),
   });
 
@@ -2451,6 +2453,8 @@ test("Pi Agent coordinates a partial-context subagent with a model and effort ov
   assert.equal(child.toolCallCount, 1);
   assert.deepEqual(calls, [{ path: "parse.c" }]);
   assert.ok(childContext);
+  assert.ok(rootContexts[0].toolNames.includes("track_checkpoint"));
+  assert.equal(childContext.toolNames.includes("track_checkpoint"), false);
   assert.match(childContext.systemPrompt, /use the commentary channel/);
   assert.match(childContext.systemPrompt, /use the Tart VM with SIP enabled/);
   assert.equal(childContext.reasoning, "low");

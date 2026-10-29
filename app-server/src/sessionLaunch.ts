@@ -75,6 +75,7 @@ export interface ResolvedAppServerSessionLaunch {
   promptTemplatePath?: string;
   resumeCapturePath?: string;
   resumeFallbackPromptPath?: string;
+  trackEpoch?: boolean;
   workflowId?: string;
   researchProfileId?: string;
   researchProfileHash?: string;
@@ -137,6 +138,7 @@ export function appServerSessionArgs(
   }
 
   if (launch.resumeCapturePath) args.push('--resume-capture', launch.resumeCapturePath);
+  if (launch.trackEpoch) args.push('--track-epoch');
   if (launch.resumeFallbackPromptPath) {
     args.push('--resume-fallback-prompt-file', launch.resumeFallbackPromptPath);
   }
