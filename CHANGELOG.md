@@ -66,6 +66,7 @@
 
 #### Fixed
 
+- Repository source tools recognize configured managed checkout stores on Windows while continuing to exclude other runtime data.
 - Repository source tools accept managed checkouts beneath Beale data directories, including configured repository stores, while excluding unrelated runtime data.
 
 ## 0.9.5
