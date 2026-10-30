@@ -28,7 +28,9 @@ export function assertRepositorySourceRoot(root: string): void {
       const rootParts = toNamespacedPath(canonicalRoot).toLowerCase().split(sep);
       const storeParts = toNamespacedPath(canonicalStore).toLowerCase().split(sep);
       const firstDifferentSegment = rootParts.findIndex((part, position) => part !== storeParts[position]);
-      throw new Error(`Repository source tools cannot inspect Beale runtime data outside managed checkouts. Diagnostics: rootName=${basename(canonicalRoot)}, configuredStoreName=${basename(configuredStore)}, canonicalStoreName=${basename(canonicalStore)}, rootSegments=${rootParts.length}, storeSegments=${storeParts.length}, firstDifferentSegment=${firstDifferentSegment}.`);
+      const equalPath = (left: string, right: string) =>
+        toNamespacedPath(left).toLowerCase() === toNamespacedPath(right).toLowerCase();
+      throw new Error(`Repository source tools cannot inspect Beale runtime data outside managed checkouts. Diagnostics: rootName=${basename(canonicalRoot)}, configuredStoreName=${basename(configuredStore)}, canonicalStoreName=${basename(canonicalStore)}, rootSegments=${rootParts.length}, storeSegments=${storeParts.length}, firstDifferentSegment=${firstDifferentSegment}, argumentMatchesConfigured=${equalPath(root, configuredStore)}, argumentMatchesCanonical=${equalPath(root, canonicalStore)}, configuredMatchesCanonical=${equalPath(configuredStore, canonicalStore)}.`);
     }
   }
 }
