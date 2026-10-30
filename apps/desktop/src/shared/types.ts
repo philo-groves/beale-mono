@@ -1281,6 +1281,14 @@ export interface CustomProviderDefinition {
   contextWindow: number;
   maxTokens: number;
   models: { id: string; name: string }[];
+  /** Restrict the provider to these model IDs. Empty or absent means every discovered model. */
+  modelAllowlist?: string[];
+  /**
+   * Per-model effort sent for the off thinking level. A listed model exposes only
+   * off, so incompatible thinking streams stay disabled while the provider still
+   * receives the effort value it requires.
+   */
+  modelOffReasoningEfforts?: Record<string, string>;
   /** Register the endpoint's models as reasoning-capable and send thinking controls. */
   reasoning?: boolean;
 }
@@ -2342,7 +2350,7 @@ export interface BealeApi {
   setAppServerRemoteAccessSettings(update: AppServerRemoteAccessUpdate): Promise<AppServerRemoteAccessSettings>;
   getProviderSettings(): Promise<ProviderSettings>;
   setDefaultProviderId(providerId: ResearchModelProviderId | null): Promise<ProviderSettings>;
-  saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }): Promise<ProviderSettings>;
+  saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; modelAllowlist?: string[]; modelOffReasoningEfforts?: Record<string, string>; reasoning?: boolean }): Promise<ProviderSettings>;
   removeCustomProvider(providerId: `custom-${string}`): Promise<ProviderSettings>;
   setProviderModelDefaults(providerId: ResearchModelProviderId, defaults: ProviderModelDefaults): Promise<ProviderSettings>;
   setProviderContextSize(providerId: ResearchModelProviderId, contextSize: ProviderContextSize): Promise<ProviderSettings>;

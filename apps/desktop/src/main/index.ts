@@ -721,7 +721,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC_CHANNELS.getProviderSettings, () => workspaceService.getProviderSettings());
   ipcMain.handle(IPC_CHANNELS.setDefaultProviderId, (_event, providerId: ResearchModelProviderId | null) => workspaceService.setDefaultProviderId(providerId));
-  ipcMain.handle(IPC_CHANNELS.saveCustomProvider, (_event, input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) =>
+  ipcMain.handle(IPC_CHANNELS.saveCustomProvider, (_event, input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; modelAllowlist?: string[]; modelOffReasoningEfforts?: Record<string, string>; reasoning?: boolean }) =>
     workspaceService.saveCustomProvider(input));
   ipcMain.handle(IPC_CHANNELS.removeCustomProvider, (_event, providerId: `custom-${string}`) =>
     workspaceService.removeCustomProvider(providerId));

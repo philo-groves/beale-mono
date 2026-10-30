@@ -1362,7 +1362,7 @@ export function App(): JSX.Element {
     }
   }, []);
 
-  const saveCustomProvider = useCallback(async (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string }): Promise<void> => {
+  const saveCustomProvider = useCallback(async (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; modelAllowlist?: string[]; modelOffReasoningEfforts?: Record<string, string>; reasoning?: boolean }): Promise<void> => {
     setBusy(true);
     setError(null);
     try {

@@ -8,6 +8,15 @@ export interface CustomProviderDefinition {
   contextWindow: number;
   maxTokens: number;
   models: { id: string; name: string }[];
+  /** Restrict the provider to these model IDs. Empty or absent means every discovered model. */
+  modelAllowlist?: string[];
+  /**
+   * Per-model effort sent for the off thinking level. A listed model never receives
+   * thinking controls, which endpoints such as Mistral reject outright; it gets a
+   * scalar effort value instead. Listed models also keep the low/high/max ladder,
+   * while minimal and medium stay unavailable because the target APIs reject them.
+   */
+  modelOffReasoningEfforts?: Record<string, string>;
   /** Enable OpenAI-compatible reasoning controls, with DeepSeek wire semantics for DeepSeek model IDs. */
   reasoning?: boolean;
 }
@@ -39,6 +48,18 @@ export function normalizeCustomProviderDefinition(value: unknown): CustomProvide
   if (new Set(models.map((model) => model.id)).size !== models.length) {
     throw new Error("Duplicate custom provider model ID.");
   }
+  const modelAllowlist = normalizeModelAllowlist(value.modelAllowlist);
+  const allowedModels = modelAllowlist.length
+    ? models.filter((model) => modelAllowlist.includes(model.id))
+    : models;
+  if (modelAllowlist.length && !allowedModels.length) throw new Error("Custom provider model allowlist matched no models.");
+  const modelOffReasoningEfforts = Object.fromEntries(
+    Object.entries(normalizeModelOffReasoningEfforts(
+      value.modelOffReasoningEfforts,
+      new Set(models.map((model) => model.id)),
+      value.reasoning === true,
+    )).filter(([modelId]) => allowedModels.some((model) => model.id === modelId)),
+  );
   const contextWindow = value.contextWindow ?? 128_000;
   const maxTokens = value.maxTokens ?? 16_000;
   if (!Number.isInteger(contextWindow) || Number(contextWindow) < 1_024 || Number(contextWindow) > 10_000_000
@@ -46,7 +67,9 @@ export function normalizeCustomProviderDefinition(value: unknown): CustomProvide
     throw new Error("Invalid custom provider token limits.");
   }
   return { id: value.id, name: value.name.trim(), baseUrl: url.href.replace(/\/$/u, ''),
-    contextWindow: Number(contextWindow), maxTokens: Number(maxTokens), models,
+    contextWindow: Number(contextWindow), maxTokens: Number(maxTokens), models: allowedModels,
+    ...(modelAllowlist.length ? { modelAllowlist } : {}),
+    ...(Object.keys(modelOffReasoningEfforts).length ? { modelOffReasoningEfforts } : {}),
     ...(value.reasoning === true ? { reasoning: true } : {}) };
 }
 
@@ -98,7 +121,8 @@ export function createCustomProviderModel(
   model: { id: string; name: string },
 ): Model<'openai-completions'> {
   const reasoning = definition.reasoning === true;
-  const deepSeek = reasoning && model.id.toLowerCase().includes('deepseek');
+  const offEffort = definition.modelOffReasoningEfforts?.[model.id];
+  const deepSeek = reasoning && !offEffort && model.id.toLowerCase().includes('deepseek');
   return {
     ...model,
     provider: definition.id,
@@ -109,7 +133,11 @@ export function createCustomProviderModel(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: definition.contextWindow,
     maxTokens: definition.maxTokens,
-    ...(deepSeek ? {
+    ...(offEffort ? {
+      thinkingLevelMap: {
+        off: offEffort, minimal: null, low: 'low', medium: null, high: 'high', max: 'max',
+      } as const,
+    } : deepSeek ? {
       thinkingLevelMap: { minimal: null, low: 'low', medium: null, high: 'high', max: 'max' } as const,
     } : {}),
     compat: {
@@ -145,4 +173,41 @@ export function registerCustomProviders(models: MutableModels, definitions = rea
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeModelAllowlist(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 500) throw new Error("Invalid custom provider model allowlist.");
+  const seen = new Set<string>();
+  return value.flatMap((entry): string[] => {
+    if (typeof entry !== 'string' || !entry.trim() || entry.length > 200) {
+      throw new Error("Invalid custom provider model allowlist.");
+    }
+    const id = entry.trim();
+    if (seen.has(id)) return [];
+    seen.add(id);
+    return [id];
+  });
+}
+
+function normalizeModelOffReasoningEfforts(
+  value: unknown,
+  modelIds: Set<string>,
+  reasoning: boolean,
+): Record<string, string> {
+  if (value === undefined || value === null) return {};
+  if (!isRecord(value)) throw new Error("Invalid custom provider reasoning effort overrides.");
+  const entries = Object.entries(value);
+  if (entries.length > 500) throw new Error("Invalid custom provider reasoning effort overrides.");
+  if (entries.length && !reasoning) throw new Error("Custom provider reasoning effort overrides require reasoning.");
+  const efforts: Record<string, string> = {};
+  for (const [rawModelId, rawEffort] of entries) {
+    const modelId = rawModelId.trim();
+    if (!modelIds.has(modelId)) throw new Error("Custom provider reasoning effort override names an unknown model.");
+    if (typeof rawEffort !== 'string' || !/^[a-z0-9_.-]{1,64}$/iu.test(rawEffort.trim())) {
+      throw new Error("Invalid custom provider reasoning effort override.");
+    }
+    efforts[modelId] = rawEffort.trim();
+  }
+  return efforts;
 }

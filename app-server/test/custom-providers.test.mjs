@@ -77,3 +77,28 @@ test('reasoning custom providers persist and accept reasoning defaults', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('custom provider model allowlists persist and gate model defaults', () => {
+  const root = mkdtempSync(join(tmpdir(), 'beale-custom-provider-allowlist-'));
+  const restricted = { id: 'custom-restricted', name: 'Restricted API', baseUrl: 'https://api.example.test/v1',
+    contextWindow: 128_000, maxTokens: 16_000,
+    models: [{ id: 'model-one', name: 'Model One' }, { id: 'model-two', name: 'Model Two' }],
+    modelAllowlist: ['model-two'] };
+  try {
+    const registry = new WorkspaceRegistry(root);
+    registry.saveCustomProvider(restricted);
+    const saved = registry.getProviderSettings().customProviders?.[0];
+    assert.deepEqual(saved?.models, [{ id: 'model-two', name: 'Model Two' }]);
+    assert.deepEqual(saved?.modelAllowlist, ['model-two']);
+    registry.setProviderModelDefaults(restricted.id,
+      { largeModel: 'model-two', smallModel: 'model-two', reasoningEffort: 'off' });
+    assert.throws(() => registry.setProviderModelDefaults(restricted.id,
+      { largeModel: 'model-one', smallModel: 'model-one', reasoningEffort: 'off' }), /available models/);
+    registry.close();
+    const reopened = new WorkspaceRegistry(root);
+    assert.deepEqual(reopened.getProviderSettings().customProviders?.[0].models, [{ id: 'model-two', name: 'Model Two' }]);
+    reopened.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
