@@ -25,7 +25,7 @@ export function assertRepositorySourceRoot(root: string): void {
     const managedConfiguredStore = [configuredStore, canonicalStore].some((store) =>
       relative(dataRoot, store) !== "" && within(store, canonicalRoot));
     if (!managedConfiguredStore && !within(defaultStore, canonicalRoot)) {
-      throw new Error("Repository source tools cannot inspect Beale runtime data outside managed checkouts.");
+      throw new Error(`Repository source tools cannot inspect Beale runtime data outside managed checkouts. Diagnostics: configuredWithin=${within(configuredStore, canonicalRoot)}, canonicalWithin=${within(canonicalStore, canonicalRoot)}, configuredStoreBelowDataRoot=${relative(dataRoot, configuredStore) !== ""}, canonicalStoreBelowDataRoot=${relative(dataRoot, canonicalStore) !== ""}, matchedSegment=${index}, segments=${parts.length}.`);
     }
   }
 }
