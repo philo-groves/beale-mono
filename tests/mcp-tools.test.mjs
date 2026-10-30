@@ -538,7 +538,7 @@ function handle(message) {
 `, "utf8");
   const client = createConfiguredResearchMcpClient({
     allowedServers: ["fixture"],
-    timeoutMs: 50,
+    timeoutMs: 5_000,
     servers: [{
       name: "fixture",
       command: process.execPath,
@@ -549,7 +549,7 @@ function handle(message) {
   try {
     await assert.rejects(
       client.callTool({ serverName: "fixture", toolName: "pending", arguments: {}, timeoutMs: 50 }),
-      /exceeded timeout 50ms/,
+      /MCP request tools\/call exceeded timeout 50ms/,
     );
     let cancellation = "";
     for (let attempt = 0; attempt < 80; attempt += 1) {
