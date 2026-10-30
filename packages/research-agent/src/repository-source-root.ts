@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep, toNamespacedPath } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep, toNamespacedPath } from "node:path";
 import { PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 import { defaultSourceRepositoryStoreDirectory } from "./source-materializer.js";
 
@@ -25,7 +25,10 @@ export function assertRepositorySourceRoot(root: string): void {
     const managedConfiguredStore = [configuredStore, canonicalStore].some((store) =>
       relative(toNamespacedPath(dataRoot), toNamespacedPath(store)) !== "" && within(store, canonicalRoot));
     if (!managedConfiguredStore && !within(defaultStore, canonicalRoot)) {
-      throw new Error("Repository source tools cannot inspect Beale runtime data outside managed checkouts.");
+      const rootParts = toNamespacedPath(canonicalRoot).toLowerCase().split(sep);
+      const storeParts = toNamespacedPath(canonicalStore).toLowerCase().split(sep);
+      const firstDifferentSegment = rootParts.findIndex((part, position) => part !== storeParts[position]);
+      throw new Error(`Repository source tools cannot inspect Beale runtime data outside managed checkouts. Diagnostics: rootName=${basename(canonicalRoot)}, configuredStoreName=${basename(configuredStore)}, canonicalStoreName=${basename(canonicalStore)}, rootSegments=${rootParts.length}, storeSegments=${storeParts.length}, firstDifferentSegment=${firstDifferentSegment}.`);
     }
   }
 }
