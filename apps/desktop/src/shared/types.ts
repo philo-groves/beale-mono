@@ -678,6 +678,11 @@ export interface AppServerFindingSecurityTracking {
   affectedAssetIds: string[];
   surfaceIds: string[];
   progressBlocker: { reason: string; actorId?: string; setAt: string } | null;
+  reportability?: { decision: 'reportable' | 'not_reportable'; basis: string; policyRefs: string[];
+    actorId?: string; assessedAt: string } | null;
+  triage?: { blocker: { reason: string; actorId?: string; setAt: string } | null;
+    packet: { artifactId: string; contentHash: string; sizeBytes: number; claimBindingHash?: string;
+      replayRunId: string; verifiedAt: string } | null };
   externalReferences: Array<{ kind: string; identifier: string; url: string | null }>;
 }
 
@@ -713,6 +718,7 @@ export interface AppServerFindingSummary {
   maturity: 'lead' | 'observed' | 'reproduced' | 'verified' | 'refuted';
   rating: ResearchClaimRating;
   classification: string;
+  componentClaimIds?: string[];
   title: string;
   summary: string;
   impact: string;
@@ -2227,6 +2233,7 @@ export type SteeringAction =
   | { type: 'resume'; runId: string; instruction?: string; modelSelection?: ResearchModelSelection; note?: string }
   | { type: 'stop'; runId: string; note?: string }
   | { type: 'steer'; runId: string; instruction: string; modelSelection?: ResearchModelSelection }
+  | { type: 'remove_steering'; runId: string; targetRequestId: string }
   | { type: 'set_shell_safety_mode'; runId: string; shellSafetyMode: ShellSafetyMode }
   | {
       type: 'run_runbook';

@@ -57,6 +57,11 @@ const SECURITY_TRACKING_SCHEMA = {
     affectedAssetIds: { type: "array", items: { type: "string" } },
     surfaceIds: { type: "array", items: { type: "string" }, description: "Surface IDs this finding affects. Used for surface coverage accounting." },
     progressBlocker: { type: ["object", "null"], description: "Use only when a concrete dependency currently prevents further authorized investigation or escalation despite reasonable attempts. The reason must name the blocked action, the actual impediment, and what change would unblock it. Missing proof, an unanswered reachability or policy question, a completion-check gap, or a reviewer needs-work result is unfinished work, not a blocker. Null clears the blocker without refuting the finding.", properties: { reason: { type: "string", description: "Describe the action that cannot proceed, the concrete impediment after attempted alternatives, and the condition that would unblock it; do not restate a stage-gate requirement." } }, required: ["reason"] },
+    reportability: { type: ["object", "null"], description: "Verified findings only. Null restores Unknown. Record the program scope, impact threshold, and rule basis before marking Reportable or Not Reportable.", required: ["decision", "basis", "policyRefs"], properties: {
+      decision: { type: "string", enum: ["reportable", "not_reportable"] }, basis: { type: "string" },
+      policyRefs: { type: "array", minItems: 1, items: { type: "string" } },
+    } },
+    triageBlocker: { type: ["object", "null"], description: "Verified findings only. Name the concrete reason a policy-compliant portable PoC cannot yet be built or replayed; null clears it.", required: ["reason"], properties: { reason: { type: "string" } } },
     externalReferences: {
       type: "array",
       items: {
@@ -147,6 +152,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
         title: { type: "string" },
         surfaceId: { type: "string", description: "Surface this lead belongs to. Defaults to the agent's current surface." },
         classification: { type: "string", ...(defaults.classifications?.length ? { enum: [...defaults.classifications] } : {}), description: "A classification declared by the active research profile." },
+        componentClaimIds: { type: "array", items: { type: "string" }, maxItems: 8, description: "For a proposed security.chain, canonical component finding IDs. A chain needs a concrete composition question." },
         summary: { type: "string" }, impact: { type: "string" },
         rating: { type: "string", enum: RESEARCH_CLAIM_RATINGS, description: "Untrusted qualitative estimate: informational, low, medium, high, or critical." },
         confidence: { type: "number", minimum: 0, maximum: 1 },
@@ -159,6 +165,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
         title: requiredString(input.title, "title"),
         ...(input.surfaceId !== undefined ? { surfaceId: selectedSurfaceId(input.surfaceId, defaults.surfaceStore) } : {}),
         classification: requiredClassification(input.classification, defaults.classifications),
+        ...(Array.isArray(input.componentClaimIds) ? { componentClaimIds: input.componentClaimIds.map((id) => requiredString(id, "componentClaimIds[]")) } : {}),
         rating: requiredResearchClaimRating(input.rating),
         ...(string(input.summary) ? { summary: string(input.summary)! } : {}),
         ...(string(input.impact) ? { impact: string(input.impact)! } : {}),
@@ -206,6 +213,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       required: ["title", "classification", "rating", "evidence"],
       properties: {
         title: { type: "string" }, surfaceId: { type: "string", description: "Surface this finding belongs to. Defaults to the agent's current surface." }, classification: { type: "string", ...(defaults.classifications?.length ? { enum: [...defaults.classifications] } : {}), description: "A classification declared by the active research profile." },
+        componentClaimIds: { type: "array", items: { type: "string" }, maxItems: 8, description: "For security.chain, canonical component finding IDs that combine into the demonstrated path." },
         summary: { type: "string" }, impact: { type: "string" },
         stepsToReproduce: { type: "string", description: "Concrete reproduction steps. Optional while observed; required from reproduced onward." },
         rating: { type: "string", enum: RESEARCH_CLAIM_RATINGS, description: "Untrusted qualitative estimate: informational, low, medium, high, or critical." },
@@ -221,6 +229,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
         title: requiredString(input.title, "title"),
         ...(input.surfaceId !== undefined ? { surfaceId: selectedSurfaceId(input.surfaceId, defaults.surfaceStore) } : {}),
         classification: requiredClassification(input.classification, defaults.classifications),
+        ...(Array.isArray(input.componentClaimIds) ? { componentClaimIds: input.componentClaimIds.map((id) => requiredString(id, "componentClaimIds[]")) } : {}),
         rating: requiredResearchClaimRating(input.rating),
         ...(string(input.summary) ? { summary: string(input.summary)! } : {}),
         ...(string(input.impact) ? { impact: string(input.impact)! } : {}),
@@ -254,6 +263,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
         stepsToReproduce: { type: "string", description: "Concrete reproduction steps. Required from reproduced onward." },
         rating: { type: "string", enum: RESEARCH_CLAIM_RATINGS, description: "Untrusted qualitative estimate for prioritization and notifications." },
         confidence: { type: "number", minimum: 0, maximum: 1 }, classification: { type: "string" },
+        componentClaimIds: { type: "array", items: { type: "string" }, maxItems: 8, description: "Replace the ordered component findings of a security chain." },
         securityTracking: SECURITY_TRACKING_SCHEMA,
       },
     }, (input, context) => store.revise(requiredString(input.id, "id"), {
@@ -267,6 +277,7 @@ export function createFindingTools(store: ResearchClaimStore, defaults: FindingT
       ...(input.rating !== undefined ? { rating: requiredResearchClaimRating(input.rating) } : {}),
       ...(typeof input.confidence === "number" ? { confidence: input.confidence } : {}),
       ...(input.classification !== undefined ? { classification: requiredClassification(input.classification, defaults.classifications) } : {}),
+      ...(Array.isArray(input.componentClaimIds) ? { componentClaimIds: input.componentClaimIds.map((id) => requiredString(id, "componentClaimIds[]")) } : {}),
       ...(input.securityTracking !== undefined ? { securityTracking: parseSecurityTrackingUpdate(input.securityTracking) } : {}),
     }, context?.modelAuthor, context?.agentId)),
     findingTool("finding.transition", "finding_transition", "Update a finding through its evidence-gated lifecycle, or append evidence using its current status as toStatus. Reproduced and later findings require concrete steps to reproduce; reproduction requires a successful runbook; verification must be independent; reporting and disclosure require matching durable references.", "write", {
@@ -455,6 +466,15 @@ function parseSecurityTrackingUpdate(value: unknown): FindingSecurityTrackingUpd
     ...(Array.isArray(input.affectedAssetIds) ? { affectedAssetIds: input.affectedAssetIds.map((id) => requiredString(id, "securityTracking.affectedAssetIds[]")) } : {}),
     ...(Array.isArray(input.surfaceIds) ? { surfaceIds: input.surfaceIds.map((id) => requiredString(id, "securityTracking.surfaceIds[]")) } : {}),
     ...(input.progressBlocker !== undefined ? { progressBlocker: input.progressBlocker === null ? null : { reason: requiredString(requiredRecord(input.progressBlocker, "securityTracking.progressBlocker").reason, "securityTracking.progressBlocker.reason") } } : {}),
+    ...(input.reportability !== undefined ? { reportability: input.reportability === null ? null : (() => {
+      const decision = requiredRecord(input.reportability, "securityTracking.reportability");
+      if (decision.decision !== "reportable" && decision.decision !== "not_reportable") throw new Error("securityTracking.reportability.decision is invalid.");
+      if (!Array.isArray(decision.policyRefs) || decision.policyRefs.length === 0) throw new Error("Reportability requires program policy references.");
+      return { decision: decision.decision, basis: requiredString(decision.basis, "securityTracking.reportability.basis"),
+        policyRefs: decision.policyRefs.map((ref) => requiredString(ref, "securityTracking.reportability.policyRefs[]")) };
+    })() } : {}),
+    ...(input.triageBlocker !== undefined ? { triageBlocker: input.triageBlocker === null ? null
+      : { reason: requiredString(requiredRecord(input.triageBlocker, "securityTracking.triageBlocker").reason, "securityTracking.triageBlocker.reason") } } : {}),
     ...(Array.isArray(input.externalReferences) ? {
       externalReferences: input.externalReferences.map((value) => {
         const reference = requiredRecord(value, "securityTracking.externalReferences[]");

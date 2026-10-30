@@ -18,7 +18,7 @@ import { pathToFileURL } from "node:url";
 import { MemoryGraphStore, type MemoryContext } from "./memory-graph.js";
 import { openResearchDatabase } from "./database.js";
 import { modelAuthorsForResource, recordModelAuthorship, type ModelAuthor } from "./model-authorship.js";
-import { registerResearchStorageArtifact, type ResearchStorageArtifactManifestEntry } from "./storage.js";
+import { registerResearchStorageArtifact, resolveResearchStorageArtifact, type ResearchStorageArtifactManifestEntry } from "./storage.js";
 import type { ResearchArtifactRef, ResearchStorageLayout } from "./types.js";
 
 export const REPORT_STATUSES = ["complete", "stale"] as const;
@@ -137,7 +137,7 @@ export class ReportStore {
     return row ? { ...this.toRecord(row), content: readFileSync(this.absolutePath(row.relative_path), "utf8") } : null;
   }
 
-  public create(input: { title: string; summary: string; content: string; status?: ReportStatus; submissionPacketPath?: string }, author?: ModelAuthor): {
+  public create(input: { title: string; summary: string; content: string; status?: ReportStatus; submissionPacketPath?: string; submissionPacketArtifactId?: string }, author?: ModelAuthor): {
     report: ReportRecord;
     artifactRef: ResearchArtifactRef;
     submissionPacketArtifactRef?: ResearchArtifactRef;
@@ -147,8 +147,14 @@ export class ReportStore {
     const content = requiredText(input.content, "content", 256_000);
     const status = input.status ?? "complete";
     validateStatus(status);
+    if (input.submissionPacketPath && input.submissionPacketArtifactId) {
+      throw new Error("Choose either a packet path or a verified triage packet artifact.");
+    }
     const submissionPacketPath = input.submissionPacketPath
       ? validatedPacketSource(input.submissionPacketPath, this.packetCandidateRoots)
+      : null;
+    const triagePacket = input.submissionPacketArtifactId
+      ? this.requireTriagePacket(input.submissionPacketArtifactId)
       : null;
     const id = `report_${randomUUID()}`;
     const now = new Date().toISOString();
@@ -156,9 +162,9 @@ export class ReportStore {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const entry = this.writeAndRegister(id, relativePath, title, content);
-      const packetEntry = submissionPacketPath
+      const packetEntry = triagePacket ?? (submissionPacketPath
         ? this.importSubmissionPacket(id, title, submissionPacketPath)
-        : null;
+        : null);
       this.database.prepare(`INSERT INTO app_server_reports (
         id, workspace_id, workspace_name, subject_id, subject_name, session_id,
         title, summary, status, triage_status, artifact_id, relative_path, content_hash, size_bytes,
@@ -347,6 +353,36 @@ export class ReportStore {
     });
   }
 
+  public importTriagePacket(claimId: string, candidatePath: string): ResearchStorageArtifactManifestEntry {
+    const sourcePath = validatedPacketSource(candidatePath, this.packetCandidateRoots);
+    const relativePath = join("triage-packets", safeSegment(this.context.workspaceId), safeSegment(claimId), `${randomUUID()}.zip`);
+    const path = this.absolutePath(relativePath);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const temporaryPath = `${path}.${randomUUID()}.tmp`;
+    copyFileSync(sourcePath, temporaryPath);
+    renameSync(temporaryPath, path);
+    chmodSync(path, 0o600);
+    return registerResearchStorageArtifact(this.storageLayout, {
+      path, kind: "triage-packet", purpose: `Verified triage packet for claim ${claimId}`,
+    });
+  }
+
+  public validatedTriagePacketSource(candidatePath: string): string {
+    return validatedPacketSource(candidatePath, this.packetCandidateRoots);
+  }
+
+  private requireTriagePacket(artifactId: string): ResearchStorageArtifactManifestEntry {
+    const entry = resolveResearchStorageArtifact(this.storageLayout, artifactId);
+    if (!entry || entry.kind !== "triage-packet") throw new Error("Verified triage packet artifact is missing.");
+    const workspaceRoot = resolve(this.storageLayout.artifactDirectoryPath,
+      "triage-packets", safeSegment(this.context.workspaceId));
+    if (!pathInside(workspaceRoot, entry.path) || !statSync(entry.path).isFile()) {
+      throw new Error("Triage packet does not belong to the active workspace.");
+    }
+    if (hashFile(entry.path) !== entry.contentHash) throw new Error("Triage packet content changed after verification.");
+    return entry;
+  }
+
   private importRecording(reportId: string, title: string, candidatePath: string): {
     entry: ResearchStorageArtifactManifestEntry;
     filename: string;
@@ -444,6 +480,19 @@ function validatedPacketSource(value: string, allowedRoots: readonly string[]): 
   }
   if (!hasZipSignature(path)) throw new Error("submissionPacketPath must contain a ZIP archive.");
   return path;
+}
+function hashFile(path: string): string {
+  const hash = createHash("sha256");
+  const descriptor = openSync(path, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    let bytesRead: number;
+    do {
+      bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+    } while (bytesRead > 0);
+  } finally { closeSync(descriptor); }
+  return `sha256:${hash.digest("hex")}`;
 }
 function validatedRecordingSource(value: string, allowedRoots: readonly string[]): string {
   const candidate = requiredText(value, "recordingPath", 4_096);

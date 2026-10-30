@@ -1,8 +1,18 @@
 import type { BealeWorkspaceResearchTrack } from '@beale/app-server-runtime/protocol';
-import type { RunDetail } from '@shared/types';
+import type { BealeApi, RunDetail } from '@shared/types';
 
-export function pausesResearchTrackFromSessionAction(action: string, trackRunning: boolean): boolean {
-  return trackRunning && action === 'pause';
+export async function pauseResearchTrackSessionAction(input: {
+  action: string;
+  workspaceId: string;
+  sessionId: string;
+  serverId?: string;
+  api: Pick<BealeApi, 'getResearchTrack' | 'controlResearchTrack'>;
+}): Promise<boolean> {
+  if ((input.action !== 'pause' && input.action !== 'stop') || !input.sessionId.startsWith('track_')) return false;
+  const track = await input.api.getResearchTrack(input.workspaceId, input.serverId);
+  if (track?.id !== input.sessionId) return true;
+  if (track.status === 'running') await input.api.controlResearchTrack(input.workspaceId, 'pause', input.serverId);
+  return true;
 }
 
 export function runningResearchTrackDetail(detail: RunDetail | null, running: boolean): RunDetail | null {

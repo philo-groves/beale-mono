@@ -1,7 +1,7 @@
 {
   "name": "@beale/desktop",
   "productName": "Beale",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "private": true,
   "license": "MIT",
   "description": "Beale authorized vulnerability research workbench",

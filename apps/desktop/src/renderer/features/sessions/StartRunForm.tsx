@@ -193,7 +193,7 @@ interface StartRunFormProps {
   showSuggestions?: boolean;
   presentation?: 'dialog' | 'session';
   busy: boolean;
-  runAction: (action: () => Promise<WorkspaceSnapshot | null | void>) => Promise<void>;
+  runAction: (action: () => Promise<WorkspaceSnapshot | null | void>, options?: { refreshSnapshot?: boolean }) => Promise<void>;
   onCancel: () => void;
   onLoadResearchGoalSuggestions?: (phase: ResearchGoalPhase) => void;
   onSelectResearchGoalSuggestion?: (phase: ResearchGoalPhase, suggestion: string) => void;
@@ -262,7 +262,7 @@ export function StartRunForm(props: StartRunFormProps): JSX.Element {
       await runAction(async () => {
         startedTrack = await window.beale.controlResearchTrack(snapshot.workspace.workspaceId, 'start', undefined,
           researchTrackConfiguration(input, props.guardianEnabled !== false));
-      });
+      }, { refreshSnapshot: false });
       if (startedTrack) props.onTrackStarted?.(startedTrack);
       return;
     }

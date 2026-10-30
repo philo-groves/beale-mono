@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { APP_SERVER_PROTOCOL_VERSION, APP_SERVER_SESSION_LAUNCH_VERSION, BEALE_APP_SERVER_CAPABILITIES, BEALE_APP_SERVER_CONTRACT_TIMESTAMP, BEALE_APP_SERVER_CONTROL_VERSION } from '@beale/app-server-runtime/protocol';
@@ -419,6 +419,7 @@ test('Fleet prepares direct VM shell access from the primary and releases its re
     assert.equal(prepared.machineId, 'tart:example-vm');
     assert.equal(prepared.guestCwd, '/Users/example');
     assert.equal(prepared.sshArgs.at(-1), 'example@192.0.2.10');
+    assert.equal(prepared.sshArgs.some((arg) => arg.startsWith('HostKeyAlias=')), false);
     assert.equal(calls.some(({ command }) => command === 'ssh'), true);
     await fleet.releaseSessionTarget(prepared.machineId, 'session-example');
     assert.equal((await fleet.state()).machines[0].owner, null);
@@ -459,6 +460,11 @@ test('Fleet resumes a clone target by replacing an unbootable session VM', async
     assert.equal(clones.length, 2);
     assert.equal(prepared.machineId, `tart:${clones[1]}`);
     assert.equal(prepared.guestCwd, '/Users/example');
+    const alias = prepared.sshArgs.find((arg) => arg.startsWith('HostKeyAlias='));
+    assert.match(alias, /^HostKeyAlias=beale-vm-[a-f0-9]{24}$/);
+    assert.ok(prepared.sshArgs.includes('CheckHostIP=no'));
+    assert.ok(prepared.sshArgs.includes('StrictHostKeyChecking=accept-new'));
+    assert.ok(prepared.sshArgs.includes(`UserKnownHostsFile=${join(homedir(), '.ssh', 'tart_known_hosts')}`));
     const state = await fleet.state();
     assert.equal(state.machines.find((machine) => machine.id === `tart:${clones[0]}`)?.canRun, false);
     assert.equal(state.machines.find((machine) => machine.id === `tart:${clones[0]}`)?.owner, null);
@@ -466,8 +472,38 @@ test('Fleet resumes a clone target by replacing an unbootable session VM', async
     await fleet.releaseSessionTarget(prepared.machineId, 'session-example');
     const resumed = await fleet.prepareSessionTarget('vm:clone:tart:example-base', 'workspace-example', 'session-example');
     assert.equal(resumed.machineId, prepared.machineId);
+    assert.ok(resumed.sshArgs.includes(alias));
     assert.equal(clones.length, 2);
     await fleet.releaseSessionTarget(resumed.machineId, 'session-example');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Fleet stops retrying a clone when SSH reports a changed host key', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'beale-fleet-host-key-example-'));
+  const machines = new Map([['example-base', false]]);
+  let sshAttempts = 0;
+  const runner = {
+    async run(command, args) {
+      if (command === 'tart' && args[0] === 'list') return JSON.stringify([...machines].map(([Name, Running]) => ({ Name, Running })));
+      if (command === 'tart' && args[0] === 'clone') { machines.set(args[2], false); return ''; }
+      if (command === 'tart' && args[0] === 'ip') return '192.0.2.10\n';
+      if (command === 'ssh' && args.at(-1) === 'pwd') {
+        sshAttempts += 1;
+        throw Object.assign(new Error('SSH rejected the host'), { stderr: 'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! Host key verification failed.' });
+      }
+      throw new Error('Unexpected Fleet command.');
+    },
+    launch(_command, args) { machines.set(args[1], true); },
+  };
+  try {
+    const fleet = new FleetService(join(root, 'fleet.json'), 'darwin', runner);
+    await fleet.configure({ action: 'set-machine', machineId: 'tart:example-base', base: true,
+      canRun: false, canClone: true, sshUser: 'example' });
+    await fleet.configure({ action: 'set-workspace-targets', workspaceId: 'workspace-example',
+      targetIds: ['vm:clone:tart:example-base'] });
+    await assert.rejects(fleet.prepareSessionTarget('vm:clone:tart:example-base', 'workspace-example', 'session-example'),
+      /SSH host key verification failed/);
+    assert.equal(sshAttempts, 3);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

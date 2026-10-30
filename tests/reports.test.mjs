@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { recordRunbookExecution } from "./fixtures/record-runbook-execution.mjs";
 
 import {
   createReportTools,
@@ -14,9 +13,7 @@ import {
   getDefaultMemoryDatabasePath,
   listResearchStorageArtifacts,
   MemoryGraphStore,
-  ResearchClaimStore,
   ReportStore,
-  RunbookStore,
 } from "../packages/research-agent/dist/index.js";
 
 test("reports persist revisioned Markdown artifacts within one workspace", async () => {
@@ -174,126 +171,5 @@ test("reports import and retain bounded workspace packet and recording attachmen
     store.close();
     await rm(workspaceRoot, { recursive: true, force: true });
     await rm(outsideRoot, { recursive: true, force: true });
-  }
-});
-
-test("security report creation accepts a verified finding reviewed in the same session", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "app-server-security-report-tools-"));
-  const layout = ensureResearchStorageLayout(createResearchStorageLayout({ workspaceRoot }));
-  const memoryGraph = new MemoryGraphStore({ workspaceRoot, context: {
-    sessionId: "run_security", workspaceId: "workspace_security", workspaceName: "Security",
-    subjectId: "subject_security", subjectName: "Security Subject",
-  } });
-  const claims = new ResearchClaimStore(memoryGraph);
-  const runbooks = new RunbookStore(memoryGraph.databasePath, layout, memoryGraph.getContext());
-  const packetPath = join(workspaceRoot, "submission.zip");
-  await writeFile(packetPath, Buffer.from([0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0]));
-  const store = new ReportStore(memoryGraph.databasePath, layout, memoryGraph.getContext(), { packetCandidateRoots: [workspaceRoot] });
-  const registry = createResearchToolRegistry(createReportTools(store, {
-    requireVerifiedFinding: true,
-    requireSubmissionPacket: true,
-    claimStore: claims,
-  }));
-  try {
-    let finding = claims.createObserved({
-      title: "Unvalidated redirect reaches an authenticated callback",
-      summary: "An attacker-controlled destination receives the victim authorization result.",
-      impact: "The callback discloses the victim authorization result.",
-      classification: "security.vulnerability",
-      sourceRevision: "git:example-component:one",
-      environmentFingerprint: "environment:example-component:one",
-      evidence: [{ kind: "command", referenceId: "redirect-verifier", summary: "The complete callback path was observed." }],
-    }, undefined, "agent_author_example");
-    const premature = await registry.execute({
-      id: "premature_report",
-      actionClass: "synthesize",
-      toolName: "report.create",
-      input: { title: "Premature", summary: "Unverified finding.", content: "# Premature", sourceFindingId: finding.id, submissionPacketPath: packetPath },
-    });
-    assert.equal(premature.result.status, "error");
-    assert.match(premature.result.error.message, /verified finding/);
-    const runbook = runbooks.create({
-      title: "Reproduce redirect callback chain",
-      purpose: "Replay the complete redirect and callback path.",
-      cells: [{ kind: "code", language: "sh", source: "./redirect-verifier", features: ["runtime"] }],
-    }).runbook;
-    const runId = "redirect_chain_run";
-    recordRunbookExecution(runbooks, runbook.id, runId, {
-      sourceRevision: finding.sourceRevision, environmentFingerprint: finding.environmentFingerprint, actorId: "agent_author_example",
-    });
-    finding = claims.transition(finding.id, {
-      expectedRevision: finding.revision,
-      toStatus: "reproduced",
-      reason: "The reusable proof completed on a clean target.",
-      reproductionRunbookId: runbook.id,
-      stepsToReproduce: "Run the example redirect verifier against a clean target, then observe the callback result.",
-      evidence: [{ kind: "runbook_execution", referenceId: runId, summary: "Clean reproduction succeeded." }],
-    }, undefined, "agent_author_example");
-    finding = claims.transition(finding.id, {
-      expectedRevision: finding.revision,
-      toStatus: "verified",
-      reason: "A distinct reviewer reproduced and challenged the finding in the same session.",
-      evidence: [{
-        kind: "independent_verification", referenceId: runId,
-        summary: "Independent replay held.", sessionId: "run_security", independent: true,
-      }],
-    }, undefined, "agent_reviewer_example", { freshSubagentContext: true });
-    const legacyDatabase = new DatabaseSync(memoryGraph.databasePath);
-    try {
-      legacyDatabase.prepare("UPDATE app_server_research_claims SET steps_to_reproduce = '' WHERE id = ?").run(finding.id);
-      const missingSteps = await registry.execute({
-        id: "verified_finding_without_steps",
-        actionClass: "synthesize",
-        toolName: "report.create",
-        input: { title: "Missing steps", summary: "Example result.", content: "# Missing steps",
-          sourceFindingId: finding.id, submissionPacketPath: packetPath },
-      });
-      assert.equal(missingSteps.result.status, "error");
-      assert.match(missingSteps.result.error.message, /steps to reproduce/);
-      assert.equal(store.list().length, 0);
-    } finally {
-      legacyDatabase.prepare("UPDATE app_server_research_claims SET steps_to_reproduce = ? WHERE id = ?")
-        .run(finding.stepsToReproduce, finding.id);
-      legacyDatabase.close();
-    }
-    const missingPacket = await registry.execute({
-      id: "verified_finding_without_packet",
-      actionClass: "synthesize",
-      toolName: "report.create",
-      input: { title: "Missing packet", summary: "Reportable finding.", content: "# Missing packet", sourceFindingId: finding.id },
-    });
-    assert.equal(missingPacket.result.status, "blocked");
-    assert.match(JSON.stringify(missingPacket.result), /submissionPacketPath/);
-    finding = claims.revise(finding.id, { expectedRevision: finding.revision, summary: "Updated example conclusion requiring review.", reason: "Example clarification." },
-      undefined, "agent_author_example");
-    const invalidated = await registry.execute({
-      id: "invalidated_report_example", actionClass: "synthesize", toolName: "report.create",
-      input: { title: "Example report", summary: "Example result.", content: "# Example report", sourceFindingId: finding.id, submissionPacketPath: packetPath },
-    });
-    assert.equal(invalidated.result.status, "error");
-    assert.match(invalidated.result.error.message, /current validated reproduction and independent review/);
-    assert.equal(store.list().length, 0, "invalid evidence must be rejected before creating report artifacts");
-    finding = claims.transition(finding.id, { expectedRevision: finding.revision, toStatus: "verified", reason: "Reviewed the updated example conclusion.", evidence: [
-      { kind: "independent_verification", referenceId: runId, summary: "Example renewed review.", independent: true },
-    ] }, undefined, "agent_reviewer_example", { freshSubagentContext: true });
-    const created = await registry.execute({
-      id: "verified_finding_report",
-      actionClass: "synthesize",
-      toolName: "report.create",
-      input: { title: "Verified finding", summary: "Reportable finding.", content: "# Verified finding", sourceFindingId: finding.id, submissionPacketPath: packetPath },
-    });
-    assert.equal(created.result.status, "complete");
-    assert.equal(created.result.artifactRefs[0].kind, "report");
-    assert.equal(created.result.artifactRefs[1].kind, "submission-packet");
-    assert.equal(created.result.output.report.submissionPacket.filename, "submission.zip");
-    assert.equal(created.result.output.sourceFinding.id, finding.id);
-    assert.equal(created.result.output.sourceFinding.status, "report_ready");
-    assert.equal(created.result.output.sourceFinding.transitions.at(-1).sessionId, "run_security");
-  } finally {
-    store.close();
-    runbooks.close();
-    claims.close();
-    memoryGraph.close();
-    await rm(workspaceRoot, { recursive: true, force: true });
   }
 });

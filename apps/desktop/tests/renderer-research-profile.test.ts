@@ -7,9 +7,11 @@ import type {
   ResearchProfile,
   ResearchProfileWorkflow,
   RunDetail,
+  TraceEventRecord,
   WorkspaceSnapshot
 } from '@shared/types';
 import { MemoryTypeLabel } from '../src/renderer/features/research/MemoryTypeLabel';
+import { activeTrackWorkerCards, activeTrackWorkersFromEvents, groupTrackWorkers, TrackWorkerCard } from '../src/renderer/features/research/TrackWorkerCards';
 import {
   browserBaseUrl,
   campaignCatalogSectionVisibility,
@@ -39,6 +41,66 @@ import { researchGoalSuggestionCacheKey } from '../src/renderer/view-models/rese
 import { testResearchProfile } from './researchProfileFixture';
 
 describe('renderer research profile presentation', () => {
+  it('projects a running investigator from live activity before the track status snapshot catches up', () => {
+    const activity = (sequence: number, action: string, status: string) => ({
+      sequence, createdAt: `2026-01-01T00:00:0${sequence}.000Z`, payload: { payload: {
+        type: 'subagent.activity', agentPath: '/root/investigator-example', role: 'investigator',
+        trackClaimId: 'finding-example', action, status
+      } }
+    }) as unknown as TraceEventRecord;
+    const findings = [{ id: 'finding-example', title: 'Example parser boundary' }];
+    expect(activeTrackWorkersFromEvents([activity(1, 'spawned', 'running')], findings)).toEqual([{
+      role: 'investigator', claimId: 'finding-example', title: 'Example parser boundary',
+      assignedAt: '2026-01-01T00:00:01.000Z', queued: []
+    }]);
+    expect(activeTrackWorkersFromEvents([
+      activity(1, 'spawned', 'running'), activity(2, 'completed', 'completed')
+    ], findings)).toEqual([]);
+    expect(activeTrackWorkersFromEvents([{ sequence: 1, createdAt: '2026-01-01T00:00:01.000Z',
+      payload: { type: 'subagent.activity', agentPath: '/root/manual-example', role: 'investigator',
+        action: 'spawned', status: 'running', message: 'Review the example callback.\nUse the test fixture.' }
+    } as unknown as TraceEventRecord])[0]?.title).toBe('Review the example callback.');
+  });
+
+  it('removes a track worker card after its terminal lifecycle event', () => {
+    const worker = { role: 'investigator' as const, claimId: 'finding-example', title: 'Example parser boundary',
+      assignedAt: '2026-01-01T00:00:00.000Z', queued: [{ claimId: 'finding-example-queued', title: 'Example queued boundary' }] };
+    const event = (sequence: number, action: string, timestamp: string) => ({ sequence, createdAt: timestamp,
+      payload: { type: 'subagent.activity', role: worker.role, trackClaimId: worker.claimId, action, timestamp } });
+    expect(activeTrackWorkerCards([worker], [])).toEqual([worker]);
+    expect(activeTrackWorkerCards([worker], [event(1, 'spawned', '2026-01-01T00:00:01.000Z'),
+      event(2, 'completed', '2026-01-01T00:00:02.000Z')] as unknown as TraceEventRecord[])).toEqual([]);
+    expect(activeTrackWorkerCards([worker], [{ sequence: 3, createdAt: '2026-01-01T00:00:03.000Z',
+      payload: { payload: { type: 'subagent.activity', role: worker.role, trackClaimId: worker.claimId,
+        action: 'completed', timestamp: '2026-01-01T00:00:03.000Z' } } }] as unknown as TraceEventRecord[])).toEqual([]);
+    expect(activeTrackWorkerCards([worker], [event(1, 'completed', '2025-12-31T23:59:59.000Z')] as unknown as TraceEventRecord[])).toEqual([worker]);
+    const html = renderToStaticMarkup(createElement(TrackWorkerCard, {
+      group: groupTrackWorkers([worker])[0]!, onShowQueue: () => undefined
+    }));
+    expect(html).toContain('>1 Investigator</h2>');
+    expect(html).toContain('>Example parser boundary</p>');
+    expect(html).toMatch(/<header[^>]*>[\s\S]*?>1 Queued<\/span>[\s\S]*?<\/header>/u);
+    expect(html).not.toContain('Working for');
+  });
+
+  it('groups workers of one role into a card with separated current findings and one queue', () => {
+    const first = { role: 'investigator' as const, claimId: 'finding-example-one', title: 'Example parser boundary',
+      assignedAt: '2026-01-01T00:00:00.000Z', queued: [{ claimId: 'finding-example-queued', title: 'Example queued boundary' }] };
+    const second = { ...first, claimId: 'finding-example-two', title: 'Example callback boundary' };
+    const triager = { ...first, role: 'triager' as const, claimId: 'finding-example-three', title: 'Example policy review',
+      queued: [] };
+    const groups = groupTrackWorkers([first, second, triager]);
+    expect(groups.map((group) => [group.role, group.workers.length, group.queued.length])).toEqual([
+      ['investigator', 2, 1], ['triager', 1, 0]
+    ]);
+    const html = renderToStaticMarkup(createElement(TrackWorkerCard, {
+      group: groups[0]!, onShowQueue: () => undefined
+    }));
+    expect(html).toContain('>2 Investigators</h2>');
+    expect(html).toContain('>1 Queued</span>');
+    expect(html).toMatch(/track-worker-findings[^>]*>[\s\S]*Example parser boundary[\s\S]*<\/li><li>[\s\S]*Example callback boundary/u);
+  });
+
   it('shows the current browser host without a protocol as the summary label', () => {
     expect(browserBaseUrl('https://example.test:8443/path?q=1')).toBe('example.test:8443');
     expect(browserBaseUrl('http://example.test/path')).toBe('example.test');

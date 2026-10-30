@@ -4,6 +4,7 @@ import type { ModelThinkingLevel, SimpleStreamOptions } from "@earendil-works/pi
 import { createResearchEventId, nowIso } from "./ids.js";
 import type { ResearchEvent } from "./types.js";
 import type { SurfaceFoundationScout, SurfaceStore } from "./surfaces.js";
+import type { TrackWorkerAssignment } from "./track-funnel.js";
 export const SUBAGENT_COLLABORATION_TOOLS = [
   { name: "spawn_agent", description: "Spawn a bounded child session for independent work." },
   { name: "send_message", description: "Queue a message for an existing agent." },
@@ -54,6 +55,7 @@ export interface CreateSubagentManagerOptions {
   rootReasoning?: SimpleStreamOptions["reasoning"];
   maxThreads?: number;
   maxDepth?: number;
+  maxChildrenPerNonRootAgent?: number;
   maxConcurrentRooms?: number;
   maxMembersPerRoom?: number;
   peerChallengeRounds?: number;
@@ -101,6 +103,7 @@ export interface SubagentActivity {
   roomTitle?: string;
   roomKind?: string;
   role?: string;
+  trackClaimId?: string;
   surfaceId?: string;
   surfaceTrail?: readonly { id: string; name: string }[];
   authorAgentPath?: string;
@@ -131,6 +134,7 @@ interface SubagentSession {
   roomTitle: string | null;
   roomKind: string | null;
   role: string | null;
+  trackClaimId: string | null;
   surfaceId: string | null;
   status: SubagentStatus;
   createdAt: string;
@@ -221,6 +225,7 @@ export class SubagentManager {
   private readonly waiters = new Set<Waiter>();
   private readonly maxThreads: number;
   private readonly maxDepth: number;
+  private readonly maxChildrenPerNonRootAgent: number | null;
   private readonly maxConcurrentRooms: number;
   private readonly maxMembersPerRoom: number;
   private readonly peerChallengeRounds: number;
@@ -238,6 +243,7 @@ export class SubagentManager {
     this.mode = options.mode ?? "simple";
     this.maxThreads = positiveInteger(options.maxThreads) ?? DEFAULT_MAX_THREADS;
     this.maxDepth = Math.max(options.surfaceStore ? 1 : 0, nonNegativeInteger(options.maxDepth) ?? DEFAULT_MAX_DEPTH);
+    this.maxChildrenPerNonRootAgent = positiveInteger(options.maxChildrenPerNonRootAgent) ?? null;
     this.maxConcurrentRooms = positiveInteger(options.maxConcurrentRooms) ?? this.maxThreads;
     this.maxMembersPerRoom = positiveInteger(options.maxMembersPerRoom) ?? this.maxThreads;
     this.peerChallengeRounds = nonNegativeInteger(options.peerChallengeRounds) ?? 0;
@@ -259,6 +265,7 @@ export class SubagentManager {
       roomTitle: null,
       roomKind: null,
       role: null,
+      trackClaimId: null,
       surfaceId: null,
       status: "running",
       createdAt: new Date().toISOString(),
@@ -288,6 +295,27 @@ export class SubagentManager {
     return this.startFoundationScout(surfaceId, firstAgentId);
   }
 
+  public spawnTrackWorker(assignment: TrackWorkerAssignment): void {
+    if (this.stopped) throw new Error("The track session is stopping.");
+    const role = this.requireDelegationRole(assignment.role);
+    const message = [
+      `Track worker assignment: ${role.label}.`,
+      `Canonical finding: ${assignment.claimId}, expected revision ${assignment.claimRevision}.`,
+      "Read the current claim and its evidence before acting. Recheck its revision before a write.",
+      "You may spawn one subagent for a bounded independent check. For independent verification, choose Reviewer with fork_turns=none, then inspect its durable evidence before a decision.",
+      "Work only on this assignment and its necessary component evidence. Record durable results; do not call track.checkpoint.",
+      "If the claim is no longer eligible, stop without manufacturing work. Return the result and exact remaining dependency to the discovery lead.",
+    ].join("\n");
+    this.spawn("root", `automatic_track_${randomUUID()}`, {
+      task_name: `track_${assignment.role}_${randomUUID().replaceAll("-", "").slice(0, 10)}`,
+      role: assignment.role,
+      track_claim_id: assignment.claimId,
+      ...(assignment.surfaceId ? { surface_id: assignment.surfaceId } : {}),
+      fork_turns: "none",
+      message,
+    }, [], false, false, false, true);
+  }
+
   private startFoundationScout(surfaceId: string, firstAgentId: string): SurfaceFoundationScout {
     this.foundationScouts.set(surfaceId, { status: "queued", agentPath: null, reason: "Starting the foundation scout." });
     try {
@@ -295,7 +323,7 @@ export class SubagentManager {
         task_name: `surface_foundation_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
         surface_id: surfaceId,
         ...(this.delegationRoles.has("discoverer") ? { role: "discoverer" } : {}),
-        message: "Give this component a concise research foundation. Identify its role, neighboring components, relevant trust boundaries, what is already known, and useful open leads. Use surface.update for partial notes and a Mermaid threatModel.diagram grounded in observed or explicitly assumed relationships. When scope and reconnaissance support an assessment, score impact, reachability, relevance, exposure, and precedence from 1 to 10 with a basis for each in foundation.ranking; leave it unscored otherwise. Record useful threat-model context; progress follows the current claims and can change later. Keep hypotheses and tests in research records rather than making them child surfaces. Create a child surface only for a concrete subcomponent with a stable noun name. Coordinate with the main agent and report useful observations and limits.",
+        message: "Give this component a concise research foundation. First check whether it can affect an eligible deployed target under the recorded program rules. If policy or target evidence establishes a component-level scope decision, record foundation.scopeAssessment with a basis and references; leave it unset when uncertain, and never infer exclusion from a test or example name alone. Identify its role, neighboring components, relevant trust boundaries, what is already known, and useful open leads. Use surface.update for partial notes and a Mermaid threatModel.diagram grounded in observed or explicitly assumed relationships. When scope and reconnaissance support an assessment, score impact, reachability, relevance, exposure, and precedence from 1 to 10 with a basis for each in foundation.ranking; leave it unscored otherwise. Record useful threat-model context; progress follows the current claims and can change later. Keep hypotheses and tests in research records rather than making them child surfaces. Create a child surface only for a concrete subcomponent with a stable noun name. Coordinate with the main agent and report useful observations and limits.",
       }, [], false, false, true);
       const agentPath = typeof result.task_name === "string" ? result.task_name : null;
       if (firstAgentId !== "root") {
@@ -343,7 +371,8 @@ export class SubagentManager {
       return session.id === "root" ? [] : [this.createSendMessageTool(agentId), this.createListTool(agentId)];
     }
     const tools = [
-      ...(session.depth < this.maxDepth ? [this.createSpawnTool(agentId)] : []),
+      ...(session.depth < this.maxDepth && !this.hasReachedChildLimit(session.id)
+        ? [this.createSpawnTool(agentId)] : []),
       this.createSendMessageTool(agentId),
       this.createFollowupTool(agentId),
       this.createInterruptTool(agentId),
@@ -761,6 +790,7 @@ export class SubagentManager {
     _roomCreation = false,
     deferLaunch = false,
     automaticFoundation = false,
+    automaticTrackWorker = false,
   ): Record<string, unknown> {
     const parentMessages = contextOverride ? [...contextOverride] : this.takeContextSnapshot(parentId, toolCallId);
     const parent = this.ensureSession(parentId);
@@ -775,13 +805,18 @@ export class SubagentManager {
     if ([...this.sessions.values()].some((session) => session.path === path)) {
       throw new Error(`Agent task path already exists: ${path}`);
     }
+    if (this.hasReachedChildLimit(parentId)) {
+      throw new Error("This Track worker has already spawned its one subagent. Use followup_task for that child.");
+    }
     const activeCount = [...this.sessions.values()].filter((session) => session.id !== "root" && session.status === "running").length;
     if (activeCount >= this.maxThreads) {
       throw new Error(`Subagent concurrency limit reached (${this.maxThreads}).`);
     }
 
     const message = requiredString(input.message, "message");
-    const surfaceId = this.options.surfaceStore ? requiredString(input.surface_id, "surface_id") : null;
+    const surfaceId = this.options.surfaceStore
+      ? automaticTrackWorker ? optionalString(input.surface_id) ?? null : requiredString(input.surface_id, "surface_id")
+      : null;
     if (surfaceId) this.options.surfaceStore?.require(surfaceId, true);
     const forkTurns = normalizeForkTurns(optionalString(input.fork_turns) ?? "none");
     const providerOverride = optionalString(input.provider);
@@ -795,7 +830,7 @@ export class SubagentManager {
       throw new Error("Full-history children inherit the parent provider, model, and reasoning effort. Omit routing overrides or use partial/no inheritance.");
     }
     let inheritedMessages = inheritMessages(parentMessages, toolCallId, forkTurns);
-    const preference = automaticFoundation && delegationRole?.id
+    const preference = (automaticFoundation || automaticTrackWorker) && delegationRole?.id
       && !this.providerPreferences.some((candidate) => !candidate.roles || candidate.roles.includes(delegationRole.id))
       ? undefined
       : this.selectProviderPreference(providerOverride, modelOverride, parent, delegationRole?.id);
@@ -838,6 +873,7 @@ export class SubagentManager {
       roomTitle,
       roomKind,
       role,
+      trackClaimId: automaticTrackWorker ? optionalString(input.track_claim_id) ?? null : null,
       surfaceId,
       status: "pending",
       createdAt: new Date().toISOString(),
@@ -856,7 +892,15 @@ export class SubagentManager {
     }
     if (roomName) this.rooms.get(roomName)?.memberIds.push(id);
     if (!deferLaunch) {
-      this.launch(child, message, inheritedMessages);
+      try { this.launch(child, message, inheritedMessages); }
+      catch (error) {
+        this.sessions.delete(id);
+        if (roomName) {
+          const room = this.rooms.get(roomName);
+          if (room) room.memberIds = room.memberIds.filter((memberId) => memberId !== id);
+        }
+        throw error;
+      }
       void this.emitSessionActivity(child, { type: "spawned", message });
     }
     return {
@@ -1295,6 +1339,12 @@ export class SubagentManager {
     return [...this.sessions.values()].filter((session) => session.id !== "root" && session.status === "running").length;
   }
 
+  private hasReachedChildLimit(parentId: string): boolean {
+    return parentId !== "root" && this.maxChildrenPerNonRootAgent !== null
+      && [...this.sessions.values()].filter((session) => session.parentId === parentId).length
+        >= this.maxChildrenPerNonRootAgent;
+  }
+
   private hasThreadCapacity(additional = 1): boolean {
     return this.activeThreadCount() + additional <= this.maxThreads;
   }
@@ -1399,6 +1449,8 @@ export class SubagentManager {
       provider: session.provider,
       model: session.model,
       reasoningEffort: session.reasoning ?? null,
+      ...(session.role ? { role: session.role } : {}),
+      ...(session.trackClaimId ? { trackClaimId: session.trackClaimId } : {}),
       ...(surfaceId ? { surfaceId } : {}),
       ...(surfaceId && this.options.surfaceStore ? { surfaceTrail: this.options.surfaceStore.hierarchy(surfaceId) } : {}),
       ...(session.roomName ? {

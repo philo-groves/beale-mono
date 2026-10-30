@@ -26,6 +26,7 @@ export type {
   ResearchProfileSnapshot,
 } from "./knowledge-types.js";
 export * from "./report-tools.js";
+export * from "./triage-tools.js";
 export * from "./model-context.js";
 export * from "./auth.js";
 export * from "./custom-providers.js";
@@ -48,6 +49,7 @@ export * from "./research-resources.js";
 export { sourceRepositoryCheckoutPath } from "./source-materializer.js";
 export * from "./surfaces.js";
 export * from "./research-track.js";
+export * from "./track-funnel.js";
 export * from "./research-kit-guidance.js";
 export * from "./resource-scope-review.js";
 export * from "./shell-tool.js";

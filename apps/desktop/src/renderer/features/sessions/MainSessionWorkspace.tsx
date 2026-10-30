@@ -209,7 +209,7 @@ export const MainSessionWorkspace = memo(function MainSessionWorkspace({
     ensurePanelWidth,
     beginResize,
     handleResizeKeyDown
-  } = useResizableResearchSidePanel(showResearchSidePanel);
+  } = useResizableResearchSidePanel(showResearchSidePanel, sidePanelRunId);
   const researchSideColumnRef = useRef<HTMLDivElement | null>(null);
   useAutoExpandResearchSummary(
     researchSideColumnRef,

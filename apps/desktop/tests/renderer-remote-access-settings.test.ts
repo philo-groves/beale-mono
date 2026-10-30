@@ -40,7 +40,7 @@ describe('local app server remote access settings', () => {
       onSaveRemoteAccess: async () => undefined
     }));
 
-    expect(html).not.toContain('<h2>iPhone Remote Access</h2>');
+    expect(html).toContain('Local App Server</h2>');
     expect(html).not.toContain('Publish the loopback app-server to this tailnet');
     expect(html).toContain('beale-mac.example.ts.net');
     expect(html).toContain('https://beale-mac.example.ts.net:47174');

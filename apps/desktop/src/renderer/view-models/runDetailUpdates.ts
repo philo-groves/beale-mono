@@ -1,9 +1,11 @@
 import type { RunDetail, RunDetailUpdate, RunDetailUpdateCursor, RunHistoryPage, SubagentPreviewRecord, TraceEventRecord, TranscriptMessageRecord, WorkspaceSnapshot } from '@shared/types';
 import type { DevMetricDetail } from '../devInstrumentation';
 
-export function selectRunId(current: string | null, snapshot: WorkspaceSnapshot | null): string | null {
+export function selectRunId(current: string | null, snapshot: WorkspaceSnapshot | null,
+  pending?: { runId: string; workspaceId: string } | null): string | null {
   if (!snapshot) return null;
   if (current && snapshot.runs.some(({ run }) => run.id === current)) return current;
+  if (current && pending?.runId === current && pending.workspaceId === snapshot.workspace.workspaceId) return current;
   return null;
 }
 

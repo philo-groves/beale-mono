@@ -10,6 +10,7 @@ import { mergeRemoteSessionHistory, remoteRunDetail, remoteSessionHistoryPage, r
 import { buildTraceDisplayEventsForAgentPath } from '../src/renderer/view-models/traceDisplay';
 import { commentaryMessagesForSession } from '../src/renderer/view-models/commentary';
 import { sessionDurationTiming } from '../src/renderer/view-models/sessionHeader';
+import { subagentSummaries } from '../src/renderer/view-models/subagents';
 
 const catalog: FleetRemoteCatalog = {
   serverId: 'server-example',
@@ -49,6 +50,18 @@ test('remote workspaces and sessions use the standard sidebar hierarchy', () => 
   expect(html).not.toContain('sidebar-surface-slot');
 });
 
+test('remote track sessions reserve the right sidebar for active worker cards', () => {
+  const trackCatalog: FleetRemoteCatalog = { ...catalog,
+    sessions: [{ ...catalog.sessions[0]!, id: 'track_example' }] };
+  const html = renderToStaticMarkup(createElement(RemoteFleetWorkspace, {
+    serverId: 'server-example', serverName: 'Example server', catalog: trackCatalog,
+    workspaceId: 'workspace-example', sessionId: 'track_example', newResearchOpen: false, automations: false,
+    error: null, onLaunched: () => undefined
+  }));
+  expect(html).toContain('main-session-grid research-details-open');
+  expect(html).toContain('aria-label="Session summary"');
+});
+
 test('remote workspace details render the workspace dashboard from the shared details DTO', () => {
   const details: BealeAppServerWorkspaceDetails = {
     schemaVersion: 1,
@@ -77,7 +90,7 @@ test('remote workspace details render the workspace dashboard from the shared de
   expect(html).not.toContain('<span>Resources</span>');
   expect(html).toContain('Surfaces');
   expect(html).toContain('Rules');
-  expect(html).toContain('Targets');
+  expect(html).not.toContain('<span>Targets</span>');
   expect(html).toContain('Settings');
   expect(html).toContain('Runbooks');
   expect(html).toContain('Reports');
@@ -100,11 +113,6 @@ test('remote workspace details render the workspace dashboard from the shared de
 
   const surfaces = renderToStaticMarkup(createElement(RemoteWorkspaceDetails, { serverId: 'server-example', details, initialView: 'surfaces' }));
   expect(surfaces).toContain('aria-label="Workspace surfaces"');
-
-  const targets = renderToStaticMarkup(createElement(RemoteWorkspaceDetails, { serverId: 'server-example', details, initialView: 'targets' }));
-  expect(targets).toContain('workspace-targets-panel');
-  expect(targets).toContain('<h2>ExampleCo Research Targets</h2>');
-  expect(targets).toContain('Selected on this app server');
 
   const populated: BealeAppServerWorkspaceDetails = { ...details, memory: { ...details.memory,
     nodeCount: 1, nodeTypeCounts: { observation: 1 },
@@ -169,6 +177,25 @@ test('remote session duration excludes time between active periods', () => {
   } });
   expect(detail?.activityIntervals).toHaveLength(2);
   expect(sessionDurationTiming(detail!, Date.parse('2026-01-03T00:05:00.000Z'))?.durationMs).toBe(15 * 60_000);
+});
+
+test('remote sessions attribute older worker events to their original attempt', () => {
+  const detail = remoteRunDetail({ result: {
+    session: {
+      id: 'session-example', status: 'active', title: 'Synthetic review', prompt: 'Inspect example.test',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T01:00:00.000Z', metadata: {},
+      attempts: [
+        { id: 'attempt_previous', startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T00:30:00.000Z' },
+        { id: 'attempt_current', startedAt: '2026-01-01T01:00:00.000Z' }
+      ]
+    },
+    events: [{ id: 'event-worker', kind: 'agent.event', timestamp: '2026-01-01T00:10:00.000Z',
+      payload: { type: 'subagent.activity', action: 'spawned', agentPath: '/root/worker', status: 'running' } }]
+  } });
+  expect(detail?.attempts.map((attempt) => attempt.id)).toEqual(['attempt_previous', 'attempt_current']);
+  expect(detail?.traceEvents[0]?.attemptId).toBe('attempt_previous');
+  expect(subagentSummaries(detail?.traceEvents ?? [], 'active', 'commentary', [], 'attempt_current')[0]?.status)
+    .toBe('interrupted');
 });
 
 test('remote canonical events feed the local commentary projection', () => {

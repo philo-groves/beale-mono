@@ -24,7 +24,6 @@ import {
   commentaryMessagesForSession,
   commentaryRepositoryMetadataForScope,
   hydrateCommentaryToolCall,
-  surfaceDiagramToolLine,
   type CommentaryToolCall,
   type CommentaryMessage
 } from '../../view-models/commentary';
@@ -60,6 +59,15 @@ const returnToolCallWithoutLoading = async (toolCall: CommentaryToolCall): Promi
 const INLINE_SINGULAR_TOOL_NAMES = new Set(['file.read', 'shell.run']);
 
 export type CommentaryViewState = 'new-research' | 'session';
+
+export function commentaryStreamingScopeKey(
+  detail: RunDetail | null,
+  selectedRunId: string | null,
+  showBackToMain: boolean,
+  viewedAgentPath: string
+): string | null {
+  return detail ? `${selectedRunId ?? detail.run.id}:${detail.run.id}:${showBackToMain}:${viewedAgentPath}` : null;
+}
 
 export const CommentaryView = memo(function CommentaryView({
   busy,
@@ -161,7 +169,7 @@ export const CommentaryView = memo(function CommentaryView({
     traceEvents: detail?.traceEvents.length ?? 0,
     displayEvents: events.length
   }), [detail, events, repositoryMetadata, sessionSetupPending, showBackToMain]);
-  const streamingScopeKey = detail ? `${selectedRunId ?? detail.run.id}:${detail.run.id}:${showBackToMain}` : null;
+  const streamingScopeKey = commentaryStreamingScopeKey(detail, selectedRunId, showBackToMain, viewedAgentPath);
   const streamingMode = commentaryStreamingModeForUserAgent(typeof navigator === 'undefined' ? '' : navigator.userAgent);
   const [reducedMotion, setReducedMotion] = useState(() => typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
@@ -685,7 +693,7 @@ export const CommentaryView = memo(function CommentaryView({
           <span>Back to Lead</span>
         </button>
       ) : null}
-      {loading ? <SessionLoadingState label="Loading session" /> : null}
+      {loading ? <SessionLoadingState label={sessionSetupPending ? 'Preparing track session' : 'Loading session'} /> : null}
       {!detail && onInitialInstruction ? (
         <div className="main-commentary-scroll" aria-label={newResearch ? 'New research commentary' : 'No report review started yet'}>
           <div className="main-commentary-list">{emptyContent}</div>
@@ -969,10 +977,11 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
   const label = commentaryMessageLabel(message.kind, message.taskAction);
   const icon = commentaryMessageIcon(message.kind, message.toolName);
   const hasAgentHeader = message.kind === 'task' && message.taskAction !== 'spawn';
-  const isAgentMessage = message.kind === 'task' && (message.taskAction === 'message' || message.taskAction === 'room_message');
+  const isFlatAgentMessage = message.kind === 'task'
+    && (message.taskAction === 'message' || message.taskAction === 'followup');
+  const isAgentMessage = isFlatAgentMessage || message.kind === 'task' && message.taskAction === 'room_message';
   const originIsCurrentAgent = message.taskAuthorAgentPath === viewedAgentPath
     || !message.taskAuthorAgentPath && viewedAgentPath === '/root' && message.taskOrigin === 'Lead';
-  const destinationIsCurrentAgent = message.taskRecipientAgentPath === viewedAgentPath;
   const communicationClass = message.kind === 'task'
     ? hasAgentHeader
       ? originIsCurrentAgent ? 'agent-communication-outbound' : 'agent-communication-inbound'
@@ -986,16 +995,8 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
   const messageContent = message.kind === 'marker' || message.kind === 'progress' ? null : (
     <div className="main-commentary-message-content">
       {message.kind === 'diagram' && message.surfaceDiagram ? (
-        <>
-          <div className="main-commentary-diagram-tool-line">
-            <Wrench size={16} aria-hidden="true" />
-            <span>{message.contentMarkdown}</span>
-          </div>
-          {message.contentMarkdown === surfaceDiagramToolLine(message.surfaceDiagram) ? (
-            <SurfaceThreatDiagram source={message.surfaceDiagram.source}
-              surfaceName={message.surfaceDiagram.surfaceName} />
-          ) : null}
-        </>
+        <SurfaceThreatDiagram source={message.surfaceDiagram.source}
+          surfaceName={message.surfaceDiagram.surfaceName} presentation="session" />
       ) : message.kind === 'tool' ? (
         <CommentaryToolMessageContent
           message={message}
@@ -1041,15 +1042,19 @@ export const CommentaryMessageRow = memo(function CommentaryMessageRow({
           ))}
         </div>
       ) : hasAgentHeader ? (
-        <div className="main-commentary-agent-card">
+        <div className={`main-commentary-agent-card${isFlatAgentMessage ? ' is-communication' : ''}`}>
           <div className="main-commentary-agent-header">
             <div className="main-commentary-agent-route">
-              <Mail size={14} aria-hidden="true" />
-              <span className={`main-commentary-agent-name${originIsCurrentAgent ? ' is-current-agent' : ''}`}
-                title={message.taskOrigin}>{message.taskOrigin ?? 'Lead'}</span>
+              {isFlatAgentMessage
+                ? <span className="main-commentary-agent-mail-icon"><Mail size={16} aria-hidden="true" /></span>
+                : <Mail size={14} aria-hidden="true" />}
+              <span className="main-commentary-agent-name" title={message.taskOrigin}>
+                {message.taskOrigin ?? 'Lead'}
+              </span>
               <ArrowRight size={14} aria-hidden="true" />
-              <span className={`main-commentary-agent-name${destinationIsCurrentAgent ? ' is-current-agent' : ''}`}
-                title={message.taskDestination}>{message.taskDestination ?? 'Unknown recipient'}</span>
+              <span className="main-commentary-agent-name" title={message.taskDestination}>
+                {message.taskDestination ?? 'Unknown recipient'}
+              </span>
             </div>
             <span className="main-commentary-agent-type">{label}</span>
           </div>
@@ -1513,9 +1518,9 @@ export function commentaryMessageLabel(
 ): string | null {
   if (kind === 'task') {
     if (taskAction === 'spawn') return 'New subagent task';
-    if (taskAction === 'followup') return 'Follow-up task';
+    if (taskAction === 'followup') return 'Follow-Up';
     if (taskAction === 'room_message') return 'Room message';
-    return 'Inter-Agent Message';
+    return 'Collaboration';
   }
   return null;
 }

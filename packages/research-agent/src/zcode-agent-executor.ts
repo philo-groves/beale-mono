@@ -15,6 +15,7 @@ import {
   type SubagentRunResult,
   type SubagentRuntimeFactory,
 } from "./subagent-orchestration.js";
+import type { TrackWorkerAssignment } from "./track-funnel.js";
 import { createResearchSystemPrompt } from "./system-prompt.js";
 import type { SurfaceStore } from "./surfaces.js";
 import {
@@ -53,6 +54,7 @@ export interface CreateZCodeAgentExecutorOptions {
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<readonly string[]>;
   subagents?: false;
   subagentRuntimeFactory?: SubagentRuntimeFactory;
+  trackWorkerAssignments?: readonly TrackWorkerAssignment[];
   collaboration?: ResearchCollaborationConfig;
   collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
@@ -157,7 +159,8 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
 
       const collaboration = options.collaboration;
       const manualDelegation = options.subagents !== false && collaboration?.mode !== "solo";
-      const collaborationManager = options.agentIdentity || (!manualDelegation && !options.surfaceStore)
+      const collaborationManager = options.agentIdentity || (!manualDelegation && !options.surfaceStore
+        && !options.trackWorkerAssignments?.length)
         ? null
         : createSubagentRuntime({
             rootProvider: "zai",
@@ -183,6 +186,9 @@ export function createZCodeAgentExecutor(options: CreateZCodeAgentExecutorOption
             },
             onToolEvent: (event) => emitResearchEvents(input.eventSink, [event], options.agentIdentity),
           }, options.subagentRuntimeFactory);
+      for (const assignment of options.trackWorkerAssignments ?? []) {
+        collaborationManager?.spawnTrackWorker?.(assignment);
+      }
       const agentTools = [
         ...(collaborationManager?.createTools("root") ?? []),
         ...(options.collaborationTools ?? []),
@@ -552,7 +558,7 @@ async function handleMcpRequest(
       result = {
         protocolVersion: "2025-11-25",
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "app-server", version: "0.9.5" },
+        serverInfo: { name: "app-server", version: "0.9.6" },
       };
     } else if (method === "tools/list") {
       result = { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })) };

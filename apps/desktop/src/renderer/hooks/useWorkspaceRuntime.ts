@@ -42,6 +42,8 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
   setWorkspaceRegistry: Dispatch<SetStateAction<WorkspaceRegistryState | null>>;
   setOpenAiStatus: Dispatch<SetStateAction<OpenAiAccountStatus | null>>;
   setSelectedRunId: Dispatch<SetStateAction<string | null>>;
+  selectPendingRunId: (runId: string, workspaceId: string) => void;
+  releasePendingRunId: (runId: string) => void;
   applySnapshot: (next: WorkspaceSnapshot | null, selectedRunIdOverride?: string) => void;
   loadSnapshot: () => Promise<void>;
   loadWorkspaceRegistry: () => Promise<void>;
@@ -56,6 +58,7 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
   const pendingSnapshotRef = useRef<WorkspaceSnapshot | null | undefined>(undefined);
   const pendingWorkspaceRegistryRef = useRef<WorkspaceRegistryState | null>(null);
   const appliedSnapshotRef = useRef<WorkspaceSnapshot | null>(null);
+  const pendingRunIdRef = useRef<{ runId: string; workspaceId: string } | null>(null);
   const snapshotActivityRef = useRef(0);
   const snapshotFrameRef = useRef<number | null>(null);
   const workspaceRegistryFrameRef = useRef<number | null>(null);
@@ -82,7 +85,7 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
       if (next) {
         setOpenAiStatus(next.openAi);
       }
-      setSelectedRunId((current) => selectedRunIdOverride ?? selectRunId(current, next));
+      setSelectedRunId((current) => selectedRunIdOverride ?? selectRunId(current, next, pendingRunIdRef.current));
     };
     if (previous?.workspace.workspacePath === next?.workspace.workspacePath
       && previous?.appServerMemory.loading === true && next?.appServerMemory.loading !== true) {
@@ -90,6 +93,15 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
     } else {
       startTransition(commit);
     }
+  }, []);
+
+  const selectPendingRunId = useCallback((runId: string, workspaceId: string): void => {
+    pendingRunIdRef.current = { runId, workspaceId };
+    setSelectedRunId(runId);
+  }, []);
+
+  const releasePendingRunId = useCallback((runId: string): void => {
+    if (pendingRunIdRef.current?.runId === runId) pendingRunIdRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -262,6 +274,8 @@ export function useWorkspaceRuntime(onError: (message: string) => void): {
     setWorkspaceRegistry,
     setOpenAiStatus,
     setSelectedRunId,
+    selectPendingRunId,
+    releasePendingRunId,
     applySnapshot,
     loadSnapshot,
     loadWorkspaceRegistry

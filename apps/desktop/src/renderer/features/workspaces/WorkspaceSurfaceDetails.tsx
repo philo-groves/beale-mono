@@ -125,6 +125,16 @@ export function WorkspaceSurfaceDetails({ surface, map, workspaceId = '', active
       || lead.securityTracking?.surfaceIds.includes(surface.id)));
   const childrenByParent = new Map<string, string[]>();
   const surfaceNames = new Map(map.surfaces.map((item) => [item.id, item.name]));
+  const surfaceById = new Map(map.surfaces.map((item) => [item.id, item]));
+  let excludedBy = surface.foundation?.scopeAssessment?.decision === 'not_applicable' ? surface : null;
+  let scopeAncestor = surface.parentId ? surfaceById.get(surface.parentId) : null;
+  const visitedScopeAncestors = new Set<string>();
+  while (scopeAncestor && !visitedScopeAncestors.has(scopeAncestor.id)) {
+    visitedScopeAncestors.add(scopeAncestor.id);
+    if (scopeAncestor.foundation?.scopeAssessment?.decision === 'not_applicable') excludedBy = scopeAncestor;
+    scopeAncestor = scopeAncestor.parentId ? surfaceById.get(scopeAncestor.parentId) : null;
+  }
+  const scopeAssessment = excludedBy?.foundation?.scopeAssessment ?? surface.foundation?.scopeAssessment;
   for (const item of map.surfaces) if (item.parentId) {
     childrenByParent.set(item.parentId, [...(childrenByParent.get(item.parentId) ?? []), item.id]);
   }
@@ -149,6 +159,7 @@ export function WorkspaceSurfaceDetails({ surface, map, workspaceId = '', active
   const surfaceTrajectories = workspaceMemories.filter((node) => node.type === 'trajectory'
     && node.surfaceId && descendantIds.has(node.surfaceId));
   const status = surface.resourceDirection === 'out_of_scope' ? 'Out of scope'
+    : excludedBy ? 'Not applicable'
     : surface.progressBlocker ? 'Blocked' : surface.coverageState.covered ? 'Covered'
     : surface.firstTouchedAt ? 'In progress' : 'Untouched';
   const firstTouchedModel = surface.firstTouchedModel?.trim() || null;
@@ -222,6 +233,14 @@ export function WorkspaceSurfaceDetails({ surface, map, workspaceId = '', active
         <p className="workspace-surface-details-description">{surface.description.trim() || 'No description recorded.'}</p>
       </section>
 
+      {scopeAssessment ? <section className="workspace-surface-details-section">
+        <h3>Scope applicability</h3>
+        <p>{scopeAssessment.decision === 'applicable' ? 'Applicable' : 'Not applicable'}
+          {excludedBy && excludedBy.id !== surface.id ? ` via ${excludedBy.name}` : ''}</p>
+        <p className="workspace-surface-details-description">{scopeAssessment.basis}</p>
+        <ul>{scopeAssessment.references.map((reference) => <li key={reference}>{reference}</li>)}</ul>
+      </section> : null}
+
       <SurfaceRankingChart ranking={surface.foundation?.ranking} />
 
       {surface.progressBlocker ? <section className="workspace-surface-details-section workspace-surface-details-blocker">
@@ -240,6 +259,12 @@ export function WorkspaceSurfaceDetails({ surface, map, workspaceId = '', active
           <h3>Discovery</h3>
           {surface.foundation?.discovery ? <p className="workspace-surface-details-description">{surface.foundation.discovery}</p>
             : <p className="workspace-surface-details-muted">No discovery note recorded.</p>}
+        </section>
+        <section className="workspace-surface-details-section workspace-surface-recon-list">
+          <h3>High Value Signals</h3>
+          {surface.foundation?.highValueSignals?.length ? <ul>{surface.foundation.highValueSignals.map((signal, index) => <li key={`${signal.kind}:${index}`}>
+            <strong>{signal.kind.replaceAll('_', ' ')}</strong><p>{signal.basis}</p>
+          </li>)}</ul> : <p className="workspace-surface-details-muted">None recorded.</p>}
         </section>
         <section className="workspace-surface-details-section workspace-surface-recon-list">
           <h3>Tech Stack</h3>

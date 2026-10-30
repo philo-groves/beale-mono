@@ -31,6 +31,31 @@ test("control stream queues steering and holds it while paused", async () => {
   input.destroy();
 });
 
+test("control stream removes a selected steering message from future guidance and queued delivery", async () => {
+  const input = new PassThrough();
+  const events = [];
+  const controls = new AppServerControlStream(input, (event) => events.push(event), [
+    { requestId: "steer_previous", instruction: "Review the example parser." },
+  ]);
+  controls.start();
+
+  input.write(`${JSON.stringify({ schemaVersion: 1, type: "pause" })}\n`);
+  input.write(`${JSON.stringify({ schemaVersion: 1, type: "steer", requestId: "steer_new", instruction: "Check the example decoder." })}\n`);
+  input.write(`${JSON.stringify({ schemaVersion: 1, type: "remove_steering", requestId: "remove_new", targetRequestId: "steer_new" })}\n`);
+  input.write(`${JSON.stringify({ schemaVersion: 1, type: "remove_steering", requestId: "remove_previous", targetRequestId: "steer_previous" })}\n`);
+  input.write(`${JSON.stringify({ schemaVersion: 1, type: "resume" })}\n`);
+  assert.deepEqual(await controls.takeSteeringInstructions(), []);
+  assert.deepEqual(controls.getActiveSteeringInstructions(), []);
+  assert.equal(events.find((event) => event.requestId === "remove_new")?.accepted, true);
+  assert.equal(events.find((event) => event.requestId === "remove_previous")?.accepted, true);
+
+  input.write(`${JSON.stringify({ schemaVersion: 1, type: "remove_steering", requestId: "remove_again", targetRequestId: "steer_new" })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.at(-1)?.accepted, false);
+  controls.close();
+  input.destroy();
+});
+
 test("control stream rejects malformed messages without closing", async () => {
   const input = new PassThrough();
   const events = [];

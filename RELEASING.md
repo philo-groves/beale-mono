@@ -1,6 +1,6 @@
 # Releasing Beale
 
-Beale, app-server, and the two runtime packages advance together. The current coordinated candidate is `0.9.5`. A version number in source is not a published release. The macOS and Windows source installer clones the `release` branch and builds locally. Native installers with in-app updates are published by the Release workflow on a version tag.
+Beale, app-server, and the two runtime packages advance together. The current coordinated candidate is `0.9.6`. A version number in source is not a published release. The macOS and Windows source installer clones the `release` branch and builds locally. Native installers with in-app updates are published by the Release workflow on a version tag.
 
 ## Change lanes
 

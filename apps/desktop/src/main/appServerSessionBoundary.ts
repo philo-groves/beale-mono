@@ -1352,10 +1352,20 @@ function sessionDetail(
     session.id,
     event,
     eventSequenceOffset + index + 1
-  ));
+  ).map((trace) => trace.attemptId ? trace : {
+    ...trace, attemptId: attemptIdForCanonicalEvent(session, trace.createdAt)
+  }));
+  const removedSteeringRequestIds = new Set(events.flatMap((event) => {
+    if (event.kind !== 'beale.steering_removed') return [];
+    const targetRequestId = recordValue(event.payload)?.targetRequestId;
+    return typeof targetRequestId === 'string' ? [targetRequestId] : [];
+  }));
   const persistedTranscripts = uniqueCorrelatedTranscripts(latestRecords(events.flatMap((event) => event.kind === 'beale.transcript'
     ? recordArrayValue<TranscriptMessageRecord>(event.payload)
-    : [])));
+    : []))).map((message) => message.source === 'user_steering'
+      && removedSteeringRequestIds.has(String(message.metadata?.controlRequestId ?? ''))
+      ? { ...message, metadata: { ...message.metadata, steeringRemoved: true } }
+      : message);
   const persistedTranscriptKeys = new Set(persistedTranscripts.flatMap((message) => {
     const key = transcriptCorrelationKey(message);
     return key ? [key] : [];
@@ -1552,8 +1562,8 @@ function transcriptFromCanonicalModelEvent(
 
 function attemptIdForCanonicalEvent(session: AppServerSessionRecord, timestamp: string): string | null {
   return [...session.attempts].reverse().find((attempt) => (
-    attempt.startedAt <= timestamp && (!attempt.endedAt || timestamp <= attempt.endedAt)
-  ))?.id ?? session.attempts.at(-1)?.id ?? null;
+    attempt.startedAt <= timestamp
+  ))?.id ?? null;
 }
 
 function transcriptCorrelationKey(message: TranscriptMessageRecord): string | null {

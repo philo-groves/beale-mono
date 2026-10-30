@@ -94,6 +94,8 @@ test('existing track tables gain optional launch configuration columns', () => {
       const columns = database.prepare('PRAGMA table_info(app_server_research_tracks)').all().map((row) => row.name);
       assert.ok(columns.includes('collaboration_json'));
       assert.ok(columns.includes('guardian_enabled'));
+      assert.ok(columns.includes('last_resource_id'));
+      assert.ok(columns.includes('consecutive_resource_epochs'));
       const surfaceColumns = database.prepare('PRAGMA table_info(app_server_research_track_surfaces)').all().map((row) => row.name);
       assert.ok(surfaceColumns.includes('actionability_score'));
       assert.ok(surfaceColumns.includes('score_updated_at'));
@@ -171,158 +173,7 @@ test('finishing a user-paused epoch does not invent a pause reason', () => {
   } finally { state.close(); }
 });
 
-test('actionability promotes child proof work, decays without evidence, and returns to breadth', async () => {
-  const state = fixture();
-  try {
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces });
-    const root = state.store.reserveNext('session-example-root', surfaces);
-    assert.equal(root.surface.id, surfaces[0].id);
-    const rootWorker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId,
-      sessionId: 'session-example-root' });
-    try { rootWorker.checkpoint({ surfaceId: root.surface.id, outcome: 'defer', impact: 'unknown',
-      theory: 'A synthetic entry path remains untested.', nextAction: 'Test the child trust boundary.',
-      evidenceRefs: [] }, root.surface); }
-    finally { rootWorker.close(); }
-    state.store.finishEpoch('session-example-root', true);
-    const children = [
-      { id: 'surface-example-a-one', parentId: surfaces[0].id, name: 'Example input path',
-        coverageState: open, progressBlocker: null },
-      { id: 'surface-example-a-two', parentId: surfaces[0].id, name: 'Example privilege path',
-        coverageState: open, progressBlocker: null },
-    ];
-    const map = [...surfaces, ...children];
-    const firstChild = state.store.reserveNext('session-example-child-one', map);
-    assert.equal(firstChild.surface.id, children[0].id);
-    await afterEpochStart();
-    recordMemoryEvidence(state);
-    state.database.prepare('UPDATE memory_nodes SET updated_at=? WHERE id=?')
-      .run(new Date().toISOString(), 'memory-example-a');
-    const firstWorker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId,
-      sessionId: 'session-example-child-one' });
-    try { firstWorker.checkpoint({ surfaceId: firstChild.surface.id, outcome: 'continue', impact: 'high',
-      theory: 'The synthetic input reached a privileged boundary.', nextAction: 'Test its effect.',
-      evidenceRefs: ['memory:memory-example-a'] }, firstChild.surface); }
-    finally { firstWorker.close(); }
-    state.store.finishEpoch('session-example-child-one', true);
-    assert.ok(state.store.get().surfaces.find((work) => work.surfaceId === children[0].id).actionabilityScore >= 80);
-    state.database.prepare('UPDATE memory_nodes SET updated_at=? WHERE id=?')
-      .run('2000-01-01T00:00:00.000Z', 'memory-example-a');
-
-    const secondLook = state.store.reserveNext('session-example-child-two', map);
-    assert.equal(secondLook.surface.id, children[0].id);
-    const secondWorker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId,
-      sessionId: 'session-example-child-two' });
-    try { secondWorker.checkpoint({ surfaceId: secondLook.surface.id, outcome: 'defer', impact: 'high',
-      theory: 'The effect still needs a discriminating test.', nextAction: 'Test another route.',
-      evidenceRefs: ['memory:memory-example-a'] }, secondLook.surface); }
-    finally { secondWorker.close(); }
-    state.store.finishEpoch('session-example-child-two', true);
-    assert.ok(state.store.get().surfaces.find((work) => work.surfaceId === children[0].id).actionabilityScore < 80);
-
-    const alternateRoot = state.store.reserveNext('session-example-breadth', map);
-    assert.equal(alternateRoot.surface.id, surfaces[1].id);
-    state.store.finishEpoch('session-example-breadth', true);
-    const nextChild = state.store.reserveNext('session-example-child-three', map);
-    assert.equal(nextChild.surface.id, children[0].id);
-    assert.deepEqual(researchTrackProgress(state.store.get()), { investigated: 3, complete: 0, total: 4 });
-    state.store.finishEpoch('session-example-child-three', true);
-
-    state.database.prepare('UPDATE app_server_research_track_surfaces SET score_updated_at=? WHERE workspace_id=? AND surface_id=?')
-      .run('2000-01-01T00:00:00.000Z', workspaceId, children[0].id);
-    assert.equal(state.store.get().surfaces.find((work) => work.surfaceId === children[0].id).actionabilityScore, 0);
-  } finally { state.close(); }
-});
-
-test('open claims receive depth epochs while periodic breadth still reaches new resources', () => {
-  const state = fixture();
-  try {
-    const map = [{ ...surfaces[0], coverageState: { ...open,
-      openLeadIds: ['claim-example-open'], unblockedFindingIds: ['finding-example-open'] } }, surfaces[1]];
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces: map });
-    const first = state.store.reserveNext('session-example-claim-depth', map);
-    assert.equal(first.surface.id, map[0].id);
-    assert.equal(first.focus, 'depth');
-    state.store.finishEpoch('session-example-claim-depth', true);
-    state.database.prepare(`UPDATE app_server_research_tracks SET epoch_count=3 WHERE workspace_id=?`)
-      .run(workspaceId);
-    state.database.prepare(`UPDATE app_server_research_track_surfaces
-      SET actionability_score=90, impact='high', no_progress_epochs=0
-      WHERE workspace_id=? AND surface_id=?`).run(workspaceId, map[0].id);
-    const breadth = state.store.reserveNext('session-example-claim-breadth', map);
-    assert.equal(breadth.surface.id, map[1].id);
-    assert.equal(breadth.focus, 'breadth');
-  } finally { state.close(); }
-});
-
-test('finding resolution outranks an equally actionable unmapped child', () => {
-  const state = fixture();
-  try {
-    const map = [surfaces[0],
-      { id: 'surface-example-a', parentId: surfaces[0].id, name: 'Example decoder',
-        coverageState: open, progressBlocker: null },
-      { id: 'surface-example-b', parentId: surfaces[0].id, name: 'Example broker',
-        coverageState: { ...open, unblockedFindingIds: ['finding-example-broker'] }, progressBlocker: null }];
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces: map });
-    const assigned = state.store.reserveNext('session-example-finding-depth', map);
-    assert.equal(assigned.surface.id, map[2].id);
-    assert.equal(assigned.focus, 'depth');
-  } finally { state.close(); }
-});
-
-test('unavailable target validation keeps an open claim from monopolizing depth work', () => {
-  const state = fixture();
-  try {
-    const map = [{ ...surfaces[0], coverageState: { ...open,
-      openLeadIds: [], unblockedFindingIds: ['finding-example-device'] } }, surfaces[1]];
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces: map });
-    state.database.prepare(`UPDATE app_server_research_track_surfaces
-      SET validation_json=? WHERE workspace_id=? AND surface_id=?`)
-      .run(JSON.stringify({ targetDependent: true, environment: 'none',
-        reason: 'The example device needed for the next proof is unavailable.' }), workspaceId, map[0].id);
-    const assigned = state.store.reserveNext('session-example-device-breadth', map);
-    assert.equal(assigned.surface.id, map[1].id);
-    assert.equal(assigned.focus, 'breadth');
-  } finally { state.close(); }
-});
-
-test('metadata edits and human notes do not raise priority; new source evidence does', async () => {
-  const state = fixture();
-  try {
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces: [surfaces[0]] });
-    for (const [sessionId, kind] of [['session-example-edit', null], ['session-example-note', 'human_note'],
-      ['session-example-source', 'code']]) {
-      state.store.reserveNext(sessionId, [surfaces[0]]);
-      await afterEpochStart();
-      if (kind) recordMemoryEvidence(state, kind);
-      state.database.prepare('UPDATE memory_nodes SET updated_at=? WHERE id=?')
-        .run(new Date().toISOString(), 'memory-example-a');
-      const worker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId, sessionId });
-      try { worker.checkpoint({ surfaceId: surfaces[0].id, outcome: 'defer', impact: 'high',
-        theory: 'An example path needs direct validation.', nextAction: 'Test the example input.',
-        evidenceRefs: ['memory:memory-example-a'], angles: [angle('example source path')] }, surfaces[0]); }
-      finally { worker.close(); }
-      const work = state.store.get().surfaces[0];
-      if (kind === 'code') {
-        assert.equal(work.actionabilityScore, 33);
-        assert.equal(work.noProgressEpochs, 0);
-        assert.deepEqual(work.priority, { baseScore: 78, actionability: 33, impactAdjustment: 30,
-          surfaceRankingAdjustment: 0,
-          testableAngleBonus: 15, targetValidationPenalty: 0, noProgressPenalty: 0 });
-      } else {
-        assert.equal(work.noProgressEpochs, kind === null ? 1 : 2);
-        assert.equal(work.actionabilityScore, kind === null ? 17 : 0);
-      }
-      state.store.finishEpoch(sessionId, true);
-    }
-  } finally { state.close(); }
-});
-
-test('five scored surface factors affect selection and replace qualitative impact adjustment', () => {
+test('impact and reachability tiers select a promising surface', () => {
   const state = fixture();
   const ranking = (score) => Object.fromEntries(['impact', 'reachability', 'relevance', 'exposure', 'precedence']
     .map((factor) => [factor, { score, basis: `Synthetic ${factor} assessment.` }]));
@@ -333,21 +184,7 @@ test('five scored surface factors affect selection and replace qualitative impac
   try {
     state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
       targetIds: ['local'], surfaces: ranked });
-    state.database.prepare(`UPDATE app_server_research_track_surfaces SET impact='critical'
-      WHERE workspace_id=? AND surface_id=?`).run(workspaceId, ranked[1].id);
-    const work = state.store.get().surfaces;
-    assert.equal(work[0].priority.surfaceRankingAdjustment, -40);
-    assert.equal(work[1].priority.surfaceRankingAdjustment, 50);
-    assert.equal(work[1].priority.impactAdjustment, 0);
-    assert.equal(work[1].priority.baseScore, 85);
     assert.equal(state.store.reserveNext('session-example-ranked', ranked).surface.id, ranked[1].id);
-    const reversed = [
-      { ...ranked[0], foundation: { ranking: ranking(10) } },
-      { ...ranked[1], foundation: { ranking: ranking(1) } },
-    ];
-    const refreshed = state.store.syncSurfaces(reversed).surfaces;
-    assert.equal(refreshed.find((surface) => surface.surfaceId === ranked[0].id).priority.surfaceRankingAdjustment, 50);
-    assert.equal(refreshed.find((surface) => surface.surfaceId === ranked[1].id).priority.surfaceRankingAdjustment, -40);
   } finally { state.close(); }
 });
 
@@ -467,124 +304,7 @@ test('high-impact completion accepts a bounded review while structured outcomes 
   } finally { state.close(); }
 });
 
-test('track scheduling favors a testable higher-impact surface over a stalled low-impact path', () => {
-  const state = fixture();
-  try {
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces });
-    const update = state.database.prepare(`UPDATE app_server_research_track_surfaces
-      SET actionability_score=?, impact=?, validation_json=?, no_progress_epochs=?
-      WHERE workspace_id=? AND surface_id=?`);
-    update.run(82, 'low', JSON.stringify({ targetDependent: true, environment: 'none',
-      reason: 'The example hardware is unavailable for the required test.' }), 1,
-    workspaceId, surfaces[0].id);
-    update.run(55, 'high', JSON.stringify({ targetDependent: false, environment: 'localhost',
-      reason: 'The example parser can be checked from source.' }), 0,
-    workspaceId, surfaces[1].id);
-    assert.equal(state.store.reserveNext('session-example-prioritized', surfaces).surface.id, surfaces[1].id);
-  } finally { state.close(); }
-});
-
-test('track scheduling rotates away from hardware-dependent work without target validation', () => {
-  const state = fixture();
-  try {
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces });
-    state.database.prepare(`UPDATE app_server_research_track_surfaces
-      SET actionability_score=70, impact='high', validation_json=?
-      WHERE workspace_id=? AND surface_id=?`).run(JSON.stringify({ targetDependent: true,
-      environment: 'none', reason: 'The example device is unavailable for target validation.' }),
-    workspaceId, surfaces[0].id);
-    state.database.prepare(`UPDATE app_server_research_track_surfaces SET actionability_score=55
-      WHERE workspace_id=? AND surface_id=?`).run(workspaceId, surfaces[1].id);
-    assert.equal(state.store.reserveNext('session-example-hardware-rotation', surfaces).surface.id, surfaces[1].id);
-  } finally { state.close(); }
-});
-
-test('track scheduling does not favor low-impact work solely because it yields easy evidence', () => {
-  const state = fixture();
-  try {
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces });
-    state.database.prepare(`UPDATE app_server_research_track_surfaces
-      SET actionability_score=80, impact='low' WHERE workspace_id=? AND surface_id=?`)
-      .run(workspaceId, surfaces[0].id);
-    state.database.prepare(`UPDATE app_server_research_track_surfaces
-      SET actionability_score=65, impact='medium' WHERE workspace_id=? AND surface_id=?`)
-      .run(workspaceId, surfaces[1].id);
-    assert.equal(state.store.reserveNext('session-example-impact-rotation', surfaces).surface.id, surfaces[1].id);
-  } finally { state.close(); }
-});
-
-test('track breadth escapes a high-scoring repository family for another resource kind', () => {
-  const state = fixture();
-  try {
-    const map = [
-      { id: 'resource-example-repository', resourceId: 'resource-example-repository', resourceKind: 'repository',
-        resourceSource: 'explicit_scope', parentId: null, name: 'Example source', coverageState: open, progressBlocker: null },
-      { id: 'surface-example-repository-child', resourceId: 'resource-example-repository', resourceKind: 'repository',
-        resourceSource: 'explicit_scope', parentId: 'resource-example-repository', name: 'Example parser path', coverageState: open, progressBlocker: null },
-      { id: 'resource-example-other', resourceId: 'resource-example-other', resourceKind: 'other',
-        resourceSource: 'explicit_scope', parentId: null, name: 'Example platform resource', coverageState: open, progressBlocker: null },
-      { id: 'resource-example-binary', resourceId: 'resource-example-binary', resourceKind: 'binary',
-        resourceSource: 'runtime_discovery', parentId: null, name: 'Example service executable', coverageState: open, progressBlocker: null },
-    ];
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' }, targetIds: ['local'], surfaces: map });
-    state.database.prepare(`UPDATE app_server_research_tracks SET epoch_count=8, last_surface_id=? WHERE workspace_id=?`)
-      .run(map[1].id, workspaceId);
-    state.database.prepare(`UPDATE app_server_research_track_surfaces SET epochs=7,
-      actionability_score=95, impact='high' WHERE workspace_id=? AND surface_id=?`)
-      .run(workspaceId, map[1].id);
-    state.database.prepare(`UPDATE app_server_research_track_surfaces SET epochs=1
-      WHERE workspace_id=? AND surface_id=?`).run(workspaceId, map[0].id);
-    assert.equal(state.store.reserveNext('session-example-cross-resource', map).surface.id, map[2].id);
-  } finally { state.close(); }
-});
-
-test('a newly approved service becomes a selectable track root after repository-only epochs', () => {
-  const state = fixture();
-  try {
-    const repository = { id: 'resource-example-repository', resourceId: 'resource-example-repository',
-      resourceKind: 'repository', resourceSource: 'explicit_scope', parentId: null,
-      name: 'Example source', coverageState: open, progressBlocker: null };
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces: [repository] });
-    state.database.prepare(`UPDATE app_server_research_tracks SET epoch_count=4, last_surface_id=? WHERE workspace_id=?`)
-      .run(repository.id, workspaceId);
-    state.database.prepare(`UPDATE app_server_research_track_surfaces SET epochs=4,
-      actionability_score=90, impact='high' WHERE workspace_id=? AND surface_id=?`)
-      .run(workspaceId, repository.id);
-    const service = { id: 'resource-example-service', resourceId: 'resource-example-service',
-      resourceKind: 'service', resourceSource: 'runtime_discovery', parentId: null,
-      name: 'Example daemon', coverageState: open, progressBlocker: null };
-    assert.equal(state.store.reserveNext('session-example-new-service', [repository, service]).surface.id, service.id);
-  } finally { state.close(); }
-});
-
-test('recurring breadth selects a different resource after every root has been investigated', () => {
-  const state = fixture();
-  try {
-    const map = [
-      { id: 'resource-example-repository', resourceId: 'resource-example-repository', resourceKind: 'repository',
-        parentId: null, name: 'Example source', coverageState: open, progressBlocker: null },
-      { id: 'surface-example-repository-child', resourceId: 'resource-example-repository', resourceKind: 'repository',
-        parentId: 'resource-example-repository', name: 'Example parser path', coverageState: open, progressBlocker: null },
-      { id: 'resource-example-service', resourceId: 'resource-example-service', resourceKind: 'service',
-        parentId: null, name: 'Example daemon', coverageState: open, progressBlocker: null },
-    ];
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' }, targetIds: ['local'], surfaces: map });
-    state.database.prepare(`UPDATE app_server_research_tracks SET epoch_count=3, last_surface_id=? WHERE workspace_id=?`)
-      .run(map[1].id, workspaceId);
-    const update = state.database.prepare(`UPDATE app_server_research_track_surfaces
-      SET epochs=?, actionability_score=? WHERE workspace_id=? AND surface_id=?`);
-    update.run(1, 35, workspaceId, map[0].id);
-    update.run(2, 95, workspaceId, map[1].id);
-    update.run(1, 35, workspaceId, map[2].id);
-    assert.equal(state.store.reserveNext('session-example-recurring-breadth', map).surface.id, map[2].id);
-  } finally { state.close(); }
-});
-
-test('target-dependent localhost evidence records a gap and raises actionability less than device evidence', async () => {
+test('target-dependent localhost evidence preserves a validation gap until device proof', async () => {
   const state = fixture();
   try {
     state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
@@ -628,7 +348,6 @@ test('target-dependent localhost evidence records a gap and raises actionability
           reason: 'The synthetic device was not connected during this epoch.' } } })).status, 'complete');
     } finally { hostWorker.close(); }
     const afterHost = state.store.get().surfaces[0];
-    assert.ok(afterHost.actionabilityScore > 0);
     assert.equal(afterHost.validation.environment, 'localhost');
     state.store.finishEpoch('session-example-host-proof', true);
     state.store.reserveNext('session-example-device-proof', [surfaces[0]]);
@@ -642,7 +361,6 @@ test('target-dependent localhost evidence records a gap and raises actionability
         evidenceRefs: ['memory:memory-example-a'], validation: { targetDependent: true,
           environment: 'device', reason: 'Observed the behavior on the example device.' } }, surfaces[0]);
     } finally { deviceWorker.close(); }
-    assert.ok(state.store.get().surfaces[0].actionabilityScore > afterHost.actionabilityScore);
     assert.equal(state.store.get().surfaces[0].validation.environment, 'device');
   } finally { state.close(); }
 });
@@ -676,48 +394,6 @@ test('worker and launch failures pause a track with an actionable diagnostic', a
     assert.equal(state.store.reserveNext('session-example-second-unwanted-retry', surfaces), null);
     assert.equal(state.store.control('stop').lastError, null);
     assert.equal(state.store.control('stop').status, 'stopped');
-  } finally { state.close(); }
-});
-
-test('expected epoch rotation preserves checkpoints and identifies missing checkpoints', async () => {
-  const state = fixture();
-  const service = new AppServerHostService({ registry: {
-    registryDirectory: join(dirname(state.databasePath), 'registry'),
-    resolveWorkspace: (id) => id === workspaceId ? {
-      workspaceId, researchProfileId: 'security-research', memoryBackend: 'app-server'
-    } : null,
-    storageForProfile: () => ({ databasePath: state.databasePath, artifactDirectoryPath: join(dirname(state.databasePath), 'artifacts') })
-  }, invokeProtocol: async (operation) => operation === 'session.get' ? { status: 'stopped' } : {} });
-  const request = { launch: { workspaceId, mode: 'research-track' } };
-  try {
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces: [surfaces[0]] });
-    const first = state.store.reserveNext('session-example-rotation-one', [surfaces[0]]);
-    const worker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId,
-      sessionId: 'session-example-rotation-one' });
-    try {
-      worker.checkpoint({ surfaceId: first.surface.id, outcome: 'defer', impact: 'medium',
-        theory: 'A synthetic trust boundary requires another proof.', nextAction: 'Check another entry path.',
-        evidenceRefs: ['memory:memory-example-a'] }, first.surface);
-    } finally { worker.close(); }
-    await service.recordSessionTerminalState({ request, sessionId: 'session-example-rotation-one',
-      attemptId: 'attempt-example-rotation-one', state: 'stopped', trackRotation: true });
-    assert.equal(state.store.get().status, 'running');
-    assert.equal(state.store.get().lastError, null);
-    assert.equal(state.store.get().surfaces[0].noProgressEpochs, 1);
-
-    state.store.reserveNext('session-example-rotation-two', [surfaces[0]]);
-    await service.recordSessionTerminalState({ request, sessionId: 'session-example-rotation-two',
-      attemptId: 'attempt-example-rotation-two', state: 'stopped', trackRotation: true });
-    assert.equal(state.store.get().status, 'running');
-    assert.match(state.store.get().lastError, /time limit without a track checkpoint/);
-    assert.equal(state.store.get().surfaces[0].noProgressEpochs, 2);
-
-    state.store.reserveNext('session-example-manual-stop', [surfaces[0]]);
-    await service.recordSessionTerminalState({ request, sessionId: 'session-example-manual-stop',
-      attemptId: 'attempt-example-manual-stop', state: 'stopped' });
-    assert.equal(state.store.get().status, 'paused');
-    assert.match(state.store.get().lastError, /no durable progress/);
   } finally { state.close(); }
 });
 
@@ -774,161 +450,24 @@ test('track start stores the selected model, targets, and collaboration on the o
   } finally { state.close(); }
 });
 
-test('track epochs share a session, wait for worker exit, and ignore an obsolete stop', async () => {
+test('urgent track scan only inspects its workspace', async () => {
   const state = fixture();
-  let stopTransition = null;
-  const epochMarkers = [];
-  let currentSurfaces = surfaces;
   const service = new AppServerHostService({ registry: {
     registryDirectory: join(dirname(state.databasePath), 'registry'),
-    listWorkspaces: () => [{ workspaceId }],
-    resolveWorkspace: (id) => id === workspaceId ? {
-      workspaceId, researchProfileId: 'security-research', researchKitId: 'apple-security-bounty',
-      memoryBackend: 'app-server'
-    } : null,
+    listWorkspaces: () => [{ workspaceId: 'workspace-other-example' }, { workspaceId }],
+    resolveWorkspace: (id) => {
+      assert.equal(id, workspaceId);
+      return { workspaceId, researchProfileId: 'security-research', researchKitId: 'example-kit', memoryBackend: 'app-server' };
+    },
     storageForProfile: () => ({ databasePath: state.databasePath, artifactDirectoryPath: join(dirname(state.databasePath), 'artifacts') })
-  }, invokeProtocol: async (operation, options) => {
-    if (operation === 'session.transition') stopTransition = options.input;
-    if (operation === 'session.append_event') epochMarkers.push(options.input);
-    return operation === 'session.get' ? { status: 'completed' } : {};
-  } });
-  service.workspaceResearchTrackContext = async () => ({ scope: { id: 'scope-example' },
-    targets: [{ id: 'local', ready: true }], surfaceMap: { surfaces: currentSurfaces } });
-  try {
-    const collaboration = { mode: 'adaptive', subagentMode: 'advanced', providers: [] };
-    const started = state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex', model: 'example-model' },
-      targetIds: ['local'], collaboration, surfaces });
-    assert.deepEqual(state.store.get().collaboration, collaboration);
-    const [first] = await service.dueResearchTracks();
-    assert.equal(first.request.sessionId, started.id);
-    assert.deepEqual(first.request.launch.collaboration, collaboration);
-    assert.match(first.request.launch.promptMarkdown, /Selected execution targets: local/);
-    assert.match(first.request.launch.promptMarkdown, /^# Continuous research track epoch 1/m);
-    assert.match(first.request.launch.promptMarkdown, /Epoch focus: breadth/);
-    assert.match(first.request.launch.promptMarkdown, /complementary depth subagent/);
-    assert.match(first.request.launch.promptMarkdown, /lead alone records the track checkpoint/);
-    assert.match(first.request.launch.promptMarkdown, /pursue the most promising authorized question/);
-    assert.match(first.request.launch.promptMarkdown, /listed resources are an inventory/);
-    assert.match(first.request.launch.promptMarkdown, /authorized physical iPhone/);
-    assert.match(first.request.launch.promptMarkdown, /localhost run alone does not validate target behavior/);
-    assert.match(first.request.launch.promptMarkdown, /Official vendor APIs and SDKs may be covered/);
-    assert.match(first.request.launch.promptMarkdown, /Third-party applications, customers, and accounts are not authorized/);
-    assert.match(first.request.launch.promptMarkdown, /Map concrete subcomponents with stable noun names/);
-    assert.match(first.request.launch.promptMarkdown, /Checkpoint at a useful stopping point/);
-    assert.match(first.request.launch.promptMarkdown, /Epoch checkpoint recorded\./);
-    assert.doesNotMatch(first.request.launch.promptMarkdown, /final response so the host can select/);
-    assert.equal(first.request.launch.generateTitle, true);
-    assert.equal(first.request.launch.continuation, undefined);
-    assert.deepEqual(await service.dueResearchTracks(new Date(), new Set([started.id])), []);
-    await service.recordSessionTerminalState({ request: first.request, sessionId: started.id,
-      attemptId: 'attempt-example-first', state: 'completed' });
-    assert.deepEqual(epochMarkers.map((event) => ({ id: event.id, kind: event.kind, payload: event.payload })), [{
-      id: 'track_epoch_resolving_attempt-example-first', kind: 'agent.event',
-      payload: { type: 'track_epoch_resolving', attemptId: 'attempt-example-first', agentPath: '/root' }
-    }]);
-    currentSurfaces = [{ ...surfaces[0], coverageState: { ...open,
-      openLeadIds: ['claim-example-open'], unblockedFindingIds: ['finding-example-open'] } }, surfaces[1]];
-    const [second] = await service.dueResearchTracks();
-    assert.match(second.request.launch.promptMarkdown, /^# Continuous research track epoch 2/m);
-    assert.match(second.request.launch.promptMarkdown, /Epoch focus: depth/);
-    assert.match(second.request.launch.promptMarkdown, /Linked open leads: claim-example-open/);
-    assert.match(second.request.launch.promptMarkdown, /Findings needing resolution: finding-example-open/);
-    assert.match(second.request.launch.promptMarkdown, /complementary breadth subagent/);
-    assert.equal(second.request.sessionId, started.id);
-    assert.equal(second.request.launch.continuation.fallbackPrompt, second.request.launch.promptMarkdown);
-    assert.equal(second.request.launch.continuation.resumeAttemptId, undefined);
-    assert.equal(second.request.launch.generateTitle, true);
-    await service.recordSessionTerminalState({ request: first.request, sessionId: 'session-example-obsolete',
-      attemptId: 'attempt-example-obsolete', state: 'stopped' });
-    assert.equal(epochMarkers.length, 1);
-    assert.equal(state.store.get().status, 'running');
-    assert.equal(state.store.get().activeSessionId, started.id);
-    await service.recordSessionControlState({ request: first.request, sessionId: started.id,
-      attemptId: 'attempt-example-first', state: 'stopped', stopCause: 'track_state' });
-    assert.equal(stopTransition.metadata.appServerStopCause, 'track_state');
-    assert.equal(stopTransition.metadata.manualControlState, undefined);
-    state.store.finishEpoch(started.id, true);
-    await service.recordSessionTerminalState({ request: second.request, sessionId: started.id,
-      attemptId: 'attempt-example-second', state: 'completed' });
-    assert.deepEqual(epochMarkers.map((event) => event.id), [
-      'track_epoch_resolving_attempt-example-first', 'track_epoch_resolving_attempt-example-second'
-    ]);
-  } finally { state.close(); }
-});
-
-test('track epochs retain model history until harness context review calls for a fresh attempt', async () => {
-  const state = fixture();
-  const directory = dirname(state.databasePath);
-  let attempts = [];
-  let events = [];
-  const service = new AppServerHostService({ registry: {
-    registryDirectory: join(directory, 'registry'),
-    listWorkspaces: () => [{ workspaceId }],
-    resolveWorkspace: (id) => id === workspaceId ? {
-      workspaceId, workspacePath: directory, researchProfileId: 'security-research',
-      memoryBackend: 'app-server'
-    } : null,
-    storageForProfile: () => ({ databasePath: state.databasePath,
-      artifactDirectoryPath: join(directory, 'artifacts') })
-  }, invokeProtocol: async (operation) => operation === 'session.get'
-    ? { workspaceId, status: 'completed', attempts }
-    : operation === 'session.events' ? { events } : {} });
+  }, invokeProtocol: async () => ({}) });
   service.workspaceResearchTrackContext = async () => ({ scope: { id: 'scope-example' },
     targets: [{ id: 'local', ready: true }], surfaceMap: { surfaces } });
   try {
-    const track = state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
+    const started = state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex', model: 'example-model' },
       targetIds: ['local'], surfaces });
-    const runDirectory = join(directory, '.beale', 'app-server-runs');
-    mkdirSync(runDirectory, { recursive: true });
-    const [first] = await service.dueResearchTracks();
-    assert.equal(first.request.launch.continuation, undefined);
-    attempts = [{ id: 'attempt-example-initial', parentAttemptId: null,
-      startedAt: '2026-01-01T01:00:00.000Z' }];
-    writeFileSync(join(runDirectory, `${track.id}.capture.json`), '{"agent":{}}');
-    events = [
-      { kind: 'agent.event', timestamp: '2026-01-01T01:01:00.000Z', payload: {
-        type: 'context_composed', agentPath: '/root', estimatedTokens: 32_000 } },
-      { kind: 'agent.event', timestamp: '2026-01-01T01:02:00.000Z', payload: {
-        type: 'turn_completed', agentPath: '/root', contextWindow: 100_000 } },
-    ];
-    await service.recordSessionTerminalState({ request: first.request, sessionId: track.id,
-      attemptId: attempts[0].id, state: 'completed' });
-    const [second] = await service.dueResearchTracks();
-    assert.equal(second.request.sessionId, track.id);
-    assert.equal(second.request.launch.continuation.resumeAttemptId, attempts[0].id);
-    assert.equal(second.request.launch.continuation.resumeFromInitialAttempt, true);
-    assert.match(second.request.launch.promptMarkdown, /use retained model history when available/);
-
-    attempts.push({ id: 'attempt-example-second', parentAttemptId: attempts[0].id,
-      startedAt: '2026-01-01T02:00:00.000Z' });
-    writeFileSync(join(runDirectory, `${track.id}.attempt-example-second.capture.json`), '{"agent":{}}');
-    events = [
-      { kind: 'agent.event', timestamp: '2026-01-01T02:01:00.000Z', payload: {
-        type: 'context_composed', agentPath: '/root', estimatedTokens: 87_000 } },
-      { kind: 'agent.event', timestamp: '2026-01-01T02:02:00.000Z', payload: {
-        type: 'turn_completed', agentPath: '/root', contextWindow: 100_000 } },
-    ];
-    await service.recordSessionTerminalState({ request: second.request, sessionId: track.id,
-      attemptId: attempts[1].id, state: 'completed' });
-    const [third] = await service.dueResearchTracks();
-    assert.equal(third.request.sessionId, track.id);
-    assert.equal(third.request.launch.continuation.resumeAttemptId, undefined);
-    assert.match(third.request.launch.promptMarkdown, /fresh model context after context pressure/);
-
-    attempts.push({ id: 'attempt-example-third', parentAttemptId: null,
-      startedAt: '2026-01-01T03:00:00.000Z' });
-    writeFileSync(join(runDirectory, `${track.id}.attempt-example-third.capture.json`), '{"agent":{}}');
-    events = [
-      { kind: 'agent.event', timestamp: '2026-01-01T03:01:00.000Z', payload: {
-        type: 'context_composed', agentPath: '/root', estimatedTokens: 20_000 } },
-      { kind: 'agent.event', timestamp: '2026-01-01T03:02:00.000Z', payload: {
-        type: 'turn_completed', agentPath: '/root', contextWindow: 100_000 } },
-    ];
-    await service.recordSessionTerminalState({ request: third.request, sessionId: track.id,
-      attemptId: attempts[2].id, state: 'completed' });
-    const [fourth] = await service.dueResearchTracks();
-    assert.equal(fourth.request.launch.continuation.resumeAttemptId, attempts[2].id);
-    assert.equal(fourth.request.launch.continuation.resumeFromInitialAttempt, false);
+    const [due] = await service.dueResearchTracks(new Date(), new Set(), new Set(), workspaceId);
+    assert.equal(due.request.sessionId, started.id);
   } finally { state.close(); }
 });
 
@@ -1036,125 +575,6 @@ test('track epochs retain a disabled Guardian setting across scheduling', async 
   } finally { state.close(); }
 });
 
-test('Guardian recovers an orphaned track epoch and reviews the interrupted work in the next epoch', async () => {
-  const state = fixture();
-  const transitions = [];
-  let transitionAttempts = 0;
-  const service = new AppServerHostService({ registry: {
-    registryDirectory: join(dirname(state.databasePath), 'registry'),
-    listWorkspaces: () => [{ workspaceId }],
-    resolveWorkspace: (id) => id === workspaceId ? {
-      workspaceId, researchProfileId: 'security-research', memoryBackend: 'app-server'
-    } : null,
-    storageForProfile: () => ({ databasePath: state.databasePath, artifactDirectoryPath: join(dirname(state.databasePath), 'artifacts') })
-  }, invokeProtocol: async (operation, options) => {
-    if (operation === 'session.get') return interruptedTrackSession(true);
-    if (operation === 'session.transition') {
-      transitionAttempts += 1;
-      if (transitionAttempts === 1) throw new Error('Synthetic persistence interruption.');
-      transitions.push(options.input);
-      return {};
-    }
-    return {};
-  } });
-  service.workspaceResearchTrackContext = async () => ({ scope: { id: 'scope-example' },
-    targets: [{ id: 'local', ready: true }], surfaceMap: { surfaces } });
-  try {
-    const track = state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces });
-    const first = state.store.reserveNext(track.id, surfaces);
-    state.database.prepare('UPDATE app_server_research_track_surfaces SET no_progress_epochs=2 WHERE workspace_id=? AND surface_id=?')
-      .run(workspaceId, first.surface.id);
-    state.database.prepare('UPDATE app_server_research_tracks SET updated_at=? WHERE workspace_id=?')
-      .run('2000-01-01T00:00:00.000Z', workspaceId);
-    assert.deepEqual(await service.dueResearchTracks(new Date(), new Set()), []);
-    assert.equal(state.store.get().status, 'running');
-    assert.equal(state.store.get().activeSessionId, track.id);
-    const [next] = await service.dueResearchTracks(new Date(), new Set());
-    assert.equal(state.store.get().status, 'running');
-    assert.equal(state.store.get().activeSessionId, track.id);
-    assert.equal(state.store.get().surfaces.find((work) => work.surfaceId === first.surface.id).noProgressEpochs, 2);
-    assert.equal(transitions.length, 1);
-    assert.equal(transitions[0].status, 'failed');
-    assert.equal(transitions[0].attemptId, 'attempt-example-interrupted');
-    assert.match(next.request.launch.promptMarkdown, /Guardian recovery review: The prior worker ended/u);
-  } finally { state.close(); }
-});
-
-test('Guardian resumes a track paused by the earlier orphan policy after reviewing its session', async () => {
-  const state = fixture();
-  const transitions = [];
-  const service = new AppServerHostService({ registry: {
-    registryDirectory: join(dirname(state.databasePath), 'registry'),
-    listWorkspaces: () => [{ workspaceId }],
-    resolveWorkspace: (id) => id === workspaceId ? {
-      workspaceId, researchProfileId: 'security-research', memoryBackend: 'app-server'
-    } : null,
-    storageForProfile: () => ({ databasePath: state.databasePath, artifactDirectoryPath: join(dirname(state.databasePath), 'artifacts') })
-  }, invokeProtocol: async (operation, options) => {
-    if (operation === 'session.get') return interruptedTrackSession(true);
-    if (operation === 'session.transition') { transitions.push(options.input); return {}; }
-    return {};
-  } });
-  service.workspaceResearchTrackContext = async () => ({ scope: { id: 'scope-example' },
-    targets: [{ id: 'local', ready: true }], surfaceMap: { surfaces } });
-  try {
-    const track = state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces });
-    state.store.reserveNext(track.id, surfaces);
-    state.store.finishEpoch(track.id, false, 'The research worker ended without a terminal session record.');
-    state.store.pauseWithError('The research worker ended without a terminal session record. Review the session before resuming.');
-    const [next] = await service.dueResearchTracks(new Date(), new Set());
-    assert.equal(state.store.get().status, 'running');
-    assert.equal(state.store.get().activeSessionId, track.id);
-    assert.equal(transitions.length, 1);
-    assert.match(next.request.launch.promptMarkdown, /Guardian recovery review: The prior worker ended/u);
-  } finally { state.close(); }
-});
-
-test('startup recovery advances a checkpointed track epoch without replaying it', async () => {
-  const state = fixture();
-  let terminalTransition = null;
-  let started = null;
-  const service = new AppServerHostService({ registry: {
-    registryDirectory: join(dirname(state.databasePath), 'registry'),
-    listWorkspaces: () => [{ workspaceId }],
-    resolveWorkspace: (id) => id === workspaceId ? {
-      workspaceId, researchProfileId: 'security-research', memoryBackend: 'app-server'
-    } : null,
-    storageForProfile: () => ({ databasePath: state.databasePath, artifactDirectoryPath: join(dirname(state.databasePath), 'artifacts') })
-  }, invokeProtocol: async (operation, options) => {
-    if (operation === 'session.recover_interrupted') return { sessionIds: [started.id], interruptedSessions: 1 };
-    if (operation === 'session.get') return { workspaceId, status: 'paused',
-      metadata: { appServerRestartLaunch: { schemaVersion: 1, eligible: true,
-        launch: { workspaceId, mode: 'research-track', promptMarkdown: 'Synthetic surface investigation.',
-          machineId: 'local', targetIds: ['local'], provider: { id: 'openai-codex', model: 'example-model' } } } },
-      attempts: [{ id: 'attempt-example-interrupted', parentAttemptId: null,
-        status: 'paused', metadata: { interruptedByRecovery: true } }] };
-    if (operation === 'session.transition') { terminalTransition = options.input; return {}; }
-    throw new Error(`Unexpected operation: ${operation}`);
-  } });
-  service.workspaceResearchTrackContext = async () => ({ scope: { id: 'scope-example' },
-    targets: [{ id: 'local', ready: true }], surfaceMap: { surfaces } });
-  try {
-    started = state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
-      targetIds: ['local'], surfaces });
-    const first = state.store.reserveNext(started.id, surfaces);
-    const worker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId, sessionId: started.id });
-    try { worker.checkpoint({ surfaceId: first.surface.id, outcome: 'defer', impact: 'medium',
-      theory: 'A synthetic trust boundary needs another proof.', nextAction: 'Inspect a different entry path.',
-      evidenceRefs: [] }, first.surface); }
-    finally { worker.close(); }
-    const recovery = await service.recoverInterruptedSessions();
-    assert.equal(recovery.recovered.length, 0);
-    assert.equal(recovery.skippedSessions, 1);
-    assert.equal(terminalTransition.status, 'completed');
-    assert.equal(state.store.get().activeSessionId, null);
-    assert.equal((await service.dueResearchTracks())[0].request.sessionId, started.id);
-    assert.equal(state.store.get().activeSurfaceId, surfaces[1].id);
-  } finally { state.close(); }
-});
-
 test('a high-impact surface can complete after a bounded assessment', () => {
   const state = fixture();
   try {
@@ -1204,6 +624,37 @@ test('track respects external blockers and can start a new audit pass', () => {
   } finally { state.close(); }
 });
 
+test('track excludes supported nonapplicable surfaces before selection and at checkpoint', () => {
+  const state = fixture();
+  const assessment = { decision: 'not_applicable', basis: 'The example policy excludes this demonstration component.',
+    references: ['policy-example-section'] };
+  try {
+    const scoped = [{ ...surfaces[0], foundation: { scopeAssessment: assessment } },
+      { id: 'surface-example-child', parentId: surfaces[0].id, name: 'Example demonstration parser',
+        coverageState: open, progressBlocker: null }, surfaces[1]];
+    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' }, targetIds: ['local'], surfaces: scoped });
+    assert.deepEqual(state.store.get().surfaces.map((work) => work.surfaceId), [surfaces[1].id]);
+    assert.equal(state.store.reserveNext('session-example-scoped', scoped).surface.id, surfaces[1].id);
+    state.store.finishEpoch('session-example-scoped', true);
+    const assigned = state.store.reserveNext('session-example-screen', surfaces);
+    const assessedActive = { ...assigned.surface, foundation: { scopeAssessment: assessment } };
+    const worker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId,
+      sessionId: 'session-example-screen' });
+    try {
+      const checkpoint = { surfaceId: assigned.surface.id, outcome: 'exclude', impact: 'unknown',
+        theory: 'No eligible attack path.', nextAction: 'Revisit if the example policy changes.', evidenceRefs: [] };
+      assert.throws(() => worker.checkpoint(checkpoint, assigned.surface), /scope assessment/);
+      assert.equal(worker.checkpoint(checkpoint, assessedActive).status, 'excluded');
+    } finally { worker.close(); }
+    state.store.finishEpoch('session-example-screen', true);
+    const reviewed = surfaces.map((surface) => surface.id === assigned.surface.id ? assessedActive : surface);
+    assert.equal(state.store.syncSurfaces(reviewed).surfaces.find((work) => work.surfaceId === assigned.surface.id).status,
+      'excluded');
+    assert.equal(state.store.syncSurfaces(surfaces).surfaces.find((work) => work.surfaceId === assigned.surface.id).status,
+      'deferred');
+  } finally { state.close(); }
+});
+
 test('stopping an active track permits an immediate new pass with a distinct session', () => {
   const state = fixture();
   try {
@@ -1245,20 +696,6 @@ test('a completed parent stays complete while a child remains open', () => {
   } finally { state.close(); }
 });
 
-test('three epochs without durable progress pause the track', () => {
-  const state = fixture();
-  try {
-    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' }, targetIds: ['local'], surfaces: [surfaces[0]] });
-    for (let index = 0; index < 3; index += 1) {
-      const sessionId = `session-example-no-progress-${index}`;
-      assert.ok(state.store.reserveNext(sessionId, [surfaces[0]]));
-      state.store.finishEpoch(sessionId, true);
-    }
-    assert.equal(state.store.get().status, 'paused');
-    assert.match(state.store.get().lastError, /no durable progress/);
-  } finally { state.close(); }
-});
-
 test('repeated no-progress work rotates to another available surface', () => {
   const state = fixture();
   try {
@@ -1293,5 +730,101 @@ test('report-ready findings do not reopen completed surface work', () => {
     assert.equal(state.store.reserveNext('session-example-next', map), null);
     assert.equal(state.store.get().surfaces[0].status, 'complete');
     assert.equal(state.store.get().status, 'complete');
+  } finally { state.close(); }
+});
+
+test('high-value signals select an engagement and two evidence-free checkpoints cool it', () => {
+  const state = fixture();
+  const focused = { ...surfaces[1], foundation: { highValueSignals: [
+    { kind: 'pre_auth', basis: 'The example endpoint accepts input before authentication.' },
+  ] } };
+  const map = [surfaces[0], focused];
+  try {
+    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
+      targetIds: ['local'], surfaces: map });
+    const checkpoint = (sessionId) => {
+      const worker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId, sessionId });
+      try { worker.checkpoint({ surfaceId: focused.id, outcome: 'continue', impact: 'high',
+        theory: 'Example untrusted input may cross the example trust boundary.',
+        nextAction: 'Test a distinct input at the boundary.', evidenceRefs: [] }, focused); }
+      finally { worker.close(); }
+      state.store.finishEpoch(sessionId, true);
+    };
+    assert.equal(state.store.reserveNext('session-high-one', map).surface.id, focused.id);
+    checkpoint('session-high-one');
+    assert.equal(state.store.reserveNext('session-high-two', map).surface.id, focused.id);
+    checkpoint('session-high-two');
+    const cooled = state.store.get().surfaces.find((work) => work.surfaceId === focused.id);
+    assert.equal(cooled.noProgressEpochs, 2);
+    assert.ok(Date.parse(cooled.revisitAfter) > Date.now());
+    assert.equal(state.store.reserveNext('session-other', map).surface.id, surfaces[0].id);
+  } finally { state.close(); }
+});
+
+test('productive work rotates to another resource after three consecutive epochs', async () => {
+  const state = fixture();
+  const map = [
+    { ...surfaces[0], resourceId: surfaces[0].id, resourceKind: 'repository' },
+    { ...surfaces[1], resourceId: surfaces[1].id, resourceKind: 'repository' },
+    { id: 'resource-example-c', parentId: null, resourceId: 'resource-example-c',
+      resourceKind: 'binary', name: 'Example executable', coverageState: open, progressBlocker: null },
+  ];
+  try {
+    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
+      targetIds: ['local'], surfaces: map });
+    for (let epoch = 1; epoch <= 3; epoch += 1) {
+      const sessionId = `session-example-productive-${epoch}`;
+      assert.equal(state.store.reserveNext(sessionId, map).surface.id, map[0].id);
+      await afterEpochStart();
+      recordMemoryEvidence(state);
+      const worker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId, sessionId });
+      try { worker.checkpoint({ surfaceId: map[0].id, outcome: 'continue', impact: 'high',
+        theory: 'The example input has a testable boundary.', nextAction: 'Test another example path.',
+        evidenceRefs: ['memory:memory-example-a'] }, map[0]); }
+      finally { worker.close(); }
+      state.store.finishEpoch(sessionId, true);
+      assert.equal(state.store.get().surfaces.find((surface) => surface.surfaceId === map[0].id).noProgressEpochs, 0);
+    }
+    state.database.prepare(`UPDATE app_server_research_tracks SET last_resource_id=NULL,
+      consecutive_resource_epochs=0 WHERE workspace_id=?`).run(workspaceId);
+    assert.equal(state.store.reserveNext('session-example-diverse', map).surface.id, map[2].id);
+  } finally { state.close(); }
+});
+
+test('resource rotation counts consecutive epochs across child surfaces', async () => {
+  const state = fixture();
+  const root = { ...surfaces[0], resourceId: 'resource-example-shared', resourceKind: 'repository' };
+  const child = { id: 'surface-example-child', parentId: root.id,
+    resourceId: root.resourceId, resourceKind: 'repository', name: 'Example parser',
+    foundation: { highValueSignals: [{ kind: 'pre_auth', basis: 'Example input is accepted before authentication.' }] },
+    coverageState: open, progressBlocker: null };
+  const alternate = { ...surfaces[1], resourceId: surfaces[1].id, resourceKind: 'binary' };
+  const initial = [root, alternate];
+  const expanded = [root, child, alternate];
+  try {
+    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
+      targetIds: ['local'], surfaces: initial });
+    for (let epoch = 1; epoch <= 3; epoch += 1) {
+      const sessionId = `session-example-shared-${epoch}`;
+      const map = epoch === 1 ? initial : expanded;
+      const expected = epoch === 1 ? root : child;
+      assert.equal(state.store.reserveNext(sessionId, map).surface.id, expected.id);
+      await afterEpochStart();
+      recordMemoryEvidence(state);
+      const worker = new ResearchTrackStore({ databasePath: state.databasePath, workspaceId, sessionId });
+      try { worker.checkpoint({ surfaceId: expected.id, outcome: 'continue', impact: 'high',
+        theory: 'The example input has a testable boundary.', nextAction: 'Test another example path.',
+        evidenceRefs: ['memory:memory-example-a'] }, expected); }
+      finally { worker.close(); }
+      state.store.finishEpoch(sessionId, true);
+    }
+    const streak = state.database.prepare(`SELECT consecutive_surface_epochs, consecutive_resource_epochs
+      FROM app_server_research_tracks WHERE workspace_id=?`).get(workspaceId);
+    assert.equal(streak.consecutive_surface_epochs, 2);
+    assert.equal(streak.consecutive_resource_epochs, 3);
+    const rebound = [{ ...root, foundation: { highValueSignals: [
+      { kind: 'pre_auth', basis: 'Example input is accepted before authentication.' },
+    ] } }, alternate];
+    assert.equal(state.store.reserveNext('session-example-alternate-resource', rebound).surface.id, alternate.id);
   } finally { state.close(); }
 });

@@ -34,6 +34,8 @@ test('surface map projects eligible hierarchy, touch state, coverage, and active
     surfaces.focus('/root/scout', root.id);
     const foundation = {
       discovery: 'Example service request parsing is reachable through its public API.',
+      scopeAssessment: { decision: 'applicable', basis: 'The example policy includes this service endpoint.',
+        references: ['policy-example-section'] },
       ranking: Object.fromEntries(['impact', 'reachability', 'relevance', 'exposure', 'precedence']
         .map((factor) => [factor, { score: 7, basis: `Synthetic ${factor} basis.` }])),
       techStack: [{ technology: 'Example Parser', role: 'Request parsing', version: '2.x', environment: 'Example service',
@@ -72,6 +74,7 @@ test('surface map projects eligible hierarchy, touch state, coverage, and active
     assert.equal(map.surfaces.find((surface) => surface.id === child.id).parentId, root.id);
     assert.equal(map.surfaces.find((surface) => surface.id === child.id).resourceKind, 'service');
     assert.equal(map.surfaces.find((surface) => surface.id === child.id).resourceSource, 'explicit_scope');
+    assert.equal(map.surfaces.find((surface) => surface.id === child.id).foundation.scopeAssessment.decision, 'applicable');
     assert.equal(map.surfaces.find((surface) => surface.id === child.id).firstTouchedBy, 'root');
     assert.equal(map.surfaces.find((surface) => surface.id === root.id).firstTouchedBy, '/root/scout');
     assert.equal(map.surfaces.find((surface) => surface.id === child.id).firstTouchedModel, 'gpt-example');
@@ -99,6 +102,10 @@ test('surface map projects eligible hierarchy, touch state, coverage, and active
     assert.throws(() => decodeBealeWorkspaceSurfaceMap({ ...map, surfaces: map.surfaces.map((surface) =>
       surface.id === child.id ? { ...surface, foundation: { ...surface.foundation, ranking: {
         ...surface.foundation.ranking, exposure: { score: 11, basis: 'Synthetic exposure basis.' } } } } : surface) }),
+    /invalid workspace surface map/);
+    assert.throws(() => decodeBealeWorkspaceSurfaceMap({ ...map, surfaces: map.surfaces.map((surface) =>
+      surface.id === child.id ? { ...surface, foundation: { ...surface.foundation, scopeAssessment: {
+        decision: 'not_applicable', basis: 'Synthetic exclusion.', references: [] } } } : surface) }),
     /invalid workspace surface map/);
     assert.equal(map.surfaces.find((surface) => surface.id === child.id).foundation.threatModelReviewed, true);
     assert.deepEqual(map.surfaces.find((surface) => surface.id === child.id).coverageState.openLeadIds, []);

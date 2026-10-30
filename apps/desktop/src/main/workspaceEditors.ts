@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { extname, join, posix } from 'node:path';
+import { extname, join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { WorkspaceEditorCatalog, WorkspaceEditorId } from '@shared/types';
@@ -17,11 +17,6 @@ interface DetectedEditor extends EditorDefinition {
 }
 
 const execFileAsync = promisify(execFile);
-const MAC_EDITOR_ICON_FILES: Partial<Record<WorkspaceEditorId, string>> = {
-  vscode: 'Code.icns',
-  'vscode-insiders': 'Code - Insiders.icns'
-};
-
 export interface WorkspaceEditorDetectionOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -215,17 +210,12 @@ export function getWorkspaceEditorCatalog(options: WorkspaceEditorDetectionOptio
 
 function nativeIconPath(
   editor: DetectedEditor,
-  platform: NodeJS.Platform,
-  pathExists: (path: string) => boolean
+  platform: NodeJS.Platform
 ): string {
   if (platform !== 'darwin') return editor.executablePath;
   const appBundleEnd = editor.executablePath.toLowerCase().indexOf('.app/');
   if (appBundleEnd < 0) return editor.executablePath;
-  const appBundlePath = editor.executablePath.slice(0, appBundleEnd + 4);
-  const iconFile = MAC_EDITOR_ICON_FILES[editor.id];
-  if (!iconFile) return appBundlePath;
-  const iconPath = posix.join(appBundlePath, 'Contents', 'Resources', iconFile);
-  return pathExists(iconPath) ? iconPath : appBundlePath;
+  return editor.executablePath.slice(0, appBundleEnd + 4);
 }
 
 export async function getWorkspaceEditorCatalogForHost(
@@ -241,7 +231,6 @@ export async function getWorkspaceEditorCatalogForHost(
   const catalog = getWorkspaceEditorCatalog(resolvedOptions);
   if (!resolveIconDataUrl) return catalog;
   const detectedEditors = detectEditors(resolvedOptions);
-  const pathExists = resolvedOptions.pathExists ?? existsSync;
   return {
     ...catalog,
     editors: await Promise.all(catalog.editors.map(async (editor) => {
@@ -250,7 +239,7 @@ export async function getWorkspaceEditorCatalogForHost(
       try {
         return {
           ...editor,
-          iconDataUrl: await resolveIconDataUrl(nativeIconPath(detected, platform, pathExists))
+          iconDataUrl: await resolveIconDataUrl(nativeIconPath(detected, platform))
         };
       } catch {
         return editor;

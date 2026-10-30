@@ -20,6 +20,15 @@ describe('renderer run detail update view model', () => {
     expect(selectRunId('run_one', null)).toBeNull();
   });
 
+  it('keeps a newly started track selected while its session is being created', () => {
+    const pending = { runId: 'track_example', workspaceId: 'workspace_test' };
+    expect(selectRunId('track_example', snapshot([]), pending)).toBe('track_example');
+    expect(selectRunId('track_example', snapshot([]))).toBeNull();
+    expect(selectRunId('track_example', {
+      ...snapshot([]), workspace: { ...snapshot([]).workspace, workspaceId: 'workspace_other' }
+    }, pending)).toBeNull();
+  });
+
   it('builds update cursors and metric summaries', () => {
     const detail = runDetail({
       traceEvents: [traceEvent({ id: 'trace_old', sequence: 7 })],

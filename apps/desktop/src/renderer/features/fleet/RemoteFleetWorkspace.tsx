@@ -7,9 +7,10 @@ import { WorkspaceSidebar } from '../workspaces/WorkspaceSidebar';
 import { CommentaryView } from '../commentary/CommentaryView';
 import { FleetBrowserSideView } from '../research/FleetBrowserSideView';
 import { SubagentDetailPanel } from '../research/MemorySidePanel';
+import { TrackWorkerCards } from '../research/TrackWorkerCards';
 import { useResearchTrackSessionRunning } from '../../hooks/useResearchTrackSessionRunning';
 import { buildTraceDisplayEventsForAgentPath } from '../../view-models/traceDisplay';
-import { pausesResearchTrackFromSessionAction, runningResearchTrackDetail } from '../../view-models/researchTrackSession';
+import { pauseResearchTrackSessionAction, runningResearchTrackDetail } from '../../view-models/researchTrackSession';
 import { subagentSummaries } from '../../view-models/subagents';
 import { surfaceFocusSummary, type SurfaceFocusSummary } from '../../view-models/surfaceFocus';
 import { mergeRemoteSessionHistory, remoteRunDetail, remoteRunStatus, remoteSessionHistoryPage, remoteWorkspaceRegistry } from './remoteFleetProjection';
@@ -101,6 +102,8 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
   const [controlError, setControlError] = useState<string | null>(null);
   const [browserSelection, setBrowserSelection] = useState<string | null>(null);
   const browserOpen = browserSelection === `${serverId}:${sessionId ?? ''}`;
+  const session = catalog?.sessions.find((item) => item.id === sessionId && item.workspaceId === workspaceId);
+  const sessionReady = Boolean(session);
   const showingWorkspaceDetails = Boolean(workspaceId && !sessionId && !newResearchOpen && !automations);
   useEffect(() => { setBrowserSelection(null); }, [serverId, sessionId]);
   useEffect(() => { if (selectedSubagentPath) setBrowserSelection(null); }, [selectedSubagentPath]);
@@ -121,7 +124,7 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
   useEffect(() => {
     setDetail(null);
     setOlderPages([]);
-    if (!workspaceId || !sessionId) return;
+    if (!workspaceId || !sessionId || !sessionReady) return;
     let active = true;
     const refresh = (): void => {
       void window.beale.getFleetRemoteSession(serverId, workspaceId, sessionId)
@@ -131,9 +134,8 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
     refresh();
     const interval = window.setInterval(refresh, 3_000);
     return () => { active = false; window.clearInterval(interval); };
-  }, [serverId, workspaceId, sessionId]);
+  }, [serverId, workspaceId, sessionId, sessionReady]);
   const workspace = catalog?.workspaces.find((item) => item.workspaceId === workspaceId);
-  const session = catalog?.sessions.find((item) => item.id === sessionId && item.workspaceId === workspaceId);
   const researchTrackRunning = useResearchTrackSessionRunning(workspaceId, sessionId, serverId);
   const browserAvailable = Boolean(session && (researchTrackRunning || !['completed', 'failed', 'stopped'].includes(session.status)));
   const allowedTargets = new Set((workspaceId ? catalog?.workspaceTargets[workspaceId] ?? ['local'] : []).map((targetId) => (
@@ -175,9 +177,11 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
     [canonicalRunDetail, researchTrackRunning]);
   const events = useMemo(() => runDetail ? buildTraceDisplayEventsForAgentPath(runDetail, null) : [], [runDetail]);
   const runStatus = runDetail?.run.status ?? remoteRunStatus(session?.status ?? '');
+  const showTrackWorkerSidebar = Boolean(workspaceId && sessionId?.startsWith('track_'));
   const selectedSubagent = useMemo(() => {
     if (!runDetail || !selectedSubagentPath) return null;
-    return subagentSummaries(runDetail.traceEvents ?? [], runStatus, 'commentary')
+    return subagentSummaries(runDetail.traceEvents ?? [], runStatus, 'commentary', [],
+      runDetail.attempts.at(-1)?.id, runDetail.attempts.at(-1)?.startedAt)
       .find((agent) => agent.path === selectedSubagentPath) ?? {
       path: selectedSubagentPath,
       name: selectedSubagentPath.split('/').at(-1) ?? selectedSubagentPath,
@@ -273,9 +277,10 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
     setControlBusy(true);
     setControlError(null);
     try {
-      if (workspaceId && pausesResearchTrackFromSessionAction(type, researchTrackRunning)) {
-        await window.beale.controlResearchTrack(workspaceId, 'pause', serverId);
-        return;
+      if (workspaceId && (type === 'pause' || type === 'stop')) {
+        const handled = await pauseResearchTrackSessionAction({ action: type, workspaceId, sessionId,
+          serverId, api: window.beale });
+        if (handled) return;
       }
       if (type === 'resume' && instruction?.trim()) {
         await window.beale.controlFleetRemoteSession(serverId, sessionId, 'steer', instruction);
@@ -284,9 +289,9 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
     } catch (caught) { setControlError(message(caught)); }
     finally { setControlBusy(false); }
   };
-  return <section className={`remote-fleet-workspace${session ? ' remote-fleet-session' : ''}${showingWorkspaceDetails ? ' remote-fleet-details' : ''}${newResearchOpen ? ' remote-fleet-new-research' : ''}`} aria-label={`${serverName} research`}>
+  return <section className={`remote-fleet-workspace${sessionId ? ' remote-fleet-session' : ''}${showingWorkspaceDetails ? ' remote-fleet-details' : ''}${newResearchOpen ? ' remote-fleet-new-research' : ''}`} aria-label={`${serverName} research`}>
     <div className="remote-fleet-content">
-      {!session && !showingWorkspaceDetails && !newResearchOpen ? <><p className="remote-fleet-eyebrow">{serverName}</p>
+      {!sessionId && !showingWorkspaceDetails && !newResearchOpen ? <><p className="remote-fleet-eyebrow">{serverName}</p>
         <h1>{workspace?.name ?? (automations ? 'Automations' : 'Research')}</h1></> : null}
       {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
       {showingWorkspaceDetails ? workspaceDetails?.workspace.workspaceId === workspaceId
@@ -296,6 +301,7 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
           onStartTrack={onStartTrack} onTrackResumed={onTrackResumed} />
         : <p className="remote-fleet-details-status" role={workspaceDetailsError ? 'alert' : 'status'}>{workspaceDetailsError ?? 'Loading workspace details…'}</p>
       : null}
+      {sessionId && !session ? <p className="remote-fleet-details-status" role="status">Preparing track session…</p> : null}
       {session ? <>{detailError ? <p className="settings-form-error" role="alert">{detailError}</p> : null}
         {controlError ? <p className="settings-form-error" role="alert">{controlError}</p> : null}
         {browserAvailable ? <div className="remote-fleet-view-switch" aria-label="Remote session view">
@@ -309,7 +315,7 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
         </div> : null}
         {browserAvailable && browserOpen && sessionId && !selectedSubagent ? <div className="remote-fleet-browser">
           <FleetBrowserSideView runId={sessionId} remoteServerId={serverId} visible />
-        </div> : <div className={`main-session-grid ${selectedSubagent ? 'research-details-open' : 'session-main-only'}`} data-session-view-state="session">
+        </div> : <div className={`main-session-grid ${selectedSubagent || showTrackWorkerSidebar ? 'research-details-open' : 'session-main-only'}`} data-session-view-state="session">
           <CommentaryView
             busy={controlBusy}
             detail={runDetail}
@@ -348,6 +354,17 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
                 <SubagentDetailPanel detail={runDetail} events={selectedSubagentEvents}
                   providerModelCatalog={providerCatalog} runId={sessionId} subagent={selectedSubagent}
                   backLabel="Session" onBack={onBackToSubagents} />
+              </div>
+            </>
+          ) : showTrackWorkerSidebar && workspaceId && sessionId ? (
+            <>
+              <div className="research-side-resize-handle" aria-hidden="true" />
+              <div className="research-side-column">
+                <aside className="main-session-side session-summary-panel track-summary-panel" aria-label="Session summary">
+                  <TrackWorkerCards workspaceId={workspaceId} sessionId={sessionId} serverId={serverId}
+                    events={runDetail?.traceEvents ?? []} findings={runDetail?.appServerMemory?.findings ?? []}
+                    activeAttemptId={runDetail?.attempts.at(-1)?.id} runStatus={runStatus} />
+                </aside>
               </div>
             </>
           ) : null}

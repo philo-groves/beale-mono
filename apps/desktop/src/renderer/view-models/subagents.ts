@@ -116,10 +116,12 @@ export function subagentSummaries(
   events: readonly TraceEventRecord[],
   runStatus?: RunStatus | null,
   projection: SubagentMessageProjection = 'full',
-  previews: readonly SubagentPreviewRecord[] = []
+  previews: readonly SubagentPreviewRecord[] = [],
+  activeAttemptId?: string | null,
+  activeAttemptStartedAt?: string | null
 ): SubagentSummary[] {
   const summaries = new Map<string, SubagentAccumulator>();
-  const currentAttemptId = latestRootAttemptId(events);
+  const currentAttemptId = activeAttemptId ?? latestRootAttemptId(events);
   const recoveryInterruption = latestRecoveryInterruption(events);
   const nativeCommentaryKeys = nativeCommentaryCorrelationKeys(events);
 
@@ -199,18 +201,17 @@ export function subagentSummaries(
     });
   }
 
-  return [...summaries.values()].map(({ attemptId, spawnedAt, lastSequence, latestMessageSequence: _latestMessageSequence, ...summary }) => ({
-    ...summary,
-    status: reconciledSubagentStatus(
-      summary.status,
-      attemptId,
-      currentAttemptId,
-      runStatus,
-      lastSequence,
-      recoveryInterruption
-    ),
-    createdAt: spawnedAt ?? summary.createdAt
-  })).sort((left, right) => {
+  return [...summaries.values()].map(({ attemptId, spawnedAt, lastSequence, latestMessageSequence: _latestMessageSequence, ...summary }) => {
+    const status = reconciledSubagentStatus(summary.status, attemptId, currentAttemptId,
+      runStatus, lastSequence, recoveryInterruption);
+    const legacyPreviewFromPriorAttempt = activeAttemptStartedAt && !attemptId
+      && timestampOrder(summary.lastActiveAt, activeAttemptStartedAt) < 0;
+    return {
+      ...summary,
+      status: legacyPreviewFromPriorAttempt && ACTIVE_SUBAGENT_STATUSES.has(status) ? 'interrupted' as const : status,
+      createdAt: spawnedAt ?? summary.createdAt
+    };
+  }).sort((left, right) => {
     const timeDifference = timestampOrder(left.createdAt, right.createdAt);
     return timeDifference || left.path.localeCompare(right.path);
   });
@@ -227,10 +228,11 @@ export function subagentOverviewFromSummaries(subagents: readonly SubagentSummar
 
 export function subagentOverviewForEvents(
   events: readonly TraceEventRecord[],
-  runStatus?: RunStatus | null
+  runStatus?: RunStatus | null,
+  activeAttemptId?: string | null
 ): SubagentOverview {
   const summaries = new Map<string, SubagentOverviewAccumulator>();
-  const currentAttemptId = latestRootAttemptId(events);
+  const currentAttemptId = activeAttemptId ?? latestRootAttemptId(events);
   const recoveryInterruption = latestRecoveryInterruption(events);
 
   for (const event of events) {

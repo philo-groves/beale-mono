@@ -44,6 +44,7 @@ import {
   type SubagentRunResult,
   type SubagentRuntimeFactory,
 } from "./subagent-orchestration.js";
+import type { TrackWorkerAssignment } from "./track-funnel.js";
 import {
   ResearchGoalRuntime,
   type CreateResearchGoalRuntimeOptions,
@@ -103,15 +104,18 @@ export interface CreatePiAgentExecutorOptions {
   surfaceStore?: SurfaceStore;
   toolExecution?: ToolExecutionMode;
   getSteeringMessages?: () => Promise<AgentMessage[]>;
+  getActiveSteeringMessages?: () => readonly string[];
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<AgentMessage[]>;
   getContinuityContext?: () => unknown;
   getModelSelection?: () => { provider: string; model: string; reasoningEffort: ModelThinkingLevel; daybreakBlue?: boolean } | undefined;
   modelFirstEventTimeoutMs?: number;
+  modelEventIdleTimeoutMs?: number;
   subagents?: false | {
     maxThreads?: number;
     maxDepth?: number;
   };
   subagentRuntimeFactory?: SubagentRuntimeFactory;
+  trackWorkerAssignments?: readonly TrackWorkerAssignment[];
   collaboration?: ResearchCollaborationConfig;
   collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
@@ -139,6 +143,8 @@ const MIN_ACTIVE_CONTEXT_TOKENS = 32_000;
 const RECENT_TOOL_RESULTS_TO_KEEP = 8;
 const COMPACTED_TOOL_RESULT_MAX_CHARS = 1_200;
 const DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS = 180_000;
+const DEFAULT_MODEL_EVENT_IDLE_TIMEOUT_MS = 20 * 60_000;
+const BROKER_MODEL_EVENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 const MAX_TRANSIENT_MODEL_RETRIES = 4;
 const RUNTIME_CONTROL_TOOL_NAMES = new Set(["session_disposition", "harness_feedback", "features_preview", "features_load", "plugins_preview", "plugins_load"]);
 
@@ -428,7 +434,8 @@ export function createPiAgentExecutor(
       const collaboration = options.collaboration;
       const collaborationEnabled = collaboration?.mode !== "solo";
       const manualDelegation = options.subagents !== false && collaborationEnabled;
-      const subagents = options.agentIdentity || (!manualDelegation && !options.surfaceStore)
+      const subagents = options.agentIdentity || (!manualDelegation && !options.surfaceStore
+        && !options.trackWorkerAssignments?.length)
         ? null
         : createSubagentRuntime({
             rootProvider: options.provider,
@@ -482,6 +489,17 @@ export function createPiAgentExecutor(
           pendingHostSteeringWait = wait;
         }
         return pendingHostSteeringWait;
+      };
+      const filterInactiveHostSteering = (
+        messages: readonly AgentMessage[],
+        activeSteering: readonly string[] | undefined,
+      ): AgentMessage[] => {
+        if (!activeSteering) return [...messages];
+        const active = new Set(activeSteering);
+        return messages.filter((message) => {
+          const content = agentMessageText(message);
+          return !content.startsWith("User steering for the active research run:\n\n") || active.has(content);
+        });
       };
       const takeTurnSteering = async (agentId: string, root: boolean): Promise<{
         messages: AgentMessage[];
@@ -727,6 +745,8 @@ export function createPiAgentExecutor(
           // finishes the call. The local first-event timer must not cancel them.
           firstEventTimeoutMs: process.env.APP_SERVER_MODEL_BROKER_URL
             ? 0 : options.modelFirstEventTimeoutMs ?? DEFAULT_MODEL_FIRST_EVENT_TIMEOUT_MS,
+          eventIdleTimeoutMs: options.modelEventIdleTimeoutMs ?? (process.env.APP_SERVER_MODEL_BROKER_URL
+            ? BROKER_MODEL_EVENT_IDLE_TIMEOUT_MS : DEFAULT_MODEL_EVENT_IDLE_TIMEOUT_MS),
           tryAuthenticationFallback: (errorMessage) => {
             const active = activeModelSelection();
             return authenticationRouter.tryFallback(active.model.provider, errorMessage);
@@ -751,15 +771,21 @@ export function createPiAgentExecutor(
           }),
           waitForSafetyRecovery: async () => {
             const steering = await waitForSessionSafetySteering(request.id);
-            if (steering.messages.length > 0) researchFocus.notePotentialExternalChange();
+            const activeSteering = options.getActiveSteeringMessages?.();
+            const messages = filterInactiveHostSteering(steering.messages, activeSteering);
+            if (messages.length > 0) researchFocus.notePotentialExternalChange();
             if (request.root && steering.authoritativeHostMessages.length > 0) {
-              const authoritativeSteering = steering.authoritativeHostMessages
+              const authoritativeSteering = filterInactiveHostSteering(steering.authoritativeHostMessages, activeSteering)
                 .map(agentMessageText)
                 .filter(Boolean);
               researchFocus.noteAuthoritativeUserSteering(authoritativeSteering);
               goalRuntime?.noteAuthoritativeUserSteering(authoritativeSteering);
             }
-            return steering.messages as Message[];
+            if (activeSteering) {
+              researchFocus.replaceAuthoritativeUserSteering(activeSteering);
+              goalRuntime?.replaceAuthoritativeUserSteering(activeSteering);
+            }
+            return messages as Message[];
           },
           onRetry: async ({ retry, delayMs, errorMessage, recoveryKind, safetyDisposition, awaitingSteering }) => {
             const retryEvent = {
@@ -1179,15 +1205,21 @@ export function createPiAgentExecutor(
             },
             getSteeringMessages: async () => {
               const steering = await takeTurnSteering(request.id, request.root === true);
-              if (steering.messages.length > 0) researchFocus.notePotentialExternalChange();
+              const activeSteering = options.getActiveSteeringMessages?.();
+              const messages = filterInactiveHostSteering(steering.messages, activeSteering);
+              if (messages.length > 0) researchFocus.notePotentialExternalChange();
               if (request.root && steering.authoritativeHostMessages.length > 0) {
-                const authoritativeSteering = steering.authoritativeHostMessages
+                const authoritativeSteering = filterInactiveHostSteering(steering.authoritativeHostMessages, activeSteering)
                   .map(agentMessageText)
                   .filter(Boolean);
                 researchFocus.noteAuthoritativeUserSteering(authoritativeSteering);
                 goalRuntime?.noteAuthoritativeUserSteering(authoritativeSteering);
               }
-              return steering.messages;
+              if (activeSteering) {
+                researchFocus.replaceAuthoritativeUserSteering(activeSteering);
+                goalRuntime?.replaceAuthoritativeUserSteering(activeSteering);
+              }
+              return messages;
             },
             getFollowUpMessages: async () => {
               const mailboxMessages = subagents?.takeMailbox(request.id) ?? [];
@@ -1271,6 +1303,10 @@ export function createPiAgentExecutor(
           contextWindowRetryCheckpointed,
         };
       };
+
+      for (const assignment of options.trackWorkerAssignments ?? []) {
+        subagents?.spawnTrackWorker?.(assignment);
+      }
 
       const inheritedRootMessages = options.resumableState?.messages
         ?? options.initialMessages
@@ -1607,6 +1643,7 @@ function createRetryingStreamFn(
     waitForSafetyRecovery?: () => Promise<Message[]>;
     onContextRetry?: (event: { tokensBefore: number; tokensAfter: number; errorMessage: string }) => Promise<void> | void;
     firstEventTimeoutMs?: number;
+    eventIdleTimeoutMs?: number;
     tryAuthenticationFallback?: (errorMessage: string) => boolean;
   },
 ): StreamFn {
@@ -1622,6 +1659,7 @@ function createRetryingStreamFn(
       for (;;) {
         let contextCompactedForRetry = false;
         let emittedCommittedContent = false;
+        let lastEventTimeoutMs = 0;
         let automaticSafetyRetry = false;
         let authenticationFallbackActivated = false;
         let retryError: AssistantMessage | null = null;
@@ -1648,9 +1686,12 @@ function createRetryingStreamFn(
           });
           const iterator = upstream[Symbol.asyncIterator]();
           for (;;) {
-            const next = emittedCommittedContent || !options.firstEventTimeoutMs
-              ? await iterator.next()
-              : await nextModelEvent(iterator, options.firstEventTimeoutMs, () => {
+            const eventTimeoutMs = emittedCommittedContent
+              ? options.eventIdleTimeoutMs
+              : options.firstEventTimeoutMs || options.eventIdleTimeoutMs;
+            lastEventTimeoutMs = eventTimeoutMs ?? 0;
+            const next = !eventTimeoutMs ? await iterator.next()
+              : await nextModelEvent(iterator, eventTimeoutMs, () => {
                   eventIdleTimedOut = true;
                   attemptController.abort();
                 });
@@ -1755,7 +1796,7 @@ function createRetryingStreamFn(
           const message = assistantErrorMessage(
             model,
             eventIdleTimedOut
-              ? `Model stream produced no actionable content for ${options.firstEventTimeoutMs}ms.`
+              ? `Model stream produced no actionable content for ${lastEventTimeoutMs}ms.`
               : error,
           );
           if (

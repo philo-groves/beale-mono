@@ -1,5 +1,5 @@
 import { nowIso } from "./ids.js";
-import { candidateCompletionChecklist, requireCanonicalClaim, type ResearchClaimStore } from "./findings.js";
+import { candidateCompletionChecklist, claimVerificationHash, requireCanonicalClaim, type ResearchClaimStore } from "./findings.js";
 import type { FindingSummary } from "./knowledge-types.js";
 import { REPORT_STATUSES, ReportStore, type ReportStatus } from "./reports.js";
 import type { ResearchExecutableTool, ResearchToolExecutionContext, ResearchToolExecutionResult } from "./tool-registry.js";
@@ -11,7 +11,7 @@ const CREATE_PARAMETERS = { type: "object", required: ["title", "summary", "cont
   title: { type: "string" }, summary: { type: "string", description: "A concise catalog description." },
   content: { type: "string", description: "The complete Markdown report." }, status: { type: "string", enum: [...REPORT_STATUSES] },
   sourceFindingId: { type: "string", description: "The verified security finding this report documents." },
-  submissionPacketPath: { type: "string", description: "Path to the completed submission.zip inside the active workspace. app-server imports it into durable report storage." },
+  submissionPacketPath: { type: "string", description: "For non-security reports only. Security reports use the verified triage packet already attached to the finding." },
 } };
 const REVISE_PARAMETERS = { type: "object", required: ["id", "expectedRevision", "content"], properties: {
   id: { type: "string" }, expectedRevision: { type: "number" }, content: { type: "string", description: "The complete replacement Markdown report." },
@@ -29,7 +29,6 @@ export function createReportTools(store: ReportStore, policy: ReportToolPolicy =
   const requiredCreateFields = [
     ...CREATE_PARAMETERS.required,
     ...(policy.requireVerifiedFinding ? ["sourceFindingId"] : []),
-    ...(policy.requireSubmissionPacket ? ["submissionPacketPath"] : []),
   ];
   const createParameters = { ...CREATE_PARAMETERS, required: requiredCreateFields };
   return [
@@ -40,15 +39,20 @@ export function createReportTools(store: ReportStore, policy: ReportToolPolicy =
     }) })),
     tool("report.get", "report_get", "Read the full Markdown content of one workspace report.", "read", GET_PARAMETERS, (input) => ({ output: store.get(requiredText(input.id, "id")) })),
     tool("report.create", "report_create", policy.requireVerifiedFinding
-      ? "Create a complete, revisioned Markdown report for a verified security finding with recorded steps to reproduce, attach its durable submission packet, and advance that finding to report-ready. Unverified findings are not reportable."
+      ? "Create a complete Markdown submission report only for a verified, reportable finding with a verified portable triage packet. Reuse that packet and advance the finding to report-ready."
       : "Create a complete, revisioned Markdown report when a result is ready to share. Reports are artifacts, not memories.", "write", createParameters, (input, context) => {
       const sourceFinding = policy.requireVerifiedFinding
         ? requireReportableSecurityFinding(input.sourceFindingId, policy.claimStore)
         : null;
+      if (sourceFinding && text(input.submissionPacketPath)) {
+        throw new Error("Security reports reuse the finding's verified triage packet; do not supply another packet path.");
+      }
       const created = store.create({
         title: requiredText(input.title, "title"), summary: requiredText(input.summary, "summary"), content: requiredText(input.content, "content"),
         ...(text(input.status) ? { status: text(input.status)! as ReportStatus } : {}),
         ...(text(input.submissionPacketPath) ? { submissionPacketPath: text(input.submissionPacketPath)! } : {}),
+        ...(sourceFinding?.securityTracking?.triage.packet
+          ? { submissionPacketArtifactId: sourceFinding.securityTracking.triage.packet.artifactId } : {}),
       }, context?.modelAuthor);
       const advanced = sourceFinding && policy.claimStore
         ? policy.claimStore.transition(sourceFinding.id, {
@@ -67,6 +71,9 @@ export function createReportTools(store: ReportStore, policy: ReportToolPolicy =
     tool("report.revise", "report_revise", "Replace a report with a complete revised Markdown document, or mark it stale, using its current revision.", "write", REVISE_PARAMETERS, (input, context) => {
       const id = requiredText(input.id, "id");
       const submissionPacketPath = text(input.submissionPacketPath);
+      if (policy.requireVerifiedFinding && submissionPacketPath) {
+        throw new Error("Security reports retain the accepted triage packet; re-triage the finding to replace it.");
+      }
       if (policy.requireSubmissionPacket && !submissionPacketPath && !store.get(id)?.submissionPacket) {
         throw new Error("Security reports require an attached submission.zip before revision.");
       }
@@ -95,6 +102,14 @@ function requireReportableSecurityFinding(
   }
   if (finding.status !== "verified") {
     throw new Error("Security reports require a verified finding that has passed independent review.");
+  }
+  if (finding.securityTracking?.reportability?.decision !== "reportable") {
+    throw new Error("Security reports require a recorded Reportable decision against program policy.");
+  }
+  const triagePacket = finding.securityTracking.triage.packet;
+  if (!triagePacket || finding.securityTracking.triage.blocker
+    || triagePacket.claimBindingHash !== claimVerificationHash(finding)) {
+    throw new Error("Security reports require a current verified triage packet.");
   }
   const evidenceChecks = candidateCompletionChecklist(finding, "verified");
   if (evidenceChecks.missingRequired.includes("steps_to_reproduce")) {

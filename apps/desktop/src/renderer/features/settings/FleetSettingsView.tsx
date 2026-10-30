@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
-import { Plus, QrCode, RefreshCw, RotateCw, Settings2 } from 'lucide-react';
+import { QrCode, RefreshCw, RotateCw } from 'lucide-react';
 import type { FleetAppServer, FleetMachine, FleetSshTestResult, FleetState } from '@beale/app-server-runtime/protocol';
-import type { AppServerRemoteAccessSettings, AppServerRemoteAccessUpdate } from '@shared/types';
+import type { AppServerRemoteAccessSettings, AppServerRemoteAccessUpdate, WorkspaceRegistryEntry } from '@shared/types';
 import { Modal } from '../../app/Modal';
 import type { FleetSelection } from '../fleet/FleetSidebar';
+import { FleetTargetsWorkspace } from '../fleet/FleetTargetsWorkspace';
 
-export function FleetSettingsView({ state, loadError, remoteAccessSettings, remoteAccessBusy, selection, onSelect, onStateChange, onRefresh, onDetectRemoteAccess, onSaveRemoteAccess }: {
+export function FleetSettingsView({ state, loadError, remoteAccessSettings, remoteAccessBusy, selection, onSelect, onStateChange, onRefresh, onDetectRemoteAccess, onSaveRemoteAccess, workspaces = [], selectedWorkspaceId = null, onScopeChange = () => undefined }: {
   state: FleetState | null;
   loadError: string | null;
   remoteAccessSettings: AppServerRemoteAccessSettings | null;
@@ -17,14 +18,13 @@ export function FleetSettingsView({ state, loadError, remoteAccessSettings, remo
   onRefresh: () => Promise<void>;
   onDetectRemoteAccess: () => Promise<void>;
   onSaveRemoteAccess: (update: AppServerRemoteAccessUpdate) => Promise<void>;
+  workspaces?: readonly WorkspaceRegistryEntry[];
+  selectedWorkspaceId?: string | null;
+  onScopeChange?: (workspaceId: string | null) => void;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [restartingId, setRestartingId] = useState<string | null>(null);
-  const refresh = async (): Promise<void> => {
-    try { await onRefresh(); setError(null); }
-    catch (caught) { setError(message(caught)); }
-  };
   const change = async (action: () => Promise<FleetState>): Promise<boolean> => {
     if (busy) return false;
     setBusy(true);
@@ -49,60 +49,36 @@ export function FleetSettingsView({ state, loadError, remoteAccessSettings, remo
     finally { setBusy(false); setRestartingId(null); }
   };
 
-  if (!state) return <div className="settings-page fleet-settings-page"><section className="settings-form"><header className="settings-form-heading"><h2>{fleetSectionLabel(selection.section)}</h2></header><p className={loadError ? 'settings-form-error' : 'fleet-machine-empty'} role={loadError ? 'alert' : 'status'}>{loadError ?? 'Loading Fleet…'}</p></section></div>;
+  if (!state) return <div className="settings-page fleet-settings-page"><section className="settings-form"><header className="settings-form-heading"><h2>Fleet</h2></header><p className={loadError ? 'settings-form-error' : 'fleet-machine-empty'} role={loadError ? 'alert' : 'status'}>{loadError ?? 'Loading Fleet…'}</p></section></div>;
 
   const selectedMachine = selection.section === 'machines' ? state.machines.find((machine) => machine.id === selection.itemId) : undefined;
   const selectedServer = selection.section === 'app-servers' ? state.appServers.find((server) => server.id === selection.itemId) : undefined;
   const addingServer = selection.section === 'app-servers' && selection.itemId === 'new';
-  if (selectedMachine) return <div className="settings-page fleet-settings-page"><FleetMachineDetails
-    key={selectedMachine.id} machine={selectedMachine} busy={busy} error={error}
-    onBack={() => onSelect({ section: 'machines', itemId: null })} onChange={change}
-  /></div>;
-  if (selectedServer || addingServer) return <div className="settings-page fleet-settings-page"><FleetAppServerDetails
-    key={selectedServer?.id ?? 'new'} server={selectedServer} busy={busy} error={error}
-    onBack={() => onSelect({ section: 'app-servers', itemId: null })}
-    onSaved={(id) => onSelect({ section: 'app-servers', itemId: id })}
-    onChange={change}
-  /></div>;
-  if (selection.section === 'app-servers' && selection.itemId === 'local') return <div className="settings-page fleet-settings-page"><LocalAppServerDetails
-    busy={busy} error={error} restarting={restartingId === 'local'} remoteAccessSettings={remoteAccessSettings} remoteAccessBusy={remoteAccessBusy}
-    onRestart={() => restart('local', () => window.beale.restartLocalAppServer())}
-    onDetectRemoteAccess={onDetectRemoteAccess} onSaveRemoteAccess={onSaveRemoteAccess}
-  /></div>;
-
-  if (selection.section === 'browsers') return <BrowserSettingsView
-    key={state.browserHomePage} homePage={state.browserHomePage} browserCount={state.browsers.length}
-    busy={busy} error={error} onChange={change}
-  />;
-
-  if (selection.section === 'machines') return <div className="settings-page fleet-settings-page"><section className="settings-form" aria-busy={busy}>
-    <header className="settings-form-heading"><h2>Virtual Machines</h2><p>Select a VM in the sidebar to configure its run, clone, and SSH settings.</p></header>
-    {state.error ? <p className="settings-form-error" role="status">{state.error}</p> : null}
-    {state.machines.length === 0 ? <p className="fleet-machine-empty">No VMs were found. Prepare one in Tart or Hyper-V, then refresh Fleet.</p> : null}
-    {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
-    <div className="settings-form-actions fleet-machine-refresh"><span /><button type="button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} aria-hidden="true" />Refresh</button></div>
-  </section></div>;
-
-  return <div className="settings-page fleet-settings-page"><section className="settings-form" aria-busy={busy}>
-    <header className="settings-form-heading"><h2>App Servers</h2><p>Connect to other Beale app servers on this Tailscale network. Configure each server on its own machine.</p></header>
-    <div className="settings-form-control-list fleet-machine-list fleet-app-server-list" aria-label="App servers">
-      <div className="settings-form-control-row fleet-machine-row">
-        <span className="settings-form-control-copy"><strong>Local</strong><small>This machine’s Beale app-server process.</small></span>
-        <button type="button" className="fleet-machine-configure-button" aria-label="Restart local app server" title="Restart local app server" disabled={busy} onClick={() => void restart('local', () => window.beale.restartLocalAppServer())}><RotateCw size={18} aria-hidden="true" /></button>
-      </div>
-      {state.appServers.length === 0 ? <p className="fleet-machine-empty">No remote app servers are saved.</p> : null}
-      {state.appServers.map((server) => <div className="settings-form-control-row fleet-machine-row" key={server.id}>
-        <span className="settings-form-control-copy"><strong>{server.name}</strong><small>{server.url}</small></span>
-        <span className="fleet-machine-actions">
-          <button type="button" className="fleet-machine-configure-button" aria-label={`Restart ${server.name} app server`} title={`Restart ${server.name} app server`} disabled={busy} onClick={() => void restart(server.id, () => window.beale.restartFleetAppServer(server.id))}><RotateCw size={18} aria-hidden="true" /></button>
-          <button type="button" className="fleet-machine-configure-button" aria-label={`Configure ${server.name}`} title={`Configure ${server.name}`} disabled={busy} onClick={() => onSelect({ section: 'app-servers', itemId: server.id })}><Settings2 size={18} aria-hidden="true" /></button>
-        </span>
-      </div>)}
-    </div>
-    {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
-    {restartingId ? <p role="status" className="fleet-machine-empty">Restarting app-server…</p> : null}
-    <div className="settings-form-actions fleet-machine-refresh"><span /><button type="button" disabled={busy} onClick={() => onSelect({ section: 'app-servers', itemId: 'new' })}><Plus size={14} aria-hidden="true" />Add App Server</button></div>
-  </section></div>;
+  const localSelected = selection.section === 'app-servers' && selection.itemId === 'local';
+  const browsersSelected = selection.section === 'browsers' && selection.itemId === 'settings';
+  const closeDialog = (): void => onSelect({ section: selection.section, itemId: null });
+  const dialogTitle = selectedMachine ? `Configure ${selectedMachine.name}`
+    : selectedServer ? `Configure ${selectedServer.name}`
+      : addingServer ? 'Add App Server'
+        : localSelected ? 'Local App Server'
+          : browsersSelected ? 'Browsers' : null;
+  return <div className="settings-page fleet-settings-page">
+    <FleetTargetsWorkspace state={state} workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId}
+      busy={busy} onScopeChange={onScopeChange} onStateChange={onStateChange} onRefresh={onRefresh} />
+    {dialogTitle ? <Modal title={dialogTitle} className="fleet-settings-dialog" wide closeDisabled={busy} onClose={closeDialog}>
+      {selectedMachine ? <FleetMachineDetails key={selectedMachine.id} machine={selectedMachine} busy={busy} error={error}
+        onChange={change} /> : selectedServer || addingServer ? <FleetAppServerDetails
+          key={selectedServer?.id ?? 'new'} server={selectedServer} busy={busy} error={error}
+          restarting={restartingId === selectedServer?.id}
+          onRestart={() => selectedServer ? restart(selectedServer.id, () => window.beale.restartFleetAppServer(selectedServer.id)) : Promise.resolve()}
+          onBack={closeDialog} onSaved={closeDialog} onChange={change} /> : localSelected ? <LocalAppServerDetails
+            busy={busy} error={error} restarting={restartingId === 'local'} remoteAccessSettings={remoteAccessSettings} remoteAccessBusy={remoteAccessBusy}
+            onRestart={() => restart('local', () => window.beale.restartLocalAppServer())}
+            onDetectRemoteAccess={onDetectRemoteAccess} onSaveRemoteAccess={onSaveRemoteAccess} /> : <BrowserSettingsView
+              key={state.browserHomePage} homePage={state.browserHomePage} browserCount={state.browsers.length}
+              busy={busy} error={error} onChange={change} />}
+    </Modal> : null}
+  </div>;
 }
 
 function LocalAppServerDetails({ busy, error, restarting, remoteAccessSettings, remoteAccessBusy, onRestart, onDetectRemoteAccess, onSaveRemoteAccess }: {
@@ -133,7 +109,7 @@ function LocalAppServerDetails({ busy, error, restarting, remoteAccessSettings, 
     finally { setTesting(false); }
   };
   return <section className="settings-form fleet-detail-view" aria-label="Local" aria-busy={locked}>
-    <header className="settings-form-heading"><h2>Local</h2><p>This machine’s Beale app-server process.</p></header>
+    <header className="settings-form-heading"><p>This machine’s Beale app-server process.</p></header>
     <form className="settings-form-squircle fleet-detail-form fleet-text-form" onSubmit={(event) => {
       event.preventDefault();
       void onSaveRemoteAccess({ enabled, magicDnsName });
@@ -237,7 +213,7 @@ function BrowserSettingsView({ homePage, browserCount, busy, error, onChange }: 
 }): JSX.Element {
   const [url, setUrl] = useState(homePage);
   return <div className="settings-page fleet-settings-page"><section className="settings-form" aria-busy={busy}>
-    <header className="settings-form-heading"><h2>Browsers</h2><p>Set the page opened by new browser sessions. Choose available browsers using the checkboxes in the sidebar.</p></header>
+    <header className="settings-form-heading"><p>Set the page opened by new browser sessions. Choose available browsers using the checkboxes in the sidebar.</p></header>
     <form className="settings-form-squircle fleet-detail-form fleet-text-form" onSubmit={(event) => {
       event.preventDefault();
       void onChange(() => window.beale.configureFleet({ action: 'set-browser-home-page', url: url.trim() }));
@@ -255,16 +231,12 @@ function BrowserSettingsView({ homePage, browserCount, busy, error, onChange }: 
   </section></div>;
 }
 
-function fleetSectionLabel(section: FleetSelection['section']): string {
-  if (section === 'app-servers') return 'App Servers';
-  if (section === 'browsers') return 'Browsers';
-  return 'Virtual Machines';
-}
-
-function FleetAppServerDetails({ server, busy, error, onBack, onSaved, onChange }: {
+function FleetAppServerDetails({ server, busy, error, restarting, onRestart, onBack, onSaved, onChange }: {
   server: FleetAppServer | undefined;
   busy: boolean;
   error: string | null;
+  restarting: boolean;
+  onRestart: () => Promise<void>;
   onBack: () => void;
   onSaved: (serverId: string) => void;
   onChange: (action: () => Promise<FleetState>) => Promise<boolean>;
@@ -297,7 +269,7 @@ function FleetAppServerDetails({ server, busy, error, onBack, onSaved, onChange 
   };
   return (
     <section className="settings-form fleet-detail-view" aria-label={server ? `Configure ${server.name}` : 'Add App Server'}>
-      <header className="settings-form-heading"><h2>{server ? server.name : 'Add App Server'}</h2><p>Configure this app server on the current machine.</p></header>
+      <header className="settings-form-heading"><p>Configure this app server on the current machine.</p></header>
       <form className="settings-form-squircle fleet-detail-form fleet-text-form" onSubmit={(event) => void save(event)}>
         <div className="settings-form-control-list">
           <label className="settings-form-control-row fleet-text-field">
@@ -317,13 +289,16 @@ function FleetAppServerDetails({ server, busy, error, onBack, onSaved, onChange 
           <div className="fleet-app-server-test-buttons">
             <button type="button" className="secondary-button" disabled={locked || !url.trim() || (!server && !operatorToken.trim())} onClick={() => void test()}>{testing ? 'Testing…' : 'Test Connection'}</button>
             {server ? <FleetPairingQrCodeAction serverId={server.id} serverName={server.name} disabled={locked} /> : null}
+            {server ? <button type="button" className="secondary-button" disabled={locked} onClick={() => void onRestart()}>
+              <RotateCw size={14} aria-hidden="true" />{restarting ? 'Restarting…' : 'Restart App Server'}
+            </button> : null}
           </div>
           {testResult ? <p className={testResult.success ? 'fleet-vm-test-success' : 'settings-form-error'} role="status">{testResult.message}</p> : null}
         </div>
         {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
+        {restarting ? <p className="fleet-machine-empty" role="status">Restarting app-server…</p> : null}
         <div className="settings-form-actions fleet-detail-actions">
           {server ? <button type="button" className="secondary-button" disabled={locked} onClick={() => void remove()}>Remove</button> : null}
-          <button type="button" className="secondary-button" disabled={locked} onClick={onBack}>Back</button>
           <button type="submit" className="primary-button" disabled={locked}>Save App Server</button>
         </div>
       </form>
@@ -331,11 +306,10 @@ function FleetAppServerDetails({ server, busy, error, onBack, onSaved, onChange 
   );
 }
 
-function FleetMachineDetails({ machine, busy, error, onBack, onChange }: {
+function FleetMachineDetails({ machine, busy, error, onChange }: {
   machine: FleetMachine;
   busy: boolean;
   error: string | null;
-  onBack: () => void;
   onChange: (action: () => Promise<FleetState>) => Promise<boolean>;
 }): JSX.Element {
   const [canRun, setCanRun] = useState(machine.canRun);
@@ -392,7 +366,7 @@ function FleetMachineDetails({ machine, busy, error, onBack, onChange }: {
 
   return (
     <section className="settings-form fleet-detail-view" aria-label={`Configure ${machine.name}`}>
-      <header className="settings-form-heading"><h2>{machine.name}</h2><p>{machine.backend} · {machine.state}{machine.owner ? ' · Reserved by a session' : ''}</p></header>
+      <header className="settings-form-heading"><p>{machine.backend} · {machine.state}{machine.owner ? ' · Reserved by a session' : ''}</p></header>
       <form className="settings-form-squircle fleet-detail-form fleet-text-form" onSubmit={(event) => void save(event)}>
         <div className="settings-form-control-list">
           <label className="settings-form-control-row">
@@ -430,7 +404,7 @@ function FleetMachineDetails({ machine, busy, error, onBack, onChange }: {
             </label>
           ) : null}
           <label className="settings-form-control-row fleet-text-field">
-            <span className="settings-form-control-copy"><strong>SSH known-hosts file</strong><small>For Tart, Beale uses ~/.ssh/tart_known_hosts when it exists. A first connection to a clone records its host key there.</small></span>
+            <span className="settings-form-control-copy"><strong>SSH known-hosts file</strong><small>For Tart, Beale uses ~/.ssh/tart_known_hosts. A first connection records the VM host key there.</small></span>
             <input value={sshKnownHostsFile} disabled={locked || Boolean(machine.owner) || clearKnownHosts} placeholder={machine.sshKnownHostsConfigured ? 'Configured; enter a new path to replace' : 'Optional host path'} onChange={(event) => { setSshKnownHostsFile(event.currentTarget.value); setTestResult(null); }} />
           </label>
           {machine.sshKnownHostsConfigured ? (
@@ -452,7 +426,6 @@ function FleetMachineDetails({ machine, busy, error, onBack, onChange }: {
         {testResult ? <p className={testResult.success ? 'fleet-vm-test-success' : 'settings-form-error'} role="status">{testResult.message}</p> : null}
         {error ? <p className="settings-form-error" role="alert">{error}</p> : null}
         <div className="settings-form-actions fleet-detail-actions">
-          <button type="button" className="secondary-button" disabled={locked} onClick={onBack}>Back</button>
           <button type="submit" className="primary-button" disabled={locked || Boolean(machine.owner)}>Save VM</button>
         </div>
       </form>

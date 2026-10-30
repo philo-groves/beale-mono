@@ -6,8 +6,11 @@ import type { FleetState } from '@beale/app-server-runtime/protocol';
 import type { HostEnvironment, RunDetail, WorkspaceSnapshot } from '@shared/types';
 import { AppHeaderTitle, StaticAppHeaderTitle, type AppHeaderViewIcon } from '../src/renderer/app/AppHeaderTitle';
 import { AppNavigationRail, ProviderLimitIndicator, resolveAppNavigationDestination } from '../src/renderer/app/AppNavigationRail';
+import { CollectionSidebar } from '../src/renderer/app/CollectionSidebar';
+import { SidebarServerSelector } from '../src/renderer/app/SidebarServerSelector';
 import { FleetSidebar } from '../src/renderer/features/fleet/FleetSidebar';
 import { FleetSettingsView } from '../src/renderer/features/settings/FleetSettingsView';
+import { WorkspaceSidebar } from '../src/renderer/features/workspaces/WorkspaceSidebar';
 import { SettingsSidebar } from '../src/renderer/features/settings/SettingsModal';
 import { headerMenuInlineEnd, rightmostHeaderMenuControl, TopBar } from '../src/renderer/app/TopBar';
 import {
@@ -19,6 +22,32 @@ import {
 } from '../src/renderer/view-models/appShell';
 
 describe('renderer app shell view model', () => {
+  it('places the app server selector in the sidebar heading with a computer icon', () => {
+    const selector = createElement(SidebarServerSelector, {
+      servers: [], statuses: {}, value: 'local', collapsed: false,
+      onChange: () => undefined, onAdd: () => undefined, onRefreshStatuses: () => undefined
+    });
+    const workspace = renderToStaticMarkup(createElement(WorkspaceSidebar, {
+      busy: false, collapsed: false, error: null, workspaceRegistry: null, selectedRunId: null, snapshot: null,
+      onAddWorkspace: () => undefined, onImportWorkspace: () => undefined,
+      onOpenWorkspace: () => undefined, onOpenResearchSession: () => undefined,
+      onResizePointerDown: () => undefined, onStartNewResearch: () => undefined,
+      onStartNewResearchForWorkspace: () => undefined, serverSelector: selector
+    }));
+    const collection = renderToStaticMarkup(createElement(CollectionSidebar, {
+      title: 'Automations', label: 'Automations sidebar', collapsed: false, error: null,
+      updateKey: 'example', onResizePointerDown: () => undefined, serverSelector: selector,
+      children: createElement('div', null, 'Example item')
+    }));
+
+    for (const html of [workspace, collection]) {
+      expect(html).toContain('lucide-computer');
+      expect(html).toContain('aria-label="App server: Local"');
+      expect(html.indexOf('class="sidebar-server-picker"')).toBeLessThan(html.indexOf('sidebar-list-scroll-region'));
+      expect(html).not.toContain('sidebar-server-footer');
+    }
+  });
+
   it('matches header icons to workspace and sidenav destinations', () => {
     const workspaceHeader = renderToStaticMarkup(createElement(AppHeaderTitle, {
       workspaceName: 'ExampleCo iOS Parser',
@@ -163,7 +192,7 @@ describe('renderer app shell view model', () => {
     expect(single).toContain('60% left');
   });
 
-  it('lists Fleet resources in the sidebar and opens machine details inline', () => {
+  it('lists Fleet resources in the sidebar and opens configuration dialogs', () => {
     const onNavigate = () => undefined;
     const fleetState: FleetState = {
       machineId: 'machine-local', role: 'primary', enabled: true, available: true, error: null,
@@ -195,7 +224,8 @@ describe('renderer app shell view model', () => {
     expect(fleet).not.toContain('aria-label="Fleet" class="workspace-item"');
     expect(fleet.indexOf('aria-label="App Servers"')).toBeLessThan(fleet.indexOf('aria-label="Browsers"'));
     expect(fleet.indexOf('aria-label="Browsers"')).toBeLessThan(fleet.indexOf('aria-label="Virtual Machines"'));
-    expect(fleet.match(/<svg /gu)).toHaveLength(3);
+    expect(fleet.match(/<svg /gu)).toHaveLength(4);
+    expect(fleet).toContain('aria-label="Add App Server"');
     expect(fleet).not.toContain('fleet-sidebar-item-marker');
     expect(fleet).toContain('sidebar-server-status-dot online');
     expect(fleet).toContain('aria-label="Local, Connected."');
@@ -222,34 +252,45 @@ describe('renderer app shell view model', () => {
     expect(overview).not.toContain('Fleet role');
     expect(overview).not.toContain('This Beale instance');
     expect(overview).toContain('<strong>Local</strong>');
+    expect(overview).toContain('aria-label="Fleet workspace scope"');
+    expect(overview).toContain('aria-label="App Servers"');
+    expect(overview).toContain('aria-label="Browsers"');
+    expect(overview).toContain('aria-label="Virtual Machines"');
     const machine = renderToStaticMarkup(createElement(FleetSettingsView, {
       ...viewProps, selection: { section: 'machines', itemId: 'vm-example' }
     }));
     expect(machine).toContain('aria-label="Configure Example VM"');
     expect(machine).toContain('Save VM');
-    expect(machine).not.toContain('role="dialog"');
-    expect(machine).not.toContain('modal-backdrop');
+    expect(machine).toContain('role="dialog"');
+    expect(machine).toContain('modal-backdrop');
     const server = renderToStaticMarkup(createElement(FleetSettingsView, {
       ...viewProps, selection: { section: 'app-servers', itemId: 'server-example' }
     }));
     expect(server).toContain('aria-label="Configure Example Server"');
     expect(server).toContain('Show QR Code');
+    expect(server).toContain('Restart App Server');
     expect(server).toMatch(/Test Connection<\/button><button[^>]*>.*?Show QR Code<\/button>/u);
-    expect(server).not.toContain('role="dialog"');
+    expect(server).toContain('role="dialog"');
+    const addServer = renderToStaticMarkup(createElement(FleetSettingsView, {
+      ...viewProps, selection: { section: 'app-servers', itemId: 'new' }
+    }));
+    expect(addServer).toContain('Add App Server</h2>');
+    expect(addServer).toContain('Save App Server');
     const localServer = renderToStaticMarkup(createElement(FleetSettingsView, {
       ...viewProps, selection: { section: 'app-servers', itemId: 'local' }
     }));
     expect(localServer).toContain('aria-label="Local"');
-    expect(localServer).toContain('<h2>Local</h2>');
+    expect(localServer).toContain('<h2 id=');
+    expect(localServer).toContain('Local App Server</h2>');
     expect(localServer).toContain('settings-form-squircle fleet-detail-form fleet-text-form');
     expect(localServer).toContain('Test Connection');
     expect(localServer).toContain('Show QR Code');
     expect(localServer).toMatch(/Test Connection<\/button><button[^>]*>.*?Show QR Code<\/button>/u);
     expect(localServer).toContain('Restart App Server');
     const browsers = renderToStaticMarkup(createElement(FleetSettingsView, {
-      ...viewProps, selection: { section: 'browsers', itemId: null }
+      ...viewProps, selection: { section: 'browsers', itemId: 'settings' }
     }));
-    expect(browsers).not.toContain('type="checkbox"');
+    expect(browsers).toContain('role="dialog"');
     expect(browsers).toContain('Default page');
     expect(browsers).toContain('https://duckduckgo.com/');
   });

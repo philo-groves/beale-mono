@@ -3,12 +3,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
 import type { ResearchExecutableTool, ResearchToolExecutionContext } from "./tool-registry.js";
 import type { ResearchToolAction } from "./types.js";
-import type { SurfaceRanking } from "./surfaces.js";
+import type { HighValueSurfaceSignal, SurfaceRanking, SurfaceScopeAssessment } from "./surfaces.js";
 
 export type ResearchTrackStatus = "running" | "paused" | "waiting" | "complete" | "stopped";
 export type ResearchTrackWorkStatus = "unexamined" | "active" | "deferred" | "blocked" | "complete" | "excluded";
 export type ResearchTrackImpact = "unknown" | "low" | "medium" | "high" | "critical";
-export type ResearchTrackEpochFocus = "breadth" | "depth";
+export type ResearchTrackEpochFocus = "first" | "continuing";
 export type ResearchTrackValidationEnvironment = "device" | "vm" | "web" | "localhost" | "none";
 export interface ResearchTrackValidation {
   targetDependent: boolean;
@@ -93,9 +93,25 @@ export interface ResearchTrackSurfaceProjection {
   resourceDirection?: string;
   parentId: string | null;
   name: string;
-  foundation?: { ranking?: SurfaceRanking | null } | null;
+  foundation?: { ranking?: SurfaceRanking | null; highValueSignals?: Array<{ kind: HighValueSurfaceSignal; basis: string }>;
+    scopeAssessment?: SurfaceScopeAssessment | null } | null;
   coverageState: { covered: boolean; unmetRequirements: string[]; openLeadIds?: string[]; unblockedFindingIds?: string[] };
   progressBlocker: { reason: string } | null;
+}
+
+function scopeEligibleSurfaces(surfaces: readonly ResearchTrackSurfaceProjection[]): ResearchTrackSurfaceProjection[] {
+  const byId = new Map(surfaces.map((surface) => [surface.id, surface]));
+  return surfaces.filter((surface) => {
+    let current: ResearchTrackSurfaceProjection | undefined = surface;
+    const visited = new Set<string>();
+    while (current && !visited.has(current.id)) {
+      if (current.resourceDirection === "out_of_scope"
+        || current.foundation?.scopeAssessment?.decision === "not_applicable") return false;
+      visited.add(current.id);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    return true;
+  });
 }
 
 type Row = Record<string, unknown>;
@@ -104,7 +120,15 @@ const IMPACT_RANK: Record<ResearchTrackImpact, number> = { unknown: 2, low: 1, m
 const INITIAL_ROOT_ACTIONABILITY = 35;
 const INITIAL_CHILD_ACTIONABILITY = 55;
 const ACTIONABILITY_DECAY_INTERVAL_MS = 6 * 60 * 60_000;
+const MAX_CONSECUTIVE_RESOURCE_EPOCHS = 3;
 
+function cooldownUntil(noProgressEpochs: number): string | null {
+  if (noProgressEpochs < 2) return null;
+  const hours = Math.min(168, 6 * 2 ** Math.min(5, noProgressEpochs - 2));
+  return new Date(Date.now() + hours * 60 * 60_000).toISOString();
+}
+
+/** Legacy progress projection kept for existing clients; scheduling uses value tiers and cooldowns. */
 function priorityBreakdown(work: Pick<ResearchTrackSurfaceState,
   "actionabilityScore" | "angles" | "impact" | "validation" | "noProgressEpochs">,
   ranking: SurfaceRanking | null): ResearchTrackPriorityBreakdown {
@@ -124,8 +148,6 @@ function priorityBreakdown(work: Pick<ResearchTrackSurfaceState,
     actionability: work.actionabilityScore, impactAdjustment, surfaceRankingAdjustment, testableAngleBonus,
     targetValidationPenalty, noProgressPenalty };
 }
-
-function schedulingScore(work: ResearchTrackSurfaceState): number { return work.priority.baseScore; }
 
 export function researchTrackProgress(track: Pick<ResearchTrackSnapshot, "surfaces">): {
   investigated: number; complete: number; total: number;
@@ -161,6 +183,7 @@ export class ResearchTrackStore {
         target_ids_json TEXT NOT NULL, collaboration_json TEXT, guardian_enabled INTEGER NOT NULL DEFAULT 1,
         active_session_id TEXT, active_surface_id TEXT,
         epoch_count INTEGER NOT NULL, last_surface_id TEXT, consecutive_surface_epochs INTEGER NOT NULL,
+        last_resource_id TEXT, consecutive_resource_epochs INTEGER NOT NULL DEFAULT 0,
         last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS app_server_research_track_surfaces (
@@ -183,6 +206,12 @@ export class ResearchTrackStore {
     }
     if (!columns.some((column) => column.name === "guardian_enabled")) {
       this.#database.exec("ALTER TABLE app_server_research_tracks ADD COLUMN guardian_enabled INTEGER NOT NULL DEFAULT 1");
+    }
+    if (!columns.some((column) => column.name === "last_resource_id")) {
+      this.#database.exec("ALTER TABLE app_server_research_tracks ADD COLUMN last_resource_id TEXT");
+    }
+    if (!columns.some((column) => column.name === "consecutive_resource_epochs")) {
+      this.#database.exec("ALTER TABLE app_server_research_tracks ADD COLUMN consecutive_resource_epochs INTEGER NOT NULL DEFAULT 0");
     }
     const surfaceColumns = this.#database.prepare("PRAGMA table_info(app_server_research_track_surfaces)").all() as Array<{ name: string }>;
     if (!surfaceColumns.some((column) => column.name === "actionability_score")) {
@@ -257,7 +286,7 @@ export class ResearchTrackStore {
     surfaces: readonly ResearchTrackSurfaceProjection[];
     replaceUnfinished?: boolean;
   }): ResearchTrackSnapshot {
-    const eligibleSurfaces = input.surfaces.filter((surface) => surface.resourceDirection !== "out_of_scope");
+    const eligibleSurfaces = scopeEligibleSurfaces(input.surfaces);
     if (eligibleSurfaces.length === 0) throw new Error("A research track requires an eligible scope surface.");
     if (input.targetIds.length === 0 || input.targetIds.length > 16
       || new Set(input.targetIds).size !== input.targetIds.length) {
@@ -286,6 +315,7 @@ export class ResearchTrackStore {
           guardian_enabled=excluded.guardian_enabled,
           active_session_id=NULL, active_surface_id=NULL,
           epoch_count=0, last_surface_id=NULL, consecutive_surface_epochs=0,
+          last_resource_id=NULL, consecutive_resource_epochs=0,
           last_error=NULL, created_at=excluded.created_at, updated_at=excluded.updated_at`)
         .run(this.#workspaceId, id, (existing?.pass ?? 0) + 1, required(input.scopeId, "scopeId"),
           JSON.stringify(input.provider), JSON.stringify(input.targetIds),
@@ -300,7 +330,7 @@ export class ResearchTrackStore {
   public syncSurfaces(surfaces: readonly ResearchTrackSurfaceProjection[]): ResearchTrackSnapshot | null {
     const track = this.get();
     if (!track) return null;
-    surfaces = surfaces.filter((surface) => surface.resourceDirection !== "out_of_scope");
+    surfaces = scopeEligibleSurfaces(surfaces);
     const now = new Date().toISOString();
     const visibleIds = new Set(surfaces.map((surface) => surface.id));
     const newSurface = surfaces.some((surface) => !track.surfaces.some((work) => work.surfaceId === surface.id));
@@ -324,7 +354,7 @@ export class ResearchTrackStore {
         this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status='blocked', updated_at=?
           WHERE workspace_id=? AND surface_id=?`).run(now, this.#workspaceId, surface.id);
       } else if (!surface.progressBlocker && work.status === "blocked") {
-        this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status='deferred', updated_at=?
+        this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status='deferred', revisit_after=NULL, updated_at=?
           WHERE workspace_id=? AND surface_id=?`).run(now, this.#workspaceId, surface.id);
       }
     }
@@ -380,93 +410,68 @@ export class ResearchTrackStore {
       return true;
     });
     const ready = actionable.filter((work) => !work.revisitAfter || work.revisitAfter <= new Date().toISOString());
-    // A second look should follow other available work, but never leave a
-    // running track idle solely because its remaining revisit time is future.
-    const eligible = ready.length > 0 ? ready : actionable;
-    const workById = new Map(track.surfaces.map((work) => [work.surfaceId, work]));
-    const score = (work: ResearchTrackSurfaceState): number => {
+    // A cooled surface returns when its recorded revisit time arrives. An idle
+    // track stays running so the host scan can pick it up without operator action.
+    if (actionable.length > 0 && ready.length === 0) return null;
+    const tier = (work: ResearchTrackSurfaceState): number => {
       const surface = byId.get(work.surfaceId);
-      const parent = surface?.parentId ? workById.get(surface.parentId) : null;
-      const recentParent = parent?.lastWorkedAt && Date.now() - Date.parse(parent.lastWorkedAt) < 60 * 60_000;
-      return schedulingScore(work) + (surface?.parentId && work.epochs === 0 && recentParent ? 10 : 0);
+      const signals = surface?.foundation?.highValueSignals ?? [];
+      if (signals.length > 0) return 0;
+      const ranking = surface?.foundation?.ranking;
+      if (ranking && ranking.impact.score >= 7 && ranking.reachability.score >= 5) return 1;
+      if (ranking && ranking.impact.score >= 7) return 2;
+      return 3;
     };
-    const claimWorkBonus = (work: ResearchTrackSurfaceState): number => {
-      const claims = byId.get(work.surfaceId)?.coverageState;
-      const bonus = Math.min(claims?.unblockedFindingIds?.length ?? 0, 2) * 25
-        + Math.min(claims?.openLeadIds?.length ?? 0, 2) * 15;
-      // An unavailable target does not become actionable merely because claims remain open.
-      return work.priority.targetValidationPenalty > 0 ? Math.min(bonus, 10) : bonus;
-    };
-    const depthScore = (work: ResearchTrackSurfaceState): number => score(work) + claimWorkBonus(work);
-    const rank = (left: ResearchTrackSurfaceState, right: ResearchTrackSurfaceState): number =>
-      score(right) - score(left)
+    const ranked = [...ready].sort((left, right) =>
+      tier(left) - tier(right)
       || (left.lastWorkedAt ?? "").localeCompare(right.lastWorkedAt ?? "")
-      || left.surfaceId.localeCompare(right.surfaceId);
-    const depthRank = (left: ResearchTrackSurfaceState, right: ResearchTrackSurfaceState): number =>
-      depthScore(right) - depthScore(left) || rank(left, right);
-    const resourceIdForSurface = (surfaceId: string): string => {
-      const surface = byId.get(surfaceId);
+      || left.surfaceId.localeCompare(right.surfaceId));
+    const resourceId = (work: ResearchTrackSurfaceState): string => {
+      const surface = byId.get(work.surfaceId);
       if (surface?.resourceId) return surface.resourceId;
       let root = surface;
-      const seen = new Set<string>();
-      while (root?.parentId && !seen.has(root.id)) {
-        seen.add(root.id);
+      const visited = new Set<string>();
+      while (root?.parentId && !visited.has(root.id)) {
+        visited.add(root.id);
         root = byId.get(root.parentId);
       }
-      return root?.id ?? surfaceId;
+      return root?.resourceId ?? root?.id ?? work.surfaceId;
     };
-    const resourceId = (work: ResearchTrackSurfaceState): string => resourceIdForSurface(work.surfaceId);
-    const resourceKind = (work: ResearchTrackSurfaceState): string =>
-      byId.get(work.surfaceId)?.resourceKind ?? byId.get(resourceId(work))?.resourceKind ?? "unknown";
-    const resourceSource = (work: ResearchTrackSurfaceState): string | undefined =>
-      byId.get(work.surfaceId)?.resourceSource ?? byId.get(resourceId(work))?.resourceSource;
+    const resourceKind = (work: ResearchTrackSurfaceState): string => {
+      const surface = byId.get(work.surfaceId);
+      return surface?.resourceKind ?? byId.get(resourceId(work))?.resourceKind ?? "unknown";
+    };
     const kindEpochs = new Map<string, number>();
     const resourceEpochs = new Map<string, number>();
     for (const work of track.surfaces) {
-      if (work.epochs === 0 || !byId.has(work.surfaceId)) continue;
+      if (!byId.has(work.surfaceId)) continue;
       const kind = resourceKind(work);
-      kindEpochs.set(kind, (kindEpochs.get(kind) ?? 0) + work.epochs);
       const id = resourceId(work);
+      kindEpochs.set(kind, (kindEpochs.get(kind) ?? 0) + work.epochs);
       resourceEpochs.set(id, (resourceEpochs.get(id) ?? 0) + work.epochs);
     }
-    const breadthScore = (work: ResearchTrackSurfaceState): number => {
-      const kind = resourceKind(work);
-      const kindBonus = kind === "unknown" ? 0 : Math.max(0, 30 - (kindEpochs.get(kind) ?? 0) * 6);
-      const alternateKindBonus = kind !== "repository" && kind !== "unknown" ? 8 : 0;
-      const executionBonus = kind === "binary" || kind === "service" ? 8 : 0;
-      return score(work) + kindBonus + alternateKindBonus + executionBonus
-        + (resourceSource(work) === "explicit_scope" ? 12 : 0);
-    };
-    const breadthRank = (left: ResearchTrackSurfaceState, right: ResearchTrackSurfaceState): number =>
-      breadthScore(right) - breadthScore(left) || rank(left, right);
-    const breadth = eligible.filter((work) => !byId.get(work.surfaceId)?.parentId && work.epochs === 0
-      && claimWorkBonus(work) === 0).sort(breadthRank);
-    const depth = eligible.filter((work) => byId.get(work.surfaceId)?.parentId || work.epochs > 0
-      || claimWorkBonus(work) > 0).sort(depthRank);
-    const strongestDepth = depth[0];
-    const unexploredKind = breadth.some((work) => resourceKind(work) !== "unknown"
-      && !kindEpochs.has(resourceKind(work)));
-    const kindStarvation = track.epochCount >= 3 && kindEpochs.size === 1 && unexploredKind;
-    // Keep three epochs available for depth, then give another resource a turn.
-    // Escape a one-kind streak immediately when a reviewed new kind appears.
-    const explorationDue = track.epochCount >= 3 && (track.epochCount % 4 === 3 || kindStarvation);
-    const exploreBreadth = breadth.length > 0 && (!strongestDepth || depthScore(strongestDepth) < 20 || explorationDue);
-    const history = this.#database.prepare("SELECT last_surface_id, consecutive_surface_epochs FROM app_server_research_tracks WHERE workspace_id=?")
-      .get(this.#workspaceId) as { last_surface_id: string | null; consecutive_surface_epochs: number };
-    const lastResourceId = history.last_surface_id ? resourceIdForSurface(history.last_surface_id) : null;
-    const alternateResources = eligible.filter((work) => resourceId(work) !== lastResourceId).sort((left, right) =>
-      (resourceEpochs.get(resourceId(left)) ?? 0) - (resourceEpochs.get(resourceId(right)) ?? 0)
-      || (kindEpochs.get(resourceKind(left)) ?? 0) - (kindEpochs.get(resourceKind(right)) ?? 0)
-      || breadthRank(left, right));
-    const candidates = exploreBreadth ? breadth
-      : explorationDue && breadth.length === 0 && alternateResources.length > 0 ? alternateResources
-        : depth.length > 0 ? depth : breadth;
-    const focus: ResearchTrackEpochFocus = exploreBreadth || explorationDue && breadth.length === 0
-      && alternateResources.length > 0 ? "breadth" : depth.length > 0 ? "depth" : "breadth";
-    const selected = history.consecutive_surface_epochs >= 2 && candidates.length > 1
-      && (focus === "depth" ? depthScore(candidates[0]!) : score(candidates[0]!)) < 80
-      ? candidates.find((candidate) => candidate.surfaceId !== history.last_surface_id) ?? candidates[0]
-      : candidates[0];
+    const history = this.#database.prepare(`SELECT last_surface_id, consecutive_surface_epochs,
+      last_resource_id, consecutive_resource_epochs FROM app_server_research_tracks WHERE workspace_id=?`)
+      .get(this.#workspaceId) as { last_surface_id: string | null; consecutive_surface_epochs: number;
+        last_resource_id: string | null; consecutive_resource_epochs: number };
+    const previous = ready.find((work) => work.surfaceId === history.last_surface_id);
+    const previousWork = track.surfaces.find((work) => work.surfaceId === history.last_surface_id);
+    const previousResourceId = history.last_resource_id ?? (previousWork ? resourceId(previousWork) : null);
+    const resourceStreak = history.last_resource_id === null
+      ? history.consecutive_surface_epochs : history.consecutive_resource_epochs;
+    const alternative = previousResourceId && resourceStreak >= MAX_CONSECUTIVE_RESOURCE_EPOCHS
+      ? [...ready].filter((work) => resourceId(work) !== previousResourceId).sort((left, right) =>
+        tier(left) - tier(right)
+        || (kindEpochs.get(resourceKind(left)) ?? 0) - (kindEpochs.get(resourceKind(right)) ?? 0)
+        || (resourceEpochs.get(resourceId(left)) ?? 0) - (resourceEpochs.get(resourceId(right)) ?? 0)
+        || (left.lastWorkedAt ?? "").localeCompare(right.lastWorkedAt ?? "")
+        || left.surfaceId.localeCompare(right.surfaceId))[0]
+      : null;
+    // Keep a productive engagement for a bounded run. A better value tier can
+    // preempt it earlier; after three epochs another ready resource gets a turn.
+    const selected = alternative ?? (previous && previous.noProgressEpochs < 2
+      && tier(previous) <= tier(ranked[0]!) ? previous : ranked[0]);
+    const focus: ResearchTrackEpochFocus = selected?.epochs === 0 ? "first" : "continuing";
     if (!selected) {
       const status = track.surfaces.every((work) => work.status === "complete" || work.status === "excluded") ? "complete"
         : track.surfaces.some((work) => work.status === "blocked") ? "waiting" : "paused";
@@ -476,13 +481,17 @@ export class ResearchTrackStore {
       return null;
     }
     const now = new Date().toISOString();
+    const selectedResourceId = resourceId(selected);
+    const nextResourceStreak = previousResourceId === selectedResourceId ? resourceStreak + 1 : 1;
     this.#database.exec("BEGIN IMMEDIATE");
     try {
       const reserved = this.#database.prepare(`UPDATE app_server_research_tracks SET active_session_id=?, active_surface_id=?,
         epoch_count=epoch_count+1, last_surface_id=?,
         consecutive_surface_epochs=CASE WHEN last_surface_id=? THEN consecutive_surface_epochs+1 ELSE 1 END,
-        updated_at=? WHERE workspace_id=? AND status='running' AND active_session_id IS NULL`)
-        .run(required(sessionId, "sessionId"), selected.surfaceId, selected.surfaceId, selected.surfaceId, now, this.#workspaceId).changes;
+        last_resource_id=?, consecutive_resource_epochs=?, updated_at=?
+        WHERE workspace_id=? AND status='running' AND active_session_id IS NULL`)
+        .run(required(sessionId, "sessionId"), selected.surfaceId, selected.surfaceId, selected.surfaceId,
+          selectedResourceId, nextResourceStreak, now, this.#workspaceId).changes;
       if (!reserved) { this.#database.exec("ROLLBACK"); return null; }
       this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status='active', epochs=epochs+1,
         last_worked_at=?, updated_at=? WHERE workspace_id=? AND surface_id=?`)
@@ -492,9 +501,24 @@ export class ResearchTrackStore {
     return { track: this.get()!, surface: byId.get(selected.surfaceId)!, focus };
   }
 
+  /** Keep downstream finding work moving when no discovery component is ready. */
+  public reserveWorkersOnly(sessionId: string): ResearchTrackSnapshot {
+    const track = this.get();
+    if (!track || track.activeSessionId || !["running", "waiting", "complete"].includes(track.status)) {
+      throw new Error("The research track cannot reserve a worker-only epoch.");
+    }
+    const now = new Date().toISOString();
+    const result = this.#database.prepare(`UPDATE app_server_research_tracks SET status='running',
+      active_session_id=?, active_surface_id=NULL, epoch_count=epoch_count+1,
+      last_error=NULL, updated_at=? WHERE workspace_id=? AND active_session_id IS NULL`).run(
+        sessionId, now, this.#workspaceId);
+    if (Number(result.changes) !== 1) throw new Error("The research track changed before worker-only reservation.");
+    return this.get()!;
+  }
+
   public checkpoint(input: {
     surfaceId: string;
-    outcome: "continue" | "defer" | "blocked" | "complete";
+    outcome: "continue" | "defer" | "blocked" | "complete" | "exclude";
     impact: ResearchTrackImpact;
     theory: string;
     nextAction: string;
@@ -510,6 +534,9 @@ export class ResearchTrackStore {
     if (input.outcome === "blocked" && !surface.progressBlocker) {
       throw new Error("Set a concrete surface progress blocker before marking track work blocked.");
     }
+    if (input.outcome === "exclude" && surface.foundation?.scopeAssessment?.decision !== "not_applicable") {
+      throw new Error("Record a supported not-applicable scope assessment on the surface before excluding it.");
+    }
     const work = track.surfaces.find((item) => item.surfaceId === input.surfaceId)!;
     const angles = this.#mergeAngles(work.angles, input.angles);
     const evidenceRefs = [...new Set([
@@ -518,14 +545,16 @@ export class ResearchTrackStore {
     ])];
     if (evidenceRefs.length > 32) throw new Error("A track checkpoint can cite at most 32 evidence records.");
     for (const ref of evidenceRefs) this.#assertEvidenceRef(ref);
-    const status = input.outcome === "continue" || input.outcome === "defer" ? "deferred" : input.outcome;
+    const status = input.outcome === "continue" || input.outcome === "defer" ? "deferred"
+      : input.outcome === "exclude" ? "excluded" : input.outcome;
     const prior = work;
     const now = new Date().toISOString();
-    const revisitAfter = null;
     const nextAction = input.nextAction;
     const freshEvidence = evidenceRefs.some((ref) => this.#freshEvidenceRef(ref, work.lastWorkedAt, now));
-    const changed = freshEvidence || status === "complete" || status === "blocked";
-    const validation = input.validation ?? null;
+    const changed = freshEvidence || status === "complete" || status === "blocked" || status === "excluded";
+    const noProgressEpochs = changed ? 0 : prior.noProgressEpochs + 1;
+    const revisitAfter = status === "deferred" ? cooldownUntil(noProgressEpochs) : null;
+    const validation = input.validation ?? work.validation;
     if (validation) {
       if (typeof validation.targetDependent !== "boolean"
         || !["device", "vm", "web", "localhost", "none"].includes(validation.environment)
@@ -543,14 +572,14 @@ export class ResearchTrackStore {
     }
     const evidenceGain = validation?.targetDependent && (validation.environment === "localhost" || validation.environment === "none")
       ? 5 : validation?.targetDependent === false ? 15 : 25;
-    const actionabilityScore = status === "blocked" ? 0 : status === "complete" ? 100
+    const actionabilityScore = status === "blocked" || status === "excluded" ? 0 : status === "complete" ? 100
       : Math.max(0, Math.min(100, work.actionabilityScore + (freshEvidence
         ? evidenceGain + (IMPACT_RANK[input.impact] - 2) * 8 : -18)));
     this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status=?, impact=?, theory=?, next_action=?,
       evidence_refs_json=?, angles_json=?, no_progress_epochs=?, revisits=?, revisit_after=?, actionability_score=?, score_updated_at=?, validation_json=?, updated_at=?
       WHERE workspace_id=? AND surface_id=?`)
       .run(status, input.impact, bounded(input.theory, 2_000), bounded(nextAction, 2_000),
-        JSON.stringify(evidenceRefs), JSON.stringify(angles), changed ? 0 : prior.noProgressEpochs + 1,
+        JSON.stringify(evidenceRefs), JSON.stringify(angles), noProgressEpochs,
         input.outcome === "complete" ? prior.revisits + 1 : prior.revisits,
         revisitAfter, actionabilityScore, now, validation ? JSON.stringify(validation) : null, now, this.#workspaceId, input.surfaceId);
     return this.get()!.surfaces.find((work) => work.surfaceId === input.surfaceId)!;
@@ -617,22 +646,17 @@ export class ResearchTrackStore {
     const noProgressIncrement = options.countNoProgress === false ? 0 : 1;
     if (work?.status === "active") {
       this.#database.prepare(`UPDATE app_server_research_track_surfaces SET status='deferred', no_progress_epochs=no_progress_epochs+?,
-        actionability_score=?, score_updated_at=?, next_action=?, updated_at=? WHERE workspace_id=? AND surface_id=?`)
+        actionability_score=?, score_updated_at=?, next_action=?, revisit_after=?, updated_at=? WHERE workspace_id=? AND surface_id=?`)
         .run(noProgressIncrement, Math.max(0, work.actionabilityScore - 20), now,
-          "Resume the assigned threat-model investigation and record a durable checkpoint.", now, this.#workspaceId, work.surfaceId);
+          "Resume the assigned threat-model investigation and record a durable checkpoint.",
+          cooldownUntil(work.noProgressEpochs + noProgressIncrement),
+          now, this.#workspaceId, work.surfaceId);
     }
-    const noProgressEpochs = work ? work.noProgressEpochs + (work.status === "active" ? noProgressIncrement : 0) : 0;
-    const repeatedNoProgress = work?.status !== "excluded" && noProgressEpochs >= 3;
-    const otherSurfaceAvailable = track.surfaces.some((surface) => surface.surfaceId !== work?.surfaceId
-      && surface.status !== "complete" && surface.status !== "blocked" && surface.status !== "excluded");
-    const pauseForNoProgress = repeatedNoProgress && !otherSurfaceAvailable;
     this.#database.prepare(`UPDATE app_server_research_tracks SET active_session_id=NULL, active_surface_id=NULL,
-      status=CASE WHEN ? THEN 'paused' ELSE status END,
       last_error=CASE WHEN status='paused' THEN last_error ELSE ? END,
       updated_at=? WHERE workspace_id=?`)
-      .run(pauseForNoProgress ? 1 : 0,
-        pauseForNoProgress ? "Three epochs on one surface produced no durable progress. Review its theory or scope before resuming."
-          : succeeded ? null : bounded(diagnostic ?? "The research epoch ended before completion.", 1_000), now, this.#workspaceId);
+      .run(succeeded ? null : bounded(diagnostic ?? "The research epoch ended before completion.", 1_000),
+        now, this.#workspaceId);
     return this.get();
   }
 
@@ -728,7 +752,8 @@ export class ResearchTrackStore {
 export function createResearchTrackTool(store: ResearchTrackStore, surface: (id: string) => ResearchTrackSurfaceProjection): ResearchExecutableTool {
   const parameters = { type: "object", required: ["surfaceId", "outcome", "impact", "theory", "nextAction"],
     additionalProperties: false, properties: {
-      surfaceId: { type: "string" }, outcome: { type: "string", enum: ["continue", "defer", "blocked", "complete"] },
+      surfaceId: { type: "string" }, outcome: { type: "string", enum: ["continue", "defer", "blocked", "complete", "exclude"],
+        description: "Use exclude only after surface.update records a supported scopeAssessment of not_applicable for the entire component." },
       impact: { type: "string", enum: ["unknown", "low", "medium", "high", "critical"] },
       theory: { type: "string", description: "The concrete attacker-control-to-impact theory tested this epoch, including contrary evidence." },
       nextAction: { type: "string", description: "The next positive proof step, revisit trigger, or unblock condition." },
@@ -755,7 +780,7 @@ export function createResearchTrackTool(store: ResearchTrackStore, surface: (id:
         properties: { targetDependent: { type: "boolean" }, environment: { type: "string", enum: ["device", "vm", "web", "localhost", "none"] }, reason: { type: "string" } } },
     } };
   return { descriptor: { name: "track.checkpoint", transportName: "track_checkpoint",
-    description: `Record a bounded assessment and useful next step on the assigned component. Structured leads and validation details are optional. ${TRACK_EVIDENCE_REF_GUIDANCE} Use blocked for a concrete external dependency.`,
+    description: `Record a bounded assessment and useful next step on the assigned component. Structured leads and validation details are optional. ${TRACK_EVIDENCE_REF_GUIDANCE} Use blocked for a concrete external dependency and exclude for a supported component-level scope mismatch.`,
     actionClasses: ["synthesize"], sideEffects: "write", requiredPermissions: ["research-resource:inventory"], inputSchema: parameters },
     parameters, async execute(action: ResearchToolAction, context?: ResearchToolExecutionContext) {
       const startedAt = new Date().toISOString();
@@ -767,7 +792,7 @@ export function createResearchTrackTool(store: ResearchTrackStore, surface: (id:
         const surfaceId = required(input.surfaceId, "surfaceId");
         const outcome = input.outcome;
         const impact = input.impact;
-        if (outcome !== "continue" && outcome !== "defer" && outcome !== "blocked" && outcome !== "complete") throw new Error("Invalid track outcome.");
+        if (outcome !== "continue" && outcome !== "defer" && outcome !== "blocked" && outcome !== "complete" && outcome !== "exclude") throw new Error("Invalid track outcome.");
         if (impact !== "unknown" && impact !== "low" && impact !== "medium" && impact !== "high" && impact !== "critical") throw new Error("Invalid impact estimate.");
         if (input.evidenceRefs !== undefined && (!Array.isArray(input.evidenceRefs) || !input.evidenceRefs.every((ref) => typeof ref === "string"))) throw new Error("evidenceRefs must be strings.");
         if (input.angles !== undefined && !Array.isArray(input.angles)) throw new Error("angles must be an array.");

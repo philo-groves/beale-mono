@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { JSX, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, ChevronDown, LockKeyhole, Plus, Square, Users, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, LockKeyhole, Pause, Plus, Square, Users, X } from 'lucide-react';
 import type {
   ApprovalRecord,
   PolicyReviewDecision,
@@ -122,6 +122,8 @@ export const MainSteerArea = memo(function MainSteerArea({
     : preferredResearchEffort(initialModel?.effortLevels ?? [], initialModelSelection?.reasoningEffort ?? 'high'));
   const [fastMode, setFastMode] = useState(initialModelSelection?.fastMode === true);
   const footerRef = useRef<HTMLElement | null>(null);
+  const steeringMenuRef = useRef<HTMLDivElement | null>(null);
+  const [steeringMenuOpen, setSteeringMenuOpen] = useState(false);
   const preComposerRef = useRef<HTMLDivElement | null>(null);
   const postComposerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -132,6 +134,26 @@ export const MainSteerArea = memo(function MainSteerArea({
   const historyCaretRef = useRef<number | null>(null);
   const sentMessagesByRunRef = useRef(new Map<string, string[]>());
   const historyDetail = detail?.run.id === runId ? detail : null;
+  const activeSteering = (historyDetail?.transcriptMessages ?? []).filter((message) =>
+    message.source === 'user_steering'
+    && typeof message.metadata.controlRequestId === 'string'
+    && message.metadata.steeringRemoved !== true
+  );
+  useEffect(() => {
+    if (!steeringMenuOpen) return;
+    const dismiss = (event: MouseEvent): void => {
+      if (event.target instanceof Node && !steeringMenuRef.current?.contains(event.target)) setSteeringMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setSteeringMenuOpen(false);
+    };
+    document.addEventListener('mousedown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('mousedown', dismiss);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [steeringMenuOpen]);
   const historyEntries = runId
     ? sessionInputHistory(
         historyDetail?.run.promptMarkdown ?? '',
@@ -143,6 +165,10 @@ export const MainSteerArea = memo(function MainSteerArea({
   const disabled = busy || (!runId && !onInitialInstruction)
     || (!trimmedInstruction && !(instructionLocked && !runId)) || !selectedModelId;
   const status = detail?.run.status ?? null;
+  const showSteeringMenu = activeSteering.length > 0 && (status === 'active' || status === 'paused' || status === 'queued');
+  useEffect(() => {
+    if (!showSteeringMenu) setSteeringMenuOpen(false);
+  }, [showSteeringMenu]);
   const suggestionKey = detail
     ? `${detail.run.id}:${status}:${detail.transcriptMessages?.at(-1)?.id ?? ''}:${detail.run.summary}`
     : null;
@@ -338,7 +364,7 @@ export const MainSteerArea = memo(function MainSteerArea({
       {preComposerContent ? (
         <div className="main-steer-pre-composer-content" ref={preComposerRef}>{preComposerContent}</div>
       ) : null}
-      <div className={`main-steer-input-row without-trace-filters${showCollaboration ? '' : ' without-collaboration'}${instructionLocked ? ' is-instruction-locked' : ''}`}>
+      <div className={`main-steer-input-row without-trace-filters${showCollaboration ? '' : ' without-collaboration'}${instructionLocked ? ' is-instruction-locked' : ''}${showSteeringMenu ? ' has-steering' : ''}`}>
         {instructionLocked ? <span className="main-steer-instruction-lock" role="img" aria-label="Track objective is locked">
           <LockKeyhole size={15} aria-hidden="true" />
         </span> : null}
@@ -476,17 +502,51 @@ export const MainSteerArea = memo(function MainSteerArea({
           />
         ) : null}
         {contextUsageAccessory ? <div className="main-steer-context-accessory">{contextUsageAccessory}</div> : null}
+        {showSteeringMenu ? (
+          <div className="main-steer-steering-menu" ref={steeringMenuRef}>
+            <button
+              type="button"
+              className="main-steer-steering-trigger"
+              aria-label={`Active steering messages (${activeSteering.length})`}
+              aria-expanded={steeringMenuOpen}
+              title="Active steering messages"
+              onClick={() => setSteeringMenuOpen((open) => !open)}
+            >
+              <CowHeadIcon />
+            </button>
+            {steeringMenuOpen ? (
+              <div className="main-steer-steering-list" role="menu" aria-label="Active steering messages">
+                {activeSteering.map((message) => (
+                  <div className="main-steer-steering-item" key={message.id}>
+                    <p>{message.contentMarkdown}</p>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-label={`Remove steering: ${message.contentMarkdown.slice(0, 120)}`}
+                      disabled={sessionControlsDisabled}
+                      onClick={() => {
+                        if (!runId) return;
+                        onSessionAction({ type: 'remove_steering', runId, targetRequestId: String(message.metadata.controlRequestId) });
+                        setSteeringMenuOpen(false);
+                      }}
+                    >Remove</button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <ContextUsageDonut detail={detail} />
         {sessionActive ? (
           <button
             type="button"
             className="main-steer-send main-steer-stop"
-            title="Stop session"
-            aria-label="Stop session"
+            title={runId?.startsWith('track_') ? 'Pause Track' : 'Stop session'}
+            aria-label={runId?.startsWith('track_') ? 'Pause Track' : 'Stop session'}
             disabled={sessionControlsDisabled}
             onClick={() => runId && onSessionAction({ type: 'stop', runId, note: 'Stop requested from session composer.' })}
           >
-            <Square size={11} fill="currentColor" />
+            {runId?.startsWith('track_') ? <Pause size={13} fill="currentColor" /> : <Square size={11} fill="currentColor" />}
           </button>
         ) : (
           <button type="button" className="main-steer-send" title="Send steering instruction" aria-label="Send steering instruction" disabled={disabled} onClick={submit}>
@@ -500,6 +560,17 @@ export const MainSteerArea = memo(function MainSteerArea({
     </footer>
   );
 });
+
+function CowHeadIcon(): JSX.Element {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 8 4 5 2 6l2 4 3 1M17 8l3-3 2 1-2 4-3 1" />
+      <path d="M7 7c1.2-1.2 2.8-2 5-2s3.8.8 5 2v7c0 3-2 5-5 5s-5-2-5-5V7Z" />
+      <path d="M8 14c.8-1.2 2.2-2 4-2s3.2.8 4 2v2c0 1.7-1.8 3-4 3s-4-1.3-4-3v-2Z" />
+      <path d="M9 10h.01M15 10h.01M10 16h.01M14 16h.01" />
+    </svg>
+  );
+}
 
 function ContextUsageDonut({ detail }: { detail: RunDetail | null }): JSX.Element {
   const contextMeter = contextMeterForDetail(detail);

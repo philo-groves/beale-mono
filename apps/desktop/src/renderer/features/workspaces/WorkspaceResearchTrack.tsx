@@ -1,7 +1,9 @@
 import { useEffect, useState, type JSX } from 'react';
-import { ExternalLink, Gauge, LoaderCircle, Pause, Play, Route, Square, TriangleAlert } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ExternalLink, Gauge, LoaderCircle, Pause, Play, Route, Trash2, TriangleAlert } from 'lucide-react';
 import type { BealeWorkspaceResearchTrack } from '@beale/app-server-runtime/protocol';
 import type { BealeApi, ResearchModelProviderId } from '../../../shared/types';
+import { Modal } from '../../app/Modal';
 
 const MODEL_PROVIDERS = new Set<ResearchModelProviderId>(['openai-codex', 'anthropic', 'xai', 'zai', 'openrouter']);
 
@@ -51,6 +53,7 @@ export function WorkspaceResearchTrack({ workspaceId, serverId, enabled, onOpenS
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progressOpen, setProgressOpen] = useState(false);
+  const [confirmStopOpen, setConfirmStopOpen] = useState(false);
   const [observedSessionId, setObservedSessionId] = useState<string | null>(null);
   useEffect(() => {
     if (!workspaceId) { setLoading(false); return undefined; }
@@ -78,6 +81,7 @@ export function WorkspaceResearchTrack({ workspaceId, serverId, enabled, onOpenS
         ? await resumeResearchTrack(track, serverId)
         : await window.beale.controlResearchTrack(workspaceId, action, serverId);
       setTrack(value);
+      if (action === 'stop') setConfirmStopOpen(false);
       if (action === 'resume') onTrackResumed?.(value);
       if (value.activeSessionId && value.activeSessionPhase === 'researching') setObservedSessionId(value.activeSessionId); }
     catch (caught) { setError(message(caught)); }
@@ -128,15 +132,10 @@ export function WorkspaceResearchTrack({ workspaceId, serverId, enabled, onOpenS
         {status === 'paused' && !track?.lastError ? <span>Paused with track controls. Resume Track to continue research.</span> : null}
         {track ? <>
           <span>Pass {track.pass} · {investigated} of {total} investigated · {complete} complete</span>
-          <small>Base priority combines the factors below. Resource breadth and repeat-work rotation can change the next selection.</small>
+          <small>Discovery favors recorded high-value signals and strong impact with reachable proof. Productive engagements continue; two evidence-free checkpoints cool a component.</small>
           {track.surfaces.filter((surface) => surface.status !== 'excluded').map((surface) => <div key={surface.surfaceId} className="workspace-research-track-surface">
-            <strong>{surface.name}</strong><span>{surface.status.replaceAll('_', ' ')} · prior impact {surface.impact} · actionability {surface.actionabilityScore}/100 · {surface.epochs} epochs{surface.validation ? ` · validation ${surface.validation.environment}` : ''}</span>
-            {surface.priority ? <small>Base priority {surface.priority.baseScore}: actionability {surface.priority.actionability}
-              {' · '}prior impact {surface.priority.impactAdjustment >= 0 ? '+' : ''}{surface.priority.impactAdjustment}
-              {surface.priority.surfaceRankingAdjustment ? <> · surface factors {surface.priority.surfaceRankingAdjustment > 0 ? '+' : ''}{surface.priority.surfaceRankingAdjustment}</> : null}
-              {' · '}testable path +{surface.priority.testableAngleBonus}
-              {' · '}validation gap −{surface.priority.targetValidationPenalty}
-              {' · '}stalled work −{surface.priority.noProgressPenalty}</small> : null}
+            <strong>{surface.name}</strong><span>{surface.status.replaceAll('_', ' ')} · prior impact {surface.impact} · {surface.epochs} epochs · {surface.noProgressEpochs} evidence-free{surface.validation ? ` · validation ${surface.validation.environment}` : ''}</span>
+            {surface.revisitAfter ? <small>Cooling until {new Date(surface.revisitAfter).toLocaleString()}</small> : null}
             {surface.angles.length > 0 ? <small>Attacker paths: {surface.angles.map((angle) => `${angle.name} (${angle.status.replaceAll('_', ' ')})`).join(' · ')}</small> : null}
             {surface.nextAction ? <small>{surface.nextAction}</small> : null}
           </div>)}
@@ -151,9 +150,16 @@ export function WorkspaceResearchTrack({ workspaceId, serverId, enabled, onOpenS
     {status === 'running' ? <button className="workspace-research-track-icon-button" type="button" disabled={busy}
       aria-label="Pause Track" title="Pause Track" onClick={() => void control('pause')}><Pause size={16} aria-hidden="true" /></button> : null}
     {track && status !== 'complete' && status !== 'stopped' ? <button className="workspace-research-track-icon-button" type="button"
-      disabled={busy} aria-label="Stop Track" title="Stop Track" onClick={() => void control('stop')}><Square size={15} aria-hidden="true" /></button> : null}
+      disabled={busy} aria-label="Cancel Track" title="Cancel Track" onClick={() => setConfirmStopOpen(true)}><Trash2 size={16} aria-hidden="true" /></button> : null}
     {status !== 'running' && onOpenSession && observedSessionId ? <button className="workspace-research-track-icon-button" type="button"
       aria-label="View Track session" title="View Track session" onClick={() => onOpenSession(observedSessionId)}><ExternalLink size={16} aria-hidden="true" /></button> : null}
+    {confirmStopOpen ? createPortal(<Modal title="Cancel research track?" closeDisabled={busy}
+      onClose={() => setConfirmStopOpen(false)} footer={<>
+        <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmStopOpen(false)}>Keep Track</button>
+        <button className="primary-button workspace-research-track-stop-confirm" type="button" disabled={busy}
+          onClick={() => void control('stop')}>Cancel Track</button>
+      </>}><p>Canceling ends this track. You cannot resume it, and unfinished progress in the current research session may be lost. Pause the track to continue later.</p>
+      {error ? <p role="alert" className="form-error">{error}</p> : null}</Modal>, document.body) : null}
   </div>;
 }
 

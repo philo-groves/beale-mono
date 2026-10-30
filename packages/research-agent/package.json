@@ -1,6 +1,6 @@
 {
   "name": "@beale/research-agent",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Research-agent layer built on Pi agent core and Pi AI.",
   "type": "module",
   "main": "./dist/index.js",

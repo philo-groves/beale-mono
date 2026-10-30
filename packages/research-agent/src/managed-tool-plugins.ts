@@ -7,7 +7,7 @@ export const MANAGED_TOOL_PLUGINS = [
   {
     id: "beale-source", name: "Source",
     description: "Use for source search, code navigation, and structured text analysis.",
-    tools: ["repository.search", "repository.materialize", "workspace.search", "code.detect", "code.outline", "code.query", "code.node_context", "code.references", "code.call_candidates", "analysis.transform"],
+    tools: ["repository.search", "repository.scan", "repository.materialize", "workspace.search", "code.detect", "code.outline", "code.query", "code.node_context", "code.references", "code.call_candidates", "analysis.transform"],
   },
   {
     id: "beale-provenance", name: "Provenance",
@@ -32,7 +32,7 @@ export const MANAGED_TOOL_PLUGINS = [
   {
     id: "beale-reporting", name: "Reporting",
     description: "Use for report documents, revisions, and structured summaries of supported results.",
-    tools: ["report.list", "report.get", "report.create", "report.revise", "synthesis.compose"],
+    tools: ["report.list", "report.get", "report.create", "report.revise", "triage.package", "synthesis.compose"],
   },
   {
     id: "beale-browser", name: "Browser",

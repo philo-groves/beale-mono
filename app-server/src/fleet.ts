@@ -762,7 +762,7 @@ export class FleetService {
           try {
             const connection = await this.connection(machineId);
             const args = sshConnectionArgs(connection.sshHost, connection.sshUser, connection.sshIdentityFile,
-              connection.sshKnownHostsFile, connection.machine.backend);
+              connection.sshKnownHostsFile, connection.machine.backend, connection.sshHostKeyAlias);
             const guestCwd = (await this.runner.run('ssh', [...args,
               connection.machine.guestPlatform === 'win32'
                 ? 'powershell.exe -NoProfile -NonInteractive -Command "(Get-Location).Path"'
@@ -770,6 +770,8 @@ export class FleetService {
             if (!guestCwd) throw new Error('Fleet VM did not report its working directory.');
             return { machineId, sshArgs: args, guestPlatform: connection.machine.guestPlatform, guestCwd };
           } catch (error) {
+            const permanentFailure = nonRetryableFleetSshFailure(error);
+            if (permanentFailure && attempt >= 2) throw new Error(permanentFailure);
             if (attempt === 59) throw error;
             await new Promise((resolve) => setTimeout(resolve, 1_500));
           }
@@ -842,7 +844,9 @@ export class FleetService {
     if (!user) return { success: false, message: 'Enter the guest SSH user.' };
     const identity = input.sshIdentityFile === undefined ? saved.sshIdentityFile : optionalText(input.sshIdentityFile);
     const knownHosts = input.sshKnownHostsFile === undefined ? saved.sshKnownHostsFile : optionalText(input.sshKnownHostsFile);
-    const args = sshConnectionArgs(host, user, identity, knownHosts, machine.backend);
+    const hostKeyAlias = machine.backend === 'tart' && saved.sessionClone && !knownHosts
+      ? sessionCloneHostKeyAlias(machine.id) : null;
+    const args = sshConnectionArgs(host, user, identity, knownHosts, machine.backend, hostKeyAlias);
     try {
       await this.runner.run('ssh', [...args.slice(0, -1), '-o', 'NumberOfPasswordPrompts=0', args.at(-1)!, 'true'], 15_000);
       return { success: true, message: `Key-only SSH succeeded at ${host}. These settings have not been saved.` };
@@ -852,13 +856,17 @@ export class FleetService {
     }
   }
 
-  public async connection(machineId: string): Promise<{ machine: FleetMachine; sshHost: string; sshUser: string; sshIdentityFile: string | null; sshKnownHostsFile: string | null }> {
+  public async connection(machineId: string): Promise<{ machine: FleetMachine; sshHost: string; sshUser: string;
+    sshIdentityFile: string | null; sshKnownHostsFile: string | null; sshHostKeyAlias: string | null }> {
     const { machine, config } = await this.runnable(machineId);
     const saved = config.machines[machineId];
     if (machine.state !== 'running' || !saved?.sshUser) throw new Error('Fleet VM is not running or SSH user is not configured.');
     const sshHost = saved.sshHost ?? await this.discoverIp(machine);
     if (!sshHost) throw new Error('Fleet could not determine the running VM SSH address.');
-    return { machine, sshHost, sshUser: saved.sshUser, sshIdentityFile: saved.sshIdentityFile, sshKnownHostsFile: saved.sshKnownHostsFile };
+    const sshHostKeyAlias = machine.backend === 'tart' && saved.sessionClone && !saved.sshKnownHostsFile
+      ? sessionCloneHostKeyAlias(machine.id) : null;
+    return { machine, sshHost, sshUser: saved.sshUser, sshIdentityFile: saved.sshIdentityFile,
+      sshKnownHostsFile: saved.sshKnownHostsFile, sshHostKeyAlias };
   }
 
   private async runnable(machineId: string): Promise<{ machine: FleetMachine; config: FleetConfiguration }> {
@@ -1143,6 +1151,16 @@ function sshFailureMessage(error: unknown): string {
     : 'The app-server could not reach this VM. Check its network and host override.';
   if (/timed out/iu.test(stderr)) return 'The VM SSH address could not be reached. Check its network and host override.';
   return 'SSH failed. Check the guest user, identity file, known-hosts file, and Remote Login. These settings have not been saved.';
+}
+
+function nonRetryableFleetSshFailure(error: unknown): string | null {
+  const stderr = isRecord(error) && typeof error.stderr === 'string' ? error.stderr : '';
+  return /host key verification failed|remote host identification has changed/iu.test(stderr)
+    ? sshFailureMessage(error) : null;
+}
+
+function sessionCloneHostKeyAlias(machineId: string): string {
+  return `beale-vm-${createHash('sha256').update(machineId).digest('hex').slice(0, 24)}`;
 }
 
 function sshFailureDetail(error: unknown): string | null {

@@ -21,6 +21,7 @@ import {
   defaultResearchSystemPromptTemplate,
   createResearchToolRegistry,
   createSessionDispositionTool,
+  trackSubagentRuntimeFactory,
   initializeWorkspaceProject,
   extractCompatiblePiAgentResumableState,
   modelRetryDelayMs,
@@ -1300,6 +1301,34 @@ test("Pi Agent preserves authoritative user steering after native compaction", a
   );
 });
 
+test("Pi Agent stops preserving steering after the host removes it", async () => {
+  const contexts = [];
+  const tool = createFixtureInspectTool([]);
+  const directive = "User steering for the active research run:\n\nReview the example decoder.";
+  let steeringPoll = 0;
+  const result = await runResearchAgent({
+    prompt: "Inspect the example parser.",
+    tools: [tool.descriptor],
+    executor: createPiAgentExecutor({
+      provider: "faux", model: "faux-model",
+      models: createScriptedModels([
+        assistant("## Progress\nInitial review."),
+        assistant([toolCall("fixture_inspect", { path: "example-parser.c" }, "inspect_example")], "toolUse"),
+        assistant("## Result\nReview complete."),
+      ], contexts),
+      toolRegistry: createResearchToolRegistry([tool]),
+      getActiveSteeringMessages: () => steeringPoll >= 3 ? [] : [directive],
+      async getSteeringMessages() {
+        steeringPoll += 1;
+        return steeringPoll === 2 ? [{ role: "user", content: directive, timestamp: Date.now() }] : [];
+      },
+    }),
+  });
+  assert.equal(contexts.length, 3);
+  assert.equal(steeringPoll >= 3, true);
+  assert.deepEqual(result.agentRun.output.raw.resumableState.researchFocus.authoritativeUserSteering ?? [], []);
+});
+
 test("Pi Agent resumes a native-compacted checkpoint exactly once", async () => {
   const prompt = "Inspect target.c and preserve the decisive result across process resume.";
   const firstContexts = [];
@@ -2107,6 +2136,36 @@ test("Pi Agent waits for a durable broker completion without a local first-event
   }
 });
 
+test("Pi Agent ends a model stream that stalls after emitting content", async () => {
+  const partial = assistant("Synthetic partial response.");
+  let calls = 0;
+  const result = await runResearchAgent({
+    prompt: "Complete a synthetic review.",
+    executor: createPiAgentExecutor({
+      provider: "faux", model: "faux-model", modelEventIdleTimeoutMs: 15,
+      models: {
+        getModel() { return FAUX_MODEL; },
+        streamSimple(_model, _context, options = {}) {
+          calls += 1;
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield { type: "start", partial: assistant([]) };
+              yield { type: "text_start", contentIndex: 0, partial };
+              yield { type: "text_delta", contentIndex: 0, delta: "Synthetic partial response.", partial };
+              await new Promise((_resolve, reject) => {
+                options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+              });
+            },
+          };
+        },
+      },
+    }),
+  });
+  assert.equal(result.agentRun.status, "error");
+  assert.equal(calls, 1);
+  assert.match(result.agentRun.output.text, /15ms/);
+});
+
 test("Pi Agent retries a model stream that stalls after reasoning only", async () => {
   let calls = 0;
   const liveEvents = [];
@@ -2404,6 +2463,33 @@ test("Pi Agent beforeToolCall preflight preserves blocked tool events", async ()
     ),
   );
   assert.deepEqual(contexts[1].toolNames, COLLABORATION_TOOL_NAMES);
+});
+
+test("Pi Agent starts automatic track workers after the model runner is ready", async () => {
+  const contexts = [];
+  const events = [];
+  const result = await runResearchAgent({
+    prompt: "Review the synthetic track component.",
+    eventSink(event) { events.push(event); },
+    executor: createPiAgentExecutor({
+      provider: "faux", model: "faux-model",
+      models: createScriptedModels([
+        assistant("Synthetic track review complete."),
+        assistant("Synthetic finding investigation complete."),
+        assistant("Synthetic track review incorporated the investigation."),
+      ], contexts),
+      subagentRuntimeFactory: trackSubagentRuntimeFactory,
+      trackWorkerAssignments: [{ role: "investigator", claimId: "claim-example-one",
+        claimRevision: 1, surfaceId: null }],
+    }),
+  });
+  const worker = result.agentRun.output.raw.subagents.agents.find((agent) => agent.role === "investigator");
+  assert.equal(worker?.status, "completed");
+  assert.ok(contexts.length >= 2, "the worker must begin a model turn");
+  const actions = events.filter((event) => event.kind === "agent.event"
+    && event.payload.type === "subagent.activity").map((event) => event.payload.action);
+  assert.ok(actions.includes("spawned"));
+  assert.ok(actions.includes("completed"));
 });
 
 test("Pi Agent coordinates a partial-context subagent with a model and effort override", async () => {

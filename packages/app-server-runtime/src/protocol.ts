@@ -49,7 +49,7 @@ export interface ResourcePriorArtGetInput extends Omit<ResourcePriorArtListInput
 export const APP_SERVER_PROTOCOL_NAME = "app-server" as const;
 export const APP_SERVER_PROTOCOL_VERSION = 1 as const;
 export const APP_SERVER_CONTRACT_VERSION = 64 as const;
-export const APP_SERVER_RUNTIME_VERSION = "0.9.5" as const;
+export const APP_SERVER_RUNTIME_VERSION = "0.9.6" as const;
 export const APP_SERVER_PROTOCOL_WEBSOCKET_PATH = "/v1/session" as const;
 export const APP_SERVER_PROTOCOL_BOOTSTRAP_PREFIX = "APP_SERVER_TRANSPORT " as const;
 /**
@@ -277,6 +277,7 @@ export interface BealeAppServerSessionStopResult {
 
 export type BealeAppServerSessionControlRequest =
   | { type: "steer"; instruction: string }
+  | { type: "remove_steering"; targetRequestId: string }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "stop" };
@@ -297,10 +298,14 @@ export function decodeBealeAppServerSessionControlRequest(
     requiredBoundedString(value, "instruction", 131_072);
     return { type: "steer", instruction: value.instruction as string };
   }
+  if (value.type === "remove_steering") {
+    requiredBoundedString(value, "targetRequestId", 200);
+    return { type: "remove_steering", targetRequestId: value.targetRequestId as string };
+  }
   if (value.type === "pause" || value.type === "resume" || value.type === "stop") {
     return { type: value.type };
   }
-  throw new Error("Session control type must be steer, pause, resume, or stop.");
+  throw new Error("Session control type must be steer, remove_steering, pause, resume, or stop.");
 }
 
 export interface BealeAppServerShutdownResult {
@@ -423,7 +428,9 @@ export interface BealeWorkspaceSurfaceMap {
     firstTouchedAt: string | null; firstTouchedBy?: string | null; firstTouchedModel?: string | null; firstTouchedProvider?: string | null;
     updatedAt?: string; foundation: {
       discovery?: string;
+      scopeAssessment?: { decision: 'applicable' | 'not_applicable'; basis: string; references: string[] } | null;
       ranking?: Record<'impact' | 'reachability' | 'relevance' | 'exposure' | 'precedence', { score: number; basis: string }> | null;
+      highValueSignals?: Array<{ kind: 'pre_auth' | 'sensitive_memory' | 'historical_sink' | 'niche_dependency' | 'default_reachable' | 'other'; basis: string }>;
       threatModelReviewed?: boolean;
       techStack?: Array<{ technology: string; role: string; version: string; environment: string; evidence: string; confidence: 'observed' | 'inferred' | 'unknown' }>;
       assets?: Array<{ name: string; status: 'untouched' | 'in_progress' | 'complete' }>;
@@ -474,6 +481,13 @@ export interface BealeWorkspaceResearchTrack {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+  workers?: Array<{
+    role: "investigator" | "chain_analyst" | "triager" | "reporter";
+    claimId: string;
+    title: string;
+    assignedAt: string;
+    queued: Array<{ claimId: string; title: string }>;
+  }>;
   surfaces: Array<{
     surfaceId: string;
     name: string;
@@ -569,6 +583,7 @@ export function decodeBealeWorkspaceResearchTrack(value: unknown): BealeWorkspac
   const statuses = ["running", "paused", "waiting", "complete", "stopped"];
   const workStatuses = ["unexamined", "active", "deferred", "blocked", "complete", "excluded"];
   const impacts = ["unknown", "low", "medium", "high", "critical"];
+  const workerRoles = ["investigator", "chain_analyst", "triager", "reporter"];
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.workspaceId !== "string"
     || !statuses.includes(String(value.status)) || !Number.isSafeInteger(value.pass)
     || typeof value.scopeId !== "string" || !isRecord(value.provider)
@@ -583,6 +598,12 @@ export function decodeBealeWorkspaceResearchTrack(value: unknown): BealeWorkspac
     || !Number.isSafeInteger(value.epochCount)
     || (value.lastError !== null && typeof value.lastError !== "string")
     || typeof value.createdAt !== "string" || typeof value.updatedAt !== "string"
+    || (value.workers !== undefined && (!Array.isArray(value.workers) || !value.workers.every((worker) =>
+      isRecord(worker) && workerRoles.includes(String(worker.role))
+      && typeof worker.claimId === "string" && typeof worker.title === "string"
+      && typeof worker.assignedAt === "string" && Array.isArray(worker.queued)
+      && worker.queued.every((claim: unknown) => isRecord(claim)
+        && typeof claim.claimId === "string" && typeof claim.title === "string"))))
     || !Array.isArray(value.surfaces) || !value.surfaces.every((work) => isRecord(work)
       && typeof work.surfaceId === "string" && typeof work.name === "string" && workStatuses.includes(String(work.status))
       && impacts.includes(String(work.impact)) && typeof work.theory === "string"
@@ -644,12 +665,22 @@ export function decodeBealeWorkspaceSurfaceMap(value: unknown): BealeWorkspaceSu
     const assets = foundation.assets;
     const bugHistory = foundation.bugHistory;
     const ranking = foundation.ranking;
+    const scopeAssessment = foundation.scopeAssessment;
+    const highValueSignals = foundation.highValueSignals;
     const rankingFactors = ['impact', 'reachability', 'relevance', 'exposure', 'precedence'];
     return typeof coverage.mappingComplete === 'boolean'
       && typeof coverage.sinksInvestigated === 'boolean'
       && strings(coverage.openQuestions) && strings(coverage.unexploredConnections)
       && ['summary', 'gaps', 'opportunities'].every((key) => coverage[key] === undefined || typeof coverage[key] === 'string')
       && (foundation.discovery === undefined || typeof foundation.discovery === 'string')
+      && (scopeAssessment === undefined || scopeAssessment === null || isRecord(scopeAssessment)
+        && (scopeAssessment.decision === 'applicable' || scopeAssessment.decision === 'not_applicable')
+        && typeof scopeAssessment.basis === 'string' && scopeAssessment.basis.trim().length > 0
+        && scopeAssessment.basis.length <= 1_000
+        && Array.isArray(scopeAssessment.references) && scopeAssessment.references.length >= 1
+        && scopeAssessment.references.length <= 12
+        && scopeAssessment.references.every((reference) => typeof reference === 'string'
+          && reference.trim().length > 0 && reference.length <= 500))
       && (ranking === undefined || ranking === null || isRecord(ranking)
         && Object.keys(ranking).length === rankingFactors.length
         && rankingFactors.every((factor) => isRecord(ranking[factor])
@@ -657,6 +688,10 @@ export function decodeBealeWorkspaceSurfaceMap(value: unknown): BealeWorkspaceSu
           && Number(ranking[factor].score) <= 10
           && typeof ranking[factor].basis === 'string'
           && String(ranking[factor].basis).trim().length > 0 && String(ranking[factor].basis).length <= 500))
+      && (highValueSignals === undefined || Array.isArray(highValueSignals) && highValueSignals.length <= 12
+        && highValueSignals.every((signal) => isRecord(signal)
+          && ['pre_auth', 'sensitive_memory', 'historical_sink', 'niche_dependency', 'default_reachable', 'other'].includes(String(signal.kind))
+          && typeof signal.basis === 'string' && signal.basis.trim().length > 0 && signal.basis.length <= 500))
       && (foundation.threatModelReviewed === undefined || typeof foundation.threatModelReviewed === 'boolean')
       && (techStack === undefined || Array.isArray(techStack) && techStack.every((entry) => isRecord(entry)
         && ['technology', 'role', 'version', 'environment', 'evidence'].every((key) => typeof entry[key] === 'string')
@@ -870,6 +905,7 @@ export interface BealeWorkspaceResearchClaim {
   staleFromStatus: string | null;
   rating: ResearchClaimRating;
   classification: string;
+  componentClaimIds?: string[];
   duplicateClaims: BealeWorkspaceResearchClaimDuplicate[];
   title: string;
   summary: string;
@@ -899,6 +935,11 @@ export interface BealeWorkspaceClaimSecurityTracking {
   affectedAssetIds: string[];
   surfaceIds?: string[];
   progressBlocker?: { reason: string; setAt: string } | null;
+  reportability?: { decision: "reportable" | "not_reportable"; basis: string; policyRefs: string[]; assessedAt: string } | null;
+  triage?: {
+    blocker: { reason: string; setAt: string } | null;
+    packet: { artifactId: string; contentHash: string; sizeBytes: number; replayRunId: string; verifiedAt: string } | null;
+  };
   externalReferences: Array<{ kind: string; identifier: string; url: string | null }>;
 }
 
@@ -1889,7 +1930,7 @@ export function decodeBealeAppServerSessionControlResult(value: unknown): BealeA
   if (!isRecord(value) || value.controlVersion !== BEALE_APP_SERVER_CONTROL_VERSION
     || value.accepted !== true || !nonEmptyString(value.sessionId)
     || !validRequestId(value.requestId)
-    || (value.type !== "steer" && value.type !== "pause" && value.type !== "resume" && value.type !== "stop")) {
+    || (value.type !== "steer" && value.type !== "remove_steering" && value.type !== "pause" && value.type !== "resume" && value.type !== "stop")) {
     throw new Error("Invalid Beale app-server session control response.");
   }
   return value as unknown as BealeAppServerSessionControlResult;

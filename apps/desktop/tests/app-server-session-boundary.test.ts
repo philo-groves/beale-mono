@@ -82,10 +82,26 @@ describe('app-server session persistence boundary', () => {
           title: 'Example research session', prompt: 'Inspect the example parser.',
           model: 'example-model', reasoningEffort: 'high'
         });
+        store.appendEvent('session_external_example', {
+          id: 'steering_added_example', kind: 'beale.transcript', timestamp: '2026-08-01T00:00:00.000Z',
+          summary: 'User steering added.', payload: { record: {
+            id: 'transcript_steering_example', runId: 'session_external_example', attemptId: 'attempt_example',
+            traceEventId: null, role: 'user', phase: null, contentMarkdown: 'Review the example decoder.',
+            source: 'user_steering', metadata: { controlRequestId: 'steer_example' },
+            createdAt: '2026-08-01T00:00:00.000Z'
+          } }
+        });
+        store.appendEvent('session_external_example', {
+          id: 'steering_removed_example', kind: 'beale.steering_removed', timestamp: '2026-08-01T00:01:00.000Z',
+          summary: 'User steering removed.', payload: { targetRequestId: 'steer_example' }
+        });
       } finally {
         store.close();
       }
       expect(database.listRunRows().map((row) => row.run.id)).toContain('session_external_example');
+      expect(database.getRunDetail('session_external_example').transcriptMessages.find((message) =>
+        message.id === 'transcript_steering_example'
+      )?.metadata.steeringRemoved).toBe(true);
     } finally {
       database.close();
     }

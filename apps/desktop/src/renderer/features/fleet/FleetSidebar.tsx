@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
-import { Globe2, Monitor, ServerCog } from 'lucide-react';
+import { Globe2, Monitor, Plus, ServerCog } from 'lucide-react';
 import type { FleetAppServerStatus, FleetState } from '@beale/app-server-runtime/protocol';
 import { CollectionSidebar } from '../../app/CollectionSidebar';
 
@@ -54,10 +54,14 @@ export function FleetSidebar({ collapsed, state, statuses, selection, error, onS
       <nav className="sidebar-list-scroll-content fleet-sidebar-sections" aria-label="Fleet sections">
         {sections.map(({ id, label, icon: Icon }) => (
           <div className="workspace-group" key={id}>
-            <div className={`workspace-item-row no-menu${selection.section === id && selection.itemId === null ? ' active' : ''}`}>
-              <button type="button" className="workspace-item" onClick={() => select(id)} aria-label={label}>
+            <div className={`workspace-item-row${id === 'app-servers' ? '' : ' no-menu'}${selection.section === id && (selection.itemId === null || id === 'browsers' && selection.itemId === 'settings') ? ' active' : ''}`}>
+              <button type="button" className="workspace-item" onClick={() => select(id, id === 'browsers' ? 'settings' : null)} aria-label={label}>
                 <Icon size={15} aria-hidden="true" /><span>{label}</span>
               </button>
+              {id === 'app-servers' ? <button type="button" className="workspace-new-research-button fleet-sidebar-add-button"
+                aria-label="Add App Server" title="Add App Server" onClick={() => select('app-servers', 'new')}>
+                <Plus size={15} aria-hidden="true" />
+              </button> : null}
             </div>
             <div className="workspace-session-list fleet-sidebar-items">
               {id === 'app-servers' ? <>

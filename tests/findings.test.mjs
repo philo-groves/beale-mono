@@ -447,9 +447,9 @@ test("finding lifecycle is canonical, evidence-gated, and supports same-session 
     assert.match(reviseTool.parameters.properties.securityTracking.properties.progressBlocker.description, /Missing proof.*unfinished work, not a blocker/);
     assert.match(reviseTool.parameters.properties.securityTracking.properties.progressBlocker.properties.reason.description, /action that cannot proceed.*concrete impediment.*unblock/);
     assert.ok(transitionTool);
-    for (const tool of [createTool, reviseTool, transitionTool]) {
-      assert.equal(Object.hasOwn(tool.parameters.properties, "componentClaimIds"), false);
-    }
+    assert.equal(Object.hasOwn(createTool.parameters.properties, "componentClaimIds"), true);
+    assert.equal(Object.hasOwn(reviseTool.parameters.properties, "componentClaimIds"), true);
+    assert.equal(Object.hasOwn(transitionTool.parameters.properties, "componentClaimIds"), false);
     assert.equal("operatorOverride" in transitionTool.parameters.properties, false);
     assert.equal(findingRegistry.listTools().some((tool) => tool.descriptor.name === "claim.board_transition"), false);
     assert.ok(createTool.parameters.required.includes("rating"));
@@ -765,14 +765,14 @@ test("legacy claim-shaped memories migrate once into stable lead and finding pro
     try {
       assert.deepEqual(reopened.list().map((claim) => claim.id).sort(), firstIds);
       assert.equal(reopened.listLeads().find((claim) => claim.memoryNodeId === leadMemory.id)?.classification, "security.vulnerability");
-      assert.equal(reopened.listFindings().find((claim) => claim.memoryNodeId === primitiveMemory.id)?.classification, "security.vulnerability");
+      assert.equal(reopened.listFindings().find((claim) => claim.memoryNodeId === primitiveMemory.id)?.classification, "security.primitive");
       const chain = reopened.listFindings().find((claim) => claim.memoryNodeId === chainMemory.id);
-      assert.equal(chain?.classification, "security.vulnerability");
+      assert.equal(chain?.classification, "security.chain");
       assert.equal(chain?.securityTracking?.reachability.state, "not_assessed");
       assert.equal(chain?.rating, "informational");
-      assert.equal(Object.hasOwn(chain, "componentClaimIds"), false);
+      assert.deepEqual(chain?.componentClaimIds, []);
       assert.equal(reopened.findCreationMatches({
-        title: "Requests parser state crosses", classification: "security.vulnerability",
+        title: "Requests parser state crosses", classification: "security.primitive",
       }).some((match) => match.id === reopened.listFindings().find((claim) => claim.memoryNodeId === primitiveMemory.id)?.id), true);
     } finally {
       reopened.close();

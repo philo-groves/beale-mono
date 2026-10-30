@@ -100,7 +100,7 @@ interface ActiveAppServerRun {
 
 interface PendingAppServerControl {
   requestId: string;
-  type: 'pause' | 'resume' | 'stop' | 'configure' | 'steer' | 'configure_shell_safety' | 'resolve_shell_approval' | 'resolve_tool_approval' | 'runbook_execute';
+  type: 'pause' | 'resume' | 'stop' | 'configure' | 'steer' | 'remove_steering' | 'configure_shell_safety' | 'resolve_shell_approval' | 'resolve_tool_approval' | 'runbook_execute';
   sentAt: string;
   instruction?: string;
   modelSelection?: ResearchModelSelection;
@@ -1094,6 +1094,12 @@ export class AppServerRunEngine {
       instruction,
       ...(modelSelection ? { modelSelection } : {})
     });
+  }
+
+  public removeSteering(runId: string, targetRequestId: string): AppServerControlDispatch | null {
+    const active = this.activeRuns.get(runId);
+    if (!active) return null;
+    return this.sendControl(active, { schemaVersion: 1, type: 'remove_steering', targetRequestId });
   }
 
   public configure(runId: string, modelSelection: ResearchModelSelection): boolean {

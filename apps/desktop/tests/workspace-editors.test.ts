@@ -93,12 +93,11 @@ describe('workspace editor discovery', () => {
     }]);
   });
 
-  it('uses the bundled VS Code artwork instead of the macOS application bundle icon', async () => {
+  it('resolves the macOS VS Code application icon from its bundle', async () => {
     const home = '/Users/researcher';
     const application = '/Applications/Visual Studio Code.app';
     const executable = posix.join(application, 'Contents', 'Resources', 'app', 'bin', 'code');
-    const artwork = posix.join(application, 'Contents', 'Resources', 'Code.icns');
-    const available = new Set([executable, artwork]);
+    const available = new Set([executable]);
     const iconPaths: string[] = [];
 
     const catalog = await getWorkspaceEditorCatalogForHost({
@@ -111,7 +110,7 @@ describe('workspace editor discovery', () => {
       return 'data:image/png;base64,dnNjb2Rl';
     });
 
-    expect(iconPaths).toEqual([artwork]);
+    expect(iconPaths).toEqual([application]);
     expect(catalog.editors).toEqual([{
       id: 'vscode',
       name: 'Visual Studio Code',

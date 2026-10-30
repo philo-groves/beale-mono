@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import type {
   ManualShellApprovalResult,
@@ -17,6 +18,7 @@ export type AppServerControlMessage = AppServerControlRequest & (
   | { type: "stop" }
   | { type: "configure"; modelSelection: AppServerModelSelection }
   | { type: "steer"; instruction: string; modelSelection?: AppServerModelSelection }
+  | { type: "remove_steering"; targetRequestId: string }
   | { type: "configure_shell_safety"; shellSafetyMode: ShellSafetyMode }
   | {
       type: "runbook_execute";
@@ -50,6 +52,13 @@ export type AppServerControlEvent =
       type: "steer";
       accepted: true;
       instruction: string;
+      requestId?: string;
+      replayed?: true;
+    }
+  | {
+      type: "remove_steering";
+      accepted: true;
+      targetRequestId: string;
       requestId?: string;
       replayed?: true;
     }
@@ -91,6 +100,7 @@ export class AppServerControlStream {
   private buffer = "";
   private paused = false;
   private readonly steeringInstructions: string[] = [];
+  private readonly activeSteering = new Map<string, string>();
   private readonly processedControls = new Map<string, {
     message: string;
     event: AppServerControlEvent & { accepted: true };
@@ -110,7 +120,14 @@ export class AppServerControlStream {
   public constructor(
     private readonly input: Readable,
     private readonly onEvent: (event: AppServerControlEvent) => void = () => undefined,
-  ) {}
+    initialSteering: readonly { requestId: string; instruction: string }[] = [],
+  ) {
+    for (const item of initialSteering) this.activeSteering.set(item.requestId, item.instruction);
+  }
+
+  public getActiveSteeringInstructions(): string[] {
+    return [...this.activeSteering.values()];
+  }
 
   public start(): void {
     if (this.started) return;
@@ -303,6 +320,12 @@ export class AppServerControlStream {
         this.modelSelection = message.modelSelection;
       } else if (message.type === "configure_shell_safety") {
         this.shellSafetyMode = message.shellSafetyMode;
+      } else if (message.type === "remove_steering") {
+        const instruction = this.activeSteering.get(message.targetRequestId);
+        if (!instruction) throw new Error("Steering message is no longer active.");
+        this.activeSteering.delete(message.targetRequestId);
+        const queuedIndex = this.steeringInstructions.indexOf(instruction);
+        if (queuedIndex !== -1) this.steeringInstructions.splice(queuedIndex, 1);
       } else if (message.type === "runbook_execute") {
         if (!this.runbookExecutionHandler) throw new Error("Runbook execution is unavailable in this session.");
         const execution = this.runbookExecutionHandler({
@@ -339,6 +362,7 @@ export class AppServerControlStream {
       } else {
         if (message.modelSelection) this.modelSelection = message.modelSelection;
         this.steeringInstructions.push(message.instruction);
+        if (message.requestId) this.activeSteering.set(message.requestId, message.instruction);
         if (!this.paused && this.steeringWaiters.size > 0) {
           this.resolveSteeringWaiters(this.steeringInstructions.splice(0));
         }
@@ -348,6 +372,13 @@ export class AppServerControlStream {
           type: "steer",
           accepted: true,
           instruction: message.instruction,
+          ...(message.requestId ? { requestId: message.requestId } : {}),
+        }
+        : message.type === "remove_steering"
+        ? {
+          type: "remove_steering",
+          accepted: true,
+          targetRequestId: message.targetRequestId,
           ...(message.requestId ? { requestId: message.requestId } : {}),
         }
         : {
@@ -451,8 +482,13 @@ function parseControlMessage(line: string): AppServerControlMessage {
       type: "steer",
       instruction,
       ...(modelSelection ? { modelSelection } : {}),
-      ...(requestId ? { requestId } : {}),
+      requestId: requestId ?? randomUUID(),
     };
+  }
+  if (parsed.type === "remove_steering") {
+    const targetRequestId = parseRequestId(parsed.targetRequestId);
+    if (!targetRequestId) throw new Error("Removing steering requires a target request ID.");
+    return { schemaVersion: 1, type: "remove_steering", targetRequestId, ...(requestId ? { requestId } : {}) };
   }
   if (parsed.type === "configure") {
     return {

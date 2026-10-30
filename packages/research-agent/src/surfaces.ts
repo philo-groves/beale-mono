@@ -12,10 +12,19 @@ import type { ResearchResourceKind, ResearchToolAction } from "./types.js";
 export const SURFACE_RANKING_FACTORS = ["impact", "reachability", "relevance", "exposure", "precedence"] as const;
 export type SurfaceRankingFactor = typeof SURFACE_RANKING_FACTORS[number];
 export type SurfaceRanking = Record<SurfaceRankingFactor, { score: number; basis: string }>;
+export const HIGH_VALUE_SURFACE_SIGNALS = ["pre_auth", "sensitive_memory", "historical_sink", "niche_dependency", "default_reachable", "other"] as const;
+export type HighValueSurfaceSignal = typeof HIGH_VALUE_SURFACE_SIGNALS[number];
+export interface SurfaceScopeAssessment {
+  decision: "applicable" | "not_applicable";
+  basis: string;
+  references: string[];
+}
 
 export interface SurfaceFoundation {
   discovery: string;
+  scopeAssessment?: SurfaceScopeAssessment | null;
   ranking?: SurfaceRanking | null;
+  highValueSignals: Array<{ kind: HighValueSurfaceSignal; basis: string }>;
   techStack: Array<{ technology: string; role: string; version: string; environment: string; evidence: string; confidence: "observed" | "inferred" | "unknown" }>;
   assets: Array<{ name: string; status: "untouched" | "in_progress" | "complete" }>;
   threatModelReviewed: boolean;
@@ -586,6 +595,8 @@ function readSurfaceView(store: SurfaceStore, related: SurfaceRelatedStores, sur
     case "breakdown": return { surfaceId: surface.id, name: surface.name, description: surface.description,
       path: store.path(surface.id), revision: surface.revision, firstTouchedAt: surface.firstTouchedAt,
       updatedAt: surface.updatedAt, ranking: surface.foundation?.ranking ?? null,
+      scopeAssessment: surface.foundation?.scopeAssessment ?? null,
+      highValueSignals: surface.foundation?.highValueSignals ?? [],
       progressBlocker: surface.progressBlocker, coverageState: store.coverageState(surface.id),
       children: store.list({ parentId: surface.id, limit: typeof input.limit === "number" ? input.limit : 20,
         ...(typeof input.offset === "number" ? { offset: input.offset } : {}) }) };
@@ -631,6 +642,14 @@ export function createSurfaceTools(store: SurfaceStore, related: SurfaceRelatedS
     type: "object", additionalProperties: false,
     properties: {
       discovery: { type: "string", description: "General reconnaissance note for this component. May be as detailed as useful; preserve uncertainty and source bounds." },
+      scopeAssessment: { anyOf: [{ type: "object", additionalProperties: false,
+        required: ["decision", "basis", "references"], properties: {
+          decision: { type: "string", enum: ["applicable", "not_applicable"] },
+          basis: { type: "string", maxLength: 1_000, description: "Why this concrete component can or cannot affect an eligible target under the recorded program rules." },
+          references: { type: "array", minItems: 1, maxItems: 12, items: { type: "string", maxLength: 500 },
+            description: "Cite the scope rule, program policy, or evidence that supports this decision." },
+        } }, { type: "null" }],
+        description: "Record a component-level scope decision only when supported by policy or target evidence. A repository being in scope does not make every test, example, or undeployed subcomponent applicable. Null clears a prior assessment; omit when uncertain." },
       ranking: { type: "object", additionalProperties: false, required: [...SURFACE_RANKING_FACTORS],
         description: "Assess all five equally weighted priority factors on a 1–10 scale, with a concise evidence-based basis for each. One is low, five is moderate, and ten is high priority. Omit until there is enough context; do not assign neutral scores merely because a factor is unknown.",
         properties: {
@@ -640,6 +659,11 @@ export function createSurfaceTools(store: SurfaceStore, related: SurfaceRelatedS
           exposure: rankingFactorSchema("Who can exercise the entry point: 1 for narrow privileged/internal access, 5 for authenticated or limited access, 10 for public pre-auth exposure."),
           precedence: rankingFactorSchema("Applicable vulnerability history: 1 when a bounded search found no close analogue, 5 for a related bug class with uncertain applicability, 10 for repeated directly relevant issues. Prior issues are leads, not proof of a current flaw."),
         } },
+      highValueSignals: { type: "array", maxItems: 12, description: "Evidence-backed attacker-value signals for this component. Record a concrete basis; these guide discovery selection and are not claims of a vulnerability.", items: {
+        type: "object", additionalProperties: false, required: ["kind", "basis"], properties: {
+          kind: { type: "string", enum: [...HIGH_VALUE_SURFACE_SIGNALS] }, basis: { type: "string", maxLength: 500 },
+        },
+      } },
       techStack: { type: "array", maxItems: 200, description: "Structured technologies and software environments relevant to this surface. Replace the list when supplied; omit it to preserve existing entries.", items: {
         type: "object", required: ["technology"], additionalProperties: false, properties: {
           technology: { type: "string", description: "Product, framework, library, runtime, or platform name." },
@@ -846,9 +870,14 @@ function parseFoundation(value: unknown, previous: SurfaceFoundation | null = nu
   if (record.threatModelReviewed !== undefined && typeof record.threatModelReviewed !== "boolean") throw new Error("foundation.threatModelReviewed must be a boolean.");
   const threatModel = parseThreatModel(record.threatModel, previous?.threatModel);
   const ranking = record.ranking === undefined ? previous?.ranking : parseSurfaceRanking(record.ranking);
+  const scopeAssessment = record.scopeAssessment === undefined
+    ? previous?.scopeAssessment : parseScopeAssessment(record.scopeAssessment);
   return {
     discovery: record.discovery === undefined ? previous?.discovery ?? "" : record.discovery.trim(),
+    ...(scopeAssessment === undefined ? {} : { scopeAssessment }),
     ...(ranking === undefined ? {} : { ranking }),
+    highValueSignals: record.highValueSignals === undefined ? previous?.highValueSignals ?? []
+      : parseHighValueSignals(record.highValueSignals),
     techStack: record.techStack === undefined ? previous?.techStack ?? [] : parseTechStack(record.techStack),
     assets: record.assets === undefined ? previous?.assets ?? [] : parseAssets(record.assets),
     bugHistory: parseBugHistory(record.bugHistory, previous?.bugHistory),
@@ -856,6 +885,34 @@ function parseFoundation(value: unknown, previous: SurfaceFoundation | null = nu
     threatModel,
     threatModelReviewed: record.threatModelReviewed === true || previous?.threatModelReviewed === true || threatModelHasContent(threatModel),
   };
+}
+function parseScopeAssessment(value: unknown): SurfaceScopeAssessment | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("foundation.scopeAssessment must be an object or null.");
+  const record = value as Record<string, unknown>;
+  if (record.decision !== "applicable" && record.decision !== "not_applicable") {
+    throw new Error("foundation.scopeAssessment.decision is invalid.");
+  }
+  const basis = bounded(nonempty(record.basis, "foundation.scopeAssessment.basis"), 1_000);
+  if (!Array.isArray(record.references) || record.references.length < 1 || record.references.length > 12) {
+    throw new Error("foundation.scopeAssessment.references must contain 1 to 12 citations.");
+  }
+  const references = record.references.map((reference) => bounded(nonempty(reference, "foundation.scopeAssessment.reference"), 500));
+  return { decision: record.decision, basis, references };
+}
+function parseHighValueSignals(value: unknown): SurfaceFoundation["highValueSignals"] {
+  if (!Array.isArray(value) || value.length > 12) throw new Error("foundation.highValueSignals must contain at most 12 entries.");
+  const seen = new Set<string>();
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`foundation.highValueSignals[${index}] must be an object.`);
+    const signal = entry as Record<string, unknown>;
+    if (!HIGH_VALUE_SURFACE_SIGNALS.includes(signal.kind as HighValueSurfaceSignal) || seen.has(String(signal.kind))) {
+      throw new Error(`foundation.highValueSignals[${index}].kind is invalid or repeated.`);
+    }
+    seen.add(String(signal.kind));
+    return { kind: signal.kind as HighValueSurfaceSignal,
+      basis: bounded(nonempty(signal.basis, `foundation.highValueSignals[${index}].basis`), 500) };
+  });
 }
 function parseThreatModel(value: unknown, previous?: SurfaceFoundation["threatModel"]): SurfaceFoundation["threatModel"] {
   const fields = section(value, ["riskImpact", "invariants", "sinks", "mitigations",

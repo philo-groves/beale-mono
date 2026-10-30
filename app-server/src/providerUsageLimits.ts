@@ -143,7 +143,7 @@ async function readCodexRateLimits(): Promise<unknown> {
         }
       }
     });
-    child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'beale', title: 'Beale', version: '0.9.5' }, capabilities: null } })}\n`);
+    child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'beale', title: 'Beale', version: '0.9.6' }, capabilities: null } })}\n`);
   });
 }
 

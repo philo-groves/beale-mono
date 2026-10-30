@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
+import { Check, ChevronDown, Computer } from 'lucide-react';
 import type { FleetAppServer, FleetAppServerStatus } from '@beale/app-server-runtime/protocol';
 
 export function SidebarServerSelector({ servers, statuses, value, collapsed, onChange, onAdd, onRefreshStatuses }: {
@@ -77,8 +77,9 @@ export function SidebarServerSelector({ servers, statuses, value, collapsed, onC
           setOpen(true);
         }}
       >
+        <Computer size={14} aria-hidden="true" />
         <span className="sidebar-server-selector-label">{selected.name}</span>
-        <ChevronDown size={13} aria-hidden="true" />
+        <ChevronDown size={12} aria-hidden="true" />
       </button>
       {open ? (
         <div className="sidebar-server-menu" role="menu" aria-label="App server" onKeyDown={handleMenuKeyDown}>

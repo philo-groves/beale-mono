@@ -18,9 +18,10 @@ export interface ModelBrokerRequest {
   brokerFlags?: { nativeCompaction: boolean; fastMode: boolean; contextWindow: number; daybreakBlue?: boolean };
 }
 
-export interface ModelBrokerEndpoint { url: string; token: string }
+export interface ModelBrokerEndpoint { url: string; token: string; completionTimeoutMs?: number }
 
 const REQUEST_LIMIT_BYTES = 16 * 1024 * 1024;
+const DEFAULT_BROKER_COMPLETION_TIMEOUT_MS = 25 * 60_000;
 class BrokerRejected extends Error {}
 
 /** The guest sends no provider credential; the primary resolves auth for each call. */
@@ -87,30 +88,40 @@ async function requestBrokerCompletion(endpoint: ModelBrokerEndpoint, model: Mod
   const body = JSON.stringify(request);
   if (Buffer.byteLength(body) > REQUEST_LIMIT_BYTES) throw new Error("Model broker request exceeds its size limit.");
   const headers = { authorization: `Bearer ${endpoint.token}`, "content-type": "application/json" };
-  for (;;) {
+  const completionTimeoutMs = typeof endpoint.completionTimeoutMs === "number"
+    && Number.isFinite(endpoint.completionTimeoutMs) && endpoint.completionTimeoutMs > 0
+    ? endpoint.completionTimeoutMs : DEFAULT_BROKER_COMPLETION_TIMEOUT_MS;
+  const deadline = AbortSignal.timeout(completionTimeoutMs);
+  const checkDeadline = (): void => {
     if (signal?.aborted) throw new Error("Model broker request was aborted.");
+    if (deadline.aborted) throw new BrokerRejected(`Model broker completion timed out after ${Math.ceil(completionTimeoutMs / 1_000)} seconds.`);
+  };
+  for (;;) {
+    checkDeadline();
     try {
       const response = await fetch(endpoint.url, { method: "POST", headers, body, signal: AbortSignal.any([
-        signal ?? new AbortController().signal, AbortSignal.timeout(30_000),
+        signal ?? new AbortController().signal, deadline, AbortSignal.timeout(30_000),
       ]) });
       if (!response.ok) throw new BrokerRejected(`Model broker submission failed (HTTP ${response.status}).`);
       break;
     } catch (error) {
-      if (signal?.aborted || error instanceof BrokerRejected) throw error;
+      checkDeadline();
+      if (error instanceof BrokerRejected) throw error;
       await delay(500);
     }
   }
   for (;;) {
-    if (signal?.aborted) throw new Error("Model broker request was aborted.");
+    checkDeadline();
     try {
       const response = await fetch(`${endpoint.url}/${encodeURIComponent(id)}`, { headers: { authorization: headers.authorization },
-        signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(15_000)]) });
+        signal: AbortSignal.any([signal ?? new AbortController().signal, deadline, AbortSignal.timeout(15_000)]) });
       if (!response.ok) throw new BrokerRejected(`Model broker result failed (HTTP ${response.status}).`);
       const result: unknown = await response.json();
       if (isRecord(result) && result.state === "done" && isAssistantMessage(result.message)) return result.message;
       if (isRecord(result) && result.state === "error") throw new BrokerRejected(typeof result.error === "string" ? result.error : "Model broker failed.");
     } catch (error) {
-      if (signal?.aborted || error instanceof BrokerRejected) throw error;
+      checkDeadline();
+      if (error instanceof BrokerRejected) throw error;
       // The guest app-server or SSH tunnel may restart; the request ID remains stable.
     }
     await delay(500);
@@ -120,7 +131,7 @@ async function requestBrokerCompletion(endpoint: ModelBrokerEndpoint, model: Mod
 /** Called by the workspace-owning primary with its own provider credentials. */
 export async function completeBrokerModelRequest(request: ModelBrokerRequest,
   authenticationPreferences: ProviderAuthenticationPreferences, codexAuthFile?: string,
-  daybreakMode: 'blue' | 'red' = 'blue'): Promise<AssistantMessage> {
+  daybreakMode: 'blue' | 'red' = 'blue', signal?: AbortSignal): Promise<AssistantMessage> {
   const router = new ProviderAuthenticationRouter(authenticationPreferences);
   const { createAuthenticatedModels } = await import("./auth.js");
   if (request.model.provider === "openrouter") {
@@ -154,6 +165,7 @@ export async function completeBrokerModelRequest(request: ModelBrokerRequest,
     let response: AssistantMessage;
     try {
       response = await models.completeSimple(model, request.context, { ...safeOptions, ...(apiKey ? { apiKey } : {}),
+        ...(signal ? { signal } : {}),
         ...(onPayload ? { onPayload } : {}) });
     } catch (error) {
       if (attempt === 0 && router.tryFallback(providerId, error instanceof Error ? error.message : String(error))) {

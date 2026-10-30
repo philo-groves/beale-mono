@@ -25,6 +25,7 @@ import {
   type SubagentRunResult,
   type SubagentRuntimeFactory,
 } from "./subagent-orchestration.js";
+import type { TrackWorkerAssignment } from "./track-funnel.js";
 import {
   getToolTransportName,
   projectModelToolResult,
@@ -63,6 +64,7 @@ export interface CreateClaudeAgentExecutorOptions {
   waitForSteeringMessages?: (signal?: AbortSignal) => Promise<readonly string[]>;
   subagents?: false;
   subagentRuntimeFactory?: SubagentRuntimeFactory;
+  trackWorkerAssignments?: readonly TrackWorkerAssignment[];
   collaboration?: ResearchCollaborationConfig;
   collaborationTools?: readonly AgentTool[];
   runAlternateSubagent?: (
@@ -279,7 +281,8 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
 
       const collaboration = options.collaboration;
       const manualDelegation = options.subagents !== false && collaboration?.mode !== "solo";
-      const collaborationManager = options.agentIdentity || (!manualDelegation && !options.surfaceStore)
+      const collaborationManager = options.agentIdentity || (!manualDelegation && !options.surfaceStore
+        && !options.trackWorkerAssignments?.length)
         ? null
         : createSubagentRuntime({
             rootProvider: "anthropic",
@@ -305,6 +308,9 @@ export function createClaudeAgentExecutor(options: CreateClaudeAgentExecutorOpti
             },
             onToolEvent: (event) => emitResearchEvents(input.eventSink, [event], options.agentIdentity),
           }, options.subagentRuntimeFactory);
+      for (const assignment of options.trackWorkerAssignments ?? []) {
+        collaborationManager?.spawnTrackWorker?.(assignment);
+      }
       const collaborationMcpTools = [
         ...(collaborationManager?.createTools("root") ?? []),
         ...(options.collaborationTools ?? []),

@@ -34,10 +34,6 @@ export interface CommentaryMessage {
   createdAt: string;
 }
 
-export function surfaceDiagramToolLine(diagram: NonNullable<CommentaryMessage['surfaceDiagram']>): string {
-  return `${diagram.changeKind === 'created' ? 'Creating' : 'Updating'} threat model diagram for "${diagram.surfaceName}"`;
-}
-
 export interface CommentaryToolCall {
   id: string;
   traceEventId: string;
@@ -146,7 +142,7 @@ function surfaceDiagramMessage(event: TraceDisplayEvent): CommentaryMessage | nu
     traceEventId: event.id,
     kind: 'diagram',
     surfaceDiagram,
-    contentMarkdown: surfaceDiagramToolLine(surfaceDiagram),
+    contentMarkdown: surfaceName,
     createdAt: event.createdAt
   };
 }
@@ -165,7 +161,7 @@ function sessionEventMarker(event: TraceDisplayEvent): CommentaryMessage | null 
     : type === 'model_retry' && stringValue(payload.recoveryKind) === 'safety_guardrail'
       && payload.awaitingSteering !== true
       ? 'safeguard_recovery'
-      : type === 'track_epoch_resolving' ? 'epoch' : null;
+      : type === 'track_epoch_resolving' || type === 'track_epoch_paused' ? 'epoch' : null;
   if (!markerType) return null;
   return {
     id: `session-marker:${event.id}`,
@@ -175,8 +171,12 @@ function sessionEventMarker(event: TraceDisplayEvent): CommentaryMessage | null 
     contentMarkdown: markerType === 'compaction'
       ? 'Context Compacted'
       : markerType === 'epoch'
-        ? 'Resolving Epoch'
-        : 'Cybersecurity safeguard encountered · Beale recovering',
+        ? type === 'track_epoch_paused'
+          ? stringValue(payload.cause) === 'ssh_host_key'
+            ? 'Research Track Paused · SSH host key verification failed'
+            : 'Research Track Paused'
+          : 'Resolving Epoch'
+        : 'Recovering from Cyber Safeguard',
     createdAt: event.createdAt
   };
 }
@@ -602,6 +602,7 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'code.query': { singular: 'Querying Code', plural: (count) => `Running ${count} Code Queries` },
   'code.references': { singular: 'Finding References', plural: (count) => `Running ${count} Reference Searches` },
   'experiment.run': { singular: 'Running an Experiment', plural: (count) => `Running ${count} Experiments` },
+  'finding.revise': { singular: 'Revising a Finding', plural: (count) => `Revising ${count} Findings` },
   'file.edit': { singular: 'Editing a File', plural: (count) => `Editing ${count} Files` },
   'file.read': { singular: 'Reading a File', plural: (count) => `Reading ${count} Files` },
   'features.load': { singular: 'Loading Features', plural: (count) => `Loading Features ${count} Times` },
@@ -649,6 +650,7 @@ const TOOL_USAGE_COPY: Readonly<Record<string, ToolUsageCopy>> = {
   'shell.run': { singular: 'Running a Command', plural: (count) => `Running ${count} Commands` },
   'storage.list': { singular: 'Checking Artifacts', plural: (count) => `Checking Artifacts ${count} Times` },
   'synthesis.compose': { singular: 'Composing a Report', plural: (count) => `Composing ${count} Reports` },
+  'track.checkpoint': { singular: 'Checkpointing the Research Track', plural: (count) => `Checkpointing the Research Track ${count} Times` },
   'wait_agent': { singular: 'Waiting for Subagents', plural: (count) => `Waiting for Subagents ${count} Times` }
 };
 

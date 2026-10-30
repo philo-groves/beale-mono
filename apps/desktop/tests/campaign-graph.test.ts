@@ -227,6 +227,29 @@ describe('campaign graph projection', () => {
     expect(render([refuted])).toContain('No unrefuted findings.');
   });
 
+  it('previews five leads or findings and offers the remaining claims on demand', () => {
+    for (const label of ['Leads', 'Findings'] as const) {
+      const claims = Array.from({ length: 7 }, (_, index) => ({
+        id: `claim-example-${index + 1}`,
+        projection: label === 'Leads' ? 'lead' : 'finding',
+        maturity: 'observed',
+        title: `Example claim ${index + 1}`,
+        rating: 'medium',
+        classification: 'security.primitive',
+        authors: [], evidence: [], securityTracking: null,
+        updatedAt: '2026-01-01T00:00:00Z', revision: 1
+      } as unknown as AppServerFindingSummary));
+      const html = renderToStaticMarkup(createElement(CampaignClaimCatalogSection, {
+        claims, label, selectedClaimId: null, onOpen: () => undefined
+      }));
+      expect(html).toContain('Show 2 more');
+      expect(html).toContain('aria-expanded="false"');
+      expect(html).toContain('Example claim 5');
+      expect(html).not.toContain('Example claim 6');
+      expect(html).not.toContain('Example claim 7');
+    }
+  });
+
   it('shows a stop sign only for blocked board findings', () => {
     const finding = {
       id: 'finding-example-blocked', projection: 'finding', maturity: 'observed',

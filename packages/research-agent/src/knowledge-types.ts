@@ -183,6 +183,25 @@ export interface FindingSecurityTracking {
   surfaceIds: string[];
   /** A research obstacle, not a refutation or a change in evidence maturity. */
   progressBlocker: { reason: string; actorId: string; setAt: string } | null;
+  /** Null means reportability has not yet been assessed. */
+  reportability: {
+    decision: "reportable" | "not_reportable";
+    basis: string;
+    policyRefs: string[];
+    actorId: string;
+    assessedAt: string;
+  } | null;
+  triage: {
+    blocker: { reason: string; actorId: string; setAt: string } | null;
+    packet: {
+      artifactId: string;
+      contentHash: string;
+      sizeBytes: number;
+      claimBindingHash: string;
+      replayRunId: string;
+      verifiedAt: string;
+    } | null;
+  };
   externalReferences: FindingExternalReference[];
 }
 
@@ -220,6 +239,8 @@ export interface FindingSummary {
   /** Untrusted qualitative estimate supplied by a research agent; not an evidence-backed risk assessment. */
   rating: ResearchClaimRating;
   classification: string;
+  /** Ordered component findings for a composed security chain. */
+  componentClaimIds: string[];
   duplicateOfClaimId: string | null;
   duplicateMarkedAt: string | null;
   duplicateClaims: ResearchClaimDuplicateSummary[];

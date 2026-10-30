@@ -865,11 +865,6 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.getSnapshot, () => timedMainIpc('getSnapshot', {}, () => workspaceService.getSnapshot()));
   ipcMain.handle(IPC_CHANNELS.getHostEnvironment, () => getHostEnvironment());
   ipcMain.handle(IPC_CHANNELS.getWorkspaceEditors, () => getWorkspaceEditorCatalogForHost({}, async (path) => {
-    if (path.toLowerCase().endsWith('.icns')) {
-      const source = nativeImage.createFromPath(path);
-      if (source.isEmpty()) return null;
-      return source.resize({ width: 32, height: 32, quality: 'best' }).toDataURL();
-    }
     const icon = await app.getFileIcon(path, { size: 'normal' });
     return icon.isEmpty() ? null : icon.toDataURL();
   }));

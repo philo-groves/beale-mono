@@ -995,6 +995,36 @@ export class AppServerSessionStore {
     };
   }
 
+  public getActiveSteering(sessionId: string): Array<{ requestId: string; instruction: string }> {
+    const normalizedSessionId = requiredString(sessionId, "Session id");
+    if (!this.getSessionCore(normalizedSessionId)) throw new Error(`Session not found: ${normalizedSessionId}`);
+    const rows = this.database.prepare(`
+      SELECT event_json, content_hash FROM app_server_session_events
+      WHERE session_id = ? AND (
+        (json_extract(event_json, '$.kind') = 'beale.transcript'
+          AND json_extract(event_json, '$.payload.record.source') = 'user_steering')
+        OR json_extract(event_json, '$.kind') = 'beale.steering_removed'
+      )
+      ORDER BY event_offset ASC
+    `).all(normalizedSessionId) as StoredSessionEventRow[];
+    const active = new Map<string, string>();
+    for (const row of rows) {
+      const event = decodeEventRow(row);
+      const payload = recordValue(event.payload);
+      if (event.kind === "beale.steering_removed") {
+        const targetRequestId = optionalString(payload?.targetRequestId);
+        if (targetRequestId) active.delete(targetRequestId);
+        continue;
+      }
+      const record = recordValue(payload?.record);
+      const metadata = recordValue(record?.metadata);
+      const requestId = optionalString(metadata?.controlRequestId);
+      const instruction = optionalString(record?.contentMarkdown);
+      if (requestId && instruction) active.set(requestId, instruction);
+    }
+    return [...active].map(([requestId, instruction]) => ({ requestId, instruction }));
+  }
+
   public getEventPage(sessionId: string, input: AppServerSessionEventPageInput = {}): AppServerSessionEventPage {
     const normalizedSessionId = requiredString(sessionId, "Session id");
     if (!this.getSessionCore(normalizedSessionId)) throw new Error(`Session not found: ${normalizedSessionId}`);

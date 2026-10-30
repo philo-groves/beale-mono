@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BealeWorkspaceResearchTrack } from '@beale/app-server-runtime/protocol';
-import type { RunDetail } from '../src/shared/types';
-import { deferredResearchTrackDetail, pausesResearchTrackFromSessionAction, runningResearchTrackDetail, waitForResearchTrackSession } from '../src/renderer/view-models/researchTrackSession';
+import type { BealeApi, RunDetail } from '../src/shared/types';
+import { deferredResearchTrackDetail, pauseResearchTrackSessionAction, runningResearchTrackDetail, waitForResearchTrackSession } from '../src/renderer/view-models/researchTrackSession';
 
 function track(activeSessionId: string | null): BealeWorkspaceResearchTrack {
   return {
@@ -11,10 +11,35 @@ function track(activeSessionId: string | null): BealeWorkspaceResearchTrack {
 }
 
 describe('research track session handoff', () => {
-  it('pauses the track only for a session Pause action', () => {
-    expect(pausesResearchTrackFromSessionAction('pause', true)).toBe(true);
-    expect(pausesResearchTrackFromSessionAction('stop', true)).toBe(false);
-    expect(pausesResearchTrackFromSessionAction('pause', false)).toBe(false);
+  it('pauses a local or remote track from the session Stop control', async () => {
+    const getResearchTrack = vi.fn(async () => track('session_example'));
+    const controlResearchTrack = vi.fn(async () => track('session_example'));
+    const api = { getResearchTrack, controlResearchTrack } as unknown as Pick<BealeApi, 'getResearchTrack' | 'controlResearchTrack'>;
+
+    expect(await pauseResearchTrackSessionAction({ action: 'stop', workspaceId: 'workspace_example',
+      sessionId: 'track_example', api })).toBe(true);
+    expect(controlResearchTrack).toHaveBeenCalledWith('workspace_example', 'pause', undefined);
+    expect(getResearchTrack).toHaveBeenCalledWith('workspace_example', undefined);
+
+    expect(await pauseResearchTrackSessionAction({ action: 'stop', workspaceId: 'workspace_example',
+      sessionId: 'track_example', serverId: 'server_example', api })).toBe(true);
+    expect(getResearchTrack).toHaveBeenCalledWith('workspace_example', 'server_example');
+    expect(controlResearchTrack).toHaveBeenLastCalledWith('workspace_example', 'pause', 'server_example');
+  });
+
+  it('does not stop an already paused track or intercept an unrelated session', async () => {
+    const getResearchTrack = vi.fn(async () => ({ ...track(null), status: 'paused' as const }));
+    const controlResearchTrack = vi.fn();
+    const api = { getResearchTrack, controlResearchTrack } as unknown as Pick<BealeApi, 'getResearchTrack' | 'controlResearchTrack'>;
+
+    expect(await pauseResearchTrackSessionAction({ action: 'stop', workspaceId: 'workspace_example',
+      sessionId: 'track_example', api })).toBe(true);
+    expect(controlResearchTrack).not.toHaveBeenCalled();
+    expect(await pauseResearchTrackSessionAction({ action: 'stop', workspaceId: 'workspace_example',
+      sessionId: 'session_example', api })).toBe(false);
+    expect(await pauseResearchTrackSessionAction({ action: 'stop', workspaceId: 'workspace_example',
+      sessionId: 'track_previous', api })).toBe(true);
+    expect(controlResearchTrack).not.toHaveBeenCalled();
   });
 
   it('presents a terminal epoch as ongoing while the track is running', () => {

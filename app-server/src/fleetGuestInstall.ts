@@ -21,6 +21,7 @@ export interface FleetGuestSshConnection {
   sshUser: string;
   sshIdentityFile: string | null;
   sshKnownHostsFile: string | null;
+  sshHostKeyAlias?: string | null;
 }
 
 interface GuestBundle { archive: string; buildId: string; sha256: string }
@@ -32,7 +33,8 @@ export class FleetGuestInstaller {
 
   public async ensure(connection: FleetGuestSshConnection, forceRestart = false): Promise<void> {
     const args = sshConnectionArgs(connection.sshHost, connection.sshUser,
-      connection.sshIdentityFile, connection.sshKnownHostsFile, connection.machine.backend);
+      connection.sshIdentityFile, connection.sshKnownHostsFile, connection.machine.backend,
+      connection.sshHostKeyAlias);
     const buildId = await this.buildId();
     const guest = await this.probe(args, connection.machine.backend);
     if (guest.arch !== process.arch) {

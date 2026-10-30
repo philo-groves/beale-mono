@@ -79,7 +79,7 @@ test("verification resolves execution evidence and rejects self-review, missing 
   assert.ok(f.claims.completionChecklist(claim.id, "verified").missingRequired.includes("independent_verification"));
 });
 
-test("legacy composite classifications and review bindings remain readable without component tracking", async (t) => {
+test("stored Chain classifications and review bindings retain component links", async (t) => {
   const f = await fixture(t);
   const component = f.claims.create({ title: "Example distinct weakness", classification: "security.vulnerability" });
   const execution = await f.run();
@@ -101,8 +101,8 @@ test("legacy composite classifications and review bindings remain readable witho
   f.database.prepare("UPDATE app_server_claim_evidence SET claim_binding_hash = ? WHERE id = ?")
     .run(binding, finding.evidence.at(-1).id);
   const restored = f.claims.get(finding.id);
-  assert.equal(restored.classification, "security.vulnerability");
-  assert.equal(Object.hasOwn(restored, "componentClaimIds"), false);
+  assert.equal(restored.classification, "security.chain");
+  assert.deepEqual(restored.componentClaimIds, [component.id]);
   assert.equal(restored.evidence.at(-1).validated, true);
   const appended = f.claims.transition(finding.id, {
     expectedRevision: restored.revision, toStatus: "verified", reason: "Added another direct observation.",

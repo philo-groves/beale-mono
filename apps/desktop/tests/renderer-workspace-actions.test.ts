@@ -114,7 +114,7 @@ describe('renderer workspace actions', () => {
     expect(sessionAction).toContain('applySnapshot(next, session.runId);');
 
     const runtimeSource = readFileSync(new URL('../src/renderer/hooks/useWorkspaceRuntime.ts', import.meta.url), 'utf8');
-    expect(runtimeSource).toContain('selectedRunIdOverride ?? selectRunId(current, next)');
+    expect(runtimeSource).toContain('selectedRunIdOverride ?? selectRunId(current, next, pendingRunIdRef.current)');
   });
 
   it('uses an action response as the authoritative snapshot without immediate reloads', () => {
@@ -127,7 +127,7 @@ describe('renderer workspace actions', () => {
     const runActionSource = source.slice(start, end);
 
     expect(runActionSource).toContain('if (next) applySnapshot(next);');
-    expect(runActionSource).toContain('else await loadSnapshot();');
+    expect(runActionSource).toContain('else if (options.refreshSnapshot !== false) await loadSnapshot();');
     expect(runActionSource).not.toContain('loadWorkspaceRegistry');
   });
 

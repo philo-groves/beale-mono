@@ -349,10 +349,9 @@ describe('workspace dashboard', () => {
     expect(html).toContain('<span>Surfaces</span>');
     expect(html).toContain('<span>Rules</span>');
     expect(html).not.toContain('<span>Utilities</span>');
-    expect(html).toContain('<span>Targets</span>');
+    expect(html).not.toContain('<span>Targets</span>');
     expect(html.indexOf('<span>Campaign</span>')).toBeLessThan(html.indexOf('<span>Surfaces</span>'));
     expect(html.indexOf('<span>Surfaces</span>')).toBeLessThan(html.indexOf('<span>Rules</span>'));
-    expect(html.indexOf('<span>Targets</span>')).toBeLessThan(html.indexOf('<span>Settings</span>'));
     expect(html.indexOf('<span>Settings</span>')).toBeLessThan(html.indexOf('<span>Apple Security Bounty</span>'));
     expect(html).toContain('lucide-settings');
     expect(html).toContain('lucide-network');
@@ -362,7 +361,7 @@ describe('workspace dashboard', () => {
     expect(html).not.toContain('<span>HackerOne</span>');
     expect(html).not.toContain('<span>MSRC Windows</span>');
     expect(html).toContain('lucide-refresh-cw');
-    expect(html.match(/workspace-dashboard-tab-icon/g)).toHaveLength(6);
+    expect(html.match(/workspace-dashboard-tab-icon/g)).toHaveLength(5);
     expect(html).not.toContain('aria-label="Campaign views"');
     expect(html).toContain('aria-controls="workspace-dashboard-overview-panel" aria-selected="true"');
     expect(html).not.toContain('id="workspace-dashboard-campaign-activity-panel"');
@@ -575,8 +574,8 @@ describe('workspace dashboard', () => {
     }
   });
 
-  it('places title search beside Surfaces, Rules, and Targets', () => {
-    for (const view of ['surfaces', 'rules', 'targets'] as const) {
+  it('places title search beside Surfaces and Rules', () => {
+    for (const view of ['surfaces', 'rules'] as const) {
       const html = renderToStaticMarkup(createElement(WorkspaceUnderstandingView, {
         busy: false,
         initialView: view,

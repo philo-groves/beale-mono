@@ -21,6 +21,7 @@ export function useRunDetailPolling({
   selectedRunId,
   selectedRunState,
   researchTrackRunning = false,
+  sessionAwaitingCreation = false,
   continuationPending,
   projection,
   refreshKey,
@@ -29,6 +30,7 @@ export function useRunDetailPolling({
   selectedRunId: string | null;
   selectedRunState: RunStatus | null;
   researchTrackRunning?: boolean;
+  sessionAwaitingCreation?: boolean;
   continuationPending?: boolean;
   projection: RunDetailProjection;
   refreshKey: string | null;
@@ -117,7 +119,7 @@ export function useRunDetailPolling({
 
   useEffect(() => {
     const requestSeq = ++requestSeqRef.current;
-    if (!selectedRunId || selectedRunState === null && !researchTrackRunning) {
+    if (!selectedRunId || sessionAwaitingCreation || selectedRunState === null && !researchTrackRunning) {
       clearRunDetail();
       return undefined;
     }
@@ -251,7 +253,7 @@ export function useRunDetailPolling({
       if (pollTimer !== null) window.clearTimeout(pollTimer);
       window.beale.cancelRunDetailRequests(selectedRunId);
     };
-  }, [clearRunDetail, continuationPending, onError, projection, refreshKey, researchTrackRunning, selectedRunId, selectedRunState]);
+  }, [clearRunDetail, continuationPending, onError, projection, refreshKey, researchTrackRunning, selectedRunId, selectedRunState, sessionAwaitingCreation]);
 
   return {
     runDetail,

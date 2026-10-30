@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import { advancedSubagentRuntimeFactory } from "./advanced-subagent-runtime.js";
 import type { SurfaceStore } from "./surfaces.js";
+import type { TrackWorkerAssignment } from "./track-funnel.js";
 
 export {
   SUBAGENT_COLLABORATION_TOOLS,
@@ -42,6 +43,7 @@ export interface SubagentRuntime {
   snapshot(): Record<string, unknown>;
   settle(): Promise<void>;
   interruptAll(): void;
+  spawnTrackWorker?(assignment: TrackWorkerAssignment): void;
 }
 
 export interface CreateSubagentRuntimeOptions {

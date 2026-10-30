@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+## 0.9.6
+
+### Beale
+
+#### Added
+
+- Research Track findings support Primitive and Chain classifications with durable component links, reportability decisions, and accepted portable PoC packets.
+- Verified reportable findings can enter triage only after a successful reproduction replay in a distinct environment; security reports reuse the accepted packet.
+
+#### Changed
+
+- Surface foundations can record a cited component-level scope assessment; Breakdown shows the decision and any inherited exclusion.
+- Active Research Track worker cards use live subagent activity while track status catches up and appear beside remote track sessions.
+- Session steering now has a cow icon beside context usage that lists active steering messages and lets users remove them from future guidance.
+- Research Track workers may each spawn one child subagent, including a fresh independent Reviewer; their children cannot delegate further.
+- The session sidebar groups active Research Track workers by role, showing their current findings in one card with separators and a shared queued-findings action.
+- Campaign sidebar Leads and Findings preview five entries each and reveal the remaining entries on demand.
+- Research Track discovery prioritizes recorded high-value surfaces, keeps productive engagements, and cools evidence-free components without stopping the track.
+- Research Track rotates a productive engagement to another ready resource after three consecutive epochs, favoring less worked resource kinds among equally valuable alternatives. Existing tracks carry forward their prior same-surface streak on upgrade.
+- Track sessions start eligible investigation, chain analysis, triage, and reporting subagents from durable finding queues; empty queues start no downstream workers.
+- Active Research Track workers appear beneath the session summary with their role, current finding, and a header link to a dialog listing eligible queued findings.
+- Research prompt generation no longer carries suggestion category labels or category-specific instructions into the context given to a live agent; categories remain available when generating suggestions.
+- The app-server selector sits beside the sidebar title with a muted computer icon and text; its menu opens below the selector.
+- Research Track cancellation uses a trash icon and confirmation dialog. The session control pauses an active track for later resumption.
+- Cyber safeguard recovery markers use the same regular-weight text size as context compaction and epoch markers and read “Recovering from Cyber Safeguard.”
+- Inter-agent session message headers use the “Collaboration” label.
+- Inter-agent session messages have no divider between the header and message body.
+- Follow-up tasks use the same session message layout as inter-agent messages, with a “Follow-Up” header label.
+- Threat model diagrams show the diagram name and Threat Model label without a divider. Surface details keep a bordered card; session diagrams use an open layout with the graph icon on the left.
+- Session threat model diagrams appear immediately without a synthetic tool line above the card.
+- Diagram card titles capitalize each word while preserving existing uppercase letters.
+- Session diagrams and inter-agent messages have no outer border and align their icons, headers, and bodies with the session icon gutter.
+- Starting or resuming a Research Track opens its session immediately while the app server prepares the session. Track startup scans prioritize the selected workspace.
+- Finding revision and research track checkpoint tool activity use descriptive labels.
+- Fleet now groups app servers, browser targets, and VM targets, with tabs for each workspace and all workspaces. App-server, browser, and VM settings open in dialogs; workspaces no longer show a Targets tab.
+
+#### Fixed
+
+- Research Track worker status shows only subagents that have spawned and remain active; completed worker cards disappear before the epoch ends.
+- macOS editor controls use the VS Code application bundle icon instead of falling back to a generic code symbol.
+- Research Track worker cards follow all session subagent lifecycle events and disappear when their assigned worker finishes, even while the epoch continues.
+- Research Track sessions accept independently spawned Prover and Reviewer roles on configured collaborator routes.
+- Switching between subagent transcripts shows their stored history immediately and animates only messages that arrive afterward.
+- Automatic Research Track workers start after the Pi subagent runner is initialized; failed starts no longer leave empty agent entries or silently consume finding assignments. Existing worker reservations from the affected runtime are reset once so their findings can be retried.
+- Research Tracks tolerate VM address reuse by pinning managed clone host keys to clone identity, including on hosts without an existing Tart known-hosts file. Changed host keys pause promptly and show a pause marker after a failed epoch launch.
+- Manual resizing of the session summary sidebar no longer fights automatic width expansion; its minimum width remains enforced.
+- Triage metadata changes no longer invalidate earlier independent verification evidence.
+
+### app-server
+
+#### Added
+
+- Track epoch scheduling reserves claim-specific downstream worker assignments and releases them when a session ends or fails to launch.
+- Repository scan exposes bounded Opengrep structural patterns and local rules, with candidate match context, dataflow locations, and scan errors; literal repository search remains available.
+
+#### Changed
+
+- Research Tracks check component applicability before investigation and exclude assessed nonapplicable surfaces and descendants from future selection.
+- Steering removal is persisted with the session and applied to resumed workers and future research reminders.
+- Research Track status includes active worker assignments and eligible queued findings for the session sidebar.
+- Literal repository search uses bundled ripgrep with bounded streamed results, includes untracked nonignored source files, and respects hidden-file and repository ignore rules by default.
+
+#### Fixed
+
+- Repository source tools recognize configured managed checkout stores on Windows while continuing to exclude other runtime data.
+- Repository source tools accept managed checkouts beneath Beale data directories, including configured repository stores, while excluding unrelated runtime data.
+
 ## 0.9.5
 
 ### Beale
@@ -40,6 +107,8 @@
 
 #### Fixed
 
+- Subagents left unresolved by an earlier Track attempt no longer appear active in later attempts; legacy activity is attributed to its original attempt.
+- Model streams that stop producing events now fail after a bounded idle period, allowing stalled subagents to reach a terminal state.
 - Session threat model tool lines type into the transcript before their diagrams appear.
 - Threat model diagrams with Mermaid-generated HTML line breaks now load as SVG images in session and surface views; image decode failures show the diagram source instead of a broken image icon.
 - The workspace Surfaces hierarchy now fills the main content area, fades at its top and bottom edges, and reveals its scrollbar on hover or scroll. Selecting a surface opens a right sidebar with a circular back control, component title, inline status, first-touch model attribution, last-update time, and sections for its recorded context and state. Older app-server responses without a model show Unknown for recorded touches.
@@ -53,6 +122,8 @@
 
 #### Changed
 
+- App-server prompt expansion omits suggestion category metadata and earlier session prompts from the added research context.
+- Research Track depth scheduling now gives plausible high-impact open claims earlier proof work than low-impact claims, while retaining target-availability penalties and evidence-based actionability. Epoch instructions explicitly compare unauthorized effects and reachability before advancing a claim.
 - Research Track epochs retain compatible model context between attempts by default and add only bounded new context to resumed attempts. At each transition, the host reviews the prior capture and context signals, starts fresh when the capture is unavailable or context remains crowded, and marks the current assignment as authoritative.
 - Research Track epochs now distinguish breadth from depth, prioritize actionable open leads and findings during depth work, and prompt a complementary collaborator when collaboration is enabled. Periodic breadth rotation remains in place.
 - Research Track actionability gains require new source evidence on a cited finding or memory, or a completed runbook result from the active epoch. Record edits and report citations remain valid context but do not raise priority.
@@ -62,6 +133,7 @@
 
 #### Fixed
 
+- Fleet model broker requests now expire on both the guest and primary, so interrupted connections and stalled providers cannot keep worker sessions active indefinitely.
 - Stored research-profile resolution retries brief SQLite read contention when a session starts.
 - Recovered host shell utilities retain standard POSIX paths during login-shell startup, preventing profile errors from appearing in otherwise successful tool results.
 - Host shell calls to `ipsw` recover through a pinned, checksum-verified local binary when the utility is absent. Packaged Desktop runtimes include the installer architecture's binary and its license; source checkouts provision it on first use.

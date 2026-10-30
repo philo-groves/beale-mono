@@ -41,6 +41,7 @@ import {
   createRunbookExecutor,
   createRunbookExecutionTool,
   createReportTools,
+  createTriageTools,
   discoverResearchAgentInstructions,
   createPiAgentExecutor,
   validateResearchSystemPromptTemplate,
@@ -49,9 +50,11 @@ import {
   createZCodeAgentExecutor,
   decodeResearchCollaborationConfig,
   subagentRuntimeFactoryForMode,
+  trackSubagentRuntimeFactory,
   extractCompatibleClaudeAgentResumableState,
   extractCompatibleZCodeAgentResumableState,
   createRepositorySearchTool,
+  createRepositoryScanTool,
   createRepositoryMaterializeTool,
   createWorkspaceSearchTool,
   createRepositoryHistoryTool,
@@ -64,7 +67,9 @@ import {
   SurfaceStore,
   createSurfaceTools,
   ResearchTrackStore,
+  TrackFunnelStore,
   createResearchTrackTool,
+  type TrackWorkerAssignment,
   createResearchResourceScopeAuthorizer,
   reviewResearchResourceFirstTouch,
   createResearchAgentFlowCapture,
@@ -2074,7 +2079,7 @@ export async function main(
       throw new Error(`app-server session was not created before launch: ${args.sessionId}`);
     }
     const liveEventSink = sessionStore && args.sessionId
-      ? createPersistedSessionEventSink(sessionStore, args.sessionId, transportEventSink)
+      ? createPersistedSessionEventSink(sessionStore, args.sessionId, args.attemptId ?? null, transportEventSink)
       : transportEventSink;
     const controlStream = new AppServerControlStream(hostedTransport.controlInput, (event) => {
           void (async () => {
@@ -2110,6 +2115,15 @@ export async function main(
                 },
               });
             }
+            if (event.accepted && event.type === "remove_steering" && !event.replayed) {
+              sessionStore?.appendEventReceipt(args.sessionId!, {
+                id: `steering_removed_${event.requestId ?? randomUUID()}`,
+                kind: "beale.steering_removed",
+                timestamp,
+                summary: "User steering removed from future session guidance.",
+                payload: { targetRequestId: event.targetRequestId },
+              });
+            }
             await liveEventSink?.({
               schemaVersion: 1,
               kind: "agent.event",
@@ -2117,7 +2131,7 @@ export async function main(
               payload: { eventType: "control.received", ...controlEvent },
             });
           })();
-        });
+        }, sessionStore?.getActiveSteering(args.sessionId!) ?? []);
     controlStream?.start();
     let runtimeConfig: Awaited<ReturnType<typeof createRuntimeConfig>> | undefined;
     try {
@@ -2294,6 +2308,17 @@ export async function main(
       } else {
         resumableState = await resumableStatePromise;
         if (resumableState) effectivePrompt = args.prompt;
+        const trackWorkerAssignments = args.trackEpoch && args.sessionId
+          ? (() => {
+              const funnel = new TrackFunnelStore({
+                databasePath: runtimeConfig.memoryGraph.databasePath,
+                workspaceId: runtimeConfig.workspaceContext.memoryContext?.workspaceId
+                  ?? `workspace:${runtimeConfig.workspaceContext.workspaceRoot}`,
+              });
+              try { return funnel.activeForSession(args.sessionId!); }
+              finally { funnel.close(); }
+            })()
+          : [];
         agentExecutor = createRealAgentExecutor(
           args,
           resolvedResearchProfile,
@@ -2308,6 +2333,7 @@ export async function main(
           promptTemplate,
           runtimeConfig.surfaceStore,
           runtimeConfig.getFindingProgress,
+          trackWorkerAssignments,
         );
       }
       const sessionTitleRoute = args.mock
@@ -2506,6 +2532,7 @@ function createRealAgentExecutor(
   promptTemplate?: string,
   surfaceStore?: SurfaceStore,
   getFindingProgress?: () => readonly ResearchGoalFindingProgress[],
+  trackWorkerAssignments: readonly TrackWorkerAssignment[] = [],
 ): ResearchAgentExecutor {
   const authenticationPreferences = readProviderAuthenticationPreferences();
   const providerSessionId = args.sessionId?.trim() || resumableState?.providerSessionId;
@@ -2521,7 +2548,7 @@ function createRealAgentExecutor(
     ...(toolRegistry ? { toolRegistry } : {}),
     ...(surfaceStore ? { surfaceStore } : {}),
   };
-  const runAlternateSubagent = (collaboration && collaboration.mode !== "solo") || surfaceStore
+  const runAlternateSubagent = (collaboration && collaboration.mode !== "solo") || surfaceStore || args.trackEpoch
     ? createProviderNeutralSubagentRunner({
         workspaceRoot: args.workspaceRoot,
         resolvedResearchProfile,
@@ -2532,9 +2559,11 @@ function createRealAgentExecutor(
         ...(promptTemplate !== undefined ? { promptTemplate } : {}),
       })
     : undefined;
-  const subagentRuntimeFactory = collaboration && collaboration.mode !== "solo"
-    ? subagentRuntimeFactoryForMode(collaboration.subagentMode)
-    : undefined;
+  const subagentRuntimeFactory = args.trackEpoch
+    ? trackSubagentRuntimeFactory
+    : collaboration && collaboration.mode !== "solo"
+      ? subagentRuntimeFactoryForMode(collaboration.subagentMode)
+      : undefined;
 
   if (modelConfig.provider === "anthropic") {
     const claudeResumableState = resumableState && !("api" in resumableState) && resumableState.provider === "anthropic"
@@ -2554,6 +2583,7 @@ function createRealAgentExecutor(
       ...(collaboration ? { collaboration } : {}),
       ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
       ...(subagentRuntimeFactory ? { subagentRuntimeFactory } : {}),
+      ...(args.trackEpoch ? { trackWorkerAssignments } : {}),
       ...(claudeResumableState ? { resumableState: claudeResumableState } : {}),
       ...(controlStream
         ? {
@@ -2581,6 +2611,7 @@ function createRealAgentExecutor(
       ...(collaboration ? { collaboration } : {}),
       ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
       ...(subagentRuntimeFactory ? { subagentRuntimeFactory } : {}),
+      ...(args.trackEpoch ? { trackWorkerAssignments } : {}),
       ...(zcodeResumableState ? { resumableState: zcodeResumableState } : {}),
       ...(controlStream
         ? {
@@ -2620,6 +2651,7 @@ function createRealAgentExecutor(
     ...(collaboration ? { collaboration } : {}),
     ...(runAlternateSubagent ? { runAlternateSubagent } : {}),
     ...(subagentRuntimeFactory ? { subagentRuntimeFactory } : {}),
+    ...(args.trackEpoch ? { trackWorkerAssignments } : {}),
     ...(resolvedResearchProfile.profile.capabilities.collaborationEnabled
       ? {}
       : { subagents: false as const }),
@@ -2627,6 +2659,8 @@ function createRealAgentExecutor(
     ...(controlStream
       ? {
           getModelSelection: () => controlStream.getModelSelection(),
+          getActiveSteeringMessages: () => controlStream.getActiveSteeringInstructions().map((instruction) =>
+            `User steering for the active research run:\n\n${instruction}`),
           getSteeringMessages: async () =>
             (await controlStream.takeSteeringInstructions()).map((instruction) => ({
               role: "user" as const,
@@ -3997,11 +4031,13 @@ async function createRuntimeConfig(args: {
     const trackStore = new ResearchTrackStore({ databasePath: memoryGraph.databasePath,
       workspaceId: workspaceContext.memoryContext?.workspaceId ?? `workspace:${workspaceRoot}`,
       sessionId: args.sessionId });
-    if (trackStore.get()?.activeSessionId === args.sessionId) {
+    const activeTrack = trackStore.get();
+    if (activeTrack?.activeSessionId === args.sessionId && activeTrack.activeSurfaceId) {
       const trackTool = createResearchTrackTool(trackStore, (id) => {
         const current = surfaceStore.require(id, true);
         return { id: current.id, parentId: current.parentId, name: current.name,
-          coverageState: surfaceStore.coverageState(id), progressBlocker: current.progressBlocker };
+          foundation: current.foundation, coverageState: surfaceStore.coverageState(id),
+          progressBlocker: current.progressBlocker };
       });
       executableTools.push(trackTool);
       toolDescriptors.push(trackTool.descriptor);
@@ -4126,6 +4162,11 @@ async function createRuntimeConfig(args: {
     });
     executableTools.push(...reportTools);
     toolDescriptors.push(...reportTools.map((tool) => tool.descriptor));
+    if (memoryActive && runbookStore && resolvedResearchProfile.profile.id === "security-research") {
+      const triageTools = createTriageTools(findingStore, runbookStore, reports);
+      executableTools.push(...triageTools);
+      toolDescriptors.push(...triageTools.map((tool) => tool.descriptor));
+    }
     cleanupCallbacks.push(async () => reports.close());
   }
   const createCurrentCampaignContext = (): CampaignGraphSummary => {
@@ -4280,6 +4321,12 @@ async function createRuntimeConfig(args: {
     });
     executableTools.push(tool);
     toolDescriptors.push(tool.descriptor);
+    const scanTool = createRepositoryScanTool({
+      roots: repositorySearchRootsFromWorkspaceContext(workspaceContext),
+      researchSession: repositoryResearchSession,
+    });
+    executableTools.push(scanTool);
+    toolDescriptors.push(scanTool.descriptor);
     const materializeTool = createRepositoryMaterializeTool({ resourceTool: resourceToolOptions });
     executableTools.push(materializeTool);
     toolDescriptors.push(materializeTool.descriptor);
@@ -5071,6 +5118,7 @@ async function writeFlowCapture(
 function createPersistedSessionEventSink(
   store: AppServerSessionStore,
   sessionId: string,
+  attemptId: string | null,
   downstream: ResearchLiveEventSink | undefined,
 ): ResearchLiveEventSink {
   return async (event) => {
@@ -5086,7 +5134,7 @@ function createPersistedSessionEventSink(
       ?? randomUUID();
     const identifiedEvent = {
       ...event,
-      payload: { ...payload, eventId },
+      payload: { ...payload, eventId, ...(attemptId ? { attemptId } : {}) },
     };
     if (shouldPersistSessionEvent(identifiedEvent)) {
       store.appendEventReceipt(sessionId, {

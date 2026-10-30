@@ -78,6 +78,16 @@ export function remoteRunDetail(value: unknown): RunDetail | null {
     const attempt = asRecord(item);
     return attempt && string(attempt.startedAt) ? [attempt] : [];
   }) : [];
+  const projectedAttempts = attempts.flatMap((attempt) => {
+    const id = string(attempt.id);
+    const startedAt = string(attempt.startedAt);
+    return id && startedAt ? [{
+      id, runId: sessionId, parentAttemptId: string(attempt.parentAttemptId),
+      status: remoteRunStatus(string(attempt.status) ?? 'queued'),
+      shortState: string(attempt.summary) ?? '', seed: '', strategyRole: 'research',
+      cost: {}, tokenUsage: {}, startedAt, endedAt: string(attempt.endedAt)
+    }] : [];
+  });
   const rawIntervals = Array.isArray(session.activityIntervals)
     ? session.activityIntervals
     : attempts.map((attempt, index) => ({
@@ -204,8 +214,11 @@ export function remoteRunDetail(value: unknown): RunDetail | null {
       endedAt: string(session.endedAt)
     },
     ...(activityIntervals.length ? { activityIntervals } : {}),
-    attempts: [],
-    traceEvents,
+    attempts: projectedAttempts,
+    traceEvents: traceEvents.map((event) => ({ ...event,
+      attemptId: event.attemptId ?? [...projectedAttempts].reverse().find((attempt) =>
+        attempt.startedAt <= event.createdAt)?.id ?? null
+    })),
     transcriptMessages,
     artifacts: [],
     verifierContracts: [],

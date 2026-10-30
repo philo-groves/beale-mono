@@ -41,12 +41,19 @@ function remoteClaim(claim: BealeWorkspaceResearchClaim, workspaceId: string): A
     id: claim.id, surfaceId: claim.surfaceId ?? null, workspaceId, subjectId: '', memoryNodeId: null, originSessionId: null,
     projection: claim.projection, maturity,
     rating: claim.rating, classification: claim.classification,
+    componentClaimIds: claim.componentClaimIds ?? [],
     title: claim.title, summary: claim.summary, impact: claim.impact,
     stepsToReproduce: claim.stepsToReproduce,
     securityTracking: claim.securityTracking ? {
       ...claim.securityTracking,
       surfaceIds: claim.securityTracking.surfaceIds ?? [],
       progressBlocker: claim.securityTracking.progressBlocker ?? null,
+      reportability: claim.securityTracking.reportability
+        ? { ...claim.securityTracking.reportability, actorId: '' } : null,
+      triage: { blocker: claim.securityTracking.triage?.blocker
+        ? { ...claim.securityTracking.triage.blocker, actorId: '' } : null,
+      packet: claim.securityTracking.triage?.packet
+        ? { ...claim.securityTracking.triage.packet, claimBindingHash: '' } : null },
       reachability: { ...claim.securityTracking.reachability, evidenceIds: [], assessorId: null,
         sourceRevision: null, environmentFingerprint: null },
       cvssAssessments: claim.securityTracking.cvssAssessments.map((assessment) => ({
@@ -152,7 +159,6 @@ export function RemoteWorkspaceDetails({ serverId, details, providerModelCatalog
       initialView={initialView}
       rightAreaExpanded={selected !== null}
       readOnly
-      remoteTargets={details.targets}
       trackServerId={serverId}
       surfaceMap={details.surfaceMap}
       appServerMemory={memory}

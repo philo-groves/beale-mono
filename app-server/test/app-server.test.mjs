@@ -172,12 +172,17 @@ test('research starts without a workspace Git checkpoint', async () => {
   upstream.complete();
 });
 
-test('the app-server reserves a safe research-track epoch and retains its pause state', async () => {
+test('the app-server reserves a safe research-track epoch and marks a failed next launch as paused', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'beale-track-host-example-'));
   temporaryDirectories.push(directory);
   const registry = hostRegistryFixture(directory);
   registry.listWorkspaces = () => [{ workspaceId: 'workspace-test' }];
-  const hostService = new AppServerHostService({ registry });
+  const appended = [];
+  const hostService = new AppServerHostService({ registry, invokeProtocol: async (operation, options) => {
+    if (operation !== 'session.append_event') throw new Error('Unexpected protocol operation.');
+    appended.push(options.input);
+    return null;
+  } });
   const details = async () => ({
     scope: { id: 'scope-example', expiresAt: null },
     targets: [{ id: 'local', ready: true }],
@@ -201,17 +206,20 @@ test('the app-server reserves a safe research-track epoch and retains its pause 
   assert.equal(due[0].request.launch.guardianEnabled, true);
   assert.deepEqual(due[0].request.launch.targetIds, ['local']);
   assert.deepEqual(due[0].request.launch.collaboration, collaboration);
-  assert.match(due[0].request.launch.promptMarkdown, /Assigned surface: Example service/u);
-  assert.match(due[0].request.launch.promptMarkdown, /Map concrete subcomponents with stable noun names/u);
+  assert.match(due[0].request.launch.promptMarkdown, /Assigned component: Example service/u);
+  assert.match(due[0].request.launch.promptMarkdown, /pre-auth boundaries, sensitive memory/u);
   assert.match(due[0].request.launch.promptMarkdown, /Compare alternative explanations/u);
-  assert.match(due[0].request.launch.promptMarkdown, /Add structured attacker-path updates or validation details when they clarify the work/u);
-  assert.match(due[0].request.launch.promptMarkdown, /A bounded review can complete with open leads/u);
-  assert.match(due[0].request.launch.promptMarkdown, /use available browser tools/u);
+  assert.match(due[0].request.launch.promptMarkdown, /Dedicated track workers handle the existing finding/u);
+  assert.match(due[0].request.launch.promptMarkdown, /call track\.checkpoint/u);
   assert.equal((await hostService.workspaceResearchTrack('workspace-test', 'status')).activeSessionId,
     due[0].request.sessionId);
-  assert.equal((await hostService.workspaceResearchTrack('workspace-test', 'pause')).status, 'paused');
-  hostService.recordResearchTrackEpochLaunchFailure('workspace-test', due[0].request.sessionId, 'Example failure');
+  await hostService.recordResearchTrackEpochLaunchFailure('workspace-test', due[0].request.sessionId,
+    'SSH host key verification failed. Synthetic example failure.');
   assert.equal((await hostService.workspaceResearchTrack('workspace-test', 'status')).status, 'paused');
+  assert.equal(appended.length, 1);
+  assert.deepEqual(appended[0].payload, {
+    type: 'track_epoch_paused', cause: 'ssh_host_key', agentPath: '/root'
+  });
 });
 
 test('retiring the assigned surface ends its epoch and schedules remaining track work', async () => {
@@ -2367,6 +2375,7 @@ test("projects workspace memory into a path-free mobile catalog", async () => {
       status: "verified",
       staleFromStatus: null,
       classification: "security.vulnerability",
+      componentClaimIds: [],
       duplicateClaims: [{
         id: "claim-duplicate",
         projection: "lead",
@@ -2389,6 +2398,8 @@ test("projects workspace memory into a path-free mobile catalog", async () => {
         affectedAssetIds: ["asset-parser"],
         surfaceIds: [],
         progressBlocker: null,
+        reportability: null,
+        triage: { blocker: null, packet: null },
         externalReferences: [{ kind: "cwe", identifier: "CWE-362", url: "https://cwe.mitre.org/data/definitions/362.html" }],
       },
       confidence: 0.9,

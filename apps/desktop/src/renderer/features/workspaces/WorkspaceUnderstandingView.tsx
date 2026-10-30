@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, JSX } from 'react';
-import { BookOpen, Brain, Columns3, FileText, GitBranch, Info, ListChecks, Network, Plus, RefreshCw, Server, Settings, Trash2 } from 'lucide-react';
+import { BookOpen, Brain, Columns3, FileText, GitBranch, Info, ListChecks, Network, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react';
 import type { BealeWorkspaceResearchTrack, BealeWorkspaceSurfaceMap } from '@beale/app-server-runtime/protocol';
 import { isLiveResearchRunStatus, repositoryClonedDirectory } from '../../../shared/types';
 import { researchKitDefinition, researchKitLabel, researchKitResourceKey } from '../../../shared/researchKits';
@@ -34,7 +34,6 @@ import type { MapSurface } from '../../view-models/surfaceMap';
 import { errorMessage } from '../../lib/errors';
 import { renderTraceProseText } from '../traces/traceMarkup';
 import { WorkspaceDirectoriesField } from './WorkspaceDirectoriesWidget';
-import { WorkspaceTargetsPanel } from './WorkspaceTargetsPanel';
 import { CampaignBoardView } from './CampaignGraphView';
 import { WorkspaceSurfaceMap } from './WorkspaceSurfaceMap';
 import { WORKSPACE_ASSET_KINDS, WorkspaceAssetIcon, workspaceAssetKindLabel } from './WorkspaceResourceKinds';
@@ -44,7 +43,7 @@ import { WorkspaceTitleSearch, workspaceCatalogMatchesQuery } from './WorkspaceT
 
 const WORKSPACE_ACTIVITY_DAY_COUNT = 365;
 const DAY_DURATION_MS = 24 * 60 * 60 * 1_000;
-const WORKSPACE_DASHBOARD_VIEWS = ['campaign', 'surfaces', 'rules', 'targets', 'overview', 'kit'] as const;
+const WORKSPACE_DASHBOARD_VIEWS = ['campaign', 'surfaces', 'rules', 'overview', 'kit'] as const;
 const WORKSPACE_CAMPAIGN_VIEWS = ['board', 'memory', 'runbooks', 'reports'] as const;
 
 type WorkspaceTopLevelView = typeof WORKSPACE_DASHBOARD_VIEWS[number];
@@ -53,7 +52,6 @@ export type WorkspaceDashboardView = WorkspaceTopLevelView | WorkspaceCampaignVi
 
 const WORKSPACE_DASHBOARD_VIEW_ICONS: Record<WorkspaceTopLevelView, typeof Info> = {
   overview: Settings,
-  targets: Server,
   campaign: GitBranch,
   surfaces: Network,
   kit: RefreshCw,
@@ -218,7 +216,6 @@ export function WorkspaceUnderstandingView({
   initialView = 'board',
   rightAreaExpanded = false,
   readOnly = false,
-  remoteTargets,
   trackServerId,
   surfaceMap,
   selectedSurfaceId = null,
@@ -245,7 +242,6 @@ export function WorkspaceUnderstandingView({
   initialView?: WorkspaceDashboardView;
   rightAreaExpanded?: boolean;
   readOnly?: boolean;
-  remoteTargets?: readonly { id: string; name: string; ready: boolean }[];
   trackServerId?: string;
   surfaceMap?: BealeWorkspaceSurfaceMap | null;
   selectedSurfaceId?: string | null;
@@ -457,8 +453,6 @@ export function WorkspaceUnderstandingView({
         workspacePath={workspacePath}
         workspaceDirectories={workspaceDirectories ?? (workspacePath ? [workspacePath] : [])}
       /> : null}
-
-      {activeView === 'targets' ? <WorkspaceTargetsPanel workspaceId={workspaceId} workspaceName={activeScope?.workspaceName || workspaceName} disabled={busy} remoteTargets={remoteTargets} /> : null}
 
       {activeView === 'surfaces' ? <WorkspaceSurfaceMap
         map={visibleSurfaceMap}

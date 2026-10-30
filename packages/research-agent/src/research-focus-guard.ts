@@ -340,6 +340,11 @@ export class ResearchFocusGuard {
     }
   }
 
+  public replaceAuthoritativeUserSteering(messages: readonly string[]): void {
+    this.authoritativeUserSteering.splice(0);
+    this.noteAuthoritativeUserSteering(messages);
+  }
+
   public currentAuthoritativeUserSteering(): string[] {
     return [...this.authoritativeUserSteering];
   }

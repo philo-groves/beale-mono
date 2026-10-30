@@ -43,7 +43,9 @@ function displayFoundation(value: SurfaceFoundation | null): Surface['foundation
     openQuestions: Array.isArray(coverage.openQuestions) ? coverage.openQuestions : [],
     unexploredConnections: Array.isArray(coverage.unexploredConnections) ? coverage.unexploredConnections : []
   }, threatModelReviewed: hasThreatModelReview(value), discovery: typeof value.discovery === 'string' ? value.discovery : '',
+  scopeAssessment: value.scopeAssessment ?? null,
   ranking: value.ranking ?? null,
+  highValueSignals: Array.isArray(value.highValueSignals) ? value.highValueSignals : [],
   techStack: Array.isArray(value.techStack) ? value.techStack : [],
   assets: Array.isArray(value.assets) ? value.assets : [],
   bugHistory: { summary: value.bugHistory?.summary ?? '', limits: value.bugHistory?.limits ?? '',

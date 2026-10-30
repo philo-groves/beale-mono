@@ -74,7 +74,7 @@ describe('canonical session model usage projection', () => {
 
     expect(messages.map(({ kind, markerType, contentMarkdown }) => ({ kind, markerType, contentMarkdown }))).toEqual([{
       kind: 'marker', markerType: 'safeguard_recovery',
-      contentMarkdown: 'Cybersecurity safeguard encountered · Beale recovering'
+      contentMarkdown: 'Recovering from Cyber Safeguard'
     }]);
     expect(JSON.stringify(messages)).not.toContain('Sensitive provider diagnostic.');
   });
@@ -103,6 +103,31 @@ describe('canonical session model usage projection', () => {
     expect(JSON.stringify(messages)).not.toContain('Hidden example detail.');
   });
 
+  it('shows a failed next epoch as paused without projecting private diagnostics', () => {
+    const [trace] = traceFromSessionEvent('session_example', {
+      id: 'track_epoch_paused_example', kind: 'agent.event', timestamp: '2026-01-01T00:02:00.000Z',
+      summary: 'Research track paused while preparing the next epoch.',
+      payload: { type: 'track_epoch_paused', cause: 'ssh_host_key', agentPath: '/root',
+        internalDetail: 'Private example diagnostic.' }, agentPath: '/root'
+    }, 3);
+    const detail = {
+      run: { id: 'session_example', status: 'completed', model: 'example-model',
+        promptMarkdown: 'Review the authorized example service.', createdAt: '2026-01-01T00:00:00.000Z' },
+      attempts: [], traceEvents: [trace], transcriptMessages: [], breakoutRoomMessages: [],
+      modelSessions: [], contextCompactions: []
+    } as unknown as RunDetail;
+    const projected = projectRunDetailForRenderer(detail, { mode: 'commentary', agentPath: null });
+    expect(projected.traceEvents[0]?.payload.payload).toEqual({ type: 'track_epoch_paused',
+      cause: 'ssh_host_key', agentPath: '/root' });
+    const messages = commentaryMessagesForSession(
+      projected, buildTraceDisplayEventsForAgentPath(projected, null), { includeInitialPrompt: false }
+    );
+    expect(messages.map(({ kind, markerType, contentMarkdown }) => ({ kind, markerType, contentMarkdown }))).toEqual([{
+      kind: 'marker', markerType: 'epoch', contentMarkdown: 'Research Track Paused · SSH host key verification failed'
+    }]);
+    expect(JSON.stringify(messages)).not.toContain('Private example diagnostic.');
+  });
+
   it('renders a child agent diagram update from a canonical tool observation in the root session', () => {
     const source = 'flowchart LR\n  input["Example input"] --> parser["Example parser"]';
     const [trace] = traceFromSessionEvent('session_example', {
@@ -127,5 +152,6 @@ describe('canonical session model usage projection', () => {
     );
     expect(messages.find((message) => message.kind === 'diagram')?.surfaceDiagram)
       .toEqual({ source, surfaceId: 'surface-example', surfaceName: 'Example parser', changeKind: 'created' });
+    expect(messages.find((message) => message.kind === 'diagram')?.contentMarkdown).toBe('Example parser');
   });
 });

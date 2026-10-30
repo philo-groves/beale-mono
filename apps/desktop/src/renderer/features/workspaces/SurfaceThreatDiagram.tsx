@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type JSX } from 'react';
 import { createPortal } from 'react-dom';
-import { Maximize2, Minus, Plus, RotateCcw } from 'lucide-react';
+import { Maximize2, Minus, Network, Plus, RotateCcw } from 'lucide-react';
 import { Modal } from '../../app/Modal';
 import { clampDiagramView, INITIAL_DIAGRAM_VIEW, MAX_DIAGRAM_SCALE, zoomDiagramView,
   type DiagramViewport } from './threatDiagramViewport';
@@ -8,6 +8,11 @@ import { surfaceThreatDiagramConfig, type SurfaceDiagramTheme } from './surfaceT
 import { normalizeMermaidSvg } from './normalizeMermaidSvg';
 
 let nextRenderId = 0;
+
+function diagramTitle(name: string): string {
+  return name.replace(/(^|[^\p{L}\p{N}])(\p{L})/gu,
+    (_match, prefix: string, initial: string) => `${prefix}${initial.toUpperCase()}`);
+}
 
 function currentTheme(): SurfaceDiagramTheme {
   if (typeof document === 'undefined') return 'dark';
@@ -108,8 +113,8 @@ function ExpandedThreatDiagram({ url, surfaceName }: { url: string; surfaceName:
   </div>;
 }
 
-export function SurfaceThreatDiagram({ source, surfaceName }: {
-  source: string; surfaceName: string;
+export function SurfaceThreatDiagram({ source, surfaceName, presentation = 'surface' }: {
+  source: string; surfaceName: string; presentation?: 'session' | 'surface';
 }): JSX.Element {
   const id = `surface-threat-${useId().replace(/[^a-zA-Z0-9_-]/gu, '')}`;
   const [theme, setTheme] = useState(currentTheme);
@@ -159,6 +164,8 @@ export function SurfaceThreatDiagram({ source, surfaceName }: {
   if (!source.trim()) return <p className="workspace-surface-details-muted">No threat model diagram recorded.</p>;
   const url = rendered?.key === key ? rendered.url : undefined;
   const error = rendered?.key === key && rendered.error;
+  const title = diagramTitle(surfaceName);
+  const isSession = presentation === 'session';
   const diagram = url ? <img src={url} alt={`Threat model diagram for ${surfaceName}`}
     onError={() => setRendered({ key, error: true })} />
     : error ? <div className="workspace-surface-threat-diagram-error" role="status">
@@ -168,12 +175,22 @@ export function SurfaceThreatDiagram({ source, surfaceName }: {
       : <p className="workspace-surface-details-muted" role="status">Rendering diagram…</p>;
 
   return <>
-    <div className="workspace-surface-threat-diagram">
-      {diagram}
-      <button ref={expandButtonRef} className="workspace-surface-threat-diagram-expand" type="button"
-        aria-label={`Expand threat model diagram for ${surfaceName}`} title="Expand diagram" onClick={() => setExpanded(true)}>
-        <Maximize2 aria-hidden="true" size={16} />
-      </button>
+    <div className={`workspace-surface-threat-diagram-card${isSession ? ' is-session' : ''}`}>
+      <div className="workspace-surface-threat-diagram-header">
+        {isSession ? <span className="workspace-surface-threat-diagram-icon"><Network size={16} aria-hidden="true" /></span> : null}
+        <span className="workspace-surface-threat-diagram-name" title={title}>{title}</span>
+        <span className="workspace-surface-threat-diagram-type">
+          {isSession ? null : <Network size={14} aria-hidden="true" />}
+          Threat Model
+        </span>
+      </div>
+      <div className="workspace-surface-threat-diagram">
+        {diagram}
+        <button ref={expandButtonRef} className="workspace-surface-threat-diagram-expand" type="button"
+          aria-label={`Expand threat model diagram for ${surfaceName}`} title="Expand diagram" onClick={() => setExpanded(true)}>
+          <Maximize2 aria-hidden="true" size={16} />
+        </button>
+      </div>
     </div>
     {expanded ? createPortal(<Modal className="workspace-surface-threat-diagram-modal"
       title={`${surfaceName} threat model diagram`} onClose={() => setExpanded(false)}>

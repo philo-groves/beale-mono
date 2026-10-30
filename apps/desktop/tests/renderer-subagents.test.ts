@@ -456,6 +456,28 @@ describe('subagent trace view models', () => {
     expect(activeSubagentCount(subagents)).toBe(0);
   });
 
+  it('does not carry unresolved workers from an earlier Track attempt into the active attempt', () => {
+    const events = [traceEvent({
+      id: 'old-worker',
+      attemptId: 'attempt_previous',
+      createdAt: '2026-07-20T10:00:00.000Z',
+      payload: { type: 'subagent.activity', action: 'spawned', agentPath: '/root/worker', status: 'running' }
+    })];
+    const summaries = subagentSummaries(events, 'active', 'commentary', [], 'attempt_current');
+    expect(summaries[0]?.status).toBe('interrupted');
+    expect(subagentOverviewForEvents(events, 'active', 'attempt_current').activeCount).toBe(0);
+  });
+
+  it('does not treat a preview from an earlier attempt as a running worker', () => {
+    const previews = [{
+      agentPath: '/root/worker', message: 'Reviewing a synthetic finding.', sequence: 1,
+      createdAt: '2026-07-20T10:00:00.000Z'
+    }];
+    const summaries = subagentSummaries([], 'active', 'commentary', previews,
+      'attempt_current', '2026-07-20T11:00:00.000Z');
+    expect(summaries[0]?.status).toBe('interrupted');
+  });
+
   it('computes a lightweight subagent overview without full message previews', () => {
     const events = [
       traceEvent({

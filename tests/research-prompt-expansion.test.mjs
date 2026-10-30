@@ -53,11 +53,36 @@ test('research prompt expansion selects the profile default lane and validates b
     assert.equal(completions[0].model, 'grok-4.6');
     assert.equal(completions[0].effort, 'low');
     assert.match(completions[0].systemPrompt, /do not rewrite, soften, summarize, or repeat it/);
+    assert.doesNotMatch(completions[0].systemPrompt, /selected suggestion lane|\b(?:Discovery|Chaining|Reporting|Longshot)\b/);
     assert.equal(completions[0].authenticationPreferences.xai, 'api_key');
     const payload = JSON.parse(completions[0].prompt);
     assert.equal(payload.originalPrompt, 'Inspect request parsing.');
-    assert.equal(payload.researchProfile.lane.id, 'discovery');
+    assert.equal(payload.researchProfile.lane, undefined);
     assert.equal(payload.workspace.id, 'workspace-test');
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('an explicit suggestion category stays out of added research context', async () => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'app-server-prompt-expansion-lane-'));
+  try {
+    let request;
+    const result = await expandStoredResearchPrompt({
+      workspaceId: 'workspace-test', workspaceRoot, databasePath: ':memory:',
+      artifactDirectoryPath: join(workspaceRoot, 'artifacts'), researchProfileId: 'security-research',
+      memoryEnabled: false, phase: 'longshot', promptMarkdown: 'Inspect an authorized trust boundary.',
+      provider: { id: 'xai', model: 'grok-4.6' },
+    }, {
+      completeText: async (options) => {
+        request = options;
+        return { text: JSON.stringify({ promptMarkdown: 'The synthetic service accepts requests from principals with different access rights. Identify the input each principal controls, the authority decision that consumes it, and a comparison that would show whether protected data crosses that boundary. Preserve evidence of an ordinary authorized response as a control, and state the observed effect before estimating its broader impact.' }) };
+      },
+    });
+    assert.equal(result.phase, 'longshot');
+    assert.doesNotMatch(request.systemPrompt, /\bLongshot\b|selected suggestion lane/);
+    assert.doesNotMatch(request.prompt, /\bLongshot\b|"lane"|"workflowId"/);
+    assert.doesNotMatch(result.promptMarkdown, /\bLongshot\b/);
   } finally {
     rmSync(workspaceRoot, { recursive: true, force: true });
   }

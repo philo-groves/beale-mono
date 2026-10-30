@@ -404,7 +404,7 @@ describe('research profile host integration', () => {
               'Investigate how input validation affects the scoped service.'
             ], 'resp_memory_disabled_goals')
           : modelJsonResponse({
-              promptMarkdown: '# Security discovery\n\nInspect the authorized service, distinguish observations from inference, and preserve uncertainty.'
+              promptMarkdown: '# Security research\n\nInspect the authorized service, distinguish observations from inference, and preserve uncertainty.'
             }, 'resp_memory_disabled_prompt');
       }
     });
@@ -443,6 +443,11 @@ describe('research profile host integration', () => {
       const expansionPayload = modelRequestPayload(modelRequests[1]) as Record<string, unknown>;
       expect((expansionPayload.workspace as Record<string, unknown>).agentInstructions)
         .toContain('Investigate unauthorized cross-tenant effects on example.test.');
+      expect(String(modelRequests[1].instructions)).not.toMatch(/selected suggestion lane|\b(?:Discovery|Chaining|Reporting|Longshot)\b/);
+      expect((expansionPayload.requestedSession as Record<string, unknown>)).not.toHaveProperty('suggestionLane');
+      expect((expansionPayload.requestedSession as Record<string, unknown>)).not.toHaveProperty('mode');
+      expect(expansionPayload).not.toHaveProperty('researchProfile.suggestionLane');
+      expect(JSON.stringify(expansionPayload)).not.toMatch(/"laneInstructions"|"suggestionLane"/);
       for (const request of modelRequests) {
         expect(String(request.instructions)).not.toMatch(/app-server memory|recorded memories|active memory/i);
         const payload = modelRequestPayload(request);

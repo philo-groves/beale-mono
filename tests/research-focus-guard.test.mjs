@@ -632,6 +632,15 @@ test("research focus guard preserves authoritative user steering across state re
   assert.doesNotMatch(restored.compactionCheckpoint("native", 2), /Produce new work/);
 });
 
+test("research focus guard drops removed steering from later persisted reminders", () => {
+  const objective = "Review the example parser.";
+  const guard = new ResearchFocusGuard({ objective });
+  guard.noteAuthoritativeUserSteering(["Review the original fixture."]);
+  guard.replaceAuthoritativeUserSteering(["Review the alternate fixture."]);
+  assert.deepEqual(guard.currentAuthoritativeUserSteering(), ["Review the alternate fixture."]);
+  assert.deepEqual(guard.exportState().authoritativeUserSteering, ["Review the alternate fixture."]);
+});
+
 test("research focus guard drops old entries instead of truncating the checkpoint envelope", () => {
   const guard = new ResearchFocusGuard();
   for (let turn = 1; turn <= 16; turn += 1) {

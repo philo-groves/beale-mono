@@ -11,6 +11,7 @@ import {
   decodeResearchCollaborationConfig,
   ResearchTopicStore,
   subagentRuntimeFactoryForMode,
+  trackSubagentRuntimeFactory,
   SubagentManager,
 } from "../packages/research-agent/dist/index.js";
 
@@ -59,6 +60,133 @@ test("subagent orchestration accepts an opt-in runtime without changing the defa
     subagentRuntimeFactory: alternateFactory,
   });
   assert.deepEqual(executor.collaborationTools, toolDescriptors);
+});
+
+test("track workers launch with dedicated roles and fresh context", async () => {
+  const requests = [];
+  const activities = [];
+  const runtime = createSubagentRuntime({
+    rootProvider: "openai", rootModel: "root-model", collaboration: advancedCollaboration(),
+    allowManualDelegation: false,
+    onActivity(activity) { activities.push(activity); },
+    async run(request) { requests.push(request); return resultFor(request, "Example assignment complete."); },
+  }, trackSubagentRuntimeFactory);
+  for (const role of ["investigator", "chain_analyst", "triager", "reporter"]) {
+    runtime.spawnTrackWorker({ role, claimId: `claim-example-${role}`, claimRevision: 2, surfaceId: null });
+  }
+  await runtime.settle();
+  assert.deepEqual(requests.map((request) => request.role).sort(),
+    ["chain_analyst", "investigator", "reporter", "triager"]);
+  for (const request of requests) {
+    assert.equal(request.freshSubagentContext, true);
+    assert.deepEqual(request.inheritedMessages, []);
+    assert.match(request.prompt, /Canonical finding: claim-example-/);
+    assert.match(request.prompt, /Responsibility:/);
+  }
+  assert.deepEqual(activities.filter((activity) => activity.type === 'spawned')
+    .map((activity) => [activity.role, activity.trackClaimId]).sort(), [
+    ['chain_analyst', 'claim-example-chain_analyst'],
+    ['investigator', 'claim-example-investigator'],
+    ['reporter', 'claim-example-reporter'],
+    ['triager', 'claim-example-triager'],
+  ]);
+});
+
+test("track sessions can spawn an independent reviewer through automatic and explicit collaborator routes", async () => {
+  const requests = [];
+  const runtime = createSubagentRuntime({
+    rootProvider: "openai", rootModel: "root-model",
+    collaboration: {
+      ...advancedCollaboration(),
+      providers: [
+        { provider: "openai", model: "scout-model", reasoningEffort: "high", enabled: true, roles: ["discoverer", "prover"] },
+        { provider: "anthropic", model: "review-model", reasoningEffort: "high", enabled: true, roles: ["reviewer"] },
+      ],
+    },
+    async run(request) { requests.push(request); return resultFor(request, "Example review complete."); },
+  }, trackSubagentRuntimeFactory);
+  const spawn = runtime.createTools("root").find((tool) => tool.name === "spawn_agent");
+  assert.ok(spawn);
+  assert.ok(spawn.parameters.properties.role.enum.includes("prover"));
+  assert.ok(spawn.parameters.properties.role.enum.includes("reviewer"));
+
+  await spawn.execute("automatic_review_route", {
+    task_name: "independent_review", message: "Review the synthetic finding evidence.",
+    role: "reviewer", fork_turns: "none",
+  });
+  await spawn.execute("explicit_review_route", {
+    task_name: "explicit_review", message: "Challenge the synthetic reproduction.",
+    role: "reviewer", provider: "anthropic", model: "review-model", fork_turns: "none",
+  });
+  await runtime.settle();
+
+  assert.deepEqual(requests.map((request) => [request.role, request.provider, request.model]), [
+    ["reviewer", "anthropic", "review-model"],
+    ["reviewer", "anthropic", "review-model"],
+  ]);
+  assert.ok(requests.every((request) => request.freshSubagentContext && request.inheritedMessages.length === 0));
+  assert.ok(requests.every((request) => request.prompt.includes("Independently review the finding and its reproduction.")));
+});
+
+test("each track worker may spawn one fresh Reviewer and its child cannot delegate", async () => {
+  const requests = [];
+  const runtime = createSubagentRuntime({
+    rootProvider: "openai", rootModel: "root-model",
+    limits: { maxThreads: 1, maxDepth: 1 },
+    collaboration: { ...advancedCollaboration(), maxConcurrentRooms: 1, maxMembersPerRoom: 1 },
+    async run(request) {
+      requests.push(request);
+      const tools = toolsFromRequest(request);
+      if (request.depth === 1) {
+        assert.ok(tools.spawn_agent);
+        assert.match(request.prompt, /You may spawn one subagent/);
+        await tools.spawn_agent.execute(`review_${request.id}`, {
+          task_name: "reviewer", message: "Independently review the synthetic finding.",
+          role: "reviewer", fork_turns: "none",
+        });
+        await assert.rejects(tools.spawn_agent.execute(`extra_${request.id}`, {
+          task_name: "extra", message: "Attempt another child.", role: "reviewer", fork_turns: "none",
+        }), /already spawned its one subagent/);
+        assert.equal(runtime.createTools(request.id).some((tool) => tool.name === "spawn_agent"), false);
+      } else {
+        assert.equal(request.depth, 2);
+        assert.equal(request.role, "reviewer");
+        assert.equal(request.freshSubagentContext, true);
+        assert.deepEqual(request.inheritedMessages, []);
+        assert.equal(tools.spawn_agent, undefined);
+      }
+      return resultFor(request, "Example assignment complete.");
+    },
+  }, trackSubagentRuntimeFactory);
+  runtime.spawnTrackWorker({ role: "investigator", claimId: "claim-example-one", claimRevision: 1, surfaceId: null });
+  runtime.spawnTrackWorker({ role: "investigator", claimId: "claim-example-two", claimRevision: 1, surfaceId: null });
+  await runtime.settle();
+  assert.deepEqual(requests.map((request) => request.role).sort(),
+    ["investigator", "investigator", "reviewer", "reviewer"]);
+  assert.deepEqual(requests.map((request) => request.depth).sort(), [1, 1, 2, 2]);
+});
+
+test("track worker reservations have capacity under a legacy solo collaboration limit", async () => {
+  const requests = [];
+  const runtime = createSubagentRuntime({
+    rootProvider: "openai", rootModel: "root-model",
+    collaboration: { ...advancedCollaboration(), maxMembersPerRoom: 1, maxConcurrentRooms: 1 },
+    async run(request) { requests.push(request); return resultFor(request, "Example assignment complete."); },
+  }, trackSubagentRuntimeFactory);
+  runtime.spawnTrackWorker({ role: "investigator", claimId: "claim-example-one", claimRevision: 1, surfaceId: null });
+  runtime.spawnTrackWorker({ role: "triager", claimId: "claim-example-two", claimRevision: 1, surfaceId: null });
+  await runtime.settle();
+  assert.deepEqual(requests.map((request) => request.role).sort(), ["investigator", "triager"]);
+});
+
+test("a synchronous track worker launch failure leaves no empty agent entry", () => {
+  const runtime = createSubagentRuntime({
+    rootProvider: "openai", rootModel: "root-model",
+    run() { throw new Error("Synthetic runner initialization failed."); },
+  }, trackSubagentRuntimeFactory);
+  assert.throws(() => runtime.spawnTrackWorker({ role: "investigator", claimId: "claim-example-one",
+    claimRevision: 1, surfaceId: null }), /runner initialization failed/);
+  assert.deepEqual(runtime.snapshot().agents, []);
 });
 
 test("advanced subagent mode retains direct controls and requires explicit delegation roles", async () => {

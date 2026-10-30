@@ -255,10 +255,10 @@ test("the bundled Security profile separates claim classifications from knowledg
     ["invariant", "mitigation", "sink", "trajectory"],
   );
   assert.deepEqual(security.claims.classifications.map((classification) => classification.id),
-    ["security.vulnerability"]);
+    ["security.vulnerability", "security.primitive", "security.chain"]);
 });
 
-test("stored security profiles hide retired split classifications from active guidance", () => {
+test("stored security profiles expose bundled Primitive and Chain classifications", () => {
   const stored = normalizeResearchProfile({
     ...DEFAULT_SECURITY_RESEARCH_PROFILE,
     agent: { ...DEFAULT_SECURITY_RESEARCH_PROFILE.agent, memoryInstructions: [
@@ -266,17 +266,18 @@ test("stored security profiles hide retired split classifications from active gu
       "Represent composition with componentClaimIds on security.chain and security.primitive findings.",
     ] },
     claims: { classifications: [
-      ...DEFAULT_SECURITY_RESEARCH_PROFILE.claims.classifications,
+      DEFAULT_SECURITY_RESEARCH_PROFILE.claims.classifications[0],
       { id: "security.primitive", name: "Legacy isolated", pluralName: "Legacy isolated", description: "Legacy classification.", defaultProjection: "finding", order: 20 },
       { id: "security.chain", name: "Legacy composite", pluralName: "Legacy composite", description: "Legacy classification.", defaultProjection: "finding", composite: true, order: 30 },
     ] },
   });
   const originalHash = researchProfileHash(stored);
-  assert.deepEqual(effectiveClaimClassifications(stored).map((classification) => classification.id), ["security.vulnerability"]);
+  assert.deepEqual(effectiveClaimClassifications(stored).map((classification) => classification.id),
+    ["security.vulnerability", "security.primitive", "security.chain"]);
   assert.equal(researchProfileHash(stored), originalHash);
   const prompt = createResearchSystemPrompt({ hasTools: true, pluginCatalog: pluginCatalog("beale-knowledge", "beale-claims"), researchProfile: stored, promptTemplate: "{{boundary}}\n{{memory}}\n{{claims}}" });
   assert.match(prompt, /security\.vulnerability/);
-  assert.doesNotMatch(prompt, /security\.primitive|security\.chain|componentClaimIds/);
+  assert.match(prompt, /security\.primitive|security\.chain|componentClaimIds/);
 });
 
 test("memory, claims, and runbook prompt sections follow enabled optional features", () => {
@@ -372,10 +373,16 @@ test("suggestion lanes do not constrain live collaboration guidance", () => {
   assert.doesNotMatch(securityPrompt, /Construction Explorer/);
 });
 
-test("Longshot remains a suggestion lane and is absent from live prompts", () => {
-  const securityPrompt = createResearchSystemPrompt({ hasTools: true, hasCollaborationTools: true, researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, workflowId: "longshot" });
-
-  assert.doesNotMatch(securityPrompt, /Longshot|reportable high or critical impact|Security discovery cell/);
+test("suggestion categories do not change live research prompts", () => {
+  const promptFor = (workflowId) => createResearchSystemPrompt({
+    hasTools: true, hasCollaborationTools: true,
+    researchProfile: DEFAULT_SECURITY_RESEARCH_PROFILE, workflowId,
+  });
+  const baseline = promptFor('discovery');
+  for (const workflowId of ['chaining', 'reporting', 'longshot']) {
+    assert.equal(promptFor(workflowId), baseline);
+  }
+  assert.doesNotMatch(baseline, /selected suggestion lane|Exploit-chain cell|Longshot/);
 });
 
 test("research profile validation rejects silent schema drift", () => {

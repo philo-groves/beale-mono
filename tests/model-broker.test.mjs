@@ -48,6 +48,20 @@ test('brokered runtime model resolution does not require guest provider credenti
   }
 });
 
+test('brokered models stop polling after the completion deadline', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => init?.method === 'POST'
+    ? Response.json({}) : Response.json({ state: 'pending' });
+  try {
+    const model = { provider: 'openai-codex', id: 'model-example', api: 'openai-codex-responses' };
+    const models = brokeredModels({ getModel: () => model }, {
+      url: 'http://127.0.0.1:12345/broker', token: 'synthetic-session-token', completionTimeoutMs: 20
+    });
+    await assert.rejects(models.completeSimple(model, { systemPrompt: 'Synthetic prompt', messages: [] }),
+      /timed out/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('broker preflight rejects subscription SDK paths before a VM is cloned', async () => {
   await assert.rejects(verifyBrokerModelAccess('anthropic', 'model-example', {}), /cannot yet run/);
   await assert.rejects(verifyBrokerModelAccess('zai', 'model-example', { zai: 'subscription' }), /cannot yet run/);

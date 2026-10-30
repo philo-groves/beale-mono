@@ -488,14 +488,16 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
     reportInstructions: [
       "List existing workspace reports before creating one.",
       "Do not create a report from unverified findings. Establish demonstrated reachability and impact on the finding being reported.",
-      "Create a report only for a verified security finding that meets proof-of-vulnerability and independent-review requirements. Pass that finding as sourceFindingId to report.create; the tool rejects premature reports.",
+      "For a verified finding, assess program scope, minimum security impact, and applicable rules before reporting. Record Reportable or Not Reportable with policy references; leave it Unknown while policy evidence is missing.",
+      "For a Reportable finding, build a policy-compliant portable PoC ZIP with README.md, manifest.json, and poc/ files. Verify the current reproduction runbook on a distinct authorized environment, then accept the ZIP through triage.package. Record a concrete triage blocker when a complete packet cannot be built.",
+      "Create a report only for a verified, Reportable finding with a current accepted triage packet. Pass that finding as sourceFindingId to report.create; the tool reuses the packet and rejects premature reports.",
       "Write for a triager who has never worked on the affected subsystem. Use normal language first, define product-specific terms before relying on them, and avoid semantic cramming, unnecessary jargon, and overusing security vocabulary.",
       "Order security reports as: Impact summary; How the affected system works; Vulnerability chain; Impact and affected systems; Reproduction using the attached submission packet; Technical root cause; Remediation and regression coverage.",
       "The impact summary must state who can trigger the issue, the triggering action, the affected deployment or components, the demonstrated security outcome, and the strongest verified limitation before implementation details.",
       "The system explanation must describe the relevant components, objects, trust or ownership boundary, normal data flow, and violated invariant as if the triager is unfamiliar with the subsystem.",
       "Present the chain as a readable narrative followed by numbered state transitions. Separate demonstrated consequences from plausible downstream consequences and preserve material limitations.",
       "Put complete scripts and bulky evidence in submission.zip. In the report, name the packet, state its hash and prerequisites, give one exact entry command, enumerate the proof actions and decisive expected output, include independent rerun and cleanup results, and point to packet files for deeper inspection.",
-      "Create submission.zip inside the active workspace and pass submissionPacketPath to report.create. app-server imports the candidate packet into durable report storage; a security report is not complete without it.",
+      "The accepted triage ZIP is the submission packet. Reporting reuses that durable packet and must not rebuild or silently replace it.",
       "Reports are Markdown artifacts, not memories. Keep each one coherent and standalone, and mark it stale when superseded or no longer accurate.",
     ],
   },
@@ -534,6 +536,8 @@ export const DEFAULT_SECURITY_RESEARCH_PROFILE: ResearchProfile = {
   claims: {
     classifications: [
       { id: "security.vulnerability", name: "Security Finding", pluralName: "Security Findings", description: "One identifiable security weakness or exploitation path. Keep its observations, reachability, reproduction, and impact evidence on the same finding.", defaultProjection: "finding", order: 10, icon: "flask-conical" },
+      { id: "security.primitive", name: "Primitive", pluralName: "Primitives", description: "An independently demonstrated security flaw or exploitation capability. Preserve the underlying mechanism and its evidence on one finding.", defaultProjection: "finding", order: 11, icon: "flask-conical" },
+      { id: "security.chain", name: "Chain", pluralName: "Chains", description: "A demonstrated composition of security capabilities with an end-to-end attacker path and impact. Link its component findings and prove the composition.", defaultProjection: "finding", composite: true, order: 12, icon: "flask-conical" },
     ],
   },
   workflows: [
@@ -639,17 +643,17 @@ export function bundledResearchProfile(_profileId: BundledResearchProfileId): Re
 }
 
 export function canonicalClaimClassificationId(id: string): string {
-  return id === "security.primitive" || id === "security.chain" ? "security.vulnerability" : id;
+  return id;
 }
 
-/** Hide retired security split classifications in stored profile snapshots without changing their provenance hash. */
+/** Make the bundled security classifications available to older stored profiles without changing their provenance hash. */
 export function effectiveClaimClassifications(profile: ResearchProfile): readonly ResearchProfileClaimClassification[] {
   if (profile.id !== "security-research") return profile.claims.classifications;
-  return [
-    DEFAULT_SECURITY_RESEARCH_PROFILE.claims.classifications[0]!,
-    ...profile.claims.classifications.filter((classification) =>
-      canonicalClaimClassificationId(classification.id) !== "security.vulnerability"),
-  ];
+  const byId = new Map(profile.claims.classifications.map((classification) => [classification.id, classification]));
+  for (const classification of DEFAULT_SECURITY_RESEARCH_PROFILE.claims.classifications) {
+    byId.set(classification.id, classification);
+  }
+  return [...byId.values()].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
 }
 
 export function getDefaultResearchProfilePath(workspaceRoot: string = process.cwd()): string {

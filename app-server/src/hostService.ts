@@ -33,7 +33,7 @@ import {
   decodeFleetSshTestInput
 } from '@beale/app-server-runtime/protocol';
 import { getProviderModelCatalog, refreshOpenRouterModels, readWorkspaceProject, readWorkspaceResearchCacheState, resolveStoredResearchWorkspaceBinding, workspaceResearchIndexNeedsRebuild } from '@beale/app-server-runtime/runtime-services';
-import { applyFeaturePromptOverrides, bundledPluginsRequiredByResearchKit, decodeResearchPluginCatalog, researchKitsRequiringBundledPlugin, validateResearchSystemPromptTemplate, verifyBrokerModelAccess, ResearchResourceCatalog, ResearchTrackStore, type ResearchTrackEpochFocus, type ResearchTrackSurfaceState, type ResearchTrackSurfaceProjection } from '@beale/research-agent';
+import { applyFeaturePromptOverrides, bundledPluginsRequiredByResearchKit, decodeResearchPluginCatalog, researchKitsRequiringBundledPlugin, validateResearchSystemPromptTemplate, verifyBrokerModelAccess, ResearchResourceCatalog, ResearchTrackStore, TrackFunnelStore, type ResearchTrackEpochFocus, type ResearchTrackSurfaceState, type ResearchTrackSurfaceProjection } from '@beale/research-agent';
 import { runWorkspaceCheckpoint, workspaceOperationKey } from './workspaceCheckpoints.js';
 import { projectWorkspaceDetails } from './workspaceDetails.js';
 import { readWorkspaceSurfaceMap } from './surfaceMap.js';
@@ -1360,23 +1360,33 @@ export class AppServerHostService {
     const store = new ResearchTrackStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
     try {
       if (action === 'status') {
+        const withWorkers = (track: BealeWorkspaceResearchTrack | null): BealeWorkspaceResearchTrack | null => {
+          if (!track) return null;
+          if (!track.activeSessionId) return { ...track, workers: [] };
+          const funnel = new TrackFunnelStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
+          try { return { ...track, workers: funnel.cardsForSession(track.activeSessionId) }; }
+          finally { funnel.close(); }
+        };
         const track = store.get();
         if (!track) return null;
         if (workspace.memoryBackend === 'disabled' && track.status === 'running') {
-          return store.pauseWithError('Workspace memory was disabled. Re-enable memory before resuming the research track.');
+          return withWorkers(store.pauseWithError('Workspace memory was disabled. Re-enable memory before resuming the research track.'));
         }
-        if (workspace.memoryBackend === 'disabled') return track;
+        if (workspace.memoryBackend === 'disabled') return withWorkers(track);
         const context = await this.workspaceResearchTrackContext(workspace);
         const current = store.syncSurfaces(context.surfaceMap.surfaces)!;
         if (current.status === 'running' && (!context.scope || context.scope.id !== current.scopeId
           || context.scope.expiresAt && Date.parse(context.scope.expiresAt) <= Date.now())) {
-          return store.pauseWithError('The authorized scope changed. Review the workspace before resuming.');
+          return withWorkers(store.pauseWithError('The authorized scope changed. Review the workspace before resuming.'));
         }
         if (current.status === 'running' && current.activeSessionId && current.activeSurfaceId
           && !context.surfaceMap.surfaces.some((surface) => surface.id === current.activeSurfaceId)) {
-          return store.finishEpoch(current.activeSessionId, true, undefined, { countNoProgress: false });
+          const finished = store.finishEpoch(current.activeSessionId, true, undefined, { countNoProgress: false });
+          const funnel = new TrackFunnelStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
+          try { funnel.finishSession(current.activeSessionId); } finally { funnel.close(); }
+          return withWorkers(finished);
         }
-        return current;
+        return withWorkers(current);
       }
       if (action === 'pause' || action === 'stop') return store.control(action);
       if (workspace.memoryBackend === 'disabled') throw new Error('Enable workspace memory before starting or resuming a research track.');
@@ -1430,18 +1440,25 @@ export class AppServerHostService {
   }
 
   public async dueResearchTracks(at = new Date(), activeSessionIds: ReadonlySet<string> = new Set(),
-    busyWorkspaceIds: ReadonlySet<string> = new Set()): Promise<DueAppServerAutomation[]> {
+    busyWorkspaceIds: ReadonlySet<string> = new Set(), workspaceId?: string): Promise<DueAppServerAutomation[]> {
     const due: DueAppServerAutomation[] = [];
     for (const summary of this.registry.listWorkspaces()) {
+      if (workspaceId && summary.workspaceId !== workspaceId) continue;
       const workspace = this.registry.resolveWorkspace(summary.workspaceId);
       if (!workspace) continue;
       const storage = this.registry.storageForProfile(workspace.researchProfileId);
       const store = new ResearchTrackStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
+      const finishRecoveredWorkers = (sessionId: string): void => {
+        try {
+          const funnel = new TrackFunnelStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
+          try { funnel.finishSession(sessionId); } finally { funnel.close(); }
+        } catch (error) { console.warn('Could not release recovered track workers:', error); }
+      };
       try {
         let track = store.get();
         const recoveringPriorOrphan = track?.status === 'paused' && track.lastError === ORPHANED_TRACK_PAUSE_MESSAGE
           && track.activeSessionId === null;
-        if (!track || (track.status !== 'running' && !recoveringPriorOrphan)
+        if (!track || (!['running', 'waiting', 'complete'].includes(track.status) && !recoveringPriorOrphan)
           || busyWorkspaceIds.has(workspace.workspaceId)) continue;
         if (workspace.memoryBackend === 'disabled') {
           store.pauseWithError('Workspace memory was disabled. Re-enable memory before resuming the research track.');
@@ -1458,6 +1475,7 @@ export class AppServerHostService {
           && !details.surfaceMap.surfaces.some((surface) => surface.id === activeSurfaceId)) {
           store.syncSurfaces(details.surfaceMap.surfaces);
           store.finishEpoch(track.activeSessionId, true, undefined, { countNoProgress: false });
+          finishRecoveredWorkers(track.activeSessionId);
           continue;
         }
         const ready = new Set(details.targets.filter((target) => target.ready).map((target) => target.id));
@@ -1486,6 +1504,7 @@ export class AppServerHostService {
               const failed = session.status === 'failed';
               store.finishEpoch(track.activeSessionId, session.status === 'completed' || session.status === 'blocked',
                 failed ? 'The research worker failed. Open the failed session for details.' : undefined);
+              finishRecoveredWorkers(track.activeSessionId);
               if (failed) store.pauseWithError('The research worker failed. Open the failed session for details.');
             } else if (!hasRecentTrackSessionActivity(track.updatedAt, session, at)) {
               if (track.guardianEnabled && guardianEnabledForTrackSession(session)) {
@@ -1493,8 +1512,10 @@ export class AppServerHostService {
                 await this.markOrphanedTrackSessionForReview(track.activeSessionId, session, storage);
                 store.finishEpoch(track.activeSessionId, false, ORPHANED_TRACK_EPOCH_DIAGNOSTIC,
                   { countNoProgress: false });
+                finishRecoveredWorkers(track.activeSessionId);
               } else {
                 store.finishEpoch(track.activeSessionId, false, ORPHANED_TRACK_EPOCH_DIAGNOSTIC);
+                finishRecoveredWorkers(track.activeSessionId);
                 store.pauseWithError(ORPHANED_TRACK_PAUSE_MESSAGE);
               }
             }
@@ -1502,6 +1523,7 @@ export class AppServerHostService {
             if (guardianRecoveryPending) continue;
             if (at.getTime() - Date.parse(track.updatedAt) > 120_000) {
               store.finishEpoch(track.activeSessionId, false, 'The reserved research session was not found after recovery.');
+              finishRecoveredWorkers(track.activeSessionId);
               store.pauseWithError('The reserved research session was not found after recovery. Review the workspace before resuming.');
             }
           }
@@ -1509,18 +1531,37 @@ export class AppServerHostService {
           if (track?.activeSessionId || track?.status !== 'running') continue;
         }
         const sessionId = track.id;
-        const assignment = store.reserveNext(sessionId, details.surfaceMap.surfaces);
-        if (!assignment) continue;
-        const work = assignment.track.surfaces.find((item) => item.surfaceId === assignment.surface.id)!;
-        const continuing = assignment.track.epochCount > 1;
+        let workerCount = 0;
+        try {
+          const funnel = new TrackFunnelStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
+          try {
+            const collaboration = track.collaboration;
+            const maxMembers = typeof collaboration?.maxMembersPerRoom === 'number' ? collaboration.maxMembersPerRoom : 6;
+            const maxRooms = typeof collaboration?.maxConcurrentRooms === 'number' ? collaboration.maxConcurrentRooms : 1;
+            workerCount = funnel.reserveForSession(sessionId, track.epochCount + 1,
+              Math.max(1, Math.min(2, maxMembers * maxRooms))).length;
+          } finally { funnel.close(); }
+        } catch (error) {
+          const reason = `Track worker assignment failed: ${error instanceof Error ? error.message : String(error)}`;
+          store.pauseWithError(reason);
+          continue;
+        }
+        const assignment = track.status === 'running'
+          ? store.reserveNext(sessionId, details.surfaceMap.surfaces) : null;
+        if (!assignment && workerCount === 0) continue;
+        const epochTrack = assignment?.track ?? store.reserveWorkersOnly(sessionId);
+        const work = assignment?.track.surfaces.find((item) => item.surfaceId === assignment.surface.id);
+        const continuing = epochTrack.epochCount > 1;
         const contextReview = continuing
           ? await this.reviewResearchTrackEpochContext(workspace, storage, sessionId)
           : null;
-        const promptMarkdown = researchTrackEpochPrompt(assignment.track.id, assignment.track.pass,
-          assignment.track.epochCount, assignment.surface, work, assignment.focus,
-          details.surfaceMap.surfaces.length, assignment.track.targetIds, contextReview?.decision,
-          assignment.track.collaboration?.mode !== undefined && assignment.track.collaboration.mode !== 'solo',
-          workspace.researchKitId, recoveringPriorOrphan || assignment.track.lastError === ORPHANED_TRACK_EPOCH_DIAGNOSTIC);
+        const promptMarkdown = assignment && work
+          ? researchTrackEpochPrompt(epochTrack.id, epochTrack.pass,
+            epochTrack.epochCount, assignment.surface, work, assignment.focus,
+            details.surfaceMap.surfaces.length, epochTrack.targetIds, contextReview?.decision,
+            epochTrack.collaboration?.mode !== undefined && epochTrack.collaboration.mode !== 'solo',
+            workspace.researchKitId, recoveringPriorOrphan || epochTrack.lastError === ORPHANED_TRACK_EPOCH_DIAGNOSTIC)
+          : researchTrackWorkerEpochPrompt(epochTrack.id, epochTrack.epochCount, workerCount);
         due.push({ dueAt: at.toISOString(), request: { launchVersion: APP_SERVER_SESSION_LAUNCH_VERSION,
           sessionId, launch: { workspaceId: workspace.workspaceId,
             mode: 'research-track',
@@ -1539,6 +1580,12 @@ export class AppServerHostService {
       } catch (error) {
         const track = store.get();
         if (track?.activeSessionId) store.finishEpoch(track.activeSessionId, false, errorMessage(error));
+        if (track?.id) {
+          try {
+            const funnel = new TrackFunnelStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
+            try { funnel.cancelSession(track.id); } finally { funnel.close(); }
+          } catch (releaseError) { console.warn('Could not cancel track worker assignments:', releaseError); }
+        }
         store.pauseWithError(`Research track could not prepare the next surface: ${errorMessage(error)}`);
       } finally { store.close(); }
     }
@@ -1625,16 +1672,40 @@ export class AppServerHostService {
     } finally { store.close(); }
   }
 
-  public recordResearchTrackEpochLaunchFailure(workspaceId: string, sessionId: string, reason: string): void {
+  public async recordResearchTrackEpochLaunchFailure(workspaceId: string, sessionId: string, reason: string): Promise<void> {
     const workspace = this.requireWorkspace(workspaceId);
     const storage = this.registry.storageForProfile(workspace.researchProfileId);
     const store = new ResearchTrackStore({ databasePath: storage.databasePath, workspaceId });
+    let paused = false;
     try {
       if (store.get()?.activeSessionId === sessionId) {
         store.finishEpoch(sessionId, false, reason);
         store.pauseWithError(reason);
+        paused = true;
       }
     } finally { store.close(); }
+    const funnel = new TrackFunnelStore({ databasePath: storage.databasePath, workspaceId });
+    try { funnel.cancelSession(sessionId); } finally { funnel.close(); }
+    if (!paused) return;
+    try {
+      await this.invokeProtocol('session.append_event', {
+        args: ['session', 'append-event', '--session-id', sessionId], storage,
+        input: {
+          id: `track_epoch_paused_${randomUUID()}`,
+          kind: 'agent.event',
+          timestamp: new Date().toISOString(),
+          summary: 'Research track paused while preparing the next epoch.',
+          payload: { type: 'track_epoch_paused',
+            ...(reason.includes('SSH host key verification failed') ? { cause: 'ssh_host_key' } : {}),
+            agentPath: '/root' },
+          agentPath: '/root'
+        }
+      });
+    } catch (error) {
+      if (!(error instanceof Error && error.message.startsWith('Session not found:'))) {
+        console.warn('Could not record research track pause marker:', error);
+      }
+    }
   }
 
   public async recordSessionControlState(input: {
@@ -1726,7 +1797,7 @@ export class AppServerHostService {
       const assigned = input.request.launch.mode === 'research-track'
         && track?.activeSessionId === input.sessionId;
       if (assigned) {
-        const checkpointed = track.surfaces.some((work) => work.surfaceId === track.activeSurfaceId
+        const checkpointed = !track.activeSurfaceId || track.surfaces.some((work) => work.surfaceId === track.activeSurfaceId
           && work.status !== 'active');
         const workerFailure = input.state === 'failed' ? input.diagnostic?.trim() || 'The research worker failed.' : null;
         const diagnostic = workerFailure
@@ -1738,7 +1809,15 @@ export class AppServerHostService {
         if (workerFailure) trackStore.pauseWithError(workerFailure);
       }
     }
-    finally { trackStore.close(); }
+    finally {
+      trackStore.close();
+      if (recordTrackEpochMarker) {
+        try {
+          const funnel = new TrackFunnelStore({ databasePath: storage.databasePath, workspaceId: workspace.workspaceId });
+          try { funnel.finishSession(input.sessionId); } finally { funnel.close(); }
+        } catch (error) { console.warn('Could not release track worker assignments:', error); }
+      }
+    }
     if (recordTrackEpochMarker) {
       const eventId = `track_epoch_resolving_${input.attemptId}`;
       const timestamp = new Date().toISOString();
@@ -2335,6 +2414,7 @@ function pathFreeWorkspaceClaim(value: unknown): BealeWorkspaceMemoryCatalog['fi
     staleFromStatus: nonEmpty(claim.staleFromStatus),
     rating: researchClaimRating(claim.rating),
     classification,
+    componentClaimIds: stringArray(claim.componentClaimIds),
     duplicateClaims: Array.isArray(claim.duplicateClaims)
       ? claim.duplicateClaims.flatMap(pathFreeWorkspaceClaimDuplicate)
       : [],
@@ -2428,6 +2508,30 @@ function pathFreeClaimSecurityTracking(value: unknown): BealeWorkspaceClaimSecur
       ? { reason: nonEmpty((tracking.progressBlocker as Record<string, unknown>).reason) ?? '',
           setAt: nonEmpty((tracking.progressBlocker as Record<string, unknown>).setAt) ?? new Date(0).toISOString() }
       : null,
+    reportability: tracking.reportability && typeof tracking.reportability === 'object' && !Array.isArray(tracking.reportability)
+      ? (() => {
+          const item = tracking.reportability as Record<string, unknown>;
+          const decision = item.decision === 'reportable' || item.decision === 'not_reportable' ? item.decision : null;
+          return decision && nonEmpty(item.basis) && nonEmpty(item.assessedAt)
+            ? { decision, basis: nonEmpty(item.basis)!, policyRefs: stringArray(item.policyRefs), assessedAt: nonEmpty(item.assessedAt)! }
+            : null;
+        })()
+      : null,
+    triage: (() => {
+      const triage = tracking.triage && typeof tracking.triage === 'object' && !Array.isArray(tracking.triage)
+        ? tracking.triage as Record<string, unknown> : {};
+      const blocker = triage.blocker && typeof triage.blocker === 'object' && !Array.isArray(triage.blocker)
+        ? triage.blocker as Record<string, unknown> : null;
+      const packet = triage.packet && typeof triage.packet === 'object' && !Array.isArray(triage.packet)
+        ? triage.packet as Record<string, unknown> : null;
+      return { blocker: blocker && nonEmpty(blocker.reason) && nonEmpty(blocker.setAt)
+        ? { reason: nonEmpty(blocker.reason)!, setAt: nonEmpty(blocker.setAt)! } : null,
+        packet: packet && nonEmpty(packet.artifactId) && nonEmpty(packet.contentHash) && nonEmpty(packet.replayRunId)
+          && nonEmpty(packet.verifiedAt) && typeof packet.sizeBytes === 'number' && Number.isSafeInteger(packet.sizeBytes)
+          ? { artifactId: nonEmpty(packet.artifactId)!, contentHash: nonEmpty(packet.contentHash)!,
+              sizeBytes: packet.sizeBytes, replayRunId: nonEmpty(packet.replayRunId)!, verifiedAt: nonEmpty(packet.verifiedAt)! }
+          : null };
+    })(),
     externalReferences
   };
 }
@@ -2871,6 +2975,16 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
+function researchTrackWorkerEpochPrompt(trackId: string, epoch: number, workerCount: number): string {
+  return [
+    `# Research track finding work epoch ${epoch}`,
+    `Track ${trackId}; ${workerCount} downstream worker${workerCount === 1 ? '' : 's'} assigned.`,
+    'No discovery component is ready. Let the assigned finding workers resolve their claims. Read their results and direct messages before ending the turn.',
+    'Do not re-enter a cooling component or create speculative findings to fill the epoch. If you identify a concrete new authorized component, record it as a surface for a later discovery epoch.',
+    'There is no assigned track component to checkpoint in this epoch. Finish after the workers have settled and their remaining dependencies are durable.',
+  ].join('\n');
+}
+
 function researchTrackEpochPrompt(
   trackId: string,
   pass: number,
@@ -2885,60 +2999,27 @@ function researchTrackEpochPrompt(
   researchKitId?: string,
   reviewInterruptedEpoch = false
 ): string {
-  const linkedClaims = (ids: readonly string[] | undefined): string => !ids?.length ? 'none'
-    : `${ids.slice(0, 6).join(', ')}${ids.length > 6 ? `, and ${ids.length - 6} more` : ''}`;
-  const ranking = surface.foundation?.ranking;
+  const highValueSignals = surface.foundation?.highValueSignals ?? [];
   return [
-    `# Continuous research track epoch ${epoch}`,
-    `Track ${trackId}, pass ${pass}. The workspace currently contains ${surfaceCount} eligible security surfaces.`,
-    `Assigned surface: ${surface.name} (${surface.id}).`,
-    `Epoch focus: ${focus}.`,
-    ...(contextReview ? [contextReview.mode === 'resume'
-      ? 'Context transition: use retained model history when available. This epoch assignment supersedes earlier surface and work-direction instructions; use current canonical records when prior notes conflict.'
-      : `Context transition: start with fresh model context after ${contextReview.reason.replaceAll('_', ' ')}. Durable research state remains available; follow this assignment without repeating broad orientation.`] : []),
-    `Work direction: ${focus === 'depth'
-      ? 'advance a specific attacker path, lead, or finding toward a decisive result; use this component in its parent context when relevant'
-      : 'explore an underexamined resource or component for distinct attacker-controlled paths and trust boundaries'}.`,
-    `Linked open leads: ${linkedClaims(surface.coverageState.openLeadIds)}. Findings needing resolution: ${linkedClaims(surface.coverageState.unblockedFindingIds)}.`,
-    `Prior impact estimate: ${work.impact}. Prior theory: ${work.theory || 'Unexamined.'}`,
-    `Current actionability: ${work.actionabilityScore}/100.`,
-    `Current surface factors: ${ranking
-      ? (['impact', 'reachability', 'relevance', 'exposure', 'precedence'] as const)
-        .map((factor) => `${factor} ${ranking[factor].score}/10`).join(', ')
-      : 'unscored'}.`,
-    'When the surface is understood well enough, record all five 1–10 ranking factors (impact, reachability, relevance, exposure, precedence) with a concrete basis in surface.update foundation.ranking. Leave it unscored while important inputs are unknown; revise scores when evidence changes.',
-    `Prior validation: ${work.validation ? `${work.validation.environment}; target-dependent=${work.validation.targetDependent}; ${work.validation.reason}` : 'No target-validation result recorded.'}`,
-    `Next action: ${work.nextAction}`,
-    ...(work.angles.length ? [
-      'Prior attacker paths:',
-      ...work.angles.map((angle) => `- ${angle.name} [${angle.status}]: ${angle.vector
-        ? `Control: ${angle.vector.attackerControl}; boundary: ${angle.vector.trustBoundary}; possible failure: ${angle.vector.failureMode}; effect: ${angle.vector.unauthorizedEffect}.`
-        : 'Causal vector not yet recorded; map it before relying on this path.'} Proof: ${angle.proofQuestion} Next: ${angle.nextAction} Evidence: ${angle.evidenceRefs.join(', ') || 'none'}.`)
-    ] : ['No attacker paths have been recorded yet.']),
+    `# Research track discovery epoch ${epoch}`,
+    `Track ${trackId}, pass ${pass}; ${surfaceCount} eligible components.`,
+    `Assigned component: ${surface.name} (${surface.id}). ${focus === 'first' ? 'First engagement.' : 'Continuing engagement.'}`,
+    `High-value signals: ${highValueSignals.length ? highValueSignals.map((signal) => `${signal.kind}: ${signal.basis}`).join('; ') : 'none recorded; assess before assuming low value'}.`,
+    `Prior theory: ${work.theory || 'none'}. Next action: ${work.nextAction}.`,
+    `Validation: ${work.validation ? `${work.validation.environment}; target-dependent=${work.validation.targetDependent}; ${work.validation.reason}` : 'not yet assessed'}.`,
     `Selected execution targets: ${targetIds.join(', ')}.`,
-    ...(reviewInterruptedEpoch ? [
-      'Guardian recovery review: The prior worker ended without a terminal session record. Inspect the available prior attempt and durable workspace state before continuing. Identify work that was recorded, work that remains unverified, and the next safe proof step. Do not infer progress from the missing terminal record or repeat completed work merely to reconstruct context. Record the recovery assessment in the next durable checkpoint.'
-    ] : []),
+    ...(contextReview ? [contextReview.mode === 'resume'
+      ? 'This assignment supersedes earlier component directions. Use current durable records when old transcript context conflicts.'
+      : 'Fresh model context is in use. Continue from durable records without repeating general orientation.'] : []),
+    ...(reviewInterruptedEpoch ? ['Review the interrupted attempt and durable records before redoing any work. Record the remaining proof question.'] : []),
     '',
-    'Conduct one bounded research epoch on the assigned component. Inspect its existing notes and relevant evidence, then pursue the most promising authorized question. Map concrete subcomponents with stable noun names when that structure helps future work. Keep attack theories, experiments, and unanswered questions in notes or research records rather than adding them as surfaces. Use surface.focus to associate work with the component when useful. Compare alternative explanations and capture the observation that would distinguish them. Check nearby resources when they materially affect the current theory.',
-    ...(focus === 'depth' ? [
-      'Depth epoch: inspect the linked leads and findings, using surface.views for the full Recon and Analysis lists when the IDs above are truncated; use claim.get for candidate evidence and history. Pick the highest-value unresolved proof obligation. Establish attacker control, target reachability, and the unauthorized effect with a discriminating experiment where possible. Move a supported claim through the evidence and review gates; narrow, reject, or record a concrete blocker for a candidate when evidence warrants it. If this component has no linked claim, deepen one specific attacker path from the existing notes and checkpoint instead of repeating a general map. Finish with the exact remaining proof question.'
-    ] : [
-      'Breadth epoch: look for a distinct, in-scope path that the current board does not cover. Record a concrete lead when the attacker control, boundary, and possible effect form a testable theory. Add a surface only for a real component, not for a hypothesis. Avoid extending the inventory after the best new path is clear; leave its proof question ready for a depth epoch.'
-    ]),
-    ...(collaborationEnabled ? [
-      `Track collaboration: keep one complementary ${focus === 'breadth' ? 'depth' : 'breadth'} subagent active while useful work and capacity permit. Check active agents first and continue a suitable assignment rather than duplicating it. ${focus === 'breadth'
-        ? 'Give a distinct collaborator one existing lead, finding, or recorded attacker path to advance with a bounded proof or review question; in advanced mode, use a Prover for reproduction or a Reviewer only when independent verification is due.'
-        : 'Give a breadth scout a distinct underexamined in-scope surface to search for new attacker paths and leads; use the Discoverer role in advanced mode.'} Include the surface ID and canonical claim IDs when relevant. The lead alone records the track checkpoint for its assigned surface; collaborators record durable research and report results to the lead. Continue the primary epoch while they run, reconcile their durable results, and resolve active delegates before the final response. If no concrete complementary task or capacity exists, proceed with the primary work.`
-    ] : []),
-    'The listed resources are an inventory, not the whole authorization boundary. When source research reveals a distinct covered daemon, service, executable, API, or SDK, record it with resource.catalog discover and request Auto-Reviewed touch before substantive research. Do not leave a separate in-scope target only as a note beneath the current repository surface: an approved discovered resource becomes eligible for a later track epoch. Record the scope link; explicit exclusions still control. Official vendor APIs and SDKs may be covered even when their source was not attached. Third-party applications, customers, and accounts are not authorized just because they integrate with an in-scope vendor. Treat sample implementations as context unless independently included; prioritize the vendor-owned API or SDK behavior and impacts.',
-    'For a web-facing theory, use available browser tools to inspect the actual application behavior and test discriminating requests within the recorded authorization. Browser tools are exposed when the Browser feature is enabled; if no usable browser target exists, record that limit in the surface checkpoint. Do not substitute a broad crawl for threat-model reasoning.',
-    'Favor concrete source-to-sink reasoning and discriminating experiments over inventory scans. Follow privilege changes, object ownership, state transitions, and cross-component handoffs beyond obvious entry points. For the chosen path, state the observation that would support the suspected failure, an alternative harmless explanation, and a control or comparison that separates them. A missing prerequisite or unreachable target leaves the path open or blocked; it does not refute the mechanism. Search existing findings before creating a new one. Advance a candidate through the existing evidence, reproduction, independent-review, and report gates when authorized work can do so. A negative result must name its bounds and be recorded in durable memory before it supports ruling out an attacker path.',
-    'For target-dependent theories, prioritize a discriminating test on the authorized target or faithful device/VM. Localhost is useful for building harnesses and source-level checks, but a localhost run alone does not validate target behavior. Check target availability once, then use the target where possible. If unavailable, complete bounded source-level work that can still change the theory, record the exact target-validation gap in surface.update and the checkpoint next action, and defer to another in-scope surface when no distinct accessible proof step remains. Do not repeatedly run localhost proxies for the same blocked target question.',
-    ...(researchKitId === 'apple-security-bounty' ? [
-      'For iOS-specific behavior, inspect the Apple security device capability and use an authorized physical iPhone when one is available. Listing or describing a device is availability checking, not testing: when the theory can be exercised through an operator-built app, use the physical-iPhone install and launch tools and capture the observed result. The iOS Simulator is not a supported substitute. If device testing cannot be performed, state why in surface.update and the checkpoint next action; do not infer a negative on-device result from host tests.'
-    ] : []),
-    'Checkpoint at a useful stopping point, including when a proof reaches a result or needs an external prerequisite. Record a short assessment and a useful next action with track.checkpoint. For evidenceRefs, cite a parent workspace record as finding:<claim ID>, memory:<memory ID>, runbook:<runbook ID>, or report:<report ID>; do not use an evidence entry ID, trace ID, artifact ID, or file path. Use an empty list when no canonical record exists. Attacker-path evidenceRefs are included in the checkpoint automatically. Add structured attacker-path updates or validation details when they clarify the work; they are not required for every checkpoint. A bounded review can complete with open leads or unfinished child components. Use blocked only for a concrete external dependency; otherwise defer with a useful next step. After a successful checkpoint, end the epoch with only this neutral final sentence: "Epoch checkpoint recorded." Do not recap findings, evidence, IDs, or next steps in that final response; the durable records carry those details. If the checkpoint cannot be recorded, state the failure briefly instead.',
+    'First check whether this concrete component can affect an eligible deployed target under the recorded authorization and program rules. An in-scope repository alone does not establish that its tests, examples, tooling, or undeployed subcomponents are reportable. Use surface.update foundation.scopeAssessment only when a decision has a concrete policy or target-evidence reference. If the whole assigned component is not applicable, record not_applicable, call track.checkpoint with outcome exclude, and end the epoch before investigating or delegating on that component. If applicability is uncertain, leave it unassessed and investigate the missing scope fact; do not exclude by name alone.',
+    'Find a distinct, potentially high-impact attacker path on this component. Give priority to pre-auth boundaries, sensitive memory, historically vulnerable sinks, niche dependencies, default-reachable behavior, and other plausible authority or cross-principal transitions. Record evidence-backed high-value signals in surface.update; a signal is a research priority, not proof of a vulnerability. Compare alternative explanations and choose one discriminating observation or experiment. Do not spend the epoch inventorying after a concrete path is ready to test.',
+    'Stay with a productive path for the assigned epoch. A source read or metadata edit alone is not material progress; seek new evidence that changes reachability, impact, or the claim. The track scheduler will cool a component after two evidence-free checkpoints and rotate to another ready resource after three consecutive epochs when an alternative is ready. Persist the current proof question before rotation; do not return to an earlier resource during an epoch assigned elsewhere. General discovery scouts may inspect different components while the lead keeps this engagement; avoid overlapping assignments. Dedicated track workers handle the existing finding, chain, triage, and report queues when eligible work exists. Discovery may still record or deepen a candidate when that is necessary to establish the attacker path.',
+    ...(collaborationEnabled ? ['Use general research subagents for independent high-value scouting or a separable proof question when capacity permits. Check active agents before delegating. Resolve active delegates before finishing.'] : []),
+    'Research only within the recorded authorization. Use a real authorized target for target-dependent conclusions; localhost alone does not establish target behavior. Record a concrete blocker when a required target or policy prerequisite is unavailable. Add a separate surface only for a real component, not a hypothesis.',
+    ...(researchKitId === 'apple-security-bounty' ? ['For iOS-specific target behavior, use an authorized physical iPhone when available. A Simulator or host-only run does not establish on-device behavior.'] : []),
+    'At a useful stopping point, call track.checkpoint for the assigned component with the observed result, exact next proof question, and canonical evidence references. Keep validation details when a target gap remains. A bounded component review may complete while separate finding workers continue resolving its claims. After a successful checkpoint, end with only: "Epoch checkpoint recorded."',
   ].join('\n');
 }
 

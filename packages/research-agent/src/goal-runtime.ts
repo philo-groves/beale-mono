@@ -159,6 +159,11 @@ export class ResearchGoalRuntime {
     }
   }
 
+  public replaceAuthoritativeUserSteering(messages: readonly string[]): void {
+    this.authoritativeUserSteering.splice(0);
+    this.noteAuthoritativeUserSteering(messages);
+  }
+
   public continueAfterRootResponse(finalResponse = ""): AgentMessage[] {
     if (this.status !== "active") return [];
 

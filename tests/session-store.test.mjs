@@ -220,6 +220,37 @@ test("session store owns creation, lifecycle, capture import, and queries as one
   }
 });
 
+test("session store restores only steering that has not been removed", () => {
+  const store = new AppServerSessionStore({ databasePath: ":memory:" });
+  try {
+    store.create({
+      id: "session_steering", workspaceId: "workspace_example", attemptId: "attempt_example",
+      title: "Example session", prompt: "Inspect an example parser.",
+      provider: "openai-codex", model: "gpt-5.6-sol", reasoningEffort: "high",
+    });
+    for (const [requestId, instruction] of [
+      ["steer_one", "Inspect the example parser."],
+      ["steer_two", "Review the example decoder."],
+    ]) {
+      store.appendEvent("session_steering", {
+        id: `event_${requestId}`, kind: "beale.transcript", timestamp: "2026-08-01T00:00:00.000Z",
+        summary: "User steering added.", payload: {
+          record: { source: "user_steering", contentMarkdown: instruction, metadata: { controlRequestId: requestId } },
+        },
+      });
+    }
+    store.appendEvent("session_steering", {
+      id: "event_remove", kind: "beale.steering_removed", timestamp: "2026-08-01T00:01:00.000Z",
+      summary: "User steering removed.", payload: { targetRequestId: "steer_one" },
+    });
+    assert.deepEqual(store.getActiveSteering("session_steering"), [
+      { requestId: "steer_two", instruction: "Review the example decoder." },
+    ]);
+  } finally {
+    store.close();
+  }
+});
+
 test("session activity duration records each active period across pause and continuation", () => {
   const store = new AppServerSessionStore({ databasePath: ":memory:" });
   try {

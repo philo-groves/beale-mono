@@ -43,6 +43,23 @@ test('surface breakdown shows a scored pentagon with accessible factor values an
   expect(html).toContain('Synthetic related prior advisory.');
 });
 
+test('surface details explain scope exclusions inherited from a parent', () => {
+  const root: Surface = { ...surface('asset-example', null, null, true), foundation: {
+    ...surface('asset-example', null, null, true).foundation!,
+    scopeAssessment: { decision: 'not_applicable',
+      basis: 'The example policy excludes this demonstration component.', references: ['policy-example-section'] }
+  } };
+  const child = surface('parser', root.id, null, true);
+  const map: BealeWorkspaceSurfaceMap = { schemaVersion: 1, workspaceId: 'workspace-example',
+    surfaces: [root, child], agents: [] };
+  const html = renderToStaticMarkup(createElement(WorkspaceSurfaceDetails, {
+    surface: child, map, onClose: () => undefined
+  }));
+  expect(html).toContain('Surface status: Not applicable');
+  expect(html).toContain('Not applicable via asset-example');
+  expect(html).toContain('policy-example-section');
+});
+
 test('ancestors stay visible, while untouched branches stay hidden', () => {
   expect(filterSurfaceHierarchy(surfaces, '', false).map((item) => item.id))
     .toEqual(['asset-example', 'parser', 'sink', 'other-root']);
@@ -232,6 +249,11 @@ test('selected surface details show blockers, foundation state, and assigned cla
   }));
   expect(threatModel).toContain('aria-label="Threat model diagram"');
   expect(threatModel).not.toContain('<h3>Diagram</h3>');
+  expect(threatModel).not.toContain('workspace-surface-threat-diagram-card is-session');
+  expect(threatModel).toMatch(/workspace-surface-threat-diagram-card[\s\S]*workspace-surface-threat-diagram-header[\s\S]*Parser[\s\S]*lucide-network[\s\S]*Threat Model[\s\S]*workspace-surface-threat-diagram/);
+  expect(threatModel).not.toContain('workspace-surface-threat-diagram-divider');
+  expect(threatModel).toContain('title="Parser">Parser</span>');
+  expect(threatModel).toMatch(/workspace-surface-threat-diagram-type[\s\S]*lucide-network[\s\S]*Threat Model/);
   expect(threatModel).toContain('Rendering diagram…');
   expect(threatModel).toContain('aria-label="Expand threat model diagram for parser"');
   for (const title of ['Security Objectives', 'Risks', 'Assumptions', 'Invariants', 'Sinks', 'Mitigations']) {

@@ -705,8 +705,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         }
         if (action === 'start' || action === 'resume') {
           const result = await hostCall(() => hostService.workspaceResearchTrack(workspaceId, action, configuration));
-          setImmediate(() => void scanDueResearchTracks());
           sendJson(response, 200, { controlVersion: BEALE_APP_SERVER_CONTROL_VERSION, result: researchTrackWithPhase(result) });
+          setImmediate(() => void scanDueResearchTracks(workspaceId));
           return;
         }
       }
@@ -1151,12 +1151,18 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         : runtime.state === 'starting' ? 'preparing' : 'switching' };
   }
 
-  async function scanDueResearchTracks(): Promise<void> {
-    if (closing || researchTrackScanInProgress) return;
+  const pendingResearchTrackScans = new Set<string>();
+  async function scanDueResearchTracks(workspaceId?: string): Promise<void> {
+    if (closing) return;
+    if (researchTrackScanInProgress) {
+      if (workspaceId) pendingResearchTrackScans.add(workspaceId);
+      return;
+    }
     researchTrackScanInProgress = true;
     try {
       for (const runtime of sessions.values()) {
         if (runtime.request.launch.mode !== 'research-track' || isTerminal(runtime.state)) continue;
+        if (workspaceId && runtime.request.launch.workspaceId !== workspaceId) continue;
         if (Date.now() - Date.parse(runtime.startedAt) > 45 * 60_000) {
           runtime.trackRotationRequested = true;
           stopSession(runtime.sessionId, 'track_rotation');
@@ -1170,8 +1176,8 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       }
       const service = hostService as AppServerHostService & {
         dueResearchTracks?: (at?: Date, activeSessionIds?: ReadonlySet<string>,
-          busyWorkspaceIds?: ReadonlySet<string>) => Promise<Array<{ request: AppServerSessionLaunchRequest }>>;
-        recordResearchTrackEpochLaunchFailure?: (workspaceId: string, sessionId: string, reason: string) => void;
+          busyWorkspaceIds?: ReadonlySet<string>, workspaceId?: string) => Promise<Array<{ request: AppServerSessionLaunchRequest }>>;
+        recordResearchTrackEpochLaunchFailure?: (workspaceId: string, sessionId: string, reason: string) => Promise<void>;
       };
       if (typeof service.dueResearchTracks !== 'function') return;
       const activeSessionIds = new Set([...sessions.values()]
@@ -1181,19 +1187,26 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         .filter((runtime) => runtime.request.launch.mode === 'research-track'
           && (!isTerminal(runtime.state) || runtime.terminalPersistencePending))
         .map((runtime) => runtime.request.launch.workspaceId));
-      const tracks = await service.dueResearchTracks(new Date(), activeSessionIds, busyWorkspaceIds);
+      const tracks = await service.dueResearchTracks(new Date(), activeSessionIds, busyWorkspaceIds, workspaceId);
       for (const track of tracks) {
         const sessionId = track.request.sessionId;
         if (!sessionId || closing) break;
         try { await startSession(track.request, true); }
         catch (error) {
-          service.recordResearchTrackEpochLaunchFailure?.(track.request.launch.workspaceId, sessionId,
+          await service.recordResearchTrackEpochLaunchFailure?.(track.request.launch.workspaceId, sessionId,
             error instanceof Error ? error.message : String(error));
         }
       }
     } catch (error) {
       console.error('Research track scheduler failed:', error);
-    } finally { researchTrackScanInProgress = false; }
+    } finally {
+      researchTrackScanInProgress = false;
+      const nextWorkspaceId = pendingResearchTrackScans.values().next().value;
+      if (nextWorkspaceId) {
+        pendingResearchTrackScans.delete(nextWorkspaceId);
+        setImmediate(() => void scanDueResearchTracks(nextWorkspaceId));
+      }
+    }
   }
 
   function createSessionRuntime(
@@ -1673,10 +1686,10 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       );
       if (runtime.request.launch.mode === 'research-track') {
         const serviceWithTrackFailure = hostService as AppServerHostService & {
-          recordResearchTrackEpochLaunchFailure?: (workspaceId: string, sessionId: string, reason: string) => void;
+          recordResearchTrackEpochLaunchFailure?: (workspaceId: string, sessionId: string, reason: string) => Promise<void>;
         };
         try {
-          serviceWithTrackFailure.recordResearchTrackEpochLaunchFailure?.(
+          await serviceWithTrackFailure.recordResearchTrackEpochLaunchFailure?.(
             runtime.request.launch.workspaceId, runtime.sessionId,
             runtime.diagnostic ?? 'Could not persist the research track session state.');
         } catch { /* The next track scan detects an orphaned assignment. */ }

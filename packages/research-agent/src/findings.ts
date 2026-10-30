@@ -55,6 +55,7 @@ export interface CreateFindingInput {
   /** Optional source for compatibility with migrated memory-backed records. */
   memoryNodeId?: string;
   classification?: string;
+  componentClaimIds?: string[];
   title: string;
   summary?: string;
   impact?: string;
@@ -101,6 +102,7 @@ export interface ReviseResearchClaimInput {
   rating?: ResearchClaimRating;
   confidence?: number;
   classification?: string;
+  componentClaimIds?: string[];
   securityTracking?: FindingSecurityTrackingUpdate;
 }
 
@@ -128,6 +130,8 @@ export interface FindingSecurityTrackingUpdate {
   affectedAssetIds?: string[];
   surfaceIds?: string[];
   progressBlocker?: { reason: string } | null;
+  reportability?: { decision: "reportable" | "not_reportable"; basis: string; policyRefs: string[] } | null;
+  triageBlocker?: { reason: string } | null;
   externalReferences?: FindingExternalReference[];
 }
 
@@ -255,6 +259,7 @@ export class ResearchClaimStore {
       throw new Error("Observed findings require direct code, artifact, command, URL, calculation, proof, or publication evidence.");
     }
     const classification = claimClassification(input.classification ?? legacyClaimClassification(memory?.type));
+    const componentClaimIds = this.validatedComponents(classification, input.componentClaimIds ?? []);
     const assignedSurfaceId = input.surfaceId ?? surfaceId ?? memory?.surfaceId ?? null;
     const securityTracking = securityClassification(classification)
       ? { ...emptyFindingSecurityTracking(), surfaceIds: assignedSurfaceId ? [assignedSurfaceId] : [] } : null;
@@ -287,6 +292,7 @@ export class ResearchClaimStore {
         now,
         now,
       );
+      this.writeComponents(id, componentClaimIds, now);
       const evidenceIds = this.insertEvidence(id, evidence, now);
       this.insertTransition(id, 1, null, status, normalizedText(input.creationReason)
         ?? (status === "observed" ? "Observed finding created." : "Research lead created."), actorId ?? null, evidenceIds, now);
@@ -643,6 +649,9 @@ export class ResearchClaimStore {
       throw new Error(`Research claim revision conflict for ${id}: expected ${input.expectedRevision}, found ${current.revision}.`);
     }
     const classification = claimClassification(input.classification ?? current.classification);
+    const componentClaimIds = input.componentClaimIds === undefined && input.classification === undefined
+      ? current.componentClaimIds
+      : this.validatedComponents(classification, input.componentClaimIds ?? current.componentClaimIds, id);
     if (input.stepsToReproduce !== undefined
       && ["reproduced", "verified", "report_ready", "disclosed"].includes(current.status)
       && !normalizedText(input.stepsToReproduce)) {
@@ -678,8 +687,58 @@ export class ResearchClaimStore {
         current.revision,
       );
       if (Number(result.changes) !== 1) throw new Error(`Research claim revision conflict for ${id}.`);
+      if (input.componentClaimIds !== undefined) this.writeComponents(id, componentClaimIds, now);
       this.insertTransition(id, nextRevision, current.status, current.status, requiredText(input.reason, "Revision reason"), actorId ?? null, [], now);
       this.insertAuthor(id, nextRevision, author, now);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.get(id)!;
+  }
+
+  public recordTriagePacket(id: string, input: {
+    expectedRevision: number;
+    artifactId: string;
+    contentHash: string;
+    sizeBytes: number;
+    replayRunId: string;
+    reason: string;
+  }, author?: ModelAuthor, actorId?: string): FindingSummary {
+    const current = this.get(id);
+    if (!current) throw new Error(`Research claim not found: ${id}.`);
+    requireCanonicalClaim(current);
+    if (current.revision !== input.expectedRevision) throw new Error(`Research claim revision conflict for ${id}.`);
+    if (current.status !== "verified" || current.securityTracking?.reportability?.decision !== "reportable") {
+      throw new Error("Triage packets require a verified, reportable security finding.");
+    }
+    if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > 128 * 1024 * 1024
+      || !/^sha256:[a-f0-9]{64}$/u.test(input.contentHash)) {
+      throw new Error("Triage packet size or content hash is invalid.");
+    }
+    const now = new Date().toISOString();
+    const tracking: FindingSecurityTracking = {
+      ...current.securityTracking,
+      triage: { blocker: null, packet: {
+        artifactId: requiredText(input.artifactId, "Triage artifact id"),
+        contentHash: requiredText(input.contentHash, "Triage content hash"),
+        sizeBytes: input.sizeBytes,
+        claimBindingHash: claimVerificationHash(current),
+        replayRunId: requiredText(input.replayRunId, "Triage replay run id"),
+        verifiedAt: now,
+      } },
+    };
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const revision = current.revision + 1;
+      const result = this.database.prepare(`UPDATE app_server_research_claims SET security_tracking_json=?, updated_at=?, revision=?
+        WHERE id=? AND workspace_id=? AND revision=?`).run(stableJson(tracking), now, revision,
+          id, current.workspaceId, current.revision);
+      if (Number(result.changes) !== 1) throw new Error(`Research claim revision conflict for ${id}.`);
+      this.insertTransition(id, revision, current.status, current.status,
+        requiredText(input.reason, "Triage packet reason"), actorId ?? null, [], now);
+      this.insertAuthor(id, revision, author, now);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -748,6 +807,39 @@ export class ResearchClaimStore {
       throw new Error("Finding memory must belong to the active workspace.");
     }
     return memory;
+  }
+
+  private validatedComponents(classification: string, ids: readonly string[], claimId?: string): string[] {
+    if (!Array.isArray(ids) || ids.length > 8) throw new Error("A chain may link at most eight component findings.");
+    const unique = [...new Set(ids.map((id) => requiredText(id, "Component claim id")))];
+    if (classification !== "security.chain") {
+      if (unique.length > 0) throw new Error("Only security chains may link component findings.");
+      return [];
+    }
+    if (unique.length === 0) throw new Error("A security chain requires at least one component finding.");
+    for (const id of unique) {
+      if (id === claimId) throw new Error("A security chain cannot contain itself.");
+      const component = this.get(id);
+      if (!component || component.duplicateOfClaimId || component.projection !== "finding"
+        || component.status === "rejected" || !securityClassification(component.classification)) {
+        throw new Error(`Chain component ${id} must be a canonical security finding in this workspace.`);
+      }
+      if (claimId && this.database.prepare(`WITH RECURSIVE dependencies(id) AS (
+        SELECT component_claim_id FROM app_server_claim_components WHERE claim_id = ?
+        UNION SELECT links.component_claim_id FROM app_server_claim_components links
+          JOIN dependencies ON links.claim_id = dependencies.id
+      ) SELECT 1 FROM dependencies WHERE id = ? LIMIT 1`).get(id, claimId)) {
+        throw new Error("A security chain cannot contain a cycle of component findings.");
+      }
+    }
+    return unique;
+  }
+
+  private writeComponents(claimId: string, componentIds: readonly string[], now: string): void {
+    this.database.prepare("DELETE FROM app_server_claim_components WHERE claim_id = ?").run(claimId);
+    const insert = this.database.prepare(`INSERT INTO app_server_claim_components
+      (claim_id, component_claim_id, position, created_at) VALUES (?, ?, ?, ?)`);
+    componentIds.forEach((componentId, position) => insert.run(claimId, componentId, position, now));
   }
 
   private insertEvidence(findingId: string, evidence: readonly NormalizedFindingEvidence[], now: string): string[] {
@@ -1135,6 +1227,7 @@ export function readFindings(database: DatabaseSync, workspaceId: string, findin
   const evidence = groupedEvidence(database, new Set(rows.map((row) => requiredSqlText(row.id))), options.evidence, options.compactEvidence);
   const transitions = groupedTransitions(database, new Set(rows.map((row) => requiredSqlText(row.id))), options.transitions, options.compactEvidence);
   const authors = groupedAuthors(database, new Set(rows.map((row) => requiredSqlText(row.id))));
+  const components = groupedComponents(database, new Set(rows.map((row) => requiredSqlText(row.id))));
   const duplicates = groupedDuplicateClaims(database, workspaceId, new Set(rows.map((row) => requiredSqlText(row.id))), options.duplicates);
   return rows.map((row) => {
     const id = requiredSqlText(row.id);
@@ -1151,6 +1244,7 @@ export function readFindings(database: DatabaseSync, workspaceId: string, findin
     ...claimProjection(status, staleFromStatus, requiredSqlNumber(row.evidence_count)),
     rating: researchClaimRating(row.rating),
     classification,
+    componentClaimIds: components.get(id) ?? [],
     duplicateOfClaimId: optionalSqlText(row.duplicate_of_claim_id),
     duplicateMarkedAt: optionalSqlText(row.duplicate_marked_at),
     duplicateClaims: duplicates.get(id) ?? [],
@@ -1902,6 +1996,8 @@ function emptyFindingSecurityTracking(): FindingSecurityTracking {
     affectedAssetIds: [],
     surfaceIds: [],
     progressBlocker: null,
+    reportability: null,
+    triage: { blocker: null, packet: null },
     externalReferences: [],
   };
 }
@@ -1918,6 +2014,8 @@ function findingSecurityTracking(value: unknown, classification: string): Findin
     affectedAssetIds: uniqueTrackingStrings(storedStringArray(parsed.affectedAssetIds), "Affected asset id"),
     surfaceIds: uniqueTrackingStrings(storedStringArray(parsed.surfaceIds), "Surface id"),
     progressBlocker: storedProgressBlocker(parsed.progressBlocker),
+    reportability: storedReportability(parsed.reportability),
+    triage: storedTriage(parsed.triage),
     externalReferences: storedArray(parsed.externalReferences, storedExternalReference),
   };
 }
@@ -1944,8 +2042,22 @@ function revisedFindingSecurityTracking(
   const cvssAssessments = update.cvssAssessment
     ? uniqueRecords([...base.cvssAssessments, revisedCvssAssessment(update.cvssAssessment, resolvedActorId, now)])
     : base.cvssAssessments;
-  if (update.progressBlocker && current.status !== "observed" && current.status !== "reproduced") {
-    throw new Error("A progress blocker can only be set on an observed or reproduced finding.");
+  if (update.progressBlocker && !["hypothesis", "observed", "reproduced", "stale"].includes(current.status)) {
+    throw new Error("A progress blocker requires an unresolved finding.");
+  }
+  if ((update.reportability !== undefined || update.triageBlocker !== undefined)
+    && current.status !== "verified") {
+    throw new Error("Reportability and triage decisions require a verified finding.");
+  }
+  if (update.reportability?.decision === "not_reportable" && current.reportId) {
+    throw new Error("A finding already bound to a report cannot be marked not reportable.");
+  }
+  if (update.reportability && update.reportability.decision !== "reportable"
+    && update.reportability.decision !== "not_reportable") {
+    throw new Error("Reportability decision must be reportable or not_reportable.");
+  }
+  if (update.reportability && update.reportability.policyRefs.length === 0) {
+    throw new Error("Reportability requires at least one program policy reference.");
   }
   return {
     reachability,
@@ -1961,10 +2073,59 @@ function revisedFindingSecurityTracking(
       : update.progressBlocker === null
         ? null
         : { reason: requiredText(update.progressBlocker.reason, "Progress blocker reason"), actorId: resolvedActorId, setAt: now },
+    reportability: update.reportability === undefined
+      ? base.reportability
+      : update.reportability === null ? null : {
+        decision: update.reportability.decision,
+        basis: requiredText(update.reportability.basis, "Reportability basis"),
+        policyRefs: uniqueTrackingStrings(update.reportability.policyRefs, "Program policy reference"),
+        actorId: resolvedActorId,
+        assessedAt: now,
+      },
+    triage: {
+      packet: update.reportability === undefined ? base.triage.packet : null,
+      blocker: update.triageBlocker === undefined ? base.triage.blocker
+        : update.triageBlocker === null ? null
+          : { reason: requiredText(update.triageBlocker.reason, "Triage blocker reason"), actorId: resolvedActorId, setAt: now },
+    },
     externalReferences: update.externalReferences === undefined
       ? base.externalReferences
       : uniqueRecords(update.externalReferences.map(storedExternalReference)),
   };
+}
+
+function storedReportability(value: unknown): FindingSecurityTracking["reportability"] {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || (value.decision !== "reportable" && value.decision !== "not_reportable")) {
+    throw new Error("Stored reportability decision is invalid.");
+  }
+  return {
+    decision: value.decision,
+    basis: requiredText(value.basis, "Reportability basis"),
+    policyRefs: uniqueTrackingStrings(storedStringArray(value.policyRefs), "Program policy reference"),
+    actorId: requiredText(value.actorId, "Reportability actor"),
+    assessedAt: requiredText(value.assessedAt, "Reportability time"),
+  };
+}
+
+function storedTriage(value: unknown): FindingSecurityTracking["triage"] {
+  if (value === undefined || value === null) return { blocker: null, packet: null };
+  if (!isRecord(value)) throw new Error("Stored triage state must be an object.");
+  const rawPacket = value.packet;
+  const packet = rawPacket === undefined || rawPacket === null ? null : (() => {
+    if (!isRecord(rawPacket) || typeof rawPacket.sizeBytes !== "number" || !Number.isSafeInteger(rawPacket.sizeBytes)) {
+      throw new Error("Stored triage packet is invalid.");
+    }
+    return {
+      artifactId: requiredText(rawPacket.artifactId, "Triage packet artifact"),
+      contentHash: requiredText(rawPacket.contentHash, "Triage packet hash"),
+      sizeBytes: rawPacket.sizeBytes,
+      claimBindingHash: requiredText(rawPacket.claimBindingHash, "Triage claim binding"),
+      replayRunId: requiredText(rawPacket.replayRunId, "Triage replay run"),
+      verifiedAt: requiredText(rawPacket.verifiedAt, "Triage verification time"),
+    };
+  })();
+  return { blocker: storedProgressBlocker(value.blocker), packet };
 }
 
 function storedProgressBlocker(value: unknown): FindingSecurityTracking["progressBlocker"] {
@@ -2153,21 +2314,26 @@ function validIndependentEvidence(database: DatabaseSync, claim: FindingSummary,
     || (evidence.claimBindingHash !== claimVerificationHash(claim)
       && evidence.claimBindingHash !== legacyClaimVerificationHash(database, claim))
     || !successfulRunbookExecutionExists(database, claim, evidence.referenceId)) return false;
+  const verification = database.prepare(`SELECT claim_revision FROM app_server_claim_transitions
+    WHERE claim_id = ? AND EXISTS (SELECT 1 FROM json_each(evidence_ids_json) WHERE value = ?)
+    ORDER BY claim_revision LIMIT 1`).get(claim.id, evidence.id) as { claim_revision?: number } | undefined;
   const authors = database.prepare(`SELECT actor_id, session_id FROM app_server_claim_transitions
     WHERE claim_id = ? AND (claim_revision = 1
       OR (from_status IS NOT to_status AND to_status IN ('observed','reproduced'))
       OR (from_status IS to_status AND json_array_length(evidence_ids_json) = 0))
-    ORDER BY claim_revision`).all(claim.id) as SqlRow[];
+      AND claim_revision < ?
+    ORDER BY claim_revision`).all(claim.id, verification?.claim_revision ?? claim.revision + 1) as SqlRow[];
   if (authors.length === 0) return false;
   return authors.every((author) =>
     typeof author.actor_id === "string" && author.actor_id !== evidence.actorId);
 }
 
-function claimVerificationHash(claim: FindingSummary): string {
+export function claimVerificationHash(claim: FindingSummary): string {
   return `sha256:${createHash("sha256").update(stableJson({
     id: claim.id, title: claim.title, summary: claim.summary, impact: claim.impact,
     ...(claim.stepsToReproduce ? { stepsToReproduce: claim.stepsToReproduce } : {}),
     classification: claim.classification,
+    ...(claim.classification === "security.chain" ? { componentClaimIds: claim.componentClaimIds } : {}),
     sourceRevision: claim.sourceRevision, environmentFingerprint: claim.environmentFingerprint,
     reproductionRunbookId: claim.reproductionRunbookId,
   })).digest("hex")}`;

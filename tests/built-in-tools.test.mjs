@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdtemp, mkdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import {
   createPriorArtSearchTool,
   createRepositoryHistoryTool,
   createRepositorySearchTool,
+  createRepositoryScanTool,
   RepositoryResearchSession,
   createResearchStorageLayout,
   createResearchToolRegistry,
@@ -1255,6 +1256,74 @@ test("repository search finds bounded local source matches", async () => {
   }
 });
 
+test("repository scan returns bounded structural context and reports incomplete scans", {
+  skip: process.platform === "win32",
+}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "beale-opengrep-example-"));
+  const root = join(directory, ".beale", "repositories", "example-repository", "default");
+  const source = join(root, "example.js");
+  const executable = join(root, "opengrep-example");
+  const argumentsFile = join(root, "arguments.json");
+  try {
+    await mkdir(root, { recursive: true });
+    await writeFile(source, "function example(input) { return sink(input); }\n");
+    const report = { version: "1.33.0", results: [{ check_id: "example-rule", path: source,
+      start: { line: 1, col: 34 }, end: { line: 1, col: 45 },
+      extra: { message: "Review this example call", severity: "WARNING",
+        lines: "return sink(input);", metavars: { $X: { abstract_content: "input" } },
+        enclosing_context: [{ kind: "function", name: "example", start: { line: 1 } }],
+        dataflow_trace: { taint_source: ["CliLoc", [{ path: source, start: { line: 1, col: 20 } }, "input"]],
+          intermediate_vars: [{ location: { path: source, start: { line: 1, col: 20 } }, content: "input" }],
+          taint_sink: ["CliLoc", [{ path: source, start: { line: 1, col: 34 } }, "sink(input)"]] } } }],
+    errors: [{ type: "ParseError", message: "An example file could not be parsed." }],
+    paths: { scanned: [source] }, skipped_rules: [] };
+    await writeFile(executable, `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(argumentsFile)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write(${JSON.stringify(JSON.stringify(report))});\n`, { mode: 0o755 });
+    const tool = createRepositoryScanTool({ root, opengrepExecutable: executable });
+    const result = await createResearchToolRegistry([tool]).execute({
+      id: "scan-example", actionClass: "search", toolName: "repository.scan",
+      input: { root, pattern: "sink($X)", language: "javascript", maxResults: 5 },
+    });
+    assert.equal(result.result.status, "complete");
+    assert.equal(result.result.output.partial, true);
+    assert.equal(result.result.output.scannedFiles, 1);
+    assert.equal(result.result.output.matches[0].path, "example.js");
+    assert.equal(result.result.output.matches[0].code, "return sink(input);");
+    assert.deepEqual(result.result.output.matches[0].metavariables, [{ name: "$X", code: "input" }]);
+    assert.deepEqual(result.result.output.matches[0].enclosingContext,
+      [{ kind: "function", name: "example", line: 1 }]);
+    assert.equal(result.result.output.matches[0].dataflow.source.code, "input");
+    assert.equal(result.result.output.matches[0].dataflow.sink.code, "sink(input)");
+    assert.equal(result.result.output.issues[0].type, "ParseError");
+    const args = JSON.parse(await readFile(argumentsFile, "utf8"));
+    assert.ok(args.includes("--output-enclosing-context"));
+    assert.ok(args.includes("--dataflow-traces"));
+    assert.ok(args.includes("--disable-version-check"));
+    assert.ok(args.includes("sink($X)"));
+    assert.equal(args.includes("--config"), false);
+    await writeFile(join(root, "rules.yaml"), "rules: []\n");
+    const ruleScan = await createResearchToolRegistry([tool]).execute({
+      id: "scan-local-rule", actionClass: "search", toolName: "repository.scan",
+      input: { root, rulesFile: "rules.yaml" },
+    });
+    assert.equal(ruleScan.result.status, "complete");
+    assert.ok(JSON.parse(await readFile(argumentsFile, "utf8")).includes(await realpath(join(root, "rules.yaml"))));
+    const denied = await createResearchToolRegistry([tool]).execute({
+      id: "scan-remote-rule", actionClass: "search", toolName: "repository.scan",
+      input: { root, rulesFile: "https://example.test/rules.yaml" },
+    });
+    assert.equal(denied.result.status, "error");
+    assert.match(denied.result.summary, /inside the selected repository/);
+    const runtimeData = join(directory, ".beale", "credentials");
+    await mkdir(runtimeData);
+    const blocked = await createResearchToolRegistry([tool]).execute({
+      id: "scan-runtime-data", actionClass: "search", toolName: "repository.scan",
+      input: { root: runtimeData, pattern: "sink($X)", language: "javascript" },
+    });
+    assert.equal(blocked.result.status, "error");
+    assert.match(blocked.result.summary, /outside managed checkouts/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("repository first touch is emitted once per canonical repository revision", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-repo-touch-"));
   await writeFile(join(root, "parser.c"), "int parser_boundary = 1;\n");
@@ -1426,23 +1495,23 @@ test("prior art search normalizes public advisory results with source URLs", asy
   assert.deepEqual(result.result.output.records[0].affected, ["cpe:2.3:a:vendor:parser:*:*:*:*:*:*:*:*"]);
 });
 
-test("repository search bounds and interrupts non-Git traversal", async () => {
+test("repository search bounds file size and honors interruption", async () => {
   const root = await mkdtemp(join(tmpdir(), "app-server-repo-search-bounds-"));
-  await writeFile(join(root, "first.txt"), "unrelated first file\n");
-  await writeFile(join(root, "second.txt"), "unrelated second file\n");
+  await writeFile(join(root, "first.txt"), "needle\n");
+  await writeFile(join(root, "second.txt"), "needle in an oversized example file\n");
   try {
     const boundedTool = createRepositorySearchTool({
       root,
-      maxVisitedFiles: 1,
+      maxFileBytes: 10,
     });
     const bounded = await createResearchToolRegistry([boundedTool]).execute({
       id: "search_bounded_walk",
       actionClass: "search",
       toolName: "repository.search",
-      input: { query: "not-present" },
+      input: { query: "needle" },
     });
-    assert.equal(bounded.result.status, "error");
-    assert.match(bounded.result.summary, /stopped after inspecting 1 files/);
+    assert.equal(bounded.result.status, "complete");
+    assert.deepEqual(bounded.result.output.matches.map((match) => match.path), ["first.txt"]);
 
     const controller = new AbortController();
     controller.abort();
@@ -1461,6 +1530,69 @@ test("repository search bounds and interrupts non-Git traversal", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("repository search includes untracked source while respecting hidden and ignored files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "app-server-repo-rg-selection-example-"));
+  try {
+    await execFileAsync("git", ["init", "--quiet", root]);
+    await mkdir(join(root, ".github"));
+    await mkdir(join(root, ".beale"));
+    await mkdir(join(root, "node_modules"));
+    await writeFile(join(root, ".gitignore"), "ignored.txt\n");
+    await writeFile(join(root, "tracked.txt"), "example needle\n");
+    await writeFile(join(root, ".github", "workflow.txt"), "example needle\n");
+    await writeFile(join(root, "untracked.txt"), "example needle\n");
+    await writeFile(join(root, "ignored.txt"), "example needle\n");
+    await writeFile(join(root, ".beale", "private.txt"), "example needle\n");
+    await writeFile(join(root, "node_modules", "dependency.txt"), "example needle\n");
+    await execFileAsync("git", ["-C", root, "add", ".gitignore", "tracked.txt", ".github/workflow.txt"]);
+    const tool = createRepositorySearchTool({ root });
+    const result = await createResearchToolRegistry([tool]).execute({
+      id: "search-selection-example", actionClass: "search", toolName: "repository.search",
+      input: { query: "example needle" },
+    });
+    assert.equal(result.result.status, "complete");
+    assert.deepEqual(result.result.output.matches.map((match) => match.path).sort(),
+      ["tracked.txt", "untracked.txt"]);
+    const hidden = await createResearchToolRegistry([tool]).execute({
+      id: "search-hidden-example", actionClass: "search", toolName: "repository.search",
+      input: { query: "example needle", root: join(root, ".github") },
+    });
+    assert.equal(hidden.result.status, "complete");
+    assert.deepEqual(hidden.result.output.matches.map((match) => match.path), ["workflow.txt"]);
+    const runtimeData = await createResearchToolRegistry([tool]).execute({
+      id: "search-runtime-data-example", actionClass: "search", toolName: "repository.search",
+      input: { query: "example needle", root: join(root, ".beale") },
+    });
+    assert.equal(runtimeData.result.status, "error");
+    assert.match(runtimeData.result.summary, /outside managed checkouts/);
+    const managed = join(root, ".beale", "repositories", "example-repository", "default");
+    await mkdir(managed, { recursive: true });
+    await writeFile(join(managed, "source.txt"), "example needle\n");
+    const managedSearch = await createResearchToolRegistry([tool]).execute({
+      id: "search-managed-checkout-example", actionClass: "search", toolName: "repository.search",
+      input: { query: "example needle", root: managed },
+    });
+    assert.equal(managedSearch.result.status, "complete");
+    assert.deepEqual(managedSearch.result.output.matches.map((match) => match.path), ["source.txt"]);
+    const customStore = join(root, ".honeycrisp", "profiles", "example", "managed-source");
+    await mkdir(customStore, { recursive: true });
+    await writeFile(join(customStore, "source.txt"), "example needle\n");
+    const previousStore = process.env.APP_SERVER_REPOSITORY_STORE_DIR;
+    try {
+      process.env.APP_SERVER_REPOSITORY_STORE_DIR = customStore;
+      const customSearch = await createResearchToolRegistry([tool]).execute({
+        id: "search-custom-managed-checkout-example", actionClass: "search", toolName: "repository.search",
+        input: { query: "example needle", root: customStore },
+      });
+      assert.equal(customSearch.result.status, "complete", customSearch.result.summary);
+      assert.deepEqual(customSearch.result.output.matches.map((match) => match.path), ["source.txt"]);
+    } finally {
+      if (previousStore === undefined) delete process.env.APP_SERVER_REPOSITORY_STORE_DIR;
+      else process.env.APP_SERVER_REPOSITORY_STORE_DIR = previousStore;
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("repository search scopes configured roots and preserves bounded partial results", async () => {
@@ -2201,6 +2333,7 @@ test("default built-in family assembles configured tool surfaces", async () => {
       "prior_art.search",
       "repository.fetch_history",
       "repository.history",
+      "repository.scan",
       "repository.search",
       "synthesis.compose",
     ]);
@@ -2218,6 +2351,7 @@ test("default built-in family assembles configured tool surfaces", async () => {
       "prior_art_search",
       "repository_fetch_history",
       "repository_history",
+      "repository_scan",
       "repository_search",
       "synthesis_compose",
     ]);

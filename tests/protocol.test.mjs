@@ -91,6 +91,11 @@ test('research-track control decodes a bounded workspace progress snapshot', () 
       revisitAfter: null, lastWorkedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
   };
   assert.deepEqual(decodeBealeWorkspaceResearchTrack(snapshot), snapshot);
+  const worker = { role: 'investigator', claimId: 'finding-example', title: 'Example parser boundary',
+    assignedAt: '2026-01-01T00:00:00.000Z', queued: [{ claimId: 'finding-example-next', title: 'Example queued boundary' }] };
+  assert.deepEqual(decodeBealeWorkspaceResearchTrack({ ...snapshot, workers: [worker] }).workers, [worker]);
+  assert.throws(() => decodeBealeWorkspaceResearchTrack({ ...snapshot, workers: [{ ...worker, role: 'unknown' }] }),
+    /invalid workspace research track/);
   assert.equal(decodeBealeWorkspaceResearchTrack(null), null);
   assert.throws(() => decodeBealeWorkspaceResearchTrack({ ...snapshot, guardianEnabled: 'enabled' }),
     /invalid workspace research track/);
@@ -293,6 +298,13 @@ test("HTTP session control DTOs are bounded and correlated", () => {
     decodeBealeAppServerSessionControlRequest({ type: "steer", instruction: "Inspect the alternate parser." }),
     { type: "steer", instruction: "Inspect the alternate parser." },
   );
+  assert.deepEqual(
+    decodeBealeAppServerSessionControlRequest({ type: "remove_steering", targetRequestId: "steer-example" }),
+    { type: "remove_steering", targetRequestId: "steer-example" },
+  );
+  assert.equal(decodeBealeAppServerSessionControlResult({
+    controlVersion: 1, accepted: true, sessionId: "session-1", requestId: "request-2", type: "remove_steering",
+  }).type, "remove_steering");
   assert.deepEqual(
     decodeBealeAppServerSessionControlResult({
       controlVersion: 1,

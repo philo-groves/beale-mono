@@ -116,6 +116,7 @@ const MODEL_TOOL_RESULT_MAX_CHARS_BY_TOOL = new Map<string, number>([
   ["runbook.get", 12_000],
   ["runbook.list", 8_000],
   ["repository.search", 16_000],
+  ["repository.scan", 20_000],
   ["repository.history", 24_000],
   ["prior_art.search", 32_000],
   ["prior_art.fetch", 24_000],

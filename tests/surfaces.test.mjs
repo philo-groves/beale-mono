@@ -62,6 +62,38 @@ function fixture() {
     close() { surface.close(); resources.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
 
+test("surface scope assessments require evidence and survive partial updates", async () => {
+  const state = fixture();
+  try {
+    const root = state.surface.require(state.rootId);
+    assert.throws(() => state.surface.update(root.id, root.revision, {
+      scopeAssessment: { decision: "not_applicable", basis: "Synthetic example only.", references: [] }
+    }), /references/);
+    const assessed = state.surface.update(root.id, root.revision, {
+      scopeAssessment: { decision: "not_applicable", basis: "The example policy excludes this demonstration component.",
+        references: ["policy-example-section"] }
+    });
+    assert.equal(assessed.foundation.scopeAssessment.decision, "not_applicable");
+    const updated = state.surface.update(root.id, assessed.revision, { discovery: "Further synthetic context." });
+    assert.equal(updated.foundation.scopeAssessment.references[0], "policy-example-section");
+    const cleared = state.surface.update(root.id, updated.revision, { scopeAssessment: null });
+    assert.equal(cleared.foundation.scopeAssessment, null);
+    const tool = createSurfaceTools(state.surface).find((entry) => entry.descriptor.name === "surface.update");
+    assert.deepEqual(tool.descriptor.inputSchema.properties.foundation.properties.scopeAssessment.anyOf[0]
+      .properties.decision.enum, ["applicable", "not_applicable"]);
+    const result = await tool.execute({ id: "action-example-scope", toolName: "surface.update",
+      actionClass: "synthesize", input: { surfaceId: root.id, expectedRevision: cleared.revision,
+        foundation: { scopeAssessment: { decision: "applicable", basis: "The example policy includes this service.",
+          references: ["policy-example-section"] } } } });
+    assert.equal(result.status, "complete");
+    assert.equal(state.surface.get(root.id).foundation.scopeAssessment.decision, "applicable");
+    const breakdown = createSurfaceTools(state.surface).find((entry) => entry.descriptor.name === "surface.breakdown");
+    const view = await breakdown.execute({ id: "action-example-scope-view", toolName: "surface.breakdown",
+      actionClass: "observe", input: { surfaceId: root.id } });
+    assert.equal(view.output.scopeAssessment.decision, "applicable");
+  } finally { state.close(); }
+});
+
 test("surface rankings require grounded 1–10 factors and survive partial updates", async () => {
   const state = fixture();
   const ranking = {
@@ -210,6 +242,16 @@ test("recon lists preserve partial updates and validate structured entries", () 
     assert.deepEqual(cleared.foundation.assets, []);
     assert.deepEqual(cleared.foundation.bugHistory.entries, []);
     assert.equal(cleared.foundation.bugHistory.summary, foundation.bugHistory.summary);
+    const signaled = state.surface.update(root.id, cleared.revision, { highValueSignals: [
+      { kind: "pre_auth", basis: "The example request is accepted before authentication." },
+    ] });
+    assert.deepEqual(signaled.foundation.highValueSignals, [
+      { kind: "pre_auth", basis: "The example request is accepted before authentication." },
+    ]);
+    assert.throws(() => state.surface.update(root.id, signaled.revision, { highValueSignals: [
+      { kind: "pre_auth", basis: "First example basis." },
+      { kind: "pre_auth", basis: "Duplicate example basis." },
+    ] }), /invalid or repeated/);
   } finally { state.close(); }
 });
 

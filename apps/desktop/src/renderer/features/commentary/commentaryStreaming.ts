@@ -29,8 +29,8 @@ export const commentaryStreamingModeForUserAgent = (userAgent: string): Commenta
 const messageText = (message: CommentaryMessage): string => message.kind === 'progress'
   ? (message.reasoningTraceLines ?? [message.contentMarkdown]).join('\n')
   : message.contentMarkdown;
-const isInterAgentMessage = (message: CommentaryMessage): boolean => message.kind === 'task'
-  && (message.taskAction === 'message' || message.taskAction === 'room_message');
+const isInstantMessage = (message: CommentaryMessage): boolean => message.kind === 'diagram'
+  || message.kind === 'task' && (message.taskAction === 'message' || message.taskAction === 'room_message');
 
 function visiblePartialReasoningLine(line: string): string {
   if (line === '*') return '';
@@ -67,7 +67,7 @@ export function reconcileCommentaryStreaming(
     entry.id === state.source[index]?.id && entry.text === state.source[index]?.text
   );
   const kindById = new Map(messages.map((message) => [message.id, message.kind]));
-  const instantMessageIds = new Set(messages.filter(isInterAgentMessage).map((message) => message.id));
+  const instantMessageIds = new Set(messages.filter(isInstantMessage).map((message) => message.id));
   const hasHiddenTerminalActivity = terminal && state.pending.some((entry) => {
     const kind = kindById.get(entry.id);
     return kind !== 'final_answer' && kind !== 'error';
@@ -106,7 +106,7 @@ export function reconcileCommentaryStreaming(
   for (const message of messages.slice(lastKnownIndex + 1)) {
     if (previousById.has(message.id) || queuedIds.has(message.id)) continue;
     if (terminal && message.kind !== 'final_answer' && message.kind !== 'error') continue;
-    if (isInterAgentMessage(message)) {
+    if (isInstantMessage(message)) {
       animatedIds.add(message.id);
       continue;
     }

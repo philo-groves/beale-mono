@@ -51,6 +51,7 @@ import { FleetBrowserSideView } from './FleetBrowserSideView';
 import { renderInlineCodeText, renderTraceProseText } from '../traces/traceMarkup';
 import { WorkspaceSurfaceMap } from '../workspaces/WorkspaceSurfaceMap';
 import { WorkspaceSurfaceDetails } from '../workspaces/WorkspaceSurfaceDetails';
+import { TrackWorkerCards } from './TrackWorkerCards';
 import { sessionSurfaceCounts, sessionSurfaceHierarchy } from '../../view-models/surfaceMap';
 
 const EMPTY_SUBAGENT_OVERVIEW = { count: 0, activeCount: 0, completedCount: 0 };
@@ -632,16 +633,18 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
   const needsFullSubagents = subagentsAvailable && (detailsOpen || selectedSubagentPath !== null);
   const subagents = useMemo(
     () => needsFullSubagents
-      ? subagentSummaries(summaryEvents, runStatus, 'commentary', detail?.subagentPreviews)
+      ? subagentSummaries(summaryEvents, runStatus, 'commentary', detail?.subagentPreviews,
+        detail?.attempts.at(-1)?.id, detail?.attempts.at(-1)?.startedAt)
       : [],
-    [detail?.subagentPreviews, needsFullSubagents, runStatus, summaryEvents]
+    [detail?.subagentPreviews, detail?.attempts, needsFullSubagents, runStatus, summaryEvents]
   );
   const subagentOverview = useMemo(
     () => {
       if (!subagentsAvailable) return EMPTY_SUBAGENT_OVERVIEW;
-      return needsFullSubagents ? subagentOverviewFromSummaries(subagents) : subagentOverviewForEvents(summaryEvents, runStatus);
+      return needsFullSubagents ? subagentOverviewFromSummaries(subagents) : subagentOverviewForEvents(summaryEvents,
+        runStatus, detail?.attempts.at(-1)?.id);
     },
-    [needsFullSubagents, runStatus, subagents, subagentsAvailable, summaryEvents]
+    [detail?.attempts, needsFullSubagents, runStatus, subagents, subagentsAvailable, summaryEvents]
   );
   const filteredSubagents = useMemo(
     () => needsFullSubagents ? filterSubagentSummaries(subagents, subagentQuery) : [],
@@ -1033,7 +1036,7 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
       );
     }
     return (
-      <aside className="main-session-side session-summary-panel" aria-label="Session summary">
+      <aside className={`main-session-side session-summary-panel${viewSpace === 'session' && runId.startsWith('track_') ? ' track-summary-panel' : ''}`} aria-label="Session summary">
         <section className="session-summary-card">
           <header className="session-summary-heading">
             <h2 className="session-summary-title">Session</h2>
@@ -1110,6 +1113,10 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
             ) : null}
           </section>
         </section>
+        {viewSpace === 'session' && surfaceWorkspaceId && runId.startsWith('track_')
+          ? <TrackWorkerCards workspaceId={surfaceWorkspaceId} sessionId={runId}
+            events={summaryEvents} findings={detail?.appServerMemory?.findings ?? memory?.findings ?? []}
+            activeAttemptId={detail?.attempts.at(-1)?.id} runStatus={runStatus} /> : null}
         {browserPages}
       </aside>
     );
@@ -2483,7 +2490,9 @@ export function SubagentCatalogSection({
                   <CatalogTime value={agent.createdAt} nowMs={nowMs} />
                 </span>
               </span>
-              <span className="subagent-catalog-preview">{agent.latestMessage || 'No message yet.'}</span>
+              <span className="subagent-catalog-preview">{agent.latestMessage || (
+                agent.status === 'interrupted' ? 'Interrupted before a message.' : 'No message yet.'
+              )}</span>
             </button>
           ))
         ) : (
@@ -2718,7 +2727,7 @@ export function CampaignClaimCatalogSection({
   const findingsSection = label === 'Findings';
   const refutedClaims = findingsSection ? claims.filter((claim) => claim.maturity === 'refuted') : [];
   const catalogClaims = findingsSection ? claims.filter((claim) => claim.maturity !== 'refuted') : claims;
-  const boundedPreviewLimit = previewLimit === undefined ? catalogClaims.length : Math.max(0, previewLimit);
+  const boundedPreviewLimit = Math.max(0, previewLimit ?? 5);
   const visibleClaims = catalogClaims.slice(0, boundedPreviewLimit);
   const overflowClaims = catalogClaims.slice(boundedPreviewLimit);
   const sectionLabel = claims.length === 1 ? singularizePresentationLabel(label) : label;
@@ -2779,7 +2788,7 @@ export function CampaignClaimCatalogSection({
             className={`workspace-claim-overflow ${expanded ? 'expanded' : ''}`.trim()}
             inert={expanded ? undefined : true}
           >
-            <div>{overflowClaims.map((claim) => renderClaim(claim))}</div>
+            <div>{expanded ? overflowClaims.map((claim) => renderClaim(claim)) : null}</div>
           </div>
         ) : null}
         {catalogClaims.length === 0 && (claims.length > 0 || emptyLabel)
@@ -3169,6 +3178,27 @@ export function CampaignClaimDetailView({
               {claim.stepsToReproduce.trim() ? renderTraceProseText(claim.stepsToReproduce, 'agent_output') : <em>Not recorded</em>}
             </div>
           </section>
+          {claim.classification === 'security.chain' && (claim.componentClaimIds?.length ?? 0) > 0 ? (
+            <section className="campaign-claim-assessment" aria-label="Chain components">
+              <div><strong>Chain components</strong>
+                <p>{claim.componentClaimIds?.map((id) => claimCandidates.find((candidate) => candidate.id === id)?.title ?? id).join(' · ')}</p>
+              </div>
+            </section>
+          ) : null}
+          {securityTracking && (claim.status === 'verified' || claim.status === 'report_ready' || securityTracking.reportability) ? (
+            <section className="campaign-claim-assessment" aria-label="Reportability and triage">
+              <div><strong>Reportability</strong>
+                {securityTracking.reportability
+                  ? <p>{securityTracking.reportability.decision === 'reportable' ? 'Reportable' : 'Not reportable'}: {securityTracking.reportability.basis}</p>
+                  : <em>Not assessed</em>}
+              </div>
+              <div><strong>Portable proof</strong>
+                {securityTracking.triage?.packet ? <p>Accepted ZIP packet · {securityTracking.triage.packet.artifactId}</p>
+                  : securityTracking.triage?.blocker ? <p>Blocked: {securityTracking.triage.blocker.reason}</p>
+                    : <em>Pending</em>}
+              </div>
+            </section>
+          ) : null}
           {claim.staleReason ? <div className="memory-catalog-body"><strong>Stale reason:</strong> {renderTraceProseText(claim.staleReason, 'agent_output')}</div> : null}
           {claim.operatorOverride ? (
             <p className="memory-catalog-body"><strong>Human override:</strong> The current status was set on the Findings board without requiring the agent transition prerequisites. Review the recorded evidence before relying on it.</p>

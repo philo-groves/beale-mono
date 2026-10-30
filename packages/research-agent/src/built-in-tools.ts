@@ -5,7 +5,6 @@ import {
   stat,
 } from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   basename,
@@ -45,15 +44,17 @@ import type {
 } from "./types.js";
 import { PRE_BEALE_DATA_DIRECTORY_NAME } from "./legacy-compatibility.js";
 import { readWorkspaceProject, workspaceResearchAuthority } from "./workspace-project.js";
+import { runRepositoryOpengrepScan } from "./opengrep-scan.js";
+import { searchRepositoryWithRipgrep } from "./repository-rg-search.js";
 import { materializeGitRepositoryAsync, normalizeSourceRepositoryUrl,
   type MaterializedSourceRepository, type SourceRepositoryCandidate } from "./source-materializer.js";
 import { reviewResearchResourceFirstTouch, type ResearchResourceToolOptions } from "./research-resources.js";
 
 const DEFAULT_MAX_RESULTS = 20;
+const MAX_REPOSITORY_SEARCH_RESULTS = 200;
 const DEFAULT_MAX_BYTES = 16_384;
 const DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS = 30_000;
 const DEFAULT_REPOSITORY_SEARCH_MAX_VISITED_FILES = 50_000;
-const GIT_SEARCH_CANDIDATE_MULTIPLIER = 4;
 const REPOSITORY_SEARCH_IGNORED_DIRECTORIES = new Set([
   ".git",
   ".hg",
@@ -76,7 +77,19 @@ const REPOSITORY_SEARCH_PARAMETERS = {
       description:
         "Optional configured root label or readable absolute checkout path. The configured source list is not the authorized scope; materialize an in-scope repository first when no checkout exists.",
     },
-    maxResults: { type: "number" },
+    maxResults: { type: "integer", minimum: 1, maximum: MAX_REPOSITORY_SEARCH_RESULTS },
+  },
+};
+const REPOSITORY_SCAN_PARAMETERS = {
+  type: "object",
+  required: ["root"],
+  additionalProperties: false,
+  properties: {
+    pattern: { type: "string", description: "Opengrep structural code pattern, such as $OBJ.execute(...). Use with language." },
+    language: { type: "string", description: "Opengrep language for pattern mode, for example python, javascript, or typescript." },
+    rulesFile: { type: "string", description: "Existing local YAML rule file inside the selected repository. Use instead of pattern and language; remote registries are not supported." },
+    root: { type: "string", description: "Required configured checkout label or readable absolute source directory. Narrow this for faster, more relevant scans." },
+    maxResults: { type: "integer", minimum: 1, maximum: 50 },
   },
 };
 const REPOSITORY_MATERIALIZE_PARAMETERS = {
@@ -199,8 +212,9 @@ export interface BuiltInRepositorySearchToolOptions {
   maxResults?: number;
   maxFileBytes?: number;
   maxDurationMs?: number;
-  maxVisitedFiles?: number;
   researchSession?: RepositoryResearchSession;
+  /** Test override; production uses the pinned portable release. */
+  opengrepExecutable?: string;
 }
 
 export interface BuiltInRepositoryMaterializeToolOptions {
@@ -299,10 +313,10 @@ export function createRepositorySearchTool(
       const startedAt = nowIso();
       return completeOrError(action, startedAt, async () => {
         const query = readRequiredString(action.input, "query");
-        const maxResults = readPositiveInteger(
+        const maxResults = Math.min(MAX_REPOSITORY_SEARCH_RESULTS, readPositiveInteger(
           action.input.maxResults,
           options.maxResults ?? DEFAULT_MAX_RESULTS,
-        );
+        ));
         const requestedRoot = typeof action.input.root === "string"
           ? action.input.root.trim()
           : "";
@@ -316,13 +330,7 @@ export function createRepositorySearchTool(
           ? await resolveRepositorySearchRoots(availableRoots, requestedRoot)
           : availableRoots;
         const maxDurationMs = options.maxDurationMs ?? DEFAULT_REPOSITORY_SEARCH_TIMEOUT_MS;
-        const searchState = {
-          deadline: Date.now() + maxDurationMs,
-          maxDurationMs,
-          maxVisitedFiles: options.maxVisitedFiles ?? DEFAULT_REPOSITORY_SEARCH_MAX_VISITED_FILES,
-          visitedFiles: 0,
-          ...(context?.signal ? { signal: context.signal } : {}),
-        };
+        const deadline = Date.now() + maxDurationMs;
         const matches: {
           root: string;
           path: string;
@@ -331,23 +339,23 @@ export function createRepositorySearchTool(
         }[] = [];
         const attemptedRoots: string[] = [];
         let timedOut = false;
+        let partial = false;
+        const diagnostics: string[] = [];
         for (const root of roots) {
           if (matches.length >= maxResults) {
             break;
           }
           attemptedRoots.push(root);
-          try {
-            const rootMatches = await searchRepository(root, query, {
-              maxResults: maxResults - matches.length,
-              maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
-              state: searchState,
-            });
-            matches.push(...rootMatches.map((match) => ({ ...match, root })));
-          } catch (error) {
-            if (!(error instanceof RepositorySearchTimeoutError)) throw error;
-            timedOut = true;
-            break;
-          }
+          const result = await searchRepositoryWithRipgrep({ root, query,
+            maxResults: maxResults - matches.length,
+            maxFileBytes: options.maxFileBytes ?? DEFAULT_MAX_BYTES,
+            deadline,
+            ...(context?.signal ? { signal: context.signal } : {}) });
+          matches.push(...result.matches.map((match) => ({ ...match, root })));
+          timedOut ||= result.timedOut;
+          partial ||= result.partial;
+          if (result.diagnostic) diagnostics.push(result.diagnostic);
+          if (timedOut) break;
         }
 
         const candidateTouchPaths = [
@@ -366,7 +374,7 @@ export function createRepositorySearchTool(
         return completeResult(action, startedAt, {
           summary: timedOut
             ? `Repository search reached its ${maxDurationMs}ms limit and returned ${matches.length} partial match(es). Retry with a configured root label or a narrower absolute directory path.`
-            : `Repository search found ${matches.length} match(es) across ${attemptedRoots.length} context root(s) for: ${query}`,
+            : `Repository search found ${matches.length} match(es) across ${attemptedRoots.length} context root(s) for: ${query}${partial ? "; some results may be missing" : ""}`,
           output: {
             roots,
             availableRoots: availableRoots.map((root) => ({
@@ -376,8 +384,9 @@ export function createRepositorySearchTool(
             attemptedRoots,
             query,
             matches,
-            partial: timedOut,
+            partial: partial || timedOut,
             timedOut,
+            ...(diagnostics.length ? { diagnostics } : {}),
             repositoryFirstTouches: firstTouches,
           },
           modelOutput: {
@@ -385,12 +394,74 @@ export function createRepositorySearchTool(
             searchedRootCount: attemptedRoots.length,
             searchedRootLabels: attemptedRoots.map((root) => repositorySearchRootLabel(root)),
             matches,
-            partial: timedOut,
+            partial: partial || timedOut,
+            ...(diagnostics.length ? { diagnostics } : {}),
             ...(firstTouches.length > 0 ? { repositoryFirstTouches: firstTouches } : {}),
           },
           followUpActions: firstTouches.length > 0
             ? ["Complete the repository-first-touch provenance, advisory, release-note, upstream, and vendor-source history baseline before broad exploration."]
             : [],
+        });
+      });
+    },
+  };
+}
+
+/** Search parsed code structure with the pinned local Opengrep engine. */
+export function createRepositoryScanTool(options: BuiltInRepositorySearchToolOptions): ResearchExecutableTool {
+  const researchSession = options.researchSession ?? new RepositoryResearchSession();
+  const rootHints = uniqueResolvedPaths([...(options.root ? [options.root] : []), ...(options.roots ?? [])]);
+  const descriptor = createDescriptor({
+    name: "repository.scan",
+    transportName: "repository_scan",
+    description: "Scan local source for structural code patterns or a local rule file with Opengrep. Use repository.search for literal text. Results are candidate code matches, not confirmed issues. Provide pattern and language together, or rulesFile inside the selected repository. Remote rule registries are not used.",
+    actionClasses: ["search", "inspect"],
+    sideEffects: "read",
+    requiredPermissions: ["filesystem:read"],
+    inputSchema: REPOSITORY_SCAN_PARAMETERS,
+    artifactLocations: rootHints,
+    metadata: { provider: "appServer.built_in", safetyProfile: "host-filesystem-read",
+      defaultBudget: { maxToolCalls: 1, maxFiles: 20, maxBytes: 16_000 } },
+  });
+  return {
+    descriptor,
+    parameters: REPOSITORY_SCAN_PARAMETERS as NonNullable<ResearchExecutableTool["parameters"]>,
+    async execute(action, context) {
+      const startedAt = nowIso();
+      return completeOrError(action, startedAt, async () => {
+        const requestedRoot = typeof action.input.root === "string" ? action.input.root.trim() : "";
+        const availableRoots = await resolveExistingRoots(rootHints);
+        if (!requestedRoot) throw new Error("repository.scan requires a local root. Materialize an in-scope repository first if needed.");
+        const [root] = await resolveRepositorySearchRoots(availableRoots, requestedRoot);
+        if (!root) throw new Error("repository.scan could not resolve its local root.");
+        const maxResults = Math.min(50, readPositiveInteger(action.input.maxResults, options.maxResults ?? 20));
+        const pattern = typeof action.input.pattern === "string" ? action.input.pattern.trim() : undefined;
+        const language = typeof action.input.language === "string" ? action.input.language.trim() : undefined;
+        const rulesFile = typeof action.input.rulesFile === "string" ? action.input.rulesFile.trim() : undefined;
+        const report = await runRepositoryOpengrepScan({ root,
+          ...(pattern ? { pattern } : {}), ...(language ? { language } : {}),
+          ...(rulesFile ? { rulesFile } : {}), maxResults,
+          ...(options.opengrepExecutable ? { executable: options.opengrepExecutable } : {}),
+          ...(context?.signal ? { signal: context.signal } : {}) });
+        const matches = report.matches.map((match) => ({ ...match, root }));
+        const issues = report.issues.map((issue) => ({ ...issue, root }));
+        const repository = await researchSession.identify(root);
+        const firstTouch = repository ? await researchSession.touch(repository.root) : null;
+        const firstTouches = firstTouch ? [firstTouch] : [];
+        const result = { matches, issues, scannedFiles: report.scannedFiles,
+          totalMatches: report.totalMatches, partial: report.partial,
+          attemptedRoots: [root], repositoryFirstTouches: firstTouches };
+        return completeResult(action, startedAt, {
+          summary: `Repository scan found ${matches.length} candidate match(es) in ${report.scannedFiles} parsed file(s)${report.partial ? "; results may be incomplete" : ""}.`,
+          output: result,
+          modelOutput: { matches, issues, scannedFiles: report.scannedFiles,
+            totalMatches: report.totalMatches, partial: report.partial,
+            searchedRootLabels: [repositorySearchRootLabel(root)],
+            ...(firstTouches.length ? { repositoryFirstTouches: firstTouches } : {}) },
+          followUpActions: [
+            ...(firstTouches.length ? ["Complete the repository-first-touch source history baseline before broad exploration."] : []),
+            "Inspect candidate matches with file.read and verify the suspected behavior before treating any result as a finding.",
+          ],
         });
       });
     },
@@ -890,6 +961,7 @@ export function createDefaultBuiltInToolFamily(
     ...(options.repositorySearch
       ? [
           createRepositorySearchTool({ ...options.repositorySearch, researchSession }),
+          createRepositoryScanTool({ ...options.repositorySearch, researchSession }),
           createRepositoryHistoryTool({
             roots: [
               ...(options.repositorySearch.root ? [options.repositorySearch.root] : []),
@@ -968,247 +1040,6 @@ async function completeOrError(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return errorResult(action, startedAt, message);
-  }
-}
-
-async function searchRepository(
-  root: string,
-  query: string,
-  options: {
-    maxResults: number;
-    maxFileBytes: number;
-    state: RepositorySearchState;
-  },
-) {
-  assertRepositorySearchActive(options.state);
-  const gitMatches = await searchGitRepository(root, query, options);
-  if (gitMatches !== undefined) return gitMatches;
-
-  const matches: {
-    path: string;
-    line: number;
-    preview: string;
-  }[] = [];
-  const needle = query.toLowerCase();
-
-  async function visit(directory: string): Promise<void> {
-    assertRepositorySearchActive(options.state);
-    if (matches.length >= options.maxResults) {
-      return;
-    }
-
-    const entries = await opendir(directory);
-    for await (const entry of entries) {
-      assertRepositorySearchActive(options.state);
-      if (
-        matches.length >= options.maxResults ||
-        REPOSITORY_SEARCH_IGNORED_DIRECTORIES.has(entry.name)
-      ) {
-        continue;
-      }
-
-      const path = resolve(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(path);
-      } else if (entry.isFile()) {
-        options.state.visitedFiles += 1;
-        if (options.state.visitedFiles > options.state.maxVisitedFiles) {
-          throw new Error(
-            `Repository search stopped after inspecting ${options.state.maxVisitedFiles} files. Narrow the query or repository roots.`,
-          );
-        }
-        const fileStat = await stat(path);
-        if (fileStat.size > options.maxFileBytes) {
-          continue;
-        }
-
-        const text = await readFile(path, "utf8").catch(() => undefined);
-        if (!text) {
-          continue;
-        }
-
-        const lines = text.split(/\r?\n/);
-        for (let index = 0; index < lines.length; index += 1) {
-          const line = lines[index] ?? "";
-          if (line.toLowerCase().includes(needle)) {
-            matches.push({
-              path: portableRelativePath(root, path),
-              line: index + 1,
-              preview: line.trim().slice(0, 240),
-            });
-            if (matches.length >= options.maxResults) {
-              break;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  await visit(root);
-  return matches;
-}
-
-interface RepositorySearchState {
-  deadline: number;
-  maxDurationMs: number;
-  maxVisitedFiles: number;
-  visitedFiles: number;
-  signal?: AbortSignal;
-}
-
-class RepositorySearchTimeoutError extends Error {
-  constructor(maxDurationMs: number) {
-    super(
-      `Repository search timed out after ${maxDurationMs}ms. Narrow the query or select a repository root.`,
-    );
-    this.name = "RepositorySearchTimeoutError";
-  }
-}
-
-async function searchGitRepository(
-  root: string,
-  query: string,
-  options: {
-    maxResults: number;
-    maxFileBytes: number;
-    state: RepositorySearchState;
-  },
-): Promise<{ path: string; line: number; preview: string }[] | undefined> {
-  const gitMarker = await stat(join(root, ".git")).catch(() => undefined);
-  if (!gitMarker) return undefined;
-
-  const maxCandidates = Math.max(
-    options.maxResults + 8,
-    options.maxResults * GIT_SEARCH_CANDIDATE_MULTIPLIER,
-  );
-  const candidates = await gitGrepCandidatePaths(
-    root,
-    query,
-    maxCandidates,
-    options.state,
-  );
-  if (candidates === undefined) return undefined;
-
-  const matches: { path: string; line: number; preview: string }[] = [];
-  const needle = query.toLowerCase();
-  for (const candidate of candidates) {
-    assertRepositorySearchActive(options.state);
-    const path = resolve(root, candidate);
-    const relativePath = relative(root, path);
-    if (relativePath === ".." || relativePath.startsWith(`..${sep}`)) continue;
-    const fileStat = await stat(path).catch(() => undefined);
-    if (!fileStat?.isFile() || fileStat.size > options.maxFileBytes) continue;
-    const text = await readFile(path, "utf8").catch(() => undefined);
-    if (!text) continue;
-    const lines = text.split(/\r?\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index] ?? "";
-      if (!line.toLowerCase().includes(needle)) continue;
-      matches.push({
-        path: portableRelativePath(root, path),
-        line: index + 1,
-        preview: line.trim().slice(0, 240),
-      });
-      if (matches.length >= options.maxResults) return matches;
-    }
-  }
-  return matches;
-}
-
-function gitGrepCandidatePaths(
-  root: string,
-  query: string,
-  maxCandidates: number,
-  state: RepositorySearchState,
-): Promise<string[] | undefined> {
-  assertRepositorySearchActive(state);
-  return new Promise((resolveCandidates, reject) => {
-    const child = spawn("git", [
-      "-c",
-      "color.grep=false",
-      "-c",
-      `safe.directory=${root}`,
-      "-C",
-      root,
-      "grep",
-      "-l",
-      "-z",
-      "-I",
-      "-i",
-      "-F",
-      "-e",
-      query,
-      "--",
-      ".",
-      ":(glob,exclude)**/.beale/**",
-      `:(glob,exclude)**/${PRE_BEALE_DATA_DIRECTORY_NAME}/**`,
-      ":(glob,exclude)**/.hg/**",
-      ":(glob,exclude)**/.svn/**",
-      ":(glob,exclude)**/node_modules/**",
-    ], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const candidates: string[] = [];
-    let pending = "";
-    let settled = false;
-    let reachedLimit = false;
-    const remainingMs = Math.max(1, state.deadline - Date.now());
-    const finish = (value: string[] | undefined, error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      state.signal?.removeEventListener("abort", abort);
-      if (error) reject(error);
-      else resolveCandidates(value);
-    };
-    const stopAtLimit = () => {
-      if (candidates.length < maxCandidates) return;
-      reachedLimit = true;
-      child.kill();
-    };
-    const consume = (chunk: string) => {
-      pending += chunk;
-      let separator = pending.indexOf("\0");
-      while (separator >= 0 && !reachedLimit) {
-        const candidate = pending.slice(0, separator);
-        pending = pending.slice(separator + 1);
-        if (candidate) candidates.push(candidate);
-        stopAtLimit();
-        separator = pending.indexOf("\0");
-      }
-    };
-    const abort = () => {
-      child.kill();
-      finish(undefined, new Error("Repository search was interrupted."));
-    };
-    const timeout = setTimeout(() => {
-      child.kill();
-      finish(
-        undefined,
-        new RepositorySearchTimeoutError(state.maxDurationMs),
-      );
-    }, remainingMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", consume);
-    child.once("error", () => finish(undefined));
-    child.once("close", (code) => {
-      if (!reachedLimit && pending) candidates.push(pending);
-      finish(code === 0 || code === 1 || reachedLimit ? candidates : undefined);
-    });
-    state.signal?.addEventListener("abort", abort, { once: true });
-    if (state.signal?.aborted) abort();
-  });
-}
-
-function assertRepositorySearchActive(state: RepositorySearchState): void {
-  if (state.signal?.aborted) {
-    throw new Error("Repository search was interrupted.");
-  }
-  if (Date.now() >= state.deadline) {
-    throw new RepositorySearchTimeoutError(state.maxDurationMs);
   }
 }
 

@@ -50,7 +50,7 @@ function storedResearchSidePanelWidth(): number {
   }
 }
 
-export function useResizableResearchSidePanel(active: boolean): {
+export function useResizableResearchSidePanel(active: boolean, sessionKey: string | null = null): {
   containerRef: RefObject<HTMLDivElement | null>;
   panelWidth: number;
   maximumPanelWidth: number;
@@ -62,6 +62,11 @@ export function useResizableResearchSidePanel(active: boolean): {
   const [panelWidth, setPanelWidth] = useState(storedResearchSidePanelWidth);
   const [maximumPanelWidth, setMaximumPanelWidth] = useState(MAX_RESEARCH_SIDE_PANEL_WIDTH);
   const activeResizeCleanupRef = useRef<(() => void) | null>(null);
+  const manuallyResizedRef = useRef(false);
+
+  useEffect(() => {
+    manuallyResizedRef.current = false;
+  }, [sessionKey]);
 
   const maximumForContainer = useCallback((): number => {
     const containerWidth = containerRef.current?.getBoundingClientRect().width;
@@ -71,6 +76,7 @@ export function useResizableResearchSidePanel(active: boolean): {
   }, []);
 
   const ensurePanelWidth = useCallback((width: number): void => {
+    if (manuallyResizedRef.current) return;
     const maximum = maximumForContainer();
     setPanelWidth((currentWidth) => clampResearchSidePanelWidth(
       Math.max(currentWidth, Math.ceil(width)), maximum
@@ -123,6 +129,7 @@ export function useResizableResearchSidePanel(active: boolean): {
       document.body.classList.add(RESIZING_BODY_CLASS);
 
       const handlePointerMove = (moveEvent: PointerEvent): void => {
+        manuallyResizedRef.current = true;
         const maximum = maximumForContainer();
         setMaximumPanelWidth(maximum);
         setPanelWidth(researchSidePanelWidthAfterPointerMove(startWidth, startX, moveEvent.clientX, maximum));
@@ -155,6 +162,7 @@ export function useResizableResearchSidePanel(active: boolean): {
       if (nextWidth === null) return;
 
       event.preventDefault();
+      manuallyResizedRef.current = true;
       setMaximumPanelWidth(maximum);
       setPanelWidth(clampResearchSidePanelWidth(nextWidth, maximum));
     },
