@@ -27,7 +27,7 @@ export async function searchRepositoryWithRipgrep(input: {
   signal?: AbortSignal;
 }): Promise<RepositoryLiteralSearchResult> {
   if (input.signal?.aborted) throw new Error("Repository search was interrupted.");
-  assertRepositorySourceRoot(input.root);
+  await assertRepositorySourceRoot(input.root);
   if (Date.now() >= input.deadline) return { matches: [], timedOut: true, partial: true };
   const { rgPath } = await import("@vscode/ripgrep");
   const excludedDirectories = [".git", ".hg", ".svn", ".beale",
