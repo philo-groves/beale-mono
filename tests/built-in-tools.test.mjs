@@ -1586,7 +1586,7 @@ test("repository search includes untracked source while respecting hidden and ig
         id: "search-custom-managed-checkout-example", actionClass: "search", toolName: "repository.search",
         input: { query: "example needle", root: customStore },
       });
-      assert.equal(customSearch.result.status, "complete");
+      assert.equal(customSearch.result.status, "complete", customSearch.result.summary);
       assert.deepEqual(customSearch.result.output.matches.map((match) => match.path), ["source.txt"]);
     } finally {
       if (previousStore === undefined) delete process.env.APP_SERVER_REPOSITORY_STORE_DIR;
