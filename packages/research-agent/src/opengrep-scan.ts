@@ -179,7 +179,7 @@ export async function runRepositoryOpengrepScan(input: {
   signal?: AbortSignal;
 }): Promise<OpengrepScanResult> {
   const root = await realpath(input.root);
-  assertRepositorySourceRoot(root);
+  await assertRepositorySourceRoot(root);
   const rootStat = await stat(root);
   if (!rootStat.isDirectory()) throw new Error("Repository scan requires a directory root.");
   const patternMode = typeof input.pattern === "string" && input.pattern.trim().length > 0;
