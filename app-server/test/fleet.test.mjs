@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -696,4 +697,42 @@ test('Fleet includes bases from reachable app servers when another peer fails', 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('Fleet sandbox targets create one keyed sandbox per session and delete it on release', async () => {
+  // The SDK's in-process memory provider stands in for a cloud provider; one instance keeps its sandboxes.
+  const sdk = createRequire(new URL('../../packages/research-agent/package.json', import.meta.url));
+  const { connectSandbox } = await import(sdk.resolve('@opencoredev/sandbox-sdk'));
+  const { memory } = await import(sdk.resolve('@opencoredev/sandbox-sdk/memory'));
+  const provider = memory();
+  const root = mkdtempSync(join(tmpdir(), 'beale-fleet-sandbox-example-'));
+  const fleet = new FleetService(join(root, 'fleet.json'), 'linux', undefined, async () => provider);
+  try {
+    await assert.rejects(fleet.configure({ action: 'set-workspace-targets', workspaceId: 'workspace-example', targetIds: ['sandbox:local'] }),
+      /sandbox target is unavailable/);
+    const enabled = await fleet.configure({ action: 'set-sandbox-enabled', provider: 'local', enabled: true });
+    assert.deepEqual(enabled.sandboxes.find((sandbox) => sandbox.provider === 'local'),
+      { provider: 'local', name: 'Docker', enabled: true, credentialsConfigured: true });
+    await assert.rejects(fleet.configure({ action: 'set-sandbox-enabled', provider: 'example', enabled: true }), /supported Fleet sandbox provider/);
+    await fleet.configure({ action: 'set-workspace-targets', workspaceId: 'workspace-example', targetIds: ['local', 'sandbox:local'] });
+    await assert.rejects(fleet.prepareSessionTarget('sandbox:e2b', 'workspace-example', 'session-example'), /sandbox target is unavailable/);
+
+    const target = await fleet.prepareSessionTarget('sandbox:local', 'workspace-example', 'session-example');
+    assert.equal(target.sandbox.provider, 'local');
+    assert.equal(target.machineId, `sandbox:local:${target.sandbox.sandboxId}`);
+    assert.deepEqual({ guestPlatform: target.guestPlatform, guestCwd: target.guestCwd }, { guestPlatform: 'linux', guestCwd: '/workspace' });
+    const retried = await fleet.prepareSessionTarget('sandbox:local', 'workspace-example', 'session-example');
+    assert.equal(retried.machineId, target.machineId);
+    const other = await fleet.prepareSessionTarget('sandbox:local', 'workspace-example', 'session-other');
+    assert.notEqual(other.machineId, target.machineId);
+    assert.ok(fleet.isReservedBy(target.machineId, { machineId: fleet.machineId(), sessionId: 'session-example' }));
+    await assert.rejects(fleet.configure({ action: 'set-sandbox-enabled', provider: 'local', enabled: false }), /Release active sandbox sessions/);
+
+    await fleet.releaseSessionTarget(target.machineId, 'session-example');
+    assert.equal(fleet.isReservedBy(target.machineId, { machineId: fleet.machineId(), sessionId: 'session-example' }), false);
+    await assert.rejects(connectSandbox(provider, target.sandbox.sandboxId), { code: 'not_found' });
+    await fleet.releaseSessionTarget(other.machineId, 'session-other');
+    await fleet.configure({ action: 'set-sandbox-enabled', provider: 'local', enabled: false });
+    assert.deepEqual(JSON.parse(readFileSync(join(root, 'fleet.json'), 'utf8')).owners, {});
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

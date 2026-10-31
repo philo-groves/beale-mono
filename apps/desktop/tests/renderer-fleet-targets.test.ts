@@ -20,6 +20,7 @@ const state: FleetState = {
   appServers: [{ id: 'server-example', name: 'Example Server', url: 'https://server.example.test' }],
   browsers: [{ id: 'browser-example', name: 'Example Browser', kind: 'external', enabled: true }],
   browserHomePage: 'https://example.test/',
+  sandboxes: [],
   machines: [{ id: 'tart:example-vm', name: 'Example VM', backend: 'tart', state: 'stopped', base: false,
     canRun: true, canClone: true, guestPlatform: 'linux', privilege: 'standard', sshConfigured: false,
     sshIdentityConfigured: false, sshKnownHostsConfigured: false, sshHost: null, sshUser: null, owner: null },

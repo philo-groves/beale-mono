@@ -7,6 +7,7 @@ import type {
 } from '@beale/app-server-runtime/protocol';
 import type { AppServerProviderContextSize } from './hostRegistry.js';
 import type { AppServerMemoryBackendId } from './hostRegistry.js';
+import type { FleetRemoteShell } from './fleet.js';
 
 const DEFAULT_TOOL_MAX_BYTES = 200_000;
 const PROFILE_TOOL_FAMILY_CEILING_DEFAULT = ['shell', 'repository-search', 'file-read'] as const;
@@ -66,10 +67,8 @@ export interface ResolvedAppServerSessionLaunch {
   };
   shellSafetyMode: string;
   guardianEnabled?: boolean;
-  remoteShell?: { sshArgs: readonly string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string };
-  selectedTargets?: { ids: readonly string[]; remoteShells: Readonly<Record<string, {
-    sshArgs: readonly string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string;
-  }>> };
+  remoteShell?: FleetRemoteShell;
+  selectedTargets?: { ids: readonly string[]; remoteShells: Readonly<Record<string, FleetRemoteShell>> };
   shellOptionsPath?: string;
   collaborationConfigPath?: string;
   promptTemplatePath?: string;

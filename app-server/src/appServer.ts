@@ -972,7 +972,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
       throw new HttpError(409, `Session ${normalized.sessionId} already exists.`);
     }
     if (request.launch.machineId && !request.launch.machineId.startsWith('vm:')
-      && !request.launch.machineId.startsWith('browser:')
+      && !request.launch.machineId.startsWith('sandbox:') && !request.launch.machineId.startsWith('browser:')
       && request.launch.machineId !== 'local' && request.launch.fleetOwnerMachineId) {
       const fleetState = await hostCall(() => hostService.executeOperation({ operation: 'fleet.state' })) as { role?: unknown };
       if (fleetState.role === 'primary') {

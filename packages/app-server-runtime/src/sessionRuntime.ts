@@ -77,6 +77,9 @@ import {
   createResearchToolRegistry,
   createShellTool,
   createMultiTargetShellTool,
+  fleetSandboxConnector,
+  isFleetSandboxProvider,
+  type ShellRemoteTarget,
   createShellSafetyAuthorizer,
   createToolActionAuthorizer,
   BUNDLED_RESEARCH_PROFILE_IDS,
@@ -3839,25 +3842,39 @@ async function prepareRuntimeConfigInputs(input: {
     : mergedWorkspaceContext;
   return { resolvedRuntimeTools, runtimeTools, workspaceContext };
 }
-type FleetRemoteShell = { sshArgs: string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string };
 
-function parseFleetRemoteShell(parsed: unknown): FleetRemoteShell {
-  if (!parsed || typeof parsed !== 'object' || !('sshArgs' in parsed) || !('guestPlatform' in parsed) || !('guestCwd' in parsed)
-    || !Array.isArray(parsed.sshArgs) || parsed.sshArgs.length > 32
-    || !parsed.sshArgs.every((arg: unknown) => typeof arg === 'string' && arg.length <= 4096)
+/**
+ * Decodes one Fleet target's transport from the launch environment: SSH arguments for a VM, or
+ * the provider and ID of a Sandbox SDK sandbox the app server created for this session.
+ */
+function parseFleetRemoteShell(parsed: unknown): ShellRemoteTarget {
+  if (!parsed || typeof parsed !== 'object' || !('guestPlatform' in parsed) || !('guestCwd' in parsed)
     || (parsed.guestPlatform !== 'win32' && parsed.guestPlatform !== 'darwin' && parsed.guestPlatform !== 'linux')
     || typeof parsed.guestCwd !== 'string' || !parsed.guestCwd || parsed.guestCwd.length > 4096) {
+    throw new Error('Invalid Fleet remote shell configuration.');
+  }
+  if ('sandbox' in parsed) {
+    const sandbox = parsed.sandbox;
+    if (parsed.guestPlatform !== 'linux' || !isRecord(sandbox) || !isFleetSandboxProvider(sandbox.provider)
+      || typeof sandbox.sandboxId !== 'string' || !sandbox.sandboxId || sandbox.sandboxId.length > 512) {
+      throw new Error('Invalid Fleet sandbox configuration.');
+    }
+    return { sandbox: fleetSandboxConnector({ provider: sandbox.provider, sandboxId: sandbox.sandboxId }),
+      guestPlatform: 'linux', guestCwd: parsed.guestCwd };
+  }
+  if (!('sshArgs' in parsed) || !Array.isArray(parsed.sshArgs) || parsed.sshArgs.length > 32
+    || !parsed.sshArgs.every((arg: unknown) => typeof arg === 'string' && arg.length <= 4096)) {
     throw new Error('Invalid Fleet remote shell configuration.');
   }
   return { sshArgs: parsed.sshArgs as string[], guestPlatform: parsed.guestPlatform, guestCwd: parsed.guestCwd };
 }
 
-function readFleetRemoteShell(): FleetRemoteShell | null {
+function readFleetRemoteShell(): ShellRemoteTarget | null {
   const raw = process.env.BEALE_FLEET_REMOTE_SHELL;
   return raw ? parseFleetRemoteShell(JSON.parse(raw) as unknown) : null;
 }
 
-function readFleetTargets(): { id: string; remote?: FleetRemoteShell }[] | null {
+function readFleetTargets(): { id: string; remote?: ShellRemoteTarget }[] | null {
   const raw = process.env.BEALE_FLEET_SELECTED_TARGETS;
   if (!raw) return null;
   const parsed: unknown = JSON.parse(raw);
@@ -3869,8 +3886,9 @@ function readFleetTargets(): { id: string; remote?: FleetRemoteShell }[] | null 
     || Array.isArray(parsed.remoteShells)) throw new Error('Invalid Fleet selected targets.');
   const shells = parsed.remoteShells as Record<string, unknown>;
   const ids = parsed.ids as string[];
-  if (Object.keys(shells).some((id) => !ids.includes(id) || !id.startsWith('vm:'))
-    || ids.some((id) => id.startsWith('vm:') && !shells[id])) {
+  const remoteTarget = (id: string) => id.startsWith('vm:') || id.startsWith('sandbox:');
+  if (Object.keys(shells).some((id) => !ids.includes(id) || !remoteTarget(id))
+    || ids.some((id) => remoteTarget(id) && !shells[id])) {
     throw new Error('Invalid Fleet target shell mapping.');
   }
   return ids.map((id) => ({ id, ...(shells[id] ? { remote: parseFleetRemoteShell(shells[id]) } : {}) }));

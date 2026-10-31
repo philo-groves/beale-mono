@@ -298,7 +298,7 @@ test('research-track scheduler context reads authorization and surfaces without 
     return { activeScope: { id: 'scope-example', expiresAt: null } };
   } });
   hostService.fleet.state = async () => ({ enabled: true,
-    workspaceTargets: { 'workspace-test': ['local'] }, browsers: [], machines: [] });
+    workspaceTargets: { 'workspace-test': ['local'] }, browsers: [], machines: [], sandboxes: [] });
   hostService.workspaceSurfaceMap = async () => ({ surfaces: [{ id: 'surface-example' }] });
 
   const context = await hostService.workspaceResearchTrackContext(registry.resolveWorkspace('workspace-test'));
@@ -321,14 +321,14 @@ test('research-track target readiness accepts an allowed VM recovery base', asyn
     state: 'stopped', sshConfigured: true, guestPlatform: 'darwin', owner: null };
   hostService.fleet.state = async () => ({ enabled: true,
     workspaceTargets: { 'workspace-test': ['local', 'vm:run:tart:example-vm', 'vm:clone:tart:example-base'] },
-    browsers: [], machines: [runTarget, cloneBase] });
+    browsers: [], machines: [runTarget, cloneBase], sandboxes: [] });
   hostService.workspaceSurfaceMap = async () => ({ surfaces: [] });
   const workspace = registry.resolveWorkspace('workspace-test');
   const recoverable = await hostService.workspaceResearchTrackContext(workspace);
   assert.equal(recoverable.targets.find((target) => target.id === 'vm:run:tart:example-vm')?.ready, true);
   hostService.fleet.state = async () => ({ enabled: true,
     workspaceTargets: { 'workspace-test': ['local', 'vm:run:tart:example-vm'] },
-    browsers: [], machines: [runTarget, cloneBase] });
+    browsers: [], machines: [runTarget, cloneBase], sandboxes: [] });
   const unavailable = await hostService.workspaceResearchTrackContext(workspace);
   assert.equal(unavailable.targets.find((target) => target.id === 'vm:run:tart:example-vm')?.ready, false);
 });
@@ -1940,7 +1940,7 @@ test("workspace details use the owning app-server state and configured targets",
       throw new Error(`Unexpected operation ${operation}`);
     },
   });
-  host.fleet.state = async () => ({ workspaceTargets: { "workspace-test": ["local"] }, browsers: [], machines: [] });
+  host.fleet.state = async () => ({ workspaceTargets: { "workspace-test": ["local"] }, browsers: [], machines: [], sandboxes: [] });
   const details = await host.workspaceDetails("workspace-test");
   assert.equal(details.scope.resources[0].value, "example.test");
   assert.equal(details.rules[0].text, "Stay in scope.");
@@ -2482,6 +2482,41 @@ test('app-server prepares and releases every VM in one selected-target session',
     'unused-generated-session'), /Synthetic VM preparation failure/u);
   assert.deepEqual(preparedIds, [vmTargets[0]]);
   assert.deepEqual(releasedIds, [vmTargets[0]]);
+});
+
+test('app-server launches a session on an enabled sandbox target and releases it', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-sandbox-target-session-'));
+  temporaryDirectories.push(directory);
+  const service = new AppServerHostService({
+    registry: hostRegistryFixture(directory),
+    invokeProtocol: async (operation) => {
+      if (operation === 'provider.describe') return { defaultSmallModels: {}, sessionTitleEffort: 'medium', shellReviewEffort: 'medium' };
+      if (operation === 'plugin.runtime') return { skillDirs: [], selectedSkillIds: [], allowedMcpServers: [] };
+      if (operation === 'session.get') throw new Error('Session not found');
+      if (operation === 'session.create') return { revision: 1 };
+      throw new Error(`Unexpected operation: ${operation}`);
+    },
+  });
+  const sandbox = (enabled) => ({ provider: 'local', name: 'Docker', enabled, credentialsConfigured: true });
+  service.fleet.stateForWorkspace = async () => ({ enabled: true,
+    workspaceTargets: { 'workspace-test': ['local', 'sandbox:local'] }, browsers: [], machines: [], sandboxes: [sandbox(true)] });
+  const released = [];
+  service.fleet.prepareSessionTarget = async (targetId) => ({ machineId: `${targetId}:sandbox-example`,
+    sandbox: { provider: 'local', sandboxId: 'sandbox-example' }, guestPlatform: 'linux', guestCwd: '/workspace' });
+  service.fleet.releaseSessionTarget = async (machineId) => { released.push(machineId); };
+  const request = sessionLaunchRequest(directory, { sessionId: 'session-sandbox-target' });
+  request.launch.machineId = 'sandbox:local';
+  request.launch.targetIds = ['sandbox:local'];
+  const prepared = await service.prepareSession(request, 'unused-generated-session');
+  assert.deepEqual(JSON.parse(appServerSessionEnvironment(prepared.launch, {}).BEALE_FLEET_REMOTE_SHELL),
+    { sandbox: { provider: 'local', sandboxId: 'sandbox-example' }, guestPlatform: 'linux', guestCwd: '/workspace' });
+  await service.releaseSessionTarget('session-sandbox-target');
+  assert.deepEqual(released, ['sandbox:local:sandbox-example']);
+
+  service.fleet.stateForWorkspace = async () => ({ enabled: true,
+    workspaceTargets: { 'workspace-test': ['local', 'sandbox:local'] }, browsers: [], machines: [], sandboxes: [sandbox(false)] });
+  await assert.rejects(service.prepareSession({ ...request, sessionId: 'session-sandbox-disabled' }, 'unused-generated-session'),
+    /sandbox provider is unavailable/u);
 });
 
 test("research track launch retains collaboration settings and enabled browser tools", async () => {

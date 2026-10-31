@@ -205,6 +205,7 @@ describe('renderer app shell view model', () => {
       appServers: [{ id: 'server-example', name: 'Example Server', url: 'https://server.example.test' }],
       browsers: [{ id: 'browser-example', name: 'Example Browser', kind: 'external', enabled: true }],
       browserHomePage: 'https://duckduckgo.com/',
+      sandboxes: [{ provider: 'e2b', name: 'E2B', enabled: true, credentialsConfigured: false }],
       workspaceTargets: {}, primary: null, requiredWorkspaceIds: [], optionalWorkspaceIds: [], lastMachineByWorkspace: {}
     };
     const settings = renderToStaticMarkup(createElement(SettingsSidebar, {
@@ -217,14 +218,18 @@ describe('renderer app shell view model', () => {
         local: { id: 'local', state: 'online', message: 'Connected.' },
         'server-example': { id: 'server-example', state: 'issue', message: 'Connection needs attention.' }
       },
-      onSelect: onNavigate, onSetBrowserEnabled: async () => undefined, onResizePointerDown: onNavigate
+      onSelect: onNavigate, onSetBrowserEnabled: async () => undefined, onSetSandboxEnabled: async () => undefined,
+      onResizePointerDown: onNavigate
     }));
     expect(settings).not.toContain('>Fleet</span>');
     expect(fleet).toContain('sidebar-wordmark">Fleet</div>');
     expect(fleet).not.toContain('aria-label="Fleet" class="workspace-item"');
     expect(fleet.indexOf('aria-label="App Servers"')).toBeLessThan(fleet.indexOf('aria-label="Browsers"'));
     expect(fleet.indexOf('aria-label="Browsers"')).toBeLessThan(fleet.indexOf('aria-label="Virtual Machines"'));
-    expect(fleet.match(/<svg /gu)).toHaveLength(4);
+    expect(fleet.indexOf('aria-label="Virtual Machines"')).toBeLessThan(fleet.indexOf('aria-label="Sandboxes"'));
+    expect(fleet).toContain('aria-label="Enable E2B sandboxes"');
+    expect(fleet).toContain('title="E2B: API key missing from the app server environment"');
+    expect(fleet.match(/<svg /gu)).toHaveLength(5);
     expect(fleet).toContain('aria-label="Add App Server"');
     expect(fleet).not.toContain('fleet-sidebar-item-marker');
     expect(fleet).toContain('sidebar-server-status-dot online');

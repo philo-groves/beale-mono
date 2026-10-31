@@ -53,6 +53,22 @@ export interface AppServerShellOptions {
   leaseDirectory: string;
 }
 
+/** Runs one command in a sandbox. A Sandbox SDK `Sandbox` handle satisfies it. */
+export interface ShellSandboxRunner {
+  run(command: string, options: { cwd: string; timeoutMs: number; maxOutputBytes: number; stdin?: string; signal?: AbortSignal }):
+    Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean; truncated: boolean }>;
+}
+
+/**
+ * Where a Fleet target runs commands: a VM reached over SSH, or a Sandbox SDK sandbox. The sandbox
+ * is a factory so the session connects on its first command rather than at tool construction.
+ */
+export type ShellRemoteTarget =
+  | { sshArgs: readonly string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string; sshExecutable?: string }
+  | { sandbox: () => Promise<ShellSandboxRunner>; guestPlatform: 'linux'; guestCwd: string };
+
+const remoteExecutionTarget = (remote: ShellRemoteTarget): string => 'sandbox' in remote ? 'fleet-sandbox' : 'fleet-vm';
+
 export interface ShellToolOptions {
   workspaceRoot: string;
   defaultWorkingDirectory?: string;
@@ -63,7 +79,7 @@ export interface ShellToolOptions {
   platform?: NodeJS.Platform;
   wsl?: WslShellOptions;
   windowsPowerShell?: WindowsPowerShellOptions;
-  remote?: { sshArgs: readonly string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string; sshExecutable?: string };
+  remote?: ShellRemoteTarget;
 }
 
 export function createMultiTargetShellTool(
@@ -214,7 +230,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
       name: "shell.run",
       transportName: "shell_run",
       description: options.remote
-        ? `Run a ${platform === 'win32' ? 'PowerShell' : 'POSIX shell'} command or direct utility inside the selected Fleet VM over SSH. Shell safety authorization, utility policy, and core-directory deletion guards apply before execution. Use repository.search for literal discovery when available.`
+        ? `Run a ${platform === 'win32' ? 'PowerShell' : 'POSIX shell'} command or direct utility inside the selected Fleet ${'sandbox' in options.remote ? 'sandbox' : 'VM over SSH'}. Shell safety authorization, utility policy, and core-directory deletion guards apply before execution. Use repository.search for literal discovery when available.`
         : shellDescription(platform),
       actionClasses: ["search", "inspect", "analyze", "experiment"],
       sideEffects: "process",
@@ -226,7 +242,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         networkPolicy: "host-recorded-command-intent",
         shellRuntimes: options.remote ? ["host"] : platform === "win32" ? ["host", "wsl"] : ["host"],
         defaultCommandRuntime: platform === "win32" ? "powershell" : "host",
-        ...(options.remote ? { executionTarget: 'fleet-vm' } : {}),
+        ...(options.remote ? { executionTarget: remoteExecutionTarget(options.remote) } : {}),
         defaultBudget: { maxToolCalls: 1 },
       },
     },
@@ -238,7 +254,7 @@ export function createShellTool(options: ShellToolOptions): ResearchExecutableTo
         const requestedRuntime = readShellRuntime(action.input.runtime);
         if (options.remote && requestedRuntime === 'wsl') throw new Error('WSL is unavailable for a Fleet VM target.');
         const invocation = options.remote
-          ? resolveRemoteInvocation(requested, action.input.cwd, options.remote.guestCwd, platform)
+          ? resolveRemoteInvocation(requested, action.input.cwd, options.remote)
           : resolveShellInvocation({
               requested, requestedRuntime,
               requestedCwd: action.input.cwd ?? options.defaultWorkingDirectory,
@@ -756,7 +772,7 @@ function waitForRetry(signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
-async function runUtility(input: {
+type UtilityRunInput = {
   action: ResearchToolAction;
   utility: string;
   reportedUtility?: string;
@@ -779,8 +795,12 @@ async function runUtility(input: {
   authorization: ShellAuthorizationDecision;
   signal?: AbortSignal;
   environment?: NodeJS.ProcessEnv;
-  remote?: { sshArgs: readonly string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string; sshExecutable?: string };
-}): Promise<ResearchToolExecutionResult> {
+  remote?: ShellRemoteTarget;
+};
+
+async function runUtility(input: UtilityRunInput): Promise<ResearchToolExecutionResult> {
+  if (input.remote && 'sandbox' in input.remote) return runSandboxUtility(input, input.remote.sandbox);
+  const ssh = input.remote;
   return new Promise((resolvePromise) => {
     let settled = false;
     let timedOut = false;
@@ -788,10 +808,10 @@ async function runUtility(input: {
     let stopping = false;
     let forceStop: ReturnType<typeof setTimeout> | undefined;
     const output = createOutputCollector(input.maxOutputBytes);
-    const remoteCommand = input.remote ? remoteShellCommand(input.utility, input.args, input.cwd, input.remote.guestPlatform) : null;
-    const child = spawn(input.remote ? input.remote.sshExecutable ?? 'ssh' : input.utility,
-      input.remote ? [...input.remote.sshArgs, remoteCommand!] : input.args, {
-      ...(input.remote ? {} : { cwd: input.cwd }),
+    const remoteCommand = ssh ? remoteShellCommand(input.utility, input.args, input.cwd, ssh.guestPlatform) : null;
+    const child = spawn(ssh ? ssh.sshExecutable ?? 'ssh' : input.utility,
+      ssh ? [...ssh.sshArgs, remoteCommand!] : input.args, {
+      ...(ssh ? {} : { cwd: input.cwd }),
       env: input.environment ?? shellEnvironment(),
       detached: process.platform !== "win32",
       shell: false,
@@ -862,7 +882,7 @@ async function runUtility(input: {
         cwd: input.cwd,
         runtime: input.runtime,
         ...(spawnErrorCode ? { spawnErrorCode } : {}),
-        ...(input.remote ? { executionTarget: 'fleet-vm' } : {}),
+        ...(input.remote ? { executionTarget: remoteExecutionTarget(input.remote) } : {}),
         ...(input.wsl ? { wsl: input.wsl } : {}),
         authorization: input.authorization,
       }));
@@ -873,42 +893,7 @@ async function runUtility(input: {
       clearTimeout(timeout);
       if (forceStop) clearTimeout(forceStop);
       input.signal?.removeEventListener("abort", abort);
-      const captured = output.value();
-      const resultOutput = {
-        utility: input.reportedUtility ?? input.utility,
-        args: redactShellArguments(input.reportedArgs ?? input.args),
-        cwd: input.cwd,
-        runtime: input.runtime,
-        ...(input.remote ? { executionTarget: 'fleet-vm' } : {}),
-        ...(input.wsl ? { wsl: input.wsl } : {}),
-        exitCode,
-        signal,
-        timedOut,
-        aborted,
-        authorization: input.authorization,
-        ...captured,
-      };
-      const noMatches = exitCode === 1 && isSearchUtility(input.logicalUtility, input.logicalArgs);
-      if ((exitCode === 0 || noMatches) && !timedOut && !aborted) {
-        resolvePromise({
-          action: input.action,
-          status: "complete",
-          startedAt: input.startedAt,
-          completedAt: nowIso(),
-          summary: noMatches
-            ? `${input.displayUtility} completed with no matches.`
-            : `${input.displayUtility} completed successfully.`,
-          output: resultOutput,
-          followUpActions: [],
-        });
-        return;
-      }
-      const reason = timedOut
-        ? `${input.displayUtility} timed out after ${input.timeoutMs}ms.`
-        : aborted
-          ? `${input.displayUtility} was aborted.`
-          : `${input.displayUtility} exited with status ${exitCode ?? signal ?? "unknown"}.`;
-      resolvePromise(errorResult(input.action, input.startedAt, reason, resultOutput));
+      resolvePromise(utilityResult(input, { exitCode, signal, timedOut, aborted, captured: output.value() }));
     };
     child.on("close", finish);
 
@@ -917,15 +902,102 @@ async function runUtility(input: {
   });
 }
 
+/**
+ * Runs the command in a Sandbox SDK sandbox. The SDK enforces the timeout and abort itself, killing
+ * the command's process group in the guest, so there is no local process to stop.
+ */
+async function runSandboxUtility(
+  input: UtilityRunInput,
+  sandbox: () => Promise<ShellSandboxRunner>,
+): Promise<ResearchToolExecutionResult> {
+  try {
+    const box = await sandbox();
+    // The SDK wraps the command in the guest shell and applies cwd itself, so it gets plain quoted argv.
+    const result = await box.run([input.utility, ...input.args].map(posixQuote).join(' '), {
+      cwd: input.cwd,
+      timeoutMs: input.timeoutMs,
+      maxOutputBytes: input.maxOutputBytes,
+      ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    return utilityResult(input, {
+      exitCode: result.exitCode,
+      signal: null,
+      timedOut: result.timedOut,
+      aborted: input.signal?.aborted === true && !result.timedOut,
+      // The SDK caps each stream to maxOutputBytes and reports one truncation flag for both.
+      captured: { stdout: result.stdout, stderr: result.stderr,
+        stdoutTruncated: result.truncated, stderrTruncated: result.truncated },
+    });
+  } catch (error) {
+    return errorResult(input.action, input.startedAt, `Fleet sandbox command failed: ${errorMessage(error)}`, {
+      utility: input.reportedUtility ?? input.utility,
+      args: redactShellArguments(input.reportedArgs ?? input.args),
+      cwd: input.cwd,
+      runtime: input.runtime,
+      executionTarget: 'fleet-sandbox',
+      authorization: input.authorization,
+    });
+  }
+}
+
+/** Builds the shell.run result for a finished command, shared by the process and sandbox paths. */
+function utilityResult(input: UtilityRunInput, outcome: {
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  aborted: boolean;
+  captured: ShellOutput;
+}): ResearchToolExecutionResult {
+  const { exitCode, signal, timedOut, aborted } = outcome;
+  const resultOutput = {
+    utility: input.reportedUtility ?? input.utility,
+    args: redactShellArguments(input.reportedArgs ?? input.args),
+    cwd: input.cwd,
+    runtime: input.runtime,
+    ...(input.remote ? { executionTarget: remoteExecutionTarget(input.remote) } : {}),
+    ...(input.wsl ? { wsl: input.wsl } : {}),
+    exitCode,
+    signal,
+    timedOut,
+    aborted,
+    authorization: input.authorization,
+    ...outcome.captured,
+  };
+  const noMatches = exitCode === 1 && isSearchUtility(input.logicalUtility, input.logicalArgs);
+  if ((exitCode === 0 || noMatches) && !timedOut && !aborted) {
+    return {
+      action: input.action,
+      status: "complete",
+      startedAt: input.startedAt,
+      completedAt: nowIso(),
+      summary: noMatches
+        ? `${input.displayUtility} completed with no matches.`
+        : `${input.displayUtility} completed successfully.`,
+      output: resultOutput,
+      followUpActions: [],
+    };
+  }
+  const reason = timedOut
+    ? `${input.displayUtility} timed out after ${input.timeoutMs}ms.`
+    : aborted
+      ? `${input.displayUtility} was aborted.`
+      : `${input.displayUtility} exited with status ${exitCode ?? signal ?? "unknown"}.`;
+  return errorResult(input.action, input.startedAt, reason, resultOutput);
+}
+
 function remoteShellCommand(utility: string, args: readonly string[], cwd: string, platform: NodeJS.Platform): string {
   if (platform === 'win32') {
     const quote = (value: string): string => `'${value.replace(/'/gu, "''")}'`;
     const script = `$ErrorActionPreference='Stop'; Set-Location -LiteralPath ${quote(cwd)}; & ${quote(utility)} ${args.map(quote).join(' ')}; exit $LASTEXITCODE`;
     return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
   }
-  const quote = (value: string): string => `'${value.replace(/'/gu, "'\\''")}'`;
-  const script = `cd ${quote(cwd)} && ${[utility, ...args].map(quote).join(' ')}`;
-  return `sh -lc ${quote(script)}`;
+  const script = `cd ${posixQuote(cwd)} && ${[utility, ...args].map(posixQuote).join(' ')}`;
+  return `sh -lc ${posixQuote(script)}`;
+}
+
+function posixQuote(value: string): string {
+  return `'${value.replace(/'/gu, "'\\''")}'`;
 }
 
 function defaultUtilityTimeoutMs(utility: string, args: readonly string[]): number {
@@ -1036,17 +1108,18 @@ function readShellRuntime(value: unknown): ShellRuntime | undefined {
   throw new Error("shell.run runtime must be host or wsl.");
 }
 
-function resolveRemoteInvocation(requested: RequestedShellInvocation, rawCwd: unknown, defaultCwd: string, platform: NodeJS.Platform): ResolvedShellInvocation {
+function resolveRemoteInvocation(requested: RequestedShellInvocation, rawCwd: unknown, remote: ShellRemoteTarget): ResolvedShellInvocation {
   if (rawCwd !== undefined && (typeof rawCwd !== 'string' || !rawCwd.trim() || rawCwd.includes('\0'))) {
     throw new Error('shell.run cwd must be a non-empty guest path.');
   }
-  const cwd = typeof rawCwd === 'string' ? rawCwd : defaultCwd;
+  const platform = remote.guestPlatform;
+  const cwd = typeof rawCwd === 'string' ? rawCwd : remote.guestCwd;
   const utility = requested.kind === 'command' ? platform === 'win32' ? 'powershell.exe' : '/bin/sh' : requested.utility;
   const args = requested.kind === 'command'
     ? platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', requested.args[1] ?? ''] : requested.args
     : requested.args;
   return { runtime: 'host', utility, args, policyUtility: utility, policyArgs: args,
-    displayUtility: requested.kind === 'command' ? 'VM shell' : requested.utility, cwd };
+    displayUtility: requested.kind === 'command' ? 'sandbox' in remote ? 'Sandbox shell' : 'VM shell' : requested.utility, cwd };
 }
 
 function resolveShellInvocation(input: {

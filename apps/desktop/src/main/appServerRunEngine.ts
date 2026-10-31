@@ -2990,7 +2990,7 @@ function machineIdFromRun(run: RunRecord): string {
 }
 
 function usesLocalAppServer(targetId: string): boolean {
-  return targetId === 'local' || targetId.startsWith('vm:') || targetId.startsWith('browser:');
+  return targetId === 'local' || targetId.startsWith('vm:') || targetId.startsWith('sandbox:') || targetId.startsWith('browser:');
 }
 
 function fleetRemoteRecord(endpoint: FleetPreparedSession): BealeAppServerDiscovery {

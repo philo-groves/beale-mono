@@ -54,7 +54,7 @@ import {
 import { longSessionRecoveryFallbackPrompt } from './sessionRecovery.js';
 import { reviewResearchTrackContext, type ResearchTrackContextDecision } from './researchTrackContextReview.js';
 import { AppServerWorkerDatabaseCoordinator } from './workerDatabaseBroker.js';
-import { FleetIncompleteResponseError, FleetService } from './fleet.js';
+import { FleetIncompleteResponseError, FleetService, type FleetRemoteShell, type FleetSessionTarget } from './fleet.js';
 import { FleetRemoteController } from './fleetRemote.js';
 import { FleetModelBrokerQueue } from './fleetModelBrokerQueue.js';
 import type { ModelBrokerRequest } from '@beale/research-agent';
@@ -792,7 +792,10 @@ export class AppServerHostService {
         if (selectedId.startsWith('browser:') && !state.browsers.some((browser) => browser.enabled && `browser:${browser.id}` === selectedId)) {
           throw new Error('The selected browser is unavailable in Fleet.');
         }
-        if (selectedId !== 'local' && !selectedId.startsWith('browser:') && !selectedId.startsWith('vm:')) {
+        if (selectedId.startsWith('sandbox:') && !state.sandboxes.some((sandbox) => sandbox.enabled && `sandbox:${sandbox.provider}` === selectedId)) {
+          throw new Error('The selected sandbox provider is unavailable in Fleet.');
+        }
+        if (selectedId !== 'local' && !selectedId.startsWith('browser:') && !selectedId.startsWith('vm:') && !selectedId.startsWith('sandbox:')) {
           throw new Error('Select a configured workspace target.');
         }
       }
@@ -959,10 +962,10 @@ export class AppServerHostService {
     if (request.launch.mode === 'research-track' && !trackAssignment) {
       throw new Error('The research track has no active surface assigned to this session.');
     }
-    const remoteShells: Record<string, Awaited<ReturnType<FleetService['prepareSessionTarget']>>> = {};
+    const remoteShells: Record<string, FleetSessionTarget> = {};
     try {
       for (const selectedId of selectedTargetIds) {
-        if (selectedId.startsWith('vm:')) {
+        if (selectedId.startsWith('vm:') || selectedId.startsWith('sandbox:')) {
           remoteShells[selectedId] = await this.fleet.prepareSessionTarget(selectedId, workspace.workspaceId, sessionId, !request.launch.continuation);
         }
       }
@@ -1046,10 +1049,9 @@ export class AppServerHostService {
         },
         shellSafetyMode: request.launch.shellSafetyMode?.trim() || 'auto_review',
         guardianEnabled: request.launch.guardianEnabled !== false,
-        ...(remoteShell ? { remoteShell: { sshArgs: remoteShell.sshArgs, guestPlatform: remoteShell.guestPlatform, guestCwd: remoteShell.guestCwd } } : {}),
+        ...(remoteShell ? { remoteShell: launchRemoteShell(remoteShell) } : {}),
         ...(selectedTargetIds.length > 1 ? { selectedTargets: { ids: selectedTargetIds,
-          remoteShells: Object.fromEntries(Object.entries(remoteShells).map(([id, shell]) => [id,
-            { sshArgs: shell.sshArgs, guestPlatform: shell.guestPlatform, guestCwd: shell.guestCwd }])) } } : {}),
+          remoteShells: Object.fromEntries(Object.entries(remoteShells).map(([id, shell]) => [id, launchRemoteShell(shell)])) } } : {}),
         ...(existsSync(this.registry.shellOptionsPath) ? { shellOptionsPath: this.registry.shellOptionsPath } : {}),
         ...(collaborationConfigPath ? { collaborationConfigPath } : {}),
         ...(promptTemplatePath ? { promptTemplatePath } : {}),
@@ -1893,7 +1895,10 @@ export class AppServerHostService {
           ready: fleet.enabled && !machine.owner && (machine.sshConfigured && machine.state !== 'unknown'
             || recoveryBases.some((base) => base.guestPlatform === machine.guestPlatform)) }] : []),
         ...(machine.canClone ? [{ id: `vm:clone:${machine.id}`, name: `${machine.name} · Clone`, ready: fleet.enabled && machine.sshConfigured && machine.state === 'stopped' && !machine.owner }] : [])
-      ])
+      ]),
+      ...fleet.sandboxes.filter((sandbox) => sandbox.enabled).map((sandbox) => ({
+        id: `sandbox:${sandbox.provider}`, name: `${sandbox.name} sandbox`, ready: fleet.enabled && sandbox.credentialsConfigured
+      }))
     ].filter((target) => allowed.has(target.id));
     return {
       scope: scopeId
@@ -1930,7 +1935,10 @@ export class AppServerHostService {
       ...fleet.machines.flatMap((machine) => [
         ...(machine.canRun ? [{ id: `vm:run:${machine.id}`, name: `${machine.name} · Run`, ready: fleet.enabled && machine.sshConfigured && machine.state !== 'unknown' && !machine.owner }] : []),
         ...(machine.canClone ? [{ id: `vm:clone:${machine.id}`, name: `${machine.name} · Clone`, ready: fleet.enabled && machine.sshConfigured && machine.state === 'stopped' && !machine.owner }] : [])
-      ])
+      ]),
+      ...fleet.sandboxes.filter((sandbox) => sandbox.enabled).map((sandbox) => ({
+        id: `sandbox:${sandbox.provider}`, name: `${sandbox.name} sandbox`, ready: fleet.enabled && sandbox.credentialsConfigured
+      }))
     ];
     const { workspacePath: _workspacePath, workspaceDirectories: _workspaceDirectories, memoryBackend: _memoryBackend, ...summary } = workspace;
     return projectWorkspaceDetails(summary, state, memory, memorySummary,
@@ -3065,6 +3073,11 @@ function persistenceStorageFromInput(value: unknown): AppServerHostStorage {
 
 function boundedInteger(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+/** The worker's view of a prepared target: its transport, without the app server's ownership ID. */
+function launchRemoteShell({ machineId: _machineId, ...remote }: FleetSessionTarget): FleetRemoteShell {
+  return remote;
 }
 
 function errorMessage(error: unknown): string {

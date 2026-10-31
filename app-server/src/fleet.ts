@@ -8,10 +8,36 @@ import { APP_SERVER_SESSION_LAUNCH_VERSION, BEALE_APP_SERVER_CONTRACT_TIMESTAMP,
 import { sshConnectionArgs } from './fleetSsh.js';
 import { detectFleetBrowsers } from './fleetBrowsers.js';
 import { normalizeTailnetOrigin, verifySameTailnet } from './tailnetRemote.js';
+import {
+  FLEET_SANDBOX_PROVIDERS,
+  FLEET_SANDBOX_PROVIDER_DETAILS,
+  createFleetSandbox,
+  destroyFleetSandbox,
+  fleetSandboxProvider,
+  isFleetSandboxProvider,
+  type FleetSandboxReference,
+  type FleetSandboxProviderResolver,
+} from '@beale/research-agent';
 
 const execFileAsync = promisify(execFile);
 const VM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const WORKSPACE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const VM_TARGET_ID = /^(?:local|browser:[a-z0-9-]+|vm:(?:run|clone):(?:tart|hyper-v):[A-Za-z0-9._:-]+)$/u;
+const SANDBOX_TARGET_ID = new RegExp(`^sandbox:(?:${FLEET_SANDBOX_PROVIDERS.join('|')})$`, 'u');
+/** The working directory Sandbox SDK uses for commands in every provider. */
+const SANDBOX_GUEST_CWD = '/workspace';
+
+function isWorkspaceTargetId(id: string): boolean {
+  return VM_TARGET_ID.test(id) || SANDBOX_TARGET_ID.test(id);
+}
+
+/** What a session worker needs to run commands on one Fleet target. */
+export type FleetRemoteShell =
+  | { sshArgs: string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string }
+  | { sandbox: FleetSandboxReference; guestPlatform: 'linux'; guestCwd: string };
+
+/** A target prepared for one session; `machineId` is the ownership record released when it ends. */
+export type FleetSessionTarget = { machineId: string } & FleetRemoteShell;
 
 export class FleetIncompleteResponseError extends Error {
   constructor(readonly operation: AppServerProtocolOperation, cause?: unknown) {
@@ -55,6 +81,8 @@ interface FleetConfiguration {
   lastMachineByWorkspace: Record<string, string>;
   workspaceTargets: Record<string, string[]>;
   browserEnabled: Record<string, boolean>;
+  /** Sandbox SDK providers offered as targets. Off until the operator enables one. */
+  sandboxEnabled: Record<string, boolean>;
   browserHomePage: string;
   machines: Record<string, FleetMachineConfig>;
   appServers: Record<string, { name: string; url: string; operatorToken: string }>;
@@ -91,6 +119,7 @@ export class FleetService {
     private readonly path = join(homedir(), '.beale', 'fleet.json'),
     private readonly hostPlatform = platform(),
     private readonly runner: FleetCommandRunner = defaultRunner,
+    private readonly sandboxProvider: FleetSandboxProviderResolver = fleetSandboxProvider,
   ) {}
 
   public async state(): Promise<FleetState> {
@@ -173,6 +202,7 @@ export class FleetService {
       const selectable = (machineId === 'local' || state.enabled)
         && (config.workspaceTargets[workspaceId] ?? ['local', 'browser:in-agent']).includes(machineId)
         && (machineId === 'local'
+          || (SANDBOX_TARGET_ID.test(machineId) && config.sandboxEnabled[machineId.slice('sandbox:'.length)] === true)
           || state.browsers.some((browser) => machineId === `browser:${browser.id}` && browser.enabled)
           || state.machines.some((machine) => (machineId === `vm:run:${machine.id}` && machine.canRun)
             || (machineId === `vm:clone:${machine.id}` && machine.canClone && machine.state === 'stopped')));
@@ -183,14 +213,17 @@ export class FleetService {
     } else if (action === 'set-workspace-targets') {
       const workspaceId = validWorkspaceId(input.workspaceId);
       if (!Array.isArray(input.targetIds) || input.targetIds.length > 128
-        || input.targetIds.some((id) => typeof id !== 'string' || id.length > 300
-          || !/^(?:local|browser:[a-z0-9-]+|vm:(?:run|clone):(?:tart|hyper-v):[A-Za-z0-9._:-]+)$/u.test(id))) {
-        throw new Error('Workspace targets must be a bounded list of Browser or Fleet VM IDs.');
+        || input.targetIds.some((id) => typeof id !== 'string' || id.length > 300 || !isWorkspaceTargetId(id))) {
+        throw new Error('Workspace targets must be a bounded list of Browser, Fleet VM, or sandbox IDs.');
       }
       const state = await this.state();
       const targetIds = input.targetIds as string[];
       for (const id of targetIds) {
         if (id === 'local') continue;
+        if (id.startsWith('sandbox:')) {
+          if (config.sandboxEnabled[id.slice('sandbox:'.length)] !== true) throw new Error('Workspace sandbox target is unavailable.');
+          continue;
+        }
         if (id.startsWith('browser:')) {
           if (!state.browsers.some((browser) => browser.id === id.slice(8) && browser.enabled)) throw new Error('Workspace browser target is unavailable.');
           continue;
@@ -200,6 +233,13 @@ export class FleetService {
         if (!machine || (match?.[1] === 'run' ? !machine.canRun : !machine.canClone)) throw new Error('Workspace VM target is unavailable.');
       }
       config.workspaceTargets[workspaceId] = [...new Set(targetIds)];
+    } else if (action === 'set-sandbox-enabled') {
+      const provider = input.provider;
+      if (!isFleetSandboxProvider(provider) || typeof input.enabled !== 'boolean') throw new Error('Select a supported Fleet sandbox provider.');
+      if (!input.enabled && Object.keys(config.owners).some((id) => id.startsWith(`sandbox:${provider}:`))) {
+        throw new Error('Release active sandbox sessions before disabling this provider.');
+      }
+      config.sandboxEnabled[provider] = input.enabled;
     } else if (action === 'set-browser-enabled') {
       const browserId = requiredText(input.browserId, 'Browser ID');
       if (typeof input.enabled !== 'boolean' || !detectFleetBrowsers(this.hostPlatform).some((browser) => browser.id === browserId)) {
@@ -490,7 +530,7 @@ export class FleetService {
       throw new Error('Select 1 to 16 distinct remote targets.');
     }
     if (research.repeatSchedule?.type !== undefined && research.repeatSchedule.type !== 'none'
-      && targetIds.some((id) => id.startsWith('vm:'))) {
+      && targetIds.some((id) => id.startsWith('vm:') || id.startsWith('sandbox:'))) {
       throw new Error('Repeating sessions are available on Local and browser targets only.');
     }
     const fleetState = await this.callRemote<FleetState>(serverId, 'fleet.state', {});
@@ -505,6 +545,9 @@ export class FleetService {
         machineId === `vm:run:${machine.id}` && machine.canRun
         || machineId === `vm:clone:${machine.id}` && machine.canClone && machine.state === 'stopped')) {
         throw new Error('Select an available remote VM target.');
+      }
+      if (machineId.startsWith('sandbox:') && !fleetState.sandboxes.some((sandbox) => sandbox.enabled && machineId === `sandbox:${sandbox.provider}`)) {
+        throw new Error('Select an enabled remote sandbox target.');
       }
     }
     const payload = await this.remotePost(server, BEALE_APP_SERVER_SESSIONS_PATH, {
@@ -738,9 +781,8 @@ export class FleetService {
     return this.read().machines[machineId]?.sessionClone === true;
   }
 
-  public async prepareSessionTarget(targetId: string, workspaceId: string, sessionId: string, enforceAllowlist = true): Promise<{
-    machineId: string; sshArgs: string[]; guestPlatform: 'win32' | 'darwin' | 'linux'; guestCwd: string;
-  }> {
+  public async prepareSessionTarget(targetId: string, workspaceId: string, sessionId: string, enforceAllowlist = true): Promise<FleetSessionTarget> {
+    if (targetId.startsWith('sandbox:')) return this.prepareSandboxTarget(targetId, workspaceId, sessionId, enforceAllowlist);
     const match = /^vm:(run|clone):(.+)$/u.exec(targetId);
     if (!match) throw new Error('Invalid Fleet VM target.');
     if (enforceAllowlist && !(this.read().workspaceTargets[workspaceId] ?? ['local', 'browser:in-agent']).includes(targetId)) {
@@ -805,8 +847,39 @@ export class FleetService {
   public async releaseSessionTarget(machineId: string, sessionId: string): Promise<void> {
     const owner = { machineId: this.machineId(), sessionId };
     if (!this.isReservedBy(machineId, owner)) return;
-    if (this.isSessionClone(machineId)) await this.stop(machineId, owner).catch(() => undefined);
+    if (machineId.startsWith('sandbox:')) {
+      // A failed delete keeps the ownership record, so the sandbox stays visible instead of leaking unnoticed.
+      const [, provider, ...rest] = machineId.split(':');
+      if (isFleetSandboxProvider(provider)) await destroyFleetSandbox(await this.sandboxProvider(provider), rest.join(':'));
+    } else if (this.isSessionClone(machineId)) {
+      await this.stop(machineId, owner).catch(() => undefined);
+    }
     await this.release(machineId, owner);
+  }
+
+  /**
+   * Gets or creates this session's sandbox on the provider and records the session as its owner.
+   * The key ties the sandbox to this primary and session, so a retried launch reuses it.
+   */
+  private async prepareSandboxTarget(targetId: string, workspaceId: string, sessionId: string, enforceAllowlist: boolean): Promise<FleetSessionTarget> {
+    const config = this.read();
+    this.requirePrimaryEnabled(config);
+    const provider = targetId.slice('sandbox:'.length);
+    if (!isFleetSandboxProvider(provider) || config.sandboxEnabled[provider] !== true) throw new Error('Fleet sandbox target is unavailable.');
+    if (enforceAllowlist && !(config.workspaceTargets[workspaceId] ?? ['local', 'browser:in-agent']).includes(targetId)) {
+      throw new Error('This Fleet sandbox is not enabled for the workspace.');
+    }
+    const owner = { machineId: config.machineId, sessionId };
+    validOwner(owner);
+    const sandboxId = await createFleetSandbox(await this.sandboxProvider(provider),
+      `beale:${config.machineId}:${sessionId}:${provider}`, { 'beale-session': sessionId });
+    const machineId = `sandbox:${provider}:${sandboxId}`;
+    await this.exclusive(async () => {
+      const latest = this.read();
+      latest.owners[machineId] = owner;
+      this.write(latest);
+    });
+    return { machineId, sandbox: { provider, sandboxId }, guestPlatform: 'linux', guestCwd: SANDBOX_GUEST_CWD };
   }
 
   public async start(machineId: string, owner?: { machineId: string; sessionId: string }): Promise<FleetState> {
@@ -949,6 +1022,12 @@ export class FleetService {
       appServers: Object.entries(config.appServers).map(([id, server]) => ({ id, name: server.name, url: server.url }))
         .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
       browsers: detectFleetBrowsers(this.hostPlatform).map((browser) => ({ ...browser, enabled: config.browserEnabled[browser.id] !== false })),
+      sandboxes: FLEET_SANDBOX_PROVIDERS.map((provider) => ({
+        provider,
+        name: FLEET_SANDBOX_PROVIDER_DETAILS[provider].name,
+        enabled: config.sandboxEnabled[provider] === true,
+        credentialsConfigured: FLEET_SANDBOX_PROVIDER_DETAILS[provider].credentials.every((name) => Boolean(process.env[name])),
+      })),
       browserHomePage: config.browserHomePage,
       workspaceTargets: Object.fromEntries(Object.entries(config.workspaceTargets).map(([id, targets]) => [id, [...targets]])),
       primary: config.primary,
@@ -988,13 +1067,18 @@ export class FleetService {
         for (const [key, value] of Object.entries(parsed.workspaceTargets)) {
           if (WORKSPACE_ID.test(key) && Array.isArray(value)) {
             config.workspaceTargets[key] = value.filter((id): id is string => typeof id === 'string'
-              && id.length <= 300 && /^(?:local|browser:[a-z0-9-]+|vm:(?:run|clone):(?:tart|hyper-v):[A-Za-z0-9._:-]+)$/u.test(id)).slice(0, 128);
+              && id.length <= 300 && isWorkspaceTargetId(id)).slice(0, 128);
           }
         }
       }
       if (isRecord(parsed.browserEnabled)) {
         for (const [id, enabled] of Object.entries(parsed.browserEnabled)) {
           if (/^[a-z0-9-]+$/u.test(id) && typeof enabled === 'boolean') config.browserEnabled[id] = enabled;
+        }
+      }
+      if (isRecord(parsed.sandboxEnabled)) {
+        for (const [provider, enabled] of Object.entries(parsed.sandboxEnabled)) {
+          if (isFleetSandboxProvider(provider) && typeof enabled === 'boolean') config.sandboxEnabled[provider] = enabled;
         }
       }
       if (isRecord(parsed.machines)) {
@@ -1097,7 +1181,7 @@ function defaultMachineConfig(): FleetMachineConfig {
 }
 
 function defaultConfig(): FleetConfiguration {
-  return { version: 3, machineId: randomUUID(), role: 'primary', enabled: true, primary: null, requiredWorkspaceIds: [], optionalWorkspaceIds: [], lastMachineByWorkspace: {}, workspaceTargets: {}, browserEnabled: {}, browserHomePage: DEFAULT_BROWSER_HOME_PAGE, machines: {}, appServers: {}, owners: {} };
+  return { version: 3, machineId: randomUUID(), role: 'primary', enabled: true, primary: null, requiredWorkspaceIds: [], optionalWorkspaceIds: [], lastMachineByWorkspace: {}, workspaceTargets: {}, browserEnabled: {}, sandboxEnabled: {}, browserHomePage: DEFAULT_BROWSER_HOME_PAGE, machines: {}, appServers: {}, owners: {} };
 }
 
 function validOwner(owner: { machineId: unknown; sessionId: unknown; workspaceId?: unknown }): void {

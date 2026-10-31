@@ -32,7 +32,7 @@ const workspace: WorkspaceRegistryEntry = {
 
 const localFleetState: FleetState = {
   machineId: 'machine-example', role: 'primary', enabled: true, available: true, error: null,
-  appServers: [], remoteMachines: [], browserHomePage: 'https://example.test/',
+  appServers: [], remoteMachines: [], browserHomePage: 'https://example.test/', sandboxes: [],
   browsers: [], machines: [], primary: null, requiredWorkspaceIds: [], optionalWorkspaceIds: [],
   lastMachineByWorkspace: {}, workspaceTargets: { 'workspace-example': ['local'] }
 };

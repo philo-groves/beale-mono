@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Beale
+
+#### Added
+
+- Fleet settings list Sandbox SDK providers under Sandboxes. An enabled provider appears as a per-workspace target and shows when its API key is missing from the app-server environment.
+
+### app-server
+
+#### Added
+
+- Fleet `sandbox:<provider>` targets run session shell commands in a fresh Sandbox SDK sandbox on E2B, Daytona, Freestyle, Superserve, Boat, Sandboxer, or Docker. The primary creates one keyed sandbox per session and deletes it when the session ends. Providers are off by default and read credentials from the app-server environment.
+
 ## 0.9.6
 
 ### Beale

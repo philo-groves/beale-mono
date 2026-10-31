@@ -2361,6 +2361,9 @@ export function App(): JSX.Element {
           onSetBrowserEnabled={async (browserId, enabled) => {
             setFleetConfiguration(await window.beale.configureFleet({ action: 'set-browser-enabled', browserId, enabled }));
           }}
+          onSetSandboxEnabled={async (provider, enabled) => {
+            setFleetConfiguration(await window.beale.configureFleet({ action: 'set-sandbox-enabled', provider, enabled }));
+          }}
           onResizePointerDown={beginSidebarResize}
         />
       ) : pluginsOpen ? (

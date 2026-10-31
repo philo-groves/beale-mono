@@ -100,3 +100,4 @@ export * from "./workspace-import.js";
 export * from "./workspace-research-index.js";
 export { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 export type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
+export * from "./sandbox-target.js";

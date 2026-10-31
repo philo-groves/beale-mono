@@ -10,6 +10,7 @@ import type {
   ResearchGoalSuggestionSelectionInput,
   KnowledgeReportDocument,
   KnowledgeRunbookDocument,
+  FleetSandboxProvider,
 } from "@beale/research-agent";
 
 export type {
@@ -1075,6 +1076,18 @@ export interface FleetBrowser {
   enabled: boolean;
 }
 
+/**
+ * A Sandbox SDK provider the primary offers as a session target. A session that selects
+ * `sandbox:<provider>` gets a fresh sandbox, destroyed when the session ends.
+ * `credentialsConfigured` reports whether the app server's environment has the provider's API key.
+ */
+export interface FleetSandbox {
+  provider: FleetSandboxProvider;
+  name: string;
+  enabled: boolean;
+  credentialsConfigured: boolean;
+}
+
 export const DEFAULT_BROWSER_HOME_PAGE = 'https://duckduckgo.com/';
 
 export interface FleetRemoteSessionSummary {
@@ -1215,6 +1228,7 @@ export interface FleetState {
   remoteMachines: FleetMachine[];
   appServers: FleetAppServer[];
   browsers: FleetBrowser[];
+  sandboxes: FleetSandbox[];
   browserHomePage: string;
   workspaceTargets: Record<string, string[]>;
   primary: { name: string; sshHost: string | null } | null;

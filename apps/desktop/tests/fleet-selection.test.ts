@@ -6,6 +6,7 @@ const state: FleetState = {
   machineId: 'machine-example', role: 'primary', enabled: true, available: true, error: null,
   appServers: [], remoteMachines: [],
   browserHomePage: 'https://duckduckgo.com/',
+  sandboxes: [],
   browsers: [
     { id: 'in-agent', name: 'In-Agent Browser', kind: 'embedded', enabled: true },
     { id: 'chrome', name: 'Google Chrome', kind: 'external', enabled: true },
@@ -47,5 +48,19 @@ describe('Fleet workspace targets', () => {
     expect(isFleetVmTargetId('vm:run:tart:example-base')).toBe(true);
     expect(isStreamedHostBrowserTargetId('browser:in-agent')).toBe(false);
     expect(isStreamedHostBrowserTargetId('browser:chrome')).toBe(true);
+  });
+
+  it('offers enabled sandbox providers and marks one without an API key as not ready', () => {
+    const withSandboxes: FleetState = { ...state,
+      sandboxes: [
+        { provider: 'e2b', name: 'E2B', enabled: true, credentialsConfigured: false },
+        { provider: 'local', name: 'Docker', enabled: true, credentialsConfigured: true },
+        { provider: 'daytona', name: 'Daytona', enabled: false, credentialsConfigured: true },
+      ],
+      workspaceTargets: { 'workspace-example': ['sandbox:e2b', 'sandbox:local', 'sandbox:daytona'] } };
+    expect(allowedFleetTargets(withSandboxes, 'workspace-example').map((target) => [target.id, target.ready])).toEqual([
+      ['sandbox:e2b', false], ['sandbox:local', true],
+    ]);
+    expect(defaultFleetMachineId(withSandboxes, 'workspace-example')).toBe('sandbox:local');
   });
 });

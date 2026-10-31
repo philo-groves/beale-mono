@@ -832,7 +832,7 @@ export function ResearchSettingsForm({
         && (!requiresCyberPolicyAcknowledgement || providerPolicyReady(preference.provider, providerPolicyRiskAcknowledgements));
     });
   const canGenerate = hasPromptDraft && selectedProvider?.configured === true && !generatingPrompt;
-  const vmRepeatConflict = selectedMachineIds.some((machineId) => machineId.startsWith('vm:')) && repeatSchedule.type !== 'none';
+  const vmRepeatConflict = selectedMachineIds.some((machineId) => machineId.startsWith('vm:') || machineId.startsWith('sandbox:')) && repeatSchedule.type !== 'none';
   const remoteTargetsReady = !remoteTargetChoices || selectedMachineIds.length > 0
     && selectedMachineIds.every((machineId) => remoteTargetChoices.some((target) => target.id === machineId && target.ready));
   const canStart = (trackMode || hasPromptDraft)
@@ -1135,7 +1135,7 @@ export function ResearchSettingsForm({
                 />
               </div> : null}
             </div>
-            {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM.</div> : null}
+            {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM or sandbox.</div> : null}
           </>
         )}
         postComposerContent={generationFeedback ? (
@@ -1229,7 +1229,7 @@ export function ResearchSettingsForm({
               ) : null}
               {fleetWorkspaceId ? <MachinePicker targets={remoteTargetChoices ?? (fleetState ? allowedFleetTargets(fleetState, fleetWorkspaceId) : null)} values={selectedMachineIds} disabled={generatingPrompt} error={fleetError} onChange={selectMachine} onRetry={() => setFleetLoadAttempt((attempt) => attempt + 1)} /> : null}
             </div>
-            {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM.</div> : null}
+            {vmRepeatConflict ? <div role="alert">Repeating sessions are available on Local only. Choose No repeat to use this VM or sandbox.</div> : null}
           </section>
           {showSuggestions ? (
             <ResearchGoalChooser

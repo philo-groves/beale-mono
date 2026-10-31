@@ -18,7 +18,7 @@ describe('local app server remote access settings', () => {
       state: {
         enabled: true, role: 'primary', machineId: 'machine-example', available: true, error: null,
         machines: [], remoteMachines: [], appServers: [], browsers: [],
-        browserHomePage: 'https://example.test/', workspaceTargets: {}, primary: null,
+        browserHomePage: 'https://example.test/', sandboxes: [], workspaceTargets: {}, primary: null,
         requiredWorkspaceIds: [], optionalWorkspaceIds: [], lastMachineByWorkspace: {}
       } satisfies FleetState,
       loadError: null,

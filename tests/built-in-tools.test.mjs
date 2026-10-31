@@ -5,6 +5,7 @@ import { access, mkdtemp, mkdir, readFile, realpath, rm, symlink, utimes, writeF
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import test from "node:test";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 
 import {
@@ -90,6 +91,47 @@ test('Fleet shell routes authorized commands through the configured remote trans
     assert.match(decoded, /Set-Location -LiteralPath 'C:\\Users\\example'/);
     assert.match(decoded, /Write-Output example/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Fleet shell runs authorized commands in a Sandbox SDK sandbox', async () => {
+  // The SDK's in-process memory provider is a real sandbox implementation without a network service.
+  const sdk = createRequire(new URL('../packages/research-agent/package.json', import.meta.url));
+  const { createSandbox } = await import(sdk.resolve('@opencoredev/sandbox-sdk'));
+  const { memory } = await import(sdk.resolve('@opencoredev/sandbox-sdk/memory'));
+  const root = await mkdtemp(join(tmpdir(), 'beale-sandbox-transport-test-'));
+  const box = await createSandbox(memory());
+  let connections = 0;
+  try {
+    await box.files.write('/workspace/notes/example.txt', 'synthetic note');
+    const registry = createResearchToolRegistry([createShellTool({
+      workspaceRoot: root, authorize: allowShell,
+      remote: { sandbox: async () => { connections += 1; return box; }, guestPlatform: 'linux', guestCwd: '/workspace' },
+    })]);
+    const read = await registry.execute({
+      id: 'sandbox_read', actionClass: 'inspect', toolName: 'shell.run',
+      input: { utility: 'cat', args: ['example.txt'], cwd: '/workspace/notes' },
+    });
+    assert.equal(read.result.status, 'complete');
+    assert.equal(read.result.output.stdout, 'synthetic note');
+    assert.equal(read.result.output.executionTarget, 'fleet-sandbox');
+    assert.equal(read.result.output.cwd, '/workspace/notes');
+    const failed = await registry.execute({
+      id: 'sandbox_false', actionClass: 'inspect', toolName: 'shell.run', input: { utility: 'false' },
+    });
+    assert.equal(failed.result.status, 'error');
+    assert.match(failed.result.error.message, /exited with status 1/);
+    const guarded = await registry.execute({
+      id: 'sandbox_protected_delete', actionClass: 'experiment', toolName: 'shell.run',
+      input: { utility: 'rm', args: ['-rf', '/workspace'] },
+    });
+    assert.equal(guarded.result.status, 'error');
+    assert.match(guarded.result.error.message, /Folder delete guard blocked rm/);
+    assert.equal(connections, 2);
+    assert.equal(await box.files.read('/workspace/notes/example.txt'), 'synthetic note');
+  } finally {
+    await box.destroy();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('shell recovers a missing host rg before returning the tool result', { skip: process.platform === 'win32' }, async () => {

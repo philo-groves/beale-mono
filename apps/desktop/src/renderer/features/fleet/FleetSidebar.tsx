@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react';
-import { Globe2, Monitor, Plus, ServerCog } from 'lucide-react';
-import type { FleetAppServerStatus, FleetState } from '@beale/app-server-runtime/protocol';
+import { Box, Globe2, Monitor, Plus, ServerCog } from 'lucide-react';
+import type { FleetAppServerStatus, FleetSandbox, FleetState } from '@beale/app-server-runtime/protocol';
 import { CollectionSidebar } from '../../app/CollectionSidebar';
 
-export type FleetSection = 'app-servers' | 'browsers' | 'machines';
+export type FleetSection = 'app-servers' | 'browsers' | 'machines' | 'sandboxes';
 export interface FleetSelection {
   section: FleetSection;
   itemId: string | null;
@@ -13,10 +13,11 @@ export interface FleetSelection {
 const sections = [
   { id: 'app-servers', label: 'App Servers', icon: ServerCog },
   { id: 'browsers', label: 'Browsers', icon: Globe2 },
-  { id: 'machines', label: 'Virtual Machines', icon: Monitor }
+  { id: 'machines', label: 'Virtual Machines', icon: Monitor },
+  { id: 'sandboxes', label: 'Sandboxes', icon: Box }
 ] as const;
 
-export function FleetSidebar({ collapsed, state, statuses, selection, error, onSelect, onSetBrowserEnabled, onResizePointerDown }: {
+export function FleetSidebar({ collapsed, state, statuses, selection, error, onSelect, onSetBrowserEnabled, onSetSandboxEnabled, onResizePointerDown }: {
   collapsed: boolean;
   state: FleetState | null;
   statuses: Record<string, FleetAppServerStatus>;
@@ -24,20 +25,21 @@ export function FleetSidebar({ collapsed, state, statuses, selection, error, onS
   error: string | null;
   onSelect: (selection: FleetSelection) => void;
   onSetBrowserEnabled: (browserId: string, enabled: boolean) => Promise<void>;
+  onSetSandboxEnabled: (provider: FleetSandbox['provider'], enabled: boolean) => Promise<void>;
   onResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }): JSX.Element {
-  const [updatingBrowserId, setUpdatingBrowserId] = useState<string | null>(null);
-  const [browserError, setBrowserError] = useState<string | null>(null);
-  const updateBrowser = async (browserId: string, enabled: boolean): Promise<void> => {
-    if (updatingBrowserId) return;
-    setUpdatingBrowserId(browserId);
-    setBrowserError(null);
+  const [updatingToggleId, setUpdatingToggleId] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
+  const updateToggle = async (toggleId: string, apply: () => Promise<void>): Promise<void> => {
+    if (updatingToggleId) return;
+    setUpdatingToggleId(toggleId);
+    setToggleError(null);
     try {
-      await onSetBrowserEnabled(browserId, enabled);
+      await apply();
     } catch (caught) {
-      setBrowserError(caught instanceof Error ? caught.message : String(caught));
+      setToggleError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setUpdatingBrowserId(null);
+      setUpdatingToggleId(null);
     }
   };
   const select = (section: FleetSection, itemId: string | null = null): void => onSelect({ section, itemId });
@@ -47,8 +49,8 @@ export function FleetSidebar({ collapsed, state, statuses, selection, error, onS
       title="Fleet"
       label="Fleet"
       collapsed={collapsed}
-      error={error ?? browserError}
-      updateKey={`${state?.appServers.length ?? 0}:${state?.browsers.length ?? 0}:${state?.machines.length ?? 0}:${selection.section}:${selection.itemId ?? ''}`}
+      error={error ?? toggleError}
+      updateKey={`${state?.appServers.length ?? 0}:${state?.browsers.length ?? 0}:${state?.machines.length ?? 0}:${state?.sandboxes.length ?? 0}:${selection.section}:${selection.itemId ?? ''}`}
       onResizePointerDown={onResizePointerDown}
     >
       <nav className="sidebar-list-scroll-content fleet-sidebar-sections" aria-label="Fleet sections">
@@ -76,12 +78,28 @@ export function FleetSidebar({ collapsed, state, statuses, selection, error, onS
                     className="fleet-browser-toggle"
                     aria-label={`Enable ${browser.name}`}
                     checked={browser.enabled}
-                    disabled={updatingBrowserId !== null}
-                    onChange={(event) => void updateBrowser(browser.id, event.currentTarget.checked)}
+                    disabled={updatingToggleId !== null}
+                    onChange={(event) => { const enabled = event.currentTarget.checked; void updateToggle(`browser:${browser.id}`, () => onSetBrowserEnabled(browser.id, enabled)); }}
                   />
                 </div>
               )) : null}
               {id === 'machines' ? state?.machines.map((machine) => <FleetSidebarItem key={machine.id} label={machine.name} active={selection.section === id && selection.itemId === machine.id} onClick={() => select(id, machine.id)} />) : null}
+              {id === 'sandboxes' ? state?.sandboxes.map((sandbox) => (
+                <div className="workspace-session-row fleet-browser-row" key={sandbox.provider}>
+                  <span className="workspace-session-item fleet-browser-label"
+                    title={sandbox.credentialsConfigured ? sandbox.name : `${sandbox.name}: API key missing from the app server environment`}>
+                    <span className="workspace-session-title">{sandbox.name}</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="fleet-browser-toggle"
+                    aria-label={`Enable ${sandbox.name} sandboxes`}
+                    checked={sandbox.enabled}
+                    disabled={updatingToggleId !== null}
+                    onChange={(event) => { const enabled = event.currentTarget.checked; void updateToggle(`sandbox:${sandbox.provider}`, () => onSetSandboxEnabled(sandbox.provider, enabled)); }}
+                  />
+                </div>
+              )) : null}
               {state && id === 'machines' && state.machines.length === 0 ? <span className="workspace-session-empty">No virtual machines found.</span> : null}
               {state && id === 'browsers' && state.browsers.length === 0 ? <span className="workspace-session-empty">No browsers found.</span> : null}
             </div>

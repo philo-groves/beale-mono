@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { JSX } from 'react';
-import { Globe2, Monitor, RefreshCw, ServerCog } from 'lucide-react';
+import { Box, Globe2, Monitor, RefreshCw, ServerCog } from 'lucide-react';
 import type { FleetState } from '@beale/app-server-runtime/protocol';
 import type { WorkspaceRegistryEntry } from '@shared/types';
 import { availableFleetTargets, configuredWorkspaceTargets } from '../../../shared/fleet';
@@ -11,6 +11,8 @@ interface TargetRow {
   detail: string;
   available: boolean;
   ready: boolean;
+  /** Shown in place of the generic setup hint when the target is not ready. */
+  setupHint?: string;
 }
 
 export function nextWorkspaceTargetIds(state: FleetState, workspaceId: string, targetId: string, enabled: boolean): string[] {
@@ -64,7 +66,7 @@ export function FleetTargetsWorkspace({ state, workspaces, selectedWorkspaceId, 
   const targetRow = (target: TargetRow): JSX.Element => {
     const count = selectedCount(target.id);
     const allSelected = scopeWorkspaceIds.length > 0 && count === scopeWorkspaceIds.length;
-    const detail = !target.ready ? `${target.detail} · Configure in Fleet before use`
+    const detail = !target.ready ? `${target.detail} · ${target.setupHint ?? 'Configure in Fleet before use'}`
       : scopeId ? target.detail : `${target.detail} · ${count} of ${scopeWorkspaceIds.length} workspaces`;
     return <label className="settings-form-control-row fleet-target-row" key={target.id}>
       <span className="settings-form-control-copy"><strong>{target.name}</strong><small>{detail}</small></span>
@@ -85,6 +87,11 @@ export function FleetTargetsWorkspace({ state, workspaces, selectedWorkspaceId, 
     ...(machine.canClone ? [{ id: `vm:clone:${machine.id}`, name: `${machine.name} · Clone`, detail: 'Clone this stopped VM',
       available: state.enabled, ready: machine.sshConfigured && machine.state === 'stopped' }] : [])
   ]) : [];
+  const sandboxTargets: TargetRow[] = state.role === 'primary' ? state.sandboxes.filter((sandbox) => sandbox.enabled).map((sandbox) => ({
+    id: `sandbox:${sandbox.provider}`, name: `${sandbox.name} sandbox`, detail: 'Fresh sandbox for each session',
+    available: state.enabled, ready: sandbox.credentialsConfigured,
+    setupHint: 'Set the provider API key in the app server environment'
+  })) : [];
   const unconfiguredMachines = state.role === 'primary'
     ? state.machines.filter((machine) => !machine.canRun && !machine.canClone) : [];
   return <div className="fleet-targets-workspace wide-content-container" aria-label="Fleet targets">
@@ -135,6 +142,13 @@ export function FleetTargetsWorkspace({ state, workspaces, selectedWorkspaceId, 
           </div>)}
           {!vmTargets.length && !unconfiguredMachines.length && !state.remoteMachines.length
             ? <p className="fleet-target-empty">No virtual machines found. Refresh Fleet to discover VMs.</p> : null}
+        </div>
+      </section>
+      <section className="settings-form fleet-target-group" aria-label="Sandboxes">
+        <header className="settings-form-heading"><div className="fleet-target-heading-label"><Box size={15} aria-hidden="true" /><h2>Sandboxes</h2></div></header>
+        <div className="settings-form-control-list">
+          {sandboxTargets.length ? sandboxTargets.map(targetRow)
+            : <p className="fleet-target-empty">Enable a sandbox provider in the Fleet sidebar to add it here.</p>}
         </div>
       </section>
       {error ? <p className="settings-form-error" role="alert">{error}</p> : null}

@@ -33,6 +33,12 @@ export function availableFleetTargets(state: FleetState): FleetTargetChoice[] {
           ready: machine.sshConfigured && machine.state === 'stopped', detail: 'Clone for this session',
         });
       }
+      for (const sandbox of state.sandboxes) {
+        if (sandbox.enabled) targets.push({
+          id: `sandbox:${sandbox.provider}`, name: `${sandbox.name} sandbox`,
+          ready: sandbox.credentialsConfigured, detail: 'Fresh sandbox for each session',
+        });
+      }
     }
   }
   return targets;

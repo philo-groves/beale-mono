@@ -3523,9 +3523,9 @@ export class WorkspaceService {
       ...(input.collaboration ? { collaboration: normalizeResearchCollaboration(input.collaboration) } : {})
     };
     if (!runtime) throw new Error('No Beale workspace is open');
-    if (normalizedInput.machineId?.startsWith('vm:')
+    if ((normalizedInput.machineId?.startsWith('vm:') || normalizedInput.machineId?.startsWith('sandbox:'))
       && normalizeRepeatSchedule(normalizedInput.budget.repeatSchedule).type !== 'none') {
-      throw new Error('Repeating research sessions are not available on Fleet VMs. Choose No repeat or Local.');
+      throw new Error('Repeating research sessions are not available on Fleet VMs or sandboxes. Choose No repeat or Local.');
     }
     const researchProfile = this.refreshResearchProfile(runtime);
     if (researchProfile.profile.id !== 'security-research') {
