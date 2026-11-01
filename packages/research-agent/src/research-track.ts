@@ -362,9 +362,13 @@ export class ResearchTrackStore {
     return this.get();
   }
 
-  public control(action: "pause" | "resume" | "stop"): ResearchTrackSnapshot {
+  public control(action: "pause" | "resume" | "stop", resumeTargetIds?: readonly string[]): ResearchTrackSnapshot {
     const track = this.get();
     if (!track) throw new Error("No research track exists in this workspace.");
+    if (resumeTargetIds !== undefined && (action !== "resume" || resumeTargetIds.length < 1
+      || resumeTargetIds.length > 16 || new Set(resumeTargetIds).size !== resumeTargetIds.length)) {
+      throw new Error("A resumed research track requires 1 to 16 distinct research targets.");
+    }
     if (action === "resume" && track.status !== "paused" && track.status !== "waiting") {
       throw new Error("Only a paused or waiting research track can resume.");
     }
@@ -386,8 +390,11 @@ export class ResearchTrackStore {
     }
     const status = action === "resume" ? "running" : "paused";
     this.#database.prepare(`UPDATE app_server_research_tracks SET status=?,
+      target_ids_json=CASE WHEN ? THEN ? ELSE target_ids_json END,
       last_error=CASE WHEN ? THEN NULL ELSE last_error END, updated_at=? WHERE workspace_id=?`)
-      .run(status, action === "resume" ? 1 : 0, new Date().toISOString(), this.#workspaceId);
+      .run(status, action === "resume" && resumeTargetIds !== undefined ? 1 : 0,
+        JSON.stringify(resumeTargetIds ?? track.targetIds), action === "resume" ? 1 : 0,
+        new Date().toISOString(), this.#workspaceId);
     return this.get()!;
   }
 
@@ -415,16 +422,21 @@ export class ResearchTrackStore {
     if (actionable.length > 0 && ready.length === 0) return null;
     const tier = (work: ResearchTrackSurfaceState): number => {
       const surface = byId.get(work.surfaceId);
-      const signals = surface?.foundation?.highValueSignals ?? [];
-      if (signals.length > 0) return 0;
       const ranking = surface?.foundation?.ranking;
-      if (ranking && ranking.impact.score >= 7 && ranking.reachability.score >= 5) return 1;
-      if (ranking && ranking.impact.score >= 7) return 2;
-      return 3;
+      if (!ranking) return surface?.foundation?.highValueSignals?.length ? 2 : 3;
+      if (ranking.impact.score >= 7 && ranking.reachability.score >= 5) {
+        return ranking.exposure.score >= 5 ? 0 : 1;
+      }
+      // An explicit weak impact or attacker path should not outrank an
+      // unassessed component merely because it has an interesting signal.
+      return ranking.impact.score >= 7 ? 4 : 5;
     };
+    const signalCount = (work: ResearchTrackSurfaceState): number =>
+      byId.get(work.surfaceId)?.foundation?.highValueSignals?.length ?? 0;
     const ranked = [...ready].sort((left, right) =>
       tier(left) - tier(right)
       || (left.lastWorkedAt ?? "").localeCompare(right.lastWorkedAt ?? "")
+      || signalCount(right) - signalCount(left)
       || left.surfaceId.localeCompare(right.surfaceId));
     const resourceId = (work: ResearchTrackSurfaceState): string => {
       const surface = byId.get(work.surfaceId);
@@ -465,6 +477,7 @@ export class ResearchTrackStore {
         || (kindEpochs.get(resourceKind(left)) ?? 0) - (kindEpochs.get(resourceKind(right)) ?? 0)
         || (resourceEpochs.get(resourceId(left)) ?? 0) - (resourceEpochs.get(resourceId(right)) ?? 0)
         || (left.lastWorkedAt ?? "").localeCompare(right.lastWorkedAt ?? "")
+        || signalCount(right) - signalCount(left)
         || left.surfaceId.localeCompare(right.surfaceId))[0]
       : null;
     // Keep a productive engagement for a bounded run. A better value tier can

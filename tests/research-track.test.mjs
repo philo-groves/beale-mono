@@ -188,6 +188,42 @@ test('impact and reachability tiers select a promising surface', () => {
   } finally { state.close(); }
 });
 
+test('an interesting signal does not outrank stronger assessed impact and reachability', () => {
+  const state = fixture();
+  const ranking = (impact, reachability, exposure) => Object.fromEntries(
+    ['impact', 'reachability', 'relevance', 'exposure', 'precedence'].map((factor) =>
+      [factor, { score: { impact, reachability, exposure }[factor] ?? 5,
+        basis: `Synthetic ${factor} assessment.` }]));
+  const ranked = [
+    { ...surfaces[0], foundation: { ranking: ranking(5, 3, 2), highValueSignals: [
+      { kind: 'historical_sink', basis: 'A synthetic historical issue involved this parser.' }
+    ] } },
+    { ...surfaces[1], foundation: { ranking: ranking(8, 7, 6), highValueSignals: [] } },
+  ];
+  try {
+    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
+      targetIds: ['local'], surfaces: ranked });
+    assert.equal(state.store.reserveNext('session-example-value', ranked).surface.id, ranked[1].id);
+  } finally { state.close(); }
+});
+
+test('an unassessed component precedes one assessed as low value despite a signal', () => {
+  const state = fixture();
+  const weakRanking = Object.fromEntries(['impact', 'reachability', 'relevance', 'exposure', 'precedence']
+    .map((factor) => [factor, { score: 3, basis: `Synthetic ${factor} assessment.` }]));
+  const map = [
+    { ...surfaces[0], foundation: { ranking: weakRanking, highValueSignals: [
+      { kind: 'pre_auth', basis: 'A synthetic parser accepts input before authentication.' }
+    ] } },
+    surfaces[1],
+  ];
+  try {
+    state.store.start({ scopeId: 'scope-example', provider: { id: 'openai-codex' },
+      targetIds: ['local'], surfaces: map });
+    assert.equal(state.store.reserveNext('session-example-unassessed', map).surface.id, map[1].id);
+  } finally { state.close(); }
+});
+
 test('new finding evidence and completed runbook cells qualify as track progress', async () => {
   const state = fixture();
   try {

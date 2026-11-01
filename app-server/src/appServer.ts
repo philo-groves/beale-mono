@@ -690,7 +690,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
         return;
       }
       if (body.operation === 'workspace.research_track' && isRecord(body.input)) {
-        const { action, workspaceId, configuration } = decodeBealeWorkspaceResearchTrackRequest(body.input);
+        const { action, workspaceId, configuration, resumeTargetIds } = decodeBealeWorkspaceResearchTrackRequest(body.input);
         if (action === 'status') {
           const result = await hostCall(() => hostService.workspaceResearchTrack(workspaceId, action));
           sendJson(response, 200, { controlVersion: BEALE_APP_SERVER_CONTROL_VERSION, result: researchTrackWithPhase(result) });
@@ -704,7 +704,7 @@ export async function startAppServer(options: AppServerOptions = {}): Promise<Ap
           return;
         }
         if (action === 'start' || action === 'resume') {
-          const result = await hostCall(() => hostService.workspaceResearchTrack(workspaceId, action, configuration));
+          const result = await hostCall(() => hostService.workspaceResearchTrack(workspaceId, action, configuration, resumeTargetIds));
           sendJson(response, 200, { controlVersion: BEALE_APP_SERVER_CONTROL_VERSION, result: researchTrackWithPhase(result) });
           setImmediate(() => void scanDueResearchTracks(workspaceId));
           return;

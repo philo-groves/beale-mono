@@ -80,7 +80,7 @@ test("track workers launch with dedicated roles and fresh context", async () => 
   for (const request of requests) {
     assert.equal(request.freshSubagentContext, true);
     assert.deepEqual(request.inheritedMessages, []);
-    assert.match(request.prompt, /Canonical finding: claim-example-/);
+    assert.match(request.prompt, /Canonical claim: claim-example-/);
     assert.match(request.prompt, /Responsibility:/);
   }
   assert.deepEqual(activities.filter((activity) => activity.type === 'spawned')
@@ -125,7 +125,8 @@ test("track sessions can spawn an independent reviewer through automatic and exp
     ["reviewer", "anthropic", "review-model"],
   ]);
   assert.ok(requests.every((request) => request.freshSubagentContext && request.inheritedMessages.length === 0));
-  assert.ok(requests.every((request) => request.prompt.includes("Independently review the finding and its reproduction.")));
+  assert.ok(requests.every((request) => request.prompt.includes("Independently review the assigned Finding and its reproduction.")));
+  assert.ok(requests.every((request) => request.prompt.includes("downrated to low or informational")));
 });
 
 test("each track worker may spawn one fresh Reviewer and its child cannot delegate", async () => {

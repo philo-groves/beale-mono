@@ -533,6 +533,7 @@ export interface BealeWorkspaceResearchTrack {
 export interface BealeWorkspaceResearchTrackRequest {
   workspaceId: string;
   action: "status" | "start" | "pause" | "resume" | "stop";
+  resumeTargetIds?: string[];
   configuration?: {
     provider: { id: string; model: string; reasoningEffort: string };
     guardianEnabled?: boolean;
@@ -548,6 +549,13 @@ export function decodeBealeWorkspaceResearchTrackRequest(value: unknown): BealeW
     throw new Error("Invalid workspace research track request.");
   }
   const configuration = value.configuration;
+  const resumeTargetIds = value.resumeTargetIds;
+  if (resumeTargetIds !== undefined && (value.action !== "resume" || !Array.isArray(resumeTargetIds)
+    || resumeTargetIds.length < 1 || resumeTargetIds.length > 16
+    || !resumeTargetIds.every((id: unknown) => typeof id === "string" && id.length > 0 && id.length <= 256)
+    || new Set(resumeTargetIds).size !== resumeTargetIds.length)) {
+    throw new Error("Invalid workspace research track resume targets: choose 1 to 16 distinct targets.");
+  }
   if (configuration !== undefined) {
     if (value.action !== "start" || !isRecord(configuration)) {
       throw new Error("Invalid workspace research track configuration: only start accepts settings.");
@@ -575,6 +583,7 @@ export function decodeBealeWorkspaceResearchTrackRequest(value: unknown): BealeW
     }
   }
   return { workspaceId: value.workspaceId.trim(), action: value.action,
+    ...(resumeTargetIds === undefined ? {} : { resumeTargetIds: resumeTargetIds as string[] }),
     ...(configuration === undefined ? {} : { configuration: configuration as NonNullable<BealeWorkspaceResearchTrackRequest["configuration"]> }) };
 }
 

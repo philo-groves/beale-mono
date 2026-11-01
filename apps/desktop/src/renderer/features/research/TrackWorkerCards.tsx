@@ -32,10 +32,10 @@ function workerRole(value: unknown): Worker['role'] | null {
 /** Live lifecycle events keep cards visible while the track status projection catches up. */
 export function activeTrackWorkersFromEvents(
   events: readonly TraceEventRecord[],
-  findings: readonly { id: string; title: string }[] = [],
+  claims: readonly { id: string; title: string }[] = [],
   activeAttemptId?: string | null
 ): Worker[] {
-  const titles = new Map(findings.map((finding) => [finding.id, finding.title]));
+  const titles = new Map(claims.map((claim) => [claim.id, claim.title]));
   const latest = new Map<string, { sequence: number; role: Worker['role']; claimId: string | null;
     title: string; assignedAt: string; status: string }>();
   for (const event of events) {
@@ -55,7 +55,7 @@ export function activeTrackWorkersFromEvents(
     const message = typeof activity.message === 'string' ? activity.message.split('\n')[0]?.trim() : '';
     latest.set(agentPath, {
       sequence: event.sequence, role, claimId,
-      title: claimId ? titles.get(claimId) ?? 'Finding under review' : message || `${ROLE_LABELS[role]} in progress`,
+      title: claimId ? titles.get(claimId) ?? 'Claim under review' : message || `${ROLE_LABELS[role]} in progress`,
       assignedAt: prior?.assignedAt ?? event.createdAt,
       status
     });
@@ -102,9 +102,9 @@ export function groupTrackWorkers(workers: readonly Worker[]): WorkerGroup[] {
   return [...groups.values()];
 }
 
-export function TrackWorkerCards({ workspaceId, sessionId, serverId, events, findings = [], activeAttemptId, runStatus }: {
+export function TrackWorkerCards({ workspaceId, sessionId, serverId, events, claims = [], activeAttemptId, runStatus }: {
   workspaceId: string; sessionId: string; serverId?: string;
-  events: readonly TraceEventRecord[]; findings?: readonly { id: string; title: string }[];
+  events: readonly TraceEventRecord[]; claims?: readonly { id: string; title: string }[];
   activeAttemptId?: string | null; runStatus?: RunStatus | null
 }): JSX.Element | null {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -135,7 +135,7 @@ export function TrackWorkerCards({ workspaceId, sessionId, serverId, events, fin
   const activeWorkersByKey = new Map<string, Worker>();
   const sessionCanHaveActiveWorkers = runStatus === 'queued' || runStatus === 'active';
   for (const worker of sessionCanHaveActiveWorkers
-    ? activeTrackWorkersFromEvents(events, findings, activeAttemptId) : []) {
+    ? activeTrackWorkersFromEvents(events, claims, activeAttemptId) : []) {
     activeWorkersByKey.set(`${worker.role}:${worker.claimId}`, worker);
   }
   for (const worker of sessionCanHaveActiveWorkers ? activeTrackWorkerCards(workers, events) : []) {
@@ -152,10 +152,10 @@ export function TrackWorkerCards({ workspaceId, sessionId, serverId, events, fin
         {groups.map((group) => <TrackWorkerCard key={group.role}
           group={group} onShowQueue={() => setQueuedRole(group.role)} />)}
       </section>
-      {selected ? <Modal title={`${ROLE_LABELS[selected.role]} queued findings`} onClose={() => setQueuedRole(null)}>
+      {selected ? <Modal title={`${ROLE_LABELS[selected.role]} queued ${selected.role === 'investigator' ? 'claims' : 'findings'}`} onClose={() => setQueuedRole(null)}>
         {selected.queued.length > 0 ? <ol className="track-worker-queue-list">
           {selected.queued.map((claim) => <li key={claim.claimId}>{claim.title}</li>)}
-        </ol> : <p>No findings are queued for this role.</p>}
+        </ol> : <p>No {selected.role === 'investigator' ? 'claims' : 'findings'} are queued for this role.</p>}
       </Modal> : null}
     </>
   );
@@ -167,7 +167,7 @@ export function TrackWorkerCard({ group, onShowQueue }: { group: WorkerGroup; on
     <header className="session-summary-heading">
       <h2 className="session-summary-title">{workerLabel}</h2>
       <button type="button" className="track-worker-queued" onClick={onShowQueue}
-        aria-label={`Show ${group.queued.length} queued findings for ${workerLabel}`}>
+        aria-label={`Show ${group.queued.length} queued ${group.role === 'investigator' ? 'claims' : 'findings'} for ${workerLabel}`}>
         <span>{group.queued.length} Queued</span><ChevronRight size={15} aria-hidden="true" />
       </button>
     </header>

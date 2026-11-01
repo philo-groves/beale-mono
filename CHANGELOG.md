@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### app-server
+
+#### Changed
+
+- Research Track selection now weighs assessed impact, reachability, and deployment exposure before surface signals. Discovery and investigator guidance keep ordinary reachability observations out of verified security findings.
+- Research Track Investigators now pick up unresolved security Leads that existed before the current epoch while keeping newly created Leads with discovery. Within one rating, observed and reproduced Findings retain priority; existing databases add the epoch cutoff record automatically.
+- Automatic Research Track investigation now orders candidates by qualitative rating before maturity and leaves low and informational claims for deliberate follow-up instead of assigning worker slots to their verification.
+- A paused Research Track can resume with a revised set of ready targets without resetting its pass or surface progress.
+- Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
+- Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
+
 ## 0.9.6
 
 ### Beale

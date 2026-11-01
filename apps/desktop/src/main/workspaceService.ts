@@ -1102,12 +1102,14 @@ export class WorkspaceService {
   }
 
   public async controlResearchTrack(workspaceId: string, action: 'start' | 'pause' | 'resume' | 'stop', serverId?: string,
-    configuration?: import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrackRequest['configuration']): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrack> {
+    configuration?: import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrackRequest['configuration'],
+    resumeTargetIds?: string[]): Promise<import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrack> {
     const operation = serverId ? 'fleet.remote_research_track' : 'workspace.research_track';
     let response: unknown;
     try {
       response = await invokeAppServerOperation({ operation,
-        input: { workspaceId, action, ...(serverId ? { serverId } : {}), ...(configuration ? { configuration } : {}) } });
+        input: { workspaceId, action, ...(serverId ? { serverId } : {}), ...(configuration ? { configuration } : {}),
+          ...(resumeTargetIds ? { resumeTargetIds } : {}) } });
     } catch (error) {
       if (!(error instanceof AppServerIncompleteResponseError)) throw error;
       const current = await this.getResearchTrack(workspaceId, serverId).catch(() => null);

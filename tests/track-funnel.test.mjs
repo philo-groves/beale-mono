@@ -14,6 +14,7 @@ import {
   createTriageTools, createReportTools,
 } from '../packages/research-agent/dist/index.js';
 import { AppServerHostService } from '../app-server/dist/hostService.js';
+import { claimVerificationHash } from '../packages/research-agent/dist/findings.js';
 
 function fixture() {
   const close = [];
@@ -78,6 +79,70 @@ test('track funnel is empty without eligible findings and cools unchanged invest
       reason: 'A distinct entry path was identified.', summary: 'An example input reaches the sink on a distinct path.' });
     assert.equal(state.funnel.reserveForSession('epoch-three', 3)[0]?.claimRevision, finding.revision);
     state.funnel.finishSession('epoch-three');
+  } finally { await state.close(); }
+});
+
+test('investigators receive prior-epoch Leads but never Leads created during the reserved epoch', async () => {
+  const state = await fixture();
+  try {
+    assert.deepEqual(state.funnel.reserveForSession('track-example', 1), []);
+    const lead = state.claims.create({ title: 'Example unobserved parser theory',
+      classification: 'security.vulnerability', rating: 'high' });
+    assert.equal(lead.projection, 'lead');
+    assert.deepEqual(state.funnel.reserveForSession('track-example', 1), [],
+      'retrying the same epoch must retain its original Lead boundary');
+    const [assignment] = state.funnel.reserveForSession('track-example', 2);
+    assert.equal(assignment?.role, 'investigator');
+    assert.equal(assignment?.claimId, lead.id);
+  } finally { await state.close(); }
+});
+
+test('observed Findings take the first investigator slot ahead of older Leads', async () => {
+  const state = await fixture();
+  try {
+    state.claims.create({ title: 'Example older security theory',
+      classification: 'security.vulnerability', rating: 'high' });
+    const finding = observed(state.claims, 'Example observed boundary');
+    const [assignment] = state.funnel.reserveForSession('epoch-priority', 1, 1);
+    assert.equal(assignment?.claimId, finding.id);
+  } finally { await state.close(); }
+});
+
+test('higher-rated Leads precede medium observed Findings in automatic investigation', async () => {
+  const state = await fixture();
+  try {
+    let finding = observed(state.claims, 'Example medium observed boundary');
+    finding = state.claims.revise(finding.id, { expectedRevision: finding.revision,
+      reason: 'Synthetic impact reassessment.', rating: 'medium' });
+    const lead = state.claims.create({ title: 'Example high-impact authority theory',
+      classification: 'security.vulnerability', rating: 'high' });
+    const [assignment] = state.funnel.reserveForSession('epoch-value-priority', 1, 1);
+    assert.equal(assignment?.claimId, lead.id);
+  } finally { await state.close(); }
+});
+
+test('automatic investigation leaves low and informational claims available for deliberate follow-up', async () => {
+  const state = await fixture();
+  try {
+    state.claims.create({ title: 'Example low-impact parser behavior',
+      classification: 'security.vulnerability', rating: 'low' });
+    state.claims.create({ title: 'Example informational reachability',
+      classification: 'security.vulnerability', rating: 'informational' });
+    assert.deepEqual(state.funnel.reserveForSession('epoch-low-value', 1), []);
+  } finally { await state.close(); }
+});
+
+test('a Chain Lead created within an epoch waits for the next chain analyst reservation', async () => {
+  const state = await fixture();
+  try {
+    state.funnel.reserveForSession('epoch-chain-lead', 1);
+    const primitive = observed(state.claims, 'Example linked primitive');
+    const chain = state.claims.create({ title: 'Example composition theory',
+      classification: 'security.chain', rating: 'high', componentClaimIds: [primitive.id] });
+    assert.equal(state.funnel.reserveForSession('epoch-chain-lead', 1)
+      .some((assignment) => assignment.claimId === chain.id), false);
+    assert.equal(state.funnel.reserveForSession('epoch-chain-lead', 2)
+      .some((assignment) => assignment.role === 'chain_analyst' && assignment.claimId === chain.id), true);
   } finally { await state.close(); }
 });
 
@@ -182,7 +247,7 @@ test('chain work is sparse and tied to linked component evidence', async () => {
   } finally { await state.close(); }
 });
 
-test('the host runs eligible finding workers while discovery components cool', async () => {
+test('the host runs eligible Lead workers while discovery components cool', async () => {
   const state = await fixture();
   const workspaceId = 'workspace-example-funnel';
   const surface = { id: 'surface-example-service', parentId: null, name: 'Example service',
@@ -197,7 +262,8 @@ test('the host runs eligible finding workers while discovery components cool', a
         revisit_after=? WHERE workspace_id=? AND surface_id=?`).run(
           new Date(Date.now() + 60 * 60_000).toISOString(), workspaceId, surface.id);
     } finally { database.close(); }
-    observed(state.claims, 'Example queued parser finding');
+    const lead = state.claims.create({ title: 'Example queued parser Lead',
+      classification: 'security.vulnerability', rating: 'high' });
     const host = new AppServerHostService({ registry: {
       registryDirectory: join(state.root, 'registry'),
       listWorkspaces: () => [{ workspaceId }],
@@ -214,12 +280,13 @@ test('the host runs eligible finding workers while discovery components cool', a
     assert.equal(track.get().activeSurfaceId, null);
     const [assignment] = state.funnel.activeForSession(track.get().id);
     assert.equal(assignment?.role, 'investigator');
+    assert.equal(assignment?.claimId, lead.id);
     const status = await host.workspaceResearchTrack(workspaceId, 'status');
     assert.deepEqual(status.workers, [], 'a reservation does not represent a started worker');
     recordWorkerActivity(state.graph.databasePath, track.get().id, assignment, 'spawned', 1);
     const runningStatus = await host.workspaceResearchTrack(workspaceId, 'status');
     assert.deepEqual(runningStatus.workers.map((worker) => worker.role), ['investigator']);
-    assert.equal(runningStatus.workers[0].title, 'Example queued parser finding');
+    assert.equal(runningStatus.workers[0].title, 'Example queued parser Lead');
     await host.recordResearchTrackEpochLaunchFailure(workspaceId, track.get().id, 'Synthetic launch failure.');
     assert.deepEqual(state.funnel.activeForSession(track.get().id), []);
   } finally { track.close(); await state.close(); }
@@ -253,7 +320,7 @@ test('a completed discovery pass can still process newly eligible findings', asy
       targets: [{ id: 'local', ready: true }], surfaceMap: { surfaces: [surface] } });
     const due = await host.dueResearchTracks(new Date(), new Set(), new Set(), workspaceId);
     assert.equal(due.length, 1);
-    assert.match(due[0].request.launch.promptMarkdown, /finding work epoch/);
+    assert.match(due[0].request.launch.promptMarkdown, /claim work epoch/);
     assert.equal(track.get().activeSurfaceId, null);
     assert.deepEqual(state.funnel.activeForSession(track.get().id).map((item) => item.role), ['investigator']);
     await host.recordResearchTrackEpochLaunchFailure(workspaceId, track.get().id, 'Synthetic launch failure.');
@@ -328,6 +395,25 @@ test('verified findings flow through policy triage, portable replay packet, and 
         packetPath, replayRunId: 'example-portable-run', reason: 'The full proof replayed in a distinct example environment.' } });
     assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
     finding = outcome.result.output.finding;
+    const database = new DatabaseSync(state.graph.databasePath);
+    try {
+      const row = database.prepare('SELECT security_tracking_json FROM app_server_research_claims WHERE id=?').get(finding.id);
+      const tracking = JSON.parse(row.security_tracking_json);
+      tracking.triage.packet.claimBindingHash = `sha256:${'0'.repeat(64)}`;
+      database.prepare('UPDATE app_server_research_claims SET security_tracking_json=? WHERE id=?')
+        .run(JSON.stringify(tracking), finding.id);
+    } finally { database.close(); }
+    finding = state.claims.get(finding.id);
+    assert.equal(state.claims.completionChecklist(finding.id, 'report_ready').missingRequired
+      .some((key) => key === 'reproduction' || key === 'independent_verification'), false);
+    assert.notEqual(finding.securityTracking.triage.packet.claimBindingHash, claimVerificationHash(finding));
+    assert.deepEqual(state.funnel.reserveForSession('epoch-retriage', 2).map((item) => item.role), ['triager']);
+    state.funnel.finishSession('epoch-retriage');
+    outcome = await triageTools.execute({ id: 'triage-repackage-example', toolName: 'triage.package',
+      actionClass: 'synthesize', input: { claimId: finding.id, expectedRevision: finding.revision,
+        packetPath, replayRunId: 'example-portable-run', reason: 'The revised example claim has a current replay packet.' } });
+    assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
+    finding = outcome.result.output.finding;
     assert.deepEqual(state.funnel.reserveForSession('epoch-report', 2).map((item) => item.role), ['reporter']);
     outcome = await reportTools.execute({ id: 'report-after-triage', toolName: 'report.create',
       actionClass: 'synthesize', input: reportInput });
@@ -336,5 +422,38 @@ test('verified findings flow through policy triage, portable replay packet, and 
     assert.equal(outcome.result.output.sourceFinding.status, 'report_ready');
     state.funnel.finishSession('epoch-report');
     assert.deepEqual(state.funnel.reserveForSession('epoch-done', 3), []);
+  } finally { await state.close(); }
+});
+
+test('reportable verified findings with obsolete proof return to investigation', async () => {
+  const state = await fixture();
+  try {
+    let finding = observed(state.claims, 'Example authorization crossing');
+    const book = state.runbooks.create({ title: 'Example authorization replay', purpose: 'Replay the authorization crossing.',
+      cells: [{ kind: 'code', language: 'sh', source: './example-replay', features: ['runtime'] }] }).runbook;
+    recordRunbookExecution(state.runbooks, book.id, 'example-proof-run', {
+      sourceRevision: finding.sourceRevision, environmentFingerprint: finding.environmentFingerprint,
+      actorId: 'agent-example-investigator',
+    });
+    finding = state.claims.transition(finding.id, { expectedRevision: finding.revision, toStatus: 'reproduced',
+      reason: 'The example proof completed.', reproductionRunbookId: book.id,
+      stepsToReproduce: 'Run the example replay and inspect the result.',
+      evidence: [{ kind: 'runbook_execution', referenceId: 'example-proof-run', summary: 'Example proof completed.' }],
+    }, undefined, 'agent-example-investigator');
+    finding = state.claims.transition(finding.id, { expectedRevision: finding.revision, toStatus: 'verified',
+      reason: 'An independent example reviewer checked the proof.',
+      evidence: [{ kind: 'independent_verification', referenceId: 'example-proof-run',
+        summary: 'Example review completed.', independent: true }],
+    }, undefined, 'agent-example-reviewer', { freshSubagentContext: true });
+    finding = state.claims.revise(finding.id, { expectedRevision: finding.revision,
+      reason: 'The example program policy permits a report.', securityTracking: {
+        reportability: { decision: 'reportable', basis: 'The synthetic boundary qualifies.', policyRefs: ['example-policy:impact'] },
+      } });
+    state.runbooks.append({ id: book.id, expectedRevision: state.runbooks.get(book.id).revision,
+      cells: [{ kind: 'code', language: 'sh', source: './example-replay --check', features: ['runtime'] }] });
+    assert.ok(state.claims.completionChecklist(finding.id, 'report_ready').missingRequired.includes('reproduction'));
+    const assignments = state.funnel.reserveForSession('epoch-refresh', 2);
+    assert.deepEqual(assignments.map((item) => item.role), ['investigator']);
+    assert.equal(assignments[0].claimId, finding.id);
   } finally { await state.close(); }
 });

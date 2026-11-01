@@ -792,7 +792,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.getWorkspaceSurfaceMap, (_event, workspaceId: string, sessionId?: string) => workspaceService.getWorkspaceSurfaceMap(workspaceId, sessionId));
   ipcMain.handle(IPC_CHANNELS.getResearchTrack, (_event, workspaceId: string, serverId?: string) => workspaceService.getResearchTrack(workspaceId, serverId));
   ipcMain.handle(IPC_CHANNELS.controlResearchTrack, (_event, workspaceId: string, action: 'start' | 'pause' | 'resume' | 'stop', serverId?: string,
-    configuration?: import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrackRequest['configuration']) => workspaceService.controlResearchTrack(workspaceId, action, serverId, configuration));
+    configuration?: import('@beale/app-server-runtime/protocol').BealeWorkspaceResearchTrackRequest['configuration'],
+    resumeTargetIds?: string[]) => workspaceService.controlResearchTrack(workspaceId, action, serverId, configuration, resumeTargetIds));
   ipcMain.handle(IPC_CHANNELS.getFleetRemoteWorkspaceDocument, (_event, serverId: string, workspaceId: string, kind: 'runbook' | 'report', resourceId: string) => workspaceService.getFleetRemoteWorkspaceDocument(serverId, workspaceId, kind, resourceId));
   ipcMain.handle(IPC_CHANNELS.getFleetRemoteQuickChats, (_event, serverId: string) => workspaceService.getFleetRemoteQuickChats(serverId));
   ipcMain.handle(IPC_CHANNELS.startFleetRemoteQuickChat, (_event, serverId: string, input: import('@beale/app-server-runtime/protocol').BealeAppServerQuickChatStartInput) => workspaceService.startFleetRemoteQuickChat(serverId, input));
