@@ -225,15 +225,15 @@ export interface AppServerResolvedArtifact {
 }
 
 export interface AppServerAuxiliaryModelRoute {
-  provider: 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter';
+  provider: 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter' | `custom-${string}`;
   model: string;
   effort: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 export interface AppServerProviderSemantics {
-  providers: Array<'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter'>;
-  aliases: Record<string, 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter'>;
-  defaultSmallModels: Record<'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter', string>;
+  providers: Array<'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter' | `custom-${string}`>;
+  aliases: Record<string, 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter' | `custom-${string}`>;
+  defaultSmallModels: Record<string, string>;
   auxiliaryEfforts: Array<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
   sessionTitleEffort: 'medium';
   shellReviewEffort: 'low';

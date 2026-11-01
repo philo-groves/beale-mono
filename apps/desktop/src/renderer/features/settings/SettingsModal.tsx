@@ -257,7 +257,7 @@ export function SettingsView({
   onRemoveProvider?: (providerId: ResearchModelProviderId) => Promise<void>;
   onConfigureProviderApiKey?: (providerId: ResearchModelProviderId, apiKey: string) => Promise<void>;
   onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
-  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) => Promise<void>;
+  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; modelAllowlist?: string[]; modelOffReasoningEfforts?: Record<string, string>; reasoning?: boolean }) => Promise<void>;
   onRemoveCustomProvider?: (providerId: `custom-${string}`) => Promise<void>;
   onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
   onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
@@ -2098,7 +2098,7 @@ export function ProvidersSettingsView({
   onRemoveProvider?: (providerId: ResearchModelProviderId) => Promise<void>;
   onConfigureProviderApiKey?: (providerId: ResearchModelProviderId, apiKey: string) => Promise<void>;
   onRemoveProviderApiKey?: (providerId: ResearchModelProviderId) => Promise<void>;
-  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) => Promise<void>;
+  onSaveCustomProvider?: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; modelAllowlist?: string[]; modelOffReasoningEfforts?: Record<string, string>; reasoning?: boolean }) => Promise<void>;
   onRemoveCustomProvider?: (providerId: `custom-${string}`) => Promise<void>;
   onSetDefaultProviderId: (providerId: ResearchModelProviderId | null) => Promise<void>;
   onSetProviderModelDefaults: (providerId: ResearchModelProviderId, defaults: ProviderModelDefaults) => Promise<void>;
@@ -2501,7 +2501,7 @@ function CustomProviderCard({ provider, defaults, modelCatalog, busy, onSave, on
   defaults?: ProviderModelDefaults;
   modelCatalog?: ResearchProviderModelCatalog | null;
   busy: boolean;
-  onSave: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }) => Promise<void>;
+  onSave: (input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; modelAllowlist?: string[]; modelOffReasoningEfforts?: Record<string, string>; reasoning?: boolean }) => Promise<void>;
   onCancel?: () => void;
   onRemove?: () => Promise<void>;
   onSetDefaults?: (defaults: ProviderModelDefaults) => Promise<void>;
@@ -2510,6 +2510,7 @@ function CustomProviderCard({ provider, defaults, modelCatalog, busy, onSave, on
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '');
   const [contextWindow, setContextWindow] = useState(provider?.contextWindow ?? 128_000);
   const [maxTokens, setMaxTokens] = useState(provider?.maxTokens ?? 16_000);
+  const [modelAllowlist, setModelAllowlist] = useState(provider?.modelAllowlist?.join(', ') ?? '');
   const [reasoning, setReasoning] = useState(provider?.reasoning === true);
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -2520,8 +2521,9 @@ function CustomProviderCard({ provider, defaults, modelCatalog, busy, onSave, on
     setSaving(true);
     setError(null);
     try {
+      const allowlist = modelAllowlist.split(',').map((id) => id.trim()).filter(Boolean);
       await onSave({ ...(provider ? { id: provider.id } : {}), name, baseUrl, contextWindow, maxTokens,
-        ...(apiKey ? { apiKey } : {}), reasoning });
+        ...(apiKey ? { apiKey } : {}), modelAllowlist: allowlist, reasoning });
       setApiKey('');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -2569,6 +2571,13 @@ function CustomProviderCard({ provider, defaults, modelCatalog, busy, onSave, on
             <label className="settings-form-control-row provider-custom-field">
               <span className="settings-form-control-copy"><strong>Maximum output tokens</strong><small>Upper limit for a model response.</small></span>
               <input type="number" min={256} max={contextWindow} value={maxTokens} disabled={busy || saving} onChange={(event) => setMaxTokens(Number(event.target.value))} />
+            </label>
+            <label className="settings-form-control-row provider-custom-field">
+              <span className="settings-form-control-copy">
+                <strong>Model allowlist</strong>
+                <small>Comma-separated model IDs. Leave blank to show every model the endpoint returns.</small>
+              </span>
+              <input value={modelAllowlist} disabled={busy || saving} onChange={(event) => setModelAllowlist(event.target.value)} placeholder="model-one, model-two" />
             </label>
             <label className="settings-form-control-row provider-custom-field">
               <span className="settings-form-control-copy">

@@ -11,7 +11,7 @@ export const AUXILIARY_MODEL_JOB_NAMES = [
 
 export type AuxiliaryModelJobName = (typeof AUXILIARY_MODEL_JOB_NAMES)[number];
 export type AuxiliaryModelEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export type AuxiliaryModelProvider = 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter';
+export type AuxiliaryModelProvider = 'openai-codex' | 'anthropic' | 'xai' | 'zai' | 'openrouter' | `custom-${string}`;
 
 export interface AuxiliaryModelRoute {
   provider: AuxiliaryModelProvider;

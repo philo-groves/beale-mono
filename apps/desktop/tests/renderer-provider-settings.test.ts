@@ -39,7 +39,8 @@ describe('renderer provider settings', () => {
       providerSettings: {
         defaultProviderId: 'custom-example',
         customProviders: [{ id: 'custom-example', name: 'Example API', baseUrl: 'https://api.example.test/v1',
-          contextWindow: 128_000, maxTokens: 16_000, reasoning, models: [{ id: 'model-example', name: 'Example Model' }] }],
+          contextWindow: 128_000, maxTokens: 16_000, reasoning, modelAllowlist: ['model-example'],
+          models: [{ id: 'model-example', name: 'Example Model' }] }],
         modelDefaults: { 'custom-example': { largeModel: 'model-example', smallModel: 'model-example', reasoningEffort: 'off' } }
       },
       providerStatusesLoaded: true,
@@ -54,6 +55,8 @@ describe('renderer provider settings', () => {
     expect(html).toContain('model-example');
     expect(html).toContain('https://api.example.test/v1');
     expect(html).toContain('Save and refresh models');
+    expect(html).toContain('Model allowlist');
+    expect(html).toContain('value="model-example"');
     expect(html.includes('aria-label="Large model reasoning"')).toBe(reasoning);
     if (reasoning) expect(html).toContain('<option value="max">Max</option>');
   });

@@ -843,7 +843,7 @@ export class WorkspaceService {
     return this.getWorkspaceRegistry().setDefaultProviderId(providerId);
   }
 
-  public async saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; reasoning?: boolean }): Promise<ProviderSettings> {
+  public async saveCustomProvider(input: { id?: `custom-${string}`; name: string; baseUrl: string; contextWindow?: number; maxTokens?: number; apiKey?: string; modelAllowlist?: string[]; modelOffReasoningEfforts?: Record<string, string>; reasoning?: boolean }): Promise<ProviderSettings> {
     const id = input.id ?? `custom-${randomUUID()}` as const;
     const existing = this.getProviderSettings().customProviders?.find((provider) => provider.id === id);
     if (input.id && !existing) throw new Error('Unknown custom provider.');
@@ -853,25 +853,33 @@ export class WorkspaceService {
     const effectiveKey = apiKey ?? process.env[customProviderKeyEnvironmentVariable(id)];
     const models = await discoverCustomProviderModels(input.baseUrl, effectiveKey);
     const reasoning = input.reasoning ?? (existing?.reasoning === true);
+    const modelAllowlist = input.modelAllowlist ?? existing?.modelAllowlist;
+    const modelOffReasoningEfforts = reasoning
+      ? input.modelOffReasoningEfforts ?? existing?.modelOffReasoningEfforts
+      : undefined;
     const definition = normalizeCustomProviderDefinition({ id, name: input.name, baseUrl: input.baseUrl,
       contextWindow: input.contextWindow ?? existing?.contextWindow,
       maxTokens: input.maxTokens ?? existing?.maxTokens, models,
+      ...(modelAllowlist?.length ? { modelAllowlist } : {}),
+      ...(modelOffReasoningEfforts && Object.keys(modelOffReasoningEfforts).length
+        ? { modelOffReasoningEfforts } : {}),
       ...(reasoning ? { reasoning: true } : {}) }) as CustomProviderDefinition;
     if (apiKey) this.providerCredentials.setApiKey(id, apiKey);
     const registry = this.getWorkspaceRegistry();
     registry.saveCustomProvider(definition);
     const currentDefaults = registry.getProviderSettings().modelDefaults[id];
-    const available = new Set(models.map((model) => model.id));
-    const largeModel = models.find((model) => model.id === currentDefaults?.largeModel) ?? models[0]!;
+    const selectableModels = definition.models;
+    const available = new Set(selectableModels.map((model) => model.id));
+    const largeModel = selectableModels.find((model) => model.id === currentDefaults?.largeModel) ?? selectableModels[0]!;
     const effortLevels = getSupportedThinkingLevels(createCustomProviderModel(definition, largeModel));
     const desiredEffort = currentDefaults && effortLevels.includes(currentDefaults.reasoningEffort)
       ? currentDefaults.reasoningEffort
-      : reasoning ? 'high' : 'off';
+      : effortLevels.includes('high') ? 'high' : effortLevels[0] ?? 'off';
     if (!currentDefaults || !available.has(currentDefaults.largeModel) || !available.has(currentDefaults.smallModel)
       || currentDefaults.reasoningEffort !== desiredEffort) {
       registry.setProviderModelDefaults(id, {
-        largeModel: currentDefaults && available.has(currentDefaults.largeModel) ? currentDefaults.largeModel : models[0]!.id,
-        smallModel: currentDefaults && available.has(currentDefaults.smallModel) ? currentDefaults.smallModel : models[0]!.id,
+        largeModel: currentDefaults && available.has(currentDefaults.largeModel) ? currentDefaults.largeModel : selectableModels[0]!.id,
+        smallModel: currentDefaults && available.has(currentDefaults.smallModel) ? currentDefaults.smallModel : selectableModels[0]!.id,
         reasoningEffort: desiredEffort
       });
     }
