@@ -389,7 +389,8 @@ export class AppServerHostService {
       if (request.operation === 'fleet.remote_research_track') {
         const serverId = nonEmpty(input.serverId) ?? '';
         const trackRequest = decodeBealeWorkspaceResearchTrackRequest({ workspaceId: input.workspaceId,
-          action: input.action ?? 'status', ...(input.configuration ? { configuration: input.configuration } : {}) });
+          action: input.action ?? 'status', ...(input.configuration ? { configuration: input.configuration } : {}),
+          ...(input.resumeTargetIds ? { resumeTargetIds: input.resumeTargetIds } : {}) });
         try {
           return await this.fleet.callRemote(serverId, 'workspace.research_track', { ...trackRequest });
         } catch (error) {
@@ -569,7 +570,7 @@ export class AppServerHostService {
     if (request.operation === 'workspace.research_track') {
       if (!workspace) throw new Error('A registered workspace is required.');
       const input = decodeBealeWorkspaceResearchTrackRequest(request.input);
-      return this.workspaceResearchTrack(workspace.workspaceId, input.action, input.configuration);
+      return this.workspaceResearchTrack(workspace.workspaceId, input.action, input.configuration, input.resumeTargetIds);
     }
     const storageProfileId = workspace?.researchProfileId ?? request.profileId;
     if (request.operation === 'workspace.project') {
@@ -1353,7 +1354,8 @@ export class AppServerHostService {
   }
 
   public async workspaceResearchTrack(workspaceIdentifier: string, action: string,
-    configuration?: BealeWorkspaceResearchTrackRequest['configuration']): Promise<BealeWorkspaceResearchTrack | null> {
+    configuration?: BealeWorkspaceResearchTrackRequest['configuration'],
+    resumeTargetIds?: readonly string[]): Promise<BealeWorkspaceResearchTrack | null> {
     const workspace = this.requireWorkspace(workspaceIdentifier);
     if (workspace.researchProfileId !== 'security-research') throw new Error('A Security workspace is required for a research track.');
     const storage = this.registry.storageForProfile(workspace.researchProfileId);
@@ -1397,20 +1399,20 @@ export class AppServerHostService {
         if (!details.scope?.id || details.scope.expiresAt && Date.parse(details.scope.expiresAt) <= Date.now()) {
           throw new Error('Renew the recorded authorization before resuming continuous research.');
         }
+        const readyTargets = new Set(details.targets.filter((target) => target.ready)
+          .map((target) => target.id === 'browser:in-agent' ? 'local' : target.id));
+        const targetIds = resumeTargetIds ?? track.targetIds;
+        if (targetIds.some((targetId) => !readyTargets.has(targetId))) {
+          throw new Error('A selected research target is unavailable. Restore it before resuming the track.');
+        }
+        if (!targetIds.includes('local')) throw new Error('Enable Local as a workspace target to run the research track on its owning app-server.');
         if (details.scope.id !== track.scopeId) {
-          const readyTargets = new Set(details.targets.filter((target) => target.ready)
-            .map((target) => target.id === 'browser:in-agent' ? 'local' : target.id));
-          const targetIds = track.targetIds;
-          if (targetIds.some((targetId) => !readyTargets.has(targetId))) {
-            throw new Error('A selected research target is unavailable. Restore it before resuming the track.');
-          }
-          if (!targetIds.includes('local')) throw new Error('Enable Local as a workspace target to run the research track on its owning app-server.');
           return store.start({ scopeId: details.scope.id, provider: track.provider,
             guardianEnabled: track.guardianEnabled,
             ...(track.collaboration ? { collaboration: track.collaboration } : {}),
-            targetIds, surfaces: details.surfaceMap.surfaces, replaceUnfinished: true });
+            targetIds: [...targetIds], surfaces: details.surfaceMap.surfaces, replaceUnfinished: true });
         }
-        return store.control('resume');
+        return store.control('resume', resumeTargetIds);
       }
       if (action !== 'start') throw new Error('Unsupported research track action.');
       const details = await this.workspaceResearchTrackContext(workspace);
@@ -2977,9 +2979,9 @@ function stringArray(value: unknown): string[] {
 
 function researchTrackWorkerEpochPrompt(trackId: string, epoch: number, workerCount: number): string {
   return [
-    `# Research track finding work epoch ${epoch}`,
+    `# Research track claim work epoch ${epoch}`,
     `Track ${trackId}; ${workerCount} downstream worker${workerCount === 1 ? '' : 's'} assigned.`,
-    'No discovery component is ready. Let the assigned finding workers resolve their claims. Read their results and direct messages before ending the turn.',
+    'No discovery component is ready. Let the assigned Lead and Finding workers resolve their claims. Read their results and direct messages before ending the turn.',
     'Do not re-enter a cooling component or create speculative findings to fill the epoch. If you identify a concrete new authorized component, record it as a surface for a later discovery epoch.',
     'There is no assigned track component to checkpoint in this epoch. Finish after the workers have settled and their remaining dependencies are durable.',
   ].join('\n');
@@ -3014,8 +3016,8 @@ function researchTrackEpochPrompt(
     ...(reviewInterruptedEpoch ? ['Review the interrupted attempt and durable records before redoing any work. Record the remaining proof question.'] : []),
     '',
     'First check whether this concrete component can affect an eligible deployed target under the recorded authorization and program rules. An in-scope repository alone does not establish that its tests, examples, tooling, or undeployed subcomponents are reportable. Use surface.update foundation.scopeAssessment only when a decision has a concrete policy or target-evidence reference. If the whole assigned component is not applicable, record not_applicable, call track.checkpoint with outcome exclude, and end the epoch before investigating or delegating on that component. If applicability is uncertain, leave it unassessed and investigate the missing scope fact; do not exclude by name alone.',
-    'Find a distinct, potentially high-impact attacker path on this component. Give priority to pre-auth boundaries, sensitive memory, historically vulnerable sinks, niche dependencies, default-reachable behavior, and other plausible authority or cross-principal transitions. Record evidence-backed high-value signals in surface.update; a signal is a research priority, not proof of a vulnerability. Compare alternative explanations and choose one discriminating observation or experiment. Do not spend the epoch inventorying after a concrete path is ready to test.',
-    'Stay with a productive path for the assigned epoch. A source read or metadata edit alone is not material progress; seek new evidence that changes reachability, impact, or the claim. The track scheduler will cool a component after two evidence-free checkpoints and rotate to another ready resource after three consecutive epochs when an alternative is ready. Persist the current proof question before rotation; do not return to an earlier resource during an epoch assigned elsewhere. General discovery scouts may inspect different components while the lead keeps this engagement; avoid overlapping assignments. Dedicated track workers handle the existing finding, chain, triage, and report queues when eligible work exists. Discovery may still record or deepen a candidate when that is necessary to establish the attacker path.',
+    'Find a distinct, potentially high-impact attacker path on this component. Give priority to pre-auth boundaries, sensitive memory, historically vulnerable sinks, niche dependencies, default-reachable behavior, and other plausible authority or cross-principal transitions. Before extending a path, compare its likely security consequence, practical attacker reachability, deployed exposure, and program impact threshold. An interesting sink or reachable parser is not itself an eligible finding. Before creating an observed Finding or commissioning reproduction or independent verification, identify evidence of a violated security property and a credible path to program-level impact. Keep standalone reachability and low-impact behavior as bounded research context or a Lead while a concrete chain remains open. Record evidence-backed high-value signals and a realistic ranking in surface.update; lower the ranking when a bounded check reveals weak impact or deployment. If a live claim is downrated to low or informational without a credible path to program-level impact, stop delegated proof and review on that standalone claim and preserve its evidence at the supported status. Preserve useful primitives and negative results, then move to a stronger path instead of spending repeated epochs verifying a standalone low-impact observation. Compare alternative explanations and choose one discriminating observation or experiment. Do not spend the epoch inventorying after a concrete path is ready to test.',
+    'Stay with a productive path for the assigned epoch. A source read or metadata edit alone is not material progress; seek new evidence that changes reachability, impact, or the claim. The track scheduler will cool a component after two evidence-free checkpoints and rotate to another ready resource after three consecutive epochs when an alternative is ready. Persist the current proof question before rotation; do not return to an earlier resource during an epoch assigned elsewhere. General discovery scouts may inspect different components while the lead keeps this engagement; avoid overlapping assignments. Dedicated track workers handle Leads that existed before this epoch and the finding, chain, triage, and report queues when eligible work exists. Discovery may still record or deepen a candidate when that is necessary to establish the attacker path.',
     ...(collaborationEnabled ? ['Use general research subagents for independent high-value scouting or a separable proof question when capacity permits. Check active agents before delegating. Resolve active delegates before finishing.'] : []),
     'Research only within the recorded authorization. Use a real authorized target for target-dependent conclusions; localhost alone does not establish target behavior. Record a concrete blocker when a required target or policy prerequisite is unavailable. Add a separate surface only for a real component, not a hypothesis.',
     ...(researchKitId === 'apple-security-bounty' ? ['For iOS-specific target behavior, use an authorized physical iPhone when available. A Simulator or host-only run does not establish on-device behavior.'] : []),

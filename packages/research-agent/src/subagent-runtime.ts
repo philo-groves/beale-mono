@@ -300,10 +300,10 @@ export class SubagentManager {
     const role = this.requireDelegationRole(assignment.role);
     const message = [
       `Track worker assignment: ${role.label}.`,
-      `Canonical finding: ${assignment.claimId}, expected revision ${assignment.claimRevision}.`,
+      `Canonical claim: ${assignment.claimId}, expected revision ${assignment.claimRevision}.`,
       "Read the current claim and its evidence before acting. Recheck its revision before a write.",
       "You may spawn one subagent for a bounded independent check. For independent verification, choose Reviewer with fork_turns=none, then inspect its durable evidence before a decision.",
-      "Work only on this assignment and its necessary component evidence. Record durable results; do not call track.checkpoint.",
+      "Work only on this assigned claim and its necessary component evidence. Current-epoch discovery remains with the lead agent. Record durable results; do not call track.checkpoint.",
       "If the claim is no longer eligible, stop without manufacturing work. Return the result and exact remaining dependency to the discovery lead.",
     ].join("\n");
     this.spawn("root", `automatic_track_${randomUUID()}`, {

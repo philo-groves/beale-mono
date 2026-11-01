@@ -362,7 +362,10 @@ export function RemoteFleetWorkspace({ serverId, serverName, catalog, workspaceI
               <div className="research-side-column">
                 <aside className="main-session-side session-summary-panel track-summary-panel" aria-label="Session summary">
                   <TrackWorkerCards workspaceId={workspaceId} sessionId={sessionId} serverId={serverId}
-                    events={runDetail?.traceEvents ?? []} findings={runDetail?.appServerMemory?.findings ?? []}
+                    events={runDetail?.traceEvents ?? []} claims={[
+                      ...(runDetail?.appServerMemory?.leads ?? []),
+                      ...(runDetail?.appServerMemory?.findings ?? [])
+                    ]}
                     activeAttemptId={runDetail?.attempts.at(-1)?.id} runStatus={runStatus} />
                 </aside>
               </div>

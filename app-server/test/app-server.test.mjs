@@ -209,7 +209,8 @@ test('the app-server reserves a safe research-track epoch and marks a failed nex
   assert.match(due[0].request.launch.promptMarkdown, /Assigned component: Example service/u);
   assert.match(due[0].request.launch.promptMarkdown, /pre-auth boundaries, sensitive memory/u);
   assert.match(due[0].request.launch.promptMarkdown, /Compare alternative explanations/u);
-  assert.match(due[0].request.launch.promptMarkdown, /Dedicated track workers handle the existing finding/u);
+  assert.match(due[0].request.launch.promptMarkdown, /stop delegated proof and review/u);
+  assert.match(due[0].request.launch.promptMarkdown, /Dedicated track workers handle Leads that existed before this epoch/u);
   assert.match(due[0].request.launch.promptMarkdown, /call track\.checkpoint/u);
   assert.equal((await hostService.workspaceResearchTrack('workspace-test', 'status')).activeSessionId,
     due[0].request.sessionId);
@@ -285,6 +286,41 @@ test('the scheduler retires a missing assigned surface without pausing the track
   assert.equal(retired.surfaces.find((surface) => surface.surfaceId === assigned).status, 'excluded');
   assert.equal((await hostService.dueResearchTracks()).length, 1);
   assert.equal((await hostService.workspaceResearchTrack('workspace-test', 'status')).activeSurfaceId, surfaces[0].id);
+});
+
+test('a paused research track can resume with ready targets without resetting its pass', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'beale-track-resume-targets-example-'));
+  temporaryDirectories.push(directory);
+  const registry = hostRegistryFixture(directory);
+  registry.listWorkspaces = () => [{ workspaceId: 'workspace-test' }];
+  const hostService = new AppServerHostService({ registry, invokeProtocol: async () => null });
+  const surface = { id: 'surface-example', parentId: null, name: 'Example service',
+    coverageState: { covered: false, unmetRequirements: ['surface_map'], unblockedFindingIds: [] }, progressBlocker: null };
+  hostService.workspaceResearchTrackContext = async () => ({
+    scope: { id: 'scope-example', expiresAt: null },
+    targets: [{ id: 'local', ready: true }, { id: 'vm:clone:tart:example-base', ready: true }],
+    surfaceMap: { surfaces: [surface] }
+  });
+  const started = await hostService.workspaceResearchTrack('workspace-test', 'start', {
+    provider: { id: 'openai-codex', model: 'example-model', reasoningEffort: 'high' },
+    targetIds: ['local', 'vm:clone:tart:example-base']
+  });
+  const [epoch] = await hostService.dueResearchTracks();
+  await hostService.recordResearchTrackEpochLaunchFailure('workspace-test', epoch.request.sessionId,
+    'Synthetic Fleet VM launch failure.');
+  const paused = await hostService.workspaceResearchTrack('workspace-test', 'status');
+  assert.equal(paused.status, 'paused');
+  assert.equal(paused.epochCount, 1);
+  await assert.rejects(() => hostService.workspaceResearchTrack('workspace-test', 'resume', undefined,
+    ['local', 'vm:clone:tart:missing']), /selected research target is unavailable/);
+  assert.equal((await hostService.workspaceResearchTrack('workspace-test', 'status')).status, 'paused');
+  const resumed = await hostService.workspaceResearchTrack('workspace-test', 'resume', undefined, ['local']);
+  assert.equal(resumed.status, 'running');
+  assert.equal(resumed.id, started.id);
+  assert.equal(resumed.pass, started.pass);
+  assert.equal(resumed.epochCount, paused.epochCount);
+  assert.deepEqual(resumed.targetIds, ['local']);
+  assert.deepEqual(resumed.surfaces, paused.surfaces);
 });
 
 test('research-track scheduler context reads authorization and surfaces without loading workspace memory', async () => {

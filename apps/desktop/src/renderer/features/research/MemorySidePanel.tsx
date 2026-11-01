@@ -1115,7 +1115,10 @@ export const ResearchSidePanel = memo(function ResearchSidePanel({
         </section>
         {viewSpace === 'session' && surfaceWorkspaceId && runId.startsWith('track_')
           ? <TrackWorkerCards workspaceId={surfaceWorkspaceId} sessionId={runId}
-            events={summaryEvents} findings={detail?.appServerMemory?.findings ?? memory?.findings ?? []}
+            events={summaryEvents} claims={[
+              ...(detail?.appServerMemory?.leads ?? memory?.leads ?? []),
+              ...(detail?.appServerMemory?.findings ?? memory?.findings ?? [])
+            ]}
             activeAttemptId={detail?.attempts.at(-1)?.id} runStatus={runStatus} /> : null}
         {browserPages}
       </aside>

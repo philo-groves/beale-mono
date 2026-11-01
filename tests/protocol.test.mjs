@@ -63,6 +63,13 @@ test('research-track control decodes a bounded workspace progress snapshot', () 
     'off');
   assert.throws(() => decodeBealeWorkspaceResearchTrackRequest({ workspaceId: 'workspace-example', action: 'resume', configuration }),
     /Invalid workspace research track configuration: only start accepts settings/);
+  assert.deepEqual(decodeBealeWorkspaceResearchTrackRequest({ workspaceId: 'workspace-example', action: 'resume',
+    resumeTargetIds: ['local', 'vm:clone:tart:example-base'] }),
+    { workspaceId: 'workspace-example', action: 'resume', resumeTargetIds: ['local', 'vm:clone:tart:example-base'] });
+  assert.throws(() => decodeBealeWorkspaceResearchTrackRequest({ workspaceId: 'workspace-example', action: 'resume',
+    resumeTargetIds: ['local', 'local'] }), /resume targets: choose 1 to 16 distinct targets/);
+  assert.throws(() => decodeBealeWorkspaceResearchTrackRequest({ workspaceId: 'workspace-example', action: 'start',
+    resumeTargetIds: ['local'] }), /resume targets: choose 1 to 16 distinct targets/);
   assert.throws(() => decodeBealeWorkspaceResearchTrackRequest({ workspaceId: 'workspace-example', action: 'start',
     configuration: { ...configuration, targetIds: ['local', 'local'] } }), /choose 1 to 16 distinct targets/);
   assert.throws(() => decodeBealeWorkspaceResearchTrackRequest({ workspaceId: 'workspace-example', action: 'start',

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openResearchDatabase } from "./database.js";
-import { claimVerificationHash, readFindings } from "./findings.js";
+import { candidateCompletionChecklist, claimVerificationHash, readFindings } from "./findings.js";
 import type { FindingSummary } from "./knowledge-types.js";
 
 export type TrackWorkerRole = "investigator" | "chain_analyst" | "triager" | "reporter";
@@ -52,7 +52,14 @@ export class TrackFunnelStore {
       PRIMARY KEY (workspace_id, role, claim_id)
     );
     CREATE INDEX IF NOT EXISTS app_server_track_worker_session_idx
-      ON app_server_track_worker_attempts(workspace_id, active_session_id);`);
+      ON app_server_track_worker_attempts(workspace_id, active_session_id);
+    CREATE TABLE IF NOT EXISTS app_server_track_worker_epoch_cutoffs (
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      epoch INTEGER NOT NULL,
+      claim_rowid_cutoff INTEGER NOT NULL,
+      PRIMARY KEY (workspace_id, session_id)
+    );`);
     const columns = this.#database.prepare("PRAGMA table_info(app_server_track_worker_attempts)").all();
     if (!columns.some((column) => column.name === "assigned_epoch")) {
       this.#database.exec("ALTER TABLE app_server_track_worker_attempts ADD COLUMN assigned_epoch INTEGER NOT NULL DEFAULT 0");
@@ -121,6 +128,27 @@ export class TrackFunnelStore {
 
   public reserveForSession(sessionId: string, epoch: number, maxWorkers = 2): TrackWorkerAssignment[] {
     if (!sessionId.trim()) throw new Error("Track worker session id is required.");
+    const hasClaims = Boolean(this.#database.prepare(`SELECT 1 FROM sqlite_master
+      WHERE type='table' AND name='app_server_research_claims'`).get());
+    const latestClaim = hasClaims
+      ? this.#database.prepare(`SELECT COALESCE(MAX(rowid), 0) AS rowid FROM app_server_research_claims
+        WHERE workspace_id=?`).get(this.#workspaceId) as { rowid: number }
+      : { rowid: 0 };
+    // Keep the first reservation's claim boundary if an epoch is retried. A
+    // Lead created after that boundary belongs to the next epoch's queue.
+    this.#database.prepare(`INSERT INTO app_server_track_worker_epoch_cutoffs
+      (workspace_id, session_id, epoch, claim_rowid_cutoff) VALUES (?, ?, ?, ?)
+      ON CONFLICT(workspace_id, session_id) DO UPDATE SET
+        epoch=excluded.epoch, claim_rowid_cutoff=excluded.claim_rowid_cutoff
+      WHERE app_server_track_worker_epoch_cutoffs.epoch<excluded.epoch`)
+      .run(this.#workspaceId, sessionId, epoch, latestClaim.rowid);
+    const cutoff = this.#database.prepare(`SELECT epoch, claim_rowid_cutoff FROM app_server_track_worker_epoch_cutoffs
+      WHERE workspace_id=? AND session_id=?`).get(this.#workspaceId, sessionId) as { epoch: number; claim_rowid_cutoff: number };
+    if (cutoff.epoch !== epoch) throw new Error("Track worker reservation belongs to a newer epoch.");
+    const priorLeadIds = new Set((hasClaims ? this.#database.prepare(`SELECT id FROM app_server_research_claims
+      WHERE workspace_id=? AND rowid<=?`).all(this.#workspaceId, cutoff.claim_rowid_cutoff) as Array<{ id: string }>
+      : [])
+      .map((row) => row.id));
     // A new track epoch supersedes an orphaned reservation from an interrupted session.
     this.#database.prepare(`UPDATE app_server_track_worker_attempts SET active_session_id=NULL
       WHERE workspace_id=? AND active_session_id IS NOT NULL
@@ -128,7 +156,7 @@ export class TrackFunnelStore {
     const claims = readFindings(this.#database, this.#workspaceId)
       .filter((claim) => claim.duplicateOfClaimId === null);
     const attempts = this.attempts();
-    const pools = this.eligiblePools(claims, attempts);
+    const pools = this.eligiblePools(claims, attempts, priorLeadIds);
     const selected: Array<{ role: TrackWorkerRole; claim: FindingSummary }> = [];
     if (maxWorkers > 0 && pools.investigator.length > 0) selected.push({ role: "investigator", claim: pools.investigator.shift()! });
     const downstream: TrackWorkerRole[] = ["triager", "reporter", "chain_analyst"];
@@ -167,7 +195,8 @@ export class TrackFunnelStore {
       .all(this.#workspaceId) as unknown as AttemptRow[]).map((row) => [`${row.role}:${row.claim_id}`, row]));
   }
 
-  private eligiblePools(claims: FindingSummary[], attempts = this.attempts()): Record<TrackWorkerRole, FindingSummary[]> {
+  private eligiblePools(claims: FindingSummary[], attempts = this.attempts(),
+    priorLeadIds?: ReadonlySet<string>): Record<TrackWorkerRole, FindingSummary[]> {
     const byId = new Map(claims.map((claim) => [claim.id, claim]));
     const now = new Date().toISOString();
     const eligible = (role: TrackWorkerRole, claim: FindingSummary): boolean => {
@@ -182,19 +211,35 @@ export class TrackFunnelStore {
       || claim.classification.startsWith("security.");
     const unresolved = (claim: FindingSummary): boolean => ["hypothesis", "observed", "reproduced", "stale"].includes(claim.status);
     const unblocked = (claim: FindingSummary): boolean => !claim.securityTracking?.progressBlocker;
+    const provenanceRefresh = new Set(claims.filter((claim) => claim.status === "verified" && !claim.reportId
+      && claim.securityTracking?.reportability?.decision === "reportable")
+      .filter((claim) => candidateCompletionChecklist(claim, "report_ready").missingRequired
+        .some((key) => key === "reproduction" || key === "independent_verification"))
+      .map((claim) => claim.id));
+    const needsRefresh = (claim: FindingSummary): boolean => provenanceRefresh.has(claim.id);
+    // Track workers spend scarce review capacity on claims with a plausible
+    // program-level impact. Lower-rated observations remain durable for chains.
+    const priorityCandidate = (claim: FindingSummary): boolean =>
+      claim.rating !== "low" && claim.rating !== "informational";
     const investigation = claims.filter((claim) => security(claim) && claim.classification !== "security.chain"
-      && claim.projection === "finding" && unresolved(claim) && unblocked(claim)
+      && (claim.projection === "finding" || claim.projection === "lead" && (!priorLeadIds || priorLeadIds.has(claim.id)))
+      && (unresolved(claim) || needsRefresh(claim)) && unblocked(claim)
+      && (priorityCandidate(claim) || needsRefresh(claim))
       && eligible("investigator", claim));
     const chaining = claims.filter((claim) => claim.classification === "security.chain"
-      && claim.componentClaimIds.length > 0 && unresolved(claim) && unblocked(claim)
+      && (claim.projection === "finding" || !priorLeadIds || priorLeadIds.has(claim.id))
+      && claim.componentClaimIds.length > 0 && (unresolved(claim) || needsRefresh(claim))
+      && unblocked(claim) && (priorityCandidate(claim) || needsRefresh(claim))
       && claim.componentClaimIds.some((id) => byId.get(id)?.evidence.length)
       && eligible("chain_analyst", claim));
-    const triage = claims.filter((claim) => security(claim) && claim.status === "verified"
+    const triage = claims.filter((claim) => security(claim) && claim.status === "verified" && !needsRefresh(claim)
       && (claim.securityTracking?.reportability === null
         || claim.securityTracking?.reportability?.decision === "reportable"
-          && !claim.securityTracking.triage.packet && !claim.securityTracking.triage.blocker)
+          && claim.securityTracking.triage.packet?.claimBindingHash !== claimVerificationHash(claim)
+          && !claim.securityTracking.triage.blocker)
       && eligible("triager", claim));
     const reporting = claims.filter((claim) => security(claim) && claim.status === "verified" && !claim.reportId
+      && !needsRefresh(claim)
       && claim.securityTracking?.reportability?.decision === "reportable"
       && !claim.securityTracking.triage.blocker
       && claim.securityTracking.triage.packet?.claimBindingHash === claimVerificationHash(claim)
@@ -202,7 +247,8 @@ export class TrackFunnelStore {
     const age = (role: TrackWorkerRole, claim: FindingSummary): string =>
       attempts.get(`${role}:${claim.id}`)?.next_eligible_at ?? claim.updatedAt;
     const order = (role: TrackWorkerRole, items: FindingSummary[]): FindingSummary[] => [...items].sort((left, right) =>
-      (role === "investigator" ? maturityOrder(left) - maturityOrder(right) : 0)
+      (role === "investigator" || role === "chain_analyst" ? claimRatingOrder(left) - claimRatingOrder(right) : 0)
+      || (role === "investigator" ? maturityOrder(left) - maturityOrder(right) : 0)
       || age(role, left).localeCompare(age(role, right))
       || left.id.localeCompare(right.id));
     const pools: Record<TrackWorkerRole, FindingSummary[]> = {
@@ -246,4 +292,8 @@ function maturityOrder(claim: FindingSummary): number {
   if (claim.status === "reproduced") return 0;
   if (claim.status === "observed") return 1;
   return 2;
+}
+
+function claimRatingOrder(claim: FindingSummary): number {
+  return { critical: 0, high: 1, medium: 2, low: 3, informational: 4 }[claim.rating];
 }

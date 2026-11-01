@@ -56,6 +56,8 @@ describe('renderer research profile presentation', () => {
     expect(activeTrackWorkersFromEvents([
       activity(1, 'spawned', 'running'), activity(2, 'completed', 'completed')
     ], findings)).toEqual([]);
+    expect(activeTrackWorkersFromEvents([activity(1, 'spawned', 'running')],
+      [{ id: 'finding-example', title: 'Example prior-epoch Lead' }])[0]?.title).toBe('Example prior-epoch Lead');
     expect(activeTrackWorkersFromEvents([{ sequence: 1, createdAt: '2026-01-01T00:00:01.000Z',
       payload: { type: 'subagent.activity', agentPath: '/root/manual-example', role: 'investigator',
         action: 'spawned', status: 'running', message: 'Review the example callback.\nUse the test fixture.' }
