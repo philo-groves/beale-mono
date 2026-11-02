@@ -20,6 +20,12 @@ pub struct CredentialStore {
     root: PathBuf,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ModelDefaults {
+    pub lead: String,
+    pub small: String,
+}
+
 impl CredentialStore {
     pub fn new() -> Result<Self> {
         let root = if let Some(path) = std::env::var_os("BEALE_V2_HOME") {
@@ -92,6 +98,53 @@ impl CredentialStore {
         remove_if_exists(&self.credential_path(provider)?)
     }
 
+    pub fn load_lead_provider(&self) -> Result<Option<String>> {
+        match std::fs::read_to_string(self.root.join("lead-provider")) {
+            Ok(value) if value == "openai" || value == "xai" => Ok(Some(value)),
+            Ok(_) => bail!("invalid saved lead provider"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).context("cannot read lead provider"),
+        }
+    }
+
+    pub fn save_lead_provider(&self, provider: &str) -> Result<()> {
+        match provider {
+            "openai" | "xai" => {
+                self.write_private(&self.root.join("lead-provider"), provider.as_bytes())
+            }
+            _ => bail!("unknown lead provider"),
+        }
+    }
+
+    pub fn clear_lead_provider(&self) -> Result<()> {
+        remove_if_exists(&self.root.join("lead-provider"))
+    }
+
+    pub fn load_model_defaults(&self, provider: &str, mode: &str) -> Result<Option<ModelDefaults>> {
+        match std::fs::read(self.model_defaults_path(provider, mode)?) {
+            Ok(bytes) => Ok(Some(
+                serde_json::from_slice(&bytes).context("invalid saved model defaults")?,
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).context("cannot read model defaults"),
+        }
+    }
+
+    pub fn save_model_defaults(
+        &self,
+        provider: &str,
+        mode: &str,
+        defaults: &ModelDefaults,
+    ) -> Result<()> {
+        if !crate::models::valid_id(&defaults.lead) || !crate::models::valid_id(&defaults.small) {
+            bail!("invalid model defaults");
+        }
+        self.write_private(
+            &self.model_defaults_path(provider, mode)?,
+            &serde_json::to_vec(defaults)?,
+        )
+    }
+
     pub fn host_id(&self) -> Result<String> {
         let path = self.root.join("host-id");
         match std::fs::read_to_string(&path) {
@@ -158,6 +211,15 @@ impl CredentialStore {
         match provider {
             "openai" | "xai" => Ok(self.root.join(format!("{provider}-api-key"))),
             _ => bail!("unknown provider"),
+        }
+    }
+
+    fn model_defaults_path(&self, provider: &str, mode: &str) -> Result<PathBuf> {
+        match (provider, mode) {
+            ("openai" | "xai", "api-key" | "subscription") => {
+                Ok(self.root.join(format!("{provider}-{mode}-models.json")))
+            }
+            _ => bail!("unknown provider model scope"),
         }
     }
 
@@ -310,5 +372,43 @@ mod tests {
     fn rejects_unknown_credential_name() {
         let store = CredentialStore::at(std::env::temp_dir());
         assert!(store.load("../outside").is_err());
+    }
+
+    #[test]
+    fn model_defaults_are_scoped_by_provider_and_method() {
+        let root = std::env::temp_dir().join(format!("beale-model-test-{}", uuid::Uuid::new_v4()));
+        let store = CredentialStore::at(root.clone());
+        let defaults = ModelDefaults {
+            lead: "example-lead".to_owned(),
+            small: "example-small".to_owned(),
+        };
+        store
+            .save_model_defaults("openai", "subscription", &defaults)
+            .unwrap();
+        let loaded = store
+            .load_model_defaults("openai", "subscription")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.lead, defaults.lead);
+        assert_eq!(loaded.small, defaults.small);
+        assert!(
+            store
+                .load_model_defaults("openai", "api-key")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .load_model_defaults("xai", "subscription")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .save_model_defaults("../other", "subscription", &defaults)
+                .is_err()
+        );
+        std::fs::remove_file(root.join("openai-subscription-models.json")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

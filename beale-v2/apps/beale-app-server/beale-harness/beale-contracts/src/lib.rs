@@ -39,6 +39,8 @@ pub mod v1 {
     pub struct ProviderAuthStatusResponse {
         #[prost(message, repeated, tag = "1")]
         pub providers: Vec<ProviderAuthStatus>,
+        #[prost(enumeration = "ProviderId", tag = "2")]
+        pub lead_provider: i32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -74,10 +76,60 @@ pub mod v1 {
         #[prost(bytes = "vec", tag = "1")]
         pub proof: Vec<u8>,
     }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum AuthMethod {
+        Unspecified = 0,
+        Subscription = 1,
+        ApiKey = 2,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListModelsRequest {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "2")]
+        pub method: i32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ModelEntry {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub display_name: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ModelCatalogResponse {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "2")]
+        pub method: i32,
+        #[prost(message, repeated, tag = "3")]
+        pub models: Vec<ModelEntry>,
+        #[prost(string, tag = "4")]
+        pub lead_model: String,
+        #[prost(string, tag = "5")]
+        pub small_model: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetModelDefaultsRequest {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "2")]
+        pub method: i32,
+        #[prost(string, tag = "3")]
+        pub lead_model: String,
+        #[prost(string, tag = "4")]
+        pub small_model: String,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 1;
+pub const PROTOCOL_MINOR: u32 = 3;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -85,6 +137,9 @@ pub const AUTH_PROVE_PATH: &str = "/v1/providers/prove";
 pub const AUTH_API_KEY_PATH: &str = "/v1/providers/api-key";
 pub const AUTH_SUBSCRIPTION_START_PATH: &str = "/v1/providers/subscription/start";
 pub const AUTH_SUBSCRIPTION_FORGET_PATH: &str = "/v1/providers/subscription/forget";
+pub const LEAD_PROVIDER_PATH: &str = "/v1/providers/lead";
+pub const MODELS_LIST_PATH: &str = "/v1/providers/models/list";
+pub const MODELS_DEFAULTS_PATH: &str = "/v1/providers/models/defaults";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const DEFAULT_LOCAL_ADDR: &str = "127.0.0.1:43831";
 pub const CONTROL_CHALLENGE_BYTES: usize = 32;

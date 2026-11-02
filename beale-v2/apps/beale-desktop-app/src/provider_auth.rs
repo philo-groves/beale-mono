@@ -1,6 +1,7 @@
 use beale_contracts::{
     AUTH_API_KEY_PATH, AUTH_PROVE_PATH, AUTH_STATUS_PATH, AUTH_SUBSCRIPTION_FORGET_PATH,
-    AUTH_SUBSCRIPTION_START_PATH, CONTROL_CHALLENGE_BYTES, PROTOBUF_CONTENT_TYPE, control_proof,
+    AUTH_SUBSCRIPTION_START_PATH, CONTROL_CHALLENGE_BYTES, LEAD_PROVIDER_PATH,
+    PROTOBUF_CONTENT_TYPE, control_proof,
     v1::{
         ControlChallengeRequest, ControlChallengeResponse, ProviderAuthStatusResponse, ProviderId,
         ProviderRequest, SetApiKeyRequest, StartSubscriptionResponse,
@@ -16,6 +17,12 @@ pub(crate) struct AuthStatus {
     pub api_key: bool,
     pub in_progress: bool,
     pub error: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AuthSnapshot {
+    pub providers: [AuthStatus; 2],
+    pub lead: Option<ProviderId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,9 +113,17 @@ fn valid_proof(token: &str, nonce: &[u8], proof: &[u8]) -> bool {
             == 0
 }
 
-pub(crate) async fn status(client: &Client, addr: SocketAddr) -> Result<[AuthStatus; 2], String> {
+pub(crate) async fn authenticated_token(
+    client: &Client,
+    addr: SocketAddr,
+) -> Result<String, String> {
     let token = token().map_err(str::to_owned)?;
     verify_host(client, addr, &token).await?;
+    Ok(token)
+}
+
+pub(crate) async fn status(client: &Client, addr: SocketAddr) -> Result<AuthSnapshot, String> {
+    let token = authenticated_token(client, addr).await?;
     let response = client
         .get(url(addr, AUTH_STATUS_PATH))
         .bearer_auth(token)
@@ -131,6 +146,10 @@ pub(crate) async fn status(client: &Client, addr: SocketAddr) -> Result<[AuthSta
     if bytes.len() > 4096 {
         return Err("Credential status was too large".to_owned());
     }
+    decode_status(&bytes)
+}
+
+fn decode_status(bytes: &[u8]) -> Result<AuthSnapshot, String> {
     let reply = ProviderAuthStatusResponse::decode(bytes)
         .map_err(|_| "Invalid credential status".to_owned())?;
     let mut result = [AuthStatus::default(), AuthStatus::default()];
@@ -147,7 +166,49 @@ pub(crate) async fn status(client: &Client, addr: SocketAddr) -> Result<[AuthSta
             error: provider.login_error.chars().take(160).collect(),
         };
     }
-    Ok(result)
+    let lead = match ProviderId::try_from(reply.lead_provider) {
+        Ok(ProviderId::Unspecified) => None,
+        Ok(id @ (ProviderId::Openai | ProviderId::Xai)) => Some(id),
+        _ => return Err("Invalid lead provider in credential status".to_owned()),
+    };
+    if let Some(id) = lead {
+        let index = if id == ProviderId::Openai { 0 } else { 1 };
+        if !result[index].subscription && !result[index].api_key {
+            return Err("Lead provider is not configured".to_owned());
+        }
+    }
+    Ok(AuthSnapshot {
+        providers: result,
+        lead,
+    })
+}
+
+pub(crate) async fn set_lead(
+    client: &Client,
+    addr: SocketAddr,
+    provider: ProviderId,
+) -> Result<(), String> {
+    let token = authenticated_token(client, addr).await?;
+    let response = client
+        .post(url(addr, LEAD_PROVIDER_PATH))
+        .bearer_auth(token)
+        .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+        .body(
+            ProviderRequest {
+                provider: provider as i32,
+            }
+            .encode_to_vec(),
+        )
+        .send()
+        .await
+        .map_err(|_| "Could not set lead provider".to_owned())?;
+    if response.status() != StatusCode::NO_CONTENT {
+        return Err(format!(
+            "Could not set lead provider ({})",
+            response.status()
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn check_cli() -> std::process::ExitCode {
@@ -163,8 +224,11 @@ pub(crate) fn check_cli() -> std::process::ExitCode {
         runtime.block_on(status(&client, addr))
     })();
     match result {
-        Ok(providers) => {
-            for (name, provider) in [("OpenAI", &providers[0]), ("xAI", &providers[1])] {
+        Ok(snapshot) => {
+            for (name, provider) in [
+                ("OpenAI", &snapshot.providers[0]),
+                ("xAI", &snapshot.providers[1]),
+            ] {
                 println!(
                     "{name}: subscription={}, API key={}, sign-in={}",
                     if provider.subscription {
@@ -184,6 +248,14 @@ pub(crate) fn check_cli() -> std::process::ExitCode {
                     }
                 );
             }
+            println!(
+                "Lead: {}",
+                match snapshot.lead {
+                    Some(ProviderId::Openai) => "OpenAI",
+                    Some(ProviderId::Xai) => "xAI",
+                    _ => "None",
+                }
+            );
             std::process::ExitCode::SUCCESS
         }
         Err(error) => {
@@ -204,8 +276,7 @@ pub(crate) async fn perform(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| "Could not initialize app-server connection".to_owned())?;
-    let token = token().map_err(str::to_owned)?;
-    verify_host(&client, addr, &token).await?;
+    let token = authenticated_token(&client, addr).await?;
     let (path, body, remove) = match action {
         Action::SetApiKey(provider, api_key) => (
             AUTH_API_KEY_PATH,
@@ -305,5 +376,25 @@ mod tests {
             &[8_u8; CONTROL_CHALLENGE_BYTES],
             &proof
         ));
+    }
+
+    #[test]
+    fn status_accepts_only_a_configured_lead() {
+        let mut reply = ProviderAuthStatusResponse {
+            providers: vec![beale_contracts::v1::ProviderAuthStatus {
+                provider: ProviderId::Xai as i32,
+                subscription_configured: true,
+                api_key_configured: false,
+                login_in_progress: false,
+                login_error: String::new(),
+            }],
+            lead_provider: ProviderId::Xai as i32,
+        };
+        assert_eq!(
+            decode_status(&reply.encode_to_vec()).unwrap().lead,
+            Some(ProviderId::Xai)
+        );
+        reply.lead_provider = ProviderId::Openai as i32;
+        assert!(decode_status(&reply.encode_to_vec()).is_err());
     }
 }

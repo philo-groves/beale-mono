@@ -9,11 +9,14 @@
 - Started the v2 Rune desktop client with Beale's dark icon rail and an Agent Settings Providers view for OpenAI and xAI.
 - Added the v2 desktop custom header with navigation toggle, application menus, contextual title, and Windows window controls.
 - Added edge and corner resizing to the v2 Windows desktop frame and requested rounded corners on Windows 11.
+- Added a dark grey 1px border around the v2 desktop window on Windows, following rounded corners through DWM on Windows 11.
 - Framed the v2 desktop content surface with the v1 right and bottom inset and removed the header divider.
 - Added the v2 Agent Settings sidenav with the v1 section list and a collapse control; Providers remains the available settings view.
 - Reworked the v2 Providers view into top provider tabs with the selected provider's authentication and model configuration sections below.
 - Connected the v2 desktop to the app-server's versioned local health endpoint with live status and a one-shot connection check.
 - Added same-device OpenAI and xAI subscription sign-in, API key configuration, credential status, and forget controls to the v2 Providers view.
+- Added account-specific model lists and lead/small defaults for OpenAI and xAI subscription and API key access in the v2 Providers view.
+- Added a lead provider control to the v2 Providers view, with the first configured provider selected automatically.
 
 ### app-server
 
@@ -22,6 +25,8 @@
 - Started the v2 Rust app-server workspace with a loopback host, versioned protobuf health contract, and host-only OpenAI and xAI API-key and subscription provider paths.
 - Gave the v2 app-server and desktop a shared loopback address for local development, with non-loopback bindings rejected.
 - Added v1.1 local provider credential operations with a private control token; API keys use current-user DPAPI protection on Windows and private host files on other systems.
+- Added v1.2 local model catalog and default-selection operations, with host-side validation against available models and per-method persistence.
+- Added v1.3 lead provider status and selection, stored by the app-server and reassigned when its last credential is removed.
 
 #### Changed
 

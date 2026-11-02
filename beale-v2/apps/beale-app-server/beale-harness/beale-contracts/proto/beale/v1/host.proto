@@ -23,6 +23,7 @@ message ProviderAuthStatus {
 
 message ProviderAuthStatusResponse {
   repeated ProviderAuthStatus providers = 1;
+  ProviderId lead_provider = 2;
 }
 
 message ProviderRequest {
@@ -45,4 +46,35 @@ message ControlChallengeRequest {
 
 message ControlChallengeResponse {
   bytes proof = 1;
+}
+
+enum AuthMethod {
+  AUTH_METHOD_UNSPECIFIED = 0;
+  AUTH_METHOD_SUBSCRIPTION = 1;
+  AUTH_METHOD_API_KEY = 2;
+}
+
+message ListModelsRequest {
+  ProviderId provider = 1;
+  AuthMethod method = 2;
+}
+
+message ModelEntry {
+  string id = 1;
+  string display_name = 2;
+}
+
+message ModelCatalogResponse {
+  ProviderId provider = 1;
+  AuthMethod method = 2;
+  repeated ModelEntry models = 3;
+  string lead_model = 4;
+  string small_model = 5;
+}
+
+message SetModelDefaultsRequest {
+  ProviderId provider = 1;
+  AuthMethod method = 2;
+  string lead_model = 3;
+  string small_model = 4;
 }

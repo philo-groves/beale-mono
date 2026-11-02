@@ -97,28 +97,12 @@ impl ProviderClient {
         &self.http
     }
 
-    pub async fn infer(
+    pub(crate) async fn token(
         &self,
         provider: Provider,
         mode: AuthMode,
-        request: &InferenceRequest,
         store: &CredentialStore,
     ) -> Result<String> {
-        ensure!(
-            !request.model.trim().is_empty() && request.model.len() <= 128,
-            "invalid model name"
-        );
-        ensure!(
-            !request.messages.is_empty() && request.messages.len() <= 128,
-            "invalid message count"
-        );
-        ensure!(
-            request
-                .messages
-                .iter()
-                .all(|m| !m.text.is_empty() && m.text.len() <= 1_048_576),
-            "invalid message text"
-        );
         let route = route(provider, mode);
         let token = match mode {
             AuthMode::ApiKey => store
@@ -146,6 +130,33 @@ impl ProviderClient {
             }
         };
         ensure!(!token.trim().is_empty(), "provider credential is empty");
+        Ok(token)
+    }
+
+    pub async fn infer(
+        &self,
+        provider: Provider,
+        mode: AuthMode,
+        request: &InferenceRequest,
+        store: &CredentialStore,
+    ) -> Result<String> {
+        ensure!(
+            !request.model.trim().is_empty() && request.model.len() <= 128,
+            "invalid model name"
+        );
+        ensure!(
+            !request.messages.is_empty() && request.messages.len() <= 128,
+            "invalid message count"
+        );
+        ensure!(
+            request
+                .messages
+                .iter()
+                .all(|m| !m.text.is_empty() && m.text.len() <= 1_048_576),
+            "invalid message text"
+        );
+        let route = route(provider, mode);
+        let token = self.token(provider, mode, store).await?;
         let messages: Vec<Value> = request
             .messages
             .iter()

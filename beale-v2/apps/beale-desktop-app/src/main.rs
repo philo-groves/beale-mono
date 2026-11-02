@@ -6,9 +6,11 @@ use std::time::Duration;
 
 mod connection;
 mod provider_auth;
-use beale_contracts::v1::ProviderId;
+mod provider_models;
+use beale_contracts::v1::{AuthMethod, ProviderId};
 use connection::ConnectionStatus;
 use provider_auth::{Action, AuthStatus, SignInPrompt};
+use provider_models::ModelCatalog;
 
 #[cfg(target_os = "windows")]
 mod windows_frame;
@@ -97,6 +99,14 @@ enum Provider {
 }
 
 impl Provider {
+    fn from_id(id: ProviderId) -> Option<Self> {
+        match id {
+            ProviderId::Openai => Some(Self::OpenAi),
+            ProviderId::Xai => Some(Self::Xai),
+            ProviderId::Unspecified => None,
+        }
+    }
+
     fn id(self) -> ProviderId {
         match self {
             Self::OpenAi => ProviderId::Openai,
@@ -137,6 +147,16 @@ enum HeaderMenu {
     File,
     View,
     Window,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelRole {
+    Lead,
+    Small,
+}
+
+fn catalog_index(provider: Provider, method: AuthMethod) -> usize {
+    provider.index() * 2 + if method == AuthMethod::ApiKey { 1 } else { 0 }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -205,11 +225,23 @@ struct State {
     connection: ConnectionStatus,
     auth_status: [AuthStatus; 2],
     auth_loaded: bool,
+    lead_provider: Option<Provider>,
+    lead_picker: bool,
+    lead_busy: bool,
+    lead_error: String,
+    provider_selection_initialized: bool,
+    native_window_border: bool,
     auth_message: String,
     sign_in_prompt: Option<SignInPrompt>,
     api_key_edit: TextEdit,
     api_key_dialog: bool,
     auth_busy: bool,
+    model_method: [AuthMethod; 2],
+    model_catalogs: [Option<ModelCatalog>; 4],
+    model_loading: [bool; 4],
+    model_errors: [String; 4],
+    model_saving: bool,
+    model_picker: Option<ModelRole>,
     notice: Option<&'static str>,
     settings_nav_visible: bool,
     open_menu: Option<HeaderMenu>,
@@ -223,11 +255,23 @@ impl Default for State {
             connection: ConnectionStatus::Connecting,
             auth_status: Default::default(),
             auth_loaded: false,
+            lead_provider: None,
+            lead_picker: false,
+            lead_busy: false,
+            lead_error: String::new(),
+            provider_selection_initialized: false,
+            native_window_border: false,
             auth_message: String::new(),
             sign_in_prompt: None,
             api_key_edit: TextEdit::new("").secure(),
             api_key_dialog: false,
             auth_busy: false,
+            model_method: [AuthMethod::Subscription; 2],
+            model_catalogs: std::array::from_fn(|_| None),
+            model_loading: [false; 4],
+            model_errors: std::array::from_fn(|_| String::new()),
+            model_saving: false,
+            model_picker: None,
             notice: None,
             settings_nav_visible: true,
             open_menu: None,
@@ -276,6 +320,140 @@ fn start_auth_action(state: &mut State, action: Action) {
                     state.auth_message = "Credential setting saved on the app-server.".to_owned()
                 }
                 Err(error) => state.auth_message = error,
+            }
+        });
+    });
+}
+
+fn start_model_list(state: &mut State, provider: Provider, method: AuthMethod) {
+    let index = catalog_index(provider, method);
+    if state.model_loading[index] || !state.auth_loaded {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.model_loading[index] = true;
+    state.model_errors[index].clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = provider_models::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize model connection".to_owned())?;
+            runtime.block_on(provider_models::list(&client, addr, provider.id(), method))
+        })();
+        handle.update(move |state, _| {
+            state.model_loading[index] = false;
+            let authenticated = match method {
+                AuthMethod::Subscription => state.auth_status[provider.index()].subscription,
+                AuthMethod::ApiKey => state.auth_status[provider.index()].api_key,
+                _ => false,
+            };
+            if !state.auth_loaded || !authenticated {
+                return;
+            }
+            match result {
+                Ok(catalog) => state.model_catalogs[index] = Some(catalog),
+                Err(error) => state.model_errors[index] = error,
+            }
+        });
+    });
+}
+
+fn start_lead_save(state: &mut State, provider: Provider) {
+    let configured = &state.auth_status[provider.index()];
+    if state.lead_busy || !state.auth_loaded || (!configured.subscription && !configured.api_key) {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.lead_busy = true;
+    state.lead_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = connection::http_client()
+                .map_err(|_| "Could not initialize app-server connection".to_owned())?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize app-server connection".to_owned())?;
+            runtime.block_on(provider_auth::set_lead(&client, addr, provider.id()))
+        })();
+        handle.update(move |state, _| {
+            state.lead_busy = false;
+            match result {
+                Ok(()) => {
+                    state.lead_provider = Some(provider);
+                    state.lead_picker = false;
+                }
+                Err(error) => state.lead_error = error,
+            }
+        });
+    });
+}
+
+fn start_model_save(
+    state: &mut State,
+    provider: Provider,
+    method: AuthMethod,
+    role: ModelRole,
+    id: String,
+) {
+    let index = catalog_index(provider, method);
+    if state.model_saving {
+        return;
+    }
+    let Some(catalog) = &state.model_catalogs[index] else {
+        return;
+    };
+    if !catalog.models.iter().any(|model| model.id == id) {
+        return;
+    }
+    let (lead, small) = match role {
+        ModelRole::Lead => (id, catalog.small.clone()),
+        ModelRole::Small => (catalog.lead.clone(), id),
+    };
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.model_picker = None;
+    state.model_saving = true;
+    state.model_errors[index].clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = provider_models::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize model connection".to_owned())?;
+            runtime.block_on(provider_models::save(
+                &client,
+                addr,
+                provider.id(),
+                method,
+                lead.clone(),
+                small.clone(),
+            ))
+        })();
+        handle.update(move |state, _| {
+            state.model_saving = false;
+            match result {
+                Ok(()) => {
+                    if let Some(catalog) = &mut state.model_catalogs[index] {
+                        catalog.lead = lead;
+                        catalog.small = small;
+                    }
+                }
+                Err(error) => state.model_errors[index] = error,
             }
         });
     });
@@ -740,6 +918,7 @@ fn provider_tab(provider: Provider, selected: bool) -> El {
             s.api_key_dialog = false;
             s.api_key_edit.clear();
             s.auth_message.clear();
+            s.model_picker = None;
         })
         .child(
             el().size(21.0, 21.0)
@@ -763,32 +942,59 @@ fn provider_tab(provider: Provider, selected: bool) -> El {
         )
 }
 
-fn provider_setting_row(label: &'static str, description: &'static str) -> El {
+fn lead_provider_controls(state: &State) -> El {
+    let configured = state
+        .auth_status
+        .iter()
+        .any(|status| status.subscription || status.api_key);
+    let label = match state.lead_provider {
+        Some(Provider::OpenAi) => "OpenAI",
+        Some(Provider::Xai) => "xAI",
+        None => "None",
+    };
     row()
-        .w_full()
-        .h(62.0)
         .center_y()
-        .gap(12.0)
+        .gap(7.0)
         .child(
-            col()
-                .grow(1.0)
-                .gap(4.0)
-                .child(
-                    text(label)
-                        .font(TextStyle::new(13.0, 550.0))
-                        .color(color("#e2e2e2")),
-                )
-                .child(
-                    text(description)
-                        .font(TextStyle::new(11.5, 400.0))
-                        .color(color("#969696")),
+            text("Lead")
+                .font(TextStyle::new(11.5, 500.0))
+                .color(color("#a8a8a8")),
+        )
+        .child(if state.auth_loaded && configured && !state.lead_busy {
+            credential_button(label, |s| s.lead_picker = !s.lead_picker)
+                .key("lead-provider-control")
+        } else {
+            el().child(
+                text(if state.lead_busy { "Saving" } else { label })
+                    .font(TextStyle::new(11.5, 400.0))
+                    .color(color("#888888")),
+            )
+        })
+}
+
+fn lead_provider_choices(state: &State) -> El {
+    if !state.lead_picker {
+        return el();
+    }
+    let mut choices = row().w_full().gap(6.0).child(
+        text("Lead provider")
+            .font(TextStyle::new(11.5, 500.0))
+            .color(color("#a8a8a8")),
+    );
+    for provider in [Provider::OpenAi, Provider::Xai] {
+        let status = &state.auth_status[provider.index()];
+        if status.subscription || status.api_key {
+            choices = choices.child(
+                credential_button(provider.name(), move |s| start_lead_save(s, provider)).key(
+                    match provider {
+                        Provider::OpenAi => "lead-choice-openai",
+                        Provider::Xai => "lead-choice-xai",
+                    },
                 ),
-        )
-        .child(
-            text("Unavailable")
-                .font(TextStyle::new(11.5, 400.0))
-                .color(color("#777777")),
-        )
+            );
+        }
+    }
+    choices
 }
 
 fn credential_button(label: &'static str, action: impl Fn(&mut State) + 'static) -> El {
@@ -935,6 +1141,176 @@ fn provider_settings_group(
                 .child(el().w_full().h(1.0).fill(color("#2c2c2c")))
                 .child(second),
         )
+}
+
+fn model_default_row(state: &State, provider: Provider, method: AuthMethod, role: ModelRole) -> El {
+    let index = catalog_index(provider, method);
+    let catalog = state.model_catalogs[index].as_ref();
+    let selected = catalog.map(|catalog| match role {
+        ModelRole::Lead => &catalog.lead,
+        ModelRole::Small => &catalog.small,
+    });
+    let value = selected
+        .map(|id| {
+            catalog
+                .and_then(|catalog| {
+                    catalog
+                        .models
+                        .iter()
+                        .find(|model| &model.id == id)
+                        .map(|model| model.name.as_str())
+                })
+                .unwrap_or(id)
+        })
+        .unwrap_or(if state.model_loading[index] {
+            "Loading…"
+        } else {
+            "Unavailable"
+        });
+    let (label, description) = match role {
+        ModelRole::Lead => ("Lead Model", "Primary model for complex research work."),
+        ModelRole::Small => (
+            "Small Model",
+            "Lighter model for supporting research tasks.",
+        ),
+    };
+    row()
+        .w_full()
+        .h(68.0)
+        .center_y()
+        .gap(12.0)
+        .child(
+            col()
+                .grow(1.0)
+                .gap(4.0)
+                .child(
+                    text(label)
+                        .font(TextStyle::new(13.0, 550.0))
+                        .color(color("#e2e2e2")),
+                )
+                .child(
+                    text(description)
+                        .font(TextStyle::new(11.5, 400.0))
+                        .color(color("#969696")),
+                ),
+        )
+        .child(
+            text(value.to_owned())
+                .font(TextStyle::new(11.5, 450.0))
+                .color(color("#bcbcbc")),
+        )
+        .child(if catalog.is_some() && !state.model_saving {
+            credential_button("Choose", move |s| s.model_picker = Some(role)).key(match role {
+                ModelRole::Lead => "choose-lead-model",
+                ModelRole::Small => "choose-small-model",
+            })
+        } else {
+            el()
+        })
+}
+
+fn model_settings(state: &State, provider: Provider) -> El {
+    let method = state.model_method[provider.index()];
+    let index = catalog_index(provider, method);
+    let auth = &state.auth_status[provider.index()];
+    let configured = match method {
+        AuthMethod::Subscription => auth.subscription,
+        AuthMethod::ApiKey => auth.api_key,
+        _ => false,
+    };
+    let mut section = col().w_full().gap(12.0);
+    let mut source = row().w_full().center_y().gap(8.0).child(
+        text("Model access")
+            .font(TextStyle::new(12.0, 500.0))
+            .color(color("#a8a8a8")),
+    );
+    if auth.subscription {
+        source = source.child(credential_button(
+            if method == AuthMethod::Subscription {
+                "Subscription (selected)"
+            } else {
+                "Subscription"
+            },
+            move |s| {
+                s.model_method[provider.index()] = AuthMethod::Subscription;
+                s.model_picker = None;
+            },
+        ));
+    }
+    if auth.api_key {
+        source = source.child(credential_button(
+            if method == AuthMethod::ApiKey {
+                "API key (selected)"
+            } else {
+                "API key"
+            },
+            move |s| {
+                s.model_method[provider.index()] = AuthMethod::ApiKey;
+                s.model_picker = None;
+            },
+        ));
+    }
+    if configured {
+        source = source.child(credential_button("Refresh", move |s| {
+            let index = catalog_index(provider, method);
+            s.model_catalogs[index] = None;
+            start_model_list(s, provider, method);
+        }));
+    }
+    section = section.child(source);
+    section = section.child(provider_settings_group(
+        "provider-model-defaults",
+        "Default Models",
+        "Choose account-available models for primary and supporting research.",
+        model_default_row(state, provider, method, ModelRole::Lead),
+        model_default_row(state, provider, method, ModelRole::Small),
+    ));
+    if !state.model_errors[index].is_empty() {
+        section = section.child(
+            text(state.model_errors[index].clone())
+                .font(TextStyle::new(12.0, 400.0))
+                .color(color("#cf8888")),
+        );
+    } else if !configured {
+        section = section.child(
+            text("Connect this sign-in method to load its models.")
+                .font(TextStyle::new(12.0, 400.0))
+                .color(color("#969696")),
+        );
+    }
+    if let (Some(role), Some(catalog)) = (state.model_picker, &state.model_catalogs[index]) {
+        let mut choices = col().w_full().gap(3.0);
+        for model in &catalog.models {
+            let id = model.id.clone();
+            choices = choices.child(
+                el().w_full()
+                    .h(34.0)
+                    .px(10.0)
+                    .center_y()
+                    .radius(6.0)
+                    .fill(color("#252525"))
+                    .hover(color("#343434"))
+                    .on_press(move |s: &mut State| {
+                        start_model_save(s, provider, method, role, id.clone())
+                    })
+                    .child(
+                        text(format!("{}  ·  {}", model.name, model.id))
+                            .font(TextStyle::new(11.5, 400.0))
+                            .color(color("#e4e4e4")),
+                    ),
+            );
+        }
+        section = section.child(
+            col()
+                .w_full()
+                .h(220.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(choices),
+        );
+    }
+    section
 }
 
 fn provider_detail(state: &State) -> El {
@@ -1086,16 +1462,7 @@ fn provider_detail(state: &State) -> El {
                 ),
         );
     }
-    detail.child(provider_settings_group(
-        "provider-model-defaults",
-        "Default Models",
-        "Choose models for primary and supporting research after connection.",
-        provider_setting_row("Large Model", "Primary model for complex research work."),
-        provider_setting_row(
-            "Small Model",
-            "Lighter model for supporting research tasks.",
-        ),
-    ))
+    detail.child(model_settings(state, provider))
 }
 
 fn view(state: &State, _: &mut Cx<State>) -> El {
@@ -1109,18 +1476,31 @@ fn view(state: &State, _: &mut Cx<State>) -> El {
         content = content
             .child(
                 row()
-                    .key("provider-view-tabs")
-                    .role("tablist")
-                    .label("Provider views")
                     .w_full()
                     .h(40.0)
-                    .gap(6.0)
-                    .child(provider_tab(
-                        Provider::OpenAi,
-                        state.selected == Provider::OpenAi,
-                    ))
-                    .child(provider_tab(Provider::Xai, state.selected == Provider::Xai)),
+                    .child(
+                        row()
+                            .key("provider-view-tabs")
+                            .role("tablist")
+                            .label("Provider views")
+                            .gap(6.0)
+                            .child(provider_tab(
+                                Provider::OpenAi,
+                                state.selected == Provider::OpenAi,
+                            ))
+                            .child(provider_tab(Provider::Xai, state.selected == Provider::Xai)),
+                    )
+                    .child(el().grow(1.0))
+                    .child(lead_provider_controls(state)),
             )
+            .child(lead_provider_choices(state))
+            .child(if state.lead_error.is_empty() {
+                el()
+            } else {
+                text(state.lead_error.clone())
+                    .font(TextStyle::new(12.0, 400.0))
+                    .color(color("#cf8888"))
+            })
             .child(provider_detail(state));
     } else {
         content = content
@@ -1202,18 +1582,20 @@ fn view(state: &State, _: &mut Cx<State>) -> El {
             ),
     );
     body = body.child(settings_surface);
-    let mut window = col()
-        .key("window")
-        .role("window")
+    let mut window = col().key("window").role("window").w_full().h_full();
+    if cfg!(target_os = "windows") && !state.native_window_border {
+        window = window.padding(1.0).fill(color("#323232"));
+    }
+    let mut surface = col()
         .w_full()
-        .h_full()
+        .grow(1.0)
         .fill(color("#151515"))
         .child(header(state))
         .child(body);
     if let Some(menu) = state.open_menu {
-        window = window.child(menu_popup(menu));
+        surface = surface.child(menu_popup(menu));
     }
-    window
+    window.child(surface)
 }
 
 fn main() -> std::process::ExitCode {
@@ -1249,7 +1631,10 @@ fn main() -> std::process::ExitCode {
             if let Ok(mut current) = slot.lock() {
                 *current = Some(window.clone());
             }
-            windows_frame::configure(window);
+            let native_border = windows_frame::configure(window);
+            if let Some(handle) = AUTH_HANDLE.get() {
+                handle.update(move |state, _| state.native_window_border = native_border);
+            }
         });
     let handle = app.handle();
     let _ = AUTH_HANDLE.set(handle.clone());
@@ -1277,17 +1662,90 @@ fn main() -> std::process::ExitCode {
                 None
             };
             let auth_loaded = auth_result.is_some();
-            let auth_status = auth_result.unwrap_or_default();
+            let auth_snapshot = auth_result.unwrap_or_default();
+            let auth_status = auth_snapshot.providers;
+            let lead_provider = auth_snapshot.lead.and_then(Provider::from_id);
             handle.update_if(move |state, _| {
                 if state.connection == status
                     && state.auth_status == auth_status
                     && state.auth_loaded == auth_loaded
+                    && state.lead_provider == lead_provider
                 {
                     false
                 } else {
+                    let previous = state.auth_status.clone();
+                    let was_loaded = state.auth_loaded;
+                    let previous_lead = state.lead_provider;
                     state.connection = status;
                     state.auth_status = auth_status;
                     state.auth_loaded = auth_loaded;
+                    state.lead_provider = lead_provider;
+                    let first_added = was_loaded
+                        && previous
+                            .iter()
+                            .all(|item| !item.subscription && !item.api_key)
+                        && state
+                            .auth_status
+                            .iter()
+                            .any(|item| item.subscription || item.api_key);
+                    if auth_loaded && (!state.provider_selection_initialized || first_added) {
+                        if let Some(lead) = lead_provider {
+                            state.selected = lead;
+                        }
+                        state.provider_selection_initialized = true;
+                    } else if let Some(old) = previous_lead
+                        && state.selected == old
+                        && lead_provider != Some(old)
+                        && !state.auth_status[old.index()].subscription
+                        && !state.auth_status[old.index()].api_key
+                        && let Some(new_lead) = lead_provider
+                    {
+                        state.selected = new_lead;
+                    }
+                    if !auth_loaded
+                        || state
+                            .auth_status
+                            .iter()
+                            .all(|item| !item.subscription && !item.api_key)
+                    {
+                        state.lead_picker = false;
+                    }
+                    if previous_lead != lead_provider {
+                        state.lead_error.clear();
+                    }
+                    for provider in [Provider::OpenAi, Provider::Xai] {
+                        for method in [AuthMethod::Subscription, AuthMethod::ApiKey] {
+                            let index = catalog_index(provider, method);
+                            let old = if method == AuthMethod::Subscription {
+                                previous[provider.index()].subscription
+                            } else {
+                                previous[provider.index()].api_key
+                            };
+                            let current = if method == AuthMethod::Subscription {
+                                state.auth_status[provider.index()].subscription
+                            } else {
+                                state.auth_status[provider.index()].api_key
+                            };
+                            if old != current || !auth_loaded {
+                                state.model_catalogs[index] = None;
+                                state.model_loading[index] = false;
+                                state.model_errors[index].clear();
+                            }
+                            if auth_loaded
+                                && current
+                                && state.model_catalogs[index].is_none()
+                                && !state.model_loading[index]
+                                && state.model_errors[index].is_empty()
+                            {
+                                start_model_list(state, provider, method);
+                            }
+                        }
+                        if !state.auth_status[provider.index()].subscription
+                            && state.auth_status[provider.index()].api_key
+                        {
+                            state.model_method[provider.index()] = AuthMethod::ApiKey;
+                        }
+                    }
                     if state.auth_status[state.selected.index()].subscription
                         && !state.auth_status[state.selected.index()].in_progress
                     {
@@ -1320,6 +1778,30 @@ mod tests {
         assert_eq!(runtime.state.selected, Provider::Xai);
         assert!(runtime.find("provider-detail-xai").is_some());
         assert!(runtime.find("provider-detail-openai").is_none());
+    }
+
+    #[test]
+    fn lead_picker_lists_only_configured_providers() {
+        let state = State {
+            auth_loaded: true,
+            lead_provider: Some(Provider::Xai),
+            auth_status: [
+                AuthStatus::default(),
+                AuthStatus {
+                    api_key: true,
+                    ..AuthStatus::default()
+                },
+            ],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("lead-provider-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("lead-choice-xai").is_some());
+        assert!(runtime.find("lead-choice-openai").is_none());
     }
 
     #[test]

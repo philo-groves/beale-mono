@@ -71,7 +71,8 @@ unsafe extern "system" fn frame_proc(
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
-pub(super) fn configure(window: &WindowHandle) {
+pub(super) fn configure(window: &WindowHandle) -> bool {
+    let mut native_border = false;
     let _ = window.with_raw_handle(|handle| {
         let RawWindowHandle::Win32(raw) = handle.as_raw() else {
             return;
@@ -90,16 +91,17 @@ pub(super) fn configure(window: &WindowHandle) {
                 (&raw const preference).cast(),
                 size_of_val(&preference) as u32,
             );
-            // Let DWM round the window without drawing a light system border.
-            let no_border: u32 = 0xffff_fffe;
-            DwmSetWindowAttribute(
+            // DWM traces the rounded frame. Older Windows versions use Rune's inset edge.
+            let border_color: u32 = 0x0032_3232;
+            native_border = DwmSetWindowAttribute(
                 hwnd,
                 DWMWA_BORDER_COLOR as u32,
-                (&raw const no_border).cast(),
-                size_of_val(&no_border) as u32,
-            );
+                (&raw const border_color).cast(),
+                size_of_val(&border_color) as u32,
+            ) == 0;
         }
     });
+    native_border
 }
 
 #[cfg(test)]
