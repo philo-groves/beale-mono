@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "apps/beale-app-server/beale-extender",
+    "apps/beale-app-server/beale-harness/*",
+    "apps/beale-desktop-app",
+    "apps/beale-ios-app",
+    "extensions/features/*",
+    "extensions/plugins/*",
+    "extensions/research-kits/*",
+]

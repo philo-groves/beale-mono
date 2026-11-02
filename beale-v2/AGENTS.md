@@ -1,0 +1,1 @@
+Follow the AGENTS.md (if one exists) of the inner Beale project being edited.
