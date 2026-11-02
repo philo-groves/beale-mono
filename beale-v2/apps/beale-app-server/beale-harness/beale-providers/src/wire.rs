@@ -121,7 +121,9 @@ impl ProviderClient {
         );
         let route = route(provider, mode);
         let token = match mode {
-            AuthMode::ApiKey => std::env::var(route.api_key_env)
+            AuthMode::ApiKey => store
+                .load_api_key(route.oauth_name)?
+                .or_else(|| std::env::var(route.api_key_env).ok())
                 .with_context(|| format!("{} is unavailable", route.api_key_env))?,
             AuthMode::Subscription => {
                 let mut credential = store

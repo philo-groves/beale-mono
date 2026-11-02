@@ -6,3 +6,43 @@ message HealthResponse {
   uint32 protocol_minor = 2;
   string service = 3;
 }
+
+enum ProviderId {
+  PROVIDER_ID_UNSPECIFIED = 0;
+  PROVIDER_ID_OPENAI = 1;
+  PROVIDER_ID_XAI = 2;
+}
+
+message ProviderAuthStatus {
+  ProviderId provider = 1;
+  bool subscription_configured = 2;
+  bool api_key_configured = 3;
+  bool login_in_progress = 4;
+  string login_error = 5;
+}
+
+message ProviderAuthStatusResponse {
+  repeated ProviderAuthStatus providers = 1;
+}
+
+message ProviderRequest {
+  ProviderId provider = 1;
+}
+
+message SetApiKeyRequest {
+  ProviderId provider = 1;
+  string api_key = 2;
+}
+
+message StartSubscriptionResponse {
+  string verification_url = 1;
+  string user_code = 2;
+}
+
+message ControlChallengeRequest {
+  bytes nonce = 1;
+}
+
+message ControlChallengeResponse {
+  bytes proof = 1;
+}

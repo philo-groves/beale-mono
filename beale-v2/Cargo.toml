@@ -3,6 +3,7 @@ members = [
     "apps/beale-app-server/beale-harness/beale-contracts",
     "apps/beale-app-server/beale-harness/beale-core",
     "apps/beale-app-server/beale-harness/beale-providers",
+    "apps/beale-desktop-app",
 ]
 resolver = "3"
 

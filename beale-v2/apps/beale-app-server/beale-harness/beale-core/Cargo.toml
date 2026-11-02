@@ -12,3 +12,7 @@ beale-contracts = { path = "../beale-contracts" }
 beale-providers = { path = "../beale-providers" }
 prost.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+tower = "0.5"
+uuid.workspace = true

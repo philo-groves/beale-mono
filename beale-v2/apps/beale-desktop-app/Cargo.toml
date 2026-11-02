@@ -1,0 +1,19 @@
+[package]
+name = "beale-desktop-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+beale-contracts = { path = "../beale-app-server/beale-harness/beale-contracts" }
+prost.workspace = true
+reqwest.workspace = true
+rune = { git = "https://github.com/anomalyco/rune", rev = "84f8f13cdc73d4c932d6501df68dba850ba10edf", default-features = false }
+tokio.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+

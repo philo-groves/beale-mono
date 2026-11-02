@@ -68,6 +68,17 @@ async fn callback_handler(
 }
 
 pub async fn login_openai(client: &reqwest::Client, store: &CredentialStore) -> Result<()> {
+    login_openai_with_prompt(client, store, |url, _| {
+        println!("Open this URL to sign in with ChatGPT:\n{url}");
+    })
+    .await
+}
+
+pub async fn login_openai_with_prompt(
+    client: &reqwest::Client,
+    store: &CredentialStore,
+    prompt: impl FnOnce(String, String) + Send,
+) -> Result<()> {
     let host_id = {
         let _lock = store.lock("openai").await?;
         store.host_id()?
@@ -125,7 +136,7 @@ pub async fn login_openai(client: &reqwest::Client, store: &CredentialStore) -> 
         query.append_pair("code_challenge_method", "S256");
         query.append_pair("code_challenge", &challenge);
     }
-    println!("Open this URL to sign in with ChatGPT:\n{url}");
+    prompt(url.to_string(), String::new());
 
     let callback_result = timeout(Duration::from_secs(300), callback_rx).await;
     let _ = shutdown_tx.send(());
@@ -268,6 +279,17 @@ struct OAuthError {
 }
 
 pub async fn login_xai(client: &reqwest::Client, store: &CredentialStore) -> Result<()> {
+    login_xai_with_prompt(client, store, |url, code| {
+        println!("Open {url} and enter code: {code}");
+    })
+    .await
+}
+
+pub async fn login_xai_with_prompt(
+    client: &reqwest::Client,
+    store: &CredentialStore,
+    prompt: impl FnOnce(String, String) + Send,
+) -> Result<()> {
     let response = client
         .post(XAI_DEVICE)
         .form(&[
@@ -296,7 +318,7 @@ pub async fn login_xai(client: &reqwest::Client, store: &CredentialStore) -> Res
         url.scheme() == "https",
         "xAI verification URL must use HTTPS"
     );
-    println!("Open {url} and enter code: {}", device.user_code);
+    prompt(url.to_string(), device.user_code);
     let deadline = Instant::now() + Duration::from_secs(device.expires_in.min(900));
     let mut interval = device.interval.unwrap_or(5).max(1);
     loop {
