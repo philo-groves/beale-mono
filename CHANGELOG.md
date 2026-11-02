@@ -25,6 +25,7 @@
 - Matched the v2 desktop font families to the v1 system UI and monospace stacks.
 - Aligned the v2 header title separator with the sidenav edge and added right-edge sidenav resizing with v1 width limits.
 - Replaced the v2 desktop icon approximations with v1 Lucide shapes and pixel-aligned sizes for clearer rendering.
+- Tightened the v2 Agent Settings sidenav spacing and title size, and removed Profile and Prompt sections.
 
 ### app-server
 

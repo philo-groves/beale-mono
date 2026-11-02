@@ -104,8 +104,6 @@ enum SettingsSection {
     Appearance,
     #[default]
     Providers,
-    Profile,
-    Prompt,
     Features,
     Archive,
 }
@@ -116,8 +114,6 @@ impl SettingsSection {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Providers => "Providers",
-            Self::Profile => "Profile",
-            Self::Prompt => "Prompt",
             Self::Features => "Features",
             Self::Archive => "Archive",
         }
@@ -128,8 +124,6 @@ impl SettingsSection {
             Self::General => "settings-general",
             Self::Appearance => "settings-appearance",
             Self::Providers => "settings-providers",
-            Self::Profile => "settings-profile",
-            Self::Prompt => "settings-prompt",
             Self::Features => "settings-features",
             Self::Archive => "settings-archive",
         }
@@ -140,20 +134,16 @@ impl SettingsSection {
             Self::General => &SETTINGS,
             Self::Appearance => &APPEARANCE,
             Self::Providers => &PROVIDERS,
-            Self::Profile => &PROFILE,
-            Self::Prompt => &PROMPT,
             Self::Features => &FEATURES,
             Self::Archive => &ARCHIVE,
         }
     }
 }
 
-const SETTINGS_SECTIONS: [SettingsSection; 7] = [
+const SETTINGS_SECTIONS: [SettingsSection; 5] = [
     SettingsSection::General,
     SettingsSection::Appearance,
     SettingsSection::Providers,
-    SettingsSection::Profile,
-    SettingsSection::Prompt,
     SettingsSection::Features,
     SettingsSection::Archive,
 ];
@@ -905,7 +895,7 @@ fn settings_nav_button(section: SettingsSection, active: bool) -> El {
         .role("button")
         .label(format!("{} settings", section.label()))
         .w_full()
-        .h(34.0)
+        .h(30.0)
         .px(10.0)
         .center_y()
         .gap(12.0)
@@ -949,21 +939,22 @@ fn settings_sidenav(active: SettingsSection, connection: &ConnectionStatus, widt
         .label("Agent settings sections")
         .w(width)
         .h_full()
-        .px(12.0)
+        .px(8.0)
         .pt(12.0)
         .fill(color("#111111"))
         .child(
             text("Agent Settings")
-                .font(TextStyle::new(22.0, 500.0))
+                .font(TextStyle::new(20.0, 500.0))
                 .color(color("#aaaaaa"))
-                .mb(14.0),
+                .ml(4.0)
+                .mb(12.0),
         )
         .child(sections)
         .child(el().grow(1.0))
         .child(
             col()
                 .w_full()
-                .px(8.0)
+                .px(12.0)
                 .pb(16.0)
                 .gap(7.0)
                 .child(
@@ -2179,6 +2170,8 @@ mod tests {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        assert!(runtime.find("settings-profile").is_none());
+        assert!(runtime.find("settings-prompt").is_none());
         let (x, y) = runtime.find("settings-appearance").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
