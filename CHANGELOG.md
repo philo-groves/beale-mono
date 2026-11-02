@@ -26,9 +26,13 @@
 - Added the v2 Home view with a data-driven v1-style sidebar for research actions and workspaces; its main content remains blank while session flows are built.
 - Added a v2 New Workspace draft flow with Settings, Resources, and Rules views, a None-only Research Kit selector, and no Research Subject field. Final creation remains unavailable until app-server workspace operations exist.
 - Added a native folder picker beside the v2 New Workspace directory field, preserving manual path entry.
+- Added a centered Add a Surface dialog opened from plus buttons beside the in-scope and out-of-scope surface list headings.
+- Added a confirmation dialog before cancelling a v2 New Workspace draft, with a safe Keep Editing choice and an explicit discard action.
 
 #### Changed
 
+- Fixed the v2 Add Surface dialog's scope from its invoking list and replaced its scope selector with an in-scope or out-of-scope title.
+- Renamed v2 workspace draft Resources to Surfaces, with separate in-scope and out-of-scope lists, creator tags, and a default reason for exclusions entered at creation.
 - Removed the unused File, View, and Window menus from the v2 desktop header.
 - Matched the v2 desktop dark shell gradient and settings surface colors to Beale v1.
 - Matched the v2 desktop font families to the v1 system UI and monospace stacks.

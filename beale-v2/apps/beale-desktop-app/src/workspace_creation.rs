@@ -4,14 +4,16 @@ use rune::{
 
 use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button, form_label_font,
-    icons::FOLDER_OPEN, selection_button, settings_form, toggle_selection_menu, ui_font,
+    icons::{FOLDER_OPEN, PLUS},
+    modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
+    toggle_selection_menu, ui_font,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum CreationTab {
     #[default]
     Settings,
-    Resources,
+    Surfaces,
     Rules,
 }
 
@@ -28,9 +30,9 @@ const TABS: [TabSpec; 3] = [
         label: "Settings",
     },
     TabSpec {
-        tab: CreationTab::Resources,
-        key: "workspace-tab-resources",
-        label: "Resources",
+        tab: CreationTab::Surfaces,
+        key: "workspace-tab-surfaces",
+        label: "Surfaces",
     },
     TabSpec {
         tab: CreationTab::Rules,
@@ -59,7 +61,7 @@ impl CreationTab {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum ResourceKind {
+pub(crate) enum SurfaceKind {
     #[default]
     Repository,
     Documentation,
@@ -69,7 +71,7 @@ pub(crate) enum ResourceKind {
     Other,
 }
 
-impl ResourceKind {
+impl SurfaceKind {
     pub(crate) const ALL: [Self; 6] = [
         Self::Repository,
         Self::Documentation,
@@ -102,36 +104,36 @@ impl ResourceKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum ResourceDirection {
-    #[default]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SurfaceScope {
     InScope,
     OutOfScope,
 }
 
-impl ResourceDirection {
-    pub(crate) const ALL: [Self; 2] = [Self::InScope, Self::OutOfScope];
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SurfaceCreator {
+    User,
+    // Agent-created surfaces will be supplied by the app-server once workspace operations exist.
+    #[allow(dead_code)]
+    Agent,
+}
 
-    pub(crate) fn key(self) -> &'static str {
+impl SurfaceCreator {
+    fn label(self) -> &'static str {
         match self {
-            Self::InScope => "in-scope",
-            Self::OutOfScope => "out-of-scope",
-        }
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::InScope => "In Scope",
-            Self::OutOfScope => "Out of Scope",
+            Self::User => "User",
+            Self::Agent => "Agent",
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Resource {
-    pub(crate) kind: ResourceKind,
-    pub(crate) direction: ResourceDirection,
+pub(crate) struct Surface {
+    pub(crate) kind: SurfaceKind,
+    pub(crate) scope: SurfaceScope,
     pub(crate) value: String,
+    pub(crate) created_by: SurfaceCreator,
+    pub(crate) out_of_scope_reason: Option<String>,
 }
 
 pub(crate) struct WorkspaceDraft {
@@ -140,10 +142,12 @@ pub(crate) struct WorkspaceDraft {
     pub(crate) name: TextEdit,
     pub(crate) directory: TextEdit,
     pub(crate) guidance: TextEdit,
-    pub(crate) resource_kind: ResourceKind,
-    pub(crate) resource_direction: ResourceDirection,
-    pub(crate) resource_value: TextEdit,
-    pub(crate) resources: Vec<Resource>,
+    pub(crate) surface_kind: SurfaceKind,
+    pub(crate) surface_value: TextEdit,
+    pub(crate) surfaces: Vec<Surface>,
+    pub(crate) surface_dialog_scope: Option<SurfaceScope>,
+    surface_error: Option<&'static str>,
+    pub(crate) cancel_dialog_open: bool,
     pub(crate) rule_value: TextEdit,
     pub(crate) rules: Vec<String>,
     error: Option<&'static str>,
@@ -157,10 +161,12 @@ impl Default for WorkspaceDraft {
             name: TextEdit::new(""),
             directory: TextEdit::new(""),
             guidance: TextEdit::new(""),
-            resource_kind: ResourceKind::default(),
-            resource_direction: ResourceDirection::default(),
-            resource_value: TextEdit::new(""),
-            resources: Vec::new(),
+            surface_kind: SurfaceKind::default(),
+            surface_value: TextEdit::new(""),
+            surfaces: Vec::new(),
+            surface_dialog_scope: None,
+            surface_error: None,
+            cancel_dialog_open: false,
             rule_value: TextEdit::new(""),
             rules: Vec::new(),
             error: None,
@@ -169,6 +175,23 @@ impl Default for WorkspaceDraft {
 }
 
 impl WorkspaceDraft {
+    fn open_surface_dialog(&mut self, scope: SurfaceScope) {
+        self.surface_kind = SurfaceKind::default();
+        self.surface_value.clear();
+        self.surface_error = None;
+        self.surface_dialog_scope = Some(scope);
+    }
+
+    pub(crate) fn close_surface_dialog(&mut self) {
+        self.surface_dialog_scope = None;
+        self.surface_value.clear();
+        self.surface_error = None;
+    }
+
+    fn close_cancel_dialog(&mut self) {
+        self.cancel_dialog_open = false;
+    }
+
     fn validate_current(&self) -> Option<&'static str> {
         match self.tab {
             CreationTab::Settings if self.name.text.trim().is_empty() => {
@@ -185,33 +208,39 @@ impl WorkspaceDraft {
             {
                 Some("Use an absolute workspace directory.")
             }
-            CreationTab::Resources
+            CreationTab::Surfaces
                 if !self
-                    .resources
+                    .surfaces
                     .iter()
-                    .any(|resource| resource.direction == ResourceDirection::InScope) =>
+                    .any(|surface| surface.scope == SurfaceScope::InScope) =>
             {
-                Some("Add at least one in-scope resource.")
+                Some("Add at least one in-scope surface.")
             }
             _ => None,
         }
     }
 
-    fn add_resource(&mut self) {
-        let value = self.resource_value.text.trim();
+    fn add_surface(&mut self) {
+        let Some(scope) = self.surface_dialog_scope else {
+            return;
+        };
+        let value = self.surface_value.text.trim();
         if value.is_empty() {
-            self.error = Some("Enter a resource.");
-        } else if self.resources.iter().any(|resource| {
-            resource.kind == self.resource_kind && resource.value.eq_ignore_ascii_case(value)
+            self.surface_error = Some("Enter a surface.");
+        } else if self.surfaces.iter().any(|surface| {
+            surface.kind == self.surface_kind && surface.value.eq_ignore_ascii_case(value)
         }) {
-            self.error = Some("That resource is already listed.");
+            self.surface_error = Some("That surface is already listed.");
         } else {
-            self.resources.push(Resource {
-                kind: self.resource_kind,
-                direction: self.resource_direction,
+            self.surfaces.push(Surface {
+                kind: self.surface_kind,
+                scope,
                 value: value.to_owned(),
+                created_by: SurfaceCreator::User,
+                out_of_scope_reason: (scope == SurfaceScope::OutOfScope)
+                    .then(|| "Set at workspace creation".to_owned()),
             });
-            self.resource_value.clear();
+            self.close_surface_dialog();
             self.error = None;
         }
     }
@@ -423,7 +452,7 @@ fn settings(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
             ),
             row_with_control(
                 "Research Kit",
-                "Optional resource and rule acquisition kit.",
+                "Optional surface and rule acquisition kit.",
                 kit,
                 theme,
             ),
@@ -464,60 +493,145 @@ fn settings(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     vec![details]
 }
 
-fn resources(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+    vec![
+        surface_list(state, SurfaceScope::InScope, theme),
+        surface_list(state, SurfaceScope::OutOfScope, theme),
+    ]
+}
+
+pub(crate) fn surface_dialog(state: &State, scope: SurfaceScope, theme: ThemeStyle<'_>) -> [El; 2] {
     let kind = selection_button(
-        state.workspace_draft.resource_kind.label(),
-        state.selection_menu == Some(SelectionMenu::ResourceKind),
-        |s| toggle_selection_menu(s, SelectionMenu::ResourceKind),
+        state.workspace_draft.surface_kind.label(),
+        state.selection_menu == Some(SelectionMenu::SurfaceKind),
+        |s| toggle_selection_menu(s, SelectionMenu::SurfaceKind),
         theme,
     )
-    .key("workspace-resource-kind-control");
-    let direction = selection_button(
-        state.workspace_draft.resource_direction.label(),
-        state.selection_menu == Some(SelectionMenu::ResourceDirection),
-        |s| toggle_selection_menu(s, SelectionMenu::ResourceDirection),
-        theme,
-    )
-    .key("workspace-resource-direction-control");
-    let editor = settings_form(
-        FormSpec {
-            key: "workspace-resource-form",
-            heading: "Authorized Resources",
-        },
+    .key("workspace-surface-kind-control");
+    let form = settings_form_card(
         [
             row_with_control("Type", "Kind of target or source material.", kind, theme),
             row_with_control(
-                "Scope",
-                "Whether research may test this resource.",
-                direction,
-                theme,
-            ),
-            row_with_control(
-                "Resource",
+                "Surface",
                 "Identifier, URL, or path.",
                 field(
-                    &state.workspace_draft.resource_value,
-                    "workspace-resource-input",
-                    "Enter resource",
+                    &state.workspace_draft.surface_value,
+                    "workspace-surface-input",
+                    "Enter surface",
                     theme,
-                    |s| &mut s.workspace_draft.resource_value,
+                    |s| &mut s.workspace_draft.surface_value,
                 ),
                 theme,
             ),
         ],
         theme,
     );
-    let mut list = col().key("workspace-resource-list").w_full().gap(8.0);
-    for (index, resource) in state.workspace_draft.resources.iter().enumerate() {
-        let label = format!(
-            "{} · {} · {}",
-            resource.kind.label(),
-            resource.direction.label(),
-            resource.value
+    let mut body = col().w_full().gap(10.0).child(form);
+    if let Some(error) = state.workspace_draft.surface_error {
+        body = body.child(
+            text(error)
+                .key("workspace-surface-dialog-error")
+                .font(ui_font(14.0, 400.0))
+                .color(theme.color("#e07676")),
         );
+    }
+    let actions = row()
+        .w_full()
+        .gap(8.0)
+        .child(el().grow(1.0))
+        .child(
+            form_button("Cancel", theme)
+                .key("workspace-surface-dialog-cancel")
+                .on_press(|s: &mut State| s.workspace_draft.close_surface_dialog()),
+        )
+        .child(
+            form_button("Add Surface", theme)
+                .key("workspace-add-surface")
+                .on_press(|s: &mut State| s.workspace_draft.add_surface()),
+        );
+    let focus_return = match scope {
+        SurfaceScope::InScope => "workspace-add-in-scope-surface",
+        SurfaceScope::OutOfScope => "workspace-add-out-of-scope-surface",
+    };
+    let title = match scope {
+        SurfaceScope::InScope => "Add an In-Scope Surface",
+        SurfaceScope::OutOfScope => "Add an Out-of-Scope Surface",
+    };
+    modal_dialog::render(
+        modal_dialog::DialogSpec {
+            key: "workspace-surface-dialog",
+            title,
+            width: 540.0,
+            focus_return,
+        },
+        body,
+        actions,
+        theme,
+        |s: &mut State| s.workspace_draft.close_surface_dialog(),
+    )
+}
+
+fn request_cancel(state: &mut State) {
+    state.selection_menu = None;
+    state.workspace_draft.cancel_dialog_open = true;
+}
+
+pub(crate) fn cancel_dialog(theme: ThemeStyle<'_>) -> [El; 2] {
+    let body = text("Discard this unfinished workspace draft? Your entries will be lost.")
+        .w_full()
+        .wrap()
+        .font(ui_font(14.0, 400.0))
+        .color(theme.color("#b8b8b8"));
+    let actions = row()
+        .w_full()
+        .gap(8.0)
+        .child(el().grow(1.0))
+        .child(
+            form_button("Keep Editing", theme)
+                .key("workspace-cancel-keep-editing")
+                .on_press(|s: &mut State| s.workspace_draft.close_cancel_dialog()),
+        )
+        .child(
+            form_button("Discard Workspace", theme)
+                .key("workspace-cancel-discard")
+                .fill(theme.color("#482525"))
+                .hover(theme.color("#603030"))
+                .on_press(|s: &mut State| s.cancel_workspace_creation()),
+        );
+    modal_dialog::render(
+        modal_dialog::DialogSpec {
+            key: "workspace-cancel-dialog",
+            title: "Cancel New Workspace?",
+            width: 460.0,
+            focus_return: "workspace-cancel",
+        },
+        body,
+        actions,
+        theme,
+        |s: &mut State| s.workspace_draft.close_cancel_dialog(),
+    )
+}
+
+fn surface_list(state: &State, scope: SurfaceScope, theme: ThemeStyle<'_>) -> El {
+    let mut list = col().w_full().py(12.0).gap(8.0);
+    let mut count = 0;
+    for (index, surface) in state.workspace_draft.surfaces.iter().enumerate() {
+        if surface.scope != scope {
+            continue;
+        }
+        count += 1;
+        let mut label = format!(
+            "{} · {} · {}",
+            surface.kind.label(),
+            surface.value,
+            surface.created_by.label(),
+        );
+        if let Some(reason) = &surface.out_of_scope_reason {
+            label.push_str(&format!(" · {reason}"));
+        }
         list = list.child(
             row()
-                .key(format!("workspace-resource-{index}"))
+                .key(format!("workspace-surface-{index}"))
                 .w_full()
                 .center_y()
                 .gap(8.0)
@@ -531,36 +645,54 @@ fn resources(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                 )
                 .child(
                     form_button("Remove", theme)
-                        .key(format!("workspace-resource-remove-{index}"))
+                        .key(format!("workspace-surface-remove-{index}"))
                         .on_press(move |s: &mut State| {
-                            s.workspace_draft.resources.remove(index);
+                            s.workspace_draft.surfaces.remove(index);
                         }),
                 ),
         );
     }
-    if state.workspace_draft.resources.is_empty() {
+    if count == 0 {
         list = list.child(
-            text("No resources recorded.")
+            text("No surfaces listed.")
                 .font(ui_font(14.0, 400.0))
                 .color(theme.color("#969696")),
         );
     }
-    vec![
-        editor,
-        row().w_full().child(el().grow(1.0)).child(
-            form_button("Add Resource", theme)
-                .key("workspace-add-resource")
-                .on_press(|s: &mut State| s.workspace_draft.add_resource()),
-        ),
-        settings_form(
-            FormSpec {
-                key: "workspace-recorded-resources",
-                heading: "Recorded Resources",
+    let button_key = match scope {
+        SurfaceScope::InScope => "workspace-add-in-scope-surface",
+        SurfaceScope::OutOfScope => "workspace-add-out-of-scope-surface",
+    };
+    let add_button = el()
+        .key(button_key)
+        .role("button")
+        .label(match scope {
+            SurfaceScope::InScope => "Add an in-scope surface",
+            SurfaceScope::OutOfScope => "Add an out-of-scope surface",
+        })
+        .size(26.0, 26.0)
+        .center()
+        .radius(8.0)
+        .continuous_corners()
+        .hover(theme.color("#303030"))
+        .cursor(Cursor::Pointer)
+        .on_press(move |s: &mut State| s.workspace_draft.open_surface_dialog(scope))
+        .child(icon(&PLUS, 16.0).color(theme.color("#bdbdbd")));
+    settings_form_with_action(
+        FormSpec {
+            key: match scope {
+                SurfaceScope::InScope => "workspace-in-scope-surfaces",
+                SurfaceScope::OutOfScope => "workspace-out-of-scope-surfaces",
             },
-            [col().w_full().py(12.0).child(list)],
-            theme,
-        ),
-    ]
+            heading: match scope {
+                SurfaceScope::InScope => "In-Scope Surfaces",
+                SurfaceScope::OutOfScope => "Out-of-Scope Surfaces",
+            },
+        },
+        [list],
+        Some(add_button),
+        theme,
+    )
 }
 
 fn rules(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
@@ -659,7 +791,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         });
     let forms = match state.workspace_draft.tab {
         CreationTab::Settings => settings(state, theme),
-        CreationTab::Resources => resources(state, theme),
+        CreationTab::Surfaces => surfaces(state, theme),
         CreationTab::Rules => rules(state, theme),
     };
     for form in forms {
@@ -681,7 +813,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .child(
             form_button("Cancel", theme)
                 .key("workspace-cancel")
-                .on_press(|s: &mut State| s.cancel_workspace_creation()),
+                .on_press(request_cancel),
         );
     if state.workspace_draft.tab.next().is_some() {
         actions = actions.child(

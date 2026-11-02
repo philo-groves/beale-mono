@@ -12,6 +12,7 @@ mod desktop_fonts;
 mod home_sidebar;
 mod icons;
 mod in_place_menu;
+mod modal_dialog;
 mod provider_auth;
 mod provider_icons;
 mod provider_models;
@@ -61,6 +62,14 @@ fn ui_font(size: f32, weight: f32) -> TextStyle {
 
 fn form_label_font() -> TextStyle {
     ui_font(14.0, 550.0)
+}
+
+fn sidenav_heading(label: &'static str, theme: ThemeStyle<'_>) -> El {
+    row().h(30.0).center_y().child(
+        text(label)
+            .font(ui_font(18.0, 500.0))
+            .color(theme.color("#aaaaaa")),
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -129,8 +138,7 @@ enum ModelRole {
 enum SelectionMenu {
     LeadProvider,
     ResearchKit,
-    ResourceKind,
-    ResourceDirection,
+    SurfaceKind,
     ColorTheme,
     InterfaceFont,
     TextSize,
@@ -1058,22 +1066,13 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
             detail: None,
             selected: true,
         }],
-        SelectionMenu::ResourceKind => workspace_creation::ResourceKind::ALL
+        SelectionMenu::SurfaceKind => workspace_creation::SurfaceKind::ALL
             .into_iter()
             .map(|kind| in_place_menu::MenuItem {
                 value: kind.key().to_owned(),
                 label: kind.label().to_owned(),
                 detail: None,
-                selected: state.workspace_draft.resource_kind == kind,
-            })
-            .collect(),
-        SelectionMenu::ResourceDirection => workspace_creation::ResourceDirection::ALL
-            .into_iter()
-            .map(|direction| in_place_menu::MenuItem {
-                value: direction.key().to_owned(),
-                label: direction.label().to_owned(),
-                detail: None,
-                selected: state.workspace_draft.resource_direction == direction,
+                selected: state.workspace_draft.surface_kind == kind,
             })
             .collect(),
         SelectionMenu::LeadProvider => [Provider::OpenAi, Provider::Xai]
@@ -1174,8 +1173,7 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
 fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
     match menu {
         SelectionMenu::ResearchKit => "workspace-kit-control",
-        SelectionMenu::ResourceKind => "workspace-resource-kind-control",
-        SelectionMenu::ResourceDirection => "workspace-resource-direction-control",
+        SelectionMenu::SurfaceKind => "workspace-surface-kind-control",
         SelectionMenu::LeadProvider => "lead-provider-control",
         SelectionMenu::ColorTheme => "color-theme-control",
         SelectionMenu::InterfaceFont => "appearance-font-control",
@@ -1228,20 +1226,12 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
     state.selection_menu = None;
     match menu {
         SelectionMenu::ResearchKit => {}
-        SelectionMenu::ResourceKind => {
-            if let Some(kind) = workspace_creation::ResourceKind::ALL
+        SelectionMenu::SurfaceKind => {
+            if let Some(kind) = workspace_creation::SurfaceKind::ALL
                 .into_iter()
                 .find(|kind| kind.key() == value)
             {
-                state.workspace_draft.resource_kind = kind;
-            }
-        }
-        SelectionMenu::ResourceDirection => {
-            if let Some(direction) = workspace_creation::ResourceDirection::ALL
-                .into_iter()
-                .find(|direction| direction.key() == value)
-            {
-                state.workspace_draft.resource_direction = direction;
+                state.workspace_draft.surface_kind = kind;
             }
         }
         SelectionMenu::LeadProvider => {
@@ -1688,7 +1678,7 @@ fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeSty
         .label(format!("{} settings", spec.label))
         .w_full()
         .h(30.0)
-        .px(10.0)
+        .px(8.0)
         .center_y()
         .gap(12.0)
         .radius(8.0)
@@ -1738,9 +1728,8 @@ fn settings_sidenav(
         .pt(12.0)
         .fill(color("#111111"))
         .child(
-            text("Agent Settings")
-                .font(ui_font(18.0, 500.0))
-                .color(color("#aaaaaa"))
+            sidenav_heading("Agent Settings", theme)
+                .key("settings-sidenav-title")
                 .ml(4.0)
                 .mb(12.0),
         )
@@ -2084,6 +2073,10 @@ fn authentication_row(
 }
 
 fn settings_form(spec: FormSpec, rows: impl IntoIterator<Item = El>, theme: ThemeStyle<'_>) -> El {
+    settings_form_with_action(spec, rows, None, theme)
+}
+
+fn settings_form_card(rows: impl IntoIterator<Item = El>, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     let mut items = col().w_full().px(16.0).radius(10.0).fill(color("#191919"));
     for (index, item) in rows.into_iter().enumerate() {
@@ -2092,16 +2085,34 @@ fn settings_form(spec: FormSpec, rows: impl IntoIterator<Item = El>, theme: Them
         }
         items = items.child(item);
     }
+    items
+}
+
+fn settings_form_with_action(
+    spec: FormSpec,
+    rows: impl IntoIterator<Item = El>,
+    action: Option<El>,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let color = |value| theme.color(value);
+    let heading = text(spec.heading)
+        .font(ui_font(17.0, 600.0))
+        .color(color("#f2f2f2"));
+    let heading = if let Some(action) = action {
+        row()
+            .w_full()
+            .center_y()
+            .child(heading.grow(1.0))
+            .child(action)
+    } else {
+        heading
+    };
     col()
         .key(spec.key)
         .w_full()
         .gap(12.0)
-        .child(
-            text(spec.heading)
-                .font(ui_font(17.0, 600.0))
-                .color(color("#f2f2f2")),
-        )
-        .child(items)
+        .child(heading)
+        .child(settings_form_card(rows, theme))
 }
 
 fn source_priority_row(state: &State, provider: Provider, spec: &ModelRowSpec) -> El {
@@ -3269,15 +3280,29 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .child(header(state, header_prefix_width))
         .child(body);
     window = window.child(surface);
+    if state.primary_view == PrimaryView::WorkspaceCreation
+        && let Some(scope) = state.workspace_draft.surface_dialog_scope
+    {
+        for layer in workspace_creation::surface_dialog(state, scope, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::WorkspaceCreation
+        && state.workspace_draft.cancel_dialog_open
+    {
+        for layer in workspace_creation::cancel_dialog(theme) {
+            window = window.child(layer);
+        }
+    }
     if let Some(menu) = state.selection_menu
         && match menu {
             SelectionMenu::ResearchKit => {
                 state.primary_view == PrimaryView::WorkspaceCreation
                     && state.workspace_draft.tab == workspace_creation::CreationTab::Settings
             }
-            SelectionMenu::ResourceKind | SelectionMenu::ResourceDirection => {
+            SelectionMenu::SurfaceKind => {
                 state.primary_view == PrimaryView::WorkspaceCreation
-                    && state.workspace_draft.tab == workspace_creation::CreationTab::Resources
+                    && state.workspace_draft.tab == workspace_creation::CreationTab::Surfaces
             }
             SelectionMenu::ColorTheme => state.settings_section == SettingsSection::Appearance,
             SelectionMenu::InterfaceFont | SelectionMenu::TextSize => {
@@ -3294,8 +3319,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         if !items.is_empty() {
             let (title, width) = match menu {
                 SelectionMenu::ResearchKit => ("Research Kit", 178.0),
-                SelectionMenu::ResourceKind => ("Resource Type", 178.0),
-                SelectionMenu::ResourceDirection => ("Scope", 178.0),
+                SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
                 SelectionMenu::LeadProvider => ("Default Provider", 178.0),
                 SelectionMenu::ColorTheme => ("Color Theme", 178.0),
                 SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
@@ -4481,7 +4505,7 @@ mod tests {
     }
 
     #[test]
-    fn new_workspace_draft_moves_through_settings_resources_and_rules() {
+    fn new_workspace_draft_moves_through_settings_surfaces_and_rules() {
         fn click(runtime: &mut Runtime<State>, key: &str) {
             let (x, y) = runtime.find(key).unwrap();
             runtime.pointer_down(x, y);
@@ -4555,13 +4579,84 @@ mod tests {
         click(&mut runtime, "workspace-next");
         assert_eq!(
             runtime.state.workspace_draft.tab,
-            workspace_creation::CreationTab::Resources
+            workspace_creation::CreationTab::Surfaces
         );
-        runtime.state.workspace_draft.resource_value = TextEdit::new("example.test");
-        runtime.state.workspace_draft.resource_kind = workspace_creation::ResourceKind::Domain;
+        assert!(runtime.find("workspace-surface-dialog").is_none());
+        assert!(runtime.find("workspace-add-in-scope-surface").is_some());
+        assert!(runtime.find("workspace-add-out-of-scope-surface").is_some());
+        click(&mut runtime, "workspace-add-in-scope-surface");
+        assert!(runtime.find("workspace-surface-dialog").is_some());
+        assert!(runtime.find("workspace-surface-scope-control").is_none());
+        assert_eq!(
+            runtime.state.workspace_draft.surface_dialog_scope,
+            Some(workspace_creation::SurfaceScope::InScope),
+        );
+        click(&mut runtime, "workspace-add-surface");
+        assert!(runtime.find("workspace-surface-dialog-error").is_some());
+        click(&mut runtime, "workspace-surface-dialog-cancel");
+        assert!(runtime.find("workspace-surface-dialog").is_none());
+        assert!(runtime.state.workspace_draft.surfaces.is_empty());
+        click(&mut runtime, "workspace-add-in-scope-surface");
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
         runtime.frame(0.0);
-        click(&mut runtime, "workspace-add-resource");
-        assert_eq!(runtime.state.workspace_draft.resources.len(), 1);
+        assert!(runtime.find("workspace-surface-dialog").is_none());
+        click(&mut runtime, "workspace-add-in-scope-surface");
+        runtime.pointer_down(10.0, 350.0);
+        runtime.pointer_up(10.0, 350.0);
+        runtime.frame(0.0);
+        assert!(runtime.find("workspace-surface-dialog").is_none());
+        click(&mut runtime, "workspace-add-in-scope-surface");
+        click(&mut runtime, "workspace-surface-kind-control");
+        assert!(runtime.find("selection-menu-item-4").is_some());
+        click(&mut runtime, "selection-menu-item-4");
+        assert!(runtime.state.selection_menu.is_none());
+        assert!(runtime.find("workspace-surface-dialog").is_some());
+        runtime.state.workspace_draft.surface_value = TextEdit::new("example.test");
+        assert_eq!(
+            runtime.state.workspace_draft.surface_kind,
+            workspace_creation::SurfaceKind::Domain,
+        );
+        runtime.frame(0.0);
+        click(&mut runtime, "workspace-add-surface");
+        assert_eq!(runtime.state.workspace_draft.surfaces.len(), 1);
+        assert_eq!(
+            runtime.state.workspace_draft.surfaces[0].scope,
+            workspace_creation::SurfaceScope::InScope,
+        );
+        assert!(runtime.find("workspace-surface-dialog").is_none());
+        assert_eq!(
+            runtime.state.workspace_draft.surfaces[0].created_by,
+            workspace_creation::SurfaceCreator::User,
+        );
+        assert_eq!(
+            runtime.state.workspace_draft.surfaces[0].out_of_scope_reason,
+            None,
+        );
+        click(&mut runtime, "workspace-add-out-of-scope-surface");
+        assert_eq!(
+            runtime.state.workspace_draft.surface_dialog_scope,
+            Some(workspace_creation::SurfaceScope::OutOfScope),
+        );
+        assert!(runtime.find("workspace-surface-scope-control").is_none());
+        runtime.state.workspace_draft.surface_value = TextEdit::new("excluded.example.test");
+        runtime.frame(0.0);
+        click(&mut runtime, "workspace-add-surface");
+        assert_eq!(runtime.state.workspace_draft.surfaces.len(), 2);
+        assert_eq!(
+            runtime.state.workspace_draft.surfaces[1].scope,
+            workspace_creation::SurfaceScope::OutOfScope,
+        );
+        assert_eq!(
+            runtime.state.workspace_draft.surfaces[1]
+                .out_of_scope_reason
+                .as_deref(),
+            Some("Set at workspace creation"),
+        );
+        assert!(runtime.find("workspace-in-scope-surfaces").is_some());
+        assert!(runtime.find("workspace-out-of-scope-surfaces").is_some());
         click(&mut runtime, "workspace-next");
         assert_eq!(
             runtime.state.workspace_draft.tab,
@@ -4573,6 +4668,22 @@ mod tests {
         click(&mut runtime, "workspace-add-rule");
         assert_eq!(runtime.state.workspace_draft.rules.len(), 1);
         click(&mut runtime, "workspace-cancel");
+        assert_eq!(runtime.state.primary_view, PrimaryView::WorkspaceCreation);
+        assert!(runtime.find("workspace-cancel-dialog").is_some());
+        assert_eq!(runtime.state.workspace_draft.name.text, "Example Workspace");
+        click(&mut runtime, "workspace-cancel-keep-editing");
+        assert!(runtime.find("workspace-cancel-dialog").is_none());
+        assert_eq!(runtime.state.workspace_draft.rules.len(), 1);
+        click(&mut runtime, "workspace-cancel");
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("workspace-cancel-dialog").is_none());
+        assert_eq!(runtime.state.workspace_draft.surfaces.len(), 2);
+        click(&mut runtime, "workspace-cancel");
+        click(&mut runtime, "workspace-cancel-discard");
         assert_eq!(runtime.state.primary_view, PrimaryView::Home);
         assert!(runtime.find("workspace-creation-page").is_none());
         assert!(runtime.state.workspace_draft.name.text.is_empty());

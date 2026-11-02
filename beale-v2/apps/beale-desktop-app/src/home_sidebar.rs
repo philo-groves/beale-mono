@@ -1,8 +1,7 @@
 use rune::{El, Icon, col, icon, row, text};
 
 use crate::icons::{FOLDER_PLUS, NEW_RESEARCH, QUICK_CHAT, SEARCH};
-use crate::ui_font;
-use crate::{State, ThemeStyle};
+use crate::{State, ThemeStyle, sidenav_heading, ui_font};
 
 struct SidebarAction {
     key: &'static str,
@@ -70,7 +69,7 @@ fn primary_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
         .center_y()
         .gap(12.0)
         .radius(8.0)
-        .child(icon(spec.icon, 15.0).color(color(if available { "#bdbdbd" } else { "#777777" })))
+        .child(icon(spec.icon, 16.0).color(color(if available { "#bdbdbd" } else { "#777777" })))
         .child(
             text(spec.label)
                 .font(ui_font(13.0, 400.0))
@@ -127,10 +126,8 @@ pub(crate) fn render(width: f32, theme: ThemeStyle<'_>) -> El {
         .pt(12.0)
         .fill(color("#111111"))
         .child(
-            text(HOME_SIDEBAR.title)
+            sidenav_heading(HOME_SIDEBAR.title, theme)
                 .key("home-wordmark")
-                .font(ui_font(24.0, 500.0))
-                .color(color("#aaaaaa"))
                 .mb(12.0),
         )
         .child(primary)

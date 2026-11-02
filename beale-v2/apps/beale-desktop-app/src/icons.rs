@@ -32,6 +32,12 @@ pub(crate) static FOLDER_PLUS: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8.2a2 2 0 0 1-1.4-.6L8.6 3.6A2 2 0 0 0 7.2 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 11v6m-3-3h6"/>"#,
 };
 
+pub(crate) static PLUS: Icon = Icon {
+    name: "lucide-plus",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14"/>"#,
+};
+
 pub(crate) static FOLDER_OPEN: Icon = Icon {
     name: "lucide-folder-open",
     view: 24.0,
