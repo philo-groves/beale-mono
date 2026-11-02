@@ -1,10 +1,12 @@
 use rune::tok::TextStyle;
 use rune::{
-    AppSpec, Color, Cx, El, Icon, ScrollSpec, TextEdit, Tx, col, el, icon, row, text, text_input,
+    AppSpec, Color, Cx, El, Icon, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, icon, row,
+    text, text_input,
 };
 use std::time::Duration;
 
 mod connection;
+mod in_place_menu;
 mod provider_auth;
 mod provider_models;
 use beale_contracts::v1::{AuthMethod, ProviderId};
@@ -155,6 +157,16 @@ enum ModelRole {
     Small,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectionMenu {
+    LeadProvider,
+    Model {
+        provider: Provider,
+        method: AuthMethod,
+        role: ModelRole,
+    },
+}
+
 fn catalog_index(provider: Provider, method: AuthMethod) -> usize {
     provider.index() * 2 + if method == AuthMethod::ApiKey { 1 } else { 0 }
 }
@@ -226,7 +238,6 @@ struct State {
     auth_status: [AuthStatus; 2],
     auth_loaded: bool,
     lead_provider: Option<Provider>,
-    lead_picker: bool,
     lead_busy: bool,
     lead_error: String,
     provider_selection_initialized: bool,
@@ -241,7 +252,9 @@ struct State {
     model_loading: [bool; 4],
     model_errors: [String; 4],
     model_saving: bool,
-    model_picker: Option<ModelRole>,
+    selection_menu: Option<SelectionMenu>,
+    menu_cursor: usize,
+    menu_reveal_pending: bool,
     notice: Option<&'static str>,
     settings_nav_visible: bool,
     open_menu: Option<HeaderMenu>,
@@ -256,7 +269,6 @@ impl Default for State {
             auth_status: Default::default(),
             auth_loaded: false,
             lead_provider: None,
-            lead_picker: false,
             lead_busy: false,
             lead_error: String::new(),
             provider_selection_initialized: false,
@@ -271,7 +283,9 @@ impl Default for State {
             model_loading: [false; 4],
             model_errors: std::array::from_fn(|_| String::new()),
             model_saving: false,
-            model_picker: None,
+            selection_menu: None,
+            menu_cursor: 0,
+            menu_reveal_pending: false,
             notice: None,
             settings_nav_visible: true,
             open_menu: None,
@@ -391,7 +405,6 @@ fn start_lead_save(state: &mut State, provider: Provider) {
             match result {
                 Ok(()) => {
                     state.lead_provider = Some(provider);
-                    state.lead_picker = false;
                 }
                 Err(error) => state.lead_error = error,
             }
@@ -423,7 +436,7 @@ fn start_model_save(
     let Some(handle) = AUTH_HANDLE.get().cloned() else {
         return;
     };
-    state.model_picker = None;
+    state.selection_menu = None;
     state.model_saving = true;
     state.model_errors[index].clear();
     std::thread::spawn(move || {
@@ -457,6 +470,151 @@ fn start_model_save(
             }
         });
     });
+}
+
+fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu::MenuItem> {
+    match menu {
+        SelectionMenu::LeadProvider => [Provider::OpenAi, Provider::Xai]
+            .into_iter()
+            .filter(|provider| {
+                let status = &state.auth_status[provider.index()];
+                status.subscription || status.api_key
+            })
+            .map(|provider| in_place_menu::MenuItem {
+                value: match provider {
+                    Provider::OpenAi => "openai",
+                    Provider::Xai => "xai",
+                }
+                .to_owned(),
+                label: provider.name().to_owned(),
+                detail: None,
+                selected: state.lead_provider == Some(provider),
+            })
+            .collect(),
+        SelectionMenu::Model {
+            provider,
+            method,
+            role,
+        } => {
+            if state.selected != provider || state.model_method[provider.index()] != method {
+                return Vec::new();
+            }
+            state.model_catalogs[catalog_index(provider, method)]
+                .as_ref()
+                .map(|catalog| {
+                    let selected = match role {
+                        ModelRole::Lead => &catalog.lead,
+                        ModelRole::Small => &catalog.small,
+                    };
+                    catalog
+                        .models
+                        .iter()
+                        .map(|model| in_place_menu::MenuItem {
+                            value: model.id.clone(),
+                            label: model.name.clone(),
+                            detail: Some(model.id.clone()),
+                            selected: model.id == *selected,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+    }
+}
+
+fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
+    match menu {
+        SelectionMenu::LeadProvider => "lead-provider-control",
+        SelectionMenu::Model {
+            role: ModelRole::Lead,
+            ..
+        } => "choose-lead-model",
+        SelectionMenu::Model {
+            role: ModelRole::Small,
+            ..
+        } => "choose-small-model",
+    }
+}
+
+fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
+    if state.selection_menu == Some(menu) {
+        state.selection_menu = None;
+        return;
+    }
+    let items = selection_menu_items(state, menu);
+    if items.is_empty() {
+        return;
+    }
+    state.menu_cursor = items.iter().position(|item| item.selected).unwrap_or(0);
+    state.menu_reveal_pending = true;
+    state.selection_menu = Some(menu);
+    state.open_menu = None;
+}
+
+fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: String) {
+    if state.selection_menu != Some(menu) {
+        return;
+    }
+    if !selection_menu_items(state, menu)
+        .iter()
+        .any(|item| item.value == value)
+    {
+        return;
+    }
+    state.selection_menu = None;
+    match menu {
+        SelectionMenu::LeadProvider => {
+            let provider = if value == "openai" {
+                Provider::OpenAi
+            } else {
+                Provider::Xai
+            };
+            start_lead_save(state, provider);
+        }
+        SelectionMenu::Model {
+            provider,
+            method,
+            role,
+        } => start_model_save(state, provider, method, role, value),
+    }
+}
+
+fn selection_menu_key(state: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
+    let Some(menu) = state.selection_menu else {
+        return false;
+    };
+    let items = selection_menu_items(state, menu);
+    if items.is_empty() {
+        state.selection_menu = None;
+        return false;
+    }
+    let last = items.len() - 1;
+    match &event.key {
+        Key::Escape => {
+            state.selection_menu = None;
+            true
+        }
+        Key::Down | Key::Up | Key::Home | Key::End => {
+            state.menu_cursor = match &event.key {
+                Key::Down => (state.menu_cursor + 1).min(last),
+                Key::Up => state.menu_cursor.saturating_sub(1),
+                Key::Home => 0,
+                Key::End => last,
+                _ => state.menu_cursor.min(last),
+            };
+            tx.scroll_into_view_in(
+                "selection-menu-scroll",
+                format!("selection-menu-item-{}", state.menu_cursor),
+            );
+            true
+        }
+        Key::Enter => {
+            let index = state.menu_cursor.min(last);
+            choose_selection_menu_item(state, menu, items[index].value.clone());
+            true
+        }
+        _ => false,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -652,7 +810,6 @@ fn header(state: &State) -> El {
         .w_full()
         .h(44.0)
         .center_y()
-        .fill(color("#151515"))
         .window_drag()
         .child(left)
         .child(title);
@@ -777,7 +934,6 @@ fn rail() -> El {
         .pt(16.0)
         .gap(6.0)
         .items_center()
-        .fill(color("#151515"))
         .child(nav_button("nav-home", "Home", &HOME, false))
         .child(nav_button(
             "nav-automations",
@@ -816,6 +972,7 @@ fn settings_nav_button(section: SettingsSection, active: bool) -> El {
             s.settings_section = section;
             s.notice = None;
             s.open_menu = None;
+            s.selection_menu = None;
         })
         .child(icon(section.icon(), 15.0).color(if active {
             color("#f2f2f2")
@@ -846,7 +1003,7 @@ fn settings_sidenav(active: SettingsSection, connection: &ConnectionStatus) -> E
         .h_full()
         .px(12.0)
         .pt(12.0)
-        .fill(color("#181818"))
+        .fill(color("#111111"))
         .child(
             text("Agent Settings")
                 .font(TextStyle::new(22.0, 500.0))
@@ -918,7 +1075,7 @@ fn provider_tab(provider: Provider, selected: bool) -> El {
             s.api_key_dialog = false;
             s.api_key_edit.clear();
             s.auth_message.clear();
-            s.model_picker = None;
+            s.selection_menu = None;
         })
         .child(
             el().size(21.0, 21.0)
@@ -961,8 +1118,10 @@ fn lead_provider_controls(state: &State) -> El {
                 .color(color("#a8a8a8")),
         )
         .child(if state.auth_loaded && configured && !state.lead_busy {
-            credential_button(label, |s| s.lead_picker = !s.lead_picker)
-                .key("lead-provider-control")
+            credential_button(label, |s| {
+                toggle_selection_menu(s, SelectionMenu::LeadProvider)
+            })
+            .key("lead-provider-control")
         } else {
             el().child(
                 text(if state.lead_busy { "Saving" } else { label })
@@ -970,31 +1129,6 @@ fn lead_provider_controls(state: &State) -> El {
                     .color(color("#888888")),
             )
         })
-}
-
-fn lead_provider_choices(state: &State) -> El {
-    if !state.lead_picker {
-        return el();
-    }
-    let mut choices = row().w_full().gap(6.0).child(
-        text("Lead provider")
-            .font(TextStyle::new(11.5, 500.0))
-            .color(color("#a8a8a8")),
-    );
-    for provider in [Provider::OpenAi, Provider::Xai] {
-        let status = &state.auth_status[provider.index()];
-        if status.subscription || status.api_key {
-            choices = choices.child(
-                credential_button(provider.name(), move |s| start_lead_save(s, provider)).key(
-                    match provider {
-                        Provider::OpenAi => "lead-choice-openai",
-                        Provider::Xai => "lead-choice-xai",
-                    },
-                ),
-            );
-        }
-    }
-    choices
 }
 
 fn credential_button(label: &'static str, action: impl Fn(&mut State) + 'static) -> El {
@@ -1200,7 +1334,17 @@ fn model_default_row(state: &State, provider: Provider, method: AuthMethod, role
                 .color(color("#bcbcbc")),
         )
         .child(if catalog.is_some() && !state.model_saving {
-            credential_button("Choose", move |s| s.model_picker = Some(role)).key(match role {
+            credential_button("Choose", move |s| {
+                toggle_selection_menu(
+                    s,
+                    SelectionMenu::Model {
+                        provider,
+                        method,
+                        role,
+                    },
+                )
+            })
+            .key(match role {
                 ModelRole::Lead => "choose-lead-model",
                 ModelRole::Small => "choose-small-model",
             })
@@ -1233,7 +1377,7 @@ fn model_settings(state: &State, provider: Provider) -> El {
             },
             move |s| {
                 s.model_method[provider.index()] = AuthMethod::Subscription;
-                s.model_picker = None;
+                s.selection_menu = None;
             },
         ));
     }
@@ -1246,7 +1390,7 @@ fn model_settings(state: &State, provider: Provider) -> El {
             },
             move |s| {
                 s.model_method[provider.index()] = AuthMethod::ApiKey;
-                s.model_picker = None;
+                s.selection_menu = None;
             },
         ));
     }
@@ -1276,38 +1420,6 @@ fn model_settings(state: &State, provider: Provider) -> El {
             text("Connect this sign-in method to load its models.")
                 .font(TextStyle::new(12.0, 400.0))
                 .color(color("#969696")),
-        );
-    }
-    if let (Some(role), Some(catalog)) = (state.model_picker, &state.model_catalogs[index]) {
-        let mut choices = col().w_full().gap(3.0);
-        for model in &catalog.models {
-            let id = model.id.clone();
-            choices = choices.child(
-                el().w_full()
-                    .h(34.0)
-                    .px(10.0)
-                    .center_y()
-                    .radius(6.0)
-                    .fill(color("#252525"))
-                    .hover(color("#343434"))
-                    .on_press(move |s: &mut State| {
-                        start_model_save(s, provider, method, role, id.clone())
-                    })
-                    .child(
-                        text(format!("{}  ·  {}", model.name, model.id))
-                            .font(TextStyle::new(11.5, 400.0))
-                            .color(color("#e4e4e4")),
-                    ),
-            );
-        }
-        section = section.child(
-            col()
-                .w_full()
-                .h(220.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .child(choices),
         );
     }
     section
@@ -1465,7 +1577,7 @@ fn provider_detail(state: &State) -> El {
     detail.child(model_settings(state, provider))
 }
 
-fn view(state: &State, _: &mut Cx<State>) -> El {
+fn view(state: &State, cx: &mut Cx<State>) -> El {
     let mut content = col()
         .key("settings-page")
         .w_full()
@@ -1493,7 +1605,6 @@ fn view(state: &State, _: &mut Cx<State>) -> El {
                     .child(el().grow(1.0))
                     .child(lead_provider_controls(state)),
             )
-            .child(lead_provider_choices(state))
             .child(if state.lead_error.is_empty() {
                 el()
             } else {
@@ -1533,13 +1644,7 @@ fn view(state: &State, _: &mut Cx<State>) -> El {
                 .color(color("#c8c8c8")),
         );
     }
-    let mut body = row()
-        .key("body")
-        .w_full()
-        .grow(1.0)
-        .pr(6.0)
-        .pb(6.0)
-        .fill(color("#151515"));
+    let mut body = row().key("body").w_full().grow(1.0).pr(6.0).pb(6.0);
     body = body.child(rail());
     let mut settings_surface = row()
         .key("settings-surface")
@@ -1547,7 +1652,7 @@ fn view(state: &State, _: &mut Cx<State>) -> El {
         .h_full()
         .radius(16.0)
         .clip_rounded(16.0)
-        .fill(color("#181818"));
+        .fill(color("#111111"));
     if state.settings_nav_visible {
         settings_surface = settings_surface
             .child(settings_sidenav(state.settings_section, &state.connection))
@@ -1586,16 +1691,81 @@ fn view(state: &State, _: &mut Cx<State>) -> El {
     if cfg!(target_os = "windows") && !state.native_window_border {
         window = window.padding(1.0).fill(color("#323232"));
     }
+    let [background_width, background_height] =
+        cx.layout_size("app-surface").unwrap_or([1040.0, 720.0]);
+    let upper_left_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.43;
+    let lower_right_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.48;
     let mut surface = col()
+        .key("app-surface")
         .w_full()
         .grow(1.0)
         .fill(color("#151515"))
+        .linear_gradient(
+            145.0_f32.to_radians(),
+            [(0.0, color("#1d1d1d")), (1.0, color("#151515"))],
+        )
+        .child(
+            el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .radial_gradient(
+                    [0.88, 0.92],
+                    lower_right_radius,
+                    [(0.0, color("#1d1d1d")), (1.0, Color::TRANSPARENT)],
+                ),
+        )
+        .child(
+            el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .radial_gradient(
+                    [0.12, 0.08],
+                    upper_left_radius,
+                    [(0.0, color("#2a2a2a")), (1.0, Color::TRANSPARENT)],
+                ),
+        )
         .child(header(state))
         .child(body);
     if let Some(menu) = state.open_menu {
         surface = surface.child(menu_popup(menu));
     }
-    window.child(surface)
+    window = window.child(surface);
+    if let Some(menu) = state.selection_menu
+        && state.settings_section == SettingsSection::Providers
+    {
+        let items = selection_menu_items(state, menu);
+        if !items.is_empty() {
+            let (title, width) = match menu {
+                SelectionMenu::LeadProvider => ("Lead provider", 178.0),
+                SelectionMenu::Model { .. } => ("Choose model", 380.0),
+            };
+            window = window
+                .child(in_place_menu::dismiss_layer(|s: &mut State| {
+                    s.selection_menu = None
+                }))
+                .child(
+                    in_place_menu::panel(
+                        selection_menu_anchor(menu),
+                        title,
+                        width,
+                        state.menu_cursor.min(items.len() - 1),
+                        items,
+                        move |s: &mut State, index| {
+                            if s.selection_menu == Some(menu) {
+                                s.menu_cursor = index;
+                            }
+                        },
+                        move |s: &mut State, value| choose_selection_menu_item(s, menu, value),
+                    )
+                    .on_layout_tx(|s: &mut State, _, tx| {
+                        if s.menu_reveal_pending {
+                            s.menu_reveal_pending = false;
+                            tx.scroll_into_view_in(
+                                "selection-menu-scroll",
+                                format!("selection-menu-item-{}", s.menu_cursor),
+                            );
+                        }
+                    }),
+                );
+        }
+    }
+    window
 }
 
 fn main() -> std::process::ExitCode {
@@ -1614,6 +1784,7 @@ fn main() -> std::process::ExitCode {
             }),
         ],
         min_size: Some((840.0, 600.0)),
+        on_key: Some(selection_menu_key),
         ..AppSpec::new("Beale", (1040.0, 720.0), State::default, view)
     };
     let app = rune::App::new(spec).chrome(rune::Chrome {
@@ -1708,7 +1879,7 @@ fn main() -> std::process::ExitCode {
                             .iter()
                             .all(|item| !item.subscription && !item.api_key)
                     {
-                        state.lead_picker = false;
+                        state.selection_menu = None;
                     }
                     if previous_lead != lead_provider {
                         state.lead_error.clear();
@@ -1781,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn lead_picker_lists_only_configured_providers() {
+    fn lead_menu_lists_only_configured_providers_without_moving_content() {
         let state = State {
             auth_loaded: true,
             lead_provider: Some(Provider::Xai),
@@ -1796,12 +1967,140 @@ mod tests {
         };
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        let detail_before = runtime.find("provider-detail-openai").unwrap();
         let (x, y) = runtime.find("lead-provider-control").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
-        assert!(runtime.find("lead-choice-xai").is_some());
-        assert!(runtime.find("lead-choice-openai").is_none());
+        assert!(runtime.find("selection-menu").is_some());
+        assert!(runtime.find("selection-menu-item-0").is_some());
+        assert!(runtime.find("selection-menu-item-1").is_none());
+        assert_eq!(
+            runtime.find("provider-detail-openai").unwrap(),
+            detail_before
+        );
+    }
+
+    #[test]
+    fn model_menu_closes_on_escape_and_outside_press() {
+        let state = State {
+            auth_loaded: true,
+            auth_status: [
+                AuthStatus {
+                    subscription: true,
+                    ..AuthStatus::default()
+                },
+                AuthStatus::default(),
+            ],
+            model_catalogs: [
+                Some(ModelCatalog {
+                    models: vec![
+                        provider_models::ModelEntry {
+                            id: "example-lead".to_owned(),
+                            name: "Example Lead".to_owned(),
+                        },
+                        provider_models::ModelEntry {
+                            id: "example-small".to_owned(),
+                            name: "Example Small".to_owned(),
+                        },
+                    ],
+                    lead: "example-lead".to_owned(),
+                    small: "example-small".to_owned(),
+                }),
+                None,
+                None,
+                None,
+            ],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.on_key = Some(selection_menu_key);
+        runtime.frame(0.0);
+        let detail_before = runtime.find("provider-detail-openai").unwrap();
+        let (x, y) = runtime.find("choose-lead-model").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("selection-menu-item-1").is_some());
+        let (menu_rect, _) = runtime.presented("selection-menu").unwrap();
+        assert!(menu_rect[0] >= 0.0 && menu_rect[0] + menu_rect[2] <= 1040.0);
+        assert!(menu_rect[1] >= 0.0 && menu_rect[1] + menu_rect[3] <= 720.0);
+        assert_eq!(
+            runtime.find("provider-detail-openai").unwrap(),
+            detail_before
+        );
+        runtime.key(KeyEvent {
+            key: Key::Down,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.menu_cursor, 1);
+        runtime.key(KeyEvent {
+            key: Key::Home,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.menu_cursor, 0);
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("selection-menu").is_none());
+        let (x, y) = runtime.find("choose-lead-model").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        runtime.pointer_down(500.0, 100.0);
+        runtime.pointer_up(500.0, 100.0);
+        runtime.frame(0.0);
+        assert!(runtime.find("selection-menu").is_none());
+    }
+
+    #[test]
+    fn long_model_menu_reveals_selected_item() {
+        let models = (0..25)
+            .map(|index| provider_models::ModelEntry {
+                id: format!("example-model-{index}"),
+                name: format!("Example Model {index}"),
+            })
+            .collect();
+        let state = State {
+            auth_loaded: true,
+            auth_status: [
+                AuthStatus {
+                    subscription: true,
+                    ..AuthStatus::default()
+                },
+                AuthStatus::default(),
+            ],
+            model_catalogs: [
+                Some(ModelCatalog {
+                    models,
+                    lead: "example-model-20".to_owned(),
+                    small: "example-model-0".to_owned(),
+                }),
+                None,
+                None,
+                None,
+            ],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("choose-lead-model").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        for _ in 0..3 {
+            runtime.frame(0.0);
+        }
+        assert_eq!(runtime.state.menu_cursor, 20);
+        let (menu_rect, _) = runtime.presented("selection-menu").unwrap();
+        let (viewport_rect, _) = runtime.presented("selection-menu-scroll").unwrap();
+        let (selected_rect, _) = runtime.presented("selection-menu-item-20").unwrap();
+        assert!(menu_rect[3] <= 320.0);
+        assert!(selected_rect[1] >= viewport_rect[1]);
+        assert!(selected_rect[1] + selected_rect[3] <= viewport_rect[1] + viewport_rect[3]);
     }
 
     #[test]

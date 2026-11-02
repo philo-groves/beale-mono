@@ -17,6 +17,11 @@
 - Added same-device OpenAI and xAI subscription sign-in, API key configuration, credential status, and forget controls to the v2 Providers view.
 - Added account-specific model lists and lead/small defaults for OpenAI and xAI subscription and API key access in the v2 Providers view.
 - Added a lead provider control to the v2 Providers view, with the first configured provider selected automatically.
+- Added reusable in-window menus for v2 lead provider and model selection, with keyboard navigation and outside-click dismissal.
+
+#### Changed
+
+- Matched the v2 desktop dark shell gradient and settings surface colors to Beale v1.
 
 ### app-server
 
