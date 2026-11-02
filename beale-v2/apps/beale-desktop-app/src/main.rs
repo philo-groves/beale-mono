@@ -466,6 +466,9 @@ fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
 }
 
 fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
+    if matches!(menu, SelectionMenu::Model { .. }) && state.model_saving {
+        return;
+    }
     if state.selection_menu == Some(menu) {
         state.selection_menu = None;
         return;
@@ -1077,13 +1080,15 @@ fn lead_provider_controls(state: &State) -> El {
         .gap(7.0)
         .child(
             text("Lead")
-                .font(TextStyle::new(11.5, 500.0))
+                .font(TextStyle::new(12.0, 500.0))
                 .color(color("#a8a8a8")),
         )
         .child(if state.auth_loaded && configured && !state.lead_busy {
-            credential_button(label, |s| {
-                toggle_selection_menu(s, SelectionMenu::LeadProvider)
-            })
+            selection_button(
+                label,
+                state.selection_menu == Some(SelectionMenu::LeadProvider),
+                |s| toggle_selection_menu(s, SelectionMenu::LeadProvider),
+            )
             .key("lead-provider-control")
         } else {
             el().child(
@@ -1094,19 +1099,48 @@ fn lead_provider_controls(state: &State) -> El {
         })
 }
 
-fn credential_button(label: &'static str, action: impl Fn(&mut State) + 'static) -> El {
-    el().h(30.0)
+fn form_button(label: impl Into<String>) -> El {
+    row()
+        .h(26.0)
         .px(12.0)
         .center()
-        .radius(7.0)
+        .gap(6.0)
+        .radius(8.0)
+        .continuous_corners()
         .fill(color("#303030"))
         .hover(color("#414141"))
-        .on_press(action)
         .child(
-            text(label)
-                .font(TextStyle::new(11.5, 550.0))
+            text(label.into())
+                .font(TextStyle::new(12.0, 550.0))
+                .min_w(0.0)
+                .truncate()
                 .color(color("#eeeeee")),
         )
+}
+
+fn credential_button(label: &'static str, action: impl Fn(&mut State) + 'static) -> El {
+    form_button(label).on_press(action)
+}
+
+fn selection_button(
+    label: impl Into<String>,
+    open: bool,
+    action: impl Fn(&mut State) + 'static,
+) -> El {
+    form_button(label)
+        .max_w(220.0)
+        .fill(if open {
+            color("#303030")
+        } else {
+            Color::TRANSPARENT
+        })
+        .border(1.0, color("#2c2c2c"))
+        .child(icon(if open { &CHEVRON_UP } else { &CHEVRON_DOWN }, 13.0).color(color("#b8b8b8")))
+        .on_press(action)
+}
+
+fn form_item_row() -> El {
+    row().w_full().h(62.0).center_y().gap(12.0)
 }
 
 fn authentication_row(
@@ -1164,11 +1198,7 @@ fn authentication_row(
         })
         .key("configure-api-key")
     };
-    row()
-        .w_full()
-        .h(70.0)
-        .center_y()
-        .gap(12.0)
+    form_item_row()
         .child(
             col()
                 .grow(1.0)
@@ -1192,7 +1222,7 @@ fn authentication_row(
                 )
                 .child(
                     text(description)
-                        .font(TextStyle::new(11.5, 400.0))
+                        .font(TextStyle::new(12.0, 400.0))
                         .color(color("#969696")),
                 ),
         )
@@ -1207,26 +1237,15 @@ fn authentication_row(
         })
 }
 
-fn provider_settings_group(
-    key: &'static str,
-    heading: &'static str,
-    description: &'static str,
-    first: El,
-    second: El,
-) -> El {
+fn provider_settings_group(key: &'static str, heading: &'static str, first: El, second: El) -> El {
     col()
         .key(key)
         .w_full()
-        .gap(9.0)
+        .gap(12.0)
         .child(
             text(heading)
                 .font(TextStyle::new(15.0, 600.0))
                 .color(color("#f2f2f2")),
-        )
-        .child(
-            text(description)
-                .font(TextStyle::new(12.0, 400.0))
-                .color(color("#969696")),
         )
         .child(
             col()
@@ -1271,11 +1290,12 @@ fn model_default_row(state: &State, provider: Provider, method: AuthMethod, role
             "Lighter model for supporting research tasks.",
         ),
     };
-    row()
-        .w_full()
-        .h(68.0)
-        .center_y()
-        .gap(12.0)
+    let menu = SelectionMenu::Model {
+        provider,
+        method,
+        role,
+    };
+    form_item_row()
         .child(
             col()
                 .grow(1.0)
@@ -1287,32 +1307,24 @@ fn model_default_row(state: &State, provider: Provider, method: AuthMethod, role
                 )
                 .child(
                     text(description)
-                        .font(TextStyle::new(11.5, 400.0))
+                        .font(TextStyle::new(12.0, 400.0))
                         .color(color("#969696")),
                 ),
         )
-        .child(
-            text(value.to_owned())
-                .font(TextStyle::new(11.5, 450.0))
-                .color(color("#bcbcbc")),
-        )
-        .child(if catalog.is_some() && !state.model_saving {
-            credential_button("Choose", move |s| {
-                toggle_selection_menu(
-                    s,
-                    SelectionMenu::Model {
-                        provider,
-                        method,
-                        role,
-                    },
-                )
-            })
+        .child(if catalog.is_some() {
+            selection_button(
+                value.to_owned(),
+                state.selection_menu == Some(menu),
+                move |s| toggle_selection_menu(s, menu),
+            )
             .key(match role {
                 ModelRole::Lead => "choose-lead-model",
                 ModelRole::Small => "choose-small-model",
             })
         } else {
-            el()
+            text(value.to_owned())
+                .font(TextStyle::new(11.5, 450.0))
+                .color(color("#bcbcbc"))
         })
 }
 
@@ -1368,7 +1380,6 @@ fn model_settings(state: &State, provider: Provider) -> El {
     section = section.child(provider_settings_group(
         "provider-model-defaults",
         "Default Models",
-        "Choose account-available models for primary and supporting research.",
         model_default_row(state, provider, method, ModelRole::Lead),
         model_default_row(state, provider, method, ModelRole::Small),
     ));
@@ -1435,7 +1446,6 @@ fn provider_detail(state: &State) -> El {
         .child(provider_settings_group(
             "provider-authentication",
             "Authentication",
-            "Choose how Beale authenticates with this provider.",
             authentication_row(provider, auth, state.auth_loaded, state.auth_busy, true),
             authentication_row(provider, auth, state.auth_loaded, state.auth_busy, false),
         ));
@@ -1507,25 +1517,12 @@ fn provider_detail(state: &State) -> El {
                         .font(TextStyle::new(12.0, 400.0))
                         .color(color("#b8b8b8")),
                 )
-                .child(
-                    el().h(30.0)
-                        .px(12.0)
-                        .center()
-                        .radius(7.0)
-                        .fill(color("#303030"))
-                        .hover(color("#414141"))
-                        .on_press_tx({
-                            let url = prompt.url.clone();
-                            move |_: &mut State, tx| {
-                                let _ = tx.open_url(&url);
-                            }
-                        })
-                        .child(
-                            text("Open sign-in page")
-                                .font(TextStyle::new(11.5, 550.0))
-                                .color(color("#eeeeee")),
-                        ),
-                )
+                .child(form_button("Open sign-in page").on_press_tx({
+                    let url = prompt.url.clone();
+                    move |_: &mut State, tx| {
+                        let _ = tx.open_url(&url);
+                    }
+                }))
                 .child(
                     text(if prompt.code.is_empty() {
                         String::new()
@@ -2034,6 +2031,55 @@ mod tests {
         runtime.frame(0.0);
         runtime.pointer_down(500.0, 100.0);
         runtime.pointer_up(500.0, 100.0);
+        runtime.frame(0.0);
+        assert!(runtime.find("selection-menu").is_none());
+    }
+
+    #[test]
+    fn saving_one_model_keeps_both_selectors_in_place() {
+        let state = State {
+            auth_loaded: true,
+            auth_status: [
+                AuthStatus {
+                    subscription: true,
+                    ..AuthStatus::default()
+                },
+                AuthStatus::default(),
+            ],
+            model_catalogs: [
+                Some(ModelCatalog {
+                    models: vec![provider_models::ModelEntry {
+                        id: "example-model".to_owned(),
+                        name: "Example Model".to_owned(),
+                    }],
+                    lead: "example-model".to_owned(),
+                    small: "example-model".to_owned(),
+                }),
+                None,
+                None,
+                None,
+            ],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let lead_before = runtime.presented("choose-lead-model").unwrap().0;
+        let small_before = runtime.presented("choose-small-model").unwrap().0;
+
+        runtime.update(|state, _| state.model_saving = true);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.presented("choose-lead-model").unwrap().0,
+            lead_before
+        );
+        assert_eq!(
+            runtime.presented("choose-small-model").unwrap().0,
+            small_before
+        );
+
+        let (x, y) = runtime.find("choose-small-model").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
         runtime.frame(0.0);
         assert!(runtime.find("selection-menu").is_none());
     }

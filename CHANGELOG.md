@@ -26,6 +26,11 @@
 - Aligned the v2 header title separator with the sidenav edge and added right-edge sidenav resizing with v1 width limits.
 - Replaced the v2 desktop icon approximations with v1 Lucide shapes and pixel-aligned sizes for clearer rendering.
 - Tightened the v2 Agent Settings sidenav spacing and title size, and removed Profile and Prompt sections.
+- Standardized v2 form action buttons with continuous corners and reduced button and form row height.
+- Styled v2 lead and model selectors with separator-colored outlines, transparent idle fill, filled open state, flipping chevrons, and selected model labels.
+- Kept model selectors mounted during a default-model save so unrelated controls do not animate.
+- Removed descriptions beneath the Authentication and Default Models form headings.
+- Increased spacing below form headings and slightly enlarged row descriptions, form buttons, and the Lead label.
 
 ### app-server
 
