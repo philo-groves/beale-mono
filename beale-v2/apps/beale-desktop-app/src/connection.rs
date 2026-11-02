@@ -1,6 +1,6 @@
 use beale_contracts::{
-    DEFAULT_LOCAL_ADDR, HEALTH_PATH, PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, SERVICE_NAME,
-    v1::HealthResponse,
+    DEFAULT_LOCAL_ADDR, HEALTH_PATH, PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR,
+    SERVICE_NAME, v1::HealthResponse,
 };
 use prost::Message;
 use reqwest::{Client, StatusCode, header::CONTENT_TYPE};
@@ -66,7 +66,10 @@ fn decode_health(content_type: Option<&str>, body: &[u8]) -> ConnectionStatus {
     let Ok(health) = HealthResponse::decode(body) else {
         return ConnectionStatus::Incompatible;
     };
-    if health.service != SERVICE_NAME || health.protocol_major != PROTOCOL_MAJOR {
+    if health.service != SERVICE_NAME
+        || health.protocol_major != PROTOCOL_MAJOR
+        || health.protocol_minor < PROTOCOL_MINOR
+    {
         return ConnectionStatus::Incompatible;
     }
     ConnectionStatus::Connected {
@@ -134,7 +137,6 @@ pub(crate) fn check_cli() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beale_contracts::PROTOCOL_MINOR;
 
     #[test]
     fn local_address_rejects_remote_or_ephemeral_bindings() {
@@ -161,6 +163,12 @@ mod tests {
             ConnectionStatus::Incompatible
         );
         health.protocol_major = PROTOCOL_MAJOR;
+        health.protocol_minor = PROTOCOL_MINOR - 1;
+        assert_eq!(
+            decode_health(Some(PROTOBUF_CONTENT_TYPE), &health.encode_to_vec()),
+            ConnectionStatus::Incompatible
+        );
+        health.protocol_minor = PROTOCOL_MINOR;
         health.service = "example-service".to_owned();
         assert_eq!(
             decode_health(Some(PROTOBUF_CONTENT_TYPE), &health.encode_to_vec()),

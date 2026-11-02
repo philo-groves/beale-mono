@@ -33,6 +33,8 @@ pub mod v1 {
         pub login_in_progress: bool,
         #[prost(string, tag = "5")]
         pub login_error: String,
+        #[prost(enumeration = "AuthMethod", tag = "6")]
+        pub source_priority: i32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -41,6 +43,16 @@ pub mod v1 {
         pub providers: Vec<ProviderAuthStatus>,
         #[prost(enumeration = "ProviderId", tag = "2")]
         pub lead_provider: i32,
+        #[prost(enumeration = "DaybreakMode", tag = "3")]
+        pub openai_daybreak_mode: i32,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum DaybreakMode {
+        Unspecified = 0,
+        Blue = 1,
+        Red = 2,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -126,10 +138,24 @@ pub mod v1 {
         #[prost(string, tag = "4")]
         pub small_model: String,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetSourcePriorityRequest {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "2")]
+        pub method: i32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetDaybreakModeRequest {
+        #[prost(enumeration = "DaybreakMode", tag = "1")]
+        pub mode: i32,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 3;
+pub const PROTOCOL_MINOR: u32 = 5;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -140,6 +166,8 @@ pub const AUTH_SUBSCRIPTION_FORGET_PATH: &str = "/v1/providers/subscription/forg
 pub const LEAD_PROVIDER_PATH: &str = "/v1/providers/lead";
 pub const MODELS_LIST_PATH: &str = "/v1/providers/models/list";
 pub const MODELS_DEFAULTS_PATH: &str = "/v1/providers/models/defaults";
+pub const SOURCE_PRIORITY_PATH: &str = "/v1/providers/source-priority";
+pub const DAYBREAK_MODE_PATH: &str = "/v1/providers/openai/daybreak-mode";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const DEFAULT_LOCAL_ADDR: &str = "127.0.0.1:43831";
 pub const CONTROL_CHALLENGE_BYTES: usize = 32;

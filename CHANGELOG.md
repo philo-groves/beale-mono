@@ -7,7 +7,10 @@
 #### Added
 
 - Started the v2 Rune desktop client with Beale's dark icon rail and an Agent Settings Providers view for OpenAI and xAI.
-- Added the v2 desktop custom header with navigation toggle, application menus, contextual title, and Windows window controls.
+- Added the v2 desktop custom header with navigation toggle, contextual title, and Windows window controls.
+- Added back and forward buttons to the v2 desktop header for settings sections and provider and appearance views, with muted disabled states.
+- Applied the v1 Beale app icon to the v2 desktop executable and window on Windows and the Dock on macOS.
+- Saved and restored the v2 Windows desktop window's normal position, size, and maximized state across launches, with an off-screen placement fallback.
 - Added edge and corner resizing to the v2 Windows desktop frame and requested rounded corners on Windows 11.
 - Added a dark grey 1px border around the v2 desktop window on Windows, following rounded corners through DWM on Windows 11.
 - Framed the v2 desktop content surface with the v1 right and bottom inset and removed the header divider.
@@ -18,19 +21,53 @@
 - Added account-specific model lists and lead/small defaults for OpenAI and xAI subscription and API key access in the v2 Providers view.
 - Added a lead provider control to the v2 Providers view, with the first configured provider selected automatically.
 - Added reusable in-window menus for v2 lead provider and model selection, with keyboard navigation and outside-click dismissal.
+- Added v2 Appearance settings with Colors and Typography tabs, four themes, per-theme Heat Palette colors, an interface font choice, and text sizing, saved locally by the desktop.
+- Added an OpenAI-only Daybreak Mode form to the v2 Providers view, with Blue selected by default and Red available as a host-saved choice.
+- Added the v2 Home view with a data-driven v1-style sidebar for research actions and workspaces; its main content remains blank while session flows are built.
+- Added a v2 New Workspace draft flow with Settings, Resources, and Rules views, a None-only Research Kit selector, and no Research Subject field. Final creation remains unavailable until app-server workspace operations exist.
+- Added a native folder picker beside the v2 New Workspace directory field, preserving manual path entry.
 
 #### Changed
 
+- Removed the unused File, View, and Window menus from the v2 desktop header.
 - Matched the v2 desktop dark shell gradient and settings surface colors to Beale v1.
 - Matched the v2 desktop font families to the v1 system UI and monospace stacks.
 - Aligned the v2 header title separator with the sidenav edge and added right-edge sidenav resizing with v1 width limits.
 - Replaced the v2 desktop icon approximations with v1 Lucide shapes and pixel-aligned sizes for clearer rendering.
 - Tightened the v2 Agent Settings sidenav spacing and title size, and removed Profile and Prompt sections.
+- Reduced the v2 Agent Settings sidenav title to 18px and removed Features from the settings list.
+- Defined the v2 settings sidenav and form headings and rows from typed metadata, with one shared form-card renderer.
 - Standardized v2 form action buttons with continuous corners and reduced button and form row height.
 - Styled v2 lead and model selectors with separator-colored outlines, transparent idle fill, filled open state, flipping chevrons, and selected model labels.
 - Kept model selectors mounted during a default-model save so unrelated controls do not animate.
 - Removed descriptions beneath the Authentication and Default Models form headings.
 - Increased spacing below form headings and slightly enlarged row descriptions, form buttons, and the Lead label.
+- Replaced popup menu outlines with shadows and continuous-corner panels.
+- Enlarged settings view titles and placed the Providers title above its tabs with the same content inset as other settings views.
+- Enlarged typography across provider forms, controls, and their selection menus.
+- Replaced the active-item dot in provider and model menus with a checkmark.
+- Compact, text-only provider tabs now use shorter borderless squircle buttons with a clearer selected state; authentication status text matches row descriptions in size.
+- Replaced provider title initials with vector OpenAI and Grok marks.
+- Framed each provider view header with a rounded 1px border.
+- Removed an empty lead-error layout slot and left a slightly larger gap below the provider tabs.
+- Moved provider model Refresh into the provider header and replaced the Model access line with a Source Priority selector when both credentials are configured.
+- Colored provider setup warnings orange and provider operation errors red while keeping sign-in progress and success messages neutral.
+- Applied the selected appearance theme across the v2 desktop shell, provider forms, menus, and Windows window border.
+- Moved Color Theme selection beside the Appearance tabs, added a selected-theme header, and tied the Heat Palette directly to that theme.
+- Replaced the Heat Palette's Reset button with a revert icon beside each color that differs from its theme default.
+- Added a Theme Palette form for viewing and editing each selected theme's interface colors, with local persistence and per-color revert controls.
+- Added anchored color selector menus to Heat Palette and Theme Palette previews, with hue, saturation, and brightness controls.
+- Consolidated Appearance Typography controls into a Font Options form with font and five-size dropdowns above a Sample preview; saved Compact size remains compatible as Small at 90%.
+- Sized Typography dropdown controls to their selected values.
+- Renamed the Providers lead selector label to Default Provider.
+- Added an edge-aligned settings scrollbar with up and down controls, and smoothed notched mouse-wheel scrolling while preserving precise trackpad input.
+- Matched the v2 settings scrollbar track to the main content surface and its thumb and arrow controls to the settings sidenav color.
+
+#### Fixed
+
+- Reduced transparent padding in the v2 Windows app icon so it fills the taskbar icon area.
+- Aligned provider headers and form sections with the full width of the Providers tab area in wide windows.
+- Bundled Inter for the v2 desktop so the Beale interface font remains distinct from the system font when Inter is not installed.
 
 ### app-server
 
@@ -41,6 +78,8 @@
 - Added v1.1 local provider credential operations with a private control token; API keys use current-user DPAPI protection on Windows and private host files on other systems.
 - Added v1.2 local model catalog and default-selection operations, with host-side validation against available models and per-method persistence.
 - Added v1.3 lead provider status and selection, stored by the app-server and reassigned when its last credential is removed.
+- Added v1.4 source priority status and selection per provider, defaulting to Subscription and storing explicit API Key choices on the host.
+- Added v1.5 local OpenAI Daybreak Mode status and selection, with Blue as the host default and Red persisted in the private host directory.
 
 #### Changed
 

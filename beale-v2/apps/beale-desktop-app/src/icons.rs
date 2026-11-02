@@ -8,6 +8,36 @@ pub(crate) static HOME: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>"#,
 };
 
+pub(crate) static NEW_RESEARCH: Icon = Icon {
+    name: "lucide-square-pen",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18.37 3.63a2.12 2.12 0 0 1 3 3L12 16l-4 1 1-4Z"/>"#,
+};
+
+pub(crate) static QUICK_CHAT: Icon = Icon {
+    name: "lucide-zap",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m13 2-3 8h9l-8 12 3-9H5z"/>"#,
+};
+
+pub(crate) static SEARCH: Icon = Icon {
+    name: "lucide-search",
+    view: 24.0,
+    body: r#"<circle fill="none" stroke="currentColor" stroke-width="2" cx="11" cy="11" r="8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35"/>"#,
+};
+
+pub(crate) static FOLDER_PLUS: Icon = Icon {
+    name: "lucide-folder-plus",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8.2a2 2 0 0 1-1.4-.6L8.6 3.6A2 2 0 0 0 7.2 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 11v6m-3-3h6"/>"#,
+};
+
+pub(crate) static FOLDER_OPEN: Icon = Icon {
+    name: "lucide-folder-open",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6A2 2 0 0 1 18.46 20H4.6a2 2 0 0 1-1.94-2.5l.39-1.5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M2 16V4a2 2 0 0 1 2-2h4.5a2 2 0 0 1 1.6.8L12 5h6a2 2 0 0 1 2 2v3"/>"#,
+};
+
 pub(crate) static AUTOMATIONS: Icon = Icon {
     name: "lucide-calendar-clock",
     view: 24.0,
@@ -36,6 +66,18 @@ pub(crate) static SIDEBAR: Icon = Icon {
     name: "lucide-panel-left",
     view: 24.0,
     body: r#"<rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" x="3" y="3" rx="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 3v18"/>"#,
+};
+
+pub(crate) static ARROW_LEFT: Icon = Icon {
+    name: "lucide-arrow-left",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m12 19-7-7 7-7"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 12H5"/>"#,
+};
+
+pub(crate) static ARROW_RIGHT: Icon = Icon {
+    name: "lucide-arrow-right",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m12 5 7 7-7 7"/>"#,
 };
 
 pub(crate) static MINIMIZE: Icon = Icon {
@@ -68,6 +110,18 @@ pub(crate) static CHEVRON_UP: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m18 15-6-6-6 6"/>"#,
 };
 
+pub(crate) static CHECK: Icon = Icon {
+    name: "lucide-check",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 6 9 17l-5-5"/>"#,
+};
+
+pub(crate) static REVERT: Icon = Icon {
+    name: "lucide-rotate-ccw",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 3v5h5"/>"#,
+};
+
 pub(crate) static APPEARANCE: Icon = Icon {
     name: "lucide-palette",
     view: 24.0,
@@ -78,12 +132,6 @@ pub(crate) static PROVIDERS: Icon = Icon {
     name: "lucide-server-cog",
     view: 24.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m10.852 14.772-.383.923"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M13.148 14.772a3 3 0 1 0-2.296-5.544l-.383-.923"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m13.148 9.228.383-.923"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m13.53 15.696-.382-.924a3 3 0 1 1-2.296-5.544"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m14.772 10.852.923-.383"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m14.772 13.148.923.383"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4.5 10H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-.5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4.5 14H4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2h-.5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 18h.01"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 6h.01"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9.228 10.852-.923-.383"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9.228 13.148-.923.383"/>"#,
-};
-
-pub(crate) static FEATURES: Icon = Icon {
-    name: "lucide-sliders-horizontal",
-    view: 24.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 5H3"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 19H3"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 3v4"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M16 17v4"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 12h-9"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 19h-5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 5h-7"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 10v4"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 12H3"/>"#,
 };
 
 pub(crate) static ARCHIVE: Icon = Icon {

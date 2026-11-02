@@ -120,6 +120,42 @@ impl CredentialStore {
         remove_if_exists(&self.root.join("lead-provider"))
     }
 
+    pub fn source_priority(&self, provider: &str) -> Result<&'static str> {
+        match std::fs::read_to_string(self.source_priority_path(provider)?) {
+            Ok(value) if value == "api-key" => Ok("api-key"),
+            Ok(_) => bail!("invalid saved source priority"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("subscription"),
+            Err(error) => Err(error).context("cannot read source priority"),
+        }
+    }
+
+    pub fn save_source_priority(&self, provider: &str, mode: &str) -> Result<()> {
+        let path = self.source_priority_path(provider)?;
+        match mode {
+            "subscription" => remove_if_exists(&path),
+            "api-key" => self.write_private(&path, b"api-key"),
+            _ => bail!("unknown source priority"),
+        }
+    }
+
+    pub fn daybreak_mode(&self) -> Result<&'static str> {
+        match std::fs::read_to_string(self.root.join("openai-daybreak-mode")) {
+            Ok(value) if value == "red" => Ok("red"),
+            Ok(_) => bail!("invalid saved Daybreak mode"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("blue"),
+            Err(error) => Err(error).context("cannot read Daybreak mode"),
+        }
+    }
+
+    pub fn save_daybreak_mode(&self, mode: &str) -> Result<()> {
+        let path = self.root.join("openai-daybreak-mode");
+        match mode {
+            "blue" => remove_if_exists(&path),
+            "red" => self.write_private(&path, b"red"),
+            _ => bail!("unknown Daybreak mode"),
+        }
+    }
+
     pub fn load_model_defaults(&self, provider: &str, mode: &str) -> Result<Option<ModelDefaults>> {
         match std::fs::read(self.model_defaults_path(provider, mode)?) {
             Ok(bytes) => Ok(Some(
@@ -210,6 +246,13 @@ impl CredentialStore {
     fn api_key_path(&self, provider: &str) -> Result<PathBuf> {
         match provider {
             "openai" | "xai" => Ok(self.root.join(format!("{provider}-api-key"))),
+            _ => bail!("unknown provider"),
+        }
+    }
+
+    fn source_priority_path(&self, provider: &str) -> Result<PathBuf> {
+        match provider {
+            "openai" | "xai" => Ok(self.root.join(format!("{provider}-source-priority"))),
             _ => bail!("unknown provider"),
         }
     }
@@ -409,6 +452,38 @@ mod tests {
                 .is_err()
         );
         std::fs::remove_file(root.join("openai-subscription-models.json")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn source_priority_defaults_to_subscription_and_is_provider_scoped() {
+        let root =
+            std::env::temp_dir().join(format!("beale-priority-test-{}", uuid::Uuid::new_v4()));
+        let store = CredentialStore::at(root.clone());
+        assert_eq!(store.source_priority("openai").unwrap(), "subscription");
+        store.save_source_priority("openai", "api-key").unwrap();
+        assert_eq!(store.source_priority("openai").unwrap(), "api-key");
+        assert_eq!(store.source_priority("xai").unwrap(), "subscription");
+        assert!(store.save_source_priority("../other", "api-key").is_err());
+        assert!(store.save_source_priority("openai", "unknown").is_err());
+        store
+            .save_source_priority("openai", "subscription")
+            .unwrap();
+        assert_eq!(store.source_priority("openai").unwrap(), "subscription");
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn daybreak_mode_defaults_to_blue_and_persists_red() {
+        let root =
+            std::env::temp_dir().join(format!("beale-daybreak-example-{}", uuid::Uuid::new_v4()));
+        let store = CredentialStore::at(root.clone());
+        assert_eq!(store.daybreak_mode().unwrap(), "blue");
+        store.save_daybreak_mode("red").unwrap();
+        assert_eq!(store.daybreak_mode().unwrap(), "red");
+        assert!(store.save_daybreak_mode("unknown").is_err());
+        store.save_daybreak_mode("blue").unwrap();
+        assert_eq!(store.daybreak_mode().unwrap(), "blue");
         std::fs::remove_dir(root).unwrap();
     }
 }

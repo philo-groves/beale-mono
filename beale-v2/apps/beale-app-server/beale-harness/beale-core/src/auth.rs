@@ -7,12 +7,14 @@ use axum::{
 };
 use beale_contracts::{
     AUTH_API_KEY_PATH, AUTH_PROVE_PATH, AUTH_STATUS_PATH, AUTH_SUBSCRIPTION_FORGET_PATH,
-    AUTH_SUBSCRIPTION_START_PATH, CONTROL_CHALLENGE_BYTES, LEAD_PROVIDER_PATH,
-    MODELS_DEFAULTS_PATH, MODELS_LIST_PATH, PROTOBUF_CONTENT_TYPE, control_proof,
+    AUTH_SUBSCRIPTION_START_PATH, CONTROL_CHALLENGE_BYTES, DAYBREAK_MODE_PATH, LEAD_PROVIDER_PATH,
+    MODELS_DEFAULTS_PATH, MODELS_LIST_PATH, PROTOBUF_CONTENT_TYPE, SOURCE_PRIORITY_PATH,
+    control_proof,
     v1::{
-        AuthMethod, ControlChallengeRequest, ControlChallengeResponse, ListModelsRequest,
-        ModelCatalogResponse, ModelEntry, ProviderAuthStatus, ProviderAuthStatusResponse,
-        ProviderId, ProviderRequest, SetApiKeyRequest, SetModelDefaultsRequest,
+        AuthMethod, ControlChallengeRequest, ControlChallengeResponse, DaybreakMode,
+        ListModelsRequest, ModelCatalogResponse, ModelEntry, ProviderAuthStatus,
+        ProviderAuthStatusResponse, ProviderId, ProviderRequest, SetApiKeyRequest,
+        SetDaybreakModeRequest, SetModelDefaultsRequest, SetSourcePriorityRequest,
         StartSubscriptionResponse,
     },
 };
@@ -48,6 +50,8 @@ pub(super) fn router(token: String, store: CredentialStore) -> Router {
         .route(LEAD_PROVIDER_PATH, post(set_lead_provider))
         .route(MODELS_LIST_PATH, post(list_models))
         .route(MODELS_DEFAULTS_PATH, post(set_model_defaults))
+        .route(SOURCE_PRIORITY_PATH, post(set_source_priority))
+        .route(DAYBREAK_MODE_PATH, post(set_daybreak_mode))
         .layer(DefaultBodyLimit::max(8448))
         .with_state(AuthState {
             token,
@@ -213,11 +217,29 @@ async fn status(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             login_in_progress: login[index].in_progress,
             login_error: login[index].error.clone(),
+            source_priority: if store
+                .source_priority(name)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                == "api-key"
+            {
+                AuthMethod::ApiKey as i32
+            } else {
+                AuthMethod::Subscription as i32
+            },
         });
     }
     Ok(response(ProviderAuthStatusResponse {
         providers,
         lead_provider: lead_provider as i32,
+        openai_daybreak_mode: if store
+            .daybreak_mode()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            == "red"
+        {
+            DaybreakMode::Red as i32
+        } else {
+            DaybreakMode::Blue as i32
+        },
     }))
 }
 
@@ -440,6 +462,57 @@ async fn set_model_defaults(
                 small: request.small_model,
             },
         )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_source_priority(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: SetSourcePriorityRequest = checked_body(&headers, &body)?;
+    let (provider, _) = checked_provider(request.provider)?;
+    let mode = model_method(request.method)?;
+    if state
+        .store
+        .load(provider)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_none()
+        || !state
+            .store
+            .api_key_configured(provider)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    state
+        .store
+        .save_source_priority(provider, mode_name(mode))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_daybreak_mode(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: SetDaybreakModeRequest = checked_body(&headers, &body)?;
+    let mode = match DaybreakMode::try_from(request.mode) {
+        Ok(DaybreakMode::Blue) => "blue",
+        Ok(DaybreakMode::Red) => "red",
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    state
+        .store
+        .save_daybreak_mode(mode)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -678,6 +751,152 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("xai")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn source_priority_requires_both_credentials_and_round_trips_in_status() {
+        let root =
+            std::env::temp_dir().join(format!("beale-priority-route-{}", uuid::Uuid::new_v4()));
+        let token = "ab".repeat(32);
+        let store = CredentialStore::at(root.clone());
+        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let body = SetSourcePriorityRequest {
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::ApiKey as i32,
+        }
+        .encode_to_vec();
+        let request = Request::builder()
+            .method("POST")
+            .uri(SOURCE_PRIORITY_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .body(Body::from(body.clone()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        store
+            .save_api_key("openai", "sk-example-synthetic")
+            .unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri(SOURCE_PRIORITY_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(body.clone()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        store
+            .save(
+                "openai",
+                &beale_providers::OAuthCredential {
+                    access_token: "synthetic-access".to_owned(),
+                    refresh_token: "synthetic-refresh".to_owned(),
+                    expires_at: 1,
+                    client_id: "synthetic-client".to_owned(),
+                    id_token: None,
+                    subject: None,
+                    scopes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri(SOURCE_PRIORITY_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(body))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        let request = Request::builder()
+            .uri(AUTH_STATUS_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let status = ProviderAuthStatusResponse::decode(bytes).unwrap();
+        assert_eq!(
+            status.providers[0].source_priority,
+            AuthMethod::ApiKey as i32
+        );
+        assert_eq!(
+            status.providers[1].source_priority,
+            AuthMethod::Subscription as i32
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn daybreak_mode_requires_host_auth_and_round_trips() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-daybreak-route-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let token = "ab".repeat(32);
+        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let request = Request::builder()
+            .uri(AUTH_STATUS_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let status = ProviderAuthStatusResponse::decode(bytes).unwrap();
+        assert_eq!(status.openai_daybreak_mode, DaybreakMode::Blue as i32);
+        let body = SetDaybreakModeRequest {
+            mode: DaybreakMode::Red as i32,
+        }
+        .encode_to_vec();
+        let request = Request::builder()
+            .method("POST")
+            .uri(DAYBREAK_MODE_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .body(Body::from(body.clone()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        for mode in [DaybreakMode::Unspecified, DaybreakMode::Red] {
+            let request = Request::builder()
+                .method("POST")
+                .uri(DAYBREAK_MODE_PATH)
+                .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    SetDaybreakModeRequest { mode: mode as i32 }.encode_to_vec(),
+                ))
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                if mode == DaybreakMode::Red {
+                    StatusCode::NO_CONTENT
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
+            );
+        }
+        let request = Request::builder()
+            .uri(AUTH_STATUS_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let status = ProviderAuthStatusResponse::decode(bytes).unwrap();
+        assert_eq!(status.openai_daybreak_mode, DaybreakMode::Red as i32);
+        assert_eq!(
+            CredentialStore::at(root.clone()).daybreak_mode().unwrap(),
+            "red"
         );
         std::fs::remove_dir_all(root).unwrap();
     }

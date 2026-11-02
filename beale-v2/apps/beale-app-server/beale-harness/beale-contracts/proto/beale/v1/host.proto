@@ -19,11 +19,19 @@ message ProviderAuthStatus {
   bool api_key_configured = 3;
   bool login_in_progress = 4;
   string login_error = 5;
+  AuthMethod source_priority = 6;
 }
 
 message ProviderAuthStatusResponse {
   repeated ProviderAuthStatus providers = 1;
   ProviderId lead_provider = 2;
+  DaybreakMode openai_daybreak_mode = 3;
+}
+
+enum DaybreakMode {
+  DAYBREAK_MODE_UNSPECIFIED = 0;
+  DAYBREAK_MODE_BLUE = 1;
+  DAYBREAK_MODE_RED = 2;
 }
 
 message ProviderRequest {
@@ -77,4 +85,13 @@ message SetModelDefaultsRequest {
   AuthMethod method = 2;
   string lead_model = 3;
   string small_model = 4;
+}
+
+message SetSourcePriorityRequest {
+  ProviderId provider = 1;
+  AuthMethod method = 2;
+}
+
+message SetDaybreakModeRequest {
+  DaybreakMode mode = 1;
 }

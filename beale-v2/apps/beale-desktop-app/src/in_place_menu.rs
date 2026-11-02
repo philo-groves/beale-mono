@@ -1,6 +1,9 @@
-use rune::tok::TextStyle;
-use rune::{Align, Color, El, ScrollSpec, Side, col, el, row, text};
+use rune::{Align, Color, El, ScrollSpec, Side, Tx, col, el, icon, row, text};
 use std::rc::Rc;
+
+use crate::appearance::ThemeStyle;
+use crate::icons::CHECK;
+use crate::ui_font;
 
 pub(crate) struct MenuItem {
     pub value: String,
@@ -9,14 +12,12 @@ pub(crate) struct MenuItem {
     pub selected: bool,
 }
 
-fn color(value: &str) -> Color {
-    rune::color::hex(value).unwrap_or(Color::BLACK)
-}
-
-pub(crate) fn dismiss_layer<S: 'static>(dismiss: impl Fn(&mut S) + 'static) -> El {
-    el().key("selection-menu-dismiss")
-        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-        .on_press(dismiss)
+pub(crate) fn popup_surface(panel: El, fill: Color) -> El {
+    panel
+        .radius(12.0)
+        .continuous_corners()
+        .fill(fill)
+        .shadow(8.0, 24.0, Color::BLACK.alpha(0.6))
 }
 
 pub(crate) fn panel<S: 'static>(
@@ -25,9 +26,14 @@ pub(crate) fn panel<S: 'static>(
     width: f32,
     active: usize,
     items: Vec<MenuItem>,
-    on_hover: impl Fn(&mut S, usize) + 'static,
-    on_select: impl Fn(&mut S, String) + 'static,
+    theme: ThemeStyle<'_>,
+    actions: (
+        impl Fn(&mut S, usize) + 'static,
+        impl Fn(&mut S, String, &mut Tx) + 'static,
+    ),
 ) -> El {
+    let (on_hover, on_select) = actions;
+    let color = |value| theme.color(value);
     let hover = Rc::new(on_hover);
     let select = Rc::new(on_select);
     let has_detail = items.iter().any(|item| item.detail.is_some());
@@ -42,17 +48,14 @@ pub(crate) fn panel<S: 'static>(
         let mut labels = col().grow(1.0).min_w(0.0).child(
             text(label.clone())
                 .truncate()
-                .font(TextStyle::new(
-                    12.0,
-                    if item.selected { 550.0 } else { 400.0 },
-                ))
+                .font(ui_font(14.0, if item.selected { 550.0 } else { 400.0 }))
                 .color(color("#eeeeee")),
         );
         if let Some(detail) = item.detail {
             labels = labels.child(
                 text(detail)
                     .truncate()
-                    .font(TextStyle::new(10.5, 400.0))
+                    .font(ui_font(12.5, 400.0))
                     .color(color("#969696")),
             );
         }
@@ -74,36 +77,36 @@ pub(crate) fn panel<S: 'static>(
                 })
                 .hover(color("#424242"))
                 .on_hover(move |state: &mut S| on_hover(state, index))
-                .on_press(move |state: &mut S| on_select(state, value.clone()))
+                .on_press_tx(move |state: &mut S, tx| on_select(state, value.clone(), tx))
                 .child(labels)
                 .child(if item.selected {
-                    el().size(6.0, 6.0).radius(3.0).fill(color("#c8c8c8"))
+                    icon(&CHECK, 14.0).color(color("#c8c8c8"))
                 } else {
-                    el().size(6.0, 6.0)
+                    el().size(14.0, 14.0)
                 }),
         );
     }
-    col()
-        .key("selection-menu")
-        .role("menu")
-        .label(title)
-        .w(width)
-        .h(height)
-        .min_h(0.0)
-        .padding(5.0)
-        .radius(9.0)
-        .fill(color("#242424"))
-        .border(1.0, color("#3c3c3c"))
-        .anchored_fit(anchor, Side::Bottom, Align::End, 4.0)
-        .child(
-            col()
-                .key("selection-menu-scroll")
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .child(options),
-        )
+    popup_surface(
+        col()
+            .key("selection-menu")
+            .role("menu")
+            .label(title)
+            .w(width)
+            .h(height)
+            .min_h(0.0)
+            .padding(5.0),
+        color("#242424"),
+    )
+    .anchored_fit(anchor, Side::Bottom, Align::End, 4.0)
+    .child(
+        col()
+            .key("selection-menu-scroll")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(options),
+    )
 }
