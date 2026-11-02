@@ -1,97 +1,24 @@
 use rune::tok::TextStyle;
 use rune::{
-    AppSpec, Color, Cx, El, Icon, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, icon, row,
-    text, text_input,
+    AppSpec, Color, Cursor, Cx, Drag, El, Icon, Key, KeyEvent, Phase, ScrollSpec, TextEdit, Tx,
+    col, el, icon, row, text, text_input,
 };
 use std::time::Duration;
 
 mod connection;
+mod desktop_fonts;
+mod icons;
 mod in_place_menu;
 mod provider_auth;
 mod provider_models;
 use beale_contracts::v1::{AuthMethod, ProviderId};
 use connection::ConnectionStatus;
+use icons::*;
 use provider_auth::{Action, AuthStatus, SignInPrompt};
 use provider_models::ModelCatalog;
 
 #[cfg(target_os = "windows")]
 mod windows_frame;
-
-static HOME: Icon = Icon {
-    name: "beale-home",
-    view: 24.0,
-    body: "<path d=\"m3 10 9-7 9 7v10H3z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/><path d=\"M9 20v-7h6v7\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/>",
-};
-static AUTOMATIONS: Icon = Icon {
-    name: "beale-automations",
-    view: 24.0,
-    body: "<rect x=\"3\" y=\"5\" width=\"18\" height=\"16\" rx=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M7 3v4M17 3v4M3 10h18M12 13v4l2 1\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/>",
-};
-static FLEET: Icon = Icon {
-    name: "beale-fleet",
-    view: 24.0,
-    body: "<rect x=\"3\" y=\"3\" width=\"18\" height=\"7\" rx=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><rect x=\"3\" y=\"14\" width=\"18\" height=\"7\" rx=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><circle cx=\"7\" cy=\"6.5\" r=\"1\"/><circle cx=\"7\" cy=\"17.5\" r=\"1\"/>",
-};
-static PLUGINS: Icon = Icon {
-    name: "beale-plugins",
-    view: 24.0,
-    body: "<path d=\"M6 8h12v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4zM9 2v6m6-6v6m-3 9v5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
-};
-static SETTINGS: Icon = Icon {
-    name: "beale-settings",
-    view: 24.0,
-    body: "<path d=\"M12 3.5 13.5 5l2-.3.8 1.9 2 .7-.1 2 1.4 1.5-1.4 1.5.1 2-2 .7-.8 1.9-2-.3-1.5 1.5-1.5-1.5-2 .3-.8-1.9-2-.7.1-2L4.4 11l1.4-1.5-.1-2 2-.7.8-1.9 2 .3z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/><circle cx=\"12\" cy=\"11\" r=\"2.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/>",
-};
-static SIDEBAR: Icon = Icon {
-    name: "beale-sidebar",
-    view: 24.0,
-    body: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M9 4v16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/>",
-};
-static MINIMIZE: Icon = Icon {
-    name: "beale-minimize",
-    view: 24.0,
-    body: "<path d=\"M5 12h14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/>",
-};
-static MAXIMIZE: Icon = Icon {
-    name: "beale-maximize",
-    view: 24.0,
-    body: "<rect x=\"5\" y=\"5\" width=\"14\" height=\"14\" rx=\"1\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/>",
-};
-static CLOSE: Icon = Icon {
-    name: "beale-close",
-    view: 24.0,
-    body: "<path d=\"M5 5l14 14M19 5 5 19\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/>",
-};
-static APPEARANCE: Icon = Icon {
-    name: "beale-appearance",
-    view: 24.0,
-    body: "<path d=\"M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 1.5-3.3 1.7 1.7 0 0 1 1.3-2.7H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><circle cx=\"7.5\" cy=\"11\" r=\"1\"/><circle cx=\"10\" cy=\"7\" r=\"1\"/><circle cx=\"15\" cy=\"7.5\" r=\"1\"/>",
-};
-static PROVIDERS: Icon = Icon {
-    name: "beale-providers",
-    view: 24.0,
-    body: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"7\" rx=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M7 7.5h.01M3 17h8m6-3 1 1.3 1.6.3-.3 1.6 1 1.2-1 1.2.3 1.6-1.6.3-1 1.3-1-1.3-1.6-.3.3-1.6-1-1.2 1-1.2-.3-1.6 1.6-.3Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/><circle cx=\"17\" cy=\"17.5\" r=\"1\" fill=\"none\" stroke=\"currentColor\"/>",
-};
-static PROFILE: Icon = Icon {
-    name: "beale-profile",
-    view: 24.0,
-    body: "<circle cx=\"10\" cy=\"8\" r=\"3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M3 20v-2a6 6 0 0 1 10-4.5M17 15l.6 1 1.2.2-.2 1.2.8.8-.8.8.2 1.2-1.2.2-.6 1-.6-1-1.2-.2.2-1.2-.8-.8.8-.8-.2-1.2 1.2-.2Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/>",
-};
-static PROMPT: Icon = Icon {
-    name: "beale-prompt",
-    view: 24.0,
-    body: "<path d=\"M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h8\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/>",
-};
-static FEATURES: Icon = Icon {
-    name: "beale-features",
-    view: 24.0,
-    body: "<path d=\"M4 6h7m4 0h5M4 12h3m4 0h9M4 18h10m4 0h2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/><circle cx=\"13\" cy=\"6\" r=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><circle cx=\"9\" cy=\"12\" r=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><circle cx=\"16\" cy=\"18\" r=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/>",
-};
-static ARCHIVE: Icon = Icon {
-    name: "beale-archive",
-    view: 24.0,
-    body: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"5\" rx=\"1\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M5 9v11h14V9M10 13h4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/>",
-};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum Provider {
@@ -231,6 +158,16 @@ const SETTINGS_SECTIONS: [SettingsSection; 7] = [
     SettingsSection::Archive,
 ];
 
+const NAVIGATION_RAIL_WIDTH: f32 = 50.0;
+const SIDENAV_DEFAULT_WIDTH: f32 = 292.0;
+const SIDENAV_MIN_WIDTH: f32 = 240.0;
+const SIDENAV_MAX_WIDTH: f32 = 420.0;
+const HEADER_MENU_FALLBACK_WIDTH: f32 = if cfg!(target_os = "macos") {
+    128.0
+} else {
+    220.0
+};
+
 struct State {
     selected: Provider,
     settings_section: SettingsSection,
@@ -257,6 +194,7 @@ struct State {
     menu_reveal_pending: bool,
     notice: Option<&'static str>,
     settings_nav_visible: bool,
+    settings_nav_width: f32,
     open_menu: Option<HeaderMenu>,
 }
 
@@ -288,6 +226,7 @@ impl Default for State {
             menu_reveal_pending: false,
             notice: None,
             settings_nav_visible: true,
+            settings_nav_width: SIDENAV_DEFAULT_WIDTH,
             open_menu: None,
         }
     }
@@ -682,7 +621,7 @@ fn header_icon_button(key: &'static str, label: &'static str, glyph: &'static Ic
         .center()
         .radius(6.0)
         .hover(color("#303030"))
-        .child(icon(glyph, 15.0).color(color("#c8c8c8")))
+        .child(icon(glyph, 16.0).color(color("#c8c8c8")))
 }
 
 fn menu_button(label: &'static str, menu: HeaderMenu, open: bool) -> El {
@@ -730,7 +669,7 @@ fn window_control(key: &'static str, label: &'static str, glyph: &'static Icon) 
             color("#303030")
         })
         .child(
-            icon(glyph, if key == "header-maximize" { 13.0 } else { 15.0 }).color(color("#c8c8c8")),
+            icon(glyph, if key == "header-maximize" { 14.0 } else { 16.0 }).color(color("#c8c8c8")),
         );
     match key {
         "header-minimize" => button.on_press_tx(|_: &mut State, tx| minimize_window(tx)),
@@ -742,7 +681,7 @@ fn window_control(key: &'static str, label: &'static str, glyph: &'static Icon) 
     }
 }
 
-fn header(state: &State) -> El {
+fn header(state: &State, prefix_width: f32) -> El {
     let mut left = row()
         .key("header-menus")
         .h_full()
@@ -792,8 +731,12 @@ fn header(state: &State) -> El {
         .center_y()
         .gap(11.0)
         .window_drag()
-        .child(el().size(1.0, 18.0).fill(color("#555555")))
-        .child(icon(state.settings_section.icon(), 15.0).color(color("#c8c8c8")))
+        .child(
+            el().key("header-divider")
+                .size(1.0, 18.0)
+                .fill(color("#555555")),
+        )
+        .child(icon(state.settings_section.icon(), 16.0).color(color("#c8c8c8")))
         .child(
             text("Agent Settings")
                 .font(TextStyle::new(13.0, 500.0))
@@ -811,7 +754,7 @@ fn header(state: &State) -> El {
         .h(44.0)
         .center_y()
         .window_drag()
-        .child(left)
+        .child(el().w(prefix_width).h_full().child(left))
         .child(title);
     if cfg!(target_os = "windows") {
         bar = bar.child(
@@ -893,6 +836,11 @@ fn menu_popup(menu: HeaderMenu) -> El {
 }
 
 fn nav_button(key: &'static str, label: &'static str, glyph: &'static Icon, active: bool) -> El {
+    let glyph = if active && key == "nav-settings" {
+        &SETTINGS_FILLED
+    } else {
+        glyph
+    };
     let button = el()
         .key(key)
         .role("button")
@@ -906,7 +854,7 @@ fn nav_button(key: &'static str, label: &'static str, glyph: &'static Icon, acti
             Color::TRANSPARENT
         })
         .hover(color("#303030"))
-        .child(icon(glyph, 18.0).color(if active {
+        .child(icon(glyph, 20.0).color(if active {
             color("#f2f2f2")
         } else {
             color("#aaaaaa")
@@ -929,7 +877,7 @@ fn rail() -> El {
         .key("navigation")
         .role("navigation")
         .label("Main navigation")
-        .w(50.0)
+        .w(NAVIGATION_RAIL_WIDTH)
         .h_full()
         .pt(16.0)
         .gap(6.0)
@@ -974,7 +922,7 @@ fn settings_nav_button(section: SettingsSection, active: bool) -> El {
             s.open_menu = None;
             s.selection_menu = None;
         })
-        .child(icon(section.icon(), 15.0).color(if active {
+        .child(icon(section.icon(), 16.0).color(if active {
             color("#f2f2f2")
         } else {
             color("#bdbdbd")
@@ -990,7 +938,7 @@ fn settings_nav_button(section: SettingsSection, active: bool) -> El {
         )
 }
 
-fn settings_sidenav(active: SettingsSection, connection: &ConnectionStatus) -> El {
+fn settings_sidenav(active: SettingsSection, connection: &ConnectionStatus, width: f32) -> El {
     let mut sections = col().w_full().gap(2.0);
     for section in SETTINGS_SECTIONS {
         sections = sections.child(settings_nav_button(section, section == active));
@@ -999,7 +947,7 @@ fn settings_sidenav(active: SettingsSection, connection: &ConnectionStatus) -> E
         .key("settings-sidenav")
         .role("navigation")
         .label("Agent settings sections")
-        .w(272.0)
+        .w(width)
         .h_full()
         .px(12.0)
         .pt(12.0)
@@ -1042,6 +990,30 @@ fn settings_sidenav(active: SettingsSection, connection: &ConnectionStatus) -> E
                         ),
                 ),
         )
+}
+
+fn sidenav_resize_handle(width: f32) -> El {
+    el().key("settings-sidenav-resize")
+        .role("separator")
+        .label("Resize settings sidebar")
+        .absolute(width - 3.0, 0.0)
+        .w(7.0)
+        .h_full()
+        .cursor(Cursor::ResizeColumn)
+        .help("Drag to resize the sidebar")
+        .on_drag(|state: &mut State, drag: &mut Drag, tx: &mut Tx| {
+            tx.instant();
+            match drag.phase {
+                Phase::Down => drag.data = state.settings_nav_width,
+                Phase::Move => {
+                    state.settings_nav_width = (drag.data + drag.dx)
+                        .clamp(SIDENAV_MIN_WIDTH, SIDENAV_MAX_WIDTH)
+                        .round();
+                }
+                Phase::Up if drag.cancelled() => state.settings_nav_width = drag.data,
+                Phase::Up => {}
+            }
+        })
 }
 
 fn provider_tab(provider: Provider, selected: bool) -> El {
@@ -1655,7 +1627,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .fill(color("#111111"));
     if state.settings_nav_visible {
         settings_surface = settings_surface
-            .child(settings_sidenav(state.settings_section, &state.connection))
+            .child(settings_sidenav(
+                state.settings_section,
+                &state.connection,
+                state.settings_nav_width,
+            ))
             .child(el().w(1.0).h_full().fill(color("#2a2a2a")));
     }
     settings_surface = settings_surface.child(
@@ -1686,6 +1662,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     ),
             ),
     );
+    if state.settings_nav_visible {
+        settings_surface = settings_surface.child(sidenav_resize_handle(state.settings_nav_width));
+    }
     body = body.child(settings_surface);
     let mut window = col().key("window").role("window").w_full().h_full();
     if cfg!(target_os = "windows") && !state.native_window_border {
@@ -1693,6 +1672,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     let [background_width, background_height] =
         cx.layout_size("app-surface").unwrap_or([1040.0, 720.0]);
+    let menu_clearance = cx
+        .layout_size("header-menus")
+        .map_or(HEADER_MENU_FALLBACK_WIDTH, |size| size[0] + 8.0);
+    let header_prefix_width = menu_clearance.max(if state.settings_nav_visible {
+        NAVIGATION_RAIL_WIDTH + state.settings_nav_width
+    } else {
+        0.0
+    });
     let upper_left_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.43;
     let lower_right_radius = ((background_width * 0.88).hypot(background_height * 0.92)) * 0.48;
     let mut surface = col()
@@ -1720,7 +1707,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     [(0.0, color("#2a2a2a")), (1.0, Color::TRANSPARENT)],
                 ),
         )
-        .child(header(state))
+        .child(header(state, header_prefix_width))
         .child(body);
     if let Some(menu) = state.open_menu {
         surface = surface.child(menu_popup(menu));
@@ -1776,6 +1763,7 @@ fn main() -> std::process::ExitCode {
     if args == ["--provider-status"] {
         return provider_auth::check_cli();
     }
+    let font_spec = desktop_fonts::v1_font_spec();
     let spec = AppSpec {
         scenes: &[
             ("xai", |s: &mut State| s.selected = Provider::Xai),
@@ -1784,6 +1772,8 @@ fn main() -> std::process::ExitCode {
             }),
         ],
         min_size: Some((840.0, 600.0)),
+        fonts: font_spec.fonts,
+        families: font_spec.families,
         on_key: Some(selection_menu_key),
         ..AppSpec::new("Beale", (1040.0, 720.0), State::default, view)
     };
@@ -2137,6 +2127,51 @@ mod tests {
         runtime.frame(0.0);
         assert_eq!(runtime.state.open_menu, Some(HeaderMenu::Window));
         assert!(runtime.find("popup-close").is_some());
+    }
+
+    #[test]
+    fn sidenav_edge_tracks_header_and_resizes_within_bounds() {
+        fn aligned(runtime: &Runtime<State>) {
+            let (sidenav, _) = runtime.presented("settings-sidenav").unwrap();
+            let (divider, _) = runtime.presented("header-divider").unwrap();
+            assert!((sidenav[0] + sidenav[2] - divider[0]).abs() < 1.0);
+        }
+
+        let mut runtime =
+            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        aligned(&runtime);
+        let (x, y) = runtime.find("settings-sidenav-resize").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_move(x + 60.0, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.settings_nav_width, 352.0);
+        aligned(&runtime);
+        runtime.pointer_move(x + 300.0, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.settings_nav_width, SIDENAV_MAX_WIDTH);
+        aligned(&runtime);
+        runtime.pointer_move(x - 300.0, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.settings_nav_width, SIDENAV_MIN_WIDTH);
+        aligned(&runtime);
+        runtime.pointer_up(x - 300.0, y);
+        runtime.frame(0.0);
+
+        let (x, y) = runtime.find("header-sidebar-toggle").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        let (menu, _) = runtime.presented("header-menus").unwrap();
+        let (divider, _) = runtime.presented("header-divider").unwrap();
+        assert!(divider[0] >= menu[0] + menu[2] + 8.0);
+        assert!(runtime.find("settings-sidenav-resize").is_none());
+
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.settings_nav_width, SIDENAV_MIN_WIDTH);
+        aligned(&runtime);
     }
 
     #[test]
