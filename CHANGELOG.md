@@ -4,6 +4,10 @@
 
 ### app-server
 
+#### Added
+
+- Started the v2 Rust app-server workspace with a loopback host, versioned protobuf health contract, and host-only OpenAI and xAI API-key and subscription provider paths.
+
 #### Changed
 
 - Research Track selection now weighs assessed impact, reachability, and deployment exposure before surface signals. Discovery and investigator guidance keep ordinary reachability observations out of verified security findings.

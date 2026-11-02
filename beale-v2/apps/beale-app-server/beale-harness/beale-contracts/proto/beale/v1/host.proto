@@ -1,0 +1,8 @@
+syntax = "proto3";
+package beale.v1;
+
+message HealthResponse {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  string service = 3;
+}

@@ -12,7 +12,6 @@ These instructions apply to `beale-v2/apps/beale-app-server/`. Follow the reposi
 
 ## Rust changes
 
-- When adding the first crate manifests, choose an edition and minimum Rust version deliberately and set the resolver explicitly in the virtual workspace root.
 - Define explicit types at protocol, storage, provider, tool, and host boundaries. Validate untrusted inputs before they reach durable operations or target execution.
 - Return errors with useful context inside the host and bounded, sanitized errors across client and model boundaries. Avoid panics and unchecked `unwrap` or `expect` on runtime inputs.
 - Prefer safe Rust. When FFI or another unsafe operation is necessary, keep the unsafe block small, document its safety invariant, and expose a safe interface.
@@ -22,6 +21,6 @@ These instructions apply to `beale-v2/apps/beale-app-server/`. Follow the reposi
 ## Verification
 
 - Inspect the affected crate, contract, and tests before changing behavior. Add focused tests for boundary or protocol changes; test both sides of a versioned contract together.
-- Once member crates have manifests, run `cargo fmt --all -- --check` from `beale-v2/`, then `cargo check -p <crate>`, `cargo clippy -p <crate> --all-targets -- -D warnings`, and `cargo test -p <crate>` for affected crates. Run broader workspace checks when shared contracts or dependencies change.
+- Run `cargo fmt --all -- --check` from `beale-v2/`, then `cargo check -p <crate>`, `cargo clippy -p <crate> --all-targets -- -D warnings`, and `cargo test -p <crate>` for affected crates. Run broader workspace checks when shared contracts or dependencies change.
 - For an optional feature, check its enabled and disabled configurations separately. Keep live provider and live-target tests opt-in with user-provided credentials and authorization.
-- Update the relevant README and changelog when behavior or a public contract changes. Keep this file aligned with the crates and commands that actually exist.
+- Update the relevant README and changelog when behavior or a public contract changes. Keep this file focused on durable development rules.

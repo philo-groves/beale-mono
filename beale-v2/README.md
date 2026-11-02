@@ -2,6 +2,8 @@
 
 A complete re-implementation of Beale using lessons learned from the first. This directory will be moved to the root and replace its content when it is ready.
 
+The first Rust workspace members are `beale-contracts`, `beale-core`, and `beale-providers` under `apps/beale-app-server/beale-harness/`. Other app and extension directories remain reserved until their crate manifests exist. The workspace uses Rust edition 2024 and requires Rust 1.89 or newer.
+
 ## Core Directories
 
 ### Apps
