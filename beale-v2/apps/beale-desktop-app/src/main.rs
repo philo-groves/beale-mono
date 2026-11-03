@@ -561,6 +561,7 @@ struct State {
     menu_cursor: usize,
     menu_reveal_pending: bool,
     notice: Option<&'static str>,
+    rail_tooltip: Option<(&'static str, &'static str)>,
     sidenav_visible: bool,
     sidenav_width: f32,
     settings_scroll: SettingsScroll,
@@ -663,6 +664,7 @@ impl Default for State {
             menu_cursor: 0,
             menu_reveal_pending: false,
             notice: None,
+            rail_tooltip: None,
             sidenav_visible: true,
             sidenav_width: SIDENAV_DEFAULT_WIDTH,
             settings_scroll: SettingsScroll::default(),
@@ -807,6 +809,11 @@ impl State {
             .selected_research_workspace()
             .map(|item| item.id.clone());
         self.navigate_to(ViewLocation::NewResearch);
+    }
+
+    fn start_new_research_in_workspace(&mut self, workspace_id: String) {
+        self.start_new_research();
+        self.new_research_workspace_id = Some(workspace_id);
     }
 
     fn finish_session_turn(&mut self, generation: u64, result: Result<SessionDetail, String>) {
@@ -2144,6 +2151,7 @@ fn header_icon_button(
     el().key(key)
         .role("button")
         .label(label)
+        .help(label)
         .size(34.0, 34.0)
         .center()
         .radius(6.0)
@@ -2171,6 +2179,7 @@ fn history_button(direction: HistoryDirection, enabled: bool, theme: ThemeStyle<
         } else {
             format!("{label} unavailable")
         })
+        .help(label)
         .size(30.0, 34.0)
         .center()
         .radius(6.0)
@@ -2234,9 +2243,9 @@ fn header(state: &State, prefix_width: f32) -> El {
         header_icon_button(
             "header-sidebar-toggle",
             if state.sidenav_visible {
-                "Hide sidebar"
+                "Hide Sidebar"
             } else {
-                "Show sidebar"
+                "Show Sidebar"
             },
             &SIDEBAR,
             theme,
@@ -2399,21 +2408,37 @@ fn nav_button(
             Color::TRANSPARENT
         })
         .hover(color("#303030"))
+        .on_hover_change(move |s: &mut State, inside, _| {
+            if inside {
+                s.rail_tooltip = Some((key, label));
+            } else if s.rail_tooltip.is_some_and(|(active, _)| active == key) {
+                s.rail_tooltip = None;
+            }
+        })
+        .hover_delays(Duration::from_millis(350), Duration::ZERO)
         .child(icon(glyph, 20.0).color(if active {
             color("#f2f2f2")
         } else {
             color("#aaaaaa")
         }));
     if key == "nav-home" {
-        button.on_press(|s: &mut State| s.navigate_to(ViewLocation::Home))
+        button.on_press(|s: &mut State| {
+            s.rail_tooltip = None;
+            s.navigate_to(ViewLocation::Home);
+        })
     } else if key == "nav-settings" {
-        button.on_press(|s: &mut State| s.show_section(s.settings_section))
+        button.on_press(|s: &mut State| {
+            s.rail_tooltip = None;
+            s.show_section(s.settings_section);
+        })
     } else if active {
         button.on_press(|s: &mut State| {
+            s.rail_tooltip = None;
             s.notice = None;
         })
     } else {
         button.on_press(move |s: &mut State| {
+            s.rail_tooltip = None;
             s.notice = Some(label);
         })
     }
@@ -2452,6 +2477,28 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             state.primary_view == PrimaryView::Settings,
             theme,
         ))
+}
+
+fn rail_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
+    let (anchor, label) = state.rail_tooltip?;
+    Some(
+        row()
+            .key("rail-tooltip")
+            .inert()
+            .px(10.0)
+            .py(6.0)
+            .radius(8.0)
+            .continuous_corners()
+            .fill(theme.color("#292929"))
+            .border(1.0, theme.color("#3a3a3a"))
+            .shadow(5.0, 16.0, Color::BLACK.alpha(0.45))
+            .child(
+                text(label)
+                    .font(ui_font(12.5, 450.0))
+                    .color(theme.color("#eeeeee")),
+            )
+            .anchored_fit(anchor, Side::Right, Align::Center, 8.0),
+    )
 }
 
 fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeStyle<'_>) -> El {
@@ -4092,6 +4139,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .child(header(state, header_prefix_width))
         .child(body);
     window = window.child(surface);
+    if let Some(tooltip) = rail_tooltip(state, theme) {
+        window = window.child(tooltip);
+    }
     if state.primary_view == PrimaryView::WorkspaceCreation
         && let Some(scope) = state.workspace_draft.surface_dialog_scope
     {
@@ -6425,6 +6475,72 @@ mod tests {
             ViewLocation::Settings(SettingsSection::General)
         );
         assert!(runtime.state.view_history.forward.is_empty());
+    }
+
+    #[test]
+    fn navigation_tooltips_follow_their_icons() {
+        let mut runtime =
+            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.help_delay = 0.05;
+        runtime.frame(0.0);
+        for (key, label) in [
+            ("header-sidebar-toggle", "Hide Sidebar"),
+            ("header-back", "Back"),
+            ("header-forward", "Forward"),
+        ] {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_move(x, y);
+            runtime.frame(0.0);
+            runtime.frame(0.1);
+            let (actual, tip) = runtime.help_tooltip().unwrap();
+            let (button, _) = runtime.presented(key).unwrap();
+            assert_eq!(actual, label);
+            assert!(tip[1] >= button[1] + button[3]);
+        }
+        let (x, y) = runtime.find("nav-home").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.4);
+        let (button, _) = runtime.presented("nav-home").unwrap();
+        let (tooltip, _) = runtime.presented("rail-tooltip").unwrap();
+        assert!(tooltip[0] >= button[0] + button[2]);
+        runtime.pointer_move(500.0, 500.0);
+        runtime.frame(0.0);
+        assert!(runtime.find("rail-tooltip").is_none());
+    }
+
+    #[test]
+    fn workspace_row_new_research_opens_a_draft_for_that_workspace() {
+        let workspace_id = "00000000-0000-4000-8000-000000000003";
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            workspace_list_loaded: true,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (workspace_row, _) = runtime
+            .presented(&format!("home-workspace-{workspace_id}"))
+            .unwrap();
+        let action_key = format!("home-new-research-{workspace_id}");
+        let (action, _) = runtime.presented(&action_key).unwrap();
+        assert!(action[0] + action[2] <= workspace_row[0] + workspace_row[2]);
+        let (x, y) = runtime.find(&action_key).unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::NewResearch);
+        assert_eq!(
+            runtime.state.new_research_workspace_id.as_deref(),
+            Some(workspace_id)
+        );
+        assert!(runtime.state.workspace_id.is_none());
     }
 
     #[test]

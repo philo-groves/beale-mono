@@ -243,34 +243,65 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             let id = uuid::Uuid::parse_str(&workspace.id).ok();
             let selected =
                 state.primary_view == crate::PrimaryView::Workspace && state.workspace_id == id;
-            let mut item = row()
-                .key(format!("home-workspace-{}", workspace.id))
+            let mut opener = row()
+                .key(format!("home-workspace-open-{}", workspace.id))
                 .role("button")
                 .label(format!("Open {}", workspace.name))
+                .grow(1.0)
+                .min_w(0.0)
+                .h(30.0)
+                .center_y()
+                .gap(10.0)
+                .child(icon(&FOLDER_OPEN, 15.0).color(color("#9d9d9d")))
+                .child(
+                    text(workspace.name.clone())
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
+                        .color(color("#dddddd"))
+                        .truncate(),
+                );
+            if let Some(id) = id {
+                opener = opener.on_press(move |state: &mut State| state.open_workspace(id));
+            }
+            let item = row()
+                .key(format!("home-workspace-{}", workspace.id))
+                .role("group")
+                .label(workspace.name.clone())
                 .w_full()
                 .min_h(30.0)
                 .px(4.0)
                 .center_y()
-                .gap(10.0)
+                .gap(4.0)
                 .radius(8.0)
                 .continuous_corners()
+                .hover_group()
+                .hover(color("#282828"))
                 .fill(if selected {
                     color("#303030")
                 } else {
                     rune::Color::TRANSPARENT
                 })
-                .child(icon(&FOLDER_OPEN, 15.0).color(color("#9d9d9d")))
+                .child(opener)
                 .child(
-                    text(workspace.name.clone())
-                        .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
-                        .color(color("#dddddd"))
-                        .wrap(),
+                    el().key(format!("home-new-research-{}", workspace.id))
+                        .role("button")
+                        .label(format!("Start new research in {}", workspace.name))
+                        .help("New Research")
+                        .size(26.0, 26.0)
+                        .center()
+                        .radius(8.0)
+                        .continuous_corners()
+                        .group_opacity(0.0, 1.0)
+                        .hover(color("#303030"))
+                        .on_press({
+                            let workspace_id = workspace.id.clone();
+                            move |state: &mut State| {
+                                state.start_new_research_in_workspace(workspace_id.clone())
+                            }
+                        })
+                        .child(icon(&NEW_RESEARCH, 14.0).color(color("#bdbdbd"))),
                 );
-            if let Some(id) = id {
-                item = item
-                    .hover(color("#282828"))
-                    .on_press(move |state: &mut State| state.open_workspace(id));
-            }
             let mut group = col().w_full().gap(1.0).child(item);
             if new_session_workspace == Some(workspace.id.as_str()) {
                 group = group.child(

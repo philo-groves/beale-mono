@@ -26,10 +26,9 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{
-    auth::{authorized, checked_body, response},
-    workspace::WorkspaceStore,
-};
+use beale_workspaces::WorkspaceStore;
+mod http;
+use http::{authorized, checked_body, response};
 
 const MAX_TURNS: usize = 32;
 const MAX_HISTORY_BYTES: usize = 4_194_304;
@@ -62,7 +61,7 @@ struct StoredTurn {
     answer: String,
 }
 
-pub(super) fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
+pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
     let root = workspaces.root().join("sessions");
     let credentials = Arc::new(CredentialStore::at(workspaces.root().to_path_buf()));
     Ok(Router::new()

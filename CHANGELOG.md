@@ -6,6 +6,7 @@
 
 #### Added
 
+- Added navigation icon tooltips and a hover-revealed New Research action on each v2 Home workspace row.
 - Started the v2 Rune desktop client with Beale's dark icon rail and an Agent Settings Providers view for OpenAI and xAI.
 - Added the v2 desktop custom header with navigation toggle, contextual title, and Windows window controls.
 - Added back and forward buttons to the v2 desktop header for settings sections and provider and appearance views, with muted disabled states.
@@ -115,6 +116,7 @@
 
 #### Changed
 
+- Moved v2 workspace and session routes and storage from `beale-core` into the `beale-workspaces` and `beale-sessions` crates; `beale-core` now composes their routers.
 - Added the client version header required for xAI subscription inference through the Grok CLI proxy.
 - Replaced dashes with spaces in OpenAI model display names returned by the v2 app-server; model IDs are unchanged.
 - Research Track selection now weighs assessed impact, reachability, and deployment exposure before surface signals. Discovery and investigator guidance keep ordinary reachability observations out of verified security findings.

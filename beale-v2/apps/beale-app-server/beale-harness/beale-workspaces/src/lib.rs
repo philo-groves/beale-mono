@@ -26,7 +26,8 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::auth::{authorized, checked_body, response};
+mod http;
+use http::{authorized, checked_body, response};
 
 const DIRECTORIES: [&str; 10] = [
     "investigations",
@@ -43,7 +44,7 @@ const DIRECTORIES: [&str; 10] = [
 const DEFAULT_GUIDANCE: &str = "# Beale research workspace\n\nFollow the workspace scope and rules recorded in workspace.json.\n";
 
 #[derive(Clone)]
-pub(super) struct WorkspaceStore {
+pub struct WorkspaceStore {
     root: PathBuf,
 }
 
@@ -152,7 +153,7 @@ impl WorkspaceError {
 }
 
 impl WorkspaceStore {
-    pub(super) fn new() -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
         let root = if let Some(path) = std::env::var_os("BEALE_V2_HOME") {
             PathBuf::from(path)
         } else {
@@ -168,8 +169,7 @@ impl WorkspaceStore {
         Ok(Self { root })
     }
 
-    #[cfg(test)]
-    pub(super) fn at(root: PathBuf) -> Self {
+    pub fn at(root: PathBuf) -> Self {
         Self { root }
     }
 
@@ -186,7 +186,7 @@ impl WorkspaceStore {
             .collect())
     }
 
-    pub(super) fn contains(&self, id: &str) -> Result<bool, StatusCode> {
+    pub fn contains(&self, id: &str) -> Result<bool, StatusCode> {
         Ok(self
             .read_registry()
             .map_err(|error| error.status())?
@@ -195,7 +195,7 @@ impl WorkspaceStore {
             .any(|workspace| workspace.id == id))
     }
 
-    pub(super) fn root(&self) -> &Path {
+    pub fn root(&self) -> &Path {
         &self.root
     }
 
@@ -841,7 +841,7 @@ struct WorkspaceState {
     write_lock: Arc<Mutex<()>>,
 }
 
-pub(super) fn router(token: String, store: WorkspaceStore) -> Router {
+pub fn router(token: String, store: WorkspaceStore) -> Router {
     Router::new()
         .route(WORKSPACES_PATH, get(list).post(create))
         .route(WORKSPACE_DETAILS_PATH, get(details))

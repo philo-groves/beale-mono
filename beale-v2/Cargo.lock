@@ -218,9 +218,9 @@ dependencies = [
  "axum",
  "beale-contracts",
  "beale-providers",
+ "beale-sessions",
+ "beale-workspaces",
  "prost",
- "serde",
- "serde_json",
  "tokio",
  "tower",
  "uuid",
@@ -259,6 +259,38 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "beale-sessions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "beale-contracts",
+ "beale-providers",
+ "beale-workspaces",
+ "prost",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
+name = "beale-workspaces"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "beale-contracts",
+ "prost",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]
