@@ -4,6 +4,10 @@
 
 ### app-server
 
+#### Added
+
+- App-server research-tool clients can search and fetch public prior-art sources through a dedicated network operation that archives provenance, while runbook execution now requires active recorded workspace authorization.
+
 #### Changed
 
 - Research Track selection now weighs assessed impact, reachability, and deployment exposure before surface signals. Discovery and investigator guidance keep ordinary reachability observations out of verified security findings.
