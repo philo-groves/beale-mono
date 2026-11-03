@@ -18,11 +18,18 @@ mod provider_icons;
 mod provider_models;
 mod settings_scroll;
 mod workspace_creation;
+mod workspace_view;
+mod workspaces;
 use appearance::{
     AppearancePreferences, AppearanceTheme, HeatLevel, InterfaceFont, PaletteColor, TextSize,
     ThemeStyle,
 };
-use beale_contracts::v1::{AuthMethod, DaybreakMode, ProviderId};
+use beale_contracts::v1::{
+    AuthMethod, DaybreakMode, ProviderId, UpdateWorkspaceFoundationRequest,
+    UpdateWorkspaceRulesRequest, UpdateWorkspaceSurfacesRequest, WorkspaceDetails,
+    WorkspaceFoundation, WorkspaceRules, WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaceInput,
+    WorkspaceSurfaces,
+};
 use color_picker::Hsv;
 use connection::ConnectionStatus;
 use icons::*;
@@ -139,6 +146,7 @@ enum SelectionMenu {
     LeadProvider,
     ResearchKit,
     SurfaceKind,
+    WorkspaceSurfaceKind,
     ColorTheme,
     InterfaceFont,
     TextSize,
@@ -424,6 +432,7 @@ const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
 enum PrimaryView {
     Home,
     WorkspaceCreation,
+    Workspace,
     Settings,
 }
 
@@ -431,6 +440,7 @@ enum PrimaryView {
 enum ViewLocation {
     Home,
     WorkspaceCreation(workspace_creation::CreationTab),
+    Workspace(uuid::Uuid, workspace_view::WorkspaceTab),
     Providers(Provider),
     Appearance(AppearanceTab),
     Settings(SettingsSection),
@@ -456,6 +466,37 @@ impl ViewHistory {
 struct State {
     primary_view: PrimaryView,
     workspace_draft: workspace_creation::WorkspaceDraft,
+    workspaces: Vec<WorkspaceSummary>,
+    workspace_list_loaded: bool,
+    workspace_list_error: String,
+    pending_workspace_id: Option<String>,
+    workspace_create_busy: bool,
+    workspace_create_error: String,
+    workspace_id: Option<uuid::Uuid>,
+    workspace_tab: workspace_view::WorkspaceTab,
+    workspace_details: Option<WorkspaceDetails>,
+    workspace_details_loading: bool,
+    workspace_details_error: String,
+    workspace_details_generation: u64,
+    workspace_foundation_revision: u64,
+    workspace_surfaces_revision: u64,
+    workspace_rules_revision: u64,
+    workspace_name_edit: TextEdit,
+    workspace_guidance_edit: TextEdit,
+    workspace_surface_edits: Vec<WorkspaceSurface>,
+    workspace_rule_edits: Vec<String>,
+    workspace_rule_input: TextEdit,
+    workspace_rule_dialog_open: bool,
+    workspace_rule_dialog_error: String,
+    workspace_surface_kind: workspace_creation::SurfaceKind,
+    workspace_surface_value: TextEdit,
+    workspace_surface_dialog_scope: Option<workspace_creation::SurfaceScope>,
+    workspace_surface_edit_index: Option<usize>,
+    workspace_surface_delete_index: Option<usize>,
+    workspace_surface_error: String,
+    workspace_save_busy: Option<workspace_view::WorkspaceTab>,
+    workspace_save_error: String,
+    workspace_save_message: String,
     selected: Provider,
     settings_section: SettingsSection,
     appearance_tab: AppearanceTab,
@@ -504,6 +545,37 @@ impl Default for State {
         Self {
             primary_view: PrimaryView::Settings,
             workspace_draft: workspace_creation::WorkspaceDraft::default(),
+            workspaces: Vec::new(),
+            workspace_list_loaded: false,
+            workspace_list_error: String::new(),
+            pending_workspace_id: None,
+            workspace_create_busy: false,
+            workspace_create_error: String::new(),
+            workspace_id: None,
+            workspace_tab: workspace_view::WorkspaceTab::default(),
+            workspace_details: None,
+            workspace_details_loading: false,
+            workspace_details_error: String::new(),
+            workspace_details_generation: 0,
+            workspace_foundation_revision: 0,
+            workspace_surfaces_revision: 0,
+            workspace_rules_revision: 0,
+            workspace_name_edit: TextEdit::new(""),
+            workspace_guidance_edit: TextEdit::new(""),
+            workspace_surface_edits: Vec::new(),
+            workspace_rule_edits: Vec::new(),
+            workspace_rule_input: TextEdit::new(""),
+            workspace_rule_dialog_open: false,
+            workspace_rule_dialog_error: String::new(),
+            workspace_surface_kind: workspace_creation::SurfaceKind::default(),
+            workspace_surface_value: TextEdit::new(""),
+            workspace_surface_dialog_scope: None,
+            workspace_surface_edit_index: None,
+            workspace_surface_delete_index: None,
+            workspace_surface_error: String::new(),
+            workspace_save_busy: None,
+            workspace_save_error: String::new(),
+            workspace_save_message: String::new(),
             selected: Provider::OpenAi,
             settings_section: SettingsSection::Providers,
             appearance_tab: AppearanceTab::Colors,
@@ -576,6 +648,11 @@ impl State {
         if self.primary_view == PrimaryView::WorkspaceCreation {
             return ViewLocation::WorkspaceCreation(self.workspace_draft.tab);
         }
+        if self.primary_view == PrimaryView::Workspace
+            && let Some(id) = self.workspace_id
+        {
+            return ViewLocation::Workspace(id, self.workspace_tab);
+        }
         match self.settings_section {
             SettingsSection::Providers => ViewLocation::Providers(self.selected),
             SettingsSection::Appearance => ViewLocation::Appearance(self.appearance_tab),
@@ -584,11 +661,21 @@ impl State {
     }
 
     fn apply_view_location(&mut self, location: ViewLocation) {
+        let mut load_workspace = None;
         match location {
             ViewLocation::Home => self.primary_view = PrimaryView::Home,
             ViewLocation::WorkspaceCreation(tab) => {
                 self.primary_view = PrimaryView::WorkspaceCreation;
                 self.workspace_draft.tab = tab;
+            }
+            ViewLocation::Workspace(id, tab) => {
+                self.primary_view = PrimaryView::Workspace;
+                self.workspace_tab = tab;
+                if self.workspace_id != Some(id) {
+                    self.workspace_id = Some(id);
+                    self.workspace_details = None;
+                    load_workspace = Some(id);
+                }
             }
             ViewLocation::Providers(provider) => {
                 self.primary_view = PrimaryView::Settings;
@@ -612,9 +699,27 @@ impl State {
         self.api_key_dialog = false;
         self.api_key_edit.clear();
         self.auth_message.clear();
+        self.workspace_surface_dialog_scope = None;
+        self.workspace_surface_edit_index = None;
+        self.workspace_surface_delete_index = None;
+        self.workspace_surface_value.clear();
+        self.workspace_surface_error.clear();
+        self.workspace_rule_dialog_open = false;
+        self.workspace_rule_dialog_error.clear();
+        self.workspace_rule_input.clear();
+        self.workspace_save_error.clear();
+        self.workspace_save_message.clear();
+        if let Some(id) = load_workspace {
+            start_workspace_details(self, id);
+        }
     }
 
     fn navigate_to(&mut self, location: ViewLocation) {
+        if (self.workspace_create_busy && self.primary_view == PrimaryView::WorkspaceCreation)
+            || (self.workspace_save_busy.is_some() && self.primary_view == PrimaryView::Workspace)
+        {
+            return;
+        }
         let current = self.view_location();
         if current != location {
             ViewHistory::push(&mut self.view_history.back, current);
@@ -634,14 +739,30 @@ impl State {
 
     fn start_workspace_creation(&mut self) {
         self.workspace_draft = workspace_creation::WorkspaceDraft::default();
+        self.workspace_create_error.clear();
         self.workspace_scroll = SettingsScroll::for_key("workspace-scroll");
         self.navigate_to(ViewLocation::WorkspaceCreation(
-            workspace_creation::CreationTab::Settings,
+            workspace_creation::CreationTab::Foundation,
+        ));
+    }
+
+    fn open_workspace(&mut self, id: uuid::Uuid) {
+        self.navigate_to(ViewLocation::Workspace(
+            id,
+            workspace_view::WorkspaceTab::Campaign,
         ));
     }
 
     fn cancel_workspace_creation(&mut self) {
+        if self.workspace_create_busy {
+            return;
+        }
+        self.leave_workspace_creation();
+    }
+
+    fn leave_workspace_creation(&mut self) {
         self.workspace_draft = workspace_creation::WorkspaceDraft::default();
+        self.workspace_create_error.clear();
         self.view_history
             .back
             .retain(|location| !matches!(location, ViewLocation::WorkspaceCreation(_)));
@@ -655,6 +776,11 @@ impl State {
     }
 
     fn go_back(&mut self) {
+        if (self.workspace_create_busy && self.primary_view == PrimaryView::WorkspaceCreation)
+            || (self.workspace_save_busy.is_some() && self.primary_view == PrimaryView::Workspace)
+        {
+            return;
+        }
         if let Some(location) = self.view_history.back.pop() {
             let current = self.view_location();
             ViewHistory::push(&mut self.view_history.forward, current);
@@ -663,10 +789,160 @@ impl State {
     }
 
     fn go_forward(&mut self) {
+        if (self.workspace_create_busy && self.primary_view == PrimaryView::WorkspaceCreation)
+            || (self.workspace_save_busy.is_some() && self.primary_view == PrimaryView::Workspace)
+        {
+            return;
+        }
         if let Some(location) = self.view_history.forward.pop() {
             let current = self.view_location();
             ViewHistory::push(&mut self.view_history.back, current);
             self.apply_view_location(location);
+        }
+    }
+
+    fn finish_workspace_create(&mut self, result: Result<WorkspaceSummary, String>) {
+        self.workspace_create_busy = false;
+        match result {
+            Ok(summary) => {
+                self.pending_workspace_id = Some(summary.id.clone());
+                if !self.workspaces.iter().any(|item| item.id == summary.id) {
+                    self.workspaces.push(summary);
+                }
+                self.workspace_list_loaded = true;
+                self.workspace_list_error.clear();
+                if self.primary_view == PrimaryView::WorkspaceCreation {
+                    self.leave_workspace_creation();
+                }
+            }
+            Err(error) => self.workspace_create_error = error,
+        }
+    }
+
+    fn apply_workspace_list(&mut self, result: Result<Vec<WorkspaceSummary>, String>) -> bool {
+        if self.workspace_create_busy {
+            return false;
+        }
+        match result {
+            Ok(workspaces) => {
+                if self
+                    .pending_workspace_id
+                    .as_ref()
+                    .is_some_and(|id| !workspaces.iter().any(|workspace| &workspace.id == id))
+                {
+                    return false;
+                }
+                self.pending_workspace_id = None;
+                if self.workspace_list_loaded
+                    && self.workspace_list_error.is_empty()
+                    && self.workspaces == workspaces
+                {
+                    return false;
+                }
+                self.workspaces = workspaces;
+                self.workspace_list_loaded = true;
+                self.workspace_list_error.clear();
+            }
+            Err(error) => {
+                if !self.workspace_list_loaded && self.workspace_list_error == error {
+                    return false;
+                }
+                self.workspace_list_error = error;
+            }
+        }
+        true
+    }
+
+    fn finish_workspace_details(
+        &mut self,
+        id: uuid::Uuid,
+        generation: u64,
+        result: Result<workspaces::WorkspaceSections, String>,
+    ) {
+        if self.workspace_id != Some(id) || self.workspace_details_generation != generation {
+            return;
+        }
+        self.workspace_details_loading = false;
+        match result {
+            Ok(sections) => {
+                let _ = sections.campaign.enabled_feature_ids;
+                self.workspace_foundation_revision = sections.foundation_revision;
+                self.workspace_surfaces_revision = sections.surfaces_revision;
+                self.workspace_rules_revision = sections.rules_revision;
+                self.workspace_name_edit = TextEdit::new(
+                    sections
+                        .details
+                        .summary
+                        .as_ref()
+                        .map_or("", |summary| &summary.name),
+                );
+                self.workspace_guidance_edit = TextEdit::new(&sections.details.guidance);
+                self.workspace_surface_edits = sections.details.surfaces.clone();
+                self.workspace_rule_edits = sections.details.rules.clone();
+                if let Some(summary) = &sections.details.summary
+                    && let Some(item) = self
+                        .workspaces
+                        .iter_mut()
+                        .find(|item| item.id == summary.id)
+                {
+                    *item = summary.clone();
+                }
+                self.workspace_details = Some(sections.details);
+                self.workspace_details_error.clear();
+                self.workspace_save_error.clear();
+                self.workspace_save_message.clear();
+            }
+            Err(error) => self.workspace_details_error = error,
+        }
+    }
+
+    fn finish_workspace_save(
+        &mut self,
+        id: uuid::Uuid,
+        tab: workspace_view::WorkspaceTab,
+        result: Result<WorkspaceSaveResult, String>,
+    ) {
+        if self.workspace_id != Some(id) || self.workspace_save_busy != Some(tab) {
+            return;
+        }
+        self.workspace_save_busy = None;
+        match result {
+            Ok(WorkspaceSaveResult::Foundation(saved)) => {
+                self.workspace_foundation_revision = saved.revision;
+                if let Some(details) = &mut self.workspace_details {
+                    details.summary = saved.summary.clone();
+                    details.guidance = saved.guidance.clone();
+                }
+                if let Some(summary) = saved.summary {
+                    if let Some(item) = self
+                        .workspaces
+                        .iter_mut()
+                        .find(|item| item.id == summary.id)
+                    {
+                        *item = summary.clone();
+                    }
+                    self.workspace_name_edit = TextEdit::new(summary.name);
+                }
+                self.workspace_guidance_edit = TextEdit::new(saved.guidance);
+                self.workspace_save_message = "Foundation saved.".to_owned();
+            }
+            Ok(WorkspaceSaveResult::Surfaces(saved)) => {
+                self.workspace_surfaces_revision = saved.revision;
+                self.workspace_surface_edits = saved.surfaces.clone();
+                if let Some(details) = &mut self.workspace_details {
+                    details.surfaces = saved.surfaces;
+                }
+                self.workspace_save_message = "Surfaces saved.".to_owned();
+            }
+            Ok(WorkspaceSaveResult::Rules(saved)) => {
+                self.workspace_rules_revision = saved.revision;
+                self.workspace_rule_edits = saved.rules.clone();
+                if let Some(details) = &mut self.workspace_details {
+                    details.rules = saved.rules;
+                }
+                self.workspace_save_message = "Rules saved.".to_owned();
+            }
+            Err(error) => self.workspace_save_error = error,
         }
     }
 
@@ -797,6 +1073,161 @@ fn drag_color_picker(state: &mut State, drag: &mut Drag, tx: &mut Tx, axis: Pick
 }
 
 static AUTH_HANDLE: std::sync::OnceLock<rune::AppHandle<State>> = std::sync::OnceLock::new();
+
+enum WorkspaceSaveResult {
+    Foundation(WorkspaceFoundation),
+    Surfaces(WorkspaceSurfaces),
+    Rules(WorkspaceRules),
+}
+
+fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
+    if state.workspace_save_busy.is_some()
+        || state.workspace_details_loading
+        || state.workspace_details.is_none()
+    {
+        return;
+    }
+    let Some(id) = state.workspace_id else {
+        return;
+    };
+    if tab == workspace_view::WorkspaceTab::Campaign {
+        return;
+    }
+    if tab == workspace_view::WorkspaceTab::Foundation
+        && state.workspace_name_edit.text.trim().is_empty()
+    {
+        state.workspace_save_error = "Workspace name is required.".to_owned();
+        return;
+    }
+    if tab == workspace_view::WorkspaceTab::Surfaces
+        && !state
+            .workspace_surface_edits
+            .iter()
+            .any(|surface| surface.scope == beale_contracts::v1::SurfaceScope::InScope as i32)
+    {
+        state.workspace_save_error = "Add at least one in-scope surface.".to_owned();
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.workspace_save_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    let foundation = (tab == workspace_view::WorkspaceTab::Foundation).then(|| {
+        UpdateWorkspaceFoundationRequest {
+            expected_revision: state.workspace_foundation_revision,
+            name: state.workspace_name_edit.text.clone(),
+            guidance: state.workspace_guidance_edit.text.clone(),
+        }
+    });
+    let surfaces =
+        (tab == workspace_view::WorkspaceTab::Surfaces).then(|| UpdateWorkspaceSurfacesRequest {
+            expected_revision: state.workspace_surfaces_revision,
+            surfaces: state
+                .workspace_surface_edits
+                .iter()
+                .map(|surface| WorkspaceSurfaceInput {
+                    kind: surface.kind,
+                    scope: surface.scope,
+                    value: surface.value.clone(),
+                })
+                .collect(),
+        });
+    let rules = (tab == workspace_view::WorkspaceTab::Rules).then(|| UpdateWorkspaceRulesRequest {
+        expected_revision: state.workspace_rules_revision,
+        rules: state.workspace_rule_edits.clone(),
+    });
+    state.workspace_save_busy = Some(tab);
+    state.workspace_save_error.clear();
+    state.workspace_save_message.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = workspaces::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize workspace connection".to_owned())?;
+            runtime.block_on(async {
+                if let Some(request) = foundation {
+                    workspaces::save_foundation(&client, addr, id, request)
+                        .await
+                        .map(WorkspaceSaveResult::Foundation)
+                } else if let Some(request) = surfaces {
+                    workspaces::save_surfaces(&client, addr, id, request)
+                        .await
+                        .map(WorkspaceSaveResult::Surfaces)
+                } else if let Some(request) = rules {
+                    workspaces::save_rules(&client, addr, id, request)
+                        .await
+                        .map(WorkspaceSaveResult::Rules)
+                } else {
+                    Err("Invalid workspace section".to_owned())
+                }
+            })
+        })();
+        handle.update(move |state, _| state.finish_workspace_save(id, tab, result));
+    });
+}
+
+fn start_workspace_details(state: &mut State, id: uuid::Uuid) {
+    state.workspace_details_generation = state.workspace_details_generation.wrapping_add(1);
+    let generation = state.workspace_details_generation;
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.workspace_details_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    state.workspace_details_loading = true;
+    state.workspace_details_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = workspaces::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize workspace connection".to_owned())?;
+            runtime.block_on(workspaces::load_sections(&client, addr, id))
+        })();
+        handle.update(move |state, _| state.finish_workspace_details(id, generation, result));
+    });
+}
+
+fn start_workspace_create(state: &mut State) {
+    if state.workspace_create_busy
+        || !matches!(state.connection, ConnectionStatus::Connected { .. })
+    {
+        return;
+    }
+    let request = match workspaces::request_from_draft(&state.workspace_draft) {
+        Ok(request) => request,
+        Err(error) => {
+            state.workspace_draft.error = Some(error);
+            return;
+        }
+    };
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.workspace_create_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    state.workspace_draft.error = None;
+    state.workspace_create_error.clear();
+    state.workspace_create_busy = true;
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = workspaces::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize workspace connection".to_owned())?;
+            runtime.block_on(workspaces::create(&client, addr, request))
+        })();
+        handle.update(move |state, _| state.finish_workspace_create(result));
+    });
+}
 
 fn start_auth_action(state: &mut State, action: Action) {
     if state.auth_busy || !matches!(state.connection, ConnectionStatus::Connected { .. }) {
@@ -1075,6 +1506,15 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 selected: state.workspace_draft.surface_kind == kind,
             })
             .collect(),
+        SelectionMenu::WorkspaceSurfaceKind => workspace_creation::SurfaceKind::ALL
+            .into_iter()
+            .map(|kind| in_place_menu::MenuItem {
+                value: kind.key().to_owned(),
+                label: kind.label().to_owned(),
+                detail: None,
+                selected: state.workspace_surface_kind == kind,
+            })
+            .collect(),
         SelectionMenu::LeadProvider => [Provider::OpenAi, Provider::Xai]
             .into_iter()
             .filter(|provider| {
@@ -1174,6 +1614,7 @@ fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
     match menu {
         SelectionMenu::ResearchKit => "workspace-kit-control",
         SelectionMenu::SurfaceKind => "workspace-surface-kind-control",
+        SelectionMenu::WorkspaceSurfaceKind => "saved-workspace-surface-kind-control",
         SelectionMenu::LeadProvider => "lead-provider-control",
         SelectionMenu::ColorTheme => "color-theme-control",
         SelectionMenu::InterfaceFont => "appearance-font-control",
@@ -1232,6 +1673,14 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
                 .find(|kind| kind.key() == value)
             {
                 state.workspace_draft.surface_kind = kind;
+            }
+        }
+        SelectionMenu::WorkspaceSurfaceKind => {
+            if let Some(kind) = workspace_creation::SurfaceKind::ALL
+                .into_iter()
+                .find(|kind| kind.key() == value)
+            {
+                state.workspace_surface_kind = kind;
             }
         }
         SelectionMenu::LeadProvider => {
@@ -1551,6 +2000,33 @@ fn header(state: &State, prefix_width: f32) -> El {
             )
             .child(
                 text(state.workspace_draft.tab.label())
+                    .font(ui_font(13.0, 400.0))
+                    .color(color("#aaaaaa")),
+            );
+    } else if state.primary_view == PrimaryView::Workspace {
+        let name = state
+            .workspace_id
+            .and_then(|id| {
+                state
+                    .workspaces
+                    .iter()
+                    .find(|item| item.id == id.to_string())
+            })
+            .map_or("Workspace", |item| item.name.as_str());
+        title = title
+            .child(
+                el().key("header-divider")
+                    .size(1.0, 18.0)
+                    .fill(color("#555555")),
+            )
+            .child(icon(&FOLDER_OPEN, 16.0).color(color("#c8c8c8")))
+            .child(
+                text(name)
+                    .font(ui_font(13.0, 500.0))
+                    .color(color("#e2e2e2")),
+            )
+            .child(
+                text(state.workspace_tab.label())
                     .font(ui_font(13.0, 400.0))
                     .color(color("#aaaaaa")),
             );
@@ -3136,7 +3612,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     let mut content = col()
         .key("settings-page")
         .w_full()
-        .max_w(760.0)
+        .max_w(if state.primary_view == PrimaryView::Settings {
+            760.0
+        } else {
+            1300.0
+        })
         .self_center()
         .gap(20.0);
     if state.primary_view == PrimaryView::Settings {
@@ -3158,6 +3638,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         }
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         content = content.child(workspace_creation::render(state, theme));
+    } else if state.primary_view == PrimaryView::Workspace {
+        let campaign_height = cx
+            .layout_size("content-surface")
+            .map_or(420.0, |size| (size[1] - 180.0).max(300.0));
+        content = content.child(workspace_view::render(state, theme, campaign_height));
     }
     let mut body = row().key("body").w_full().grow(1.0).pr(6.0).pb(6.0);
     body = body.child(rail(state, theme));
@@ -3171,7 +3656,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     if state.sidenav_visible {
         settings_surface = settings_surface
             .child(if state.primary_view != PrimaryView::Settings {
-                home_sidebar::render(state.sidenav_width, theme)
+                home_sidebar::render(state, state.sidenav_width, theme)
             } else {
                 settings_sidenav(
                     state.settings_section,
@@ -3201,6 +3686,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             "workspace-scroll"
         };
         let scroll_bar = scroll_watch.clone();
+        let content_inset = match state.primary_view {
+            PrimaryView::Settings => col().w_full().padding(36.0),
+            PrimaryView::Workspace => col().w_full().px(24.0).pt(36.0).pb(24.0),
+            PrimaryView::WorkspaceCreation => col().w_full().padding(24.0),
+            PrimaryView::Home => col().w_full(),
+        };
         main_content = main_content
             .child(
                 col()
@@ -3221,7 +3712,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                             state.workspace_scroll.wheel(event, tx)
                         }
                     })
-                    .child(col().w_full().padding(36.0).child(content)),
+                    .child(content_inset.child(content)),
             )
             .child(scroll_bar.bar(theme));
     }
@@ -3294,15 +3785,42 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.primary_view == PrimaryView::Workspace
+        && let Some(scope) = state.workspace_surface_dialog_scope
+    {
+        for layer in workspace_view::surface_dialog(state, scope, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Workspace
+        && state.workspace_surface_delete_index.is_some()
+    {
+        for layer in workspace_view::surface_delete_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Workspace
+        && state.workspace_tab == workspace_view::WorkspaceTab::Rules
+        && state.workspace_rule_dialog_open
+    {
+        for layer in workspace_view::rule_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
     if let Some(menu) = state.selection_menu
         && match menu {
             SelectionMenu::ResearchKit => {
                 state.primary_view == PrimaryView::WorkspaceCreation
-                    && state.workspace_draft.tab == workspace_creation::CreationTab::Settings
+                    && state.workspace_draft.tab == workspace_creation::CreationTab::Foundation
             }
             SelectionMenu::SurfaceKind => {
                 state.primary_view == PrimaryView::WorkspaceCreation
                     && state.workspace_draft.tab == workspace_creation::CreationTab::Surfaces
+            }
+            SelectionMenu::WorkspaceSurfaceKind => {
+                state.primary_view == PrimaryView::Workspace
+                    && state.workspace_tab == workspace_view::WorkspaceTab::Surfaces
+                    && state.workspace_surface_dialog_scope.is_some()
             }
             SelectionMenu::ColorTheme => state.settings_section == SettingsSection::Appearance,
             SelectionMenu::InterfaceFont | SelectionMenu::TextSize => {
@@ -3320,6 +3838,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             let (title, width) = match menu {
                 SelectionMenu::ResearchKit => ("Research Kit", 178.0),
                 SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
+                SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
                 SelectionMenu::LeadProvider => ("Default Provider", 178.0),
                 SelectionMenu::ColorTheme => ("Color Theme", 178.0),
                 SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
@@ -3534,8 +4053,22 @@ fn main() -> std::process::ExitCode {
             handle.update(|state, _| state.connection = ConnectionStatus::Offline);
             return;
         };
+        let mut workspace_poll = 0_u8;
         loop {
             let status = runtime.block_on(connection::probe(&client, addr));
+            let workspace_result =
+                if workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. }) {
+                    let workspace_client = workspaces::client();
+                    Some(match workspace_client {
+                        Ok(workspace_client) => {
+                            runtime.block_on(workspaces::list(&workspace_client, addr))
+                        }
+                        Err(error) => Err(error),
+                    })
+                } else {
+                    None
+                };
+            workspace_poll = (workspace_poll + 1) % 5;
             let auth_result = if matches!(status, ConnectionStatus::Connected { .. }) {
                 runtime.block_on(provider_auth::status(&client, addr)).ok()
             } else {
@@ -3546,6 +4079,9 @@ fn main() -> std::process::ExitCode {
             let auth_status = auth_snapshot.providers;
             let lead_provider = auth_snapshot.lead.and_then(Provider::from_id);
             let daybreak_mode = auth_loaded.then_some(auth_snapshot.daybreak_mode);
+            if let Some(result) = workspace_result {
+                handle.update_if(move |state, _| state.apply_workspace_list(result));
+            }
             handle.update_if(move |state, _| {
                 if state.connection == status
                     && state.auth_status == auth_status
@@ -4505,7 +5041,331 @@ mod tests {
     }
 
     #[test]
-    fn new_workspace_draft_moves_through_settings_surfaces_and_rules() {
+    fn host_workspaces_appear_in_home_sidebar_and_creation_result_returns_home() {
+        let summary = WorkspaceSummary {
+            id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            name: "Example Workspace".to_owned(),
+            directory: std::env::temp_dir()
+                .join("example-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let mut state = State {
+            primary_view: PrimaryView::WorkspaceCreation,
+            connection: ConnectionStatus::Connected { major: 1, minor: 6 },
+            workspace_create_busy: true,
+            ..State::default()
+        };
+        state.workspace_draft.name = TextEdit::new("Draft Workspace");
+        state.workspace_draft.tab = workspace_creation::CreationTab::Rules;
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("workspace-create-disabled").is_some());
+        assert_eq!(runtime.state.primary_view, PrimaryView::WorkspaceCreation);
+        runtime
+            .state
+            .finish_workspace_create(Err("Could not create workspace".to_owned()));
+        runtime.frame(1.0 / 60.0);
+        assert_eq!(
+            runtime.state.workspace_create_error,
+            "Could not create workspace"
+        );
+        assert_eq!(runtime.state.workspace_draft.name.text, "Draft Workspace");
+        let mut retry = Runtime::new(runtime.state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        retry.frame(0.0);
+        assert!(retry.find("workspace-create-error").is_some());
+        assert!(retry.find("workspace-create").is_some());
+        retry.state.workspace_create_busy = true;
+        retry.state.finish_workspace_create(Ok(summary.clone()));
+        assert_eq!(retry.state.primary_view, PrimaryView::Home);
+        assert_eq!(retry.state.workspaces, vec![summary.clone()]);
+        assert!(!retry.state.apply_workspace_list(Ok(Vec::new())));
+        assert_eq!(retry.state.workspaces, vec![summary.clone()]);
+        assert!(!retry.state.apply_workspace_list(Ok(vec![summary])));
+        assert!(retry.state.pending_workspace_id.is_none());
+        assert!(retry.state.workspace_draft.name.text.is_empty());
+        let mut home = Runtime::new(retry.state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        home.frame(0.0);
+        assert!(
+            home.find("home-workspace-00000000-0000-4000-8000-000000000001")
+                .is_some()
+        );
+        assert!(home.find("home-workspaces-empty").is_none());
+    }
+
+    #[test]
+    fn saved_workspace_opens_campaign_and_shows_recorded_forms() {
+        use beale_contracts::v1::{SurfaceCreator, SurfaceKind, SurfaceScope, WorkspaceSurface};
+        let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
+        let summary = WorkspaceSummary {
+            id: id.to_string(),
+            name: "Example Workspace".to_owned(),
+            directory: std::env::temp_dir()
+                .join("example-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspaces: vec![summary.clone()],
+            workspace_list_loaded: true,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (2200.0, 900.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find(&format!("home-workspace-{id}")).unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::Workspace);
+        assert_eq!(runtime.state.workspace_id, Some(id));
+        assert!(runtime.find("workspace-campaign-empty").is_some());
+        for key in [
+            "workspace-tab-campaign",
+            "workspace-tab-foundation",
+            "workspace-tab-surfaces",
+            "workspace-tab-rules",
+        ] {
+            assert!(runtime.find(key).is_some(), "{key}");
+        }
+        let tab_positions = [
+            "workspace-tab-campaign",
+            "workspace-tab-foundation",
+            "workspace-tab-surfaces",
+            "workspace-tab-rules",
+        ]
+        .map(|key| runtime.presented(key).unwrap().0[0]);
+        assert!(tab_positions.windows(2).all(|pair| pair[0] < pair[1]));
+        let details = WorkspaceDetails {
+            summary: Some(summary),
+            guidance: "Use only example.test.\n".to_owned(),
+            surfaces: vec![WorkspaceSurface {
+                kind: SurfaceKind::Domain as i32,
+                scope: SurfaceScope::InScope as i32,
+                value: "example.test".to_owned(),
+                created_by: SurfaceCreator::Agent as i32,
+                out_of_scope_reason: String::new(),
+            }],
+            rules: vec!["Stay within scope.".to_owned()],
+        };
+        let generation = runtime.state.workspace_details_generation;
+        runtime.state.finish_workspace_details(
+            id,
+            generation,
+            Ok(workspaces::WorkspaceSections {
+                details,
+                foundation_revision: 1,
+                surfaces_revision: 1,
+                rules_revision: 1,
+                campaign: beale_contracts::v1::WorkspaceCampaign {
+                    enabled_feature_ids: Vec::new(),
+                },
+            }),
+        );
+        let mut loaded = Runtime::new(runtime.state, view, (2200.0, 900.0), Env::new(true, 1.0));
+        loaded.frame(0.0);
+        let (content_rect, _) = loaded.presented("settings-page").unwrap();
+        assert!(content_rect[2] >= 1299.0 && content_rect[2] <= 1301.0);
+        let (workspace_title, _) = loaded.presented("workspace-view-title").unwrap();
+        let mut settings =
+            Runtime::new(State::default(), view, (2200.0, 900.0), Env::new(true, 1.0));
+        settings.frame(0.0);
+        let (settings_title, _) = settings.presented("settings-view-title").unwrap();
+        assert!((workspace_title[1] - settings_title[1]).abs() < 1.0);
+        for (tab, expected) in [
+            (
+                "workspace-tab-surfaces",
+                "saved-workspace-in-scope-surfaces",
+            ),
+            ("workspace-tab-rules", "saved-workspace-rules-form"),
+            ("workspace-tab-foundation", "saved-workspace-details-form"),
+        ] {
+            let (x, y) = loaded.find(tab).unwrap();
+            loaded.pointer_down(x, y);
+            loaded.pointer_up(x, y);
+            loaded.frame(1.0 / 60.0);
+            assert!(loaded.find(expected).is_some(), "{expected}");
+            if tab == "workspace-tab-surfaces" {
+                let (x, y) = loaded.find("saved-workspace-add-in-scope-surface").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(loaded.find("saved-workspace-surface-dialog").is_some());
+                let (x, y) = loaded.find("saved-workspace-surface-kind-control").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert_eq!(
+                    loaded.state.workspace_surface_dialog_scope,
+                    Some(workspace_creation::SurfaceScope::InScope)
+                );
+                assert_eq!(
+                    loaded.state.selection_menu,
+                    Some(SelectionMenu::WorkspaceSurfaceKind)
+                );
+                let (x, y) = loaded.find("selection-menu-item-4").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
+                assert_eq!(
+                    loaded.state.workspace_surface_kind,
+                    workspace_creation::SurfaceKind::Domain
+                );
+                loaded.state.workspace_surface_value = TextEdit::new("another.example.test");
+                let (x, y) = loaded.find("saved-workspace-add-surface").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
+                assert_eq!(loaded.state.workspace_surface_edits.len(), 2);
+                assert_eq!(
+                    loaded.state.workspace_surface_edits[1].scope,
+                    SurfaceScope::InScope as i32
+                );
+                let (x, y) = loaded.find("saved-workspace-surface-edit-0").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert_eq!(loaded.state.workspace_surface_edit_index, Some(0));
+                assert_eq!(loaded.state.workspace_surface_value.text, "example.test");
+                loaded.state.workspace_surface_value = TextEdit::new("another.example.test");
+                let (x, y) = loaded.find("saved-workspace-edit-surface").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(
+                    loaded
+                        .find("saved-workspace-surface-dialog-error")
+                        .is_some()
+                );
+                loaded.state.workspace_surface_value = TextEdit::new("primary.example.test");
+                let (x, y) = loaded.find("saved-workspace-edit-surface").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert_eq!(
+                    loaded.state.workspace_surface_edits[0].value,
+                    "primary.example.test"
+                );
+                assert_eq!(
+                    loaded.state.workspace_surface_edits[0].created_by,
+                    SurfaceCreator::User as i32
+                );
+                assert!(loaded.state.workspace_surface_edit_index.is_none());
+                let (x, y) = loaded.find("saved-workspace-surface-remove-1").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(
+                    loaded
+                        .find("saved-workspace-surface-delete-dialog")
+                        .is_some()
+                );
+                assert_eq!(loaded.state.workspace_surface_edits.len(), 2);
+                let (x, y) = loaded
+                    .find("saved-workspace-surface-delete-cancel")
+                    .unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(
+                    loaded
+                        .find("saved-workspace-surface-delete-dialog")
+                        .is_none()
+                );
+                assert_eq!(loaded.state.workspace_surface_edits.len(), 2);
+                let (x, y) = loaded.find("saved-workspace-surface-remove-1").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                loaded.key(KeyEvent {
+                    key: Key::Escape,
+                    mods: Default::default(),
+                });
+                loaded.frame(0.0);
+                assert!(
+                    loaded
+                        .find("saved-workspace-surface-delete-dialog")
+                        .is_none()
+                );
+                assert_eq!(loaded.state.workspace_surface_edits.len(), 2);
+                let (x, y) = loaded.find("saved-workspace-surface-remove-1").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                let (x, y) = loaded
+                    .find("saved-workspace-surface-delete-confirm")
+                    .unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert_eq!(loaded.state.workspace_surface_edits.len(), 1);
+                assert!(
+                    loaded
+                        .find("saved-workspace-surface-delete-dialog")
+                        .is_none()
+                );
+            } else if tab == "workspace-tab-rules" {
+                assert!(loaded.find("saved-workspace-rule-editor").is_none());
+                assert!(loaded.find("saved-workspace-rule-input").is_none());
+                let (x, y) = loaded.find("saved-workspace-add-rule").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(loaded.find("saved-workspace-rule-dialog").is_some());
+                let (x, y) = loaded.find("saved-workspace-rule-dialog-add").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(loaded.find("saved-workspace-rule-dialog-error").is_some());
+                assert_eq!(loaded.state.workspace_rule_edits.len(), 1);
+                let (x, y) = loaded.find("saved-workspace-rule-dialog-cancel").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(loaded.find("saved-workspace-rule-dialog").is_none());
+                let (x, y) = loaded.find("saved-workspace-add-rule").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                loaded.state.workspace_rule_input = TextEdit::new("Use only example.test.");
+                let (x, y) = loaded.find("saved-workspace-rule-dialog-add").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert_eq!(loaded.state.workspace_rule_edits.len(), 2);
+                assert!(loaded.find("saved-workspace-rule-dialog").is_none());
+            }
+        }
+        assert!(loaded.find("saved-workspace-name-input").is_some());
+        assert!(loaded.find("saved-workspace-guidance-input").is_some());
+        assert!(loaded.find("saved-workspace-save-disabled").is_some());
+        loaded.state.workspace_name_edit = TextEdit::new("Renamed Example Workspace");
+        let mut edited = Runtime::new(loaded.state, view, (2200.0, 900.0), Env::new(true, 1.0));
+        edited.frame(0.0);
+        assert!(edited.find("saved-workspace-save").is_some());
+        edited.state.workspace_save_busy = Some(workspace_view::WorkspaceTab::Foundation);
+        let mut saved_summary = edited
+            .state
+            .workspace_details
+            .as_ref()
+            .and_then(|details| details.summary.clone())
+            .unwrap();
+        saved_summary.name = "Renamed Example Workspace".to_owned();
+        edited.state.finish_workspace_save(
+            id,
+            workspace_view::WorkspaceTab::Foundation,
+            Ok(WorkspaceSaveResult::Foundation(WorkspaceFoundation {
+                summary: Some(saved_summary),
+                guidance: "Use only example.test.\n".to_owned(),
+                revision: 2,
+            })),
+        );
+        assert_eq!(edited.state.workspace_foundation_revision, 2);
+        assert_eq!(edited.state.workspaces[0].name, "Renamed Example Workspace");
+    }
+
+    #[test]
+    fn new_workspace_draft_moves_through_foundation_surfaces_and_rules() {
         fn click(runtime: &mut Runtime<State>, key: &str) {
             let (x, y) = runtime.find(key).unwrap();
             runtime.pointer_down(x, y);
@@ -4571,7 +5431,7 @@ mod tests {
         click(&mut runtime, "workspace-next");
         assert_eq!(
             runtime.state.workspace_draft.tab,
-            workspace_creation::CreationTab::Settings
+            workspace_creation::CreationTab::Foundation
         );
         assert!(runtime.find("workspace-creation-error").is_some());
         runtime.state.workspace_draft.name = TextEdit::new("Example Workspace");

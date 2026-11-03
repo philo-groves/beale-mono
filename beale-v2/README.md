@@ -18,7 +18,7 @@ Start the desktop in the second terminal:
 cargo run -p beale-desktop-app
 ```
 
-The Agent Settings sidenav shows `Connected · v1.3` when the desktop validates the app-server's protobuf health response. To check the connection without opening the window, run `cargo run -p beale-desktop-app -- --check-connection`; it exits unsuccessfully if the host is offline or has an incompatible contract. Start order does not matter: the desktop retries every two seconds.
+The Agent Settings sidenav shows the negotiated protocol version when the desktop validates the app-server's protobuf health response. To check the connection without opening the window, run `cargo run -p beale-desktop-app -- --check-connection`; it exits unsuccessfully if the host is offline or has an incompatible contract. Start order does not matter: the desktop retries every two seconds.
 
 In Agent Settings → Providers, select OpenAI or xAI and choose **Sign in** or **Configure**. Sign in opens the provider's authorization page in the default browser on the same device. For xAI, enter the device code shown in Beale. The app-server completes the flow and saves the subscription credential; the desktop polls for completion. Configure accepts an API key in a masked field and sends it to the local app-server. The desktop only receives whether each method is configured. **Forget** removes the saved credential for that method. Use `cargo run -p beale-desktop-app -- --provider-status` to check both providers without opening the window.
 

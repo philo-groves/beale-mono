@@ -38,6 +38,18 @@ pub(crate) static PLUS: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14"/>"#,
 };
 
+pub(crate) static PEN: Icon = Icon {
+    name: "lucide-pen",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12.862 3.487a2.096 2.096 0 0 1 2.96 0l4.691 4.691a2.096 2.096 0 0 1 0 2.96L10.5 21.15 4 22l.85-6.5Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m13.5 5.81 4.69 4.69"/>"#,
+};
+
+pub(crate) static TRASH: Icon = Icon {
+    name: "lucide-trash-2",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 11v6M14 11v6"/>"#,
+};
+
 pub(crate) static FOLDER_OPEN: Icon = Icon {
     name: "lucide-folder-open",
     view: 24.0,

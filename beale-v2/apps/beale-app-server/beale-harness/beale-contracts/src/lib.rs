@@ -152,10 +152,162 @@ pub mod v1 {
         #[prost(enumeration = "DaybreakMode", tag = "1")]
         pub mode: i32,
     }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceKind {
+        Unspecified = 0,
+        Repository = 1,
+        Documentation = 2,
+        Binary = 3,
+        Service = 4,
+        Domain = 5,
+        Other = 6,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceScope {
+        Unspecified = 0,
+        InScope = 1,
+        OutOfScope = 2,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceSurfaceInput {
+        #[prost(enumeration = "SurfaceKind", tag = "1")]
+        pub kind: i32,
+        #[prost(enumeration = "SurfaceScope", tag = "2")]
+        pub scope: i32,
+        #[prost(string, tag = "3")]
+        pub value: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct CreateWorkspaceRequest {
+        #[prost(string, tag = "1")]
+        pub name: String,
+        #[prost(string, tag = "2")]
+        pub directory: String,
+        #[prost(string, tag = "3")]
+        pub guidance: String,
+        #[prost(message, repeated, tag = "4")]
+        pub surfaces: Vec<WorkspaceSurfaceInput>,
+        #[prost(string, repeated, tag = "5")]
+        pub rules: Vec<String>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceSummary {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub directory: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListWorkspacesResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub workspaces: Vec<WorkspaceSummary>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SurfaceCreator {
+        Unspecified = 0,
+        User = 1,
+        Agent = 2,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceSurface {
+        #[prost(enumeration = "SurfaceKind", tag = "1")]
+        pub kind: i32,
+        #[prost(enumeration = "SurfaceScope", tag = "2")]
+        pub scope: i32,
+        #[prost(string, tag = "3")]
+        pub value: String,
+        #[prost(enumeration = "SurfaceCreator", tag = "4")]
+        pub created_by: i32,
+        #[prost(string, tag = "5")]
+        pub out_of_scope_reason: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceDetails {
+        #[prost(message, optional, tag = "1")]
+        pub summary: Option<WorkspaceSummary>,
+        #[prost(string, tag = "2")]
+        pub guidance: String,
+        #[prost(message, repeated, tag = "3")]
+        pub surfaces: Vec<WorkspaceSurface>,
+        #[prost(string, repeated, tag = "4")]
+        pub rules: Vec<String>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceCampaign {
+        #[prost(string, repeated, tag = "1")]
+        pub enabled_feature_ids: Vec<String>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceFoundation {
+        #[prost(message, optional, tag = "1")]
+        pub summary: Option<WorkspaceSummary>,
+        #[prost(string, tag = "2")]
+        pub guidance: String,
+        #[prost(uint64, tag = "3")]
+        pub revision: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UpdateWorkspaceFoundationRequest {
+        #[prost(uint64, tag = "1")]
+        pub expected_revision: u64,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub guidance: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceSurfaces {
+        #[prost(message, repeated, tag = "1")]
+        pub surfaces: Vec<WorkspaceSurface>,
+        #[prost(uint64, tag = "2")]
+        pub revision: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UpdateWorkspaceSurfacesRequest {
+        #[prost(uint64, tag = "1")]
+        pub expected_revision: u64,
+        #[prost(message, repeated, tag = "2")]
+        pub surfaces: Vec<WorkspaceSurfaceInput>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceRules {
+        #[prost(string, repeated, tag = "1")]
+        pub rules: Vec<String>,
+        #[prost(uint64, tag = "2")]
+        pub revision: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UpdateWorkspaceRulesRequest {
+        #[prost(uint64, tag = "1")]
+        pub expected_revision: u64,
+        #[prost(string, repeated, tag = "2")]
+        pub rules: Vec<String>,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 5;
+pub const PROTOCOL_MINOR: u32 = 8;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -168,6 +320,12 @@ pub const MODELS_LIST_PATH: &str = "/v1/providers/models/list";
 pub const MODELS_DEFAULTS_PATH: &str = "/v1/providers/models/defaults";
 pub const SOURCE_PRIORITY_PATH: &str = "/v1/providers/source-priority";
 pub const DAYBREAK_MODE_PATH: &str = "/v1/providers/openai/daybreak-mode";
+pub const WORKSPACES_PATH: &str = "/v1/workspaces";
+pub const WORKSPACE_DETAILS_PATH: &str = "/v1/workspaces/{id}";
+pub const WORKSPACE_CAMPAIGN_PATH: &str = "/v1/workspaces/{id}/campaign";
+pub const WORKSPACE_FOUNDATION_PATH: &str = "/v1/workspaces/{id}/foundation";
+pub const WORKSPACE_SURFACES_PATH: &str = "/v1/workspaces/{id}/surfaces";
+pub const WORKSPACE_RULES_PATH: &str = "/v1/workspaces/{id}/rules";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const DEFAULT_LOCAL_ADDR: &str = "127.0.0.1:43831";
 pub const CONTROL_CHALLENGE_BYTES: usize = 32;

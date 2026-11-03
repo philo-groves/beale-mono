@@ -219,6 +219,8 @@ dependencies = [
  "beale-contracts",
  "beale-providers",
  "prost",
+ "serde",
+ "serde_json",
  "tokio",
  "tower",
  "uuid",

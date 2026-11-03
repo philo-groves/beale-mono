@@ -95,3 +95,100 @@ message SetSourcePriorityRequest {
 message SetDaybreakModeRequest {
   DaybreakMode mode = 1;
 }
+
+enum SurfaceKind {
+  SURFACE_KIND_UNSPECIFIED = 0;
+  SURFACE_KIND_REPOSITORY = 1;
+  SURFACE_KIND_DOCUMENTATION = 2;
+  SURFACE_KIND_BINARY = 3;
+  SURFACE_KIND_SERVICE = 4;
+  SURFACE_KIND_DOMAIN = 5;
+  SURFACE_KIND_OTHER = 6;
+}
+
+enum SurfaceScope {
+  SURFACE_SCOPE_UNSPECIFIED = 0;
+  SURFACE_SCOPE_IN_SCOPE = 1;
+  SURFACE_SCOPE_OUT_OF_SCOPE = 2;
+}
+
+message WorkspaceSurfaceInput {
+  SurfaceKind kind = 1;
+  SurfaceScope scope = 2;
+  string value = 3;
+}
+
+message CreateWorkspaceRequest {
+  string name = 1;
+  string directory = 2;
+  string guidance = 3;
+  repeated WorkspaceSurfaceInput surfaces = 4;
+  repeated string rules = 5;
+}
+
+message WorkspaceSummary {
+  string id = 1;
+  string name = 2;
+  string directory = 3;
+}
+
+message ListWorkspacesResponse {
+  repeated WorkspaceSummary workspaces = 1;
+}
+
+enum SurfaceCreator {
+  SURFACE_CREATOR_UNSPECIFIED = 0;
+  SURFACE_CREATOR_USER = 1;
+  SURFACE_CREATOR_AGENT = 2;
+}
+
+message WorkspaceSurface {
+  SurfaceKind kind = 1;
+  SurfaceScope scope = 2;
+  string value = 3;
+  SurfaceCreator created_by = 4;
+  string out_of_scope_reason = 5;
+}
+
+message WorkspaceDetails {
+  WorkspaceSummary summary = 1;
+  string guidance = 2;
+  repeated WorkspaceSurface surfaces = 3;
+  repeated string rules = 4;
+}
+
+message WorkspaceCampaign {
+  repeated string enabled_feature_ids = 1;
+}
+
+message WorkspaceFoundation {
+  WorkspaceSummary summary = 1;
+  string guidance = 2;
+  uint64 revision = 3;
+}
+
+message UpdateWorkspaceFoundationRequest {
+  uint64 expected_revision = 1;
+  string name = 2;
+  string guidance = 3;
+}
+
+message WorkspaceSurfaces {
+  repeated WorkspaceSurface surfaces = 1;
+  uint64 revision = 2;
+}
+
+message UpdateWorkspaceSurfacesRequest {
+  uint64 expected_revision = 1;
+  repeated WorkspaceSurfaceInput surfaces = 2;
+}
+
+message WorkspaceRules {
+  repeated string rules = 1;
+  uint64 revision = 2;
+}
+
+message UpdateWorkspaceRulesRequest {
+  uint64 expected_revision = 1;
+  repeated string rules = 2;
+}

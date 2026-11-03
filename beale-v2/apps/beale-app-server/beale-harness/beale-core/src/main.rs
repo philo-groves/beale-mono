@@ -16,6 +16,7 @@ use std::{io::Read, net::SocketAddr};
 use tokio::net::TcpListener;
 
 mod auth;
+mod workspace;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -101,6 +102,10 @@ async fn serve() -> Result<()> {
     let token = store.control_token()?;
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
+        .merge(workspace::router(
+            token.clone(),
+            workspace::WorkspaceStore::new()?,
+        ))
         .merge(auth::router(token, store));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

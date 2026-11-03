@@ -24,7 +24,13 @@
 - Added v2 Appearance settings with Colors and Typography tabs, four themes, per-theme Heat Palette colors, an interface font choice, and text sizing, saved locally by the desktop.
 - Added an OpenAI-only Daybreak Mode form to the v2 Providers view, with Blue selected by default and Red available as a host-saved choice.
 - Added the v2 Home view with a data-driven v1-style sidebar for research actions and workspaces; its main content remains blank while session flows are built.
-- Added a v2 New Workspace draft flow with Settings, Resources, and Rules views, a None-only Research Kit selector, and no Research Subject field. Final creation remains unavailable until app-server workspace operations exist.
+- Added a v2 New Workspace flow with Foundation, Surfaces, and Rules views, a None-only Research Kit selector, and no Research Subject field.
+- Connected v2 desktop workspace creation and Home workspace listing to the authenticated app-server v1.6 protocol, with server validation errors shown beside the draft.
+- Added clickable saved workspaces with Campaign, Surfaces, Rules, and Foundation tabs, host-backed forms, and the v1 wide content container.
+- Enabled section-specific editing of saved workspace names, guidance, surfaces, and rules with revision conflict feedback.
+- Reordered saved workspace tabs to Campaign, Foundation, Surfaces, and Rules; Surface rows now use edit and trash icon controls.
+- Added a confirmation dialog before removing a Surface from a saved workspace's pending edits.
+- Moved saved Workspace Rules entry into an Add a Rule dialog opened from the form title.
 - Added a native folder picker beside the v2 New Workspace directory field, preserving manual path entry.
 - Added a centered Add a Surface dialog opened from plus buttons beside the in-scope and out-of-scope surface list headings.
 - Added a confirmation dialog before cancelling a v2 New Workspace draft, with a safe Keep Editing choice and an explicit discard action.
@@ -77,6 +83,9 @@
 
 #### Added
 
+- Added v1.6 authenticated workspace create/list operations, a host-owned workspace registry, and an initial schema-v3 workspace layout with user-created scope surfaces and rules.
+- Added v1.7 authenticated workspace details reads for saved scope surfaces, rules, and guidance.
+- Added v1.8 separate Campaign, Foundation, Surfaces, and Rules contracts, with independent revisions and scoped update routes for editable sections.
 - Started the v2 Rust app-server workspace with a loopback host, versioned protobuf health contract, and host-only OpenAI and xAI API-key and subscription provider paths.
 - Gave the v2 app-server and desktop a shared loopback address for local development, with non-loopback bindings rejected.
 - Added v1.1 local provider credential operations with a private control token; API keys use current-user DPAPI protection on Windows and private host files on other systems.

@@ -12,7 +12,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum CreationTab {
     #[default]
-    Settings,
+    Foundation,
     Surfaces,
     Rules,
 }
@@ -25,9 +25,9 @@ struct TabSpec {
 
 const TABS: [TabSpec; 3] = [
     TabSpec {
-        tab: CreationTab::Settings,
-        key: "workspace-tab-settings",
-        label: "Settings",
+        tab: CreationTab::Foundation,
+        key: "workspace-tab-foundation",
+        label: "Foundation",
     },
     TabSpec {
         tab: CreationTab::Surfaces,
@@ -113,7 +113,7 @@ pub(crate) enum SurfaceScope {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SurfaceCreator {
     User,
-    // Agent-created surfaces will be supplied by the app-server once workspace operations exist.
+    // Agent-created surfaces will be supplied by later app-server session operations.
     #[allow(dead_code)]
     Agent,
 }
@@ -150,13 +150,13 @@ pub(crate) struct WorkspaceDraft {
     pub(crate) cancel_dialog_open: bool,
     pub(crate) rule_value: TextEdit,
     pub(crate) rules: Vec<String>,
-    error: Option<&'static str>,
+    pub(crate) error: Option<&'static str>,
 }
 
 impl Default for WorkspaceDraft {
     fn default() -> Self {
         Self {
-            tab: CreationTab::Settings,
+            tab: CreationTab::Foundation,
             unlocked: 0,
             name: TextEdit::new(""),
             directory: TextEdit::new(""),
@@ -192,18 +192,18 @@ impl WorkspaceDraft {
         self.cancel_dialog_open = false;
     }
 
-    fn validate_current(&self) -> Option<&'static str> {
-        match self.tab {
-            CreationTab::Settings if self.name.text.trim().is_empty() => {
+    fn validate_tab(&self, tab: CreationTab) -> Option<&'static str> {
+        match tab {
+            CreationTab::Foundation if self.name.text.trim().is_empty() => {
                 Some("Workspace name is required.")
             }
-            CreationTab::Settings if self.name.text.trim().chars().count() > 200 => {
+            CreationTab::Foundation if self.name.text.trim().chars().count() > 200 => {
                 Some("Workspace name must be at most 200 characters.")
             }
-            CreationTab::Settings if self.directory.text.trim().is_empty() => {
+            CreationTab::Foundation if self.directory.text.trim().is_empty() => {
                 Some("Choose a workspace directory.")
             }
-            CreationTab::Settings
+            CreationTab::Foundation
                 if !std::path::Path::new(self.directory.text.trim()).is_absolute() =>
             {
                 Some("Use an absolute workspace directory.")
@@ -218,6 +218,15 @@ impl WorkspaceDraft {
             }
             _ => None,
         }
+    }
+
+    fn validate_current(&self) -> Option<&'static str> {
+        self.validate_tab(self.tab)
+    }
+
+    pub(crate) fn validate_submission(&self) -> Option<&'static str> {
+        self.validate_tab(CreationTab::Foundation)
+            .or_else(|| self.validate_tab(CreationTab::Surfaces))
     }
 
     fn add_surface(&mut self) {
@@ -315,7 +324,7 @@ fn tab_button(spec: &TabSpec, state: &State, theme: ThemeStyle<'_>) -> El {
     }
 }
 
-fn row_with_control(
+pub(crate) fn row_with_control(
     label: &'static str,
     description: &'static str,
     control: El,
@@ -344,7 +353,7 @@ fn row_with_control(
         .child(control)
 }
 
-fn field(
+pub(crate) fn field(
     edit: &TextEdit,
     key: &'static str,
     placeholder: &'static str,
@@ -367,7 +376,7 @@ fn field(
         .on_edit(update)
 }
 
-fn settings(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+fn foundation(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     let kit = selection_button(
         "None",
         state.selection_menu == Some(SelectionMenu::ResearchKit),
@@ -790,7 +799,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             tabs
         });
     let forms = match state.workspace_draft.tab {
-        CreationTab::Settings => settings(state, theme),
+        CreationTab::Foundation => foundation(state, theme),
         CreationTab::Surfaces => surfaces(state, theme),
         CreationTab::Rules => rules(state, theme),
     };
@@ -805,16 +814,25 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 .color(color("#e07676")),
         );
     }
+    if !state.workspace_create_error.is_empty() {
+        page = page.child(
+            text(state.workspace_create_error.clone())
+                .key("workspace-create-error")
+                .font(ui_font(14.0, 400.0))
+                .color(color("#e07676")),
+        );
+    }
     let mut actions = row()
         .key("workspace-creation-actions")
         .w_full()
         .gap(8.0)
-        .child(el().grow(1.0))
-        .child(
-            form_button("Cancel", theme)
-                .key("workspace-cancel")
-                .on_press(request_cancel),
-        );
+        .child(el().grow(1.0));
+    let cancel = form_button("Cancel", theme).key("workspace-cancel");
+    actions = actions.child(if state.workspace_create_busy {
+        cancel
+    } else {
+        cancel.on_press(request_cancel)
+    });
     if state.workspace_draft.tab.next().is_some() {
         actions = actions.child(
             form_button("Next", theme)
@@ -822,7 +840,13 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 .on_press_tx(advance),
         );
     } else {
-        actions = actions.child(
+        let ready = matches!(state.connection, crate::ConnectionStatus::Connected { .. })
+            && !state.workspace_create_busy;
+        actions = actions.child(if ready {
+            form_button("Create Workspace", theme)
+                .key("workspace-create")
+                .on_press(crate::start_workspace_create)
+        } else {
             row()
                 .key("workspace-create-disabled")
                 .role("button")
@@ -834,16 +858,22 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 .continuous_corners()
                 .fill(color("#282828"))
                 .child(
-                    text("Create Workspace")
-                        .font(ui_font(14.0, 550.0))
-                        .color(color("#777777")),
-                ),
-        );
+                    text(if state.workspace_create_busy {
+                        "Creating…"
+                    } else {
+                        "Create Workspace"
+                    })
+                    .font(ui_font(14.0, 550.0))
+                    .color(color("#777777")),
+                )
+        });
     }
     page = page.child(actions);
-    if state.workspace_draft.tab == CreationTab::Rules {
+    if state.workspace_draft.tab == CreationTab::Rules
+        && !matches!(state.connection, crate::ConnectionStatus::Connected { .. })
+    {
         page = page.child(
-            text("Workspace creation awaits the app-server workspace contract.")
+            text("Connect to the app-server to create this workspace.")
                 .key("workspace-create-note")
                 .font(ui_font(13.0, 400.0))
                 .color(color("#969696")),

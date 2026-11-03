@@ -61,7 +61,7 @@ pub(super) fn router(token: String, store: CredentialStore) -> Router {
         })
 }
 
-fn authorized(headers: &HeaderMap, token: &str) -> bool {
+pub(super) fn authorized(headers: &HeaderMap, token: &str) -> bool {
     let Some(value) = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -158,7 +158,10 @@ fn initialize_lead(store: &CredentialStore, provider: &str) -> Result<(), Status
     Ok(())
 }
 
-fn checked_body<T: Message + Default>(headers: &HeaderMap, body: &[u8]) -> Result<T, StatusCode> {
+pub(super) fn checked_body<T: Message + Default>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<T, StatusCode> {
     if headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -169,7 +172,9 @@ fn checked_body<T: Message + Default>(headers: &HeaderMap, body: &[u8]) -> Resul
     T::decode(body).map_err(|_| StatusCode::BAD_REQUEST)
 }
 
-fn response<T: Message>(message: T) -> ([(header::HeaderName, &'static str); 1], Vec<u8>) {
+pub(super) fn response<T: Message>(
+    message: T,
+) -> ([(header::HeaderName, &'static str); 1], Vec<u8>) {
     (
         [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
         message.encode_to_vec(),

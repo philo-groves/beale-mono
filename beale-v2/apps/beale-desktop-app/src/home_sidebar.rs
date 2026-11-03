@@ -1,6 +1,6 @@
 use rune::{El, Icon, col, icon, row, text};
 
-use crate::icons::{FOLDER_PLUS, NEW_RESEARCH, QUICK_CHAT, SEARCH};
+use crate::icons::{FOLDER_OPEN, FOLDER_PLUS, NEW_RESEARCH, QUICK_CHAT, SEARCH};
 use crate::{State, ThemeStyle, sidenav_heading, ui_font};
 
 struct SidebarAction {
@@ -106,7 +106,7 @@ fn workspace_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
     button
 }
 
-pub(crate) fn render(width: f32, theme: ThemeStyle<'_>) -> El {
+pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     let mut primary = col().w_full().gap(2.0);
     for spec in &PRIMARY_ACTIONS {
@@ -115,6 +115,89 @@ pub(crate) fn render(width: f32, theme: ThemeStyle<'_>) -> El {
     let mut tools = row().center_y();
     for spec in &WORKSPACE_ACTIONS {
         tools = tools.child(workspace_action(spec, theme));
+    }
+    let mut workspaces = col()
+        .key("home-workspaces")
+        .w_full()
+        .grow(1.0)
+        .mt(18.0)
+        .gap(6.0)
+        .child(
+            row()
+                .key("home-workspaces-header")
+                .w_full()
+                .h(28.0)
+                .center_y()
+                .child(
+                    text(HOME_SIDEBAR.workspace_heading)
+                        .font(ui_font(15.0, 400.0))
+                        .color(color("#969696")),
+                )
+                .child(row().grow(1.0))
+                .child(tools),
+        );
+    if state.workspaces.is_empty() {
+        let label = if !state.workspace_list_error.is_empty() {
+            "Workspaces unavailable"
+        } else if state.workspace_list_loaded {
+            HOME_SIDEBAR.empty_workspaces
+        } else if matches!(state.connection, crate::ConnectionStatus::Connected { .. }) {
+            "Loading workspaces…"
+        } else {
+            HOME_SIDEBAR.empty_workspaces
+        };
+        workspaces = workspaces.child(
+            text(label)
+                .key("home-workspaces-empty")
+                .font(ui_font(13.0, 400.0))
+                .color(color("#969696"))
+                .ml(8.0),
+        );
+    } else {
+        for workspace in &state.workspaces {
+            let id = uuid::Uuid::parse_str(&workspace.id).ok();
+            let selected =
+                state.primary_view == crate::PrimaryView::Workspace && state.workspace_id == id;
+            let mut item = row()
+                .key(format!("home-workspace-{}", workspace.id))
+                .role("button")
+                .label(format!("Open {}", workspace.name))
+                .w_full()
+                .min_h(30.0)
+                .px(4.0)
+                .center_y()
+                .gap(10.0)
+                .radius(8.0)
+                .continuous_corners()
+                .fill(if selected {
+                    color("#303030")
+                } else {
+                    rune::Color::TRANSPARENT
+                })
+                .child(icon(&FOLDER_OPEN, 15.0).color(color("#9d9d9d")))
+                .child(
+                    text(workspace.name.clone())
+                        .font(ui_font(13.0, if selected { 550.0 } else { 400.0 }))
+                        .color(color("#dddddd"))
+                        .wrap(),
+                );
+            if let Some(id) = id {
+                item = item
+                    .hover(color("#282828"))
+                    .on_press(move |state: &mut State| state.open_workspace(id));
+            }
+            workspaces = workspaces.child(item);
+        }
+    }
+    if !state.workspace_list_error.is_empty() {
+        workspaces = workspaces.child(
+            text(state.workspace_list_error.clone())
+                .key("home-workspaces-error")
+                .font(ui_font(13.0, 400.0))
+                .color(color("#e07676"))
+                .ml(8.0)
+                .wrap(),
+        );
     }
     col()
         .key("home-sidenav")
@@ -131,33 +214,5 @@ pub(crate) fn render(width: f32, theme: ThemeStyle<'_>) -> El {
                 .mb(12.0),
         )
         .child(primary)
-        .child(
-            col()
-                .key("home-workspaces")
-                .w_full()
-                .grow(1.0)
-                .mt(18.0)
-                .gap(6.0)
-                .child(
-                    row()
-                        .key("home-workspaces-header")
-                        .w_full()
-                        .h(28.0)
-                        .center_y()
-                        .child(
-                            text(HOME_SIDEBAR.workspace_heading)
-                                .font(ui_font(15.0, 400.0))
-                                .color(color("#969696")),
-                        )
-                        .child(row().grow(1.0))
-                        .child(tools),
-                )
-                .child(
-                    text(HOME_SIDEBAR.empty_workspaces)
-                        .key("home-workspaces-empty")
-                        .font(ui_font(13.0, 400.0))
-                        .color(color("#969696"))
-                        .ml(8.0),
-                ),
-        )
+        .child(workspaces)
 }
