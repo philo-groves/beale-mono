@@ -27,10 +27,10 @@ use appearance::{
     ThemeStyle,
 };
 use beale_contracts::v1::{
-    AuthMethod, DaybreakMode, ProviderId, SessionDetail, SessionSummary, SubmitSessionTurnRequest,
-    UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest, UpdateWorkspaceSurfacesRequest,
-    WorkspaceDetails, WorkspaceFoundation, WorkspaceRules, WorkspaceSummary, WorkspaceSurface,
-    WorkspaceSurfaceInput, WorkspaceSurfaces,
+    AuthMethod, DaybreakMode, ProviderId, SessionDetail, SessionSummary, SessionToolDetailPage,
+    SubmitSessionTurnRequest, UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
+    UpdateWorkspaceSurfacesRequest, WorkspaceDetails, WorkspaceFoundation, WorkspaceRules,
+    WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaceInput, WorkspaceSurfaces,
 };
 use color_picker::Hsv;
 use connection::ConnectionStatus;
@@ -488,6 +488,11 @@ struct State {
     session_error: String,
     session_pending_prompt: Option<String>,
     session_generation: u64,
+    expanded_tool_id: Option<String>,
+    tool_detail: Option<SessionToolDetailPage>,
+    tool_detail_busy: bool,
+    tool_detail_error: String,
+    tool_detail_generation: u64,
     composer_menu_open: bool,
     composer_menu_section: new_research::MenuSection,
     composer_menu_cursor: usize,
@@ -584,6 +589,11 @@ impl Default for State {
             session_error: String::new(),
             session_pending_prompt: None,
             session_generation: 0,
+            expanded_tool_id: None,
+            tool_detail: None,
+            tool_detail_busy: false,
+            tool_detail_error: String::new(),
+            tool_detail_generation: 0,
             composer_menu_open: false,
             composer_menu_section: new_research::MenuSection::Model,
             composer_menu_cursor: 0,
@@ -798,6 +808,7 @@ impl State {
     }
 
     fn start_new_research(&mut self) {
+        self.clear_tool_detail();
         if self.active_session.take().is_some() {
             self.session_generation = self.session_generation.wrapping_add(1);
             self.session_busy = false;
@@ -823,6 +834,7 @@ impl State {
         self.session_busy = false;
         match result {
             Ok(detail) => {
+                self.clear_tool_detail();
                 if let Some(summary) = &detail.summary {
                     self.session_summaries.retain(|item| item.id != summary.id);
                     self.session_summaries.insert(0, summary.clone());
@@ -848,6 +860,7 @@ impl State {
         self.session_busy = false;
         match result {
             Ok(detail) => {
+                self.clear_tool_detail();
                 if let Some(summary) = &detail.summary {
                     self.new_research_workspace_id = Some(summary.workspace_id.clone());
                 }
@@ -867,6 +880,33 @@ impl State {
                 self.session_error.clear();
             }
             Err(error) => self.session_error = error,
+        }
+    }
+
+    fn clear_tool_detail(&mut self) {
+        self.expanded_tool_id = None;
+        self.tool_detail = None;
+        self.tool_detail_busy = false;
+        self.tool_detail_error.clear();
+        self.tool_detail_generation = self.tool_detail_generation.wrapping_add(1);
+    }
+
+    fn finish_tool_detail(
+        &mut self,
+        generation: u64,
+        result: Result<SessionToolDetailPage, String>,
+    ) {
+        if self.tool_detail_generation != generation {
+            return;
+        }
+        self.tool_detail_busy = false;
+        match result {
+            Ok(page) if self.expanded_tool_id.as_deref() == Some(&page.id) => {
+                self.tool_detail = Some(page);
+                self.tool_detail_error.clear();
+            }
+            Ok(_) => {}
+            Err(error) => self.tool_detail_error = error,
         }
     }
 
@@ -1313,6 +1353,56 @@ fn start_session_load(state: &mut State, id: String) {
             runtime.block_on(sessions::load(&client, addr, &id))
         })();
         handle.update(move |state, _| state.finish_session_load(generation, result));
+    });
+}
+
+fn toggle_tool_detail(state: &mut State, id: String) {
+    if state.expanded_tool_id.as_deref() == Some(&id) {
+        state.clear_tool_detail();
+        return;
+    }
+    state.clear_tool_detail();
+    state.expanded_tool_id = Some(id.clone());
+    load_tool_detail_page(state, id, 0);
+}
+
+fn load_tool_detail_page(state: &mut State, id: String, offset: u64) {
+    if state.tool_detail_busy {
+        return;
+    }
+    let Some(session_id) = state
+        .active_session
+        .as_ref()
+        .and_then(|detail| detail.summary.as_ref())
+        .map(|summary| summary.id.clone())
+    else {
+        return;
+    };
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.tool_detail_busy = true;
+    state.tool_detail_error.clear();
+    state.tool_detail_generation = state.tool_detail_generation.wrapping_add(1);
+    let generation = state.tool_detail_generation;
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize session connection".to_owned())?;
+            runtime.block_on(sessions::load_tool_page(
+                &client,
+                addr,
+                &session_id,
+                &id,
+                offset,
+            ))
+        })();
+        handle.update(move |state, _| state.finish_tool_detail(generation, result));
     });
 }
 
@@ -5689,10 +5779,12 @@ mod tests {
                 beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::User as i32,
                     text: "Echo example".to_owned(),
+                    tools: Vec::new(),
                 },
                 beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::Assistant as i32,
                     text: "Echo example".to_owned(),
+                    tools: Vec::new(),
                 },
             ],
             provider: ProviderId::Openai as i32,
@@ -5724,6 +5816,61 @@ mod tests {
         assert!((user_bubble[0] + user_bubble[2] - user_row[0] - user_row[2]).abs() < 1.0);
         assert_eq!(assistant_row[0], user_row[0]);
         assert!(runtime.find("new-research-composer").is_some());
+    }
+
+    #[test]
+    fn session_tool_details_mount_only_when_expanded() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let tool_id = "00000000-0000-4000-8000-000000000003";
+        let state = State {
+            primary_view: PrimaryView::NewResearch,
+            active_session: Some(SessionDetail {
+                summary: Some(SessionSummary {
+                    id: session_id.to_owned(),
+                    workspace_id: workspace_id.to_owned(),
+                    title: "Example".to_owned(),
+                }),
+                messages: vec![beale_contracts::v1::SessionMessage {
+                    role: beale_contracts::v1::SessionRole::Assistant as i32,
+                    text: "Done".to_owned(),
+                    tools: vec![beale_contracts::v1::SessionToolSummary {
+                        id: tool_id.to_owned(),
+                        name: "read".to_owned(),
+                        summary: "Read example.txt".to_owned(),
+                        is_error: false,
+                    }],
+                }],
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "model-example".to_owned(),
+            }),
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .presented(&format!("session-tool-button-{tool_id}"))
+                .is_some()
+        );
+        assert!(
+            runtime
+                .presented(&format!("session-tool-detail-{tool_id}"))
+                .is_none()
+        );
+        let (x, y) = runtime
+            .find(&format!("session-tool-button-{tool_id}"))
+            .unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.expanded_tool_id.as_deref(), Some(tool_id));
+        assert!(
+            runtime
+                .presented(&format!("session-tool-detail-{tool_id}"))
+                .is_some()
+        );
     }
 
     #[test]

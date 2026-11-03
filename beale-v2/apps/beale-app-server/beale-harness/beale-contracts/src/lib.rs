@@ -319,6 +319,40 @@ pub mod v1 {
         pub role: i32,
         #[prost(string, tag = "2")]
         pub text: String,
+        #[prost(message, repeated, tag = "3")]
+        pub tools: Vec<SessionToolSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionToolSummary {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub summary: String,
+        #[prost(bool, tag = "4")]
+        pub is_error: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionToolDetailPage {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub arguments: String,
+        #[prost(string, tag = "4")]
+        pub output: String,
+        #[prost(uint64, tag = "5")]
+        pub offset: u64,
+        #[prost(uint64, tag = "6")]
+        pub next_offset: u64,
+        #[prost(uint64, tag = "7")]
+        pub total_bytes: u64,
+        #[prost(bool, tag = "8")]
+        pub is_error: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -369,7 +403,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 9;
+pub const PROTOCOL_MINOR: u32 = 10;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -391,6 +425,7 @@ pub const WORKSPACE_RULES_PATH: &str = "/v1/workspaces/{id}/rules";
 pub const SESSIONS_PATH: &str = "/v1/sessions";
 pub const SESSION_DETAIL_PATH: &str = "/v1/sessions/{id}";
 pub const SESSION_TURNS_PATH: &str = "/v1/sessions/turns";
+pub const SESSION_TOOL_DETAIL_PATH: &str = "/v1/sessions/{id}/tools/{tool_id}";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const DEFAULT_LOCAL_ADDR: &str = "127.0.0.1:43831";
 pub const CONTROL_CHALLENGE_BYTES: usize = 32;

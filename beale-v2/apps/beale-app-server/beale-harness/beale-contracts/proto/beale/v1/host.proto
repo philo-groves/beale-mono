@@ -202,6 +202,25 @@ enum SessionRole {
 message SessionMessage {
   SessionRole role = 1;
   string text = 2;
+  repeated SessionToolSummary tools = 3;
+}
+
+message SessionToolSummary {
+  string id = 1;
+  string name = 2;
+  string summary = 3;
+  bool is_error = 4;
+}
+
+message SessionToolDetailPage {
+  string id = 1;
+  string name = 2;
+  string arguments = 3;
+  string output = 4;
+  uint64 offset = 5;
+  uint64 next_offset = 6;
+  uint64 total_bytes = 7;
+  bool is_error = 8;
 }
 
 message SessionSummary {

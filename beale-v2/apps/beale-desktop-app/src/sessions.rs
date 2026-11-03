@@ -1,7 +1,9 @@
 use beale_contracts::{
-    PROTOBUF_CONTENT_TYPE, SESSION_DETAIL_PATH, SESSION_TURNS_PATH, SESSIONS_PATH,
+    PROTOBUF_CONTENT_TYPE, SESSION_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURNS_PATH,
+    SESSIONS_PATH,
     v1::{
-        ListSessionsResponse, SessionDetail, SessionRole, SessionSummary, SubmitSessionTurnRequest,
+        ListSessionsResponse, SessionDetail, SessionRole, SessionSummary, SessionToolDetailPage,
+        SubmitSessionTurnRequest,
     },
 };
 use prost::Message;
@@ -13,7 +15,7 @@ const MAX_REPLY_BYTES: usize = 4_500_000;
 pub(crate) fn client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(150))
+        .timeout(Duration::from_secs(600))
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -75,7 +77,49 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                 SessionRole::try_from(message.role),
                 Ok(SessionRole::User | SessionRole::Assistant)
             ) && !message.text.is_empty()
+                && (message.role == SessionRole::Assistant as i32 || message.tools.is_empty())
+                && message.tools.len() <= 32
+                && message.tools.iter().all(|tool| {
+                    uuid::Uuid::parse_str(&tool.id).is_ok()
+                        && !tool.name.is_empty()
+                        && tool.name.len() <= 128
+                        && !tool.summary.is_empty()
+                        && tool.summary.len() <= 512
+                })
         })
+}
+
+pub(crate) async fn load_tool_page(
+    client: &Client,
+    addr: SocketAddr,
+    session_id: &str,
+    tool_id: &str,
+    offset: u64,
+) -> Result<SessionToolDetailPage, String> {
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let path = SESSION_TOOL_DETAIL_PATH
+        .replace("{id}", session_id)
+        .replace("{tool_id}", tool_id);
+    let reply: SessionToolDetailPage = decode(
+        client
+            .get(url(addr, &format!("{path}?offset={offset}")))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| "Could not load tool details".to_owned())?,
+    )
+    .await?;
+    if reply.id != tool_id
+        || reply.name.is_empty()
+        || reply.arguments.len() > 65_536
+        || reply.output.len() > 8_000
+        || reply.offset != offset
+        || reply.next_offset < offset
+        || reply.next_offset > reply.total_bytes
+    {
+        return Err("Invalid app-server tool details".to_owned());
+    }
+    Ok(reply)
 }
 
 pub(crate) async fn list(client: &Client, addr: SocketAddr) -> Result<Vec<SessionSummary>, String> {

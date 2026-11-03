@@ -1,4 +1,4 @@
-use beale_contracts::v1::{AuthMethod, SessionRole};
+use beale_contracts::v1::{AuthMethod, SessionRole, SessionToolSummary};
 use rune::{
     Align, Color, El, Key, KeyEvent, ScrollSpec, Side, Tx, col, el, icon, row, text, text_input,
 };
@@ -6,7 +6,8 @@ use rune::{
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method,
     icons::{ARROW_UP, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT},
-    in_place_menu, start_session_turn, toggle_selection_menu, ui_font,
+    in_place_menu, load_tool_detail_page, start_session_turn, toggle_selection_menu,
+    toggle_tool_detail, ui_font,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -503,6 +504,142 @@ fn transcript_message(key: String, content: String, user: bool, theme: ThemeStyl
     }
 }
 
+fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'_>) -> El {
+    let expanded = state.expanded_tool_id.as_deref() == Some(&tool.id);
+    let id = tool.id.clone();
+    let mut entry = col()
+        .key(format!("session-tool-{}", tool.id))
+        .w_full()
+        .gap(6.0)
+        .child(
+            row()
+                .key(format!("session-tool-button-{}", tool.id))
+                .w_full()
+                .gap(8.0)
+                .px(10.0)
+                .py(7.0)
+                .radius(8.0)
+                .continuous_corners()
+                .fill(theme.color("#202020"))
+                .hover(theme.color("#303030"))
+                .on_press(move |state: &mut State| toggle_tool_detail(state, id.clone()))
+                .child(
+                    icon(
+                        if expanded {
+                            &CHEVRON_DOWN
+                        } else {
+                            &CHEVRON_RIGHT
+                        },
+                        13.0,
+                    )
+                    .color(theme.color("#969696")),
+                )
+                .child(
+                    text(tool.summary.clone())
+                        .font(ui_font(13.0, 400.0))
+                        .color(theme.color(if tool.is_error { "#e07676" } else { "#b4b4b4" }))
+                        .wrap(),
+                ),
+        );
+    if expanded {
+        let mut detail = col()
+            .key(format!("session-tool-detail-{}", tool.id))
+            .w_full()
+            .gap(6.0)
+            .px(12.0)
+            .py(10.0)
+            .radius(8.0)
+            .continuous_corners()
+            .fill(theme.color("#181818"));
+        if let Some(page) = state.tool_detail.as_ref().filter(|page| page.id == tool.id) {
+            detail = detail
+                .child(
+                    text("Arguments")
+                        .font(ui_font(12.0, 600.0))
+                        .color(theme.color("#969696")),
+                )
+                .child(
+                    text(page.arguments.clone())
+                        .font(ui_font(12.0, 400.0))
+                        .color(theme.color("#d0d0d0"))
+                        .wrap(),
+                )
+                .child(
+                    text(format!(
+                        "Result · bytes {}–{} of {}",
+                        page.offset + 1,
+                        page.next_offset,
+                        page.total_bytes
+                    ))
+                    .font(ui_font(12.0, 600.0))
+                    .color(theme.color("#969696")),
+                )
+                .child(
+                    text(page.output.clone())
+                        .font(ui_font(12.0, 400.0))
+                        .color(theme.color("#d0d0d0"))
+                        .wrap(),
+                );
+            if page.next_offset < page.total_bytes && !state.tool_detail_busy {
+                let id = tool.id.clone();
+                let offset = page.next_offset;
+                detail = detail.child(
+                    el().key(format!("session-tool-more-{}", tool.id))
+                        .px(8.0)
+                        .py(5.0)
+                        .radius(7.0)
+                        .continuous_corners()
+                        .fill(theme.color("#282828"))
+                        .hover(theme.color("#383838"))
+                        .on_press(move |state: &mut State| {
+                            load_tool_detail_page(state, id.clone(), offset)
+                        })
+                        .child(
+                            text("Next page")
+                                .font(ui_font(12.0, 400.0))
+                                .color(theme.color("#d0d0d0")),
+                        ),
+                );
+            }
+            if page.offset > 0 && !state.tool_detail_busy {
+                let id = tool.id.clone();
+                detail = detail.child(
+                    el().key(format!("session-tool-start-{}", tool.id))
+                        .px(8.0)
+                        .py(5.0)
+                        .radius(7.0)
+                        .continuous_corners()
+                        .fill(theme.color("#282828"))
+                        .hover(theme.color("#383838"))
+                        .on_press(move |state: &mut State| {
+                            load_tool_detail_page(state, id.clone(), 0)
+                        })
+                        .child(
+                            text("First page")
+                                .font(ui_font(12.0, 400.0))
+                                .color(theme.color("#d0d0d0")),
+                        ),
+                );
+            }
+        } else if state.tool_detail_busy {
+            detail = detail.child(
+                text("Loading tool details…")
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color("#969696")),
+            );
+        }
+        if !state.tool_detail_error.is_empty() {
+            detail = detail.child(
+                text(state.tool_detail_error.clone())
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color("#e07676")),
+            );
+        }
+        entry = entry.child(detail);
+    }
+    entry
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     let choices = choices(state);
     let selected = selected(state, &choices);
@@ -748,6 +885,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     if let Some(detail) = &state.active_session {
         for (index, message) in detail.messages.iter().enumerate() {
             let user = message.role == SessionRole::User as i32;
+            for tool in &message.tools {
+                transcript = transcript.child(transcript_tool(tool, state, theme));
+            }
             transcript = transcript.child(transcript_message(
                 format!("session-message-{index}"),
                 message.text.clone(),

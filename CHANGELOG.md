@@ -6,6 +6,7 @@
 
 #### Added
 
+- Added expandable v2 session tool rows that fetch arguments and paged output only when opened.
 - Added navigation icon tooltips and a hover-revealed New Research action on each v2 Home workspace row.
 - Started the v2 Rune desktop client with Beale's dark icon rail and an Agent Settings Providers view for OpenAI and xAI.
 - Added the v2 desktop custom header with navigation toggle, contextual title, and Windows window controls.
@@ -102,6 +103,7 @@
 
 #### Added
 
+- Added v2 `read`, `write`, `edit`, and `bash` provider tools with bounded result paging and lazy client detail. Host SQLite schema 1 migrates to 2; the client protocol moves to v1.10.
 - Added a v2 host-owned SQLite database for workspace registration, sessions, and provider settings. Earlier v2 workspace, session, and provider setting files are not imported; credential secrets remain in protected host files.
 - Added v1.6 authenticated workspace create/list operations, a host-owned workspace registry, and an initial schema-v3 workspace layout with user-created scope surfaces and rules.
 - Added v1.7 authenticated workspace details reads for saved scope surfaces, rules, and guidance.

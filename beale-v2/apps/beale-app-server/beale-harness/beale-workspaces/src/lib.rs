@@ -199,6 +199,17 @@ impl WorkspaceStore {
         &self.root
     }
 
+    pub fn directory(&self, id: &str) -> Result<PathBuf, StatusCode> {
+        let entry = self
+            .read_registry()
+            .map_err(|error| error.status())?
+            .workspaces
+            .into_iter()
+            .find(|item| item.id == id)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        Ok(PathBuf::from(entry.directory))
+    }
+
     fn details(&self, id: &str) -> Result<WorkspaceDetails, WorkspaceError> {
         Uuid::parse_str(id).map_err(|_| WorkspaceError::Invalid)?;
         let entry = self

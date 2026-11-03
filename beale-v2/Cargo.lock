@@ -271,8 +271,10 @@ dependencies = [
  "beale-contracts",
  "beale-providers",
  "beale-storage",
+ "beale-tools",
  "beale-workspaces",
  "prost",
+ "serde_json",
  "tokio",
  "tower",
  "uuid",
@@ -284,6 +286,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rusqlite",
+ "uuid",
+]
+
+[[package]]
+name = "beale-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 
