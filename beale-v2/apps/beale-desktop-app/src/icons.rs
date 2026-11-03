@@ -26,12 +26,6 @@ pub(crate) static SEARCH: Icon = Icon {
     body: r#"<circle fill="none" stroke="currentColor" stroke-width="2" cx="11" cy="11" r="8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35"/>"#,
 };
 
-pub(crate) static FOLDER_PLUS: Icon = Icon {
-    name: "lucide-folder-plus",
-    view: 24.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8.2a2 2 0 0 1-1.4-.6L8.6 3.6A2 2 0 0 0 7.2 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 11v6m-3-3h6"/>"#,
-};
-
 pub(crate) static PLUS: Icon = Icon {
     name: "lucide-plus",
     view: 24.0,
@@ -60,6 +54,12 @@ pub(crate) static AUTOMATIONS: Icon = Icon {
     name: "lucide-calendar-clock",
     view: 24.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M16 14v2.2l1.6 1"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M16 2v4"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 10h5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 2v4"/><circle fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" cx="16" cy="16" r="6"/>"#,
+};
+
+pub(crate) static REPEAT: Icon = Icon {
+    name: "lucide-repeat",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15m-14 16-4-4 4-4m14-1v2a3 3 0 0 1-3 3H3"/>"#,
 };
 
 pub(crate) static FLEET: Icon = Icon {
@@ -126,6 +126,12 @@ pub(crate) static CHEVRON_UP: Icon = Icon {
     name: "lucide-chevron-up",
     view: 24.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m18 15-6-6-6 6"/>"#,
+};
+
+pub(crate) static CHEVRON_RIGHT: Icon = Icon {
+    name: "lucide-chevron-right",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9 18 6-6-6-6"/>"#,
 };
 
 pub(crate) static CHECK: Icon = Icon {

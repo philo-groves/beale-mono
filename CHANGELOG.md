@@ -31,6 +31,10 @@
 - Reordered saved workspace tabs to Campaign, Foundation, Surfaces, and Rules; Surface rows now use edit and trash icon controls.
 - Added a confirmation dialog before removing a Surface from a saved workspace's pending edits.
 - Moved saved Workspace Rules entry into an Add a Rule dialog opened from the form title.
+- Added a New Research draft view with a bottom composer and draft-scoped lead model selector.
+- Made the New Research composer compact and gave its model selector separate Provider and Model option menus.
+- Increased the New Research composer by one text row and added draft-level Effort selection with its value beside the model selector chevron.
+- Added a ribbon above the New Research composer with a workspace selector and draft-only repeat preset menu.
 - Added a native folder picker beside the v2 New Workspace directory field, preserving manual path entry.
 - Added a centered Add a Surface dialog opened from plus buttons beside the in-scope and out-of-scope surface list headings.
 - Added a confirmation dialog before cancelling a v2 New Workspace draft, with a safe Keep Editing choice and an explicit discard action.
@@ -72,9 +76,20 @@
 - Renamed the Providers lead selector label to Default Provider.
 - Added an edge-aligned settings scrollbar with up and down controls, and smoothed notched mouse-wheel scrolling while preserving precise trackpad input.
 - Matched the v2 settings scrollbar track to the main content surface and its thumb and arrow controls to the settings sidenav color.
+- Matched the New Research model selector's main-menu row height to its options and removed the main-menu heading.
+- Reduced the New Research composer placeholder and input text size.
+- Matched the New Research composer's bottom gap to the main content surface's window inset.
+- Changed the New Research composer placeholder to "Research with Beale" and increased its corner radius.
+- Inset the New Research composer ribbon from both sides and added padding around its workspace selector and repeat control.
+- Aligned the New Workspace title's top inset and font style with Settings and saved workspace views.
+- Made the Home sidenav's Workspaces heading a dropdown with an empty Tasks selection, a plus button beside the selector, and a bordered search control at the far right.
+- Showed an active italic New Session row beneath the selected research workspace in the Home sidenav, reopening the same draft without duplicating it.
+- Opened the v2 desktop on Home and centered a no-workspace-selected message in its content area.
 
 #### Fixed
 
+- Normalized OpenAI model labels in the v2 desktop when an older running app-server still sends dashed names.
+- Anchored the New Research model selector's main menu above its control so changing option-list height does not move it.
 - Reduced transparent padding in the v2 Windows app icon so it fills the taskbar icon area.
 - Aligned provider headers and form sections with the full width of the Providers tab area in wide windows.
 - Bundled Inter for the v2 desktop so the Beale interface font remains distinct from the system font when Inter is not installed.
@@ -96,6 +111,7 @@
 
 #### Changed
 
+- Replaced dashes with spaces in OpenAI model display names returned by the v2 app-server; model IDs are unchanged.
 - Research Track selection now weighs assessed impact, reachability, and deployment exposure before surface signals. Discovery and investigator guidance keep ordinary reachability observations out of verified security findings.
 - Research Track Investigators now pick up unresolved security Leads that existed before the current epoch while keeping newly created Leads with discovery. Within one rating, observed and reproduced Findings retain priority; existing databases add the epoch cutoff record automatically.
 - Automatic Research Track investigation now orders candidates by qualitative rating before maturity and leaves low and informational claims for deliberate follow-up instead of assigning worker slots to their verification.

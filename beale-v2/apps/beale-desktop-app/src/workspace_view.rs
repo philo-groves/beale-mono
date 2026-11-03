@@ -7,7 +7,7 @@ use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button, form_label_font,
     icons::{PEN, PLUS, TRASH},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
-    toggle_selection_menu, ui_font,
+    toggle_selection_menu, ui_font, view_title_font,
     workspace_creation::{
         SurfaceKind as DraftKind, SurfaceScope as DraftScope, field, row_with_control,
     },
@@ -751,7 +751,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, campaign_height: f32)
         .child(
             text(name)
                 .key("workspace-view-title")
-                .font(ui_font(27.0, 600.0))
+                .font(view_title_font())
                 .color(theme.color("#f2f2f2")),
         )
         .child(tabs);

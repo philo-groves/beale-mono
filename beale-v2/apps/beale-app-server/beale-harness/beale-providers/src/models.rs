@@ -141,7 +141,11 @@ fn parse_models(provider: Provider, mode: AuthMode, value: &Value) -> Result<Vec
             .and_then(Value::as_str)
             .filter(|name| !name.trim().is_empty() && name.len() <= 128)
             .unwrap_or(id);
-        push_model(&mut models, id, name);
+        if provider == Provider::OpenAi {
+            push_model(&mut models, id, &name.replace('-', " "));
+        } else {
+            push_model(&mut models, id, name);
+        }
         if provider == Provider::Xai
             && mode == AuthMode::ApiKey
             && let Some(aliases) = item.get("aliases").and_then(Value::as_array)
@@ -242,12 +246,14 @@ mod tests {
     #[test]
     fn openai_subscription_uses_visible_slugs_and_available_defaults() {
         let value = json!({"models": [
-            {"slug":"gpt-6.1-sol","display_name":"Sol","visibility":"list"},
+            {"slug":"gpt-6.1-sol","display_name":"GPT-6.1-Sol","visibility":"list"},
             {"slug":"gpt-6-luna","display_name":"Luna","visibility":"list"},
             {"slug":"hidden","visibility":"hidden"}
         ]});
         let models = parse_models(Provider::OpenAi, AuthMode::Subscription, &value).unwrap();
         assert_eq!(models.len(), 2);
+        assert_eq!(models[0].name, "GPT 6.1 Sol");
+        assert_eq!(models[0].id, "gpt-6.1-sol");
         assert_eq!(recommended(Provider::OpenAi, false, &models), "gpt-6.1-sol");
         assert_eq!(recommended(Provider::OpenAi, true, &models), "gpt-6-luna");
     }
@@ -258,12 +264,15 @@ mod tests {
         assert_eq!(
             parse_models(Provider::OpenAi, AuthMode::ApiKey, &openai)
                 .unwrap()
-                .len(),
-            1
+                .iter()
+                .map(|model| (model.id.as_str(), model.name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("gpt-6.1-sol", "gpt 6.1 sol")]
         );
         let xai = json!({"models": [{"id":"grok-4.7-2026-09","aliases":["grok-4.7"],"output_modalities":["text"]},{"id":"grok-imagine","output_modalities":["image"]}]});
         let models = parse_models(Provider::Xai, AuthMode::ApiKey, &xai).unwrap();
         assert_eq!(models.len(), 2);
+        assert_eq!(models[0].name, "grok-4.7-2026-09");
         assert_eq!(recommended(Provider::Xai, false, &models), "grok-4.7");
         assert_eq!(recommended(Provider::Xai, true, &models), "grok-4.7");
     }

@@ -13,6 +13,7 @@ mod home_sidebar;
 mod icons;
 mod in_place_menu;
 mod modal_dialog;
+mod new_research;
 mod provider_auth;
 mod provider_icons;
 mod provider_models;
@@ -65,6 +66,10 @@ impl Drop for RenderTextSizeScope {
 fn ui_font(size: f32, weight: f32) -> TextStyle {
     let scale = RENDER_TEXT_SIZE.with(|current| current.get().factor());
     TextStyle::new(size * scale, weight)
+}
+
+fn view_title_font() -> TextStyle {
+    ui_font(27.0, 600.0)
 }
 
 fn form_label_font() -> TextStyle {
@@ -144,6 +149,9 @@ enum ModelRole {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionMenu {
     LeadProvider,
+    Repeat,
+    ResearchWorkspace,
+    HomeCollection,
     ResearchKit,
     SurfaceKind,
     WorkspaceSurfaceKind,
@@ -431,6 +439,7 @@ const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrimaryView {
     Home,
+    NewResearch,
     WorkspaceCreation,
     Workspace,
     Settings,
@@ -439,6 +448,7 @@ enum PrimaryView {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ViewLocation {
     Home,
+    NewResearch,
     WorkspaceCreation(workspace_creation::CreationTab),
     Workspace(uuid::Uuid, workspace_view::WorkspaceTab),
     Providers(Provider),
@@ -465,6 +475,16 @@ impl ViewHistory {
 
 struct State {
     primary_view: PrimaryView,
+    home_collection: home_sidebar::HomeCollection,
+    new_research_prompt: TextEdit,
+    new_research_workspace_id: Option<String>,
+    new_research_model: Option<new_research::ModelSelection>,
+    new_research_effort: new_research::Effort,
+    new_research_repeat: new_research::RepeatPreset,
+    composer_menu_open: bool,
+    composer_menu_section: new_research::MenuSection,
+    composer_menu_cursor: usize,
+    composer_menu_reveal_pending: bool,
     workspace_draft: workspace_creation::WorkspaceDraft,
     workspaces: Vec<WorkspaceSummary>,
     workspace_list_loaded: bool,
@@ -544,6 +564,16 @@ impl Default for State {
     fn default() -> Self {
         Self {
             primary_view: PrimaryView::Settings,
+            home_collection: home_sidebar::HomeCollection::default(),
+            new_research_prompt: TextEdit::new(""),
+            new_research_workspace_id: None,
+            new_research_model: None,
+            new_research_effort: new_research::Effort::default(),
+            new_research_repeat: new_research::RepeatPreset::default(),
+            composer_menu_open: false,
+            composer_menu_section: new_research::MenuSection::Model,
+            composer_menu_cursor: 0,
+            composer_menu_reveal_pending: false,
             workspace_draft: workspace_creation::WorkspaceDraft::default(),
             workspaces: Vec::new(),
             workspace_list_loaded: false,
@@ -631,6 +661,7 @@ impl Default for State {
 impl State {
     fn load_appearance() -> Self {
         let mut state = Self {
+            primary_view: PrimaryView::Home,
             appearance_path: appearance::preference_path(),
             ..Self::default()
         };
@@ -644,6 +675,9 @@ impl State {
     fn view_location(&self) -> ViewLocation {
         if self.primary_view == PrimaryView::Home {
             return ViewLocation::Home;
+        }
+        if self.primary_view == PrimaryView::NewResearch {
+            return ViewLocation::NewResearch;
         }
         if self.primary_view == PrimaryView::WorkspaceCreation {
             return ViewLocation::WorkspaceCreation(self.workspace_draft.tab);
@@ -664,6 +698,7 @@ impl State {
         let mut load_workspace = None;
         match location {
             ViewLocation::Home => self.primary_view = PrimaryView::Home,
+            ViewLocation::NewResearch => self.primary_view = PrimaryView::NewResearch,
             ViewLocation::WorkspaceCreation(tab) => {
                 self.primary_view = PrimaryView::WorkspaceCreation;
                 self.workspace_draft.tab = tab;
@@ -694,6 +729,7 @@ impl State {
         }
         self.notice = None;
         self.selection_menu = None;
+        self.composer_menu_open = false;
         self.color_picker = None;
         self.sign_in_prompt = None;
         self.api_key_dialog = false;
@@ -744,6 +780,27 @@ impl State {
         self.navigate_to(ViewLocation::WorkspaceCreation(
             workspace_creation::CreationTab::Foundation,
         ));
+    }
+
+    fn start_new_research(&mut self) {
+        self.new_research_workspace_id = self
+            .selected_research_workspace()
+            .map(|item| item.id.clone());
+        self.navigate_to(ViewLocation::NewResearch);
+    }
+
+    fn selected_research_workspace(&self) -> Option<&WorkspaceSummary> {
+        self.new_research_workspace_id
+            .as_deref()
+            .and_then(|id| self.workspaces.iter().find(|item| item.id == id))
+            .or_else(|| {
+                self.workspace_id.and_then(|id| {
+                    self.workspaces
+                        .iter()
+                        .find(|item| item.id == id.to_string())
+                })
+            })
+            .or_else(|| self.workspaces.first())
     }
 
     fn open_workspace(&mut self, id: uuid::Uuid) {
@@ -840,6 +897,11 @@ impl State {
                     return false;
                 }
                 self.workspaces = workspaces;
+                if self.primary_view == PrimaryView::NewResearch {
+                    self.new_research_workspace_id = self
+                        .selected_research_workspace()
+                        .map(|item| item.id.clone());
+                }
                 self.workspace_list_loaded = true;
                 self.workspace_list_error.clear();
             }
@@ -1491,6 +1553,39 @@ fn start_model_save(
 
 fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu::MenuItem> {
     match menu {
+        SelectionMenu::HomeCollection => home_sidebar::HomeCollection::ALL
+            .into_iter()
+            .map(|collection| in_place_menu::MenuItem {
+                value: collection.key().to_owned(),
+                label: collection.label().to_owned(),
+                detail: None,
+                selected: state.home_collection == collection,
+            })
+            .collect(),
+        SelectionMenu::Repeat => new_research::RepeatPreset::ALL
+            .into_iter()
+            .map(|preset| in_place_menu::MenuItem {
+                value: preset.key().to_owned(),
+                label: preset.label().to_owned(),
+                detail: None,
+                selected: state.new_research_repeat == preset,
+            })
+            .collect(),
+        SelectionMenu::ResearchWorkspace => {
+            let selected_id = state
+                .selected_research_workspace()
+                .map(|item| item.id.as_str());
+            state
+                .workspaces
+                .iter()
+                .map(|workspace| in_place_menu::MenuItem {
+                    value: workspace.id.clone(),
+                    label: workspace.name.clone(),
+                    detail: None,
+                    selected: selected_id == Some(workspace.id.as_str()),
+                })
+                .collect()
+        }
         SelectionMenu::ResearchKit => vec![in_place_menu::MenuItem {
             value: "none".to_owned(),
             label: "None".to_owned(),
@@ -1612,6 +1707,9 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
 
 fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
     match menu {
+        SelectionMenu::HomeCollection => "home-collection-control",
+        SelectionMenu::Repeat => "new-research-repeat-control",
+        SelectionMenu::ResearchWorkspace => "new-research-workspace-control",
         SelectionMenu::ResearchKit => "workspace-kit-control",
         SelectionMenu::SurfaceKind => "workspace-surface-kind-control",
         SelectionMenu::WorkspaceSurfaceKind => "saved-workspace-surface-kind-control",
@@ -1651,6 +1749,12 @@ fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
     state.menu_cursor = items.iter().position(|item| item.selected).unwrap_or(0);
     state.menu_reveal_pending = true;
     state.selection_menu = Some(menu);
+    if matches!(
+        menu,
+        SelectionMenu::Repeat | SelectionMenu::ResearchWorkspace | SelectionMenu::HomeCollection
+    ) {
+        state.composer_menu_open = false;
+    }
     state.color_picker = None;
 }
 
@@ -1666,6 +1770,23 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
     }
     state.selection_menu = None;
     match menu {
+        SelectionMenu::HomeCollection => {
+            if let Some(collection) = home_sidebar::HomeCollection::ALL
+                .into_iter()
+                .find(|collection| collection.key() == value)
+            {
+                state.home_collection = collection;
+            }
+        }
+        SelectionMenu::Repeat => {
+            if let Some(preset) = new_research::RepeatPreset::ALL
+                .into_iter()
+                .find(|preset| preset.key() == value)
+            {
+                state.new_research_repeat = preset;
+            }
+        }
+        SelectionMenu::ResearchWorkspace => state.new_research_workspace_id = Some(value),
         SelectionMenu::ResearchKit => {}
         SelectionMenu::SurfaceKind => {
             if let Some(kind) = workspace_creation::SurfaceKind::ALL
@@ -1739,6 +1860,9 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
 }
 
 fn selection_menu_key(state: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
+    if state.composer_menu_open {
+        return new_research::menu_key(state, event, tx);
+    }
     if state.color_picker.is_some() && matches!(event.key, Key::Escape) {
         state.color_picker = None;
         return true;
@@ -2003,6 +2127,19 @@ fn header(state: &State, prefix_width: f32) -> El {
                     .font(ui_font(13.0, 400.0))
                     .color(color("#aaaaaa")),
             );
+    } else if state.primary_view == PrimaryView::NewResearch {
+        title = title
+            .child(
+                el().key("header-divider")
+                    .size(1.0, 18.0)
+                    .fill(color("#555555")),
+            )
+            .child(icon(&NEW_RESEARCH, 16.0).color(color("#c8c8c8")))
+            .child(
+                text("New Research")
+                    .font(ui_font(13.0, 500.0))
+                    .color(color("#e2e2e2")),
+            );
     } else if state.primary_view == PrimaryView::Workspace {
         let name = state
             .workspace_id
@@ -2174,7 +2311,7 @@ fn settings_nav_button(spec: &SettingsSectionSpec, active: bool, theme: ThemeSty
         }))
         .child(
             text(spec.label)
-                .font(ui_font(13.0, if active { 550.0 } else { 400.0 }))
+                .font(ui_font(14.0, if active { 550.0 } else { 400.0 }))
                 .color(if active {
                     color("#f2f2f2")
                 } else {
@@ -3623,7 +3760,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         content = content.child(
             text(state.settings_section.label())
                 .key("settings-view-title")
-                .font(ui_font(27.0, 600.0))
+                .font(view_title_font())
                 .color(color("#f2f2f2")),
         );
         for item in (state.settings_section.spec().render)(state, cx) {
@@ -3674,7 +3811,22 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .h_full()
         .min_h(0.0)
         .fill(color("#0d0d0d"));
-    if state.primary_view != PrimaryView::Home {
+    if state.primary_view == PrimaryView::NewResearch {
+        main_content = main_content.child(new_research::render(state, theme));
+    } else if state.primary_view == PrimaryView::Home {
+        main_content = main_content.child(
+            el().key("home-no-workspace")
+                .w_full()
+                .grow(1.0)
+                .center()
+                .child(
+                    text("No workspace is selected.")
+                        .key("home-no-workspace-message")
+                        .font(ui_font(14.0, 400.0))
+                        .color(color("#969696")),
+                ),
+        );
+    } else {
         let scroll_watch = if state.primary_view == PrimaryView::Settings {
             state.settings_scroll.clone()
         } else {
@@ -3689,8 +3841,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         let content_inset = match state.primary_view {
             PrimaryView::Settings => col().w_full().padding(36.0),
             PrimaryView::Workspace => col().w_full().px(24.0).pt(36.0).pb(24.0),
-            PrimaryView::WorkspaceCreation => col().w_full().padding(24.0),
-            PrimaryView::Home => col().w_full(),
+            PrimaryView::WorkspaceCreation => col().w_full().px(24.0).pt(36.0).pb(24.0),
+            PrimaryView::Home | PrimaryView::NewResearch => col().w_full(),
         };
         main_content = main_content
             .child(
@@ -3822,6 +3974,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     && state.workspace_tab == workspace_view::WorkspaceTab::Surfaces
                     && state.workspace_surface_dialog_scope.is_some()
             }
+            SelectionMenu::HomeCollection => {
+                state.primary_view != PrimaryView::Settings && state.sidenav_visible
+            }
+            SelectionMenu::Repeat | SelectionMenu::ResearchWorkspace => {
+                state.primary_view == PrimaryView::NewResearch
+            }
             SelectionMenu::ColorTheme => state.settings_section == SettingsSection::Appearance,
             SelectionMenu::InterfaceFont | SelectionMenu::TextSize => {
                 state.settings_section == SettingsSection::Appearance
@@ -3836,6 +3994,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         let items = selection_menu_items(state, menu);
         if !items.is_empty() {
             let (title, width) = match menu {
+                SelectionMenu::HomeCollection => ("Sidebar collection", 170.0),
+                SelectionMenu::Repeat => ("Repeat schedule", 190.0),
+                SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
                 SelectionMenu::ResearchKit => ("Research Kit", 178.0),
                 SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
                 SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
@@ -3877,6 +4038,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 }),
             );
         }
+    }
+    if state.primary_view == PrimaryView::NewResearch && state.composer_menu_open {
+        window = window.child(new_research::model_menu(state, theme));
     }
     if state.primary_view == PrimaryView::Settings
         && state.color_picker.is_some()
@@ -4995,7 +5159,17 @@ mod tests {
     }
 
     #[test]
-    fn home_uses_its_sidebar_and_keeps_the_main_area_blank() {
+    fn startup_opens_home_with_no_workspace_selected() {
+        let state = State::load_appearance();
+        assert_eq!(state.primary_view, PrimaryView::Home);
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("home-no-workspace-message").is_some());
+        assert!(runtime.find("settings-sidenav").is_none());
+    }
+
+    #[test]
+    fn home_uses_its_sidebar_and_centers_empty_workspace_message() {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
@@ -5009,10 +5183,12 @@ mod tests {
             "home-wordmark",
             "home-new-research",
             "home-quick-chat",
-            "home-workspaces-header",
+            "home-collection-header",
+            "home-collection-control",
             "home-search-workspaces",
             "home-add-workspace",
             "home-workspaces-empty",
+            "home-no-workspace-message",
             "content-surface",
         ] {
             assert!(runtime.find(key).is_some(), "{key} is visible");
@@ -5025,11 +5201,40 @@ mod tests {
         ] {
             assert!(runtime.find(key).is_none(), "{key} is absent from Home");
         }
+        let (surface, _) = runtime.presented("content-surface").unwrap();
+        let (message, _) = runtime.presented("home-no-workspace-message").unwrap();
+        assert!((message[0] + message[2] / 2.0 - surface[0] - surface[2] / 2.0).abs() < 1.0);
+        assert!((message[1] + message[3] / 2.0 - surface[1] - surface[3] / 2.0).abs() < 1.0);
         let history = runtime.state.view_history.back.len();
         let (x, y) = runtime.find("home-new-research").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
-        runtime.frame(0.0);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::NewResearch);
+        assert!(runtime.find("home-no-workspace-message").is_none());
+        assert!(runtime.find("new-research-composer-input").is_some());
+        assert!(runtime.find("new-research-model-control").is_some());
+        assert!(runtime.find("new-research-workspace-control").is_some());
+        assert!(runtime.find("new-research-repeat-control").is_some());
+        assert!(runtime.find("settings-scroll").is_none());
+        let (composer, _) = runtime.presented("new-research-composer").unwrap();
+        let (ribbon, _) = runtime.presented("new-research-ribbon").unwrap();
+        let (location, _) = runtime.presented("new-research-workspace-control").unwrap();
+        let (surface, _) = runtime.presented("content-surface").unwrap();
+        assert!((composer[3] - 107.0).abs() < 1.0);
+        assert!((ribbon[3] - 44.0).abs() < 1.0);
+        assert!(ribbon[1] < composer[1]);
+        assert!((ribbon[1] + ribbon[3] - composer[1] - 8.0).abs() < 1.0);
+        assert!((ribbon[0] - composer[0] - 20.0).abs() < 1.0);
+        assert!((composer[0] + composer[2] - ribbon[0] - ribbon[2] - 20.0).abs() < 1.0);
+        assert!((location[0] - ribbon[0] - 8.0).abs() < 1.0);
+        assert!(composer[1] > surface[1] + surface[3] * 0.5);
+        assert!((surface[1] + surface[3] - composer[1] - composer[3] - 6.0).abs() < 1.0);
+        assert_eq!(runtime.state.view_history.back.len(), history + 1);
+        let (x, y) = runtime.find("header-back").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::Home);
         assert_eq!(runtime.state.view_history.back.len(), history);
         let (x, y) = runtime.find("header-back").unwrap();
@@ -5038,6 +5243,363 @@ mod tests {
         runtime.frame(1.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::Settings);
         assert!(runtime.find("settings-sidenav").is_some());
+    }
+
+    #[test]
+    fn home_collection_dropdown_switches_between_workspaces_and_empty_tasks() {
+        let workspace_id = "00000000-0000-4000-8000-000000000003";
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: std::env::temp_dir()
+                    .join("example-workspace")
+                    .to_string_lossy()
+                    .into_owned(),
+            }],
+            workspace_list_loaded: true,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.on_key = Some(selection_menu_key);
+        runtime.frame(0.0);
+        let workspace_key = format!("home-workspace-{workspace_id}");
+        assert!(runtime.find(&workspace_key).is_some());
+        let (x, y) = runtime.find("home-collection-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::HomeCollection)
+        );
+        assert!(runtime.find("selection-menu-item-1").is_some());
+        let (x, y) = runtime.find("selection-menu-item-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.home_collection,
+            home_sidebar::HomeCollection::Tasks
+        );
+        assert!(runtime.find(&workspace_key).is_none());
+        assert!(runtime.find("home-add-workspace").is_none());
+        assert!(runtime.find("home-search-workspaces").is_none());
+        assert!(runtime.find("home-new-research").is_some());
+        let (x, y) = runtime.find("home-collection-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("selection-menu-item-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.home_collection,
+            home_sidebar::HomeCollection::Workspaces
+        );
+        assert!(runtime.find(&workspace_key).is_some());
+        assert!(runtime.find("home-add-workspace").is_some());
+    }
+
+    #[test]
+    fn new_research_repeat_presets_stay_in_the_draft() {
+        let state = State {
+            primary_view: PrimaryView::NewResearch,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.on_key = Some(selection_menu_key);
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("new-research-repeat-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::Repeat));
+        assert!(runtime.find("selection-menu-item-3").is_some());
+        let (x, y) = runtime.find("selection-menu-item-3").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.new_research_repeat,
+            new_research::RepeatPreset::Day
+        );
+        assert!(runtime.state.selection_menu.is_none());
+        let (x, y) = runtime.find("new-research-repeat-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        assert!(runtime.state.selection_menu.is_none());
+        assert_eq!(
+            runtime.state.new_research_repeat,
+            new_research::RepeatPreset::Day
+        );
+    }
+
+    #[test]
+    fn new_research_workspace_selector_keeps_its_draft_choice() {
+        let first = "00000000-0000-4000-8000-000000000001";
+        let second = "00000000-0000-4000-8000-000000000002";
+        let mut state = State {
+            primary_view: PrimaryView::Home,
+            workspace_id: Some(uuid::Uuid::parse_str(second).unwrap()),
+            workspaces: [(first, "Example One"), (second, "Example Two")]
+                .into_iter()
+                .map(|(id, name)| WorkspaceSummary {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    directory: "example-directory".to_owned(),
+                })
+                .collect(),
+            ..State::default()
+        };
+        state.start_new_research();
+        assert_eq!(state.new_research_workspace_id.as_deref(), Some(second));
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.on_key = Some(selection_menu_key);
+        runtime.frame(0.0);
+        let first_session = format!("home-session-{first}");
+        let second_session = format!("home-session-{second}");
+        assert!(runtime.find(&second_session).is_some());
+        assert!(runtime.find(&first_session).is_none());
+        let (workspace_row, _) = runtime
+            .presented(&format!("home-workspace-{second}"))
+            .unwrap();
+        let (session_row, _) = runtime.presented(&second_session).unwrap();
+        assert!(session_row[1] >= workspace_row[1] + workspace_row[3]);
+        let (x, y) = runtime.find("new-research-workspace-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::ResearchWorkspace)
+        );
+        assert!(runtime.find("selection-menu-item-0").is_some());
+        assert!(runtime.find("selection-menu-item-1").is_some());
+        let (x, y) = runtime.find("selection-menu-item-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.new_research_workspace_id.as_deref(),
+            Some(first)
+        );
+        assert_eq!(runtime.state.workspace_id.unwrap().to_string(), second);
+        assert!(runtime.find(&first_session).is_some());
+        assert!(runtime.find(&second_session).is_none());
+        let history = runtime.state.view_history.back.len();
+        let (x, y) = runtime.find(&first_session).unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::NewResearch);
+        assert_eq!(runtime.state.view_history.back.len(), history);
+        assert_eq!(
+            runtime.state.new_research_workspace_id.as_deref(),
+            Some(first)
+        );
+        runtime.state.navigate_to(ViewLocation::Home);
+        runtime.state.start_new_research();
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.new_research_workspace_id.as_deref(),
+            Some(first)
+        );
+
+        let mut late = State {
+            primary_view: PrimaryView::NewResearch,
+            workspace_id: Some(uuid::Uuid::parse_str(second).unwrap()),
+            ..State::default()
+        };
+        assert!(late.apply_workspace_list(Ok(runtime.state.workspaces.clone())));
+        assert_eq!(late.new_research_workspace_id.as_deref(), Some(second));
+    }
+
+    #[test]
+    fn new_research_model_selector_changes_only_the_draft() {
+        let state = State {
+            primary_view: PrimaryView::Home,
+            auth_loaded: true,
+            lead_provider: Some(Provider::OpenAi),
+            auth_status: [
+                AuthStatus {
+                    subscription: true,
+                    ..AuthStatus::default()
+                },
+                AuthStatus {
+                    subscription: true,
+                    ..AuthStatus::default()
+                },
+            ],
+            model_catalogs: [
+                Some(ModelCatalog {
+                    models: vec![
+                        provider_models::ModelEntry {
+                            id: "example-lead".to_owned(),
+                            name: "Example Lead".to_owned(),
+                        },
+                        provider_models::ModelEntry {
+                            id: "example-small".to_owned(),
+                            name: "Example Small".to_owned(),
+                        },
+                    ],
+                    lead: "example-lead".to_owned(),
+                    small: "example-small".to_owned(),
+                }),
+                None,
+                Some(ModelCatalog {
+                    models: vec![provider_models::ModelEntry {
+                        id: "example-xai".to_owned(),
+                        name: "Example xAI".to_owned(),
+                    }],
+                    lead: "example-xai".to_owned(),
+                    small: "example-xai".to_owned(),
+                }),
+                None,
+            ],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.on_key = Some(selection_menu_key);
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("home-new-research").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(runtime.state.new_research_model.is_none());
+        let (x, y) = runtime.find("new-research-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(runtime.state.composer_menu_open);
+        assert_eq!(
+            runtime.state.composer_menu_section,
+            new_research::MenuSection::Model
+        );
+        assert!(runtime.find("composer-menu-provider").is_some());
+        assert!(runtime.find("composer-menu-model").is_some());
+        assert!(runtime.find("composer-menu-effort").is_some());
+        assert!(runtime.find("composer-menu-option-1").is_some());
+        let (menu, _) = runtime.presented("composer-model-menu").unwrap();
+        assert!(menu[0] >= 0.0 && menu[0] + menu[2] <= 840.0);
+        assert!(menu[1] >= 0.0 && menu[1] + menu[3] <= 600.0);
+        let (main_at_model, _) = runtime.presented("composer-model-main").unwrap();
+        let (provider_row, _) = runtime.presented("composer-menu-provider").unwrap();
+        let (option_row, _) = runtime.presented("composer-menu-option-0").unwrap();
+        assert!((provider_row[3] - option_row[3]).abs() < 1.0);
+        assert!((provider_row[1] - main_at_model[1] - 8.0).abs() < 1.0);
+        let (control, _) = runtime.presented("new-research-model-control").unwrap();
+        assert!((control[1] - (main_at_model[1] + main_at_model[3]) - 6.0).abs() < 1.0);
+        let (x, y) = runtime.find("composer-menu-provider").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.composer_menu_section,
+            new_research::MenuSection::Provider
+        );
+        let (main_at_provider, _) = runtime.presented("composer-model-main").unwrap();
+        assert!((main_at_provider[1] - main_at_model[1]).abs() < 1.0);
+        assert!(runtime.find("composer-menu-option-1").is_some());
+        let (x, y) = runtime.find("composer-menu-option-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(!runtime.state.composer_menu_open);
+        assert_eq!(
+            runtime.state.new_research_model.as_ref().unwrap().provider,
+            Provider::Xai
+        );
+        assert_eq!(
+            runtime.state.new_research_model.as_ref().unwrap().id,
+            "example-xai"
+        );
+        let (x, y) = runtime.find("new-research-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(runtime.state.composer_menu_open);
+        assert!(runtime.find("composer-menu-option-1").is_none());
+        let (x, y) = runtime.find("composer-menu-provider").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("composer-menu-option-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.new_research_model.as_ref().unwrap().provider,
+            Provider::OpenAi
+        );
+        let (x, y) = runtime.find("new-research-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("composer-menu-option-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.new_research_model.as_ref().unwrap().id,
+            "example-small"
+        );
+        let (x, y) = runtime.find("new-research-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        assert!(!runtime.state.composer_menu_open);
+        assert_eq!(runtime.state.lead_provider, Some(Provider::OpenAi));
+        assert_eq!(
+            runtime.state.model_catalogs[0].as_ref().unwrap().lead,
+            "example-lead"
+        );
+        assert_eq!(
+            runtime.state.new_research_effort,
+            new_research::Effort::High
+        );
+        let (x, y) = runtime.find("new-research-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (main_before, _) = runtime.presented("composer-model-main").unwrap();
+        let (x, y) = runtime.find("composer-menu-effort").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.composer_menu_section,
+            new_research::MenuSection::Effort
+        );
+        let (main_after, _) = runtime.presented("composer-model-main").unwrap();
+        let (submenu, _) = runtime.presented("composer-model-submenu").unwrap();
+        assert!((main_after[3] - main_before[3]).abs() < 1.0);
+        assert!((main_after[1] - main_before[1]).abs() < 1.0);
+        assert!(submenu[3] > main_after[3]);
+        assert!((submenu[1] + submenu[3] - main_after[1] - main_after[3]).abs() < 1.0);
+        let (x, y) = runtime.find("composer-menu-option-2").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.new_research_effort, new_research::Effort::Low);
+        assert!(!runtime.state.composer_menu_open);
+        assert_eq!(
+            runtime.state.new_research_model.as_ref().unwrap().id,
+            "example-small"
+        );
     }
 
     #[test]
@@ -5375,10 +5937,14 @@ mod tests {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        let (settings_title, _) = runtime.presented("settings-view-title").unwrap();
         click(&mut runtime, "nav-home");
         click(&mut runtime, "home-add-workspace");
         assert_eq!(runtime.state.primary_view, PrimaryView::WorkspaceCreation);
         assert!(runtime.find("workspace-creation-title").is_some());
+        let (creation_title, _) = runtime.presented("workspace-creation-title").unwrap();
+        assert!((creation_title[1] - settings_title[1]).abs() < 1.0);
+        assert!((creation_title[3] - settings_title[3]).abs() < 1.0);
         assert!(runtime.find("workspace-kit-control").is_some());
         assert!(runtime.find("workspace-name-input").is_some());
         assert!(runtime.find("workspace-directory-input").is_some());

@@ -6,7 +6,7 @@ use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button, form_label_font,
     icons::{FOLDER_OPEN, PLUS},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
-    toggle_selection_menu, ui_font,
+    toggle_selection_menu, ui_font, view_title_font,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -783,7 +783,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .child(
             text("New Workspace")
                 .key("workspace-creation-title")
-                .font(ui_font(27.0, 600.0))
+                .font(view_title_font())
                 .color(color("#f2f2f2")),
         )
         .child({

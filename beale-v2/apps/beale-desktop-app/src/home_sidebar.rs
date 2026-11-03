@@ -1,7 +1,35 @@
-use rune::{El, Icon, col, icon, row, text};
+use rune::{Cursor, El, Icon, col, el, icon, row, text};
 
-use crate::icons::{FOLDER_OPEN, FOLDER_PLUS, NEW_RESEARCH, QUICK_CHAT, SEARCH};
-use crate::{State, ThemeStyle, sidenav_heading, ui_font};
+use crate::icons::{FOLDER_OPEN, NEW_RESEARCH, PLUS, QUICK_CHAT, SEARCH};
+use crate::{
+    SelectionMenu, State, ThemeStyle, selection_button, sidenav_heading, toggle_selection_menu,
+    ui_font,
+};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum HomeCollection {
+    #[default]
+    Workspaces,
+    Tasks,
+}
+
+impl HomeCollection {
+    pub(crate) const ALL: [Self; 2] = [Self::Workspaces, Self::Tasks];
+
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Workspaces => "workspaces",
+            Self::Tasks => "tasks",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Workspaces => "Workspaces",
+            Self::Tasks => "Tasks",
+        }
+    }
+}
 
 struct SidebarAction {
     key: &'static str,
@@ -15,7 +43,7 @@ const PRIMARY_ACTIONS: [SidebarAction; 2] = [
         key: "home-new-research",
         label: "New Research",
         icon: &NEW_RESEARCH,
-        action: None,
+        action: Some(State::start_new_research),
     },
     SidebarAction {
         key: "home-quick-chat",
@@ -25,36 +53,37 @@ const PRIMARY_ACTIONS: [SidebarAction; 2] = [
     },
 ];
 
-const WORKSPACE_ACTIONS: [SidebarAction; 2] = [
-    SidebarAction {
-        key: "home-search-workspaces",
-        label: "Search sessions",
-        icon: &SEARCH,
-        action: None,
-    },
-    SidebarAction {
-        key: "home-add-workspace",
-        label: "Add workspace",
-        icon: &FOLDER_PLUS,
-        action: Some(State::start_workspace_creation),
-    },
-];
+const SEARCH_WORKSPACES: SidebarAction = SidebarAction {
+    key: "home-search-workspaces",
+    label: "Search sessions",
+    icon: &SEARCH,
+    action: None,
+};
+
+const NEW_WORKSPACE: SidebarAction = SidebarAction {
+    key: "home-add-workspace",
+    label: "New Workspace",
+    icon: &PLUS,
+    action: Some(State::start_workspace_creation),
+};
 
 struct HomeSidebarSpec {
     title: &'static str,
-    workspace_heading: &'static str,
     empty_workspaces: &'static str,
 }
 
 const HOME_SIDEBAR: HomeSidebarSpec = HomeSidebarSpec {
     title: "Beale",
-    workspace_heading: "Workspaces",
     empty_workspaces: "No Workspaces Yet...",
 };
 
-fn primary_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
+fn primary_action(spec: &SidebarAction, state: &State, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     let available = spec.action.is_some();
+    let selected = spec.key == "home-new-research"
+        && state.primary_view == crate::PrimaryView::NewResearch
+        && (state.home_collection != HomeCollection::Workspaces
+            || state.selected_research_workspace().is_none());
     let mut button = row()
         .key(spec.key)
         .role("button")
@@ -69,10 +98,15 @@ fn primary_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
         .center_y()
         .gap(12.0)
         .radius(8.0)
+        .fill(if selected {
+            color("#303030")
+        } else {
+            rune::Color::TRANSPARENT
+        })
         .child(icon(spec.icon, 16.0).color(color(if available { "#bdbdbd" } else { "#777777" })))
         .child(
             text(spec.label)
-                .font(ui_font(13.0, 400.0))
+                .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                 .color(color(if available { "#dddddd" } else { "#888888" })),
         );
     if let Some(action) = spec.action {
@@ -90,9 +124,11 @@ fn workspace_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
         } else {
             format!("{} unavailable", spec.label)
         })
-        .size(28.0, 28.0)
+        .size(26.0, 26.0)
         .center()
-        .radius(6.0)
+        .radius(8.0)
+        .continuous_corners()
+        .border(1.0, theme.color("#2c2c2c"))
         .child(
             icon(spec.icon, 15.0).color(theme.color(if spec.action.is_some() {
                 "#bdbdbd"
@@ -101,42 +137,86 @@ fn workspace_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
             })),
         );
     if let Some(action) = spec.action {
-        button = button.hover(theme.color("#282828")).on_press(action);
+        button = button
+            .hover(theme.color("#414141"))
+            .cursor(Cursor::Pointer)
+            .on_press(action);
     }
     button
+}
+
+fn session_row(key: String, label: &str, italic: bool, active: bool, theme: ThemeStyle<'_>) -> El {
+    let color = |value| theme.color(value);
+    let font = ui_font(14.0, if active { 550.0 } else { 400.0 });
+    row()
+        .key(key)
+        .role("button")
+        .label(label.to_owned())
+        .w_full()
+        .min_h(30.0)
+        .px(4.0)
+        .center_y()
+        .gap(10.0)
+        .radius(8.0)
+        .continuous_corners()
+        .fill(if active {
+            color("#303030")
+        } else {
+            rune::Color::TRANSPARENT
+        })
+        .hover(color("#282828"))
+        .cursor(Cursor::Pointer)
+        .child(el().size(15.0, 15.0))
+        .child(
+            text(label.to_owned())
+                .font(if italic { font.italic() } else { font })
+                .color(color(if active { "#f2f2f2" } else { "#b8b8b8" })),
+        )
 }
 
 pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     let mut primary = col().w_full().gap(2.0);
     for spec in &PRIMARY_ACTIONS {
-        primary = primary.child(primary_action(spec, theme));
+        primary = primary.child(primary_action(spec, state, theme));
     }
-    let mut tools = row().center_y();
-    for spec in &WORKSPACE_ACTIONS {
-        tools = tools.child(workspace_action(spec, theme));
+    let collection_open = state.selection_menu == Some(SelectionMenu::HomeCollection);
+    let collection_control = selection_button(
+        state.home_collection.label(),
+        collection_open,
+        |state| toggle_selection_menu(state, SelectionMenu::HomeCollection),
+        theme,
+    )
+    .key("home-collection-control")
+    .role("button")
+    .label(format!(
+        "Choose sidebar collection: {}",
+        state.home_collection.label()
+    ))
+    .cursor(Cursor::Pointer);
+    let mut selector_tools = row().center_y().gap(4.0).child(collection_control);
+    if state.home_collection == HomeCollection::Workspaces {
+        selector_tools = selector_tools.child(workspace_action(&NEW_WORKSPACE, theme));
     }
-    let mut workspaces = col()
-        .key("home-workspaces")
+    let mut header = row()
+        .key("home-collection-header")
+        .w_full()
+        .h(28.0)
+        .mb(12.0)
+        .center_y()
+        .child(selector_tools)
+        .child(el().grow(1.0));
+    if state.home_collection == HomeCollection::Workspaces {
+        header = header.child(workspace_action(&SEARCH_WORKSPACES, theme));
+    }
+    let mut collection = col()
+        .key("home-collection")
         .w_full()
         .grow(1.0)
         .mt(18.0)
         .gap(6.0)
-        .child(
-            row()
-                .key("home-workspaces-header")
-                .w_full()
-                .h(28.0)
-                .center_y()
-                .child(
-                    text(HOME_SIDEBAR.workspace_heading)
-                        .font(ui_font(15.0, 400.0))
-                        .color(color("#969696")),
-                )
-                .child(row().grow(1.0))
-                .child(tools),
-        );
-    if state.workspaces.is_empty() {
+        .child(header);
+    if state.home_collection == HomeCollection::Workspaces && state.workspaces.is_empty() {
         let label = if !state.workspace_list_error.is_empty() {
             "Workspaces unavailable"
         } else if state.workspace_list_loaded {
@@ -146,14 +226,21 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         } else {
             HOME_SIDEBAR.empty_workspaces
         };
-        workspaces = workspaces.child(
+        collection = collection.child(
             text(label)
                 .key("home-workspaces-empty")
                 .font(ui_font(13.0, 400.0))
                 .color(color("#969696"))
                 .ml(8.0),
         );
-    } else {
+    } else if state.home_collection == HomeCollection::Workspaces {
+        let new_session_workspace = (state.primary_view == crate::PrimaryView::NewResearch)
+            .then(|| {
+                state
+                    .selected_research_workspace()
+                    .map(|item| item.id.as_str())
+            })
+            .flatten();
         for workspace in &state.workspaces {
             let id = uuid::Uuid::parse_str(&workspace.id).ok();
             let selected =
@@ -177,7 +264,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .child(icon(&FOLDER_OPEN, 15.0).color(color("#9d9d9d")))
                 .child(
                     text(workspace.name.clone())
-                        .font(ui_font(13.0, if selected { 550.0 } else { 400.0 }))
+                        .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                         .color(color("#dddddd"))
                         .wrap(),
                 );
@@ -186,11 +273,26 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                     .hover(color("#282828"))
                     .on_press(move |state: &mut State| state.open_workspace(id));
             }
-            workspaces = workspaces.child(item);
+            let mut group = col().w_full().gap(1.0).child(item);
+            if new_session_workspace == Some(workspace.id.as_str()) {
+                group = group.child(
+                    session_row(
+                        format!("home-session-{}", workspace.id),
+                        "New Session",
+                        true,
+                        true,
+                        theme,
+                    )
+                    .label(format!("New Session in {}", workspace.name))
+                    .on_press(State::start_new_research),
+                );
+            }
+            collection = collection.child(group);
         }
     }
-    if !state.workspace_list_error.is_empty() {
-        workspaces = workspaces.child(
+    if state.home_collection == HomeCollection::Workspaces && !state.workspace_list_error.is_empty()
+    {
+        collection = collection.child(
             text(state.workspace_list_error.clone())
                 .key("home-workspaces-error")
                 .font(ui_font(13.0, 400.0))
@@ -214,5 +316,5 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .mb(12.0),
         )
         .child(primary)
-        .child(workspaces)
+        .child(collection)
 }

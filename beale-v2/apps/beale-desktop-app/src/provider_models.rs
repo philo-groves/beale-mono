@@ -97,7 +97,11 @@ fn decode_catalog(
         .into_iter()
         .map(|model| ModelEntry {
             id: model.id,
-            name: model.display_name,
+            name: if provider == ProviderId::Openai {
+                model.display_name.replace('-', " ")
+            } else {
+                model.display_name
+            },
         })
         .collect();
     if models
@@ -178,5 +182,33 @@ mod tests {
         .encode_to_vec();
         assert!(decode_catalog(ProviderId::Openai, AuthMethod::Subscription, &reply).is_ok());
         assert!(decode_catalog(ProviderId::Xai, AuthMethod::Subscription, &reply).is_err());
+    }
+
+    #[test]
+    fn openai_catalog_labels_are_normalized_even_if_host_sends_dashes() {
+        let reply = |provider| {
+            ModelCatalogResponse {
+                provider: provider as i32,
+                method: AuthMethod::ApiKey as i32,
+                models: vec![WireEntry {
+                    id: "example-model-id".to_owned(),
+                    display_name: "Example-Model-Name".to_owned(),
+                }],
+                lead_model: "example-model-id".to_owned(),
+                small_model: "example-model-id".to_owned(),
+            }
+            .encode_to_vec()
+        };
+        let openai = decode_catalog(
+            ProviderId::Openai,
+            AuthMethod::ApiKey,
+            &reply(ProviderId::Openai),
+        )
+        .unwrap();
+        assert_eq!(openai.models[0].id, "example-model-id");
+        assert_eq!(openai.models[0].name, "Example Model Name");
+        let xai =
+            decode_catalog(ProviderId::Xai, AuthMethod::ApiKey, &reply(ProviderId::Xai)).unwrap();
+        assert_eq!(xai.models[0].name, "Example-Model-Name");
     }
 }
