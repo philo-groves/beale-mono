@@ -28,6 +28,23 @@ message ProviderAuthStatusResponse {
   DaybreakMode openai_daybreak_mode = 3;
 }
 
+message ProviderUsageWindow {
+  string id = 1;
+  string label = 2;
+  uint32 used_percent = 3;
+  uint64 resets_at_unix = 4;
+}
+
+message ProviderUsageSnapshot {
+  ProviderId provider = 1;
+  uint64 checked_at_unix = 2;
+  repeated ProviderUsageWindow windows = 3;
+}
+
+message ProviderUsageResponse {
+  repeated ProviderUsageSnapshot providers = 1;
+}
+
 enum DaybreakMode {
   DAYBREAK_MODE_UNSPECIFIED = 0;
   DAYBREAK_MODE_BLUE = 1;
@@ -203,6 +220,37 @@ message SessionMessage {
   SessionRole role = 1;
   string text = 2;
   repeated SessionToolSummary tools = 3;
+  repeated SessionReasoningSummary reasoning_summaries = 4;
+  uint64 duration_ms = 5;
+  repeated SessionCommentary commentary = 6;
+}
+
+message SessionReasoningSummary {
+  string text = 1;
+  uint32 after_tool_count = 2;
+}
+
+message SessionCommentary {
+  string text = 1;
+  uint32 after_tool_count = 2;
+}
+
+enum SessionStreamKind {
+  SESSION_STREAM_KIND_UNSPECIFIED = 0;
+  SESSION_STREAM_KIND_REASONING_DELTA = 1;
+  SESSION_STREAM_KIND_MESSAGE_DELTA = 2;
+  SESSION_STREAM_KIND_TOOL_STARTED = 3;
+  SESSION_STREAM_KIND_TOOL_FINISHED = 4;
+  SESSION_STREAM_KIND_COMPLETED = 5;
+  SESSION_STREAM_KIND_FAILED = 6;
+}
+
+message SessionStreamEvent {
+  SessionStreamKind kind = 1;
+  string text = 2;
+  SessionToolSummary tool = 3;
+  SessionDetail detail = 4;
+  uint32 segment_index = 5;
 }
 
 message SessionToolSummary {
@@ -233,12 +281,38 @@ message ListSessionsResponse {
   repeated SessionSummary sessions = 1;
 }
 
+message ArchiveEntry {
+  string id = 1;
+  string workspace_id = 2;
+  string title = 3;
+  string model = 4;
+  uint32 turn_count = 5;
+  uint64 created_at_ms = 6;
+  uint64 archived_at_ms = 7;
+  bool quick_chat = 8;
+}
+
+message ListArchiveResponse {
+  repeated ArchiveEntry entries = 1;
+}
+
 message SessionDetail {
   SessionSummary summary = 1;
   repeated SessionMessage messages = 2;
   ProviderId provider = 3;
   AuthMethod method = 4;
   string model = 5;
+}
+
+enum ReasoningEffort {
+  REASONING_EFFORT_UNSPECIFIED = 0;
+  REASONING_EFFORT_NONE = 1;
+  REASONING_EFFORT_MINIMAL = 2;
+  REASONING_EFFORT_LOW = 3;
+  REASONING_EFFORT_MEDIUM = 4;
+  REASONING_EFFORT_HIGH = 5;
+  REASONING_EFFORT_XHIGH = 6;
+  REASONING_EFFORT_MAX = 7;
 }
 
 message SubmitSessionTurnRequest {
@@ -248,4 +322,54 @@ message SubmitSessionTurnRequest {
   AuthMethod method = 4;
   string model = 5;
   string prompt = 6;
+  ReasoningEffort reasoning_effort = 7;
+}
+
+message QuickChatTurnRequest {
+  string chat_id = 1;
+  string prompt = 2;
+  string workspace_id = 3;
+}
+
+message QuickChatMessage {
+  SessionRole role = 1;
+  string text = 2;
+}
+
+message QuickChatDetail {
+  string chat_id = 1;
+  string title = 2;
+  repeated QuickChatMessage messages = 3;
+  string workspace_id = 4;
+}
+
+enum ReviewStage {
+  REVIEW_STAGE_UNSPECIFIED = 0;
+  REVIEW_STAGE_AUTO_REVIEW = 1;
+  REVIEW_STAGE_GUARDIAN = 2;
+}
+
+message PermissionRule {
+  string id = 1;
+  ReviewStage stage = 2;
+  string title = 3;
+  string instruction = 4;
+  bool enabled = 5;
+}
+
+message PermissionRulesResponse {
+  repeated PermissionRule rules = 1;
+}
+
+message UpdatePermissionRuleRequest {
+  string id = 1;
+  string instruction = 2;
+  bool enabled = 3;
+  string title = 4;
+}
+
+message CreatePermissionRuleRequest {
+  ReviewStage stage = 1;
+  string title = 2;
+  string instruction = 3;
 }

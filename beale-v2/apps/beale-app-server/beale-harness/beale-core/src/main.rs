@@ -100,10 +100,12 @@ async fn serve() -> Result<()> {
     let store = CredentialStore::new()?;
     let token = store.control_token()?;
     let workspaces = beale_workspaces::WorkspaceStore::new()?;
+    let db = beale_storage::HostDatabase::open(workspaces.root())?;
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
         .merge(beale_sessions::router(token.clone(), workspaces)?)
+        .merge(beale_safety::router(token.clone(), db))
         .merge(auth::router(token, store));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

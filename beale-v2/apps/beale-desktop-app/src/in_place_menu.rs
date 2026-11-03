@@ -14,6 +14,7 @@ pub(crate) struct MenuItem {
 
 pub(crate) fn popup_surface(panel: El, fill: Color) -> El {
     panel
+        .raise()
         .radius(12.0)
         .continuous_corners()
         .fill(fill)

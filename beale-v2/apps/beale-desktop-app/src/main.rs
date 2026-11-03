@@ -3,20 +3,25 @@ use rune::{
     Align, AppSpec, Color, Cursor, Cx, Drag, El, Icon, Key, KeyEvent, Phase, ScrollSpec, Side,
     TextEdit, Tx, col, el, icon, row, text, text_input,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod appearance;
+mod archive_view;
 mod color_picker;
 mod connection;
 mod desktop_fonts;
+mod form_controls;
 mod home_sidebar;
 mod icons;
 mod in_place_menu;
 mod modal_dialog;
 mod new_research;
+mod permission_settings;
 mod provider_auth;
 mod provider_icons;
 mod provider_models;
+mod provider_usage;
+mod quick_chat;
 mod sessions;
 mod settings_scroll;
 mod workspace_creation;
@@ -27,10 +32,11 @@ use appearance::{
     ThemeStyle,
 };
 use beale_contracts::v1::{
-    AuthMethod, DaybreakMode, ProviderId, SessionDetail, SessionSummary, SessionToolDetailPage,
-    SubmitSessionTurnRequest, UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
-    UpdateWorkspaceSurfacesRequest, WorkspaceDetails, WorkspaceFoundation, WorkspaceRules,
-    WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaceInput, WorkspaceSurfaces,
+    ArchiveEntry, AuthMethod, DaybreakMode, ProviderId, SessionDetail, SessionStreamEvent,
+    SessionStreamKind, SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
+    UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest, UpdateWorkspaceSurfacesRequest,
+    WorkspaceDetails, WorkspaceFoundation, WorkspaceRules, WorkspaceSummary, WorkspaceSurface,
+    WorkspaceSurfaceInput, WorkspaceSurfaces,
 };
 use color_picker::Hsv;
 use connection::ConnectionStatus;
@@ -152,6 +158,7 @@ enum SelectionMenu {
     LeadProvider,
     Repeat,
     ResearchWorkspace,
+    QuickChatWorkspace,
     HomeCollection,
     ResearchKit,
     SurfaceKind,
@@ -215,9 +222,9 @@ fn effective_model_method(status: &AuthStatus) -> AuthMethod {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum SettingsSection {
-    General,
-    Appearance,
     #[default]
+    Safety,
+    Appearance,
     Providers,
     Archive,
 }
@@ -249,11 +256,11 @@ struct SettingsSectionSpec {
 
 const SETTINGS_SECTIONS: [SettingsSectionSpec; 4] = [
     SettingsSectionSpec {
-        section: SettingsSection::General,
-        key: "settings-general",
-        label: "General",
-        icon: &SETTINGS,
-        render: unavailable_settings_view,
+        section: SettingsSection::Safety,
+        key: "settings-safety",
+        label: "Safety",
+        icon: &SAFETY,
+        render: safety_settings_view,
     },
     SettingsSectionSpec {
         section: SettingsSection::Appearance,
@@ -274,7 +281,7 @@ const SETTINGS_SECTIONS: [SettingsSectionSpec; 4] = [
         key: "settings-archive",
         label: "Archive",
         icon: &ARCHIVE,
-        render: unavailable_settings_view,
+        render: archive_settings_view,
     },
 ];
 
@@ -454,6 +461,7 @@ enum ViewLocation {
     Workspace(uuid::Uuid, workspace_view::WorkspaceTab),
     Providers(Provider),
     Appearance(AppearanceTab),
+    Safety(permission_settings::PermissionTab),
     Settings(SettingsSection),
 }
 
@@ -482,12 +490,36 @@ struct State {
     new_research_model: Option<new_research::ModelSelection>,
     new_research_effort: new_research::Effort,
     new_research_repeat: new_research::RepeatPreset,
+    quick_chat_open: bool,
+    quick_chat_draft: TextEdit,
+    quick_chat_id: Option<String>,
+    quick_chat_title: String,
+    quick_chat_workspace_id: Option<String>,
+    quick_chat_workspace_initialized: bool,
+    quick_chat_messages: Vec<beale_contracts::v1::QuickChatMessage>,
+    quick_chat_pending: Option<String>,
+    quick_chat_busy: bool,
+    quick_chat_error: String,
+    quick_chat_generation: u64,
     session_summaries: Vec<SessionSummary>,
+    archive_session_id: Option<String>,
+    archive_session_busy: bool,
+    archive_session_error: String,
+    archive_tab: archive_view::ArchiveTab,
+    archive_entries: Vec<ArchiveEntry>,
+    archive_loaded: bool,
+    archive_loading: bool,
+    archive_error: String,
+    archive_generation: u64,
+    archive_restore_busy: Option<String>,
     active_session: Option<SessionDetail>,
     session_busy: bool,
     session_error: String,
     session_pending_prompt: Option<String>,
     session_generation: u64,
+    session_live_events: Vec<SessionStreamEvent>,
+    session_elapsed_ms: u64,
+    session_work_expanded: std::collections::HashSet<usize>,
     expanded_tool_id: Option<String>,
     tool_detail: Option<SessionToolDetailPage>,
     tool_detail_busy: bool,
@@ -532,6 +564,18 @@ struct State {
     selected: Provider,
     settings_section: SettingsSection,
     appearance_tab: AppearanceTab,
+    permissions_tab: permission_settings::PermissionTab,
+    permission_rules: Vec<beale_contracts::v1::PermissionRule>,
+    permission_loaded: bool,
+    permission_loading: bool,
+    permission_error: String,
+    permission_saving: Option<String>,
+    permission_edit_id: Option<String>,
+    permission_creating: bool,
+    permission_name_edit: TextEdit,
+    permission_description_edit: TextEdit,
+    permission_edit_error: String,
+    permission_generation: u64,
     view_history: ViewHistory,
     appearance: AppearancePreferences,
     appearance_path: Option<std::path::PathBuf>,
@@ -541,6 +585,8 @@ struct State {
     color_picker: Option<ColorPickerState>,
     connection: ConnectionStatus,
     auth_status: [AuthStatus; 2],
+    provider_usage: [Option<beale_contracts::v1::ProviderUsageSnapshot>; 2],
+    usage_generation: u64,
     auth_loaded: bool,
     lead_provider: Option<Provider>,
     lead_busy: bool,
@@ -567,6 +613,7 @@ struct State {
     menu_reveal_pending: bool,
     notice: Option<&'static str>,
     rail_tooltip: Option<(&'static str, &'static str)>,
+    rail_usage_tooltip: Option<Provider>,
     sidenav_visible: bool,
     sidenav_width: f32,
     settings_scroll: SettingsScroll,
@@ -583,12 +630,36 @@ impl Default for State {
             new_research_model: None,
             new_research_effort: new_research::Effort::default(),
             new_research_repeat: new_research::RepeatPreset::default(),
+            quick_chat_open: false,
+            quick_chat_draft: TextEdit::new(""),
+            quick_chat_id: None,
+            quick_chat_title: "Quick Chat".to_owned(),
+            quick_chat_workspace_id: None,
+            quick_chat_workspace_initialized: false,
+            quick_chat_messages: Vec::new(),
+            quick_chat_pending: None,
+            quick_chat_busy: false,
+            quick_chat_error: String::new(),
+            quick_chat_generation: 0,
             session_summaries: Vec::new(),
+            archive_session_id: None,
+            archive_session_busy: false,
+            archive_session_error: String::new(),
+            archive_tab: archive_view::ArchiveTab::default(),
+            archive_entries: Vec::new(),
+            archive_loaded: false,
+            archive_loading: false,
+            archive_error: String::new(),
+            archive_generation: 0,
+            archive_restore_busy: None,
             active_session: None,
             session_busy: false,
             session_error: String::new(),
             session_pending_prompt: None,
             session_generation: 0,
+            session_live_events: Vec::new(),
+            session_elapsed_ms: 0,
+            session_work_expanded: std::collections::HashSet::new(),
             expanded_tool_id: None,
             tool_detail: None,
             tool_detail_busy: false,
@@ -631,8 +702,20 @@ impl Default for State {
             workspace_save_error: String::new(),
             workspace_save_message: String::new(),
             selected: Provider::OpenAi,
-            settings_section: SettingsSection::Providers,
+            settings_section: SettingsSection::Safety,
             appearance_tab: AppearanceTab::Colors,
+            permissions_tab: permission_settings::PermissionTab::AutoReview,
+            permission_rules: Vec::new(),
+            permission_loaded: false,
+            permission_loading: false,
+            permission_error: String::new(),
+            permission_saving: None,
+            permission_edit_id: None,
+            permission_creating: false,
+            permission_name_edit: TextEdit::new(""),
+            permission_description_edit: TextEdit::new(""),
+            permission_edit_error: String::new(),
+            permission_generation: 0,
             view_history: ViewHistory::default(),
             appearance: AppearancePreferences::default(),
             appearance_path: None,
@@ -649,6 +732,8 @@ impl Default for State {
             color_picker: None,
             connection: ConnectionStatus::Connecting,
             auth_status: Default::default(),
+            provider_usage: Default::default(),
+            usage_generation: 0,
             auth_loaded: false,
             lead_provider: None,
             lead_busy: false,
@@ -675,6 +760,7 @@ impl Default for State {
             menu_reveal_pending: false,
             notice: None,
             rail_tooltip: None,
+            rail_usage_tooltip: None,
             sidenav_visible: true,
             sidenav_width: SIDENAV_DEFAULT_WIDTH,
             settings_scroll: SettingsScroll::default(),
@@ -684,6 +770,46 @@ impl Default for State {
 }
 
 impl State {
+    fn open_quick_chat(&mut self) {
+        if !self.quick_chat_workspace_initialized {
+            let selected = match self.primary_view {
+                PrimaryView::Workspace => self.workspace_id.map(|id| id.to_string()),
+                PrimaryView::NewResearch => self
+                    .selected_research_workspace()
+                    .map(|workspace| workspace.id.clone()),
+                _ => None,
+            };
+            self.quick_chat_workspace_id = selected;
+            self.quick_chat_workspace_initialized = true;
+        }
+        self.quick_chat_open = true;
+    }
+
+    fn close_quick_chat(&mut self) {
+        let was_open = self.quick_chat_open;
+        self.quick_chat_open = false;
+        self.quick_chat_generation = self.quick_chat_generation.wrapping_add(1);
+        self.quick_chat_id = None;
+        self.quick_chat_title = "Quick Chat".to_owned();
+        self.quick_chat_workspace_id = None;
+        self.quick_chat_workspace_initialized = false;
+        self.quick_chat_messages.clear();
+        self.quick_chat_pending = None;
+        self.quick_chat_busy = false;
+        self.quick_chat_error.clear();
+        self.quick_chat_draft.clear();
+        if self.selection_menu == Some(SelectionMenu::QuickChatWorkspace) {
+            self.selection_menu = None;
+        }
+        if was_open
+            && self.primary_view == PrimaryView::Settings
+            && self.settings_section == SettingsSection::Archive
+            && matches!(self.connection, ConnectionStatus::Connected { .. })
+        {
+            start_archive_load(self);
+        }
+    }
+
     fn load_appearance() -> Self {
         let mut state = Self {
             primary_view: PrimaryView::Home,
@@ -715,6 +841,7 @@ impl State {
         match self.settings_section {
             SettingsSection::Providers => ViewLocation::Providers(self.selected),
             SettingsSection::Appearance => ViewLocation::Appearance(self.appearance_tab),
+            SettingsSection::Safety => ViewLocation::Safety(self.permissions_tab),
             section => ViewLocation::Settings(section),
         }
     }
@@ -747,6 +874,11 @@ impl State {
                 self.settings_section = SettingsSection::Appearance;
                 self.appearance_tab = tab;
             }
+            ViewLocation::Safety(tab) => {
+                self.primary_view = PrimaryView::Settings;
+                self.settings_section = SettingsSection::Safety;
+                self.permissions_tab = tab;
+            }
             ViewLocation::Settings(section) => {
                 self.primary_view = PrimaryView::Settings;
                 self.settings_section = section;
@@ -756,6 +888,11 @@ impl State {
         self.selection_menu = None;
         self.composer_menu_open = false;
         self.color_picker = None;
+        self.permission_edit_id = None;
+        self.permission_creating = false;
+        self.permission_name_edit.clear();
+        self.permission_description_edit.clear();
+        self.permission_edit_error.clear();
         self.sign_in_prompt = None;
         self.api_key_dialog = false;
         self.api_key_edit.clear();
@@ -772,6 +909,16 @@ impl State {
         self.workspace_save_message.clear();
         if let Some(id) = load_workspace {
             start_workspace_details(self, id);
+        }
+        if self.primary_view == PrimaryView::Settings
+            && self.settings_section == SettingsSection::Archive
+        {
+            start_archive_load(self);
+        }
+        if self.primary_view == PrimaryView::Settings
+            && self.settings_section == SettingsSection::Safety
+        {
+            permission_settings::start_load(self);
         }
     }
 
@@ -793,6 +940,7 @@ impl State {
         let location = match section {
             SettingsSection::Providers => ViewLocation::Providers(self.selected),
             SettingsSection::Appearance => ViewLocation::Appearance(self.appearance_tab),
+            SettingsSection::Safety => ViewLocation::Safety(self.permissions_tab),
             section => ViewLocation::Settings(section),
         };
         self.navigate_to(location);
@@ -809,6 +957,9 @@ impl State {
 
     fn start_new_research(&mut self) {
         self.clear_tool_detail();
+        self.session_live_events.clear();
+        self.session_elapsed_ms = 0;
+        self.session_work_expanded.clear();
         if self.active_session.take().is_some() {
             self.session_generation = self.session_generation.wrapping_add(1);
             self.session_busy = false;
@@ -835,6 +986,7 @@ impl State {
         match result {
             Ok(detail) => {
                 self.clear_tool_detail();
+                self.session_live_events.clear();
                 if let Some(summary) = &detail.summary {
                     self.session_summaries.retain(|item| item.id != summary.id);
                     self.session_summaries.insert(0, summary.clone());
@@ -858,6 +1010,8 @@ impl State {
             return;
         }
         self.session_busy = false;
+        self.session_live_events.clear();
+        self.session_work_expanded.clear();
         match result {
             Ok(detail) => {
                 self.clear_tool_detail();
@@ -880,6 +1034,38 @@ impl State {
                 self.session_error.clear();
             }
             Err(error) => self.session_error = error,
+        }
+    }
+
+    fn apply_session_progress(&mut self, generation: u64, event: SessionStreamEvent) {
+        if self.session_generation != generation || !self.session_busy {
+            return;
+        }
+        match SessionStreamKind::try_from(event.kind) {
+            Ok(SessionStreamKind::MessageDelta | SessionStreamKind::ReasoningDelta) => {
+                if let Some(existing) = self.session_live_events.iter_mut().rev().find(|item| {
+                    item.kind == event.kind && item.segment_index == event.segment_index
+                }) {
+                    if existing.text.len().saturating_add(event.text.len()) <= 2_097_152 {
+                        existing.text.push_str(&event.text);
+                    }
+                } else {
+                    self.session_live_events.push(event);
+                }
+            }
+            Ok(SessionStreamKind::ToolStarted) => self.session_live_events.push(event),
+            Ok(SessionStreamKind::ToolFinished) => {
+                if let Some(tool) = event.tool
+                    && let Some(existing) =
+                        self.session_live_events.iter_mut().rev().find(|item| {
+                            item.tool.as_ref().is_some_and(|prior| prior.id == tool.id)
+                        })
+                {
+                    existing.kind = SessionStreamKind::ToolFinished as i32;
+                    existing.tool = Some(tool);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1261,6 +1447,10 @@ fn start_session_turn(state: &mut State) {
     if state.session_busy {
         return;
     }
+    if state.workspaces.is_empty() {
+        state.session_error = "Create a workspace before sending.".to_owned();
+        return;
+    }
     let prompt = state.new_research_prompt.text.trim().to_owned();
     if prompt.is_empty() {
         return;
@@ -1297,13 +1487,34 @@ fn start_session_turn(state: &mut State) {
         method: model.method as i32,
         model: model.id,
         prompt: prompt.clone(),
+        reasoning_effort: state.new_research_effort.wire() as i32,
     };
     state.session_generation = state.session_generation.wrapping_add(1);
     let generation = state.session_generation;
     state.session_busy = true;
     state.session_error.clear();
+    state.session_live_events.clear();
+    state.session_elapsed_ms = 0;
     state.session_pending_prompt = Some(prompt);
     state.new_research_prompt.clear();
+    let timer_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let timer_handle = handle.clone();
+    let timer_flag = timer_running.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        while timer_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(1));
+            if !timer_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            let elapsed = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            timer_handle.update(move |state, _| {
+                if state.session_generation == generation && state.session_busy {
+                    state.session_elapsed_ms = elapsed;
+                }
+            });
+        }
+    });
     std::thread::spawn(move || {
         let result = (|| {
             let addr = connection::configured_addr()
@@ -1313,8 +1524,18 @@ fn start_session_turn(state: &mut State) {
                 .enable_all()
                 .build()
                 .map_err(|_| "Could not initialize session connection".to_owned())?;
-            runtime.block_on(sessions::submit(&client, addr, request))
+            let progress_handle = handle.clone();
+            runtime.block_on(sessions::submit_stream(
+                &client,
+                addr,
+                request,
+                move |event| {
+                    progress_handle
+                        .update(move |state, _| state.apply_session_progress(generation, event));
+                },
+            ))
         })();
+        timer_running.store(false, std::sync::atomic::Ordering::Relaxed);
         handle.update(move |state, _| state.finish_session_turn(generation, result));
     });
 }
@@ -1353,6 +1574,207 @@ fn start_session_load(state: &mut State, id: String) {
             runtime.block_on(sessions::load(&client, addr, &id))
         })();
         handle.update(move |state, _| state.finish_session_load(generation, result));
+    });
+}
+
+fn start_session_archive(state: &mut State) {
+    let Some(id) = state.archive_session_id.clone() else {
+        return;
+    };
+    if state.archive_session_busy || state.session_busy {
+        return;
+    }
+    if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+        state.archive_session_error = "App-server connection is not ready.".to_owned();
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.archive_session_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    state.archive_session_busy = true;
+    state.archive_session_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize session connection".to_owned())?;
+            runtime.block_on(sessions::archive(&client, addr, &id))
+        })();
+        handle.update(move |state, _| {
+            if state.archive_session_id.as_deref() != Some(id.as_str()) {
+                return;
+            }
+            state.archive_session_busy = false;
+            match result {
+                Ok(()) => {
+                    state.session_summaries.retain(|summary| summary.id != id);
+                    if state
+                        .active_session
+                        .as_ref()
+                        .and_then(|detail| detail.summary.as_ref())
+                        .is_some_and(|summary| summary.id == id)
+                    {
+                        state.session_generation = state.session_generation.wrapping_add(1);
+                        state.active_session = None;
+                        state.clear_tool_detail();
+                        state.navigate_to(ViewLocation::Home);
+                    }
+                    state.archive_session_id = None;
+                    state.archive_session_error.clear();
+                }
+                Err(error) => state.archive_session_error = error,
+            }
+        });
+    });
+}
+
+fn start_archive_load(state: &mut State) {
+    if state.archive_loading {
+        return;
+    }
+    if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+        state.archive_error = "App-server connection is not ready.".to_owned();
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.archive_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    state.archive_generation = state.archive_generation.wrapping_add(1);
+    let generation = state.archive_generation;
+    state.archive_loading = true;
+    state.archive_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize archive connection".to_owned())?;
+            runtime.block_on(archive_view::list(&client, addr))
+        })();
+        handle.update(move |state, _| {
+            if state.archive_generation != generation {
+                return;
+            }
+            state.archive_loading = false;
+            match result {
+                Ok(entries) => {
+                    state.archive_entries = entries;
+                    state.archive_loaded = true;
+                    state.archive_error.clear();
+                }
+                Err(error) => state.archive_error = error,
+            }
+        });
+    });
+}
+
+fn start_archive_restore(state: &mut State, id: String) {
+    if state.archive_restore_busy.is_some() {
+        return;
+    }
+    let Some(entry) = state
+        .archive_entries
+        .iter()
+        .find(|entry| entry.id == id && !entry.quick_chat)
+    else {
+        return;
+    };
+    let summary = SessionSummary {
+        id: entry.id.clone(),
+        workspace_id: entry.workspace_id.clone(),
+        title: entry.title.clone(),
+    };
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.archive_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    state.archive_restore_busy = Some(id.clone());
+    state.archive_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize archive connection".to_owned())?;
+            runtime.block_on(archive_view::restore_session(&client, addr, &id))
+        })();
+        handle.update(move |state, _| {
+            if state.archive_restore_busy.as_deref() != Some(id.as_str()) {
+                return;
+            }
+            state.archive_restore_busy = None;
+            match result {
+                Ok(()) => {
+                    state.archive_entries.retain(|entry| entry.id != id);
+                    if !state.session_summaries.iter().any(|item| item.id == id) {
+                        state.session_summaries.push(summary);
+                    }
+                    state.archive_error.clear();
+                }
+                Err(error) => state.archive_error = error,
+            }
+        });
+    });
+}
+
+fn start_quick_chat_restore(state: &mut State, id: String) {
+    if state.archive_restore_busy.is_some()
+        || !state
+            .archive_entries
+            .iter()
+            .any(|entry| entry.id == id && entry.quick_chat)
+    {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.archive_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    state.archive_restore_busy = Some(id.clone());
+    state.archive_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize archive connection".to_owned())?;
+            runtime.block_on(archive_view::load_quick_chat(&client, addr, &id))
+        })();
+        handle.update(move |state, _| {
+            if state.archive_restore_busy.as_deref() != Some(id.as_str()) {
+                return;
+            }
+            state.archive_restore_busy = None;
+            match result {
+                Ok(detail) => {
+                    state.close_quick_chat();
+                    state.quick_chat_id = Some(detail.chat_id);
+                    state.quick_chat_title = detail.title;
+                    state.quick_chat_workspace_id =
+                        (!detail.workspace_id.is_empty()).then_some(detail.workspace_id);
+                    state.quick_chat_workspace_initialized = true;
+                    state.quick_chat_messages = detail.messages;
+                    state.quick_chat_open = true;
+                    state.archive_error.clear();
+                }
+                Err(error) => state.archive_error = error,
+            }
+        });
     });
 }
 
@@ -1856,6 +2278,25 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 })
                 .collect()
         }
+        SelectionMenu::QuickChatWorkspace => std::iter::once(in_place_menu::MenuItem {
+            value: String::new(),
+            label: "No Workspace".to_owned(),
+            detail: None,
+            selected: state.quick_chat_workspace_id.is_none(),
+        })
+        .chain(
+            state
+                .workspaces
+                .iter()
+                .map(|workspace| in_place_menu::MenuItem {
+                    value: workspace.id.clone(),
+                    label: workspace.name.clone(),
+                    detail: None,
+                    selected: state.quick_chat_workspace_id.as_deref()
+                        == Some(workspace.id.as_str()),
+                }),
+        )
+        .collect(),
         SelectionMenu::ResearchKit => vec![in_place_menu::MenuItem {
             value: "none".to_owned(),
             label: "None".to_owned(),
@@ -1980,6 +2421,7 @@ fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
         SelectionMenu::HomeCollection => "home-collection-control",
         SelectionMenu::Repeat => "new-research-repeat-control",
         SelectionMenu::ResearchWorkspace => "new-research-workspace-control",
+        SelectionMenu::QuickChatWorkspace => "quick-chat-workspace-control",
         SelectionMenu::ResearchKit => "workspace-kit-control",
         SelectionMenu::SurfaceKind => "workspace-surface-kind-control",
         SelectionMenu::WorkspaceSurfaceKind => "saved-workspace-surface-kind-control",
@@ -2021,7 +2463,10 @@ fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
     state.selection_menu = Some(menu);
     if matches!(
         menu,
-        SelectionMenu::Repeat | SelectionMenu::ResearchWorkspace | SelectionMenu::HomeCollection
+        SelectionMenu::Repeat
+            | SelectionMenu::ResearchWorkspace
+            | SelectionMenu::QuickChatWorkspace
+            | SelectionMenu::HomeCollection
     ) {
         state.composer_menu_open = false;
     }
@@ -2057,6 +2502,9 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             }
         }
         SelectionMenu::ResearchWorkspace => state.new_research_workspace_id = Some(value),
+        SelectionMenu::QuickChatWorkspace => {
+            state.quick_chat_workspace_id = if value.is_empty() { None } else { Some(value) };
+        }
         SelectionMenu::ResearchKit => {}
         SelectionMenu::SurfaceKind => {
             if let Some(kind) = workspace_creation::SurfaceKind::ALL
@@ -2535,7 +2983,7 @@ fn nav_button(
 }
 
 fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
-    col()
+    let mut rail = col()
         .key("navigation")
         .role("navigation")
         .label("Main navigation")
@@ -2567,6 +3015,15 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             state.primary_view == PrimaryView::Settings,
             theme,
         ))
+        .child(el().grow(1.0));
+    for provider in [Provider::OpenAi, Provider::Xai] {
+        if let Some(usage) = &state.provider_usage[provider.index()]
+            && !usage.windows.is_empty()
+        {
+            rail = rail.child(provider_usage::indicator(provider, usage, theme));
+        }
+    }
+    rail.pb(10.0)
 }
 
 fn rail_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
@@ -3258,9 +3715,7 @@ fn provider_detail(state: &State) -> El {
     let provider = state.selected;
     let auth = &state.auth_status[provider.index()];
     let name = provider.name();
-    let method = effective_model_method(auth);
-    let configured = auth.subscription || auth.api_key;
-    let mut title_row = row()
+    let title_row = row()
         .w_full()
         .center_y()
         .gap(9.0)
@@ -3285,22 +3740,6 @@ fn provider_detail(state: &State) -> El {
                 .font(ui_font(23.0, 600.0))
                 .color(color("#f2f2f2")),
         );
-    if configured {
-        title_row = title_row.child(el().grow(1.0)).child(
-            credential_button(
-                "Refresh",
-                move |s| {
-                    let index = catalog_index(provider, method);
-                    if !s.model_loading[index] {
-                        s.model_catalogs[index] = None;
-                        start_model_list(s, provider, method);
-                    }
-                },
-                theme,
-            )
-            .key("refresh-provider-models"),
-        );
-    }
     let mut detail = col()
         .key(match provider {
             Provider::OpenAi => "provider-detail-openai",
@@ -4026,25 +4465,12 @@ fn appearance_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
     vec![controls, detail.mt(6.0)]
 }
 
-fn unavailable_settings_view(state: &State, _cx: &mut Cx<State>) -> Vec<El> {
-    let theme = state.appearance.style();
-    let color = |value| theme.color(value);
-    vec![
-        col()
-            .w_full()
-            .padding(22.0)
-            .radius(12.0)
-            .fill(color("#171717"))
-            .border(1.0, color("#2a2a2a"))
-            .child(
-                text(format!(
-                    "{} settings are not available in this preview.",
-                    state.settings_section.label()
-                ))
-                .font(ui_font(13.0, 400.0))
-                .color(color("#aaaaaa")),
-            ),
-    ]
+fn archive_settings_view(state: &State, _cx: &mut Cx<State>) -> Vec<El> {
+    archive_view::render(state, state.appearance.style())
+}
+
+fn safety_settings_view(state: &State, _cx: &mut Cx<State>) -> Vec<El> {
+    permission_settings::render(state, state.appearance.style())
 }
 
 fn view(state: &State, cx: &mut Cx<State>) -> El {
@@ -4229,8 +4655,17 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .child(header(state, header_prefix_width))
         .child(body);
     window = window.child(surface);
+    if state.quick_chat_open {
+        window = window.child(quick_chat::render(state, theme, cx));
+    }
     if let Some(tooltip) = rail_tooltip(state, theme) {
         window = window.child(tooltip);
+    }
+    if let Some(provider) = state.rail_usage_tooltip
+        && let Some(usage) = &state.provider_usage[provider.index()]
+        && !usage.windows.is_empty()
+    {
+        window = window.child(provider_usage::tooltip(provider, usage, theme));
     }
     if state.primary_view == PrimaryView::WorkspaceCreation
         && let Some(scope) = state.workspace_draft.surface_dialog_scope
@@ -4268,6 +4703,19 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.archive_session_id.is_some() {
+        for layer in home_sidebar::archive_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Settings
+        && state.settings_section == SettingsSection::Safety
+        && (state.permission_edit_id.is_some() || state.permission_creating)
+    {
+        for layer in permission_settings::edit_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
     if let Some(menu) = state.selection_menu
         && match menu {
             SelectionMenu::ResearchKit => {
@@ -4289,6 +4737,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             SelectionMenu::Repeat | SelectionMenu::ResearchWorkspace => {
                 state.primary_view == PrimaryView::NewResearch
             }
+            SelectionMenu::QuickChatWorkspace => {
+                state.quick_chat_open && state.quick_chat_id.is_none() && !state.quick_chat_busy
+            }
             SelectionMenu::ColorTheme => state.settings_section == SettingsSection::Appearance,
             SelectionMenu::InterfaceFont | SelectionMenu::TextSize => {
                 state.settings_section == SettingsSection::Appearance
@@ -4306,6 +4757,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 SelectionMenu::HomeCollection => ("Sidebar collection", 170.0),
                 SelectionMenu::Repeat => ("Repeat schedule", 190.0),
                 SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
+                SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
                 SelectionMenu::ResearchKit => ("Research Kit", 178.0),
                 SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
                 SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
@@ -4527,8 +4979,13 @@ fn main() -> std::process::ExitCode {
             return;
         };
         let mut workspace_poll = 0_u8;
+        let mut usage_refresh_at = Instant::now() - Duration::from_secs(20 * 60);
+        let mut previous_subscriptions = [false; 2];
+        let mut usage_generation = 0_u64;
         loop {
             let status = runtime.block_on(connection::probe(&client, addr));
+            let poll_archive =
+                workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. });
             let workspace_result =
                 if workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. }) {
                     let workspace_client = workspaces::client();
@@ -4560,6 +5017,40 @@ fn main() -> std::process::ExitCode {
             let auth_loaded = auth_result.is_some();
             let auth_snapshot = auth_result.unwrap_or_default();
             let auth_status = auth_snapshot.providers;
+            let subscriptions = [auth_status[0].subscription, auth_status[1].subscription];
+            if matches!(status, ConnectionStatus::Connected { .. })
+                && (usage_refresh_at.elapsed() >= Duration::from_secs(20 * 60)
+                    || subscriptions != previous_subscriptions)
+            {
+                let refresh = subscriptions != previous_subscriptions;
+                usage_refresh_at = Instant::now();
+                previous_subscriptions = subscriptions;
+                usage_generation = usage_generation.wrapping_add(1);
+                let generation = usage_generation;
+                handle.update(move |state, _| state.usage_generation = generation);
+                let usage_handle = handle.clone();
+                let usage_client = client.clone();
+                std::thread::spawn(move || {
+                    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    else {
+                        return;
+                    };
+                    let result =
+                        runtime.block_on(provider_usage::fetch(&usage_client, addr, refresh));
+                    if let Ok(usage) = result {
+                        usage_handle.update_if(move |state, _| {
+                            if state.usage_generation != generation || state.provider_usage == usage
+                            {
+                                return false;
+                            }
+                            state.provider_usage = usage;
+                            true
+                        });
+                    }
+                });
+            }
             let lead_provider = auth_snapshot.lead.and_then(Provider::from_id);
             let daybreak_mode = auth_loaded.then_some(auth_snapshot.daybreak_mode);
             if let Some(result) = workspace_result {
@@ -4588,7 +5079,16 @@ fn main() -> std::process::ExitCode {
                     let previous = state.auth_status.clone();
                     let was_loaded = state.auth_loaded;
                     let previous_lead = state.lead_provider;
+                    let was_connected =
+                        matches!(state.connection, ConnectionStatus::Connected { .. });
                     state.connection = status;
+                    if !was_connected
+                        && matches!(state.connection, ConnectionStatus::Connected { .. })
+                        && state.primary_view == PrimaryView::Settings
+                        && state.settings_section == SettingsSection::Archive
+                    {
+                        start_archive_load(state);
+                    }
                     state.auth_status = auth_status;
                     state.auth_loaded = auth_loaded;
                     state.lead_provider = lead_provider;
@@ -4679,6 +5179,15 @@ fn main() -> std::process::ExitCode {
                     true
                 }
             });
+            if poll_archive {
+                handle.update(|state, _| {
+                    if state.primary_view == PrimaryView::Settings
+                        && state.settings_section == SettingsSection::Archive
+                    {
+                        start_archive_load(state);
+                    }
+                });
+            }
             std::thread::sleep(Duration::from_secs(2));
         }
     });
@@ -4690,6 +5199,122 @@ fn main() -> std::process::ExitCode {
 mod tests {
     use super::*;
     use rune::{Env, Runtime, WheelEvent};
+
+    #[test]
+    fn safety_tabs_show_editable_host_rules_without_shields() {
+        let state = State {
+            primary_view: PrimaryView::Settings,
+            settings_section: SettingsSection::Safety,
+            permission_loaded: true,
+            permission_rules: vec![
+                beale_contracts::v1::PermissionRule {
+                    id: "auto-scope".to_owned(),
+                    stage: beale_contracts::v1::ReviewStage::AutoReview as i32,
+                    title: "Recorded research scope".to_owned(),
+                    instruction: "Deny clear scope violations.".to_owned(),
+                    enabled: true,
+                },
+                beale_contracts::v1::PermissionRule {
+                    id: "guardian-risk".to_owned(),
+                    stage: beale_contracts::v1::ReviewStage::Guardian as i32,
+                    title: "Concrete risk".to_owned(),
+                    instruction: "Deny ambiguous deletion.".to_owned(),
+                    enabled: false,
+                },
+            ],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let heading = runtime.presented("permission-rules-heading").unwrap().0;
+        let description = runtime.presented("permission-rules-description").unwrap().0;
+        let card = runtime.presented("permission-rules-card").unwrap().0;
+        assert!(heading[1] + heading[3] <= description[1]);
+        assert!(description[1] + description[3] <= card[1]);
+        assert!(runtime.find("permission-add-auto-review").is_some());
+        assert!(runtime.find("permission-add-guardian").is_none());
+        assert!(runtime.presented("permission-toggle-auto-scope").is_some());
+        assert!(
+            runtime
+                .presented("permission-toggle-guardian-risk")
+                .is_none()
+        );
+        let (x, y) = runtime.find("safety-guardian").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let heading = runtime.presented("permission-rules-heading").unwrap().0;
+        let description = runtime.presented("permission-rules-description").unwrap().0;
+        let card = runtime.presented("permission-rules-card").unwrap().0;
+        assert!(heading[1] + heading[3] <= description[1]);
+        assert!(description[1] + description[3] <= card[1]);
+        let (form, _) = runtime.presented("permission-rules-form").unwrap();
+        let (add, _) = runtime.presented("permission-add-guardian").unwrap();
+        assert!((form[0] + form[2] - add[0] - add[2]).abs() < 1.0);
+        assert!(
+            runtime
+                .presented("permission-toggle-guardian-risk")
+                .is_some()
+        );
+        assert_eq!(
+            runtime
+                .presented("permission-edit-guardian-risk")
+                .unwrap()
+                .0[2],
+            26.0
+        );
+        assert_eq!(
+            runtime
+                .presented("permission-toggle-guardian-risk")
+                .unwrap()
+                .0[2],
+            38.0
+        );
+        assert!(
+            runtime
+                .presented("permission-toggle-guardian-risk-thumb")
+                .is_some()
+        );
+        let (x, y) = runtime.find("permission-edit-guardian-risk").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.permission_name_edit.text, "Concrete risk");
+        assert_eq!(
+            runtime.state.permission_description_edit.text,
+            "Deny ambiguous deletion."
+        );
+        assert!(runtime.presented("permission-edit-dialog").is_some());
+        assert!(runtime.presented("permission-name-input").is_some());
+        assert!(runtime.presented("permission-description-input").is_some());
+        assert!(runtime.presented("permission-rule-input").is_none());
+        assert!(runtime.presented("safety-shields").is_none());
+        runtime.update(|state, _| state.permission_name_edit.clear());
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("permission-edit-save").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.presented("permission-edit-error").is_some());
+        let (x, y) = runtime.find("permission-edit-cancel").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.permission_edit_id.is_none());
+        let (x, y) = runtime.find("permission-add-guardian").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.permission_creating);
+        assert!(runtime.state.permission_name_edit.text.is_empty());
+        assert!(runtime.state.permission_description_edit.text.is_empty());
+        assert!(runtime.presented("permission-edit-dialog").is_some());
+        let (x, y) = runtime.find("permission-edit-cancel").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(!runtime.state.permission_creating);
+    }
 
     #[test]
     fn settings_scrollbar_tracks_overflow_and_can_reach_the_bottom() {
@@ -4750,7 +5375,7 @@ mod tests {
             runtime.state.settings_scroll.position().offset[1] < position.max[1] * 0.1,
             "thumb drag reaches top"
         );
-        runtime.update(|state, _| state.settings_section = SettingsSection::General);
+        runtime.update(|state, _| state.settings_section = SettingsSection::Safety);
         runtime.frame(0.0);
         runtime.frame(0.0);
         assert!(runtime.state.settings_scroll.position().max[1] <= 1.0);
@@ -4791,8 +5416,15 @@ mod tests {
 
     #[test]
     fn selecting_a_provider_updates_the_detail() {
-        let mut runtime =
-            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        let mut runtime = Runtime::new(
+            State {
+                settings_section: SettingsSection::Providers,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
         runtime.frame(0.0);
         assert!(runtime.presented("provider-daybreak-mode").is_some());
         let (x, y) = runtime.find("provider-xai").unwrap();
@@ -5200,6 +5832,7 @@ mod tests {
         for width in [840.0, 1040.0, 1320.0] {
             let state = State {
                 selected: Provider::OpenAi,
+                settings_section: SettingsSection::Providers,
                 appearance: AppearancePreferences {
                     text_size: TextSize::Large,
                     ..AppearancePreferences::default()
@@ -5230,6 +5863,7 @@ mod tests {
     #[test]
     fn lead_menu_lists_only_configured_providers_without_moving_content() {
         let state = State {
+            settings_section: SettingsSection::Providers,
             auth_loaded: true,
             lead_provider: Some(Provider::Xai),
             auth_status: [
@@ -5260,6 +5894,7 @@ mod tests {
     #[test]
     fn model_menu_closes_on_escape_and_outside_press() {
         let state = State {
+            settings_section: SettingsSection::Providers,
             auth_loaded: true,
             auth_status: [
                 AuthStatus {
@@ -5336,6 +5971,7 @@ mod tests {
     #[test]
     fn saving_one_model_keeps_both_selectors_in_place() {
         let state = State {
+            settings_section: SettingsSection::Providers,
             auth_loaded: true,
             auth_status: [
                 AuthStatus {
@@ -5386,7 +6022,7 @@ mod tests {
     }
 
     #[test]
-    fn source_priority_defaults_to_subscription_and_refresh_sits_in_header() {
+    fn source_priority_defaults_to_subscription_without_refresh_control() {
         let mut status = AuthStatus {
             api_key: true,
             ..AuthStatus::default()
@@ -5401,16 +6037,15 @@ mod tests {
         status.api_key = true;
 
         let state = State {
+            settings_section: SettingsSection::Providers,
             auth_loaded: true,
             auth_status: [status, AuthStatus::default()],
             ..State::default()
         };
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
-        let (header, _) = runtime.presented("provider-view-header").unwrap();
-        let (refresh, _) = runtime.presented("refresh-provider-models").unwrap();
-        assert!(refresh[0] > header[0] + header[2] * 0.5);
-        assert!(refresh[1] >= header[1] && refresh[1] + refresh[3] <= header[1] + header[3]);
+        assert!(runtime.find("provider-view-header").is_some());
+        assert!(runtime.find("refresh-provider-models").is_none());
         assert!(runtime.find("source-priority-control").is_some());
         let items = selection_menu_items(
             &runtime.state,
@@ -5433,6 +6068,7 @@ mod tests {
             })
             .collect();
         let state = State {
+            settings_section: SettingsSection::Providers,
             auth_loaded: true,
             auth_status: [
                 AuthStatus {
@@ -5473,6 +6109,7 @@ mod tests {
     #[test]
     fn api_key_configuration_uses_a_masked_field() {
         let state = State {
+            settings_section: SettingsSection::Providers,
             connection: ConnectionStatus::Connected { major: 1, minor: 1 },
             auth_loaded: true,
             ..State::default()
@@ -5532,6 +6169,12 @@ mod tests {
         }
         let (surface, _) = runtime.presented("content-surface").unwrap();
         let (message, _) = runtime.presented("home-no-workspace-message").unwrap();
+        let (selector, _) = runtime.presented("home-collection-control").unwrap();
+        let (add, _) = runtime.presented("home-add-workspace").unwrap();
+        let (search, _) = runtime.presented("home-search-workspaces").unwrap();
+        assert!(selector[0] + selector[2] < add[0]);
+        assert!(add[0] + add[2] <= search[0]);
+        assert!((search[0] - add[0] - add[2] - 4.0).abs() < 1.0);
         assert!((message[0] + message[2] / 2.0 - surface[0] - surface[2] / 2.0).abs() < 1.0);
         assert!((message[1] + message[3] / 2.0 - surface[1] - surface[3] / 2.0).abs() < 1.0);
         let history = runtime.state.view_history.back.len();
@@ -5572,6 +6215,278 @@ mod tests {
         runtime.frame(1.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::Settings);
         assert!(runtime.find("settings-sidenav").is_some());
+    }
+
+    #[test]
+    fn quick_chat_enters_from_right_and_grows_up_after_first_send() {
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        assert!(runtime.find("quick-chat-panel").is_none());
+        let (x, y) = runtime.find("home-quick-chat").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        let (entering, _) = runtime.presented("quick-chat-panel").unwrap();
+        runtime.frame(1.0);
+        let (settled, _) = runtime.presented("quick-chat-panel").unwrap();
+        assert!(entering[0] >= settled[0]);
+        assert!(settled[0] + settled[2] <= 1040.0);
+        assert!(runtime.find("quick-chat-input").is_some());
+        assert!(runtime.find("quick-chat-content").is_none());
+        assert!(runtime.find("quick-chat-workspace-control").is_some());
+        assert!(runtime.find("quick-chat-title").is_none());
+        let (ribbon_before, _) = runtime.presented("quick-chat-ribbon").unwrap();
+        assert!((ribbon_before[0] - settled[0] - 20.0).abs() < 1.0);
+        assert!((settled[2] - ribbon_before[2] - 40.0).abs() < 1.0);
+        assert!(
+            !runtime
+                .presented_pose("quick-chat-panel")
+                .unwrap()
+                .shadows()
+                .is_empty()
+        );
+        runtime.update(|state, _| {
+            state.quick_chat_pending = Some("Example question".to_owned());
+            state.quick_chat_busy = true;
+            state.quick_chat_title = "Example question".to_owned();
+        });
+        runtime.frame(0.0);
+        runtime.frame(0.2);
+        let (ribbon_after, _) = runtime.presented("quick-chat-ribbon").unwrap();
+        let (content, _) = runtime.presented("quick-chat-content").unwrap();
+        assert!(ribbon_after[1] < ribbon_before[1]);
+        assert!(runtime.find("quick-chat-workspace-control").is_none());
+        assert!(runtime.find("quick-chat-title").is_some());
+        assert!(content[3] >= 150.0);
+        assert!((content[0] - ribbon_after[0]).abs() < 1.0);
+        assert!((content[2] - ribbon_after[2]).abs() < 1.0);
+        assert!(runtime.find("quick-chat-content-left-border").is_some());
+        assert!(runtime.find("quick-chat-content-right-border").is_some());
+        let (x, y) = runtime.find("quick-chat-close").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(!runtime.state.quick_chat_open);
+        assert!(runtime.state.quick_chat_pending.is_none());
+        assert!(!runtime.state.quick_chat_busy);
+        assert!(runtime.find("quick-chat-panel").is_none());
+        let (x, y) = runtime.find("home-quick-chat").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(runtime.state.quick_chat_pending.is_none());
+        assert!(runtime.find("quick-chat-content").is_none());
+        assert!(runtime.find("quick-chat-workspace-control").is_some());
+    }
+
+    #[test]
+    fn home_session_archive_opens_confirmation_and_cancel_preserves_session() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            session_summaries: vec![SessionSummary {
+                id: session_id.to_owned(),
+                workspace_id: workspace_id.to_owned(),
+                title: "An example research session with a long title".to_owned(),
+            }],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (sidebar, _) = runtime.presented("home-sidenav").unwrap();
+        let (archive, _) = runtime
+            .presented(&format!("home-archive-session-{session_id}"))
+            .unwrap();
+        let (session_row, _) = runtime
+            .presented(&format!("home-session-{session_id}"))
+            .unwrap();
+        assert!(archive[0] + archive[2] <= sidebar[0] + sidebar[2]);
+        assert!(session_row[0] + session_row[2] >= archive[0] + archive[2]);
+        let (x, y) = runtime
+            .find(&format!("home-archive-session-{session_id}"))
+            .unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0 / 60.0);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(2.0 / 60.0);
+        assert_eq!(
+            runtime.state.archive_session_id.as_deref(),
+            Some(session_id)
+        );
+        assert!(runtime.find("home-session-archive-dialog").is_some());
+        let (x, y) = runtime.find("home-session-archive-cancel").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(3.0 / 60.0);
+        assert!(runtime.state.archive_session_id.is_none());
+        assert!(
+            runtime
+                .find(&format!("home-session-{session_id}"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn archive_tabs_show_flat_session_and_quick_chat_rows() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let chat_id = "00000000-0000-4000-8000-000000000003";
+        let state = State {
+            primary_view: PrimaryView::Settings,
+            settings_section: SettingsSection::Archive,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            archive_entries: vec![
+                ArchiveEntry {
+                    id: session_id.to_owned(),
+                    workspace_id: workspace_id.to_owned(),
+                    title: "An example session with a long title that should fade before the Restore control".to_owned(),
+                    model: "model-example".to_owned(),
+                    turn_count: 2,
+                    created_at_ms: 1,
+                    archived_at_ms: 2,
+                    quick_chat: false,
+                },
+                ArchiveEntry {
+                    id: chat_id.to_owned(),
+                    workspace_id: String::new(),
+                    title: "Example chat".to_owned(),
+                    model: "model-example".to_owned(),
+                    turn_count: 1,
+                    created_at_ms: 1,
+                    archived_at_ms: 1,
+                    quick_chat: true,
+                },
+            ],
+            archive_loaded: true,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (900.0, 650.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("archive-view-tabs").is_some());
+        assert!(runtime.find("archive-refresh").is_none());
+        assert!(
+            runtime
+                .find(&format!("archive-item-{session_id}"))
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find(&format!("archive-restore-{session_id}"))
+                .is_some()
+        );
+        let (list, _) = runtime.presented("archive-list").unwrap();
+        let (restore, _) = runtime
+            .presented(&format!("archive-restore-{session_id}"))
+            .unwrap();
+        assert!(restore[0] + restore[2] <= list[0] + list[2]);
+        assert!(runtime.find(&format!("archive-item-{chat_id}")).is_none());
+        let (x, y) = runtime.find("archive-tab-quick-chats").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.archive_tab,
+            archive_view::ArchiveTab::QuickChats
+        );
+        assert!(
+            runtime
+                .find(&format!("archive-item-{session_id}"))
+                .is_none()
+        );
+        assert!(runtime.find(&format!("archive-item-{chat_id}")).is_some());
+        runtime.update(|state, _| state.quick_chat_id = Some(chat_id.to_owned()));
+        runtime.frame(2.0);
+        assert!(runtime.find(&format!("archive-item-{chat_id}")).is_none());
+    }
+
+    #[test]
+    fn quick_chat_workspace_picker_selects_a_saved_workspace_before_start() {
+        let workspace_id = uuid::Uuid::new_v4().to_string();
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                workspaces: vec![WorkspaceSummary {
+                    id: workspace_id.clone(),
+                    name: "Example Workspace".to_owned(),
+                    directory: "example-directory".to_owned(),
+                }],
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("home-quick-chat").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("quick-chat-workspace-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::QuickChatWorkspace)
+        );
+        let (x, y) = runtime.find("selection-menu-item-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.quick_chat_workspace_id.as_deref(),
+            Some(workspace_id.as_str())
+        );
+        assert!(runtime.find("quick-chat-workspace-control").is_some());
+    }
+
+    #[test]
+    fn new_research_without_workspaces_warns_and_disables_composer() {
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspace_list_loaded: true,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("home-new-research").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert!(runtime.find("new-research-workspace-warning").is_some());
+        assert!(runtime.find("new-research-workspace-control").is_none());
+        let (x, y) = runtime.find("new-research-composer-input").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.paste("Example objective");
+        runtime.frame(1.0);
+        assert!(runtime.state.new_research_prompt.text.is_empty());
+        runtime.state.new_research_prompt = TextEdit::new("Example objective");
+        start_session_turn(&mut runtime.state);
+        assert!(!runtime.state.session_busy);
+        assert_eq!(
+            runtime.state.session_error,
+            "Create a workspace before sending."
+        );
     }
 
     #[test]
@@ -5713,7 +6628,16 @@ mod tests {
         );
         assert!(runtime.find("selection-menu-item-0").is_some());
         assert!(runtime.find("selection-menu-item-1").is_some());
-        let (x, y) = runtime.find("selection-menu-item-0").unwrap();
+        let (item, _) = runtime.presented("selection-menu-item-0").unwrap();
+        let (composer, _) = runtime.presented("new-research-composer").unwrap();
+        let overlap_left = item[0].max(composer[0]);
+        let overlap_right = (item[0] + item[2]).min(composer[0] + composer[2]);
+        assert!(overlap_right - overlap_left > 20.0);
+        let x = overlap_left + 12.0;
+        let y = item[1] + item[3] / 2.0;
+        assert!(y > composer[1] && y < composer[1] + composer[3]);
+        let top = runtime.element_at(x, y).unwrap();
+        assert!(top.path().contains("selection-menu"), "top={top:?}");
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(1.0);
@@ -5780,11 +6704,17 @@ mod tests {
                     role: beale_contracts::v1::SessionRole::User as i32,
                     text: "Echo example".to_owned(),
                     tools: Vec::new(),
+                    reasoning_summaries: Vec::new(),
+                    duration_ms: 0,
+                    commentary: Vec::new(),
                 },
                 beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::Assistant as i32,
                     text: "Echo example".to_owned(),
                     tools: Vec::new(),
+                    reasoning_summaries: Vec::new(),
+                    duration_ms: 1_234,
+                    commentary: Vec::new(),
                 },
             ],
             provider: ProviderId::Openai as i32,
@@ -5797,6 +6727,8 @@ mod tests {
         assert!(state.session_pending_prompt.is_none());
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        assert!(runtime.find("new-research-ribbon").is_none());
+        assert!(runtime.find("new-research-workspace-control").is_none());
         assert!(
             runtime
                 .find(&format!("home-session-{session_id}"))
@@ -5815,7 +6747,128 @@ mod tests {
         assert!(user_bubble[0] > user_row[0] + user_row[2] * 0.4);
         assert!((user_bubble[0] + user_bubble[2] - user_row[0] - user_row[2]).abs() < 1.0);
         assert_eq!(assistant_row[0], user_row[0]);
+        let (x, y) = runtime.find("session-message-0-text").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert_eq!(runtime.cursor(), Cursor::Text);
+        let clipboard = rune::clipboard::memory();
+        runtime.use_clipboard(&clipboard);
+        runtime.update(|_, tx| tx.select_text("session-message-0-text", 0..12));
+        runtime.frame(2.0 / 60.0);
+        assert_eq!(runtime.selected_text().as_deref(), Some("Echo example"));
+        runtime.key(KeyEvent {
+            key: Key::Command('c'),
+            mods: rune::Mods {
+                cmd: true,
+                ..rune::Mods::default()
+            },
+        });
+        runtime.frame(3.0 / 60.0);
+        assert_eq!(
+            clipboard.text().as_deref().map(String::as_str),
+            Some("Echo example")
+        );
         assert!(runtime.find("new-research-composer").is_some());
+        let saved = runtime.state.active_session.clone().unwrap();
+        let mut revisited = State {
+            primary_view: PrimaryView::NewResearch,
+            session_generation: 2,
+            session_busy: true,
+            ..State::default()
+        };
+        revisited.finish_session_load(2, Ok(saved));
+        let mut reopened = Runtime::new(revisited, view, (840.0, 600.0), Env::new(true, 1.0));
+        reopened.frame(0.0);
+        assert!(reopened.find("new-research-ribbon").is_none());
+        assert!(reopened.find("new-research-composer").is_some());
+    }
+
+    #[test]
+    fn composer_ribbon_slides_down_when_a_session_starts() {
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                ..State::default()
+            },
+            view,
+            (840.0, 600.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let (before, _) = runtime.presented("new-research-ribbon").unwrap();
+        runtime.update(|state, _| state.session_busy = true);
+        runtime.frame(0.0);
+        runtime.frame(0.1);
+        let (during, _) = runtime.presented("new-research-ribbon").unwrap();
+        let (composer_during, _) = runtime.presented("new-research-composer").unwrap();
+        assert!(during[1] > before[1]);
+        assert!(during[1] + during[3] > composer_during[1]);
+        runtime.frame(1.0);
+        assert!(runtime.find("new-research-ribbon").is_none());
+        assert!(runtime.find("new-research-workspace-control").is_none());
+        assert!(runtime.find("new-research-repeat-control").is_none());
+        assert!(runtime.find("new-research-composer").is_some());
+    }
+
+    #[test]
+    fn session_transcript_formats_completed_and_streaming_markdown() {
+        let mut state = State {
+            primary_view: PrimaryView::NewResearch,
+            active_session: Some(SessionDetail {
+                summary: Some(SessionSummary {
+                    id: "00000000-0000-4000-8000-000000000002".to_owned(),
+                    workspace_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+                    title: "Example".to_owned(),
+                }),
+                messages: vec![beale_contracts::v1::SessionMessage {
+                    role: beale_contracts::v1::SessionRole::Assistant as i32,
+                    text: "# Findings\n\n**Checked** `example.txt`.\n\n- First\n- Second\n\n```sh\nprintf ok\n```".to_owned(),
+                    tools: Vec::new(),
+                    reasoning_summaries: Vec::new(),
+                    duration_ms: 1_000,
+                    commentary: Vec::new(),
+                }],
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "model-example".to_owned(),
+            }),
+            session_busy: true,
+            session_live_events: vec![SessionStreamEvent {
+                kind: SessionStreamKind::MessageDelta as i32,
+                text: "**Streaming** `content` and\n\n```sh\nprintf".to_owned(),
+                tool: None,
+                detail: None,
+                segment_index: 0,
+            }],
+            ..State::default()
+        };
+        state.session_work_expanded.insert(0);
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("session-message-0-markdown").is_some());
+        assert!(runtime.find("session-live-message-0-markdown").is_some());
+        assert!(runtime.find("session-reasoning-unavailable-0").is_some());
+        let text = runtime
+            .elements()
+            .into_iter()
+            .filter_map(|element| element.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in [
+            "Findings",
+            "Checked",
+            "example.txt",
+            "First",
+            "Second",
+            "printf ok",
+            "Streaming",
+            "content",
+            "printf",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in {text:?}");
+        }
+        assert!(!text.contains("**Checked**"));
+        assert!(!text.contains("```sh"));
     }
 
     #[test]
@@ -5840,6 +6893,15 @@ mod tests {
                         summary: "Read example.txt".to_owned(),
                         is_error: false,
                     }],
+                    reasoning_summaries: vec![beale_contracts::v1::SessionReasoningSummary {
+                        text: "Checking the example file.".to_owned(),
+                        after_tool_count: 0,
+                    }],
+                    duration_ms: 2_345,
+                    commentary: vec![beale_contracts::v1::SessionCommentary {
+                        text: "Reading the example file.".to_owned(),
+                        after_tool_count: 0,
+                    }],
                 }],
                 provider: ProviderId::Openai as i32,
                 method: AuthMethod::ApiKey as i32,
@@ -5849,6 +6911,20 @@ mod tests {
         };
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
         runtime.frame(0.0);
+        assert!(runtime.find("session-work-header-0").is_some());
+        assert!(runtime.find("session-message-0").is_some());
+        assert!(runtime.find("session-reasoning-0-0").is_none());
+        let (x, y) = runtime.find("session-work-header-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.5);
+        assert!(runtime.find("session-reasoning-0-0").is_some());
+        assert!(runtime.find("session-commentary-0-0").is_some());
+        let (reasoning_bounds, _) = runtime.presented("session-reasoning-0-0").unwrap();
+        let (tool_bounds, _) = runtime
+            .presented(&format!("session-tool-button-{tool_id}"))
+            .unwrap();
+        assert!(reasoning_bounds[1] < tool_bounds[1]);
         assert!(
             runtime
                 .presented(&format!("session-tool-button-{tool_id}"))
@@ -5869,6 +6945,80 @@ mod tests {
         assert!(
             runtime
                 .presented(&format!("session-tool-detail-{tool_id}"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn streaming_progress_updates_the_visible_work_group() {
+        let tool = beale_contracts::v1::SessionToolSummary {
+            id: "00000000-0000-4000-8000-000000000003".to_owned(),
+            name: "read".to_owned(),
+            summary: "Read example.txt".to_owned(),
+            is_error: false,
+        };
+        let mut state = State {
+            primary_view: PrimaryView::NewResearch,
+            session_busy: true,
+            session_generation: 7,
+            session_pending_prompt: Some("Inspect example.txt".to_owned()),
+            ..State::default()
+        };
+        for text in ["Checking ", "example"] {
+            state.apply_session_progress(
+                7,
+                SessionStreamEvent {
+                    kind: SessionStreamKind::ReasoningDelta as i32,
+                    text: text.to_owned(),
+                    tool: None,
+                    detail: None,
+                    segment_index: 1,
+                },
+            );
+        }
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                kind: SessionStreamKind::ToolStarted as i32,
+                text: String::new(),
+                tool: Some(tool.clone()),
+                detail: None,
+                segment_index: 0,
+            },
+        );
+        state.apply_session_progress(
+            7,
+            SessionStreamEvent {
+                kind: SessionStreamKind::ToolFinished as i32,
+                text: String::new(),
+                tool: Some(tool),
+                detail: None,
+                segment_index: 0,
+            },
+        );
+        state.apply_session_progress(
+            6,
+            SessionStreamEvent {
+                kind: SessionStreamKind::MessageDelta as i32,
+                text: "stale".to_owned(),
+                tool: None,
+                detail: None,
+                segment_index: 1,
+            },
+        );
+        assert_eq!(state.session_live_events.len(), 2);
+        assert_eq!(state.session_live_events[0].text, "Checking example");
+        assert_eq!(
+            state.session_live_events[1].kind,
+            SessionStreamKind::ToolFinished as i32
+        );
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("session-current-work-header").is_some());
+        assert!(runtime.find("session-live-reasoning-0").is_some());
+        assert!(
+            runtime
+                .find("session-live-tool-00000000-0000-4000-8000-000000000003")
                 .is_some()
         );
     }
@@ -6045,6 +7195,10 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(1.0);
         assert_eq!(runtime.state.new_research_effort, new_research::Effort::Low);
+        assert_eq!(
+            runtime.state.new_research_effort.wire(),
+            beale_contracts::v1::ReasoningEffort::Low
+        );
         assert!(!runtime.state.composer_menu_open);
         assert_eq!(
             runtime.state.new_research_model.as_ref().unwrap().id,
@@ -6574,8 +7728,15 @@ mod tests {
             runtime.frame(1.0);
         }
 
-        let mut runtime =
-            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        let mut runtime = Runtime::new(
+            State {
+                settings_section: SettingsSection::Providers,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
         runtime.frame(0.0);
         assert!(runtime.find("header-back").is_some());
         assert!(runtime.find("header-forward").is_some());
@@ -6614,12 +7775,12 @@ mod tests {
             runtime.state.view_location(),
             ViewLocation::Appearance(AppearanceTab::Colors)
         );
-        click(&mut runtime, "settings-general");
+        click(&mut runtime, "settings-safety");
         assert!(runtime.state.view_history.forward.is_empty());
         click(&mut runtime, "header-forward");
         assert_eq!(
             runtime.state.view_location(),
-            ViewLocation::Settings(SettingsSection::General)
+            ViewLocation::Safety(permission_settings::PermissionTab::AutoReview)
         );
         assert!(runtime.state.view_history.forward.is_empty());
     }
@@ -6653,6 +7814,45 @@ mod tests {
         runtime.pointer_move(500.0, 500.0);
         runtime.frame(0.0);
         assert!(runtime.find("rail-tooltip").is_none());
+    }
+
+    #[test]
+    fn subscription_circles_anchor_to_rail_bottom_and_show_details() {
+        let state = State {
+            provider_usage: [
+                Some(beale_contracts::v1::ProviderUsageSnapshot {
+                    provider: ProviderId::Openai as i32,
+                    checked_at_unix: 2_000_000_000,
+                    windows: vec![
+                        beale_contracts::v1::ProviderUsageWindow {
+                            id: "primary".into(),
+                            label: "Session Limit".into(),
+                            used_percent: 25,
+                            resets_at_unix: 2_000_001_000,
+                        },
+                        beale_contracts::v1::ProviderUsageWindow {
+                            id: "secondary".into(),
+                            label: "Weekly Limit".into(),
+                            used_percent: 40,
+                            resets_at_unix: 2_000_002_000,
+                        },
+                    ],
+                }),
+                None,
+            ],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (circle, _) = runtime.presented("usage-openai").unwrap();
+        let (settings, _) = runtime.presented("nav-settings").unwrap();
+        assert!(circle[1] > settings[1] + 200.0);
+        assert!(circle[1] + circle[3] <= 720.0);
+        let (x, y) = runtime.find("usage-openai").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.presented("usage-tooltip").is_some());
+        assert!(runtime.presented("usage-xai").is_none());
     }
 
     #[test]
@@ -6759,6 +7959,17 @@ mod tests {
     fn settings_sidenav_switches_sections_and_returns_to_providers() {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.settings_section, SettingsSection::Safety);
+        assert_eq!(runtime.state.settings_section.label(), "Safety");
+        assert_eq!(
+            runtime.state.settings_section.icon().name,
+            "beale-shield-check"
+        );
+        assert!(runtime.find("settings-safety").is_some());
+        let (x, y) = runtime.find("settings-providers").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
         runtime.frame(0.0);
         assert!(runtime.find("settings-profile").is_none());
         assert!(runtime.find("settings-prompt").is_none());

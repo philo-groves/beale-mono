@@ -1,9 +1,10 @@
 use beale_contracts::{
-    PROTOBUF_CONTENT_TYPE, SESSION_DETAIL_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURNS_PATH,
+    PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_ARCHIVE_PATH, SESSION_DETAIL_PATH,
+    SESSION_STREAM_MAX_FRAME_BYTES, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_STREAM_PATH,
     SESSIONS_PATH,
     v1::{
-        ListSessionsResponse, SessionDetail, SessionRole, SessionSummary, SessionToolDetailPage,
-        SubmitSessionTurnRequest,
+        ListSessionsResponse, SessionDetail, SessionRole, SessionStreamEvent, SessionStreamKind,
+        SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
     },
 };
 use prost::Message;
@@ -12,10 +13,46 @@ use std::{net::SocketAddr, time::Duration};
 
 const MAX_REPLY_BYTES: usize = 4_500_000;
 
+#[derive(Default)]
+struct StreamDecoder {
+    pending: Vec<u8>,
+}
+
+impl StreamDecoder {
+    fn push(&mut self, chunk: &[u8]) -> Result<Vec<SessionStreamEvent>, String> {
+        self.pending.extend_from_slice(chunk);
+        let mut events = Vec::new();
+        loop {
+            if self.pending.len() < 4 {
+                break;
+            }
+            let length = u32::from_be_bytes(
+                self.pending[..4]
+                    .try_into()
+                    .map_err(|_| "Invalid session stream frame")?,
+            ) as usize;
+            if length == 0 || length > SESSION_STREAM_MAX_FRAME_BYTES {
+                return Err("Invalid session stream frame".to_owned());
+            }
+            if self.pending.len() < length + 4 {
+                break;
+            }
+            let event = SessionStreamEvent::decode(&self.pending[4..length + 4])
+                .map_err(|_| "Invalid session stream event".to_owned())?;
+            self.pending.drain(..length + 4);
+            events.push(event);
+        }
+        if self.pending.len() > SESSION_STREAM_MAX_FRAME_BYTES + 4 {
+            return Err("Session stream frame is too large".to_owned());
+        }
+        Ok(events)
+    }
+}
+
 pub(crate) fn client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(600))
+        .timeout(Duration::from_secs(30))
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -77,8 +114,33 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                 SessionRole::try_from(message.role),
                 Ok(SessionRole::User | SessionRole::Assistant)
             ) && !message.text.is_empty()
-                && (message.role == SessionRole::Assistant as i32 || message.tools.is_empty())
+                && (message.role == SessionRole::Assistant as i32
+                    || (message.tools.is_empty()
+                        && message.reasoning_summaries.is_empty()
+                        && message.commentary.is_empty()
+                        && message.duration_ms == 0))
                 && message.tools.len() <= 32
+                && message.duration_ms <= 86_400_000
+                && message.reasoning_summaries.len() <= 128
+                && message.commentary.len() <= 8
+                && message.commentary.iter().all(|item| {
+                    !item.text.trim().is_empty()
+                        && item.text.len() <= 8_192
+                        && item.after_tool_count as usize <= message.tools.len()
+                })
+                && message
+                    .commentary
+                    .windows(2)
+                    .all(|pair| pair[0].after_tool_count <= pair[1].after_tool_count)
+                && message.reasoning_summaries.iter().all(|summary| {
+                    !summary.text.trim().is_empty()
+                        && summary.text.len() <= 16_384
+                        && summary.after_tool_count as usize <= message.tools.len()
+                })
+                && message
+                    .reasoning_summaries
+                    .windows(2)
+                    .all(|pair| pair[0].after_tool_count <= pair[1].after_tool_count)
                 && message.tools.iter().all(|tool| {
                     uuid::Uuid::parse_str(&tool.id).is_ok()
                         && !tool.name.is_empty()
@@ -87,6 +149,41 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                         && tool.summary.len() <= 512
                 })
         })
+}
+
+fn valid_stream_event(event: &SessionStreamEvent) -> bool {
+    match SessionStreamKind::try_from(event.kind) {
+        Ok(SessionStreamKind::MessageDelta | SessionStreamKind::ReasoningDelta) => {
+            !event.text.is_empty()
+                && event.text.len() <= 1_048_576
+                && event.tool.is_none()
+                && event.detail.is_none()
+                && event.segment_index > 0
+        }
+        Ok(SessionStreamKind::ToolStarted | SessionStreamKind::ToolFinished) => {
+            event.text.is_empty()
+                && event.detail.is_none()
+                && event.tool.as_ref().is_some_and(|tool| {
+                    uuid::Uuid::parse_str(&tool.id).is_ok()
+                        && !tool.name.is_empty()
+                        && tool.name.len() <= 128
+                        && !tool.summary.is_empty()
+                        && tool.summary.len() <= 512
+                })
+        }
+        Ok(SessionStreamKind::Completed) => {
+            event.text.is_empty()
+                && event.tool.is_none()
+                && event.detail.as_ref().is_some_and(valid_detail)
+        }
+        Ok(SessionStreamKind::Failed) => {
+            !event.text.is_empty()
+                && event.text.len() <= 512
+                && event.tool.is_none()
+                && event.detail.is_none()
+        }
+        _ => false,
+    }
 }
 
 pub(crate) async fn load_tool_page(
@@ -146,6 +243,25 @@ pub(crate) async fn list(client: &Client, addr: SocketAddr) -> Result<Vec<Sessio
     Ok(reply.sessions)
 }
 
+pub(crate) async fn archive(client: &Client, addr: SocketAddr, id: &str) -> Result<(), String> {
+    if uuid::Uuid::parse_str(id).is_err() {
+        return Err("Invalid session ID".to_owned());
+    }
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let path = SESSION_ARCHIVE_PATH.replace("{id}", id);
+    let response = client
+        .post(url(addr, &path))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| "Could not archive session".to_owned())?;
+    match response.status() {
+        StatusCode::NO_CONTENT => Ok(()),
+        StatusCode::NOT_FOUND => Err("Session is no longer available".to_owned()),
+        _ => Err(format!("Could not archive session ({})", response.status())),
+    }
+}
+
 pub(crate) async fn load(
     client: &Client,
     addr: SocketAddr,
@@ -173,30 +289,98 @@ pub(crate) async fn load(
     Ok(reply)
 }
 
-pub(crate) async fn submit(
+pub(crate) async fn submit_stream(
     client: &Client,
     addr: SocketAddr,
     request: SubmitSessionTurnRequest,
+    mut on_progress: impl FnMut(SessionStreamEvent),
 ) -> Result<SessionDetail, String> {
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
-    let reply: SessionDetail = decode(
-        client
-            .post(url(addr, SESSION_TURNS_PATH))
-            .bearer_auth(token)
-            .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
-            .body(request.encode_to_vec())
-            .send()
-            .await
-            .map_err(|_| "Could not send session turn".to_owned())?,
-    )
-    .await?;
-    if !valid_detail(&reply)
-        || reply.summary.as_ref().is_none_or(|summary| {
-            summary.workspace_id != request.workspace_id
-                || (!request.session_id.is_empty() && summary.id != request.session_id)
-        })
-    {
-        return Err("Invalid app-server session detail".to_owned());
+    let mut response = client
+        .post(url(addr, SESSION_TURN_STREAM_PATH))
+        .timeout(Duration::from_secs(3_600))
+        .bearer_auth(token)
+        .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+        .body(request.encode_to_vec())
+        .send()
+        .await
+        .map_err(|_| "Could not send session turn".to_owned())?;
+    if response.status() != StatusCode::OK {
+        return Err(format!("Session request failed ({})", response.status()));
     }
-    Ok(reply)
+    if response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some(PROTOBUF_STREAM_CONTENT_TYPE)
+    {
+        return Err("Invalid app-server session stream".to_owned());
+    }
+    let mut decoder = StreamDecoder::default();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Session stream was interrupted".to_owned())?
+    {
+        for event in decoder.push(&chunk)? {
+            if !valid_stream_event(&event) {
+                return Err("Invalid app-server session stream event".to_owned());
+            }
+            match SessionStreamKind::try_from(event.kind) {
+                Ok(SessionStreamKind::Completed) => {
+                    let detail = event.detail.ok_or("Missing session detail".to_owned())?;
+                    if detail.summary.as_ref().is_none_or(|summary| {
+                        summary.workspace_id != request.workspace_id
+                            || (!request.session_id.is_empty() && summary.id != request.session_id)
+                    }) {
+                        return Err("Invalid app-server session detail".to_owned());
+                    }
+                    return Ok(detail);
+                }
+                Ok(SessionStreamKind::Failed) => return Err(event.text),
+                _ => on_progress(event),
+            }
+        }
+    }
+    Err("Session stream ended before completion".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use beale_contracts::session_stream_frame;
+
+    #[test]
+    fn stream_decoder_handles_fragmented_and_adjacent_frames() {
+        let first = SessionStreamEvent {
+            kind: SessionStreamKind::ReasoningDelta as i32,
+            text: "Checking example input".to_owned(),
+            tool: None,
+            detail: None,
+            segment_index: 1,
+        };
+        let second = SessionStreamEvent {
+            kind: SessionStreamKind::MessageDelta as i32,
+            text: "Example answer".to_owned(),
+            tool: None,
+            detail: None,
+            segment_index: 1,
+        };
+        let mut bytes = session_stream_frame(&first).unwrap();
+        bytes.extend(session_stream_frame(&second).unwrap());
+        let mut decoder = StreamDecoder::default();
+        assert!(decoder.push(&bytes[..2]).unwrap().is_empty());
+        let events = decoder.push(&bytes[2..]).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].text, first.text);
+        assert_eq!(events[1].text, second.text);
+        assert!(decoder.pending.is_empty());
+    }
+
+    #[test]
+    fn stream_decoder_rejects_oversized_frames() {
+        let mut decoder = StreamDecoder::default();
+        let length = (SESSION_STREAM_MAX_FRAME_BYTES as u32 + 1).to_be_bytes();
+        assert!(decoder.push(&length).is_err());
+    }
 }

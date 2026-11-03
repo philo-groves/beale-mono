@@ -6,6 +6,15 @@
 
 #### Added
 
+- Added plus buttons beside v2 Safety rule-set titles and a shared creation dialog for new Auto-Review and Guardian rules.
+- Added v2 Permissions settings with Auto-Review and Guardian tabs and editable, disableable rules.
+- Added v2 Archive settings with Sessions and Quick Chats tabs, compact stats, and Restore actions; restored Quick Chats reopen in the dock.
+- Added a hover archive action and confirmation dialog for v2 workspace sessions in the Home sidebar.
+- Added a bottom-right v2 Quick Chat dock with a sliding entry, compact single-line composer, title ribbon, and scrollable transcript that expands above the composer after sending.
+- Restored v2 subscription usage circles in the desktop icon rail, with remaining quota rings and reset tooltips for available OpenAI Codex and xAI windows.
+- Render v2 assistant messages and reasoning summaries as themed Markdown in session transcripts, including content as it streams.
+- Streamed v2 session tool activity, available reasoning summaries, and assistant text to the desktop as a turn runs; completed work collapses beneath a timed disclosure while the final answer stays visible.
+- Displayed provider supplied reasoning summaries in v2 session transcripts beside tool activity.
 - Added expandable v2 session tool rows that fetch arguments and paged output only when opened.
 - Added navigation icon tooltips and a hover-revealed New Research action on each v2 Home workspace row.
 - Started the v2 Rune desktop client with Beale's dark icon rail and an Agent Settings Providers view for OpenAI and xAI.
@@ -44,6 +53,22 @@
 
 #### Changed
 
+- Renamed the v2 Agent Settings Permissions view to Safety and gave its sidenav entry a shield-check icon.
+- Moved each v2 Permissions tab description beneath its rule form title and above the rules.
+- Permissions now opens by default in v2 Agent Settings. Auto-Review and Guardian forms name their rule sets, and editing a rule opens a form dialog for its name and description.
+- Replaced v2 Permissions rule text actions with edit icons and a reusable toggle control.
+- Removed the v2 Archive and Providers Refresh buttons; Archive updates on entry, local chat changes, reconnection, and while open.
+- Updated the v2 desktop's Rune and Rune Kit revision to upstream `3730e00c`, with no desktop API changes required.
+- Faded overflowing v2 Home sidebar titles and started each reopened Quick Chat as a fresh chat while retaining completed chats in the host archive.
+- Displayed v2 session work durations as nonzero hours, minutes, and seconds instead of a clock timestamp.
+- Aligned the v2 Quick Chat transcript with its inset ribbon and gave it a separate theme surface color from the composer.
+- Replaced the initial v2 Quick Chat title with a workspace selector; the selected workspace supplies guidance and scope, and the title appears when the first message starts.
+- Inset the v2 Quick Chat title ribbon, darkened it relative to the composer in the dark theme, and added a soft dock shadow.
+- Slide the v2 New Research composer ribbon down and remove it when a session starts; reopened sessions show only the composer.
+- Simplified the v2 Home sidenav collection row: lighter, smaller selector text, borderless controls, and New Workspace beside Search on the right.
+- Colored each v2 subscription usage ring orange below 40% remaining and red below 20% remaining.
+- Restyled v2 transcript tool calls as compact icon and label rows with a trailing disclosure chevron.
+- New Research now shows an orange workspace warning and disables its composer when no workspaces are available.
 - Kept the default arrow cursor over v2 desktop buttons and selection rows; drag surfaces retain their interaction cursors.
 - Aligned v2 session user messages to the right in rounded panels and removed speaker labels from the transcript.
 - Fixed the v2 Add Surface dialog's scope from its invoking list and replaced its scope selector with an in-scope or out-of-scope title.
@@ -69,7 +94,7 @@
 - Replaced provider title initials with vector OpenAI and Grok marks.
 - Framed each provider view header with a rounded 1px border.
 - Removed an empty lead-error layout slot and left a slightly larger gap below the provider tabs.
-- Moved provider model Refresh into the provider header and replaced the Model access line with a Source Priority selector when both credentials are configured.
+- Replaced the provider Model access line with a Source Priority selector when both credentials are configured.
 - Colored provider setup warnings orange and provider operation errors red while keeping sign-in progress and success messages neutral.
 - Applied the selected appearance theme across the v2 desktop shell, provider forms, menus, and Windows window border.
 - Moved Color Theme selection beside the Appearance tabs, added a selected-theme header, and tied the Heat Palette directly to that theme.
@@ -93,6 +118,10 @@
 
 #### Fixed
 
+- Kept v2 popup menus above the New Research composer when their bounds overlap.
+- Layered the v2 New Research composer above its exiting ribbon so the ribbon slides beneath it.
+- Enabled text selection and copying from v2 user-message bubbles.
+- Forward the v2 composer reasoning effort to OpenAI Responses turns and show when no provider reasoning summary was received.
 - Normalized OpenAI model labels in the v2 desktop when an older running app-server still sends dashed names.
 - Anchored the New Research model selector's main menu above its control so changing option-list height does not move it.
 - Reduced transparent padding in the v2 Windows app icon so it fills the taskbar icon area.
@@ -103,7 +132,19 @@
 
 #### Added
 
+- Added protocol v1.21 rule creation and host SQLite schema 10 for ordered custom Auto-Review and Guardian rules, limited to 16 total rules.
+- Added protocol v1.20 rule-name updates and host SQLite schema 9; existing saved rule settings migrate with their default names intact.
+- Added protocol v1.19 permission rule operations and SQLite schema 8 for host-owned Auto-Review and Guardian settings. Read, write, edit, and Bash calls receive small-model review and optional lead-model review after a denial; review failures deny the call.
+- Added protocol v1.18 archive listing, workspace session restoration, and saved Quick Chat detail retrieval.
+- Added protocol v1.17 with an authenticated session archive operation. Host SQLite schema 7 records archive state, migrates saved Quick Chats into the archive, and excludes archived sessions from workspace lists.
+- Added protocol v1.16 with an optional Quick Chat workspace binding and host SQLite schema 6 for its saved identity.
+- Added protocol v1.15 with authenticated Quick Chat turns using host-selected provider defaults and a workspace-independent saved transcript.
+- Added an authenticated, cached v1.14 protobuf usage snapshot endpoint; host-only probes read Codex and xAI subscription windows without sending credentials to clients.
+- Added protocol v1.13 with a typed reasoning-effort field on session turns; OpenAI Responses requests now use it alongside summary opt-in.
+- Added the framed HTTP session turn stream in protocol v1.12 and stored turn durations and intermediate assistant text in host SQLite schema 5.
+- Added bounded reasoning summaries to the v2 session contract (v1.11) and host SQLite schema 3, preserving their placement among tool calls.
 - Added v2 `read`, `write`, `edit`, and `bash` provider tools with bounded result paging and lazy client detail. Host SQLite schema 1 migrates to 2; the client protocol moves to v1.10.
+- Added a host-owned `SYSTEM.md` for v2 sessions, initialized once and read for each turn; runtime additions use plain Markdown without template variables.
 - Added a v2 host-owned SQLite database for workspace registration, sessions, and provider settings. Earlier v2 workspace, session, and provider setting files are not imported; credential secrets remain in protected host files.
 - Added v1.6 authenticated workspace create/list operations, a host-owned workspace registry, and an initial schema-v3 workspace layout with user-created scope surfaces and rules.
 - Added v1.7 authenticated workspace details reads for saved scope surfaces, rules, and guidance.
@@ -119,6 +160,8 @@
 
 #### Changed
 
+- Preferred GPT-5.6 Sol for new v2 OpenAI lead-model defaults when the account offers it; saved model choices remain in place.
+- Sent a model-aware Daybreak cyber access marker on every v2 OpenAI Responses request, using the host's Blue or Red setting and rejecting models known to require Red approval under Blue.
 - Moved v2 workspace and session routes and storage from `beale-core` into the `beale-workspaces` and `beale-sessions` crates; `beale-core` now composes their routers.
 - Added the client version header required for xAI subscription inference through the Grok CLI proxy.
 - Replaced dashes with spaces in OpenAI model display names returned by the v2 app-server; model IDs are unchanged.

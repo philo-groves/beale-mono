@@ -225,7 +225,13 @@ fn recommended(provider: Provider, small: bool, models: &[ModelEntry]) -> String
 
 fn preferred_models(provider: Provider, small: bool) -> &'static [&'static str] {
     match (provider, small) {
-        (Provider::OpenAi, false) => &["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6.1-terra"],
+        (Provider::OpenAi, false) => &[
+            "gpt-5.6-sol",
+            "gpt-6-sol",
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6.1-terra",
+        ],
         (Provider::OpenAi, true) => &["gpt-6-luna", "gpt-6.1-terra", "gpt-5.4-mini"],
         (Provider::Xai, false) => &["grok-4.7", "grok-4.6", "grok-build"],
         (Provider::Xai, true) => &[
@@ -246,28 +252,36 @@ mod tests {
     #[test]
     fn openai_subscription_uses_visible_slugs_and_available_defaults() {
         let value = json!({"models": [
+            {"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol","visibility":"list"},
             {"slug":"gpt-6.1-sol","display_name":"GPT-6.1-Sol","visibility":"list"},
             {"slug":"gpt-6-luna","display_name":"Luna","visibility":"list"},
             {"slug":"hidden","visibility":"hidden"}
         ]});
         let models = parse_models(Provider::OpenAi, AuthMode::Subscription, &value).unwrap();
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].name, "GPT 6.1 Sol");
-        assert_eq!(models[0].id, "gpt-6.1-sol");
-        assert_eq!(recommended(Provider::OpenAi, false, &models), "gpt-6.1-sol");
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].name, "GPT 5.6 Sol");
+        assert_eq!(models[0].id, "gpt-5.6-sol");
+        assert_eq!(recommended(Provider::OpenAi, false, &models), "gpt-5.6-sol");
         assert_eq!(recommended(Provider::OpenAi, true, &models), "gpt-6-luna");
     }
 
     #[test]
     fn api_lists_drop_non_text_models_and_keep_xai_aliases() {
-        let openai = json!({"data": [{"id":"gpt-6.1-sol"},{"id":"gpt-image-2"},{"id":"text-embedding-3-small"}]});
+        let openai = json!({"data": [{"id":"gpt-6.1-sol"},{"id":"gpt-5.6-sol"},{"id":"gpt-image-2"},{"id":"text-embedding-3-small"}]});
+        let openai_models = parse_models(Provider::OpenAi, AuthMode::ApiKey, &openai).unwrap();
         assert_eq!(
-            parse_models(Provider::OpenAi, AuthMode::ApiKey, &openai)
-                .unwrap()
+            recommended(Provider::OpenAi, false, &openai_models),
+            "gpt-5.6-sol"
+        );
+        assert_eq!(
+            openai_models
                 .iter()
                 .map(|model| (model.id.as_str(), model.name.as_str()))
                 .collect::<Vec<_>>(),
-            vec![("gpt-6.1-sol", "gpt 6.1 sol")]
+            vec![
+                ("gpt-6.1-sol", "gpt 6.1 sol"),
+                ("gpt-5.6-sol", "gpt 5.6 sol")
+            ]
         );
         let xai = json!({"models": [{"id":"grok-4.7-2026-09","aliases":["grok-4.7"],"output_modalities":["text"]},{"id":"grok-imagine","output_modalities":["image"]}]});
         let models = parse_models(Provider::Xai, AuthMode::ApiKey, &xai).unwrap();

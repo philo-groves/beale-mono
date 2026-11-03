@@ -195,6 +195,13 @@ impl WorkspaceStore {
             .any(|workspace| workspace.id == id))
     }
 
+    pub fn details_for_host(&self, id: &str) -> Result<WorkspaceDetails, StatusCode> {
+        self.details(id).map_err(|error| {
+            error.report();
+            error.status()
+        })
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }

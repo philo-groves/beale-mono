@@ -1,11 +1,18 @@
-use beale_contracts::v1::{AuthMethod, SessionRole, SessionToolSummary};
-use rune::{
-    Align, Color, El, Key, KeyEvent, ScrollSpec, Side, Tx, col, el, icon, row, text, text_input,
+use beale_contracts::v1::{
+    AuthMethod, ReasoningEffort, SessionRole, SessionStreamKind, SessionToolSummary,
 };
+use rune::{
+    Align, Color, El, Key, KeyEvent, ScrollSpec, Side, Transition, Tx, col, el, icon, row, text,
+    text_input,
+};
+use rune_kit::{Markdown, MarkdownStyle};
 
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method,
-    icons::{ARROW_UP, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT},
+    icons::{
+        ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT,
+        TERMINAL, WRENCH,
+    },
     in_place_menu, load_tool_detail_page, start_session_turn, toggle_selection_menu,
     toggle_tool_detail, ui_font,
 };
@@ -49,6 +56,18 @@ impl Effort {
             Self::High => "High",
             Self::XHigh => "XHigh",
             Self::Max => "Max",
+        }
+    }
+
+    pub(crate) fn wire(self) -> ReasoningEffort {
+        match self {
+            Self::Off => ReasoningEffort::None,
+            Self::Minimal => ReasoningEffort::Minimal,
+            Self::Low => ReasoningEffort::Low,
+            Self::Medium => ReasoningEffort::Medium,
+            Self::High => ReasoningEffort::High,
+            Self::XHigh => ReasoningEffort::Xhigh,
+            Self::Max => ReasoningEffort::Max,
         }
     }
 }
@@ -482,11 +501,63 @@ pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
         })
 }
 
-fn transcript_message(key: String, content: String, user: bool, theme: ThemeStyle<'_>) -> El {
-    let message = text(content)
-        .font(ui_font(14.0, 400.0))
-        .color(theme.color("#eeeeee"))
-        .wrap();
+fn is_web_link(destination: &str) -> bool {
+    reqwest::Url::parse(destination)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
+}
+
+fn transcript_markdown(content: String, theme: ThemeStyle<'_>, streaming: bool, muted: bool) -> El {
+    let body = ui_font(if muted { 13.0 } else { 14.0 }, 400.0);
+    let heading_weight = if muted { 400.0 } else { 600.0 };
+    let mut style = MarkdownStyle::neutral(theme.is_dark())
+        .text(theme.color(if muted { "#b8b8b8" } else { "#eeeeee" }))
+        .muted(theme.color("#969696"))
+        .link(theme.color(if theme.is_dark() {
+            "#a9c7eb"
+        } else {
+            "#355f96"
+        }))
+        .inline_code_bg(theme.color("#303030"))
+        .code_block(theme.color("#191919"), theme.color("#323232"))
+        .rule(theme.color("#323232"))
+        .quote_rule(theme.color("#777777"))
+        .body_font(body)
+        .heading_font(1, ui_font(if muted { 16.0 } else { 20.0 }, heading_weight))
+        .heading_font(2, ui_font(if muted { 15.0 } else { 18.0 }, heading_weight))
+        .heading_font(3, ui_font(if muted { 14.0 } else { 16.0 }, heading_weight))
+        .code_block_font(ui_font(13.0, 400.0).mono());
+    if muted {
+        style = style.strong_weight(400.0);
+    }
+    Markdown::new(content)
+        .streaming(streaming)
+        .selectable(true)
+        .on_link_tx(|_: &mut State, destination, tx| {
+            if is_web_link(destination) {
+                let _ = tx.open_url(destination);
+            }
+        })
+        .render(&style)
+}
+
+pub(crate) fn transcript_message(
+    key: String,
+    content: String,
+    user: bool,
+    streaming: bool,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let message = if user {
+        text(content)
+            .key(format!("{key}-text"))
+            .font(ui_font(14.0, 400.0))
+            .color(theme.color("#eeeeee"))
+            .wrap()
+            .selectable(true)
+            .selection_color(rune_kit::Kit::neutral(theme.is_dark()).selection())
+    } else {
+        transcript_markdown(content, theme, streaming, false).key(format!("{key}-markdown"))
+    };
     if user {
         row().key(key.clone()).w_full().child(el().grow(1.0)).child(
             col()
@@ -515,14 +586,26 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
             row()
                 .key(format!("session-tool-button-{}", tool.id))
                 .w_full()
-                .gap(8.0)
-                .px(10.0)
-                .py(7.0)
-                .radius(8.0)
-                .continuous_corners()
-                .fill(theme.color("#202020"))
-                .hover(theme.color("#303030"))
+                .gap(10.0)
+                .py(3.0)
                 .on_press(move |state: &mut State| toggle_tool_detail(state, id.clone()))
+                .child(
+                    icon(
+                        if tool.name == "bash" {
+                            &TERMINAL
+                        } else {
+                            &WRENCH
+                        },
+                        16.0,
+                    )
+                    .color(theme.color("#969696")),
+                )
+                .child(
+                    text(tool.summary.clone())
+                        .font(ui_font(13.0, 400.0))
+                        .color(theme.color(if tool.is_error { "#e07676" } else { "#b4b4b4" }))
+                        .truncate(),
+                )
                 .child(
                     icon(
                         if expanded {
@@ -532,13 +615,7 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
                         },
                         13.0,
                     )
-                    .color(theme.color("#969696")),
-                )
-                .child(
-                    text(tool.summary.clone())
-                        .font(ui_font(13.0, 400.0))
-                        .color(theme.color(if tool.is_error { "#e07676" } else { "#b4b4b4" }))
-                        .wrap(),
+                    .color(theme.color("#777777")),
                 ),
         );
     if expanded {
@@ -547,6 +624,7 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
             .w_full()
             .gap(6.0)
             .px(12.0)
+            .pl(26.0)
             .py(10.0)
             .radius(8.0)
             .continuous_corners()
@@ -640,7 +718,119 @@ fn transcript_tool(tool: &SessionToolSummary, state: &State, theme: ThemeStyle<'
     entry
 }
 
+fn transcript_reasoning(
+    content: String,
+    key: String,
+    streaming: bool,
+    theme: ThemeStyle<'_>,
+) -> El {
+    row()
+        .key(key)
+        .w_full()
+        .gap(10.0)
+        .py(3.0)
+        .child(icon(&BRAIN, 18.0).color(theme.color("#969696")))
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .child(transcript_markdown(content, theme, streaming, true)),
+        )
+}
+
+fn work_duration(ms: u64) -> String {
+    let seconds = ms / 1_000;
+    let hours = seconds / 3_600;
+    let minutes = (seconds / 60) % 60;
+    let remaining_seconds = seconds % 60;
+    let mut parts = Vec::with_capacity(3);
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if minutes > 0 {
+        parts.push(format!("{minutes}m"));
+    }
+    if remaining_seconds > 0 || parts.is_empty() {
+        parts.push(format!("{remaining_seconds}s"));
+    }
+    parts.join(" ")
+}
+
+fn work_header(
+    key: String,
+    index: usize,
+    duration_ms: u64,
+    working: bool,
+    expanded: bool,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let label = format!(
+        "{} for {}",
+        if working { "Working" } else { "Worked" },
+        work_duration(duration_ms)
+    );
+    let mut header = row().key(key).w_full().gap(5.0).py(7.0).child(
+        text(label)
+            .font(ui_font(14.0, 400.0))
+            .color(theme.color("#969696")),
+    );
+    if !working {
+        header = header
+            .on_press(move |state: &mut State| {
+                if !state.session_work_expanded.insert(index) {
+                    state.session_work_expanded.remove(&index);
+                }
+            })
+            .child(
+                icon(
+                    if expanded {
+                        &CHEVRON_DOWN
+                    } else {
+                        &CHEVRON_RIGHT
+                    },
+                    14.0,
+                )
+                .color(theme.color("#777777")),
+            );
+    }
+    col()
+        .w_full()
+        .child(header)
+        .child(el().w_full().h(1.0).fill(theme.color("#303030")))
+}
+
+fn live_tool(tool: &SessionToolSummary, finished: bool, theme: ThemeStyle<'_>) -> El {
+    row()
+        .key(format!("session-live-tool-{}", tool.id))
+        .w_full()
+        .gap(10.0)
+        .py(3.0)
+        .child(
+            icon(
+                if tool.name == "bash" {
+                    &TERMINAL
+                } else {
+                    &WRENCH
+                },
+                16.0,
+            )
+            .color(theme.color("#969696")),
+        )
+        .child(
+            text(if finished {
+                tool.summary.clone()
+            } else {
+                format!("{}…", tool.summary)
+            })
+            .font(ui_font(13.0, 400.0))
+            .color(theme.color(if tool.is_error { "#e07676" } else { "#b4b4b4" }))
+            .truncate(),
+        )
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
+    let has_workspaces = !state.workspaces.is_empty();
+    let no_workspaces = state.workspace_list_loaded && !has_workspaces;
     let choices = choices(state);
     let selected = selected(state, &choices);
     let model_label = selected.map_or_else(
@@ -716,29 +906,49 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             .hover(theme.color("#303030"))
             .on_press(toggle_menu);
     }
+    let composer_input = if has_workspaces {
+        text_input(&state.new_research_prompt, ui_font(13.5, 400.0))
+            .key("new-research-composer-input")
+            .role("textbox")
+            .label("Research objective")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .padding(14.0)
+            .color(theme.color("#eeeeee"))
+            .placeholder("Research with Beale", theme.color("#888888"))
+            .on_edit(|state: &mut State| &mut state.new_research_prompt)
+            .on_submit(|state: &mut State, _| state.new_research_prompt.insert("\n"))
+    } else {
+        el().key("new-research-composer-input")
+            .role("textbox")
+            .label("Research objective unavailable until a workspace is added")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .padding(14.0)
+            .child(
+                text(if state.new_research_prompt.text.is_empty() {
+                    "Research with Beale".to_owned()
+                } else {
+                    state.new_research_prompt.text.clone()
+                })
+                .font(ui_font(13.5, 400.0))
+                .color(theme.color("#707070"))
+                .wrap(),
+            )
+    };
     let composer = col()
         .key("new-research-composer")
+        .raise()
         .w_full()
         .h(107.0)
         .min_h(0.0)
         .mt(-8.0)
         .radius(20.0)
         .continuous_corners()
-        .fill(theme.color("#242424"))
-        .child(
-            text_input(&state.new_research_prompt, ui_font(13.5, 400.0))
-                .key("new-research-composer-input")
-                .role("textbox")
-                .label("Research objective")
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
-                .padding(14.0)
-                .color(theme.color("#eeeeee"))
-                .placeholder("Research with Beale", theme.color("#888888"))
-                .on_edit(|state: &mut State| &mut state.new_research_prompt)
-                .on_submit(|state: &mut State, _| state.new_research_prompt.insert("\n")),
-        )
+        .fill(theme.color(if has_workspaces { "#242424" } else { "#202020" }))
+        .child(composer_input)
         .child(
             row()
                 .key("new-research-composer-controls")
@@ -749,8 +959,9 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 .child(model_button)
                 .child(el().grow(1.0))
                 .child({
-                    let available =
-                        !state.new_research_prompt.text.trim().is_empty() && !state.session_busy;
+                    let available = has_workspaces
+                        && !state.new_research_prompt.text.trim().is_empty()
+                        && !state.session_busy;
                     let mut button = row()
                         .key("new-research-send")
                         .role("button")
@@ -761,8 +972,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                         })
                         .size(28.0, 28.0)
                         .center()
-                        .radius(8.0)
-                        .continuous_corners()
+                        .radius(14.0)
                         .fill(theme.color(if available { "#d0d0d0" } else { "#303030" }))
                         .child(icon(&ARROW_UP, 16.0).color(theme.color(if available {
                             "#1b1b1b"
@@ -830,8 +1040,23 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                     toggle_selection_menu(state, SelectionMenu::ResearchWorkspace)
                 });
     }
+    let workspace_control = if no_workspaces {
+        text("No workspaces available. Create one to start research.")
+            .key("new-research-workspace-warning")
+            .font(ui_font(13.0, 500.0))
+            .color(theme.color("#dca15f"))
+    } else {
+        workspace_button
+    };
     let ribbon = row()
         .key("new-research-ribbon")
+        .transition(
+            Transition::asymmetric(
+                Transition::none(),
+                Transition::offset(0.0, 44.0).combined(Transition::opacity()),
+            )
+            .hold_layout(),
+        )
         .w_full()
         .h(44.0)
         .pl(8.0)
@@ -843,7 +1068,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .corners([18.0, 18.0, 0.0, 0.0])
         .continuous_corners()
         .fill(theme.color("#1b1b1b"))
-        .child(workspace_button)
+        .child(workspace_control)
         .child(el().grow(1.0))
         .child(
             row()
@@ -885,13 +1110,65 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     if let Some(detail) = &state.active_session {
         for (index, message) in detail.messages.iter().enumerate() {
             let user = message.role == SessionRole::User as i32;
-            for tool in &message.tools {
-                transcript = transcript.child(transcript_tool(tool, state, theme));
+            if !user {
+                let expanded = state.session_work_expanded.contains(&index);
+                transcript = transcript.child(work_header(
+                    format!("session-work-header-{index}"),
+                    index,
+                    message.duration_ms,
+                    false,
+                    expanded,
+                    theme,
+                ));
+                if expanded {
+                    if message.reasoning_summaries.is_empty() {
+                        transcript = transcript.child(transcript_reasoning(
+                            "No reasoning summary was received for this turn.".to_owned(),
+                            format!("session-reasoning-unavailable-{index}"),
+                            false,
+                            theme,
+                        ));
+                    }
+                    let mut summaries = message.reasoning_summaries.iter().enumerate().peekable();
+                    let mut commentary = message.commentary.iter().enumerate().peekable();
+                    for position in 0..=message.tools.len() {
+                        while summaries.peek().is_some_and(|(_, summary)| {
+                            summary.after_tool_count as usize == position
+                        }) {
+                            if let Some((summary_index, summary)) = summaries.next() {
+                                transcript = transcript.child(transcript_reasoning(
+                                    summary.text.clone(),
+                                    format!("session-reasoning-{index}-{summary_index}"),
+                                    false,
+                                    theme,
+                                ));
+                            }
+                        }
+                        while commentary
+                            .peek()
+                            .is_some_and(|(_, item)| item.after_tool_count as usize == position)
+                        {
+                            if let Some((commentary_index, item)) = commentary.next() {
+                                transcript = transcript.child(transcript_message(
+                                    format!("session-commentary-{index}-{commentary_index}"),
+                                    item.text.clone(),
+                                    false,
+                                    false,
+                                    theme,
+                                ));
+                            }
+                        }
+                        if let Some(tool) = message.tools.get(position) {
+                            transcript = transcript.child(transcript_tool(tool, state, theme));
+                        }
+                    }
+                }
             }
             transcript = transcript.child(transcript_message(
                 format!("session-message-{index}"),
                 message.text.clone(),
                 user,
+                false,
                 theme,
             ));
         }
@@ -901,16 +1178,68 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             "session-pending-message".to_owned(),
             prompt.clone(),
             true,
+            false,
             theme,
         ));
     }
-    if state.session_busy {
-        transcript = transcript.child(
-            text("Beale is responding…")
-                .key("session-progress")
-                .font(ui_font(13.0, 400.0))
-                .color(theme.color("#969696")),
-        );
+    if state.session_busy || !state.session_live_events.is_empty() {
+        transcript = transcript.child(work_header(
+            "session-current-work-header".to_owned(),
+            state
+                .active_session
+                .as_ref()
+                .map_or(0, |detail| detail.messages.len()),
+            state.session_elapsed_ms,
+            state.session_busy,
+            !state.session_busy
+                && state.session_work_expanded.contains(
+                    &state
+                        .active_session
+                        .as_ref()
+                        .map_or(0, |detail| detail.messages.len()),
+                ),
+            theme,
+        ));
+        if state.session_busy
+            || state.session_work_expanded.contains(
+                &state
+                    .active_session
+                    .as_ref()
+                    .map_or(0, |detail| detail.messages.len()),
+            )
+        {
+            for (index, event) in state.session_live_events.iter().enumerate() {
+                match SessionStreamKind::try_from(event.kind) {
+                    Ok(SessionStreamKind::ReasoningDelta) => {
+                        transcript = transcript.child(transcript_reasoning(
+                            event.text.clone(),
+                            format!("session-live-reasoning-{index}"),
+                            true,
+                            theme,
+                        ));
+                    }
+                    Ok(SessionStreamKind::MessageDelta) => {
+                        transcript = transcript.child(transcript_message(
+                            format!("session-live-message-{index}"),
+                            event.text.clone(),
+                            false,
+                            true,
+                            theme,
+                        ));
+                    }
+                    Ok(SessionStreamKind::ToolStarted | SessionStreamKind::ToolFinished) => {
+                        if let Some(tool) = &event.tool {
+                            transcript = transcript.child(live_tool(
+                                tool,
+                                event.kind == SessionStreamKind::ToolFinished as i32,
+                                theme,
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
     if !state.session_error.is_empty() {
         transcript = transcript.child(
@@ -925,6 +1254,15 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         || state.session_pending_prompt.is_some()
         || state.session_busy
         || !state.session_error.is_empty();
+    let mut composer_stack = col()
+        .key("new-research-composer-stack")
+        .w_full()
+        .max_w(750.0)
+        .self_center();
+    if state.active_session.is_none() && !state.session_busy {
+        composer_stack = composer_stack.child(col().w_full().px(20.0).child(ribbon));
+    }
+    composer_stack = composer_stack.child(composer);
     col()
         .key("new-research-view")
         .w_full()
@@ -943,13 +1281,30 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         } else {
             el().grow(1.0)
         })
-        .child(
-            col()
-                .key("new-research-composer-stack")
-                .w_full()
-                .max_w(750.0)
-                .self_center()
-                .child(col().w_full().px(20.0).child(ribbon))
-                .child(composer),
-        )
+        .child(composer_stack)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_web_link, work_duration};
+
+    #[test]
+    fn work_duration_uses_hours_minutes_and_seconds() {
+        assert_eq!(work_duration(0), "0s");
+        assert_eq!(work_duration(999), "0s");
+        assert_eq!(work_duration(28_999), "28s");
+        assert_eq!(work_duration(60_000), "1m");
+        assert_eq!(work_duration(62_000), "1m 2s");
+        assert_eq!(work_duration(3_600_000), "1h");
+        assert_eq!(work_duration(3_661_999), "1h 1m 1s");
+    }
+
+    #[test]
+    fn transcript_links_only_open_web_destinations() {
+        assert!(is_web_link("https://example.test/research"));
+        assert!(is_web_link("http://example.test"));
+        assert!(!is_web_link("file:///example.txt"));
+        assert!(!is_web_link("javascript:alert(1)"));
+        assert!(!is_web_link("https://"));
+    }
 }

@@ -3,12 +3,13 @@
 mod credentials;
 mod models;
 mod oauth;
+pub mod usage;
 mod wire;
 
 pub use credentials::{CredentialStore, ModelDefaults, OAuthCredential};
 pub use models::{ModelCatalog, ModelEntry, mode_name, provider_name};
 pub use oauth::{login_openai, login_openai_with_prompt, login_xai, login_xai_with_prompt};
 pub use wire::{
-    AuthMode, InferenceRequest, Provider, ProviderClient, ProviderStep, TextMessage, TextRole,
-    ToolCall, input_messages, tool_output,
+    AuthMode, InferenceRequest, Provider, ProviderClient, ProviderProgress, ProviderStep,
+    TextMessage, TextRole, ToolCall, ToolStepRequest, input_messages, tool_output,
 };

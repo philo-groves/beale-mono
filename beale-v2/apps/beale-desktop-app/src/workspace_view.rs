@@ -1,10 +1,12 @@
 use beale_contracts::v1::{
     SurfaceCreator, SurfaceKind, SurfaceScope, WorkspaceDetails, WorkspaceSurface,
 };
-use rune::{Color, El, Icon, col, el, icon, row, text, text_input};
+use rune::{Color, El, col, el, icon, row, text, text_input};
 
 use crate::{
-    FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button, form_label_font,
+    FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
+    form_controls::icon_action_button,
+    form_label_font,
     icons::{PEN, PLUS, TRASH},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
     toggle_selection_menu, ui_font, view_title_font,
@@ -94,23 +96,6 @@ fn read_only_value(value: String, width: f32, theme: ThemeStyle<'_>) -> El {
                 .font(ui_font(14.0, 400.0))
                 .color(theme.color("#e2e2e2")),
         )
-}
-
-fn icon_action_button(
-    key: String,
-    label: &'static str,
-    glyph: &'static Icon,
-    theme: ThemeStyle<'_>,
-) -> El {
-    el().key(key)
-        .role("button")
-        .label(label)
-        .size(26.0, 26.0)
-        .center()
-        .radius(8.0)
-        .continuous_corners()
-        .hover(theme.color("#303030"))
-        .child(icon(glyph, 16.0).color(theme.color("#bdbdbd")))
 }
 
 fn draft_kind(kind: i32) -> DraftKind {

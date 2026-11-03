@@ -299,6 +299,12 @@ pub(crate) struct ThemeStyle<'a> {
 }
 
 impl<'a> ThemeStyle<'a> {
+    pub(crate) fn is_dark(self) -> bool {
+        matches!(
+            self.theme,
+            AppearanceTheme::Dark | AppearanceTheme::Midnight
+        )
+    }
     pub(crate) fn name(self) -> &'static str {
         self.theme.name()
     }

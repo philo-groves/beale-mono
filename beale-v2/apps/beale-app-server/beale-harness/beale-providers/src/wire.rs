@@ -4,12 +4,51 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc;
 
 const MAX_EVENT_BYTES: usize = 1_048_576;
 const MAX_OUTPUT_BYTES: usize = 2_097_152;
+const MAX_REASONING_SUMMARIES: usize = 16;
+const MAX_REASONING_SUMMARY_BYTES: usize = 16_384;
+
+fn openai_cyber_program(model: &str, mode: &str) -> Result<&'static str> {
+    ensure!(matches!(mode, "blue" | "red"), "invalid Daybreak mode");
+    let red_program = matches!(
+        model,
+        "gpt-5.5-cyber" | "gpt-5.6-cyber" | "gpt-daybreak-red-latest"
+    );
+    let red_approval = red_program || matches!(model, "gpt-6.1-sol" | "gpt-6-astra");
+    ensure!(
+        mode == "red" || !red_approval,
+        "selected OpenAI model requires Daybreak Red access"
+    );
+    Ok(if red_program {
+        "daybreak_red"
+    } else {
+        "daybreak_blue"
+    })
+}
+
+fn request_cyber_program(
+    provider: Provider,
+    model: &str,
+    store: &CredentialStore,
+) -> Result<Option<&'static str>> {
+    if provider == Provider::OpenAi {
+        Ok(Some(openai_cyber_program(model, store.daybreak_mode()?)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn add_cyber_access(body: &mut Value, program: Option<&str>) {
+    if let Some(program) = program {
+        body["access_programs"] = json!({"cyber":program});
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Provider {
@@ -43,6 +82,13 @@ pub struct InferenceRequest {
     pub messages: Vec<TextMessage>,
 }
 
+pub struct ToolStepRequest<'a> {
+    pub model: &'a str,
+    pub input: &'a [Value],
+    pub tools: &'a [Value],
+    pub reasoning_effort: Option<&'a str>,
+}
+
 #[derive(Clone, Copy)]
 enum WireShape {
     Responses,
@@ -68,8 +114,15 @@ pub struct ToolCall {
 pub struct ProviderStep {
     pub text: String,
     pub calls: Vec<ToolCall>,
+    pub reasoning_summaries: Vec<String>,
     /// Provider output items to replay while `store` is false.
     pub continuation: Vec<Value>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ProviderProgress {
+    MessageDelta(String),
+    ReasoningDelta(String),
 }
 
 #[derive(Default)]
@@ -93,12 +146,30 @@ pub fn tool_output(provider: Provider, mode: AuthMode, id: &str, output: &str) -
     }
 }
 
-fn tool_request_body(shape: WireShape, model: &str, input: &[Value], tools: &[Value]) -> Value {
+fn tool_request_body(
+    provider: Provider,
+    shape: WireShape,
+    model: &str,
+    input: &[Value],
+    tools: &[Value],
+    reasoning_effort: Option<&str>,
+    cyber_program: Option<&str>,
+) -> Value {
     match shape {
-        WireShape::Responses => json!({
+        WireShape::Responses => {
+            let mut body = json!({
             "model":model,"input":input,"tools":tools,"store":false,"stream":true,
             "include":["reasoning.encrypted_content"]
-        }),
+            });
+            if provider == Provider::OpenAi {
+                body["reasoning"] = json!({"summary":"auto"});
+                if let Some(effort) = reasoning_effort {
+                    body["reasoning"]["effort"] = json!(effort);
+                }
+            }
+            add_cyber_access(&mut body, cyber_program);
+            body
+        }
         WireShape::Chat => {
             let chat_tools: Vec<Value> = tools.iter().map(|tool| json!({
                 "type":"function",
@@ -217,7 +288,8 @@ impl ProviderClient {
             .iter()
             .map(|message| json!({"role": message.role, "content": message.text}))
             .collect();
-        let body = match route.shape {
+        let cyber_program = request_cyber_program(provider, &request.model, store)?;
+        let mut body = match route.shape {
             WireShape::Responses => json!({
                 "model": request.model,
                 "input": messages,
@@ -230,6 +302,7 @@ impl ProviderClient {
                 "stream": true,
             }),
         };
+        add_cyber_access(&mut body, cyber_program);
         let mut builder = self
             .http
             .post(route.endpoint)
@@ -255,22 +328,30 @@ impl ProviderClient {
         &self,
         provider: Provider,
         mode: AuthMode,
-        model: &str,
-        input: &[Value],
-        tools: &[Value],
+        request: ToolStepRequest<'_>,
         store: &CredentialStore,
+        progress: Option<&mpsc::Sender<ProviderProgress>>,
     ) -> Result<ProviderStep> {
         ensure!(
-            !model.is_empty() && model.len() <= 128,
+            !request.model.is_empty() && request.model.len() <= 128,
             "invalid model name"
         );
         ensure!(
-            !input.is_empty() && input.len() <= 192,
+            !request.input.is_empty() && request.input.len() <= 192,
             "invalid provider input count"
         );
         let route = route(provider, mode);
         let token = self.token(provider, mode, store).await?;
-        let body = tool_request_body(route.shape, model, input, tools);
+        let cyber_program = request_cyber_program(provider, request.model, store)?;
+        let body = tool_request_body(
+            provider,
+            route.shape,
+            request.model,
+            request.input,
+            request.tools,
+            request.reasoning_effort,
+            cyber_program,
+        );
         let mut builder = self
             .http
             .post(route.endpoint)
@@ -282,17 +363,21 @@ impl ProviderClient {
                 .header("x-grok-client-version", "1.0.13")
                 .header("x-grok-client-identifier", "beale")
                 .header("x-grok-client-mode", "headless")
-                .header("x-grok-model-override", model);
+                .header("x-grok-model-override", request.model);
         }
         let response = builder.send().await.context("provider request failed")?;
         if !response.status().is_success() {
             bail!("provider rejected request ({})", response.status());
         }
-        read_tool_stream(response, route.shape).await
+        read_tool_stream(response, route.shape, progress).await
     }
 }
 
-async fn read_tool_stream(response: reqwest::Response, shape: WireShape) -> Result<ProviderStep> {
+async fn read_tool_stream(
+    response: reqwest::Response,
+    shape: WireShape,
+    progress: Option<&mpsc::Sender<ProviderProgress>>,
+) -> Result<ProviderStep> {
     let mut stream = response.bytes_stream();
     let mut pending = Vec::new();
     let mut text = String::new();
@@ -300,6 +385,9 @@ async fn read_tool_stream(response: reqwest::Response, shape: WireShape) -> Resu
     let mut response_output: Option<Vec<Value>> = None;
     let mut response_items = Vec::<Value>::new();
     let mut chat_calls = BTreeMap::<usize, PendingCall>::new();
+    let mut reasoning_parts = BTreeMap::<(u64, u64), String>::new();
+    let mut sent_reasoning = HashSet::<(u64, u64)>::new();
+    let mut sent_text = false;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("provider stream interrupted")?;
         ensure!(
@@ -325,13 +413,77 @@ async fn read_tool_stream(response: reqwest::Response, shape: WireShape) -> Resu
             match shape {
                 WireShape::Responses => {
                     match event.get("type").and_then(Value::as_str).unwrap_or("") {
-                        "response.output_text.delta" => append(
-                            &mut text,
-                            event
+                        "response.output_text.delta" => {
+                            let delta = event
                                 .get("delta")
                                 .and_then(Value::as_str)
-                                .context("missing text delta")?,
-                        )?,
+                                .context("missing text delta")?;
+                            append(&mut text, delta)?;
+                            sent_text |= !delta.is_empty();
+                            if !delta.is_empty()
+                                && let Some(tx) = progress
+                            {
+                                let _ = tx
+                                    .send(ProviderProgress::MessageDelta(delta.to_owned()))
+                                    .await;
+                            }
+                        }
+                        "response.reasoning_summary_text.delta" => {
+                            let key = summary_key(&event)?;
+                            let delta = event
+                                .get("delta")
+                                .and_then(Value::as_str)
+                                .context("missing reasoning summary delta")?;
+                            ensure!(
+                                reasoning_parts.contains_key(&key)
+                                    || reasoning_parts.len() < MAX_REASONING_SUMMARIES,
+                                "too many reasoning summaries"
+                            );
+                            let part = reasoning_parts.entry(key).or_default();
+                            ensure!(
+                                part.len().saturating_add(delta.len())
+                                    <= MAX_REASONING_SUMMARY_BYTES,
+                                "reasoning summary is too large"
+                            );
+                            part.push_str(delta);
+                            if !delta.is_empty() {
+                                sent_reasoning.insert(key);
+                            }
+                            if !delta.is_empty()
+                                && let Some(tx) = progress
+                            {
+                                let _ = tx
+                                    .send(ProviderProgress::ReasoningDelta(delta.to_owned()))
+                                    .await;
+                            }
+                        }
+                        "response.reasoning_summary_text.done"
+                        | "response.reasoning_summary_part.done" => {
+                            let key = summary_key(&event)?;
+                            if let Some(value) = event
+                                .get("text")
+                                .or_else(|| event.pointer("/part/text"))
+                                .and_then(Value::as_str)
+                            {
+                                ensure!(
+                                    value.len() <= MAX_REASONING_SUMMARY_BYTES,
+                                    "reasoning summary is too large"
+                                );
+                                reasoning_parts.insert(key, value.to_owned());
+                                if !value.is_empty()
+                                    && sent_reasoning.insert(key)
+                                    && let Some(tx) = progress
+                                {
+                                    let _ = tx
+                                        .send(ProviderProgress::ReasoningDelta(value.to_owned()))
+                                        .await;
+                                }
+                                ensure!(
+                                    reasoning_parts.len() <= MAX_REASONING_SUMMARIES,
+                                    "too many reasoning summaries"
+                                );
+                            }
+                        }
                         "response.output_item.done" => {
                             if let Some(item) = event.get("item") {
                                 ensure!(
@@ -356,7 +508,15 @@ async fn read_tool_stream(response: reqwest::Response, shape: WireShape) -> Resu
                     }
                 }
                 WireShape::Chat => {
+                    let before = text.len();
                     apply_chat_event(&event, &mut text, &mut chat_calls)?;
+                    if let Some(tx) = progress
+                        && text.len() > before
+                    {
+                        let _ = tx
+                            .send(ProviderProgress::MessageDelta(text[before..].to_owned()))
+                            .await;
+                    }
                 }
             }
         }
@@ -380,9 +540,23 @@ async fn read_tool_stream(response: reqwest::Response, shape: WireShape) -> Resu
                 }
             }
             let calls = calls_from_response(&output)?;
+            let reasoning_summaries = summaries_from_response(&output, reasoning_parts)?;
+            if let Some(tx) = progress {
+                if !sent_text && !text.is_empty() {
+                    let _ = tx.send(ProviderProgress::MessageDelta(text.clone())).await;
+                }
+                if sent_reasoning.is_empty() {
+                    for summary in &reasoning_summaries {
+                        let _ = tx
+                            .send(ProviderProgress::ReasoningDelta(summary.clone()))
+                            .await;
+                    }
+                }
+            }
             Ok(ProviderStep {
                 text,
                 calls,
+                reasoning_summaries,
                 continuation: output,
             })
         }
@@ -405,10 +579,57 @@ async fn read_tool_stream(response: reqwest::Response, shape: WireShape) -> Resu
             Ok(ProviderStep {
                 text,
                 calls,
+                reasoning_summaries: Vec::new(),
                 continuation,
             })
         }
     }
+}
+
+fn summary_key(event: &Value) -> Result<(u64, u64)> {
+    Ok((
+        event
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .context("missing reasoning output index")?,
+        event
+            .get("summary_index")
+            .and_then(Value::as_u64)
+            .context("missing reasoning summary index")?,
+    ))
+}
+
+fn summaries_from_response(
+    output: &[Value],
+    mut streamed: BTreeMap<(u64, u64), String>,
+) -> Result<Vec<String>> {
+    for (output_index, item) in output.iter().enumerate() {
+        if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+            continue;
+        }
+        if let Some(parts) = item.get("summary").and_then(Value::as_array) {
+            for (summary_index, part) in parts.iter().enumerate() {
+                if let Some(value) = part.get("text").and_then(Value::as_str) {
+                    ensure!(
+                        value.len() <= MAX_REASONING_SUMMARY_BYTES,
+                        "reasoning summary is too large"
+                    );
+                    streamed.insert(
+                        (output_index as u64, summary_index as u64),
+                        value.to_owned(),
+                    );
+                    ensure!(
+                        streamed.len() <= MAX_REASONING_SUMMARIES,
+                        "too many reasoning summaries"
+                    );
+                }
+            }
+        }
+    }
+    Ok(streamed
+        .into_values()
+        .filter(|value| !value.trim().is_empty())
+        .collect())
 }
 
 fn calls_from_response(output: &[Value]) -> Result<Vec<ToolCall>> {
@@ -678,19 +899,213 @@ mod tests {
         let tools = vec![
             json!({"type":"function","name":"read","description":"Read file","parameters":{"type":"object"}}),
         ];
-        let responses = tool_request_body(WireShape::Responses, "model-example", &input, &tools);
+        let responses = tool_request_body(
+            Provider::OpenAi,
+            WireShape::Responses,
+            "model-example",
+            &input,
+            &tools,
+            Some("high"),
+            Some("daybreak_blue"),
+        );
         assert_eq!(responses["tools"][0]["name"], "read");
         assert_eq!(responses["store"], false);
         assert_eq!(responses["input"], json!(input));
-        let chat = tool_request_body(WireShape::Chat, "model-example", &input, &tools);
+        assert_eq!(responses["reasoning"]["summary"], "auto");
+        assert_eq!(responses["reasoning"]["effort"], "high");
+        assert_eq!(responses["access_programs"]["cyber"], "daybreak_blue");
+        let xai = tool_request_body(
+            Provider::Xai,
+            WireShape::Responses,
+            "model-example",
+            &input,
+            &tools,
+            Some("high"),
+            None,
+        );
+        assert!(xai.get("reasoning").is_none());
+        assert!(xai.get("access_programs").is_none());
+        let chat = tool_request_body(
+            Provider::Xai,
+            WireShape::Chat,
+            "model-example",
+            &input,
+            &tools,
+            Some("high"),
+            None,
+        );
         assert_eq!(chat["tools"][0]["function"]["name"], "read");
         assert_eq!(chat["messages"], json!(input));
+        assert!(chat.get("access_programs").is_none());
+    }
+
+    #[test]
+    fn openai_cyber_program_matches_model_and_approval() {
+        for mode in ["blue", "red"] {
+            assert_eq!(
+                openai_cyber_program("gpt-5.6-sol", mode).unwrap(),
+                "daybreak_blue"
+            );
+            assert_eq!(
+                openai_cyber_program("gpt-6-sol", mode).unwrap(),
+                "daybreak_blue"
+            );
+        }
+        assert_eq!(
+            openai_cyber_program("gpt-6.1-sol", "red").unwrap(),
+            "daybreak_blue"
+        );
+        assert_eq!(
+            openai_cyber_program("gpt-6-astra", "red").unwrap(),
+            "daybreak_blue"
+        );
+        assert_eq!(
+            openai_cyber_program("gpt-5.6-cyber", "red").unwrap(),
+            "daybreak_red"
+        );
+        assert!(openai_cyber_program("gpt-6.1-sol", "blue").is_err());
+        assert!(openai_cyber_program("gpt-5.6-cyber", "blue").is_err());
+        assert!(openai_cyber_program("gpt-5.6-sol", "other").is_err());
+        assert_eq!(
+            openai_cyber_program("gpt-example-model", "blue").unwrap(),
+            "daybreak_blue"
+        );
+    }
+
+    #[test]
+    fn request_cyber_program_reads_the_host_setting_only_for_openai() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-cyber-routing-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = CredentialStore::at(root.clone());
+        assert_eq!(
+            request_cyber_program(Provider::OpenAi, "gpt-5.6-sol", &store).unwrap(),
+            Some("daybreak_blue")
+        );
+        store.save_daybreak_mode("red").unwrap();
+        assert_eq!(
+            request_cyber_program(Provider::OpenAi, "gpt-5.6-cyber", &store).unwrap(),
+            Some("daybreak_red")
+        );
+        assert_eq!(
+            request_cyber_program(Provider::Xai, "grok-4.7", &store).unwrap(),
+            None
+        );
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_only_provider_reasoning_summaries() {
+        let output = vec![json!({
+            "type":"reasoning",
+            "reasoning_text":"private trace",
+            "summary":[{"type":"summary_text","text":"Checked the example input."}]
+        })];
+        let mut streamed = BTreeMap::new();
+        streamed.insert((0, 0), "partial".to_owned());
+        let summaries = summaries_from_response(&output, streamed).unwrap();
+        assert_eq!(summaries, vec!["Checked the example input."]);
+        assert!(summaries[0].find("private trace").is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_deltas_arrive_before_the_response_completes() {
+        use axum::{body::Bytes, http::Response};
+        use futures_util::stream;
+        use std::convert::Infallible;
+
+        let chunks = stream::unfold(0, |index| async move {
+            let body = match index {
+                0 => {
+                    "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Checking example\"}\n\n"
+                }
+                1 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Done example\"}\n\n"
+                }
+                2 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"reasoning\",\"summary\":[{\"text\":\"Checking example\"}]},{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done example\"}]}]}}\n\n"
+                }
+                _ => return None,
+            };
+            Some((
+                Ok::<_, Infallible>(Bytes::from_static(body.as_bytes())),
+                index + 1,
+            ))
+        });
+        let response: reqwest::Response = Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let (tx, mut rx) = mpsc::channel(8);
+        let reader = tokio::spawn(async move {
+            read_tool_stream(response, WireShape::Responses, Some(&tx)).await
+        });
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(first, ProviderProgress::ReasoningDelta(value) if value == "Checking example")
+        );
+        assert!(!reader.is_finished());
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(second, ProviderProgress::MessageDelta(value) if value == "Done example"));
+        assert!(!reader.is_finished());
+        let result = reader.await.unwrap().unwrap();
+        assert_eq!(result.text, "Done example");
+        assert_eq!(result.reasoning_summaries, ["Checking example"]);
+    }
+
+    #[tokio::test]
+    async fn chat_text_arrives_before_the_done_marker() {
+        use axum::{body::Bytes, http::Response};
+        use futures_util::stream;
+        use std::convert::Infallible;
+
+        let chunks = stream::unfold(0, |index| async move {
+            let body = match index {
+                0 => "data: {\"choices\":[{\"delta\":{\"content\":\"Example reply\"}}]}\n\n",
+                1 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    "data: [DONE]\n\n"
+                }
+                _ => return None,
+            };
+            Some((
+                Ok::<_, Infallible>(Bytes::from_static(body.as_bytes())),
+                index + 1,
+            ))
+        });
+        let response: reqwest::Response = Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let (tx, mut rx) = mpsc::channel(8);
+        let reader =
+            tokio::spawn(
+                async move { read_tool_stream(response, WireShape::Chat, Some(&tx)).await },
+            );
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(first, ProviderProgress::MessageDelta(value) if value == "Example reply"));
+        assert!(!reader.is_finished());
+        assert_eq!(reader.await.unwrap().unwrap().text, "Example reply");
     }
 
     #[test]
     fn chat_tool_call_arguments_reassemble_across_deltas() {
         let mut text = String::new();
         let mut calls = BTreeMap::new();
+        apply_chat_event(
+            &json!({"choices":[{"delta":{"reasoning_content":"private trace"}}]}),
+            &mut text,
+            &mut calls,
+        )
+        .unwrap();
+        assert!(text.is_empty());
         apply_chat_event(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-example","function":{"name":"bash","arguments":"{\"command\":"}}]}}]}), &mut text, &mut calls).unwrap();
         apply_chat_event(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"printf example\"}"}}]}}]}), &mut text, &mut calls).unwrap();
         let call = calls.get(&0).unwrap();

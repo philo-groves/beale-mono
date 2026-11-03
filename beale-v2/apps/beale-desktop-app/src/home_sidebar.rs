@@ -1,9 +1,11 @@
 use rune::{El, Icon, col, el, icon, row, text};
 
-use crate::icons::{FOLDER_OPEN, NEW_RESEARCH, PLUS, QUICK_CHAT, SEARCH};
+use crate::icons::{
+    ARCHIVE, CHEVRON_DOWN, CHEVRON_UP, FOLDER_OPEN, NEW_RESEARCH, PLUS, QUICK_CHAT, SEARCH,
+};
 use crate::{
-    SelectionMenu, State, ThemeStyle, selection_button, sidenav_heading, start_session_load,
-    toggle_selection_menu, ui_font,
+    SelectionMenu, State, ThemeStyle, form_button, modal_dialog, sidenav_heading,
+    start_session_archive, start_session_load, toggle_selection_menu, ui_font,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -49,7 +51,7 @@ const PRIMARY_ACTIONS: [SidebarAction; 2] = [
         key: "home-quick-chat",
         label: "Quick Chat",
         icon: &QUICK_CHAT,
-        action: None,
+        action: Some(State::open_quick_chat),
     },
 ];
 
@@ -128,7 +130,6 @@ fn workspace_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
         .center()
         .radius(8.0)
         .continuous_corners()
-        .border(1.0, theme.color("#2c2c2c"))
         .child(
             icon(spec.icon, 15.0).color(theme.color(if spec.action.is_some() {
                 "#bdbdbd"
@@ -168,7 +169,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
                 .font(if italic { font.italic() } else { font })
                 .color(color(if active { "#f2f2f2" } else { "#b8b8b8" }))
                 .min_w(0.0)
-                .truncate(),
+                .truncate_fade(),
         )
 }
 
@@ -179,38 +180,61 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         primary = primary.child(primary_action(spec, state, theme));
     }
     let collection_open = state.selection_menu == Some(SelectionMenu::HomeCollection);
-    let collection_control = selection_button(
-        state.home_collection.label(),
-        collection_open,
-        |state| toggle_selection_menu(state, SelectionMenu::HomeCollection),
-        theme,
-    )
-    .key("home-collection-control")
-    .role("button")
-    .label(format!(
-        "Choose sidebar collection: {}",
-        state.home_collection.label()
-    ));
-    let mut selector_tools = row().center_y().gap(4.0).child(collection_control);
-    if state.home_collection == HomeCollection::Workspaces {
-        selector_tools = selector_tools.child(workspace_action(&NEW_WORKSPACE, theme));
-    }
+    let collection_control = row()
+        .key("home-collection-control")
+        .role("button")
+        .label(format!(
+            "Choose sidebar collection: {}",
+            state.home_collection.label()
+        ))
+        .h(26.0)
+        .px(8.0)
+        .center_y()
+        .gap(6.0)
+        .radius(8.0)
+        .continuous_corners()
+        .fill(if collection_open {
+            color("#303030")
+        } else {
+            rune::Color::TRANSPARENT
+        })
+        .hover(color("#414141"))
+        .child(
+            text(state.home_collection.label())
+                .font(ui_font(13.0, 400.0))
+                .color(color("#eeeeee")),
+        )
+        .child(
+            icon(
+                if collection_open {
+                    &CHEVRON_UP
+                } else {
+                    &CHEVRON_DOWN
+                },
+                13.0,
+            )
+            .color(color("#b8b8b8")),
+        )
+        .on_press(|state| toggle_selection_menu(state, SelectionMenu::HomeCollection));
     let mut header = row()
         .key("home-collection-header")
         .w_full()
         .h(28.0)
-        .mb(12.0)
+        .mb(6.0)
         .center_y()
-        .child(selector_tools)
+        .child(collection_control)
         .child(el().grow(1.0));
     if state.home_collection == HomeCollection::Workspaces {
-        header = header.child(workspace_action(&SEARCH_WORKSPACES, theme));
+        header = header
+            .gap(4.0)
+            .child(workspace_action(&NEW_WORKSPACE, theme))
+            .child(workspace_action(&SEARCH_WORKSPACES, theme));
     }
     let mut collection = col()
         .key("home-collection")
         .w_full()
         .grow(1.0)
-        .mt(18.0)
+        .mt(12.0)
         .gap(6.0)
         .child(header);
     if state.home_collection == HomeCollection::Workspaces && state.workspaces.is_empty() {
@@ -259,7 +283,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .min_w(0.0)
                         .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                         .color(color("#dddddd"))
-                        .truncate(),
+                        .truncate_fade(),
                 );
             if let Some(id) = id {
                 opener = opener.on_press(move |state: &mut State| state.open_workspace(id));
@@ -328,26 +352,54 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                         .as_ref()
                         .and_then(|detail| detail.summary.as_ref())
                         .is_some_and(|summary| summary.id == session.id);
+                let opener = session_row(
+                    format!("home-session-{}", session.id),
+                    &session.title,
+                    false,
+                    active,
+                    theme,
+                )
+                .grow(1.0)
+                .min_w(0.0)
+                .on_press(move |state: &mut State| {
+                    if state
+                        .active_session
+                        .as_ref()
+                        .and_then(|detail| detail.summary.as_ref())
+                        .is_some_and(|summary| summary.id == session_id)
+                    {
+                        state.navigate_to(crate::ViewLocation::NewResearch);
+                    } else {
+                        start_session_load(state, session_id.clone());
+                    }
+                });
+                let archive_id = session.id.clone();
                 group = group.child(
-                    session_row(
-                        format!("home-session-{}", session.id),
-                        &session.title,
-                        false,
-                        active,
-                        theme,
-                    )
-                    .on_press(move |state: &mut State| {
-                        if state
-                            .active_session
-                            .as_ref()
-                            .and_then(|detail| detail.summary.as_ref())
-                            .is_some_and(|summary| summary.id == session_id)
-                        {
-                            state.navigate_to(crate::ViewLocation::NewResearch);
-                        } else {
-                            start_session_load(state, session_id.clone());
-                        }
-                    }),
+                    row()
+                        .key(format!("home-session-container-{}", session.id))
+                        .w_full()
+                        .center_y()
+                        .hover_group()
+                        .child(opener)
+                        .child(
+                            el().key(format!("home-archive-session-{}", session.id))
+                                .role("button")
+                                .label(format!("Archive {}", session.title))
+                                .help("Archive Session")
+                                .pin(None, Some(2.0), Some(2.0), None)
+                                .size(26.0, 26.0)
+                                .center()
+                                .radius(8.0)
+                                .continuous_corners()
+                                .group_opacity(0.0, 1.0)
+                                .fill(color("#282828"))
+                                .hover(color("#303030"))
+                                .on_press(move |state: &mut State| {
+                                    state.archive_session_id = Some(archive_id.clone());
+                                    state.archive_session_error.clear();
+                                })
+                                .child(icon(&ARCHIVE, 15.0).color(color("#bdbdbd"))),
+                        ),
                 );
             }
             collection = collection.child(group);
@@ -380,4 +432,82 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         )
         .child(primary)
         .child(collection)
+}
+
+fn close_archive_dialog(state: &mut State) {
+    if !state.archive_session_busy {
+        state.archive_session_id = None;
+        state.archive_session_error.clear();
+    }
+}
+
+pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
+    let title = state
+        .archive_session_id
+        .as_deref()
+        .and_then(|id| {
+            state
+                .session_summaries
+                .iter()
+                .find(|session| session.id == id)
+        })
+        .map_or("This session", |session| session.title.as_str());
+    let mut body = col()
+        .w_full()
+        .gap(10.0)
+        .child(
+            text(title.to_owned())
+                .w_full()
+                .truncate_fade()
+                .font(ui_font(14.0, 500.0))
+                .color(theme.color("#e2e2e2")),
+        )
+        .child(
+            text("Archive this session? It will leave the workspace sidebar.")
+                .w_full()
+                .wrap()
+                .font(ui_font(14.0, 400.0))
+                .color(theme.color("#b8b8b8")),
+        );
+    if !state.archive_session_error.is_empty() {
+        body = body.child(
+            text(state.archive_session_error.clone())
+                .w_full()
+                .wrap()
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#e07676")),
+        );
+    }
+    let mut actions = row().w_full().gap(8.0).child(el().grow(1.0)).child(
+        form_button("Cancel", theme)
+            .key("home-session-archive-cancel")
+            .on_press(close_archive_dialog),
+    );
+    let mut confirm = form_button(
+        if state.archive_session_busy {
+            "Archiving..."
+        } else {
+            "Archive Session"
+        },
+        theme,
+    )
+    .key("home-session-archive-confirm")
+    .fill(theme.color("#482525"))
+    .hover(theme.color("#603030"));
+    if !state.archive_session_busy {
+        confirm = confirm.on_press(start_session_archive);
+    }
+    actions = actions.child(confirm);
+    modal_dialog::render(
+        modal_dialog::DialogSpec {
+            key: "home-session-archive-dialog",
+            title: "Archive Session?",
+            width: 480.0,
+            focus_return: "home-collection-control",
+        },
+        body,
+        actions,
+        theme,
+        close_archive_dialog,
+    )
 }

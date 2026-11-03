@@ -10,7 +10,9 @@ anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-providers = { path = "../beale-providers" }
+beale-safety = { path = "../beale-safety" }
 beale-sessions = { path = "../beale-sessions" }
+beale-storage = { path = "../beale-storage" }
 beale-workspaces = { path = "../beale-workspaces" }
 prost.workspace = true
 tokio.workspace = true

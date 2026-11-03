@@ -8,22 +8,26 @@ use axum::{
 use beale_contracts::{
     AUTH_API_KEY_PATH, AUTH_PROVE_PATH, AUTH_STATUS_PATH, AUTH_SUBSCRIPTION_FORGET_PATH,
     AUTH_SUBSCRIPTION_START_PATH, CONTROL_CHALLENGE_BYTES, DAYBREAK_MODE_PATH, LEAD_PROVIDER_PATH,
-    MODELS_DEFAULTS_PATH, MODELS_LIST_PATH, PROTOBUF_CONTENT_TYPE, SOURCE_PRIORITY_PATH,
-    control_proof,
+    MODELS_DEFAULTS_PATH, MODELS_LIST_PATH, PROTOBUF_CONTENT_TYPE, PROVIDER_USAGE_PATH,
+    SOURCE_PRIORITY_PATH, control_proof,
     v1::{
         AuthMethod, ControlChallengeRequest, ControlChallengeResponse, DaybreakMode,
         ListModelsRequest, ModelCatalogResponse, ModelEntry, ProviderAuthStatus,
-        ProviderAuthStatusResponse, ProviderId, ProviderRequest, SetApiKeyRequest,
-        SetDaybreakModeRequest, SetModelDefaultsRequest, SetSourcePriorityRequest,
-        StartSubscriptionResponse,
+        ProviderAuthStatusResponse, ProviderId, ProviderRequest, ProviderUsageResponse,
+        ProviderUsageSnapshot, ProviderUsageWindow, SetApiKeyRequest, SetDaybreakModeRequest,
+        SetModelDefaultsRequest, SetSourcePriorityRequest, StartSubscriptionResponse,
     },
 };
+use beale_providers::usage;
 use beale_providers::{
     AuthMode, CredentialStore, ModelCatalog, ModelDefaults, Provider, ProviderClient,
     login_openai_with_prompt, login_xai_with_prompt, mode_name, provider_name,
 };
 use prost::Message;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::{Mutex, oneshot};
 
 #[derive(Clone)]
@@ -32,6 +36,7 @@ struct AuthState {
     store: Arc<CredentialStore>,
     login: Arc<Mutex<[LoginState; 2]>>,
     lead_lock: Arc<Mutex<()>>,
+    usage_cache: Arc<Mutex<Option<(Instant, ProviderUsageResponse)>>>,
 }
 
 #[derive(Clone, Default)]
@@ -44,6 +49,7 @@ pub(super) fn router(token: String, store: CredentialStore) -> Router {
     Router::new()
         .route(AUTH_PROVE_PATH, post(prove))
         .route(AUTH_STATUS_PATH, get(status))
+        .route(PROVIDER_USAGE_PATH, get(provider_usage))
         .route(AUTH_API_KEY_PATH, post(set_api_key).delete(remove_api_key))
         .route(AUTH_SUBSCRIPTION_START_PATH, post(start_subscription))
         .route(AUTH_SUBSCRIPTION_FORGET_PATH, post(forget_subscription))
@@ -58,6 +64,7 @@ pub(super) fn router(token: String, store: CredentialStore) -> Router {
             store: Arc::new(store),
             login: Arc::new(Mutex::new(Default::default())),
             lead_lock: Arc::new(Mutex::new(())),
+            usage_cache: Arc::new(Mutex::new(None)),
         })
 }
 
@@ -246,6 +253,51 @@ async fn status(
             DaybreakMode::Blue as i32
         },
     }))
+}
+
+async fn provider_usage(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let mut cache = state.usage_cache.lock().await;
+    if headers
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        != Some("no-cache")
+        && let Some((at, value)) = cache.as_ref()
+        && at.elapsed() < Duration::from_secs(300)
+    {
+        return Ok(response(value.clone()));
+    }
+    let client = ProviderClient::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (openai, xai) = tokio::join!(
+        usage::openai_codex_usage(client.http()),
+        usage::xai_usage(&client, &state.store),
+    );
+    let checked_at_unix = usage::checked_at_unix();
+    let providers = [(ProviderId::Openai, openai), (ProviderId::Xai, xai)]
+        .into_iter()
+        .map(|(provider, result)| ProviderUsageSnapshot {
+            provider: provider as i32,
+            checked_at_unix,
+            windows: result
+                .unwrap_or_default()
+                .into_iter()
+                .map(|window| ProviderUsageWindow {
+                    id: window.id.to_owned(),
+                    label: window.label.to_owned(),
+                    used_percent: window.used_percent,
+                    resets_at_unix: window.resets_at_unix,
+                })
+                .collect(),
+        })
+        .collect();
+    let value = ProviderUsageResponse { providers };
+    *cache = Some((Instant::now(), value.clone()));
+    Ok(response(value))
 }
 
 async fn set_api_key(
@@ -582,6 +634,19 @@ mod tests {
         let bytes = to_bytes(response.into_body(), 128).await.unwrap();
         let proof = ControlChallengeResponse::decode(bytes).unwrap();
         assert_eq!(proof.proof, control_proof(&token, &nonce));
+    }
+
+    #[tokio::test]
+    async fn usage_snapshot_requires_control_token() {
+        let app = router("ab".repeat(32), CredentialStore::at(std::env::temp_dir()));
+        let request = Request::builder()
+            .uri(PROVIDER_USAGE_PATH)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
-// Lucide v0.554.0 icon geometry, used under the ISC and Feather MIT licenses.
+// Lucide v0.554.0 geometry is used under the ISC and Feather MIT licenses;
+// beale-prefixed icons use custom geometry.
 // See LUCIDE-LICENSE in this directory.
 use rune::Icon;
 
@@ -80,6 +81,12 @@ pub(crate) static SETTINGS: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" cx="12" cy="12" r="3"/>"#,
 };
 
+pub(crate) static SAFETY: Icon = Icon {
+    name: "beale-shield-check",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 22c-5-2.7-8-6-8-11V5l8-3 8 3v6c0 5-3 8.3-8 11Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9 12 2 2 4-4"/>"#,
+};
+
 pub(crate) static SIDEBAR: Icon = Icon {
     name: "lucide-panel-left",
     view: 24.0,
@@ -138,6 +145,24 @@ pub(crate) static CHEVRON_RIGHT: Icon = Icon {
     name: "lucide-chevron-right",
     view: 24.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m9 18 6-6-6-6"/>"#,
+};
+
+pub(crate) static BRAIN: Icon = Icon {
+    name: "beale-brain",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M11.5 5.5C10.3 3.1 7.2 2.7 5.8 4.7 3.5 4.8 2.5 7.2 3.8 9 1.9 10.2 1.8 13.2 3.9 14.3 3.2 16.6 4.7 18.4 6.8 18.5 7.5 20.9 10.4 21.5 11.5 19.2Z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12.5 5.5C13.7 3.1 16.8 2.7 18.2 4.7 20.5 4.8 21.5 7.2 20.2 9 22.1 10.2 22.2 13.2 20.1 14.3 20.8 16.6 19.3 18.4 17.2 18.5 16.5 20.9 13.6 21.5 12.5 19.2Z"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M7.2 6.2c-1.4 1.3-1 3.3.5 4.1M4.1 12.1c2.4-.6 4.2.5 4.4 2.7M7.3 18.4c-.5-2.1.8-3.7 2.6-4M16.8 6.2c1.4 1.3 1 3.3-.5 4.1m3.7 1.8c-2.4-.6-4.2.5-4.4 2.7m1.2 3.6c.5-2.1-.8-3.7-2.6-4"/>"#,
+};
+
+pub(crate) static WRENCH: Icon = Icon {
+    name: "lucide-wrench",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"/>"#,
+};
+
+pub(crate) static TERMINAL: Icon = Icon {
+    name: "lucide-terminal",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m4 17 6-6-6-6M12 19h8"/>"#,
 };
 
 pub(crate) static CHECK: Icon = Icon {

@@ -47,6 +47,34 @@ pub mod v1 {
         pub openai_daybreak_mode: i32,
     }
 
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ProviderUsageWindow {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub label: String,
+        #[prost(uint32, tag = "3")]
+        pub used_percent: u32,
+        #[prost(uint64, tag = "4")]
+        pub resets_at_unix: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ProviderUsageSnapshot {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(uint64, tag = "2")]
+        pub checked_at_unix: u64,
+        #[prost(message, repeated, tag = "3")]
+        pub windows: Vec<ProviderUsageWindow>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ProviderUsageResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub providers: Vec<ProviderUsageSnapshot>,
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum DaybreakMode {
@@ -321,6 +349,54 @@ pub mod v1 {
         pub text: String,
         #[prost(message, repeated, tag = "3")]
         pub tools: Vec<SessionToolSummary>,
+        #[prost(message, repeated, tag = "4")]
+        pub reasoning_summaries: Vec<SessionReasoningSummary>,
+        #[prost(uint64, tag = "5")]
+        pub duration_ms: u64,
+        #[prost(message, repeated, tag = "6")]
+        pub commentary: Vec<SessionCommentary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionCommentary {
+        #[prost(string, tag = "1")]
+        pub text: String,
+        #[prost(uint32, tag = "2")]
+        pub after_tool_count: u32,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SessionStreamKind {
+        Unspecified = 0,
+        ReasoningDelta = 1,
+        MessageDelta = 2,
+        ToolStarted = 3,
+        ToolFinished = 4,
+        Completed = 5,
+        Failed = 6,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionStreamEvent {
+        #[prost(enumeration = "SessionStreamKind", tag = "1")]
+        pub kind: i32,
+        #[prost(string, tag = "2")]
+        pub text: String,
+        #[prost(message, optional, tag = "3")]
+        pub tool: Option<SessionToolSummary>,
+        #[prost(message, optional, tag = "4")]
+        pub detail: Option<SessionDetail>,
+        #[prost(uint32, tag = "5")]
+        pub segment_index: u32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionReasoningSummary {
+        #[prost(string, tag = "1")]
+        pub text: String,
+        #[prost(uint32, tag = "2")]
+        pub after_tool_count: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -372,6 +448,32 @@ pub mod v1 {
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ArchiveEntry {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub workspace_id: String,
+        #[prost(string, tag = "3")]
+        pub title: String,
+        #[prost(string, tag = "4")]
+        pub model: String,
+        #[prost(uint32, tag = "5")]
+        pub turn_count: u32,
+        #[prost(uint64, tag = "6")]
+        pub created_at_ms: u64,
+        #[prost(uint64, tag = "7")]
+        pub archived_at_ms: u64,
+        #[prost(bool, tag = "8")]
+        pub quick_chat: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListArchiveResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub entries: Vec<ArchiveEntry>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SessionDetail {
         #[prost(message, optional, tag = "1")]
         pub summary: Option<SessionSummary>,
@@ -383,6 +485,19 @@ pub mod v1 {
         pub method: i32,
         #[prost(string, tag = "5")]
         pub model: String,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum ReasoningEffort {
+        Unspecified = 0,
+        None = 1,
+        Minimal = 2,
+        Low = 3,
+        Medium = 4,
+        High = 5,
+        Xhigh = 6,
+        Max = 7,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -399,14 +514,97 @@ pub mod v1 {
         pub model: String,
         #[prost(string, tag = "6")]
         pub prompt: String,
+        #[prost(enumeration = "ReasoningEffort", tag = "7")]
+        pub reasoning_effort: i32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct QuickChatTurnRequest {
+        #[prost(string, tag = "1")]
+        pub chat_id: String,
+        #[prost(string, tag = "2")]
+        pub prompt: String,
+        #[prost(string, tag = "3")]
+        pub workspace_id: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct QuickChatMessage {
+        #[prost(enumeration = "SessionRole", tag = "1")]
+        pub role: i32,
+        #[prost(string, tag = "2")]
+        pub text: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct QuickChatDetail {
+        #[prost(string, tag = "1")]
+        pub chat_id: String,
+        #[prost(string, tag = "2")]
+        pub title: String,
+        #[prost(message, repeated, tag = "3")]
+        pub messages: Vec<QuickChatMessage>,
+        #[prost(string, tag = "4")]
+        pub workspace_id: String,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum ReviewStage {
+        Unspecified = 0,
+        AutoReview = 1,
+        Guardian = 2,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct PermissionRule {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(enumeration = "ReviewStage", tag = "2")]
+        pub stage: i32,
+        #[prost(string, tag = "3")]
+        pub title: String,
+        #[prost(string, tag = "4")]
+        pub instruction: String,
+        #[prost(bool, tag = "5")]
+        pub enabled: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct PermissionRulesResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub rules: Vec<PermissionRule>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UpdatePermissionRuleRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub instruction: String,
+        #[prost(bool, tag = "3")]
+        pub enabled: bool,
+        #[prost(string, tag = "4")]
+        pub title: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct CreatePermissionRuleRequest {
+        #[prost(enumeration = "ReviewStage", tag = "1")]
+        pub stage: i32,
+        #[prost(string, tag = "2")]
+        pub title: String,
+        #[prost(string, tag = "3")]
+        pub instruction: String,
     }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 10;
+pub const PROTOCOL_MINOR: u32 = 21;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
+pub const PROVIDER_USAGE_PATH: &str = "/v1/providers/usage";
 pub const AUTH_PROVE_PATH: &str = "/v1/providers/prove";
 pub const AUTH_API_KEY_PATH: &str = "/v1/providers/api-key";
 pub const AUTH_SUBSCRIPTION_START_PATH: &str = "/v1/providers/subscription/start";
@@ -424,9 +622,30 @@ pub const WORKSPACE_SURFACES_PATH: &str = "/v1/workspaces/{id}/surfaces";
 pub const WORKSPACE_RULES_PATH: &str = "/v1/workspaces/{id}/rules";
 pub const SESSIONS_PATH: &str = "/v1/sessions";
 pub const SESSION_DETAIL_PATH: &str = "/v1/sessions/{id}";
+pub const SESSION_ARCHIVE_PATH: &str = "/v1/sessions/{id}/archive";
+pub const SESSION_RESTORE_PATH: &str = "/v1/sessions/{id}/restore";
+pub const ARCHIVE_PATH: &str = "/v1/archive";
+pub const QUICK_CHAT_DETAIL_PATH: &str = "/v1/quick-chats/{id}";
 pub const SESSION_TURNS_PATH: &str = "/v1/sessions/turns";
+pub const QUICK_CHAT_TURNS_PATH: &str = "/v1/quick-chats/turns";
+pub const SESSION_TURN_STREAM_PATH: &str = "/v1/sessions/turns/stream";
 pub const SESSION_TOOL_DETAIL_PATH: &str = "/v1/sessions/{id}/tools/{tool_id}";
+pub const PERMISSION_RULES_PATH: &str = "/v1/permissions/rules";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
+pub const PROTOBUF_STREAM_CONTENT_TYPE: &str = "application/x-beale-protobuf-stream";
+pub const SESSION_STREAM_MAX_FRAME_BYTES: usize = 4_500_000;
+
+pub fn session_stream_frame(event: &v1::SessionStreamEvent) -> Option<Vec<u8>> {
+    use prost::Message;
+    let size = event.encoded_len();
+    if size == 0 || size > SESSION_STREAM_MAX_FRAME_BYTES {
+        return None;
+    }
+    let mut frame = Vec::with_capacity(4 + size);
+    frame.extend_from_slice(&(size as u32).to_be_bytes());
+    event.encode(&mut frame).ok()?;
+    Some(frame)
+}
 pub const DEFAULT_LOCAL_ADDR: &str = "127.0.0.1:43831";
 pub const CONTROL_CHALLENGE_BYTES: usize = 32;
 
