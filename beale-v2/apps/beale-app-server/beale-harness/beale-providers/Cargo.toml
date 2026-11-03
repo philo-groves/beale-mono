@@ -12,6 +12,7 @@ base64.workspace = true
 futures-util.workspace = true
 jsonwebtoken.workspace = true
 reqwest.workspace = true
+beale-storage = { path = "../beale-storage" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

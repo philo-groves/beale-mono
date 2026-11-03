@@ -703,6 +703,7 @@ mod tests {
         store.remove_api_key("xai").unwrap();
         assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Unspecified);
         assert!(store.load_lead_provider().unwrap().is_none());
+        drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -4,6 +4,7 @@ members = [
     "apps/beale-app-server/beale-harness/beale-core",
     "apps/beale-app-server/beale-harness/beale-providers",
     "apps/beale-app-server/beale-harness/beale-sessions",
+    "apps/beale-app-server/beale-harness/beale-storage",
     "apps/beale-app-server/beale-harness/beale-workspaces",
     "apps/beale-desktop-app",
 ]
@@ -26,6 +27,7 @@ futures-util = "0.3"
 jsonwebtoken = "9"
 prost = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

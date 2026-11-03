@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
+use beale_storage::HostDatabase;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthCredential {
@@ -18,6 +20,7 @@ pub struct OAuthCredential {
 
 pub struct CredentialStore {
     root: PathBuf,
+    db: Mutex<Option<HostDatabase>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -35,11 +38,27 @@ impl CredentialStore {
                 .context("home directory is unavailable")?;
             PathBuf::from(home).join(".beale").join("v2")
         };
-        Ok(Self { root })
+        Ok(Self::at(root))
     }
 
     pub fn at(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            db: Mutex::new(None),
+        }
+    }
+
+    fn db(&self) -> Result<HostDatabase> {
+        let mut cache = self
+            .db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("provider database lock poisoned"))?;
+        if let Some(db) = cache.as_ref() {
+            return Ok(db.clone());
+        }
+        let db = HostDatabase::open(&self.root)?;
+        *cache = Some(db.clone());
+        Ok(db)
     }
 
     pub fn control_token(&self) -> Result<String> {
@@ -99,70 +118,66 @@ impl CredentialStore {
     }
 
     pub fn load_lead_provider(&self) -> Result<Option<String>> {
-        match std::fs::read_to_string(self.root.join("lead-provider")) {
-            Ok(value) if value == "openai" || value == "xai" => Ok(Some(value)),
-            Ok(_) => bail!("invalid saved lead provider"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).context("cannot read lead provider"),
+        match self.db()?.setting("lead-provider")? {
+            Some(value) if value == "openai" || value == "xai" => Ok(Some(value)),
+            Some(_) => bail!("invalid saved lead provider"),
+            None => Ok(None),
         }
     }
 
     pub fn save_lead_provider(&self, provider: &str) -> Result<()> {
         match provider {
-            "openai" | "xai" => {
-                self.write_private(&self.root.join("lead-provider"), provider.as_bytes())
-            }
+            "openai" | "xai" => self.db()?.save_setting("lead-provider", Some(provider)),
             _ => bail!("unknown lead provider"),
         }
     }
 
     pub fn clear_lead_provider(&self) -> Result<()> {
-        remove_if_exists(&self.root.join("lead-provider"))
+        self.db()?.save_setting("lead-provider", None)
     }
 
     pub fn source_priority(&self, provider: &str) -> Result<&'static str> {
-        match std::fs::read_to_string(self.source_priority_path(provider)?) {
-            Ok(value) if value == "api-key" => Ok("api-key"),
-            Ok(_) => bail!("invalid saved source priority"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("subscription"),
-            Err(error) => Err(error).context("cannot read source priority"),
+        let path = self.source_priority_path(provider)?;
+        match self.db()?.setting(setting_name(&path)?)? {
+            Some(value) if value == "api-key" => Ok("api-key"),
+            Some(_) => bail!("invalid saved source priority"),
+            None => Ok("subscription"),
         }
     }
 
     pub fn save_source_priority(&self, provider: &str, mode: &str) -> Result<()> {
         let path = self.source_priority_path(provider)?;
+        let key = setting_name(&path)?;
         match mode {
-            "subscription" => remove_if_exists(&path),
-            "api-key" => self.write_private(&path, b"api-key"),
+            "subscription" => self.db()?.save_setting(key, None),
+            "api-key" => self.db()?.save_setting(key, Some("api-key")),
             _ => bail!("unknown source priority"),
         }
     }
 
     pub fn daybreak_mode(&self) -> Result<&'static str> {
-        match std::fs::read_to_string(self.root.join("openai-daybreak-mode")) {
-            Ok(value) if value == "red" => Ok("red"),
-            Ok(_) => bail!("invalid saved Daybreak mode"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("blue"),
-            Err(error) => Err(error).context("cannot read Daybreak mode"),
+        match self.db()?.setting("openai-daybreak-mode")? {
+            Some(value) if value == "red" => Ok("red"),
+            Some(_) => bail!("invalid saved Daybreak mode"),
+            None => Ok("blue"),
         }
     }
 
     pub fn save_daybreak_mode(&self, mode: &str) -> Result<()> {
-        let path = self.root.join("openai-daybreak-mode");
         match mode {
-            "blue" => remove_if_exists(&path),
-            "red" => self.write_private(&path, b"red"),
+            "blue" => self.db()?.save_setting("openai-daybreak-mode", None),
+            "red" => self.db()?.save_setting("openai-daybreak-mode", Some("red")),
             _ => bail!("unknown Daybreak mode"),
         }
     }
 
     pub fn load_model_defaults(&self, provider: &str, mode: &str) -> Result<Option<ModelDefaults>> {
-        match std::fs::read(self.model_defaults_path(provider, mode)?) {
-            Ok(bytes) => Ok(Some(
-                serde_json::from_slice(&bytes).context("invalid saved model defaults")?,
+        let path = self.model_defaults_path(provider, mode)?;
+        match self.db()?.setting(setting_name(&path)?)? {
+            Some(value) => Ok(Some(
+                serde_json::from_str(&value).context("invalid saved model defaults")?,
             )),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).context("cannot read model defaults"),
+            None => Ok(None),
         }
     }
 
@@ -175,27 +190,23 @@ impl CredentialStore {
         if !crate::models::valid_id(&defaults.lead) || !crate::models::valid_id(&defaults.small) {
             bail!("invalid model defaults");
         }
-        self.write_private(
-            &self.model_defaults_path(provider, mode)?,
-            &serde_json::to_vec(defaults)?,
+        let path = self.model_defaults_path(provider, mode)?;
+        self.db()?.save_setting(
+            setting_name(&path)?,
+            Some(&serde_json::to_string(defaults)?),
         )
     }
 
     pub fn host_id(&self) -> Result<String> {
-        let path = self.root.join("host-id");
-        match std::fs::read_to_string(&path) {
-            Ok(id) => {
-                let id = id.trim();
-                if id.starts_with("urn:uuid:") && uuid::Uuid::parse_str(&id[9..]).is_ok() {
-                    return Ok(id.to_owned());
-                }
-                bail!("invalid persisted host identifier");
+        if let Some(id) = self.db()?.setting("host-id")? {
+            let id = id.trim();
+            if id.starts_with("urn:uuid:") && uuid::Uuid::parse_str(&id[9..]).is_ok() {
+                return Ok(id.to_owned());
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("cannot read persisted host identifier"),
+            bail!("invalid persisted host identifier");
         }
         let id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
-        self.write_private(&path, id.as_bytes())?;
+        self.db()?.save_setting("host-id", Some(&id))?;
         Ok(id)
     }
 
@@ -228,7 +239,7 @@ impl CredentialStore {
             }
             let file = options.open(&path).context("cannot open credential lock")?;
             #[cfg(windows)]
-            restrict_windows_acl(&path)?;
+            restrict_windows_acl(&path, false)?;
             file.lock().context("cannot lock credentials")?;
             Ok(file)
         })
@@ -284,7 +295,7 @@ impl CredentialStore {
             file.write_all(contents)?;
             file.sync_all()?;
             #[cfg(windows)]
-            restrict_windows_acl(&temporary)?;
+            restrict_windows_acl(&temporary, false)?;
             std::fs::rename(&temporary, path).context("cannot replace saved credential")?;
             Ok(())
         })();
@@ -297,7 +308,7 @@ impl CredentialStore {
     fn ensure_private_root(&self) -> Result<()> {
         std::fs::create_dir_all(&self.root).context("cannot create host data directory")?;
         #[cfg(windows)]
-        restrict_windows_acl(&self.root)?;
+        restrict_windows_acl(&self.root, true)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -314,6 +325,12 @@ fn remove_if_exists(path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).context("cannot remove credential"),
     }
+}
+
+fn setting_name(path: &Path) -> Result<&str> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .context("invalid provider setting name")
 }
 
 #[cfg(windows)]
@@ -389,16 +406,21 @@ fn unprotect_api_key(bytes: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(windows)]
-fn restrict_windows_acl(path: &Path) -> Result<()> {
+fn restrict_windows_acl(path: &Path, directory: bool) -> Result<()> {
     use std::process::Command;
     let user = std::env::var("USERNAME").context("Windows user is unavailable")?;
     let domain = std::env::var("USERDOMAIN").context("Windows domain is unavailable")?;
     let principal = format!("{domain}\\{user}");
+    let permission = if directory {
+        format!("{principal}:(OI)(CI)F")
+    } else {
+        format!("{principal}:F")
+    };
     let status = Command::new("icacls")
         .arg(path)
         .arg("/inheritance:r")
         .arg("/grant:r")
-        .arg(format!("{principal}:F"))
+        .arg(permission)
         .output()
         .context("cannot set private Windows ACL")?;
     if !status.status.success() {
@@ -451,8 +473,8 @@ mod tests {
                 .save_model_defaults("../other", "subscription", &defaults)
                 .is_err()
         );
-        std::fs::remove_file(root.join("openai-subscription-models.json")).unwrap();
-        std::fs::remove_dir(root).unwrap();
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -470,7 +492,8 @@ mod tests {
             .save_source_priority("openai", "subscription")
             .unwrap();
         assert_eq!(store.source_priority("openai").unwrap(), "subscription");
-        std::fs::remove_dir(root).unwrap();
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -484,6 +507,31 @@ mod tests {
         assert!(store.save_daybreak_mode("unknown").is_err());
         store.save_daybreak_mode("blue").unwrap();
         assert_eq!(store.daybreak_mode().unwrap(), "blue");
-        std::fs::remove_dir(root).unwrap();
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn database_settings_ignore_old_files_and_survive_restart() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-provider-migration-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("lead-provider"), b"xai").unwrap();
+        std::fs::write(root.join("openai-source-priority"), b"api-key").unwrap();
+        let store = CredentialStore::at(root.clone());
+        assert!(store.load_lead_provider().unwrap().is_none());
+        assert_eq!(store.source_priority("openai").unwrap(), "subscription");
+        store.save_lead_provider("openai").unwrap();
+        drop(store);
+        std::fs::write(root.join("lead-provider"), b"invalid stale value").unwrap();
+        let reopened = CredentialStore::at(root.clone());
+        assert_eq!(
+            reopened.load_lead_provider().unwrap().as_deref(),
+            Some("openai")
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

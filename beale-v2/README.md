@@ -2,7 +2,7 @@
 
 A complete re-implementation of Beale using lessons learned from the first. This directory will be moved to the root and replace its content when it is ready.
 
-The Rust workspace now includes `beale-contracts`, `beale-core`, `beale-providers`, `beale-sessions`, and `beale-workspaces` under `apps/beale-app-server/beale-harness/`, plus the first Rune desktop client in `apps/beale-desktop-app/`. `beale-core` assembles the host; the session and workspace crates own their respective routes and storage. Other app and extension directories remain reserved until their crate manifests exist. The workspace uses Rust edition 2024 and requires Rust 1.89 or newer.
+The Rust workspace now includes `beale-contracts`, `beale-core`, `beale-providers`, `beale-sessions`, `beale-storage`, and `beale-workspaces` under `apps/beale-app-server/beale-harness/`, plus the first Rune desktop client in `apps/beale-desktop-app/`. `beale-core` assembles the host; the session and workspace crates own their respective operations, using the shared host database for global records. Other app and extension directories remain reserved until their crate manifests exist. The workspace uses Rust edition 2024 and requires Rust 1.89 or newer.
 
 ## Run the local desktop and app-server
 
@@ -32,7 +32,7 @@ Both processes use `127.0.0.1:43831` by default. If that port is occupied, set `
 $env:BEALE_V2_APP_SERVER_ADDR = "127.0.0.1:43832"
 ```
 
-The server rejects non-loopback addresses. Local credential and session operations require a random control token stored in the app-server's private host directory (`~/.beale/v2` by default, or `BEALE_V2_HOME` in both processes). Before sending credentials, the desktop challenges the process on the loopback port to prove it knows that token. On Windows, API keys are encrypted for the current user with DPAPI; on other desktop systems they are stored in owner-only host files. Remote Tailscale access is not enabled yet.
+The server rejects non-loopback addresses. Local credential and session operations require a random control token stored in the app-server's private host directory (`~/.beale/v2` by default, or `BEALE_V2_HOME` in both processes). Host-wide workspace registration, sessions, and provider choices are stored in `state.sqlite` there. Earlier v2 workspace, session, and provider setting files are not read; recreate any needed workspace and session and reselect provider choices after switching to the database. Before sending credentials, the desktop challenges the process on the loopback port to prove it knows that token. OAuth tokens and API keys remain in protected host files; on Windows, API keys are encrypted for the current user with DPAPI. Desktop appearance and window placement remain client-local files. Remote Tailscale access is not enabled yet.
 
 ## Core Directories
 

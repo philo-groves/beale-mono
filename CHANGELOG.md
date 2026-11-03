@@ -102,6 +102,7 @@
 
 #### Added
 
+- Added a v2 host-owned SQLite database for workspace registration, sessions, and provider settings. Earlier v2 workspace, session, and provider setting files are not imported; credential secrets remain in protected host files.
 - Added v1.6 authenticated workspace create/list operations, a host-owned workspace registry, and an initial schema-v3 workspace layout with user-created scope surfaces and rules.
 - Added v1.7 authenticated workspace details reads for saved scope surfaces, rules, and guidance.
 - Added v1.8 separate Campaign, Foundation, Surfaces, and Rules contracts, with independent revisions and scoped update routes for editable sections.

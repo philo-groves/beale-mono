@@ -15,6 +15,7 @@ use beale_contracts::{
         WorkspaceRules, WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaces,
     },
 };
+use beale_storage::{HostDatabase, WorkspaceRow};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -46,16 +47,14 @@ const DEFAULT_GUIDANCE: &str = "# Beale research workspace\n\nFollow the workspa
 #[derive(Clone)]
 pub struct WorkspaceStore {
     root: PathBuf,
+    db: HostDatabase,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct Registry {
-    schema_version: u32,
     workspaces: Vec<RegistryEntry>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 struct RegistryEntry {
     id: String,
     name: String,
@@ -166,11 +165,12 @@ impl WorkspaceStore {
         } else {
             std::env::current_dir()?.join(root)
         };
-        Ok(Self { root })
+        Self::at(root)
     }
 
-    pub fn at(root: PathBuf) -> Self {
-        Self { root }
+    pub fn at(root: PathBuf) -> anyhow::Result<Self> {
+        let db = HostDatabase::open(&root)?;
+        Ok(Self { root, db })
     }
 
     fn list(&self) -> Result<Vec<WorkspaceSummary>, WorkspaceError> {
@@ -546,43 +546,33 @@ impl WorkspaceStore {
     }
 
     fn read_registry(&self) -> Result<Registry, WorkspaceError> {
-        let path = self.root.join("workspaces.json");
-        match fs::read(path) {
-            Ok(bytes) if bytes.len() <= 2_097_152 => {
-                let registry: Registry = serde_json::from_slice(&bytes)
-                    .map_err(|_| WorkspaceError::Internal("decode workspace registry"))?;
-                if registry.schema_version != 1 {
-                    return Err(WorkspaceError::Internal(
-                        "unsupported workspace registry version",
-                    ));
-                }
-                Ok(registry)
-            }
-            Ok(_) => Err(WorkspaceError::Internal(
-                "workspace registry exceeds size limit",
-            )),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Registry {
-                schema_version: 1,
-                workspaces: Vec::new(),
-            }),
-            Err(_) => Err(WorkspaceError::Internal("read workspace registry")),
-        }
+        let workspaces = self
+            .db
+            .workspaces()
+            .map_err(|_| WorkspaceError::Internal("read workspace registry"))?
+            .into_iter()
+            .map(|row| RegistryEntry {
+                id: row.id,
+                name: row.name,
+                directory: row.directory,
+            })
+            .collect();
+        Ok(Registry { workspaces })
     }
 
     fn write_registry(&self, registry: &Registry) -> Result<(), WorkspaceError> {
-        fs::create_dir_all(&self.root)
-            .map_err(|_| WorkspaceError::Internal("create host data directory"))?;
-        let path = self.root.join("workspaces.json");
-        let temp = self.root.join(format!("workspaces-{}.tmp", Uuid::new_v4()));
-        let mut bytes = serde_json::to_vec_pretty(registry)
-            .map_err(|_| WorkspaceError::Internal("encode workspace registry"))?;
-        bytes.push(b'\n');
-        write_new(&temp, &bytes)?;
-        if fs::rename(&temp, &path).is_err() {
-            let _ = fs::remove_file(&temp);
-            return Err(WorkspaceError::Internal("replace workspace registry"));
-        }
-        Ok(())
+        let rows: Vec<_> = registry
+            .workspaces
+            .iter()
+            .map(|entry| WorkspaceRow {
+                id: entry.id.clone(),
+                name: entry.name.clone(),
+                directory: entry.directory.clone(),
+            })
+            .collect();
+        self.db
+            .replace_workspaces(&rows)
+            .map_err(|_| WorkspaceError::Internal("write workspace registry"))
     }
 }
 
@@ -1071,7 +1061,10 @@ mod tests {
         let directory = base.join("workspace");
         fs::create_dir_all(&directory).unwrap();
         let token = "ab".repeat(32);
-        let app = router(token.clone(), WorkspaceStore::at(base.join("host")));
+        let app = router(
+            token.clone(),
+            WorkspaceStore::at(base.join("host")).unwrap(),
+        );
         let payload = example_request(&directory).encode_to_vec();
         assert_eq!(
             app.clone()
@@ -1194,7 +1187,11 @@ mod tests {
         let list = ListWorkspacesResponse::decode(bytes).unwrap();
         assert_eq!(list.workspaces, vec![summary, second_summary]);
         assert_eq!(
-            WorkspaceStore::at(base.join("host")).list().unwrap().len(),
+            WorkspaceStore::at(base.join("host"))
+                .unwrap()
+                .list()
+                .unwrap()
+                .len(),
             2
         );
         fs::remove_dir_all(base).unwrap();
@@ -1204,7 +1201,7 @@ mod tests {
     async fn workspace_sections_save_independently_with_revision_checks() {
         let base = std::env::temp_dir().join(format!("beale-section-example-{}", Uuid::new_v4()));
         fs::create_dir_all(&base).unwrap();
-        let store = WorkspaceStore::at(base.join("host"));
+        let store = WorkspaceStore::at(base.join("host")).unwrap();
         let summary = store
             .create(example_request(&base.join("workspace")))
             .unwrap();
@@ -1316,6 +1313,8 @@ mod tests {
         assert_eq!(store.foundation(&summary.id).unwrap().revision, 2);
         assert_eq!(store.surfaces(&summary.id).unwrap().revision, 2);
         assert_eq!(store.rules(&summary.id).unwrap().revision, 2);
+        drop(app);
+        drop(store);
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -1328,7 +1327,10 @@ mod tests {
         let directory = base.join("workspace");
         fs::create_dir_all(&directory).unwrap();
         let token = "cd".repeat(32);
-        let app = router(token.clone(), WorkspaceStore::at(base.join("host")));
+        let app = router(
+            token.clone(),
+            WorkspaceStore::at(base.join("host")).unwrap(),
+        );
         let mut input = example_request(&directory);
         input.surfaces[0].scope = SurfaceScope::Unspecified as i32;
         assert_eq!(
@@ -1362,7 +1364,13 @@ mod tests {
                 .status(),
             StatusCode::BAD_REQUEST,
         );
-        assert!(!host_directory.exists());
+        assert!(
+            WorkspaceStore::at(host_directory)
+                .unwrap()
+                .list()
+                .unwrap()
+                .is_empty()
+        );
         fs::write(directory.join("existing.txt"), b"existing material").unwrap();
         assert_eq!(
             app.oneshot(post(
@@ -1380,5 +1388,32 @@ mod tests {
         );
         assert!(!directory.join("workspace.json").exists());
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn database_registry_ignores_old_file_and_survives_restart() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-workspace-migration-example-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let id = Uuid::new_v4().to_string();
+        fs::write(root.join("workspaces.json"), b"stale registry file").unwrap();
+        let store = WorkspaceStore::at(root.clone()).unwrap();
+        assert!(store.list().unwrap().is_empty());
+        let saved = Registry {
+            workspaces: vec![RegistryEntry {
+                id: id.clone(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+        };
+        store.write_registry(&saved).unwrap();
+        assert_eq!(store.list().unwrap()[0].id, id);
+        drop(store);
+        let reopened = WorkspaceStore::at(root.clone()).unwrap();
+        assert_eq!(reopened.list().unwrap()[0].name, "Example Workspace");
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
     }
 }

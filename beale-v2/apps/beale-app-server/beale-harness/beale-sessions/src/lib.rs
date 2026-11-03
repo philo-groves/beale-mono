@@ -15,11 +15,8 @@ use beale_contracts::{
 use beale_providers::{
     AuthMode, CredentialStore, InferenceRequest, Provider, ProviderClient, TextMessage, TextRole,
 };
-use serde::{Deserialize, Serialize};
+use beale_storage::{HostDatabase, SessionRow, TurnRow};
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -36,23 +33,20 @@ const MAX_HISTORY_BYTES: usize = 4_194_304;
 #[derive(Clone)]
 struct SessionState {
     token: String,
-    root: PathBuf,
+    db: HostDatabase,
     workspaces: WorkspaceStore,
     credentials: Arc<CredentialStore>,
     provider: Arc<ProviderClient>,
     write_lock: Arc<Mutex<()>>,
 }
 
-#[derive(Serialize, Deserialize)]
 struct StoredSession {
-    schema_version: u32,
     id: String,
     workspace_id: String,
     title: String,
     created_at_ms: u128,
 }
 
-#[derive(Serialize, Deserialize)]
 struct StoredTurn {
     provider: i32,
     method: i32,
@@ -62,7 +56,7 @@ struct StoredTurn {
 }
 
 pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
-    let root = workspaces.root().join("sessions");
+    let db = HostDatabase::open(workspaces.root())?;
     let credentials = Arc::new(CredentialStore::at(workspaces.root().to_path_buf()));
     Ok(Router::new()
         .route(SESSIONS_PATH, get(list))
@@ -71,7 +65,7 @@ pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Route
         .layer(DefaultBodyLimit::max(20_000))
         .with_state(SessionState {
             token,
-            root,
+            db,
             workspaces,
             credentials,
             provider: Arc::new(ProviderClient::new()?),
@@ -87,44 +81,45 @@ fn parse_id(value: &str) -> Result<Uuid, StatusCode> {
     Ok(id)
 }
 
-fn session_dir(root: &Path, id: Uuid) -> PathBuf {
-    root.join(id.to_string())
-}
-
-fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, StatusCode> {
-    let bytes = fs::read(path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if bytes.len() > max {
+fn load_persisted(
+    db: &HostDatabase,
+    id: Uuid,
+) -> Result<(StoredSession, Vec<StoredTurn>), StatusCode> {
+    let item = db
+        .session(&id.to_string())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if item.turns.is_empty() || item.turns.len() > MAX_TURNS || item.session.created_at_ms < 0 {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    Ok(bytes)
-}
-
-fn load_session(root: &Path, id: Uuid) -> Result<StoredSession, StatusCode> {
-    let path = session_dir(root, id).join("session.json");
-    if !path.exists() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let session: StoredSession = serde_json::from_slice(&read_bounded(&path, 4_096)?)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if session.schema_version != 1 || session.id != id.to_string() {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-    Ok(session)
-}
-
-fn load_turns(root: &Path, id: Uuid) -> Result<Vec<StoredTurn>, StatusCode> {
-    let directory = session_dir(root, id);
-    let mut turns = Vec::new();
-    for number in 1..=MAX_TURNS {
-        let path = directory.join(format!("turn-{number:04}.json"));
-        if !path.exists() {
-            break;
-        }
-        let turn: StoredTurn = serde_json::from_slice(&read_bounded(&path, MAX_HISTORY_BYTES)?)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        turns.push(turn);
-    }
-    Ok(turns)
+    let turns = item
+        .turns
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            if row.number
+                != i64::try_from(index + 1).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            Ok(StoredTurn {
+                provider: row.provider,
+                method: row.method,
+                model: row.model,
+                prompt: row.prompt,
+                answer: row.answer,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((
+        StoredSession {
+            id: item.session.id,
+            workspace_id: item.session.workspace_id,
+            title: item.session.title,
+            created_at_ms: item.session.created_at_ms as u128,
+        },
+        turns,
+    ))
 }
 
 fn summary(session: &StoredSession) -> SessionSummary {
@@ -162,18 +157,6 @@ fn detail(session: &StoredSession, turns: &[StoredTurn]) -> Result<SessionDetail
     })
 }
 
-fn write_new(path: &Path, value: &impl Serialize) -> Result<(), StatusCode> {
-    let bytes = serde_json::to_vec(value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
 fn title(prompt: &str) -> String {
     let line = prompt.lines().next().unwrap_or("").trim();
     let title: String = line.chars().take(72).collect();
@@ -192,37 +175,24 @@ async fn list(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let _guard = state.write_lock.lock().await;
+    let rows = state
+        .db
+        .sessions()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if rows.len() > 1_024 {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
     let mut sessions = Vec::new();
-    let entries = match fs::read_dir(&state.root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(response(ListSessionsResponse {
-                sessions: Vec::new(),
-            }));
-        }
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
-    for entry in entries {
-        let entry = entry.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Ok(id) = parse_id(&name) else {
-            continue;
-        };
-        if let Ok(session) = load_session(&state.root, id)
-            && state.workspaces.contains(&session.workspace_id)?
-        {
-            sessions.push((session.created_at_ms, summary(&session)));
-        }
-        if sessions.len() > 1_024 {
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    for row in rows {
+        if state.workspaces.contains(&row.workspace_id)? {
+            sessions.push(SessionSummary {
+                id: row.id,
+                workspace_id: row.workspace_id,
+                title: row.title,
+            });
         }
     }
-    sessions.sort_by_key(|entry| std::cmp::Reverse(entry.0));
-    Ok(response(ListSessionsResponse {
-        sessions: sessions.into_iter().map(|(_, summary)| summary).collect(),
-    }))
+    Ok(response(ListSessionsResponse { sessions }))
 }
 
 async fn details(
@@ -235,11 +205,11 @@ async fn details(
     }
     let id = parse_id(&id)?;
     let _guard = state.write_lock.lock().await;
-    let session = load_session(&state.root, id)?;
+    let (session, turns) = load_persisted(&state.db, id)?;
     if !state.workspaces.contains(&session.workspace_id)? {
         return Err(StatusCode::NOT_FOUND);
     }
-    Ok(response(detail(&session, &load_turns(&state.root, id)?)?))
+    Ok(response(detail(&session, &turns)?))
 }
 
 async fn submit_turn(
@@ -277,12 +247,10 @@ async fn submit_turn(
         _ => return Err(StatusCode::BAD_REQUEST),
     };
     let _guard = state.write_lock.lock().await;
-    let (id, session, mut turns) = if request.session_id.is_empty() {
+    let (session, mut turns) = if request.session_id.is_empty() {
         let id = Uuid::new_v4();
         (
-            id,
             StoredSession {
-                schema_version: 1,
                 id: id.to_string(),
                 workspace_id: request.workspace_id.clone(),
                 title: title(&request.prompt),
@@ -295,12 +263,11 @@ async fn submit_turn(
         )
     } else {
         let id = parse_id(&request.session_id)?;
-        let session = load_session(&state.root, id)?;
+        let (session, turns) = load_persisted(&state.db, id)?;
         if session.workspace_id != request.workspace_id {
             return Err(StatusCode::CONFLICT);
         }
-        let turns = load_turns(&state.root, id)?;
-        (id, session, turns)
+        (session, turns)
     };
     if turns.len() >= MAX_TURNS {
         return Err(StatusCode::CONFLICT);
@@ -353,15 +320,29 @@ async fn submit_turn(
         prompt: request.prompt,
         answer,
     });
-    let directory = session_dir(&state.root, id);
-    fs::create_dir_all(&directory).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    write_new(
-        &directory.join(format!("turn-{:04}.json", turns.len())),
-        turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?,
-    )?;
-    if turns.len() == 1 {
-        write_new(&directory.join("session.json"), &session)?;
-    }
+    let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    state
+        .db
+        .append_turn(
+            &SessionRow {
+                id: session.id.clone(),
+                workspace_id: session.workspace_id.clone(),
+                title: session.title.clone(),
+                created_at_ms: i64::try_from(session.created_at_ms)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            },
+            &TurnRow {
+                number: i64::try_from(turns.len())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                provider: latest.provider,
+                method: latest.method,
+                model: latest.model.clone(),
+                prompt: latest.prompt.clone(),
+                answer: latest.answer.clone(),
+            },
+            turns.len() == 1,
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(response(detail(&session, &turns)?))
 }
 
@@ -376,37 +357,40 @@ mod tests {
     fn completed_turn_round_trips_as_a_transcript() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
         let id = Uuid::new_v4();
-        let directory = session_dir(&root, id);
-        fs::create_dir_all(&directory).unwrap();
-        let session = StoredSession {
-            schema_version: 1,
+        let session = SessionRow {
             id: id.to_string(),
             workspace_id: Uuid::new_v4().to_string(),
             title: title("Echo example\nmore details"),
             created_at_ms: 1,
         };
-        let turn = StoredTurn {
+        let turn = TurnRow {
+            number: 1,
             provider: ProviderId::Openai as i32,
             method: AuthMethod::Subscription as i32,
             model: "model-example".to_owned(),
             prompt: "Echo example".to_owned(),
             answer: "Echo example".to_owned(),
         };
-        write_new(&directory.join("session.json"), &session).unwrap();
-        write_new(&directory.join("turn-0001.json"), &turn).unwrap();
-        let loaded = load_session(&root, id).unwrap();
-        let transcript = detail(&loaded, &load_turns(&root, id).unwrap()).unwrap();
+        let db = HostDatabase::open(&root).unwrap();
+        db.append_turn(&session, &turn, true).unwrap();
+        let (loaded, turns) = load_persisted(&db, id).unwrap();
+        let transcript = detail(&loaded, &turns).unwrap();
         assert_eq!(loaded.title, "Echo example");
         assert_eq!(transcript.messages.len(), 2);
         assert_eq!(transcript.messages[0].text, "Echo example");
         assert_eq!(transcript.messages[1].role, SessionRole::Assistant as i32);
-        fs::remove_dir_all(root).unwrap();
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
     async fn routes_require_host_auth_and_a_registered_workspace() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
-        let app = router("example-token".to_owned(), WorkspaceStore::at(root.clone())).unwrap();
+        let app = router(
+            "example-token".to_owned(),
+            WorkspaceStore::at(root.clone()).unwrap(),
+        )
+        .unwrap();
         let request = Request::builder()
             .uri(SESSIONS_PATH)
             .body(Body::empty())
