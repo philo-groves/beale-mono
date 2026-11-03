@@ -192,3 +192,41 @@ message UpdateWorkspaceRulesRequest {
   uint64 expected_revision = 1;
   repeated string rules = 2;
 }
+
+enum SessionRole {
+  SESSION_ROLE_UNSPECIFIED = 0;
+  SESSION_ROLE_USER = 1;
+  SESSION_ROLE_ASSISTANT = 2;
+}
+
+message SessionMessage {
+  SessionRole role = 1;
+  string text = 2;
+}
+
+message SessionSummary {
+  string id = 1;
+  string workspace_id = 2;
+  string title = 3;
+}
+
+message ListSessionsResponse {
+  repeated SessionSummary sessions = 1;
+}
+
+message SessionDetail {
+  SessionSummary summary = 1;
+  repeated SessionMessage messages = 2;
+  ProviderId provider = 3;
+  AuthMethod method = 4;
+  string model = 5;
+}
+
+message SubmitSessionTurnRequest {
+  string workspace_id = 1;
+  string session_id = 2;
+  ProviderId provider = 3;
+  AuthMethod method = 4;
+  string model = 5;
+  string prompt = 6;
+}

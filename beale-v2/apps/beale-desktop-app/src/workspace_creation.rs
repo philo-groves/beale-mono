@@ -1,6 +1,4 @@
-use rune::{
-    Color, Cursor, El, FileDialogOptions, TextEdit, Tx, col, el, icon, row, text, text_input,
-};
+use rune::{Color, El, FileDialogOptions, TextEdit, Tx, col, el, icon, row, text, text_input};
 
 use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button, form_label_font,
@@ -418,7 +416,6 @@ fn foundation(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                             .continuous_corners()
                             .border(1.0, theme.color("#2c2c2c"))
                             .hover(theme.color("#303030"))
-                            .cursor(Cursor::Pointer)
                             .on_press_tx(|s: &mut State, tx| {
                                 let path =
                                     std::path::Path::new(s.workspace_draft.directory.text.trim());
@@ -684,7 +681,6 @@ fn surface_list(state: &State, scope: SurfaceScope, theme: ThemeStyle<'_>) -> El
         .radius(8.0)
         .continuous_corners()
         .hover(theme.color("#303030"))
-        .cursor(Cursor::Pointer)
         .on_press(move |s: &mut State| s.workspace_draft.open_surface_dialog(scope))
         .child(icon(&PLUS, 16.0).color(theme.color("#bdbdbd")));
     settings_form_with_action(

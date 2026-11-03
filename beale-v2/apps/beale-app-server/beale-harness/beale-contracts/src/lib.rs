@@ -304,10 +304,72 @@ pub mod v1 {
         #[prost(string, repeated, tag = "2")]
         pub rules: Vec<String>,
     }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SessionRole {
+        Unspecified = 0,
+        User = 1,
+        Assistant = 2,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionMessage {
+        #[prost(enumeration = "SessionRole", tag = "1")]
+        pub role: i32,
+        #[prost(string, tag = "2")]
+        pub text: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionSummary {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub workspace_id: String,
+        #[prost(string, tag = "3")]
+        pub title: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListSessionsResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub sessions: Vec<SessionSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionDetail {
+        #[prost(message, optional, tag = "1")]
+        pub summary: Option<SessionSummary>,
+        #[prost(message, repeated, tag = "2")]
+        pub messages: Vec<SessionMessage>,
+        #[prost(enumeration = "ProviderId", tag = "3")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "4")]
+        pub method: i32,
+        #[prost(string, tag = "5")]
+        pub model: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SubmitSessionTurnRequest {
+        #[prost(string, tag = "1")]
+        pub workspace_id: String,
+        #[prost(string, tag = "2")]
+        pub session_id: String,
+        #[prost(enumeration = "ProviderId", tag = "3")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "4")]
+        pub method: i32,
+        #[prost(string, tag = "5")]
+        pub model: String,
+        #[prost(string, tag = "6")]
+        pub prompt: String,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 8;
+pub const PROTOCOL_MINOR: u32 = 9;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -326,6 +388,9 @@ pub const WORKSPACE_CAMPAIGN_PATH: &str = "/v1/workspaces/{id}/campaign";
 pub const WORKSPACE_FOUNDATION_PATH: &str = "/v1/workspaces/{id}/foundation";
 pub const WORKSPACE_SURFACES_PATH: &str = "/v1/workspaces/{id}/surfaces";
 pub const WORKSPACE_RULES_PATH: &str = "/v1/workspaces/{id}/rules";
+pub const SESSIONS_PATH: &str = "/v1/sessions";
+pub const SESSION_DETAIL_PATH: &str = "/v1/sessions/{id}";
+pub const SESSION_TURNS_PATH: &str = "/v1/sessions/turns";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const DEFAULT_LOCAL_ADDR: &str = "127.0.0.1:43831";
 pub const CONTROL_CHALLENGE_BYTES: usize = 32;

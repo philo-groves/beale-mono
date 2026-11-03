@@ -32,6 +32,7 @@
 - Added a confirmation dialog before removing a Surface from a saved workspace's pending edits.
 - Moved saved Workspace Rules entry into an Add a Rule dialog opened from the form title.
 - Added a New Research draft view with a bottom composer and draft-scoped lead model selector.
+- Connected New Research to host-owned sessions: send text turns through a selected signed-in provider, display the response, and reopen saved sessions beneath their workspaces.
 - Made the New Research composer compact and gave its model selector separate Provider and Model option menus.
 - Increased the New Research composer by one text row and added draft-level Effort selection with its value beside the model selector chevron.
 - Added a ribbon above the New Research composer with a workspace selector and draft-only repeat preset menu.
@@ -41,6 +42,8 @@
 
 #### Changed
 
+- Kept the default arrow cursor over v2 desktop buttons and selection rows; drag surfaces retain their interaction cursors.
+- Aligned v2 session user messages to the right in rounded panels and removed speaker labels from the transcript.
 - Fixed the v2 Add Surface dialog's scope from its invoking list and replaced its scope selector with an in-scope or out-of-scope title.
 - Renamed v2 workspace draft Resources to Surfaces, with separate in-scope and out-of-scope lists, creator tags, and a default reason for exclusions entered at creation.
 - Removed the unused File, View, and Window menus from the v2 desktop header.
@@ -101,6 +104,7 @@
 - Added v1.6 authenticated workspace create/list operations, a host-owned workspace registry, and an initial schema-v3 workspace layout with user-created scope surfaces and rules.
 - Added v1.7 authenticated workspace details reads for saved scope surfaces, rules, and guidance.
 - Added v1.8 separate Campaign, Foundation, Surfaces, and Rules contracts, with independent revisions and scoped update routes for editable sections.
+- Added v1.9 authenticated session list, detail, and submit-turn contracts with local completed-turn persistence and provider-backed text responses.
 - Started the v2 Rust app-server workspace with a loopback host, versioned protobuf health contract, and host-only OpenAI and xAI API-key and subscription provider paths.
 - Gave the v2 app-server and desktop a shared loopback address for local development, with non-loopback bindings rejected.
 - Added v1.1 local provider credential operations with a private control token; API keys use current-user DPAPI protection on Windows and private host files on other systems.
@@ -111,6 +115,7 @@
 
 #### Changed
 
+- Added the client version header required for xAI subscription inference through the Grok CLI proxy.
 - Replaced dashes with spaces in OpenAI model display names returned by the v2 app-server; model IDs are unchanged.
 - Research Track selection now weighs assessed impact, reachability, and deployment exposure before surface signals. Discovery and investigator guidance keep ordinary reachability observations out of verified security findings.
 - Research Track Investigators now pick up unresolved security Leads that existed before the current epoch while keeping newly created Leads with discovery. Within one rating, observed and reproduced Findings retain priority; existing databases add the epoch cutoff record automatically.

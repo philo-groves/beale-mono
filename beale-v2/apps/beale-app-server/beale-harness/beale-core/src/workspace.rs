@@ -169,7 +169,7 @@ impl WorkspaceStore {
     }
 
     #[cfg(test)]
-    fn at(root: PathBuf) -> Self {
+    pub(super) fn at(root: PathBuf) -> Self {
         Self { root }
     }
 
@@ -184,6 +184,19 @@ impl WorkspaceStore {
                 directory: entry.directory,
             })
             .collect())
+    }
+
+    pub(super) fn contains(&self, id: &str) -> Result<bool, StatusCode> {
+        Ok(self
+            .read_registry()
+            .map_err(|error| error.status())?
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == id))
+    }
+
+    pub(super) fn root(&self) -> &Path {
+        &self.root
     }
 
     fn details(&self, id: &str) -> Result<WorkspaceDetails, WorkspaceError> {

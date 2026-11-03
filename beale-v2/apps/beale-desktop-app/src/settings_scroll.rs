@@ -122,7 +122,6 @@ impl SettingsScroll {
                     .h(ARROW_HEIGHT)
                     .fill(theme.color("#111111"))
                     .center()
-                    .cursor(Cursor::Pointer)
                     .role("button")
                     .label("Scroll up")
                     .on_press_tx(move |_: &mut State, tx| {
@@ -136,7 +135,7 @@ impl SettingsScroll {
                 el().key("settings-scrollbar-track")
                     .w_full()
                     .grow(1.0)
-                    .cursor(Cursor::Pointer)
+                    .cursor(Cursor::Grab)
                     .on_layout_tx(move |_: &mut State, [_, _, _, height], tx| {
                         layout_scroll.track_height.set(height);
                         layout_scroll.update_thumb();
@@ -185,7 +184,6 @@ impl SettingsScroll {
                     .h(ARROW_HEIGHT)
                     .fill(theme.color("#111111"))
                     .center()
-                    .cursor(Cursor::Pointer)
                     .role("button")
                     .label("Scroll down")
                     .on_press_tx(move |_: &mut State, tx| {

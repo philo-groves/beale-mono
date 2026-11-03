@@ -17,6 +17,7 @@ mod new_research;
 mod provider_auth;
 mod provider_icons;
 mod provider_models;
+mod sessions;
 mod settings_scroll;
 mod workspace_creation;
 mod workspace_view;
@@ -26,10 +27,10 @@ use appearance::{
     ThemeStyle,
 };
 use beale_contracts::v1::{
-    AuthMethod, DaybreakMode, ProviderId, UpdateWorkspaceFoundationRequest,
-    UpdateWorkspaceRulesRequest, UpdateWorkspaceSurfacesRequest, WorkspaceDetails,
-    WorkspaceFoundation, WorkspaceRules, WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaceInput,
-    WorkspaceSurfaces,
+    AuthMethod, DaybreakMode, ProviderId, SessionDetail, SessionSummary, SubmitSessionTurnRequest,
+    UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest, UpdateWorkspaceSurfacesRequest,
+    WorkspaceDetails, WorkspaceFoundation, WorkspaceRules, WorkspaceSummary, WorkspaceSurface,
+    WorkspaceSurfaceInput, WorkspaceSurfaces,
 };
 use color_picker::Hsv;
 use connection::ConnectionStatus;
@@ -481,6 +482,12 @@ struct State {
     new_research_model: Option<new_research::ModelSelection>,
     new_research_effort: new_research::Effort,
     new_research_repeat: new_research::RepeatPreset,
+    session_summaries: Vec<SessionSummary>,
+    active_session: Option<SessionDetail>,
+    session_busy: bool,
+    session_error: String,
+    session_pending_prompt: Option<String>,
+    session_generation: u64,
     composer_menu_open: bool,
     composer_menu_section: new_research::MenuSection,
     composer_menu_cursor: usize,
@@ -570,6 +577,12 @@ impl Default for State {
             new_research_model: None,
             new_research_effort: new_research::Effort::default(),
             new_research_repeat: new_research::RepeatPreset::default(),
+            session_summaries: Vec::new(),
+            active_session: None,
+            session_busy: false,
+            session_error: String::new(),
+            session_pending_prompt: None,
+            session_generation: 0,
             composer_menu_open: false,
             composer_menu_section: new_research::MenuSection::Model,
             composer_menu_cursor: 0,
@@ -783,10 +796,71 @@ impl State {
     }
 
     fn start_new_research(&mut self) {
+        if self.active_session.take().is_some() {
+            self.session_generation = self.session_generation.wrapping_add(1);
+            self.session_busy = false;
+            self.session_pending_prompt = None;
+            self.session_error.clear();
+            self.new_research_prompt.clear();
+        }
         self.new_research_workspace_id = self
             .selected_research_workspace()
             .map(|item| item.id.clone());
         self.navigate_to(ViewLocation::NewResearch);
+    }
+
+    fn finish_session_turn(&mut self, generation: u64, result: Result<SessionDetail, String>) {
+        if self.session_generation != generation {
+            return;
+        }
+        self.session_busy = false;
+        match result {
+            Ok(detail) => {
+                if let Some(summary) = &detail.summary {
+                    self.session_summaries.retain(|item| item.id != summary.id);
+                    self.session_summaries.insert(0, summary.clone());
+                    self.new_research_workspace_id = Some(summary.workspace_id.clone());
+                }
+                self.active_session = Some(detail);
+                self.session_pending_prompt = None;
+                self.session_error.clear();
+            }
+            Err(error) => {
+                self.session_error = error;
+                if let Some(prompt) = self.session_pending_prompt.take() {
+                    self.new_research_prompt = TextEdit::new(prompt);
+                }
+            }
+        }
+    }
+
+    fn finish_session_load(&mut self, generation: u64, result: Result<SessionDetail, String>) {
+        if self.session_generation != generation {
+            return;
+        }
+        self.session_busy = false;
+        match result {
+            Ok(detail) => {
+                if let Some(summary) = &detail.summary {
+                    self.new_research_workspace_id = Some(summary.workspace_id.clone());
+                }
+                if let (Ok(provider), Ok(method)) = (
+                    ProviderId::try_from(detail.provider),
+                    AuthMethod::try_from(detail.method),
+                ) && let Some(provider) = Provider::from_id(provider)
+                {
+                    self.new_research_model = Some(new_research::ModelSelection {
+                        provider,
+                        method,
+                        id: detail.model.clone(),
+                    });
+                }
+                self.active_session = Some(detail);
+                self.new_research_prompt.clear();
+                self.session_error.clear();
+            }
+            Err(error) => self.session_error = error,
+        }
     }
 
     fn selected_research_workspace(&self) -> Option<&WorkspaceSummary> {
@@ -1135,6 +1209,105 @@ fn drag_color_picker(state: &mut State, drag: &mut Drag, tx: &mut Tx, axis: Pick
 }
 
 static AUTH_HANDLE: std::sync::OnceLock<rune::AppHandle<State>> = std::sync::OnceLock::new();
+
+fn start_session_turn(state: &mut State) {
+    if state.session_busy {
+        return;
+    }
+    let prompt = state.new_research_prompt.text.trim().to_owned();
+    if prompt.is_empty() {
+        return;
+    }
+    let Some(workspace_id) = state
+        .selected_research_workspace()
+        .map(|item| item.id.clone())
+    else {
+        state.session_error = "Choose a workspace before sending.".to_owned();
+        return;
+    };
+    let Some(model) = new_research::selected_model(state) else {
+        state.session_error = "Choose an available model before sending.".to_owned();
+        return;
+    };
+    if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+        state.session_error = "App-server connection is not ready.".to_owned();
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.session_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    let session_id = state
+        .active_session
+        .as_ref()
+        .and_then(|detail| detail.summary.as_ref())
+        .filter(|summary| summary.workspace_id == workspace_id)
+        .map_or_else(String::new, |summary| summary.id.clone());
+    let request = SubmitSessionTurnRequest {
+        workspace_id,
+        session_id,
+        provider: model.provider.id() as i32,
+        method: model.method as i32,
+        model: model.id,
+        prompt: prompt.clone(),
+    };
+    state.session_generation = state.session_generation.wrapping_add(1);
+    let generation = state.session_generation;
+    state.session_busy = true;
+    state.session_error.clear();
+    state.session_pending_prompt = Some(prompt);
+    state.new_research_prompt.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize session connection".to_owned())?;
+            runtime.block_on(sessions::submit(&client, addr, request))
+        })();
+        handle.update(move |state, _| state.finish_session_turn(generation, result));
+    });
+}
+
+fn start_session_load(state: &mut State, id: String) {
+    if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+        state.session_error = "App-server connection is not ready.".to_owned();
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.session_error = "Desktop connection is not ready.".to_owned();
+        return;
+    };
+    state.session_generation = state.session_generation.wrapping_add(1);
+    let generation = state.session_generation;
+    state.session_busy = true;
+    state.session_error.clear();
+    state.session_pending_prompt = None;
+    state.new_research_workspace_id = state
+        .session_summaries
+        .iter()
+        .find(|summary| summary.id == id)
+        .map(|summary| summary.workspace_id.clone());
+    state.active_session = None;
+    state.new_research_prompt.clear();
+    state.navigate_to(ViewLocation::NewResearch);
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = sessions::client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize session connection".to_owned())?;
+            runtime.block_on(sessions::load(&client, addr, &id))
+        })();
+        handle.update(move |state, _| state.finish_session_load(generation, result));
+    });
+}
 
 enum WorkspaceSaveResult {
     Foundation(WorkspaceFoundation),
@@ -2004,7 +2177,6 @@ fn history_button(direction: HistoryDirection, enabled: bool, theme: ThemeStyle<
         .child(icon(glyph, 16.0).color(color(if enabled { "#c8c8c8" } else { "#777777" })));
     if enabled {
         button
-            .cursor(Cursor::Pointer)
             .hover(color("#303030"))
             .on_press(move |state: &mut State| match direction {
                 HistoryDirection::Back => state.go_back(),
@@ -2254,7 +2426,7 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
         .label("Main navigation")
         .w(NAVIGATION_RAIL_WIDTH)
         .h_full()
-        .pt(16.0)
+        .pt(8.0)
         .gap(6.0)
         .items_center()
         .child(nav_button(
@@ -2894,7 +3066,6 @@ fn daybreak_option(state: &State, spec: &DaybreakRowSpec) -> El {
         .role("radio")
         .label(spec.label)
         .help(spec.description)
-        .cursor(Cursor::Pointer)
         .child(
             col()
                 .grow(1.0)
@@ -3359,7 +3530,6 @@ fn appearance_theme_palette_settings(state: &State) -> El {
                         .label(format!("Choose {} theme color", field.name()))
                         .size(27.0, 27.0)
                         .radius(7.0)
-                        .cursor(Cursor::Pointer)
                         .fill(rune::color::hex(hex).unwrap_or(Color::BLACK))
                         .on_press_tx(move |s: &mut State, tx| {
                             tx.instant();
@@ -3490,7 +3660,6 @@ fn appearance_colors_settings(state: &State) -> El {
                         .label(format!("Choose {} heat color", level.name()))
                         .size(27.0, 27.0)
                         .radius(7.0)
-                        .cursor(Cursor::Pointer)
                         .fill(rune::color::hex(hex).unwrap_or(Color::BLACK))
                         .on_press_tx(move |s: &mut State, tx| {
                             tx.instant();
@@ -4232,6 +4401,16 @@ fn main() -> std::process::ExitCode {
                 } else {
                     None
                 };
+            let session_result = if workspace_poll == 0
+                && matches!(status, ConnectionStatus::Connected { .. })
+            {
+                Some(match sessions::client() {
+                    Ok(session_client) => runtime.block_on(sessions::list(&session_client, addr)),
+                    Err(error) => Err(error),
+                })
+            } else {
+                None
+            };
             workspace_poll = (workspace_poll + 1) % 5;
             let auth_result = if matches!(status, ConnectionStatus::Connected { .. }) {
                 runtime.block_on(provider_auth::status(&client, addr)).ok()
@@ -4245,6 +4424,16 @@ fn main() -> std::process::ExitCode {
             let daybreak_mode = auth_loaded.then_some(auth_snapshot.daybreak_mode);
             if let Some(result) = workspace_result {
                 handle.update_if(move |state, _| state.apply_workspace_list(result));
+            }
+            if let Some(Ok(summaries)) = session_result {
+                handle.update_if(move |state, _| {
+                    if state.session_summaries == summaries {
+                        false
+                    } else {
+                        state.session_summaries = summaries;
+                        true
+                    }
+                });
             }
             handle.update_if(move |state, _| {
                 if state.connection == status
@@ -5421,6 +5610,70 @@ mod tests {
         };
         assert!(late.apply_workspace_list(Ok(runtime.state.workspaces.clone())));
         assert_eq!(late.new_research_workspace_id.as_deref(), Some(second));
+    }
+
+    #[test]
+    fn completed_turn_reuses_the_draft_view_and_replaces_the_new_session_row() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let mut state = State {
+            primary_view: PrimaryView::NewResearch,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            new_research_workspace_id: Some(workspace_id.to_owned()),
+            session_pending_prompt: Some("Echo example".to_owned()),
+            session_busy: true,
+            session_generation: 1,
+            ..State::default()
+        };
+        let detail = SessionDetail {
+            summary: Some(SessionSummary {
+                id: session_id.to_owned(),
+                workspace_id: workspace_id.to_owned(),
+                title: "Echo example".to_owned(),
+            }),
+            messages: vec![
+                beale_contracts::v1::SessionMessage {
+                    role: beale_contracts::v1::SessionRole::User as i32,
+                    text: "Echo example".to_owned(),
+                },
+                beale_contracts::v1::SessionMessage {
+                    role: beale_contracts::v1::SessionRole::Assistant as i32,
+                    text: "Echo example".to_owned(),
+                },
+            ],
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::Subscription as i32,
+            model: "model-example".to_owned(),
+        };
+        state.finish_session_turn(1, Ok(detail));
+        assert_eq!(state.primary_view, PrimaryView::NewResearch);
+        assert!(!state.session_busy);
+        assert!(state.session_pending_prompt.is_none());
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .find(&format!("home-session-{session_id}"))
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find(&format!("home-session-{workspace_id}"))
+                .is_none()
+        );
+        assert!(runtime.find("session-message-0").is_some());
+        assert!(runtime.find("session-message-1").is_some());
+        let (user_row, _) = runtime.presented("session-message-0").unwrap();
+        let (user_bubble, _) = runtime.presented("session-message-0-bubble").unwrap();
+        let (assistant_row, _) = runtime.presented("session-message-1").unwrap();
+        assert!(user_bubble[0] > user_row[0] + user_row[2] * 0.4);
+        assert!((user_bubble[0] + user_bubble[2] - user_row[0] - user_row[2]).abs() < 1.0);
+        assert_eq!(assistant_row[0], user_row[0]);
+        assert!(runtime.find("new-research-composer").is_some());
     }
 
     #[test]

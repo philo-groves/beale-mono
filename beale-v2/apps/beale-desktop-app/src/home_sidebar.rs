@@ -1,9 +1,9 @@
-use rune::{Cursor, El, Icon, col, el, icon, row, text};
+use rune::{El, Icon, col, el, icon, row, text};
 
 use crate::icons::{FOLDER_OPEN, NEW_RESEARCH, PLUS, QUICK_CHAT, SEARCH};
 use crate::{
-    SelectionMenu, State, ThemeStyle, selection_button, sidenav_heading, toggle_selection_menu,
-    ui_font,
+    SelectionMenu, State, ThemeStyle, selection_button, sidenav_heading, start_session_load,
+    toggle_selection_menu, ui_font,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -137,10 +137,7 @@ fn workspace_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
             })),
         );
     if let Some(action) = spec.action {
-        button = button
-            .hover(theme.color("#414141"))
-            .cursor(Cursor::Pointer)
-            .on_press(action);
+        button = button.hover(theme.color("#414141")).on_press(action);
     }
     button
 }
@@ -165,12 +162,13 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
             rune::Color::TRANSPARENT
         })
         .hover(color("#282828"))
-        .cursor(Cursor::Pointer)
         .child(el().size(15.0, 15.0))
         .child(
             text(label.to_owned())
                 .font(if italic { font.italic() } else { font })
-                .color(color(if active { "#f2f2f2" } else { "#b8b8b8" })),
+                .color(color(if active { "#f2f2f2" } else { "#b8b8b8" }))
+                .min_w(0.0)
+                .truncate(),
         )
 }
 
@@ -192,8 +190,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
     .label(format!(
         "Choose sidebar collection: {}",
         state.home_collection.label()
-    ))
-    .cursor(Cursor::Pointer);
+    ));
     let mut selector_tools = row().center_y().gap(4.0).child(collection_control);
     if state.home_collection == HomeCollection::Workspaces {
         selector_tools = selector_tools.child(workspace_action(&NEW_WORKSPACE, theme));
@@ -234,13 +231,14 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .ml(8.0),
         );
     } else if state.home_collection == HomeCollection::Workspaces {
-        let new_session_workspace = (state.primary_view == crate::PrimaryView::NewResearch)
-            .then(|| {
-                state
-                    .selected_research_workspace()
-                    .map(|item| item.id.as_str())
-            })
-            .flatten();
+        let new_session_workspace = (state.primary_view == crate::PrimaryView::NewResearch
+            && state.active_session.is_none())
+        .then(|| {
+            state
+                .selected_research_workspace()
+                .map(|item| item.id.as_str())
+        })
+        .flatten();
         for workspace in &state.workspaces {
             let id = uuid::Uuid::parse_str(&workspace.id).ok();
             let selected =
@@ -285,6 +283,40 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                     )
                     .label(format!("New Session in {}", workspace.name))
                     .on_press(State::start_new_research),
+                );
+            }
+            for session in state
+                .session_summaries
+                .iter()
+                .filter(|session| session.workspace_id == workspace.id)
+            {
+                let session_id = session.id.clone();
+                let active = state.primary_view == crate::PrimaryView::NewResearch
+                    && state
+                        .active_session
+                        .as_ref()
+                        .and_then(|detail| detail.summary.as_ref())
+                        .is_some_and(|summary| summary.id == session.id);
+                group = group.child(
+                    session_row(
+                        format!("home-session-{}", session.id),
+                        &session.title,
+                        false,
+                        active,
+                        theme,
+                    )
+                    .on_press(move |state: &mut State| {
+                        if state
+                            .active_session
+                            .as_ref()
+                            .and_then(|detail| detail.summary.as_ref())
+                            .is_some_and(|summary| summary.id == session_id)
+                        {
+                            state.navigate_to(crate::ViewLocation::NewResearch);
+                        } else {
+                            start_session_load(state, session_id.clone());
+                        }
+                    }),
                 );
             }
             collection = collection.child(group);

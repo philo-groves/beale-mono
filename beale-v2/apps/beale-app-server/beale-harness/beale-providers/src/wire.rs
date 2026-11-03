@@ -183,14 +183,16 @@ impl ProviderClient {
         if route.proxy_header {
             builder = builder
                 .header("X-XAI-Token-Auth", "xai-grok-cli")
+                .header("x-grok-client-version", "1.0.13")
+                .header("x-grok-client-identifier", "beale")
+                .header("x-grok-client-mode", "headless")
                 .header("x-grok-model-override", request.model.as_str());
         }
         let response = builder.send().await.context("provider request failed")?;
-        ensure!(
-            response.status().is_success(),
-            "provider rejected request ({})",
-            response.status()
-        );
+        if !response.status().is_success() {
+            let status = response.status();
+            bail!("provider rejected request ({status})");
+        }
         read_stream(response, route.shape).await
     }
 }
@@ -258,7 +260,7 @@ fn process_frames(
                             .context("missing text delta")?;
                         append(output, delta)?;
                     }
-                    "response.completed" => {
+                    "response.completed" | "response.done" => {
                         *completed = true;
                         break;
                     }
@@ -363,5 +365,34 @@ mod tests {
         process_frames(&mut pending, &mut output, &mut complete, WireShape::Chat).unwrap();
         assert_eq!(output, "hello");
         assert!(complete);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires signed-in provider credentials and live network access"]
+    async fn signed_in_providers_complete_a_text_turn() {
+        let store = CredentialStore::new().unwrap();
+        let client = ProviderClient::new().unwrap();
+        for provider in [Provider::OpenAi, Provider::Xai] {
+            let catalog = client
+                .list_models(provider, AuthMode::Subscription, &store)
+                .await
+                .unwrap();
+            let answer = client
+                .infer(
+                    provider,
+                    AuthMode::Subscription,
+                    &InferenceRequest {
+                        model: catalog.lead_model,
+                        messages: vec![TextMessage {
+                            role: TextRole::User,
+                            text: "Reply with a short echo of: Beale example message.".to_owned(),
+                        }],
+                    },
+                    &store,
+                )
+                .await
+                .unwrap();
+            assert!(!answer.trim().is_empty());
+        }
     }
 }

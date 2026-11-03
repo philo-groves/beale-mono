@@ -1,7 +1,7 @@
 use beale_contracts::v1::{
     SurfaceCreator, SurfaceKind, SurfaceScope, WorkspaceDetails, WorkspaceSurface,
 };
-use rune::{Color, Cursor, El, Icon, col, el, icon, row, text, text_input};
+use rune::{Color, El, Icon, col, el, icon, row, text, text_input};
 
 use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button, form_label_font,
@@ -110,7 +110,6 @@ fn icon_action_button(
         .radius(8.0)
         .continuous_corners()
         .hover(theme.color("#303030"))
-        .cursor(Cursor::Pointer)
         .child(icon(glyph, 16.0).color(theme.color("#bdbdbd")))
 }
 
@@ -322,7 +321,6 @@ fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                 .radius(8.0)
                 .continuous_corners()
                 .hover(theme.color("#303030"))
-                .cursor(Cursor::Pointer)
                 .child(icon(&PLUS, 16.0).color(theme.color("#bdbdbd")));
             let add_button = if state.workspace_save_busy.is_some() {
                 add_button

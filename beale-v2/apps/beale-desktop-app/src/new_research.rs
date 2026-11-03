@@ -1,13 +1,12 @@
-use beale_contracts::v1::AuthMethod;
+use beale_contracts::v1::{AuthMethod, SessionRole};
 use rune::{
-    Align, Color, Cursor, El, Key, KeyEvent, ScrollSpec, Side, Tx, col, el, icon, row, text,
-    text_input,
+    Align, Color, El, Key, KeyEvent, ScrollSpec, Side, Tx, col, el, icon, row, text, text_input,
 };
 
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method,
-    icons::{CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT},
-    in_place_menu, toggle_selection_menu, ui_font,
+    icons::{ARROW_UP, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT},
+    in_place_menu, start_session_turn, toggle_selection_menu, ui_font,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -171,6 +170,11 @@ fn selected<'a>(state: &State, choices: &'a [ModelChoice]) -> Option<&'a ModelCh
         })
         .or_else(|| choices.iter().find(|choice| choice.provider_default))
         .or_else(|| choices.first())
+}
+
+pub(crate) fn selected_model(state: &State) -> Option<ModelSelection> {
+    let choices = choices(state);
+    selected(state, &choices).map(|choice| choice.selection.clone())
 }
 
 fn options(state: &State, section: MenuSection) -> Vec<MenuOption> {
@@ -477,6 +481,28 @@ pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
         })
 }
 
+fn transcript_message(key: String, content: String, user: bool, theme: ThemeStyle<'_>) -> El {
+    let message = text(content)
+        .font(ui_font(14.0, 400.0))
+        .color(theme.color("#eeeeee"))
+        .wrap();
+    if user {
+        row().key(key.clone()).w_full().child(el().grow(1.0)).child(
+            col()
+                .key(format!("{key}-bubble"))
+                .max_w(620.0)
+                .px(13.0)
+                .py(10.0)
+                .radius(14.0)
+                .continuous_corners()
+                .fill(theme.color("#202020"))
+                .child(message),
+        )
+    } else {
+        col().key(key).w_full().child(message)
+    }
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     let choices = choices(state);
     let selected = selected(state, &choices);
@@ -551,7 +577,6 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     if !choices.is_empty() {
         model_button = model_button
             .hover(theme.color("#303030"))
-            .cursor(Cursor::Pointer)
             .on_press(toggle_menu);
     }
     let composer = col()
@@ -584,7 +609,36 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 .h(38.0)
                 .px(7.0)
                 .center_y()
-                .child(model_button),
+                .child(model_button)
+                .child(el().grow(1.0))
+                .child({
+                    let available =
+                        !state.new_research_prompt.text.trim().is_empty() && !state.session_busy;
+                    let mut button = row()
+                        .key("new-research-send")
+                        .role("button")
+                        .label(if state.session_busy {
+                            "Sending message"
+                        } else {
+                            "Send message"
+                        })
+                        .size(28.0, 28.0)
+                        .center()
+                        .radius(8.0)
+                        .continuous_corners()
+                        .fill(theme.color(if available { "#d0d0d0" } else { "#303030" }))
+                        .child(icon(&ARROW_UP, 16.0).color(theme.color(if available {
+                            "#1b1b1b"
+                        } else {
+                            "#777777"
+                        })));
+                    if available {
+                        button = button
+                            .hover(theme.color("#eeeeee"))
+                            .on_press(start_session_turn);
+                    }
+                    button
+                }),
         );
     let repeat_active = state.selection_menu == Some(SelectionMenu::Repeat);
     let workspace_menu_active = state.selection_menu == Some(SelectionMenu::ResearchWorkspace);
@@ -631,13 +685,13 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             )
             .color(theme.color("#969696")),
         );
-    if !state.workspaces.is_empty() {
-        workspace_button = workspace_button
-            .hover(theme.color("#303030"))
-            .cursor(Cursor::Pointer)
-            .on_press(|state: &mut State| {
-                toggle_selection_menu(state, SelectionMenu::ResearchWorkspace)
-            });
+    if !state.workspaces.is_empty() && state.active_session.is_none() {
+        workspace_button =
+            workspace_button
+                .hover(theme.color("#303030"))
+                .on_press(|state: &mut State| {
+                    toggle_selection_menu(state, SelectionMenu::ResearchWorkspace)
+                });
     }
     let ribbon = row()
         .key("new-research-ribbon")
@@ -673,7 +727,6 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                     Color::TRANSPARENT
                 })
                 .hover(theme.color("#303030"))
-                .cursor(Cursor::Pointer)
                 .on_press(|state: &mut State| toggle_selection_menu(state, SelectionMenu::Repeat))
                 .child(icon(&REPEAT, 15.0).color(theme.color(
                     if state.new_research_repeat == RepeatPreset::None {
@@ -683,6 +736,55 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                     },
                 ))),
         );
+    let mut transcript = col()
+        .key("session-transcript")
+        .w_full()
+        .max_w(750.0)
+        .self_center()
+        .gap(14.0)
+        .px(14.0)
+        .pt(22.0)
+        .pb(24.0);
+    if let Some(detail) = &state.active_session {
+        for (index, message) in detail.messages.iter().enumerate() {
+            let user = message.role == SessionRole::User as i32;
+            transcript = transcript.child(transcript_message(
+                format!("session-message-{index}"),
+                message.text.clone(),
+                user,
+                theme,
+            ));
+        }
+    }
+    if let Some(prompt) = &state.session_pending_prompt {
+        transcript = transcript.child(transcript_message(
+            "session-pending-message".to_owned(),
+            prompt.clone(),
+            true,
+            theme,
+        ));
+    }
+    if state.session_busy {
+        transcript = transcript.child(
+            text("Beale is responding…")
+                .key("session-progress")
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#969696")),
+        );
+    }
+    if !state.session_error.is_empty() {
+        transcript = transcript.child(
+            text(state.session_error.clone())
+                .key("session-error")
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#e07676"))
+                .wrap(),
+        );
+    }
+    let show_transcript = state.active_session.is_some()
+        || state.session_pending_prompt.is_some()
+        || state.session_busy
+        || !state.session_error.is_empty();
     col()
         .key("new-research-view")
         .w_full()
@@ -690,7 +792,17 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .min_h(0.0)
         .px(20.0)
         .pb(6.0)
-        .child(el().grow(1.0))
+        .child(if show_transcript {
+            col()
+                .key("session-transcript-scroll")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec { stick_bottom: true })
+                .child(transcript)
+        } else {
+            el().grow(1.0)
+        })
         .child(
             col()
                 .key("new-research-composer-stack")

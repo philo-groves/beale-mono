@@ -1,4 +1,4 @@
-use rune::{Color, Cursor, El, col, el, icon, row, text};
+use rune::{Color, El, col, el, icon, row, text};
 
 use crate::{State, ThemeStyle, icons::CLOSE, ui_font};
 
@@ -56,7 +56,6 @@ pub(crate) fn render(
                         .radius(8.0)
                         .continuous_corners()
                         .hover(color("#303030"))
-                        .cursor(Cursor::Pointer)
                         .on_press(close)
                         .child(icon(&CLOSE, 16.0).color(color("#bdbdbd"))),
                 ),

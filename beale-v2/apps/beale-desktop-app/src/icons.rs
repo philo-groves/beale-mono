@@ -98,6 +98,12 @@ pub(crate) static ARROW_RIGHT: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m12 5 7 7-7 7"/>"#,
 };
 
+pub(crate) static ARROW_UP: Icon = Icon {
+    name: "lucide-arrow-up",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m5 12 7-7 7 7M12 19V5"/>"#,
+};
+
 pub(crate) static MINIMIZE: Icon = Icon {
     name: "lucide-minus",
     view: 24.0,
