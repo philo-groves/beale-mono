@@ -6,6 +6,7 @@
 
 #### Added
 
+- Added a plugin manifest dialog to v2 plugin cards, showing the validated host manifest on demand.
 - Added v2 Anthropic and Z.ai subscription sign-in through the official Claude and ZCode applications, with separate subscription model choices.
 - Added v2 Providers tabs for Anthropic, Z.ai, OpenRouter, and multiple custom OpenAI-compatible APIs, with host-saved keys, model selection, and default-provider support.
 - Added an Uninstall action to installed v2 plugin cards, returning bundled packages to Available.
@@ -60,6 +61,8 @@
 
 #### Changed
 
+- Laid out v2 plugin cards in a responsive grid of up to four columns and removed the line beneath MCP Servers.
+- Simplified v2 plugin cards to Skills and MCP Servers counts without dividers between stats.
 - Replaced the v2 Plugins flat list with content-sized cards in the wide content area, showing clamped descriptions and separate skill, tool, resource, and prompt counts.
 - Renamed the v2 Agent Settings Permissions view to Safety and gave its sidenav entry a shield-check icon.
 - Moved each v2 Permissions tab description beneath its rule form title and above the rules.
@@ -126,6 +129,7 @@
 
 #### Fixed
 
+- Kept the selected saved session row active while its details load, preventing a temporary New Session row in the Home sidebar.
 - Kept v2 popup menus above the New Research composer when their bounds overlap.
 - Layered the v2 New Research composer above its exiting ribbon so the ribbon slides beneath it.
 - Enabled text selection and copying from v2 user-message bubbles.
@@ -140,6 +144,7 @@
 
 #### Added
 
+- Added protocol v1.26 plugin summaries with MCP server counts and an authenticated, on-demand bundled manifest read.
 - Added protocol v1.25 official CLI subscription status and session routes for Anthropic and Z.ai, keeping subscription credentials in their own applications and Beale tool execution in the Rust harness.
 - Added protocol v1.24 provider IDs and authenticated custom-provider registration. Anthropic Messages, Z.ai and OpenRouter chat completions, and custom OpenAI-compatible APIs now support streamed turns and base tools; custom keys remain host-only.
 - Added authenticated, idempotent bundled plugin uninstallation in protocol v1.23.

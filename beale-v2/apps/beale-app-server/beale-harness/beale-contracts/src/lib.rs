@@ -682,6 +682,8 @@ pub mod v1 {
         pub skill_count: u32,
         #[prost(bool, tag = "5")]
         pub has_mcp_server: bool,
+        #[prost(uint32, tag = "6")]
+        pub mcp_server_count: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -701,10 +703,24 @@ pub mod v1 {
         #[prost(string, tag = "1")]
         pub name: String,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct GetPluginManifestRequest {
+        #[prost(string, tag = "1")]
+        pub name: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct PluginManifestResponse {
+        #[prost(string, tag = "1")]
+        pub name: String,
+        #[prost(string, tag = "2")]
+        pub manifest_json: String,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 25;
+pub const PROTOCOL_MINOR: u32 = 26;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -741,6 +757,7 @@ pub const PERMISSION_RULES_PATH: &str = "/v1/permissions/rules";
 pub const PLUGINS_PATH: &str = "/v1/plugins";
 pub const PLUGIN_INSTALL_PATH: &str = "/v1/plugins/install";
 pub const PLUGIN_UNINSTALL_PATH: &str = "/v1/plugins/uninstall";
+pub const PLUGIN_MANIFEST_PATH: &str = "/v1/plugins/manifest";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const PROTOBUF_STREAM_CONTENT_TYPE: &str = "application/x-beale-protobuf-stream";
 pub const SESSION_STREAM_MAX_FRAME_BYTES: usize = 4_500_000;

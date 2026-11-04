@@ -1,16 +1,20 @@
 use beale_contracts::{
-    PLUGIN_INSTALL_PATH, PLUGIN_UNINSTALL_PATH, PLUGINS_PATH, PROTOBUF_CONTENT_TYPE,
-    v1::{InstallPluginRequest, ListPluginsResponse, PluginSummary, UninstallPluginRequest},
+    PLUGIN_INSTALL_PATH, PLUGIN_MANIFEST_PATH, PLUGIN_UNINSTALL_PATH, PLUGINS_PATH,
+    PROTOBUF_CONTENT_TYPE,
+    v1::{
+        GetPluginManifestRequest, InstallPluginRequest, ListPluginsResponse,
+        PluginManifestResponse, PluginSummary, UninstallPluginRequest,
+    },
 };
 use prost::Message;
 use reqwest::{Client, StatusCode, header::CONTENT_TYPE};
-use rune::{Color, El, col, el, icon, row, text};
+use rune::{Color, El, ScrollSpec, col, el, icon, row, text};
 use serde::Deserialize;
 use std::{collections::HashSet, net::SocketAddr};
 
 use crate::{
     AUTH_HANDLE, ConnectionStatus, State, ThemeStyle, ViewLocation, connection, form_button,
-    icons::{FEATURES, PLUGINS, PLUS, RESEARCH_KITS},
+    icons::{FEATURES, INFO, PLUGINS, PLUS, RESEARCH_KITS},
     modal_dialog, sidenav_heading, ui_font,
     workspace_creation::field,
 };
@@ -81,9 +85,7 @@ pub(crate) struct PluginEntry {
     pub(crate) description: String,
     pub(crate) installed: bool,
     pub(crate) skills: usize,
-    pub(crate) tools: Option<usize>,
-    pub(crate) resources: Option<usize>,
-    pub(crate) prompts: Option<usize>,
+    pub(crate) mcp_servers: usize,
 }
 
 impl PluginEntry {
@@ -161,7 +163,7 @@ pub(crate) fn bundled_plugins() -> Vec<PluginEntry> {
                     .is_some_and(|line| line.trim() == "---"),
                 "bundled skill needs frontmatter"
             );
-            let has_mcp_server = mcp.is_some_and(|source| {
+            let mcp_servers = mcp.map_or(0, |source| {
                 let config: serde_json::Value =
                     serde_json::from_str(source).expect("bundled MCP configuration is valid JSON");
                 assert_eq!(
@@ -169,20 +171,17 @@ pub(crate) fn bundled_plugins() -> Vec<PluginEntry> {
                     Some("https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"),
                     "bundled MCP configuration must use Agent Plugins 1.0"
                 );
-                !config["mcpServers"]
+                config["mcpServers"]
                     .as_object()
                     .expect("bundled MCP servers must be an object")
-                    .is_empty()
+                    .len()
             });
-            let known_count = if has_mcp_server { None } else { Some(0) };
             PluginEntry {
                 name: manifest.name,
                 description: manifest.description,
                 installed: false,
                 skills: 1,
-                tools: known_count,
-                resources: known_count,
-                prompts: known_count,
+                mcp_servers,
             }
         })
         .collect()
@@ -193,18 +192,17 @@ fn from_wire(plugin: PluginSummary) -> Result<PluginEntry, String> {
         || plugin.name.len() > 64
         || plugin.description.len() > 2_000
         || plugin.skill_count > 128
+        || plugin.mcp_server_count > 128
+        || plugin.has_mcp_server != (plugin.mcp_server_count > 0)
     {
         return Err("Invalid plugin catalog".to_owned());
     }
-    let count = if plugin.has_mcp_server { None } else { Some(0) };
     Ok(PluginEntry {
         name: plugin.name,
         description: plugin.description,
         installed: plugin.installed,
         skills: plugin.skill_count as usize,
-        tools: count,
-        resources: count,
-        prompts: count,
+        mcp_servers: plugin.mcp_server_count as usize,
     })
 }
 
@@ -222,7 +220,7 @@ async fn decode<T: Message + Default>(response: reqwest::Response) -> Result<T, 
         .bytes()
         .await
         .map_err(|_| "Could not read plugin response".to_owned())?;
-    if bytes.len() > 64_000 {
+    if bytes.len() > 70_000 {
         return Err("Plugin response is too large".to_owned());
     }
     T::decode(bytes).map_err(|_| "Invalid plugin response".to_owned())
@@ -299,6 +297,97 @@ async fn uninstall(client: &Client, addr: SocketAddr, name: &str) -> Result<Plug
         return Err("Invalid uninstall response".to_owned());
     }
     from_wire(response)
+}
+
+fn format_manifest(source: &str, name: &str) -> Result<String, String> {
+    if source.len() > 64_000 {
+        return Err("Plugin manifest is too large".to_owned());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(source).map_err(|_| "Invalid plugin manifest".to_owned())?;
+    if value.get("name").and_then(serde_json::Value::as_str) != Some(name) {
+        return Err("Invalid plugin manifest".to_owned());
+    }
+    serde_json::to_string_pretty(&value).map_err(|_| "Invalid plugin manifest".to_owned())
+}
+
+async fn manifest(client: &Client, addr: SocketAddr, name: &str) -> Result<String, String> {
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let response: PluginManifestResponse = decode(
+        client
+            .post(format!("http://{addr}{PLUGIN_MANIFEST_PATH}"))
+            .bearer_auth(token)
+            .header("content-type", PROTOBUF_CONTENT_TYPE)
+            .body(
+                GetPluginManifestRequest {
+                    name: name.to_owned(),
+                }
+                .encode_to_vec(),
+            )
+            .send()
+            .await
+            .map_err(|_| "Could not load plugin manifest".to_owned())?,
+    )
+    .await?;
+    if response.name != name {
+        return Err("Invalid plugin manifest response".to_owned());
+    }
+    format_manifest(&response.manifest_json, name)
+}
+
+fn start_manifest(state: &mut State, name: String) {
+    state.plugin_manifest_generation = state.plugin_manifest_generation.wrapping_add(1);
+    let generation = state.plugin_manifest_generation;
+    state.plugin_manifest_name = Some(name.clone());
+    state.plugin_manifest_text.clear();
+    state.plugin_manifest_error.clear();
+    state.plugin_manifest_loading = true;
+    if !matches!(state.connection, ConnectionStatus::Connected { .. }) {
+        let source = BUNDLED_PACKAGES.iter().find_map(|(source, _, _)| {
+            let value: serde_json::Value = serde_json::from_str(source).ok()?;
+            (value.get("name")?.as_str()? == name).then_some(*source)
+        });
+        match source.map(|source| format_manifest(source, &name)) {
+            Some(Ok(text)) => state.plugin_manifest_text = text,
+            Some(Err(error)) => state.plugin_manifest_error = error,
+            None => {
+                state.plugin_manifest_error =
+                    "Connect to the app-server to view this manifest.".to_owned()
+            }
+        }
+        state.plugin_manifest_loading = false;
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.plugin_manifest_loading = false;
+        state.plugin_manifest_error = "App-server is not ready.".to_owned();
+        return;
+    };
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid app-server address".to_owned())?;
+            let client = connection::http_client()
+                .map_err(|_| "Could not initialize connection".to_owned())?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize connection".to_owned())?;
+            runtime.block_on(manifest(&client, addr, &name))
+        })();
+        handle.update(move |state, _| {
+            if state.plugin_manifest_generation != generation
+                || state.plugin_manifest_name.as_deref() != Some(&name)
+            {
+                return;
+            }
+            state.plugin_manifest_loading = false;
+            match result {
+                Ok(text) => state.plugin_manifest_text = text,
+                Err(error) => state.plugin_manifest_error = error,
+            }
+        });
+    });
 }
 
 pub(crate) fn start_load(state: &mut State) {
@@ -524,13 +613,7 @@ fn plugin_rows(state: &State) -> impl Iterator<Item = &PluginEntry> {
         .filter(|plugin| state.plugin_tab == PluginTab::Available || plugin.installed)
 }
 
-fn stat_row(label: &'static str, value: Option<usize>, theme: ThemeStyle<'_>) -> El {
-    let mut count = text(value.map_or_else(|| "—".to_owned(), |count| count.to_string()))
-        .font(ui_font(13.0, 500.0))
-        .color(theme.color("#f2f2f2"));
-    if value.is_none() {
-        count = count.help("MCP capability count available after installation");
-    }
+fn stat_row(label: &'static str, value: usize, theme: ThemeStyle<'_>) -> El {
     row()
         .w_full()
         .h(32.0)
@@ -541,22 +624,18 @@ fn stat_row(label: &'static str, value: Option<usize>, theme: ThemeStyle<'_>) ->
                 .font(ui_font(13.0, 400.0))
                 .color(theme.color("#969696")),
         )
-        .child(count)
+        .child(
+            text(value.to_string())
+                .font(ui_font(13.0, 500.0))
+                .color(theme.color("#f2f2f2")),
+        )
 }
 
 fn plugin_card(plugin: &PluginEntry, state: &State, theme: ThemeStyle<'_>) -> El {
-    let mut stats = col().w_full();
-    for (label, value) in [
-        ("Skills", Some(plugin.skills)),
-        ("Tools", plugin.tools),
-        ("Resources", plugin.resources),
-        ("Prompts", plugin.prompts),
-    ] {
-        stats = stats
-            .child(el().w_full().h(1.0).fill(theme.color("#303030")))
-            .child(stat_row(label, value, theme));
-    }
-    stats = stats.child(el().w_full().h(1.0).fill(theme.color("#303030")));
+    let stats = col()
+        .w_full()
+        .child(stat_row("Skills", plugin.skills, theme))
+        .child(stat_row("MCP Servers", plugin.mcp_servers, theme));
     let action = if plugin.installed {
         let available = matches!(state.connection, ConnectionStatus::Connected { .. })
             && state.plugin_installing.is_none()
@@ -628,7 +707,8 @@ fn plugin_card(plugin: &PluginEntry, state: &State, theme: ThemeStyle<'_>) -> El
     };
     col()
         .key(format!("plugin-item-{}", plugin.name))
-        .w(258.0)
+        .w_full()
+        .min_w(0.0)
         .px(16.0)
         .pt(16.0)
         .pb(14.0)
@@ -651,10 +731,42 @@ fn plugin_card(plugin: &PluginEntry, state: &State, theme: ThemeStyle<'_>) -> El
                 .max_lines(3),
         )
         .child(stats.mt(16.0))
-        .child(row().w_full().pt(12.0).child(action))
+        .child(
+            row()
+                .w_full()
+                .pt(12.0)
+                .center_y()
+                .child(action)
+                .child(el().grow(1.0))
+                .child(
+                    el().key(format!("plugin-manifest-{}", plugin.name))
+                        .role("button")
+                        .label(format!("View {} plugin manifest", plugin.display_name()))
+                        .help("View plugin manifest")
+                        .size(26.0, 26.0)
+                        .mr(-5.0)
+                        .center()
+                        .radius(8.0)
+                        .continuous_corners()
+                        .hover(theme.color("#303030"))
+                        .on_press({
+                            let name = plugin.name.clone();
+                            move |state: &mut State| start_manifest(state, name.clone())
+                        })
+                        .child(icon(&INFO, 17.0).color(theme.color("#bdbdbd"))),
+                ),
+        )
 }
 
-fn plugins(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+fn plugin_columns(page_width: f32) -> usize {
+    const MIN_CARD_WIDTH: f32 = 250.0;
+    const GAP: f32 = 16.0;
+    ((page_width + GAP) / (MIN_CARD_WIDTH + GAP))
+        .floor()
+        .clamp(1.0, 4.0) as usize
+}
+
+fn plugins(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let mut tabs = row()
         .key("plugin-view-tabs")
         .role("tablist")
@@ -686,8 +798,7 @@ fn plugins(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         .w_full()
         .mt(6.0)
         .gaps(16.0, 16.0)
-        .items_start()
-        .flex_wrap();
+        .equal_columns(plugin_columns(page_width));
     let mut count = 0;
     for plugin in plugin_rows(state) {
         count += 1;
@@ -717,9 +828,9 @@ fn plugins(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
     content
 }
 
-pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     match state.extensions_section {
-        ExtensionSection::Plugins => plugins(state, theme),
+        ExtensionSection::Plugins => plugins(state, theme, page_width),
         ExtensionSection::Features => vec![
             text("No features available yet.")
                 .font(ui_font(14.0, 400.0))
@@ -782,6 +893,71 @@ pub(crate) fn add_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
     )
 }
 
+fn close_manifest_dialog(state: &mut State) {
+    state.plugin_manifest_generation = state.plugin_manifest_generation.wrapping_add(1);
+    state.plugin_manifest_name = None;
+    state.plugin_manifest_text.clear();
+    state.plugin_manifest_error.clear();
+    state.plugin_manifest_loading = false;
+}
+
+pub(crate) fn manifest_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
+    let name = state.plugin_manifest_name.as_deref().unwrap_or_default();
+    let content = if state.plugin_manifest_loading {
+        "Loading manifest…".to_owned()
+    } else if !state.plugin_manifest_error.is_empty() {
+        state.plugin_manifest_error.clone()
+    } else {
+        state.plugin_manifest_text.clone()
+    };
+    let body = col()
+        .w_full()
+        .gap(12.0)
+        .child(
+            text(name.to_owned())
+                .font(ui_font(14.0, 550.0))
+                .color(theme.color("#e2e2e2")),
+        )
+        .child(
+            col()
+                .key("plugin-manifest-content")
+                .w_full()
+                .max_h(420.0)
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: false,
+                })
+                .child(
+                    text(content)
+                        .selectable(true)
+                        .font(ui_font(13.0, 400.0))
+                        .color(theme.color(if state.plugin_manifest_error.is_empty() {
+                            "#c8c8c8"
+                        } else {
+                            "#e07676"
+                        }))
+                        .wrap(),
+                ),
+        );
+    let actions = row().w_full().child(el().grow(1.0)).child(
+        form_button("Close", theme)
+            .key("plugin-manifest-close")
+            .on_press(close_manifest_dialog),
+    );
+    modal_dialog::render(
+        modal_dialog::DialogSpec {
+            key: "plugin-manifest-dialog",
+            title: "Plugin Manifest",
+            width: 620.0,
+            focus_return: "plugin-tab-available",
+        },
+        body,
+        actions,
+        theme,
+        close_manifest_dialog,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,8 +980,13 @@ mod tests {
         );
         assert!(plugins.iter().all(|plugin| !plugin.installed));
         assert!(plugins.iter().all(|plugin| plugin.skills == 1));
-        assert_eq!(plugins[0].tools, None);
-        assert!(plugins[1..].iter().all(|plugin| plugin.tools == Some(0)));
+        assert_eq!(
+            plugins
+                .iter()
+                .map(|plugin| plugin.mcp_servers)
+                .collect::<Vec<_>>(),
+            [1, 0, 0, 0]
+        );
     }
 
     #[test]
@@ -817,18 +998,14 @@ mod tests {
                     description: "First example".to_owned(),
                     installed: false,
                     skills: 1,
-                    tools: Some(0),
-                    resources: Some(0),
-                    prompts: Some(0),
+                    mcp_servers: 0,
                 },
                 PluginEntry {
                     name: "example-two".to_owned(),
                     description: "Second example".to_owned(),
                     installed: true,
                     skills: 1,
-                    tools: Some(0),
-                    resources: Some(0),
-                    prompts: Some(0),
+                    mcp_servers: 0,
                 },
             ],
             ..State::default()
@@ -841,5 +1018,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["example-two"]
         );
+    }
+
+    #[test]
+    fn manifest_format_requires_matching_plugin_name() {
+        let source = r#"{"name":"example-plugin","version":"1.0.0"}"#;
+        assert!(
+            format_manifest(source, "example-plugin")
+                .unwrap()
+                .contains("\n")
+        );
+        assert!(format_manifest(source, "another-plugin").is_err());
+        assert!(format_manifest("not JSON", "example-plugin").is_err());
     }
 }

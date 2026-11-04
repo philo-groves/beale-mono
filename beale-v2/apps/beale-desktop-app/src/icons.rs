@@ -33,6 +33,12 @@ pub(crate) static PLUS: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14"/>"#,
 };
 
+pub(crate) static INFO: Icon = Icon {
+    name: "lucide-info",
+    view: 24.0,
+    body: r#"<circle fill="none" stroke="currentColor" stroke-width="2" cx="12" cy="12" r="10"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 16v-4m0-4h.01"/>"#,
+};
+
 pub(crate) static PEN: Icon = Icon {
     name: "lucide-pen",
     view: 24.0,

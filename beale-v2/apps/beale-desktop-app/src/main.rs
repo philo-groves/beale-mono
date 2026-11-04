@@ -570,6 +570,7 @@ struct State {
     archive_generation: u64,
     archive_restore_busy: Option<String>,
     active_session: Option<SessionDetail>,
+    session_loading_id: Option<String>,
     session_busy: bool,
     session_error: String,
     session_pending_prompt: Option<String>,
@@ -643,6 +644,11 @@ struct State {
     plugin_generation: u64,
     plugin_add_dialog_open: bool,
     plugin_source_edit: TextEdit,
+    plugin_manifest_name: Option<String>,
+    plugin_manifest_text: String,
+    plugin_manifest_loading: bool,
+    plugin_manifest_error: String,
+    plugin_manifest_generation: u64,
     settings_section: SettingsSection,
     appearance_tab: AppearanceTab,
     permissions_tab: permission_settings::PermissionTab,
@@ -737,6 +743,7 @@ impl Default for State {
             archive_generation: 0,
             archive_restore_busy: None,
             active_session: None,
+            session_loading_id: None,
             session_busy: false,
             session_error: String::new(),
             session_pending_prompt: None,
@@ -810,6 +817,11 @@ impl Default for State {
             plugin_generation: 0,
             plugin_add_dialog_open: false,
             plugin_source_edit: TextEdit::new(""),
+            plugin_manifest_name: None,
+            plugin_manifest_text: String::new(),
+            plugin_manifest_loading: false,
+            plugin_manifest_error: String::new(),
+            plugin_manifest_generation: 0,
             settings_section: SettingsSection::Safety,
             appearance_tab: AppearanceTab::Colors,
             permissions_tab: permission_settings::PermissionTab::AutoReview,
@@ -1005,6 +1017,11 @@ impl State {
         self.notice = None;
         self.plugin_add_dialog_open = false;
         self.plugin_source_edit.clear();
+        self.plugin_manifest_name = None;
+        self.plugin_manifest_text.clear();
+        self.plugin_manifest_loading = false;
+        self.plugin_manifest_error.clear();
+        self.plugin_manifest_generation = self.plugin_manifest_generation.wrapping_add(1);
         self.selection_menu = None;
         self.composer_menu_open = false;
         self.color_picker = None;
@@ -1084,7 +1101,9 @@ impl State {
         self.session_live_events.clear();
         self.session_elapsed_ms = 0;
         self.session_work_expanded.clear();
-        if self.active_session.take().is_some() {
+        let had_session = self.active_session.take().is_some();
+        let was_loading = self.session_loading_id.take().is_some();
+        if had_session || was_loading {
             self.session_generation = self.session_generation.wrapping_add(1);
             self.session_busy = false;
             self.session_pending_prompt = None;
@@ -1133,6 +1152,7 @@ impl State {
         if self.session_generation != generation {
             return;
         }
+        self.session_loading_id = None;
         self.session_busy = false;
         self.session_live_events.clear();
         self.session_work_expanded.clear();
@@ -1676,6 +1696,7 @@ fn start_session_load(state: &mut State, id: String) {
     };
     state.session_generation = state.session_generation.wrapping_add(1);
     let generation = state.session_generation;
+    state.session_loading_id = Some(id.clone());
     state.session_busy = true;
     state.session_error.clear();
     state.session_pending_prompt = None;
@@ -4789,7 +4810,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(view_title_font())
                 .color(color("#f2f2f2")),
         );
-        for item in extensions_view::render(state, theme) {
+        let page_width = cx
+            .layout_size("content-surface")
+            .map_or(1040.0, |size| (size[0] - 48.0).min(1300.0));
+        for item in extensions_view::render(state, theme, page_width) {
             content = content.child(item);
         }
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
@@ -5017,6 +5041,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     if state.primary_view == PrimaryView::Extensions && state.plugin_add_dialog_open {
         for layer in extensions_view::add_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Extensions && state.plugin_manifest_name.is_some() {
+        for layer in extensions_view::manifest_dialog(state, theme) {
             window = window.child(layer);
         }
     }
@@ -7130,6 +7159,42 @@ mod tests {
     }
 
     #[test]
+    fn opening_saved_session_keeps_its_sidebar_row_without_a_draft_row() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let state = State {
+            primary_view: PrimaryView::NewResearch,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            session_summaries: vec![SessionSummary {
+                id: session_id.to_owned(),
+                workspace_id: workspace_id.to_owned(),
+                title: "Example Session".to_owned(),
+            }],
+            new_research_workspace_id: Some(workspace_id.to_owned()),
+            session_loading_id: Some(session_id.to_owned()),
+            session_busy: true,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .find(&format!("home-session-{session_id}"))
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find(&format!("home-session-{workspace_id}"))
+                .is_none()
+        );
+        assert!(runtime.find("new-research-ribbon").is_none());
+    }
+
+    #[test]
     fn completed_turn_reuses_the_draft_view_and_replaces_the_new_session_row() {
         let workspace_id = "00000000-0000-4000-8000-000000000001";
         let session_id = "00000000-0000-4000-8000-000000000002";
@@ -8558,6 +8623,19 @@ mod tests {
         ] {
             assert!(runtime.find(&format!("plugin-item-{name}")).is_some());
         }
+        let (x, y) = runtime
+            .find("plugin-manifest-apple-security-devices")
+            .unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("plugin-manifest-dialog").is_some());
+        assert!(runtime.state.plugin_manifest_text.contains("\"version\""));
+        let (x, y) = runtime.find("plugin-manifest-close").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.plugin_manifest_name.is_none());
         let (x, y) = runtime.find("plugin-tab-installed").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -8589,7 +8667,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_cards_use_wide_content_and_wrap_at_narrow_widths() {
+    fn plugin_cards_fill_four_to_one_columns_as_content_narrows() {
         let make = |width| {
             let mut runtime = Runtime::new(
                 State {
@@ -8603,28 +8681,32 @@ mod tests {
             runtime.frame(1.0);
             runtime
         };
-        let wide = make(1600.0);
-        let (page, _) = wide.presented("settings-page").unwrap();
-        assert!(page[2] > 760.0);
-        let (first, _) = wide
-            .presented("plugin-item-apple-security-devices")
-            .unwrap();
-        let (fourth, _) = wide
-            .presented("plugin-item-microsoft-security-devices")
-            .unwrap();
-        assert!(first[3] <= 310.0);
-        assert!(fourth[0] > first[0]);
-        assert_eq!(fourth[1], first[1]);
-
-        let narrow = make(760.0);
-        let (first, _) = narrow
-            .presented("plugin-item-apple-security-devices")
-            .unwrap();
-        let (second, _) = narrow.presented("plugin-item-apple-target-flags").unwrap();
-        let (description, _) = narrow
-            .presented("plugin-description-apple-security-devices")
-            .unwrap();
-        assert!(second[1] > first[1]);
-        assert!(description[3] <= 60.0);
+        for (window_width, columns) in [(1600.0, 4), (1250.0, 3), (980.0, 2), (760.0, 1)] {
+            let runtime = make(window_width);
+            let (page, _) = runtime.presented("settings-page").unwrap();
+            let cards = [
+                "apple-security-devices",
+                "apple-target-flags",
+                "meta-skills",
+                "microsoft-security-devices",
+            ]
+            .map(|name| runtime.presented(&format!("plugin-item-{name}")).unwrap().0);
+            let first_row_count = cards
+                .iter()
+                .take_while(|card| (card[1] - cards[0][1]).abs() < 1.0)
+                .count();
+            assert_eq!(first_row_count, columns, "window width {window_width}");
+            let expected_card_width = (page[2] - 16.0 * (columns - 1) as f32) / columns as f32;
+            for card in cards.iter().take(columns) {
+                assert!((card[2] - expected_card_width).abs() < 1.0);
+            }
+            if columns < 4 {
+                assert!(cards[columns][1] > cards[0][1]);
+            }
+            let (description, _) = runtime
+                .presented("plugin-description-apple-security-devices")
+                .unwrap();
+            assert!(description[3] <= 60.0);
+        }
     }
 }

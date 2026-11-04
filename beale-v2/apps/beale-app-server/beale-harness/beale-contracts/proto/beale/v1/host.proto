@@ -425,6 +425,7 @@ message PluginSummary {
   bool installed = 3;
   uint32 skill_count = 4;
   bool has_mcp_server = 5;
+  uint32 mcp_server_count = 6;
 }
 
 message ListPluginsResponse {
@@ -437,4 +438,13 @@ message InstallPluginRequest {
 
 message UninstallPluginRequest {
   string name = 1;
+}
+
+message GetPluginManifestRequest {
+  string name = 1;
+}
+
+message PluginManifestResponse {
+  string name = 1;
+  string manifest_json = 2;
 }

@@ -10,8 +10,12 @@ use axum::{
     routing::{get, post},
 };
 use beale_contracts::{
-    PLUGIN_INSTALL_PATH, PLUGIN_UNINSTALL_PATH, PLUGINS_PATH, PROTOBUF_CONTENT_TYPE,
-    v1::{InstallPluginRequest, ListPluginsResponse, PluginSummary, UninstallPluginRequest},
+    PLUGIN_INSTALL_PATH, PLUGIN_MANIFEST_PATH, PLUGIN_UNINSTALL_PATH, PLUGINS_PATH,
+    PROTOBUF_CONTENT_TYPE,
+    v1::{
+        GetPluginManifestRequest, InstallPluginRequest, ListPluginsResponse,
+        PluginManifestResponse, PluginSummary, UninstallPluginRequest,
+    },
 };
 use beale_storage::HostDatabase;
 use prost::Message;
@@ -111,7 +115,7 @@ impl Catalog {
             }
         }
 
-        let mut has_mcp_server = false;
+        let mut mcp_server_count = 0_u32;
         let mcp_path = root.join("mcp.json");
         if mcp_path.exists() {
             let mcp_path = contained_file(&root, &mcp_path)?;
@@ -124,15 +128,30 @@ impl Catalog {
             let servers = config["mcpServers"]
                 .as_object()
                 .context("invalid MCP servers")?;
-            has_mcp_server = !servers.is_empty();
+            mcp_server_count = u32::try_from(servers.len()).context("too many MCP servers")?;
         }
         Ok(PluginSummary {
             name: manifest.name,
             description: manifest.description,
             installed: false,
             skill_count,
-            has_mcp_server,
+            has_mcp_server: mcp_server_count > 0,
+            mcp_server_count,
         })
+    }
+
+    fn manifest(&self, name: &str) -> Result<Option<String>> {
+        let Some((_, directory)) = BUNDLES.iter().find(|(candidate, _)| *candidate == name) else {
+            return Ok(None);
+        };
+        self.scan(name, directory)?;
+        let root = self.root.join(directory).canonicalize()?;
+        let path = contained_file(&root, &root.join("plugin.json"))?;
+        let bytes = std::fs::read(path)?;
+        ensure!(bytes.len() <= 64_000, "plugin manifest is too large");
+        Ok(Some(
+            String::from_utf8(bytes).context("plugin manifest is not UTF-8")?,
+        ))
     }
 
     fn list(&self, db: &HostDatabase) -> Result<Vec<PluginSummary>> {
@@ -203,6 +222,7 @@ pub fn router(token: String, db: HostDatabase) -> Result<Router> {
         .route(PLUGINS_PATH, get(list_route))
         .route(PLUGIN_INSTALL_PATH, post(install_route))
         .route(PLUGIN_UNINSTALL_PATH, post(uninstall_route))
+        .route(PLUGIN_MANIFEST_PATH, post(manifest_route))
         .layer(DefaultBodyLimit::max(1_024))
         .with_state(HttpState { token, db, catalog }))
 }
@@ -297,6 +317,37 @@ async fn uninstall_route(
     ))
 }
 
+async fn manifest_route(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<ProtoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some(PROTOBUF_CONTENT_TYPE)
+    {
+        return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    let request = GetPluginManifestRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let manifest_json = state
+        .catalog
+        .manifest(&request.name)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok((
+        [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
+        PluginManifestResponse {
+            name: request.name,
+            manifest_json,
+        }
+        .encode_to_vec(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +372,16 @@ mod tests {
         );
         assert!(available[0].has_mcp_server);
         assert!(!available[1].has_mcp_server);
+        assert_eq!(available[0].mcp_server_count, 1);
+        assert_eq!(available[1].mcp_server_count, 0);
+        assert!(
+            catalog
+                .manifest("apple-security-devices")
+                .unwrap()
+                .unwrap()
+                .contains("\"version\"")
+        );
+        assert!(catalog.manifest("unknown-plugin").unwrap().is_none());
         assert!(catalog.install(&db, "unknown-plugin").unwrap().is_none());
         assert!(
             catalog
@@ -409,6 +470,32 @@ mod tests {
         let catalog = ListPluginsResponse::decode(body).unwrap();
         assert_eq!(catalog.plugins.len(), 4);
         assert!(catalog.plugins.iter().all(|plugin| !plugin.installed));
+        let manifest = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(PLUGIN_MANIFEST_PATH)
+                    .header(header::AUTHORIZATION, "Bearer example-token")
+                    .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+                    .body(Body::from(
+                        GetPluginManifestRequest {
+                            name: "meta-skills".to_owned(),
+                        }
+                        .encode_to_vec(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(manifest.status(), StatusCode::OK);
+        let bytes = to_bytes(manifest.into_body(), 64_000).await.unwrap();
+        let manifest = PluginManifestResponse::decode(bytes).unwrap();
+        assert_eq!(manifest.name, "meta-skills");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&manifest.manifest_json).unwrap()["name"],
+            "meta-skills"
+        );
 
         let installed = app
             .clone()

@@ -256,7 +256,8 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         );
     } else if state.home_collection == HomeCollection::Workspaces {
         let new_session_workspace = (state.primary_view == crate::PrimaryView::NewResearch
-            && state.active_session.is_none())
+            && state.active_session.is_none()
+            && state.session_loading_id.is_none())
         .then(|| {
             state
                 .selected_research_workspace()
@@ -347,11 +348,12 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
             {
                 let session_id = session.id.clone();
                 let active = state.primary_view == crate::PrimaryView::NewResearch
-                    && state
-                        .active_session
-                        .as_ref()
-                        .and_then(|detail| detail.summary.as_ref())
-                        .is_some_and(|summary| summary.id == session.id);
+                    && (state.session_loading_id.as_deref() == Some(session.id.as_str())
+                        || state
+                            .active_session
+                            .as_ref()
+                            .and_then(|detail| detail.summary.as_ref())
+                            .is_some_and(|summary| summary.id == session.id));
                 let opener = session_row(
                     format!("home-session-{}", session.id),
                     &session.title,
