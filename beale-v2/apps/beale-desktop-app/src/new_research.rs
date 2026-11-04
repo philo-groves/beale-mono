@@ -142,7 +142,7 @@ enum MenuChoice {
 }
 
 fn choices(state: &State) -> Vec<ModelChoice> {
-    [Provider::OpenAi, Provider::Xai]
+    let mut choices: Vec<ModelChoice> = Provider::ALL
         .into_iter()
         .filter_map(|provider| {
             let status = &state.auth_status[provider.index()];
@@ -168,7 +168,39 @@ fn choices(state: &State) -> Vec<ModelChoice> {
                 provider_default: model.id == catalog.lead,
             })
         })
-        .collect()
+        .collect();
+    for provider in state.custom_providers.iter() {
+        for model in &provider.models {
+            choices.push(ModelChoice {
+                selection: ModelSelection {
+                    provider: Provider::Custom,
+                    method: AuthMethod::ApiKey,
+                    id: format!("{}::{}", provider.id, model.id),
+                },
+                name: model.display_name.clone(),
+                provider_default: model.id == provider.lead_model,
+            });
+        }
+    }
+    choices
+}
+
+fn custom_provider_id(selection: &ModelSelection) -> Option<&str> {
+    (selection.provider == Provider::Custom)
+        .then(|| selection.id.split_once("::").map(|(id, _)| id))
+        .flatten()
+}
+
+fn provider_label<'a>(state: &'a State, selection: &ModelSelection) -> &'a str {
+    if let Some(id) = custom_provider_id(selection) {
+        state
+            .custom_providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .map_or("Custom", |provider| provider.name.as_str())
+    } else {
+        selection.provider.name()
+    }
 }
 
 fn selected<'a>(state: &State, choices: &'a [ModelChoice]) -> Option<&'a ModelChoice> {
@@ -180,11 +212,20 @@ fn selected<'a>(state: &State, choices: &'a [ModelChoice]) -> Option<&'a ModelCh
             state.lead_provider.and_then(|provider| {
                 choices
                     .iter()
-                    .find(|choice| choice.selection.provider == provider && choice.provider_default)
+                    .find(|choice| {
+                        choice.selection.provider == provider
+                            && choice.provider_default
+                            && (provider != Provider::Custom
+                                || custom_provider_id(&choice.selection)
+                                    == Some(state.lead_custom_provider_id.as_str()))
+                    })
                     .or_else(|| {
-                        choices
-                            .iter()
-                            .find(|choice| choice.selection.provider == provider)
+                        choices.iter().find(|choice| {
+                            choice.selection.provider == provider
+                                && (provider != Provider::Custom
+                                    || custom_provider_id(&choice.selection)
+                                        == Some(state.lead_custom_provider_id.as_str()))
+                        })
                     })
             })
         })
@@ -201,32 +242,55 @@ fn options(state: &State, section: MenuSection) -> Vec<MenuOption> {
     let choices = choices(state);
     let selected = selected(state, &choices).map(|choice| choice.selection.clone());
     match section {
-        MenuSection::Provider => [Provider::OpenAi, Provider::Xai]
-            .into_iter()
-            .filter_map(|provider| {
-                choices
-                    .iter()
-                    .find(|choice| choice.selection.provider == provider && choice.provider_default)
-                    .or_else(|| {
-                        choices
-                            .iter()
-                            .find(|choice| choice.selection.provider == provider)
-                    })
-                    .map(|choice| MenuOption {
-                        label: provider.name().to_owned(),
-                        selected: selected
-                            .as_ref()
-                            .is_some_and(|selection| selection.provider == provider),
+        MenuSection::Provider => {
+            let mut options: Vec<_> = Provider::ALL
+                .into_iter()
+                .filter_map(|provider| {
+                    choices
+                        .iter()
+                        .find(|choice| {
+                            choice.selection.provider == provider && choice.provider_default
+                        })
+                        .or_else(|| {
+                            choices
+                                .iter()
+                                .find(|choice| choice.selection.provider == provider)
+                        })
+                        .map(|choice| MenuOption {
+                            label: provider.name().to_owned(),
+                            selected: selected
+                                .as_ref()
+                                .is_some_and(|selection| selection.provider == provider),
+                            choice: MenuChoice::Model(choice.selection.clone()),
+                        })
+                })
+                .collect();
+            for provider in state.custom_providers.iter() {
+                if let Some(choice) = choices.iter().find(|choice| {
+                    choice.selection.provider == Provider::Custom
+                        && custom_provider_id(&choice.selection) == Some(provider.id.as_str())
+                        && choice.provider_default
+                }) {
+                    options.push(MenuOption {
+                        label: provider.name.clone(),
+                        selected: selected.as_ref().is_some_and(|selection| {
+                            custom_provider_id(selection) == Some(provider.id.as_str())
+                        }),
                         choice: MenuChoice::Model(choice.selection.clone()),
-                    })
-            })
-            .collect(),
+                    });
+                }
+            }
+            options
+        }
         MenuSection::Model => choices
             .into_iter()
             .filter(|choice| {
                 selected.as_ref().is_some_and(|selection| {
                     choice.selection.provider == selection.provider
                         && choice.selection.method == selection.method
+                        && (selection.provider != Provider::Custom
+                            || custom_provider_id(&choice.selection)
+                                == custom_provider_id(selection))
                 })
             })
             .map(|choice| MenuOption {
@@ -381,7 +445,7 @@ fn section_row(
 pub(crate) fn model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
     let choices = choices(state);
     let selected = selected(state, &choices);
-    let provider_name = selected.map_or("None", |choice| choice.selection.provider.name());
+    let provider_name = selected.map_or("None", |choice| provider_label(state, &choice.selection));
     let model_name = selected.map_or("None", |choice| choice.name.as_str());
     let main = in_place_menu::popup_surface(
         col()
@@ -882,7 +946,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         |choice| {
             format!(
                 "Lead model: {} {}",
-                choice.selection.provider.name(),
+                provider_label(state, &choice.selection),
                 choice.name
             )
         },
@@ -1342,7 +1406,46 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_web_link, work_duration};
+    use super::{MenuSection, choices, is_web_link, options, selected_model, work_duration};
+    use crate::{Provider, State};
+    use beale_contracts::v1::{CustomProvider, ModelEntry};
+
+    #[test]
+    fn custom_models_keep_provider_identity_in_composer() {
+        let provider = |id: &str, name: &str| CustomProvider {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            base_url: "https://api.example.test/v1".to_owned(),
+            models: vec![ModelEntry {
+                id: "shared-model".to_owned(),
+                display_name: "Shared Model".to_owned(),
+            }],
+            lead_model: "shared-model".to_owned(),
+            small_model: "shared-model".to_owned(),
+            reasoning: false,
+            api_key_configured: true,
+        };
+        let state = State {
+            custom_providers: vec![
+                provider("custom-first", "First API"),
+                provider("custom-second", "Second API"),
+            ],
+            lead_provider: Some(Provider::Custom),
+            lead_custom_provider_id: "custom-second".to_owned(),
+            ..State::default()
+        };
+        assert_eq!(
+            selected_model(&state).unwrap().id,
+            "custom-second::shared-model"
+        );
+        assert_eq!(choices(&state).len(), 2);
+        let labels: Vec<_> = options(&state, MenuSection::Provider)
+            .into_iter()
+            .map(|option| option.label)
+            .collect();
+        assert_eq!(labels, ["First API", "Second API"]);
+        assert_eq!(options(&state, MenuSection::Model).len(), 1);
+    }
 
     #[test]
     fn work_duration_uses_hours_minutes_and_seconds() {

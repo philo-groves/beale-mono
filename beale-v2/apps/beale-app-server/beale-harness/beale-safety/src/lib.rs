@@ -323,6 +323,7 @@ fn parse_review(value: &str) -> Result<ReviewDecision> {
 pub struct ReviewRequest<'a> {
     pub provider: Provider,
     pub mode: AuthMode,
+    pub model: &'a str,
     pub name: &'a str,
     pub arguments: &'a Value,
     pub workspace_context: &'a str,
@@ -363,15 +364,26 @@ async fn review_inner(
             reason: "Auto-Review rules are disabled.".to_owned(),
         });
     }
-    let defaults = credentials
-        .load_model_defaults(provider_name(request.provider), mode_name(request.mode))?;
-    let (small, lead) = if let Some(defaults) = defaults {
-        (defaults.small, defaults.lead)
+    let (small, lead) = if request.provider == Provider::Custom {
+        let (id, _) = beale_providers::split_qualified_model(request.model)?;
+        let definition = credentials
+            .custom_provider(id)?
+            .context("custom provider is unavailable")?;
+        (
+            beale_providers::qualified_model(id, &definition.small_model)?,
+            beale_providers::qualified_model(id, &definition.lead_model)?,
+        )
     } else {
-        let catalog = client
-            .list_models(request.provider, request.mode, credentials)
-            .await?;
-        (catalog.small_model, catalog.lead_model)
+        let defaults = credentials
+            .load_model_defaults(provider_name(request.provider), mode_name(request.mode))?;
+        if let Some(defaults) = defaults {
+            (defaults.small, defaults.lead)
+        } else {
+            let catalog = client
+                .list_models(request.provider, request.mode, credentials)
+                .await?;
+            (catalog.small_model, catalog.lead_model)
+        }
     };
     let input = json!({"tool": request.name, "arguments": request.arguments,
         "workspace_context": request.workspace_context});
@@ -525,6 +537,7 @@ mod tests {
             ReviewRequest {
                 provider: Provider::OpenAi,
                 mode: AuthMode::Subscription,
+                model: "gpt-example",
                 name: "bash",
                 arguments: &json!({"command":"echo example"}),
                 workspace_context: "example workspace",

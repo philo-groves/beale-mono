@@ -51,6 +51,24 @@ const TOOL_PAGE_BYTES: usize = 8_000;
 const INTERRUPTED_ANSWER: &str =
     "The provider could not complete this turn. Tool activity was saved.";
 
+fn append_tool_result(
+    input: &mut Vec<Value>,
+    anthropic_results: &mut Vec<Value>,
+    provider: Provider,
+    mode: AuthMode,
+    id: &str,
+    output: &str,
+) {
+    let result = tool_output(provider, mode, id, output);
+    if provider == Provider::Anthropic {
+        if let Some(blocks) = result.get("content").and_then(Value::as_array) {
+            anthropic_results.extend(blocks.iter().cloned());
+        }
+    } else {
+        input.push(result);
+    }
+}
+
 #[derive(Clone)]
 struct SessionState {
     token: String,
@@ -545,17 +563,20 @@ async fn run_turn(
     if request.prompt.trim().is_empty()
         || request.prompt.len() > 16_384
         || request.model.is_empty()
-        || request.model.len() > 128
-        || !request
-            .model
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+        || request.model.len() > 200
+        || !request.model.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        })
     {
         return Err(StatusCode::BAD_REQUEST);
     }
     let provider = match ProviderId::try_from(request.provider) {
         Ok(ProviderId::Openai) => Provider::OpenAi,
         Ok(ProviderId::Xai) => Provider::Xai,
+        Ok(ProviderId::Anthropic) => Provider::Anthropic,
+        Ok(ProviderId::Zai) => Provider::Zai,
+        Ok(ProviderId::Openrouter) => Provider::OpenRouter,
+        Ok(ProviderId::Custom) => Provider::Custom,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
     let mode = match AuthMethod::try_from(request.method) {
@@ -563,6 +584,9 @@ async fn run_turn(
         Ok(AuthMethod::ApiKey) => AuthMode::ApiKey,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
+    if provider == Provider::Custom && mode != AuthMode::ApiKey {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let reasoning_effort = reasoning_effort_name(request.reasoning_effort)?;
     let _guard = state.write_lock.lock().await;
     let (session, mut turns) = if request.session_id.is_empty() {
@@ -690,6 +714,7 @@ async fn run_turn(
                     input: &input,
                     tools: &definitions,
                     reasoning_effort,
+                    workspace_root: Some(&workspace),
                 },
                 &state.credentials,
                 provider_tx.as_ref(),
@@ -770,6 +795,7 @@ async fn run_turn(
         }
         call_count += step.calls.len();
         input.extend(step.continuation);
+        let mut anthropic_tool_results = Vec::new();
         for call in step.calls {
             if call.id.is_empty()
                 || call.id.len() > 256
@@ -847,6 +873,7 @@ async fn run_turn(
                                     ReviewRequest {
                                         provider,
                                         mode,
+                                        model: &request.model,
                                         name: &call.name,
                                         arguments: &args,
                                         workspace_context: &workspace_context,
@@ -902,7 +929,17 @@ async fn run_turn(
                 });
                 model_preview(&output, &id)
             };
-            input.push(tool_output(provider, mode, &call.id, &model_output));
+            append_tool_result(
+                &mut input,
+                &mut anthropic_tool_results,
+                provider,
+                mode,
+                &call.id,
+                &model_output,
+            );
+        }
+        if !anthropic_tool_results.is_empty() {
+            input.push(json!({"role":"user","content":anthropic_tool_results}));
         }
     }
     let mut answer = answer.ok_or(StatusCode::BAD_GATEWAY)?;
@@ -958,6 +995,36 @@ mod tests {
     use axum::{body::Body, http::Request};
     use prost::Message;
     use tower::ServiceExt;
+
+    #[test]
+    fn anthropic_parallel_results_share_one_follow_up_message() {
+        let mut input = vec![json!({"role":"assistant","content":[
+            {"type":"tool_use","id":"tool-one","name":"read","input":{}},
+            {"type":"tool_use","id":"tool-two","name":"read","input":{}}
+        ]})];
+        let mut results = Vec::new();
+        append_tool_result(
+            &mut input,
+            &mut results,
+            Provider::Anthropic,
+            AuthMode::ApiKey,
+            "tool-one",
+            "Example one",
+        );
+        append_tool_result(
+            &mut input,
+            &mut results,
+            Provider::Anthropic,
+            AuthMode::ApiKey,
+            "tool-two",
+            "Example two",
+        );
+        input.push(json!({"role":"user","content":results}));
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[1]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(input[1]["content"][0]["tool_use_id"], "tool-one");
+        assert_eq!(input[1]["content"][1]["tool_use_id"], "tool-two");
+    }
 
     #[test]
     fn session_effort_contract_rejects_unknown_values() {

@@ -16,3 +16,22 @@ pub(crate) static GROK: Icon = Icon {
     view: 512.0,
     body: r#"<path fill="currentColor" d="M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"/><path fill="currentColor" d="M183.042 337.641C136.519 291.294 144.54 219.567 184.236 178.203C213.59 147.59 261.683 135.096 303.666 153.464L348.755 131.75C340.632 125.627 330.221 119.042 318.275 114.414C264.277 91.2407 199.63 102.774 155.735 148.516C113.513 192.549 100.236 260.254 123.036 318.027C140.069 361.206 112.148 391.748 84.0229 422.575C74.0561 433.503 64.0553 444.431 56 456L183.007 337.677"/>"#,
 };
+
+// Paths follow the provider marks already used by the v1 ProviderIcon.
+pub(crate) static ANTHROPIC: Icon = Icon {
+    name: "anthropic-mark",
+    view: 24.0,
+    body: r#"<path fill="currentColor" fill-rule="evenodd" d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-7.258 0h3.767L16.906 20h-3.674l-1.343-3.461H5.017l-1.344 3.46H0L6.57 3.522zm4.132 9.959L8.453 7.687 6.205 13.48H10.7z"/>"#,
+};
+
+pub(crate) static ZAI: Icon = Icon {
+    name: "zai-mark",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M3.25 3.5h17.5v3.12L8.96 17.08h11.79v3.42H3.25v-3.12L15.04 6.92H3.25V3.5zm15.2 6.2h2.3v5.08h-2.3V9.7z"/>"#,
+};
+
+pub(crate) static OPENROUTER: Icon = Icon {
+    name: "openrouter-route",
+    view: 24.0,
+    body: r#"<circle cx="6" cy="19" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="5" r="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 19h9.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#,
+};

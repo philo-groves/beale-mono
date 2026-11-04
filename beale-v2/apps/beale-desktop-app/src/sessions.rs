@@ -101,7 +101,12 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
         && detail.messages.len() <= 64
         && matches!(
             beale_contracts::v1::ProviderId::try_from(detail.provider),
-            Ok(beale_contracts::v1::ProviderId::Openai | beale_contracts::v1::ProviderId::Xai)
+            Ok(beale_contracts::v1::ProviderId::Openai
+                | beale_contracts::v1::ProviderId::Xai
+                | beale_contracts::v1::ProviderId::Anthropic
+                | beale_contracts::v1::ProviderId::Zai
+                | beale_contracts::v1::ProviderId::Openrouter
+                | beale_contracts::v1::ProviderId::Custom)
         )
         && matches!(
             beale_contracts::v1::AuthMethod::try_from(detail.method),

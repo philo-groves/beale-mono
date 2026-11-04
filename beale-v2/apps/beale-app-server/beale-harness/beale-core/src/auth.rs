@@ -7,21 +7,25 @@ use axum::{
 };
 use beale_contracts::{
     AUTH_API_KEY_PATH, AUTH_PROVE_PATH, AUTH_STATUS_PATH, AUTH_SUBSCRIPTION_FORGET_PATH,
-    AUTH_SUBSCRIPTION_START_PATH, CONTROL_CHALLENGE_BYTES, DAYBREAK_MODE_PATH, LEAD_PROVIDER_PATH,
+    AUTH_SUBSCRIPTION_START_PATH, CONTROL_CHALLENGE_BYTES, CUSTOM_PROVIDER_API_KEY_PATH,
+    CUSTOM_PROVIDER_DISCOVER_PATH, CUSTOM_PROVIDERS_PATH, DAYBREAK_MODE_PATH, LEAD_PROVIDER_PATH,
     MODELS_DEFAULTS_PATH, MODELS_LIST_PATH, PROTOBUF_CONTENT_TYPE, PROVIDER_USAGE_PATH,
     SOURCE_PRIORITY_PATH, control_proof,
     v1::{
-        AuthMethod, ControlChallengeRequest, ControlChallengeResponse, DaybreakMode,
+        AuthMethod, ControlChallengeRequest, ControlChallengeResponse,
+        CustomProvider as WireCustomProvider, CustomProviderRequest, DaybreakMode,
+        DiscoverCustomModelsRequest, DiscoverCustomModelsResponse, ListCustomProvidersResponse,
         ListModelsRequest, ModelCatalogResponse, ModelEntry, ProviderAuthStatus,
         ProviderAuthStatusResponse, ProviderId, ProviderRequest, ProviderUsageResponse,
-        ProviderUsageSnapshot, ProviderUsageWindow, SetApiKeyRequest, SetDaybreakModeRequest,
-        SetModelDefaultsRequest, SetSourcePriorityRequest, StartSubscriptionResponse,
+        ProviderUsageSnapshot, ProviderUsageWindow, SaveCustomProviderRequest, SetApiKeyRequest,
+        SetCustomProviderApiKeyRequest, SetDaybreakModeRequest, SetModelDefaultsRequest,
+        SetSourcePriorityRequest, StartSubscriptionResponse,
     },
 };
 use beale_providers::usage;
 use beale_providers::{
-    AuthMode, CredentialStore, ModelCatalog, ModelDefaults, Provider, ProviderClient,
-    login_openai_with_prompt, login_xai_with_prompt, mode_name, provider_name,
+    AuthMode, CredentialStore, CustomProvider, ModelCatalog, ModelDefaults, Provider,
+    ProviderClient, login_openai_with_prompt, login_xai_with_prompt, mode_name, provider_name,
 };
 use prost::Message;
 use std::{
@@ -34,7 +38,7 @@ use tokio::sync::{Mutex, oneshot};
 struct AuthState {
     token: String,
     store: Arc<CredentialStore>,
-    login: Arc<Mutex<[LoginState; 2]>>,
+    login: Arc<Mutex<[LoginState; 5]>>,
     lead_lock: Arc<Mutex<()>>,
     usage_cache: Arc<Mutex<Option<(Instant, ProviderUsageResponse)>>>,
 }
@@ -58,7 +62,18 @@ pub(super) fn router(token: String, store: CredentialStore) -> Router {
         .route(MODELS_DEFAULTS_PATH, post(set_model_defaults))
         .route(SOURCE_PRIORITY_PATH, post(set_source_priority))
         .route(DAYBREAK_MODE_PATH, post(set_daybreak_mode))
-        .layer(DefaultBodyLimit::max(8448))
+        .route(
+            CUSTOM_PROVIDERS_PATH,
+            get(list_custom_providers)
+                .post(save_custom_provider)
+                .delete(remove_custom_provider),
+        )
+        .route(
+            CUSTOM_PROVIDER_API_KEY_PATH,
+            post(set_custom_api_key).delete(remove_custom_api_key),
+        )
+        .route(CUSTOM_PROVIDER_DISCOVER_PATH, post(discover_custom_models))
+        .layer(DefaultBodyLimit::max(65_536))
         .with_state(AuthState {
             token,
             store: Arc::new(store),
@@ -93,6 +108,9 @@ fn checked_provider(value: i32) -> Result<(&'static str, usize), StatusCode> {
     match ProviderId::try_from(value) {
         Ok(ProviderId::Openai) => Ok(("openai", 0)),
         Ok(ProviderId::Xai) => Ok(("xai", 1)),
+        Ok(ProviderId::Anthropic) => Ok(("anthropic", 2)),
+        Ok(ProviderId::Zai) => Ok(("zai", 3)),
+        Ok(ProviderId::Openrouter) => Ok(("openrouter", 4)),
         _ => Err(StatusCode::BAD_REQUEST),
     }
 }
@@ -101,6 +119,9 @@ fn model_provider(value: i32) -> Result<Provider, StatusCode> {
     match ProviderId::try_from(value) {
         Ok(ProviderId::Openai) => Ok(Provider::OpenAi),
         Ok(ProviderId::Xai) => Ok(Provider::Xai),
+        Ok(ProviderId::Anthropic) => Ok(Provider::Anthropic),
+        Ok(ProviderId::Zai) => Ok(Provider::Zai),
+        Ok(ProviderId::Openrouter) => Ok(Provider::OpenRouter),
         _ => Err(StatusCode::BAD_REQUEST),
     }
 }
@@ -114,10 +135,23 @@ fn model_method(value: i32) -> Result<AuthMode, StatusCode> {
 }
 
 fn provider_configured(store: &CredentialStore, name: &str) -> Result<bool, StatusCode> {
-    Ok(store
-        .load(name)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .is_some()
+    if beale_providers::valid_custom_id(name) {
+        return Ok(store
+            .custom_provider(name)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .is_some());
+    }
+    let external = match name {
+        "anthropic" => beale_providers::subscription::configured(Provider::Anthropic),
+        "zai" => beale_providers::subscription::configured(Provider::Zai),
+        _ => false,
+    };
+    Ok(external
+        || (matches!(name, "openai" | "xai")
+            && store
+                .load(name)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .is_some())
         || store
             .api_key_configured(name)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
@@ -130,18 +164,39 @@ fn reconcile_lead(store: &CredentialStore) -> Result<ProviderId, StatusCode> {
     if let Some(name) = saved.as_deref()
         && provider_configured(store, name)?
     {
-        return Ok(if name == "openai" {
-            ProviderId::Openai
-        } else {
-            ProviderId::Xai
+        return Ok(match name {
+            "openai" => ProviderId::Openai,
+            "xai" => ProviderId::Xai,
+            "anthropic" => ProviderId::Anthropic,
+            "zai" => ProviderId::Zai,
+            "openrouter" => ProviderId::Openrouter,
+            name if beale_providers::valid_custom_id(name) => ProviderId::Custom,
+            _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
         });
     }
-    for (name, id) in [("openai", ProviderId::Openai), ("xai", ProviderId::Xai)] {
+    for (name, id) in [
+        ("openai", ProviderId::Openai),
+        ("xai", ProviderId::Xai),
+        ("anthropic", ProviderId::Anthropic),
+        ("zai", ProviderId::Zai),
+        ("openrouter", ProviderId::Openrouter),
+    ] {
         if provider_configured(store, name)? {
             store
                 .save_lead_provider(name)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             return Ok(id);
+        }
+    }
+    for custom in store
+        .custom_providers()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        if provider_configured(store, &custom.id)? {
+            store
+                .save_lead_provider(&custom.id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            return Ok(ProviderId::Custom);
         }
     }
     if saved.is_some() {
@@ -217,13 +272,24 @@ async fn status(
     for (id, name, index) in [
         (ProviderId::Openai, "openai", 0),
         (ProviderId::Xai, "xai", 1),
+        (ProviderId::Anthropic, "anthropic", 2),
+        (ProviderId::Zai, "zai", 3),
+        (ProviderId::Openrouter, "openrouter", 4),
     ] {
         providers.push(ProviderAuthStatus {
             provider: id as i32,
-            subscription_configured: store
-                .load(name)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .is_some(),
+            subscription_configured: if name == "anthropic" {
+                beale_providers::subscription::configured(Provider::Anthropic)
+            } else if name == "zai" {
+                beale_providers::subscription::configured(Provider::Zai)
+            } else if matches!(name, "openai" | "xai") {
+                store
+                    .load(name)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                    .is_some()
+            } else {
+                false
+            },
             api_key_configured: store
                 .api_key_configured(name)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
@@ -251,6 +317,14 @@ async fn status(
             DaybreakMode::Red as i32
         } else {
             DaybreakMode::Blue as i32
+        },
+        lead_custom_provider_id: if lead_provider == ProviderId::Custom {
+            store
+                .load_lead_provider()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .unwrap_or_default()
+        } else {
+            String::new()
         },
     }))
 }
@@ -354,14 +428,26 @@ async fn forget_subscription(
     }
     let request: ProviderRequest = checked_body(&headers, &body)?;
     let (provider, index) = checked_provider(request.provider)?;
+    if !matches!(provider, "openai" | "xai" | "anthropic" | "zai") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     if state.login.lock().await[index].in_progress {
         return Err(StatusCode::CONFLICT);
     }
     let _lead_guard = state.lead_lock.lock().await;
-    state
-        .store
-        .remove_oauth(provider)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if matches!(provider, "anthropic" | "zai") {
+        let external = if provider == "anthropic" {
+            Provider::Anthropic
+        } else {
+            Provider::Zai
+        };
+        beale_providers::subscription::logout(external).map_err(|_| StatusCode::BAD_GATEWAY)?;
+    } else {
+        state
+            .store
+            .remove_oauth(provider)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     reconcile_lead(&state.store)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -375,7 +461,14 @@ async fn set_lead_provider(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let request: ProviderRequest = checked_body(&headers, &body)?;
-    let (provider, _) = checked_provider(request.provider)?;
+    let provider = if request.provider == ProviderId::Custom as i32 {
+        if !beale_providers::valid_custom_id(&request.custom_provider_id) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        request.custom_provider_id.as_str()
+    } else {
+        checked_provider(request.provider)?.0
+    };
     let _lead_guard = state.lead_lock.lock().await;
     if !provider_configured(&state.store, provider)? {
         return Err(StatusCode::CONFLICT);
@@ -397,6 +490,16 @@ async fn start_subscription(
     }
     let request: ProviderRequest = checked_body(&headers, &body)?;
     let (provider, index) = checked_provider(request.provider)?;
+    if !matches!(provider, "openai" | "xai" | "anthropic" | "zai") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if matches!(provider, "anthropic" | "zai") {
+        return Ok(response(StartSubscriptionResponse {
+            verification_url: String::new(),
+            user_code: String::new(),
+            launch_official_app: true,
+        }));
+    }
     {
         let mut login = state.login.lock().await;
         if login[index].in_progress {
@@ -441,6 +544,7 @@ async fn start_subscription(
         Ok(Ok((verification_url, user_code))) => Ok(response(StartSubscriptionResponse {
             verification_url,
             user_code,
+            launch_official_app: false,
         })),
         _ => {
             task.abort();
@@ -464,11 +568,23 @@ async fn list_models(
     let request: ListModelsRequest = checked_body(&headers, &body)?;
     let provider = model_provider(request.provider)?;
     let mode = model_method(request.method)?;
+    if mode == AuthMode::Subscription
+        && !matches!(
+            provider,
+            Provider::OpenAi | Provider::Xai | Provider::Anthropic | Provider::Zai
+        )
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let client = ProviderClient::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let catalog = client
-        .list_models(provider, mode, &state.store)
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let catalog = if mode == AuthMode::Subscription
+        && matches!(provider, Provider::Anthropic | Provider::Zai)
+    {
+        beale_providers::subscription::catalog(provider, &state.store)
+    } else {
+        client.list_models(provider, mode, &state.store).await
+    }
+    .map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(response(ModelCatalogResponse {
         provider: request.provider,
         method: request.method,
@@ -501,11 +617,23 @@ async fn set_model_defaults(
     let request: SetModelDefaultsRequest = checked_body(&headers, &body)?;
     let provider = model_provider(request.provider)?;
     let mode = model_method(request.method)?;
+    if mode == AuthMode::Subscription
+        && !matches!(
+            provider,
+            Provider::OpenAi | Provider::Xai | Provider::Anthropic | Provider::Zai
+        )
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let client = ProviderClient::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let catalog = client
-        .list_models(provider, mode, &state.store)
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let catalog = if mode == AuthMode::Subscription
+        && matches!(provider, Provider::Anthropic | Provider::Zai)
+    {
+        beale_providers::subscription::catalog(provider, &state.store)
+    } else {
+        client.list_models(provider, mode, &state.store).await
+    }
+    .map_err(|_| StatusCode::BAD_GATEWAY)?;
     if !valid_selection(&catalog, &request.lead_model, &request.small_model) {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -534,11 +662,21 @@ async fn set_source_priority(
     let request: SetSourcePriorityRequest = checked_body(&headers, &body)?;
     let (provider, _) = checked_provider(request.provider)?;
     let mode = model_method(request.method)?;
-    if state
-        .store
-        .load(provider)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .is_none()
+    if !matches!(provider, "openai" | "xai" | "anthropic" | "zai") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let subscription = if provider == "anthropic" {
+        beale_providers::subscription::configured(Provider::Anthropic)
+    } else if provider == "zai" {
+        beale_providers::subscription::configured(Provider::Zai)
+    } else {
+        state
+            .store
+            .load(provider)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .is_some()
+    };
+    if !subscription
         || !state
             .store
             .api_key_configured(provider)
@@ -574,6 +712,225 @@ async fn set_daybreak_mode(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn wire_custom_provider(
+    store: &CredentialStore,
+    provider: CustomProvider,
+) -> Result<WireCustomProvider, StatusCode> {
+    let api_key_configured = store
+        .api_key_configured(&provider.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(WireCustomProvider {
+        id: provider.id,
+        name: provider.name,
+        base_url: provider.base_url,
+        models: provider
+            .models
+            .into_iter()
+            .map(|model| ModelEntry {
+                id: model.id,
+                display_name: model.name,
+            })
+            .collect(),
+        lead_model: provider.lead_model,
+        small_model: provider.small_model,
+        reasoning: provider.reasoning,
+        api_key_configured,
+    })
+}
+
+async fn list_custom_providers(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let providers = state
+        .store
+        .custom_providers()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .map(|provider| wire_custom_provider(&state.store, provider))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(response(ListCustomProvidersResponse { providers }))
+}
+
+async fn discover_custom_models(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: DiscoverCustomModelsRequest = checked_body(&headers, &body)?;
+    if request.api_key.len() > 8192 || request.api_key.chars().any(char::is_control) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let normalized_url = beale_providers::custom::validate_base_url(&request.base_url)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let key = if !request.api_key.is_empty() {
+        Some(request.api_key)
+    } else if request.id.is_empty() {
+        None
+    } else {
+        saved_discovery_key(&state.store, &request.id, &normalized_url)?
+    };
+    let client = ProviderClient::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let models =
+        beale_providers::custom::discover_models(&client, &request.base_url, key.as_deref())
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    Ok(response(DiscoverCustomModelsResponse {
+        models: models
+            .into_iter()
+            .map(|model| ModelEntry {
+                id: model.id,
+                display_name: model.name,
+            })
+            .collect(),
+    }))
+}
+
+fn saved_discovery_key(
+    store: &CredentialStore,
+    id: &str,
+    normalized_url: &str,
+) -> Result<Option<String>, StatusCode> {
+    let existing = store
+        .custom_provider(id)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if existing.base_url != normalized_url {
+        return Ok(None);
+    }
+    store
+        .load_api_key(id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn save_custom_provider(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: SaveCustomProviderRequest = checked_body(&headers, &body)?;
+    let provider = request.provider.ok_or(StatusCode::BAD_REQUEST)?;
+    let definition = CustomProvider {
+        id: provider.id,
+        name: provider.name,
+        base_url: provider.base_url,
+        models: provider
+            .models
+            .into_iter()
+            .map(|model| beale_providers::ModelEntry {
+                id: model.id,
+                name: model.display_name,
+            })
+            .collect(),
+        lead_model: provider.lead_model,
+        small_model: provider.small_model,
+        reasoning: provider.reasoning,
+    };
+    let id = definition.id.clone();
+    let _lead_guard = state.lead_lock.lock().await;
+    if let Some(existing) = state
+        .store
+        .custom_provider(&id)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
+        let next_url = beale_providers::custom::validate_base_url(&definition.base_url)
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        if existing.base_url != next_url
+            && state
+                .store
+                .api_key_configured(&id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            return Err(StatusCode::CONFLICT);
+        }
+    }
+    state
+        .store
+        .save_custom_provider(definition)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    initialize_lead(&state.store, &id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_custom_provider(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: CustomProviderRequest = checked_body(&headers, &body)?;
+    let _lead_guard = state.lead_lock.lock().await;
+    state
+        .store
+        .remove_custom_provider(&request.id)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    reconcile_lead(&state.store)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_custom_api_key(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: SetCustomProviderApiKeyRequest = checked_body(&headers, &body)?;
+    if state
+        .store
+        .custom_provider(&request.id)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .is_none()
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let _lead_guard = state.lead_lock.lock().await;
+    state
+        .store
+        .save_api_key(&request.id, &request.api_key)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    initialize_lead(&state.store, &request.id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_custom_api_key(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let request: CustomProviderRequest = checked_body(&headers, &body)?;
+    if state
+        .store
+        .custom_provider(&request.id)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .is_none()
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let _lead_guard = state.lead_lock.lock().await;
+    state
+        .store
+        .remove_api_key(&request.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    reconcile_lead(&state.store)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +939,137 @@ mod tests {
         http::Request,
     };
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn custom_provider_lifecycle_keeps_key_out_of_list_and_reconciles_lead() {
+        let root = std::env::temp_dir().join(format!(
+            "beale-custom-route-example-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = CredentialStore::at(root.clone());
+        let token = "ab".repeat(32);
+        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let provider = WireCustomProvider {
+            id: "custom-example".to_owned(),
+            name: "Example API".to_owned(),
+            base_url: "https://api.example.test/v1".to_owned(),
+            models: vec![ModelEntry {
+                id: "example-model".to_owned(),
+                display_name: "Example Model".to_owned(),
+            }],
+            lead_model: "example-model".to_owned(),
+            small_model: "example-model".to_owned(),
+            reasoning: false,
+            api_key_configured: false,
+        };
+        let request = Request::builder()
+            .method("POST")
+            .uri(CUSTOM_PROVIDERS_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(
+                SaveCustomProviderRequest {
+                    provider: Some(provider),
+                }
+                .encode_to_vec(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Custom);
+        let request = Request::builder()
+            .method("POST")
+            .uri(CUSTOM_PROVIDER_API_KEY_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(
+                SetCustomProviderApiKeyRequest {
+                    id: "custom-example".to_owned(),
+                    api_key: "sk-example".to_owned(),
+                }
+                .encode_to_vec(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        let request = Request::builder()
+            .uri(CUSTOM_PROVIDERS_PATH)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let bytes = to_bytes(response.into_body(), 512_000).await.unwrap();
+        assert!(
+            !bytes
+                .windows("sk-example".len())
+                .any(|part| part == b"sk-example")
+        );
+        let list = ListCustomProvidersResponse::decode(bytes).unwrap();
+        assert_eq!(list.providers.len(), 1);
+        assert!(list.providers[0].api_key_configured);
+        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Custom);
+        assert_eq!(
+            saved_discovery_key(&store, "custom-example", "https://api.example.test/v1")
+                .unwrap()
+                .as_deref(),
+            Some("sk-example")
+        );
+        assert!(
+            saved_discovery_key(&store, "custom-example", "https://other.example.test/v1")
+                .unwrap()
+                .is_none()
+        );
+        let mut changed = list.providers[0].clone();
+        changed.base_url = "https://other.example.test/v1".to_owned();
+        let request = Request::builder()
+            .method("POST")
+            .uri(CUSTOM_PROVIDERS_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(
+                SaveCustomProviderRequest {
+                    provider: Some(changed),
+                }
+                .encode_to_vec(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            store
+                .custom_provider("custom-example")
+                .unwrap()
+                .unwrap()
+                .base_url,
+            "https://api.example.test/v1"
+        );
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(CUSTOM_PROVIDERS_PATH)
+            .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(
+                CustomProviderRequest {
+                    id: "custom-example".to_owned(),
+                }
+                .encode_to_vec(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(reconcile_lead(&store).unwrap(), ProviderId::Unspecified);
+        assert!(!store.api_key_configured("custom-example").unwrap());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn control_token_is_required_and_provider_is_bounded() {
@@ -738,6 +1226,7 @@ mod tests {
             .body(Body::from(
                 ProviderRequest {
                     provider: ProviderId::Openai as i32,
+                    custom_provider_id: String::new(),
                 }
                 .encode_to_vec(),
             ))
@@ -779,6 +1268,7 @@ mod tests {
         let app = router(token.clone(), CredentialStore::at(root.clone()));
         let body = ProviderRequest {
             provider: ProviderId::Xai as i32,
+            custom_provider_id: String::new(),
         }
         .encode_to_vec();
         let request = Request::builder()

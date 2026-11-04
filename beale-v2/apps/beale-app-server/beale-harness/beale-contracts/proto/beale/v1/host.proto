@@ -11,6 +11,10 @@ enum ProviderId {
   PROVIDER_ID_UNSPECIFIED = 0;
   PROVIDER_ID_OPENAI = 1;
   PROVIDER_ID_XAI = 2;
+  PROVIDER_ID_ANTHROPIC = 3;
+  PROVIDER_ID_ZAI = 4;
+  PROVIDER_ID_OPENROUTER = 5;
+  PROVIDER_ID_CUSTOM = 6;
 }
 
 message ProviderAuthStatus {
@@ -26,6 +30,7 @@ message ProviderAuthStatusResponse {
   repeated ProviderAuthStatus providers = 1;
   ProviderId lead_provider = 2;
   DaybreakMode openai_daybreak_mode = 3;
+  string lead_custom_provider_id = 4;
 }
 
 message ProviderUsageWindow {
@@ -53,6 +58,45 @@ enum DaybreakMode {
 
 message ProviderRequest {
   ProviderId provider = 1;
+  string custom_provider_id = 2;
+}
+
+message CustomProvider {
+  string id = 1;
+  string name = 2;
+  string base_url = 3;
+  repeated ModelEntry models = 4;
+  string lead_model = 5;
+  string small_model = 6;
+  bool reasoning = 7;
+  bool api_key_configured = 8;
+}
+
+message ListCustomProvidersResponse {
+  repeated CustomProvider providers = 1;
+}
+
+message SaveCustomProviderRequest {
+  CustomProvider provider = 1;
+}
+
+message CustomProviderRequest {
+  string id = 1;
+}
+
+message SetCustomProviderApiKeyRequest {
+  string id = 1;
+  string api_key = 2;
+}
+
+message DiscoverCustomModelsRequest {
+  string id = 1;
+  string base_url = 2;
+  string api_key = 3;
+}
+
+message DiscoverCustomModelsResponse {
+  repeated ModelEntry models = 1;
 }
 
 message SetApiKeyRequest {
@@ -63,6 +107,7 @@ message SetApiKeyRequest {
 message StartSubscriptionResponse {
   string verification_url = 1;
   string user_code = 2;
+  bool launch_official_app = 3;
 }
 
 message ControlChallengeRequest {

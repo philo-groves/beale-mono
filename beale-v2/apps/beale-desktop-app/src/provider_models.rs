@@ -72,7 +72,7 @@ pub(crate) async fn list(
         .bytes()
         .await
         .map_err(|_| "Could not read provider models".to_owned())?;
-    if bytes.len() > 131_072 {
+    if bytes.len() > 524_288 {
         return Err("Provider model list is too large".to_owned());
     }
     decode_catalog(provider, method, &bytes)
@@ -88,7 +88,7 @@ fn decode_catalog(
     if reply.provider != provider as i32
         || reply.method != method as i32
         || reply.models.is_empty()
-        || reply.models.len() > 256
+        || reply.models.len() > 1024
     {
         return Err("Invalid provider model list".to_owned());
     }
@@ -123,9 +123,9 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && !id.contains("..")
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+        && id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        })
 }
 
 pub(crate) async fn save(

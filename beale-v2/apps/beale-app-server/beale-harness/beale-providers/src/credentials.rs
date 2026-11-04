@@ -48,7 +48,7 @@ impl CredentialStore {
         }
     }
 
-    fn db(&self) -> Result<HostDatabase> {
+    pub(crate) fn db(&self) -> Result<HostDatabase> {
         let mut cache = self
             .db
             .lock()
@@ -119,7 +119,14 @@ impl CredentialStore {
 
     pub fn load_lead_provider(&self) -> Result<Option<String>> {
         match self.db()?.setting("lead-provider")? {
-            Some(value) if value == "openai" || value == "xai" => Ok(Some(value)),
+            Some(value)
+                if matches!(
+                    value.as_str(),
+                    "openai" | "xai" | "anthropic" | "zai" | "openrouter"
+                ) || crate::valid_custom_id(&value) =>
+            {
+                Ok(Some(value))
+            }
             Some(_) => bail!("invalid saved lead provider"),
             None => Ok(None),
         }
@@ -127,7 +134,12 @@ impl CredentialStore {
 
     pub fn save_lead_provider(&self, provider: &str) -> Result<()> {
         match provider {
-            "openai" | "xai" => self.db()?.save_setting("lead-provider", Some(provider)),
+            "openai" | "xai" | "anthropic" | "zai" | "openrouter" => {
+                self.db()?.save_setting("lead-provider", Some(provider))
+            }
+            value if crate::valid_custom_id(value) => {
+                self.db()?.save_setting("lead-provider", Some(value))
+            }
             _ => bail!("unknown lead provider"),
         }
     }
@@ -249,28 +261,37 @@ impl CredentialStore {
 
     fn credential_path(&self, provider: &str) -> Result<PathBuf> {
         match provider {
-            "openai" | "xai" => Ok(self.root.join(format!("{provider}-oauth.json"))),
+            "openai" | "xai" | "anthropic" | "zai" => {
+                Ok(self.root.join(format!("{provider}-oauth.json")))
+            }
             _ => bail!("unknown provider"),
         }
     }
 
     fn api_key_path(&self, provider: &str) -> Result<PathBuf> {
         match provider {
-            "openai" | "xai" => Ok(self.root.join(format!("{provider}-api-key"))),
+            "openai" | "xai" | "anthropic" | "zai" | "openrouter" => {
+                Ok(self.root.join(format!("{provider}-api-key")))
+            }
+            value if crate::valid_custom_id(value) => {
+                Ok(self.root.join(format!("{value}-api-key")))
+            }
             _ => bail!("unknown provider"),
         }
     }
 
     fn source_priority_path(&self, provider: &str) -> Result<PathBuf> {
         match provider {
-            "openai" | "xai" => Ok(self.root.join(format!("{provider}-source-priority"))),
+            "openai" | "xai" | "anthropic" | "zai" | "openrouter" => {
+                Ok(self.root.join(format!("{provider}-source-priority")))
+            }
             _ => bail!("unknown provider"),
         }
     }
 
     fn model_defaults_path(&self, provider: &str, mode: &str) -> Result<PathBuf> {
         match (provider, mode) {
-            ("openai" | "xai", "api-key" | "subscription") => {
+            ("openai" | "xai" | "anthropic" | "zai" | "openrouter", "api-key" | "subscription") => {
                 Ok(self.root.join(format!("{provider}-{mode}-models.json")))
             }
             _ => bail!("unknown provider model scope"),

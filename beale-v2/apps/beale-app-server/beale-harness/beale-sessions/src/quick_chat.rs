@@ -111,17 +111,40 @@ async fn default_model(state: &SessionState) -> Result<(Provider, AuthMode, Stri
         .credentials
         .load_lead_provider()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let names = if preferred.as_deref() == Some("xai") {
-        ["xai", "openai"]
-    } else {
-        ["openai", "xai"]
-    };
+    let mut names = vec!["openai", "xai", "anthropic", "zai", "openrouter"];
+    let custom_providers = state
+        .credentials
+        .custom_providers()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(custom) = custom_providers
+        .iter()
+        .find(|custom| preferred.as_deref() == Some(custom.id.as_str()))
+    {
+        let model = beale_providers::qualified_model(&custom.id, &custom.lead_model)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok((Provider::Custom, AuthMode::ApiKey, model));
+    }
+    if let Some(preferred) = preferred.as_deref()
+        && let Some(index) = names.iter().position(|name| *name == preferred)
+    {
+        names.swap(0, index);
+    }
     for name in names {
-        let subscription = state
-            .credentials
-            .load(name)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .is_some();
+        let subscription = if matches!(name, "anthropic" | "zai") {
+            beale_providers::subscription::configured(if name == "anthropic" {
+                Provider::Anthropic
+            } else {
+                Provider::Zai
+            })
+        } else if matches!(name, "openai" | "xai") {
+            state
+                .credentials
+                .load(name)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .is_some()
+        } else {
+            false
+        };
         let api_key = state
             .credentials
             .api_key_configured(name)
@@ -133,10 +156,13 @@ async fn default_model(state: &SessionState) -> Result<(Provider, AuthMode, Stri
         let Some(mode) = auth_mode(subscription, api_key, priority) else {
             continue;
         };
-        let provider = if name == "openai" {
-            Provider::OpenAi
-        } else {
-            Provider::Xai
+        let provider = match name {
+            "openai" => Provider::OpenAi,
+            "xai" => Provider::Xai,
+            "anthropic" => Provider::Anthropic,
+            "zai" => Provider::Zai,
+            "openrouter" => Provider::OpenRouter,
+            _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
         };
         let catalog = state
             .provider
@@ -147,6 +173,11 @@ async fn default_model(state: &SessionState) -> Result<(Provider, AuthMode, Stri
                 StatusCode::BAD_GATEWAY
             })?;
         return Ok((provider, mode, catalog.lead_model));
+    }
+    if let Some(custom) = custom_providers.into_iter().next() {
+        let model = beale_providers::qualified_model(&custom.id, &custom.lead_model)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok((Provider::Custom, AuthMode::ApiKey, model));
     }
     Err(StatusCode::CONFLICT)
 }
@@ -225,6 +256,10 @@ pub(super) async fn turn(
         let provider = match ProviderId::try_from(latest.provider) {
             Ok(ProviderId::Openai) => Provider::OpenAi,
             Ok(ProviderId::Xai) => Provider::Xai,
+            Ok(ProviderId::Anthropic) => Provider::Anthropic,
+            Ok(ProviderId::Zai) => Provider::Zai,
+            Ok(ProviderId::Openrouter) => Provider::OpenRouter,
+            Ok(ProviderId::Custom) => Provider::Custom,
             _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
         };
         let mode = match AuthMethod::try_from(latest.method) {
@@ -294,10 +329,13 @@ pub(super) async fn turn(
     };
     let turn = TurnRow {
         number: (turns.len() + 1) as i64,
-        provider: if provider == Provider::OpenAi {
-            ProviderId::Openai as i32
-        } else {
-            ProviderId::Xai as i32
+        provider: match provider {
+            Provider::OpenAi => ProviderId::Openai as i32,
+            Provider::Xai => ProviderId::Xai as i32,
+            Provider::Anthropic => ProviderId::Anthropic as i32,
+            Provider::Zai => ProviderId::Zai as i32,
+            Provider::OpenRouter => ProviderId::Openrouter as i32,
+            Provider::Custom => ProviderId::Custom as i32,
         },
         method: if mode == AuthMode::Subscription {
             AuthMethod::Subscription as i32

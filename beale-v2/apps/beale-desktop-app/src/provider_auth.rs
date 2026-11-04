@@ -12,6 +12,93 @@ use prost::Message;
 use reqwest::{Client, StatusCode, header::CONTENT_TYPE};
 use std::{net::SocketAddr, path::PathBuf};
 
+pub(crate) fn launch_official_sign_in(provider: ProviderId) -> Result<&'static str, String> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        match provider {
+            ProviderId::Anthropic => {
+                let installed = Command::new("where.exe")
+                    .arg("claude")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success());
+                if !installed {
+                    return Err("Install the official Claude CLI before signing in.".to_owned());
+                }
+                let status = Command::new("powershell.exe")
+                    .args(["-NoProfile", "-NonInteractive", "-Command", "Start-Process -FilePath cmd.exe -ArgumentList '/k claude auth login --claudeai' -WindowStyle Normal"])
+                    .status().map_err(|_| "Could not open the Claude sign-in terminal".to_owned())?;
+                if !status.success() {
+                    return Err("Could not open the Claude sign-in terminal".to_owned());
+                }
+                Ok("Complete sign-in in the Claude terminal. Beale will detect it automatically.")
+            }
+            ProviderId::Zai => {
+                let base = std::env::var_os("LOCALAPPDATA")
+                    .ok_or("ZCode is not installed on this host")?;
+                let path = PathBuf::from(base)
+                    .join("Programs")
+                    .join("ZCode")
+                    .join("ZCode.exe");
+                Command::new(path).spawn().map_err(|_| {
+                    "Could not open ZCode. Install it and sign in there.".to_owned()
+                })?;
+                Ok("In ZCode Model Settings, connect Z.ai. Beale will detect it automatically.")
+            }
+            _ => Err("Unsupported external subscription provider".to_owned()),
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        match provider {
+            ProviderId::Anthropic => {
+                let status = Command::new("osascript").args(["-e", "tell application \"Terminal\" to do script \"claude auth login --claudeai\"", "-e", "tell application \"Terminal\" to activate"])
+                    .status().map_err(|_| "Could not open the Claude sign-in terminal".to_owned())?;
+                if !status.success() {
+                    return Err("Could not open the Claude sign-in terminal".to_owned());
+                }
+                Ok("Complete sign-in in the Claude terminal. Beale will detect it automatically.")
+            }
+            ProviderId::Zai => {
+                let status = Command::new("open")
+                    .args(["-a", "ZCode"])
+                    .status()
+                    .map_err(|_| "Could not open ZCode".to_owned())?;
+                if !status.success() {
+                    return Err("Could not open ZCode".to_owned());
+                }
+                Ok("In ZCode Model Settings, connect Z.ai. Beale will detect it automatically.")
+            }
+            _ => Err("Unsupported external subscription provider".to_owned()),
+        }
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        use std::process::Command;
+        match provider {
+            ProviderId::Anthropic => {
+                Command::new("x-terminal-emulator")
+                    .args(["-e", "claude", "auth", "login", "--claudeai"])
+                    .spawn()
+                    .map_err(|_| {
+                        "Open a terminal and run: claude auth login --claudeai".to_owned()
+                    })?;
+                Ok("Complete sign-in in the Claude terminal. Beale will detect it automatically.")
+            }
+            ProviderId::Zai => {
+                Command::new("zcode")
+                    .spawn()
+                    .map_err(|_| "Open ZCode and connect Z.ai in Model Settings".to_owned())?;
+                Ok("In ZCode Model Settings, connect Z.ai. Beale will detect it automatically.")
+            }
+            _ => Err("Unsupported external subscription provider".to_owned()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthStatus {
     pub subscription: bool,
@@ -35,8 +122,9 @@ impl Default for AuthStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthSnapshot {
-    pub providers: [AuthStatus; 2],
+    pub providers: [AuthStatus; 5],
     pub lead: Option<ProviderId>,
+    pub lead_custom_provider_id: String,
     pub daybreak_mode: DaybreakMode,
 }
 
@@ -45,6 +133,7 @@ impl Default for AuthSnapshot {
         Self {
             providers: Default::default(),
             lead: None,
+            lead_custom_provider_id: String::new(),
             daybreak_mode: DaybreakMode::Blue,
         }
     }
@@ -54,6 +143,30 @@ impl Default for AuthSnapshot {
 pub(crate) struct SignInPrompt {
     pub url: String,
     pub code: String,
+    pub external_provider: Option<ProviderId>,
+}
+
+fn sign_in_prompt(
+    reply: StartSubscriptionResponse,
+    external_provider: Option<ProviderId>,
+) -> Result<SignInPrompt, String> {
+    if reply.launch_official_app != external_provider.is_some() {
+        return Err("Invalid subscription sign-in method".to_owned());
+    }
+    if external_provider.is_none() {
+        let parsed = reqwest::Url::parse(&reply.verification_url)
+            .map_err(|_| "Invalid sign-in URL".to_owned())?;
+        if parsed.scheme() != "https" || parsed.host_str().is_none() {
+            return Err("Invalid sign-in URL".to_owned());
+        }
+    } else if !reply.verification_url.is_empty() || !reply.user_code.is_empty() {
+        return Err("Invalid official CLI sign-in response".to_owned());
+    }
+    Ok(SignInPrompt {
+        url: reply.verification_url,
+        code: reply.user_code,
+        external_provider,
+    })
 }
 
 pub(crate) enum Action {
@@ -177,11 +290,14 @@ pub(crate) async fn status(client: &Client, addr: SocketAddr) -> Result<AuthSnap
 fn decode_status(bytes: &[u8]) -> Result<AuthSnapshot, String> {
     let reply = ProviderAuthStatusResponse::decode(bytes)
         .map_err(|_| "Invalid credential status".to_owned())?;
-    let mut result = [AuthStatus::default(), AuthStatus::default()];
+    let mut result = std::array::from_fn(|_| AuthStatus::default());
     for provider in reply.providers {
         let index = match ProviderId::try_from(provider.provider) {
             Ok(ProviderId::Openai) => 0,
             Ok(ProviderId::Xai) => 1,
+            Ok(ProviderId::Anthropic) => 2,
+            Ok(ProviderId::Zai) => 3,
+            Ok(ProviderId::Openrouter) => 4,
             _ => return Err("Unknown provider in credential status".to_owned()),
         };
         let source_priority = match AuthMethod::try_from(provider.source_priority) {
@@ -198,18 +314,41 @@ fn decode_status(bytes: &[u8]) -> Result<AuthSnapshot, String> {
     }
     let lead = match ProviderId::try_from(reply.lead_provider) {
         Ok(ProviderId::Unspecified) => None,
-        Ok(id @ (ProviderId::Openai | ProviderId::Xai)) => Some(id),
+        Ok(
+            id @ (ProviderId::Openai
+            | ProviderId::Xai
+            | ProviderId::Anthropic
+            | ProviderId::Zai
+            | ProviderId::Openrouter
+            | ProviderId::Custom),
+        ) => Some(id),
         _ => return Err("Invalid lead provider in credential status".to_owned()),
     };
     if let Some(id) = lead {
-        let index = if id == ProviderId::Openai { 0 } else { 1 };
-        if !result[index].subscription && !result[index].api_key {
+        let index = match id {
+            ProviderId::Openai => 0,
+            ProviderId::Xai => 1,
+            ProviderId::Anthropic => 2,
+            ProviderId::Zai => 3,
+            ProviderId::Openrouter => 4,
+            ProviderId::Custom => {
+                if reply.lead_custom_provider_id.is_empty() {
+                    return Err("Custom lead provider requires its provider ID".to_owned());
+                }
+                usize::MAX
+            }
+            ProviderId::Unspecified => {
+                return Err("Invalid lead provider in credential status".to_owned());
+            }
+        };
+        if index != usize::MAX && !result[index].subscription && !result[index].api_key {
             return Err("Lead provider is not configured".to_owned());
         }
     }
     Ok(AuthSnapshot {
         providers: result,
         lead,
+        lead_custom_provider_id: reply.lead_custom_provider_id,
         daybreak_mode: match DaybreakMode::try_from(reply.openai_daybreak_mode) {
             Ok(mode @ (DaybreakMode::Blue | DaybreakMode::Red)) => mode,
             _ => return Err("Invalid Daybreak mode in credential status".to_owned()),
@@ -247,6 +386,7 @@ pub(crate) async fn set_lead(
     client: &Client,
     addr: SocketAddr,
     provider: ProviderId,
+    custom_provider_id: &str,
 ) -> Result<(), String> {
     let token = authenticated_token(client, addr).await?;
     let response = client
@@ -256,6 +396,7 @@ pub(crate) async fn set_lead(
         .body(
             ProviderRequest {
                 provider: provider as i32,
+                custom_provider_id: custom_provider_id.to_owned(),
             }
             .encode_to_vec(),
         )
@@ -318,6 +459,9 @@ pub(crate) fn check_cli() -> std::process::ExitCode {
             for (name, provider) in [
                 ("OpenAI", &snapshot.providers[0]),
                 ("xAI", &snapshot.providers[1]),
+                ("Anthropic", &snapshot.providers[2]),
+                ("Z.ai", &snapshot.providers[3]),
+                ("OpenRouter", &snapshot.providers[4]),
             ] {
                 println!(
                     "{name}: subscription={}, API key={}, sign-in={}",
@@ -343,6 +487,9 @@ pub(crate) fn check_cli() -> std::process::ExitCode {
                 match snapshot.lead {
                     Some(ProviderId::Openai) => "OpenAI",
                     Some(ProviderId::Xai) => "xAI",
+                    Some(ProviderId::Anthropic) => "Anthropic",
+                    Some(ProviderId::Zai) => "Z.ai",
+                    Some(ProviderId::Openrouter) => "OpenRouter",
                     _ => "None",
                 }
             );
@@ -359,6 +506,12 @@ pub(crate) async fn perform(
     addr: SocketAddr,
     action: Action,
 ) -> Result<Option<SignInPrompt>, String> {
+    let external_provider = match &action {
+        Action::StartSubscription(provider @ (ProviderId::Anthropic | ProviderId::Zai)) => {
+            Some(*provider)
+        }
+        _ => None,
+    };
     let client = Client::builder()
         .connect_timeout(std::time::Duration::from_secs(1))
         .timeout(std::time::Duration::from_secs(35))
@@ -381,6 +534,7 @@ pub(crate) async fn perform(
             AUTH_API_KEY_PATH,
             ProviderRequest {
                 provider: provider as i32,
+                custom_provider_id: String::new(),
             }
             .encode_to_vec(),
             true,
@@ -389,6 +543,7 @@ pub(crate) async fn perform(
             AUTH_SUBSCRIPTION_START_PATH,
             ProviderRequest {
                 provider: provider as i32,
+                custom_provider_id: String::new(),
             }
             .encode_to_vec(),
             false,
@@ -397,6 +552,7 @@ pub(crate) async fn perform(
             AUTH_SUBSCRIPTION_FORGET_PATH,
             ProviderRequest {
                 provider: provider as i32,
+                custom_provider_id: String::new(),
             }
             .encode_to_vec(),
             false,
@@ -438,15 +594,7 @@ pub(crate) async fn perform(
         }
         let reply = StartSubscriptionResponse::decode(bytes)
             .map_err(|_| "Invalid sign-in response".to_owned())?;
-        let parsed = reqwest::Url::parse(&reply.verification_url)
-            .map_err(|_| "Invalid sign-in URL".to_owned())?;
-        if parsed.scheme() != "https" || parsed.host_str().is_none() {
-            return Err("Invalid sign-in URL".to_owned());
-        }
-        return Ok(Some(SignInPrompt {
-            url: reply.verification_url,
-            code: reply.user_code,
-        }));
+        return Ok(Some(sign_in_prompt(reply, external_provider)?));
     }
     Ok(None)
 }
@@ -454,6 +602,28 @@ pub(crate) async fn perform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_subscription_prompt_requires_official_launch_flag() {
+        let reply = StartSubscriptionResponse {
+            verification_url: String::new(),
+            user_code: String::new(),
+            launch_official_app: true,
+        };
+        assert_eq!(
+            sign_in_prompt(reply.clone(), Some(ProviderId::Anthropic))
+                .unwrap()
+                .external_provider,
+            Some(ProviderId::Anthropic)
+        );
+        assert!(sign_in_prompt(reply, None).is_err());
+        let browser = StartSubscriptionResponse {
+            verification_url: "https://example.test/authorize".into(),
+            user_code: String::new(),
+            launch_official_app: false,
+        };
+        assert!(sign_in_prompt(browser, Some(ProviderId::Zai)).is_err());
+    }
 
     #[test]
     fn control_proof_rejects_wrong_host_token_or_nonce() {
@@ -480,6 +650,7 @@ mod tests {
                 source_priority: AuthMethod::Subscription as i32,
             }],
             lead_provider: ProviderId::Xai as i32,
+            lead_custom_provider_id: String::new(),
             openai_daybreak_mode: DaybreakMode::Blue as i32,
         };
         assert_eq!(

@@ -20,6 +20,7 @@ mod modal_dialog;
 mod new_research;
 mod permission_settings;
 mod provider_auth;
+mod provider_custom;
 mod provider_icons;
 mod provider_models;
 mod provider_usage;
@@ -44,7 +45,7 @@ use color_picker::Hsv;
 use connection::ConnectionStatus;
 use icons::*;
 use provider_auth::{Action, AuthStatus, SignInPrompt};
-use provider_icons::{GROK, OPENAI};
+use provider_icons::{ANTHROPIC, GROK, OPENAI, OPENROUTER, ZAI};
 use provider_models::ModelCatalog;
 use settings_scroll::SettingsScroll;
 
@@ -103,13 +104,29 @@ enum Provider {
     #[default]
     OpenAi,
     Xai,
+    Anthropic,
+    Zai,
+    OpenRouter,
+    Custom,
 }
 
 impl Provider {
+    const ALL: [Self; 5] = [
+        Self::OpenAi,
+        Self::Xai,
+        Self::Anthropic,
+        Self::Zai,
+        Self::OpenRouter,
+    ];
+
     fn from_id(id: ProviderId) -> Option<Self> {
         match id {
             ProviderId::Openai => Some(Self::OpenAi),
             ProviderId::Xai => Some(Self::Xai),
+            ProviderId::Anthropic => Some(Self::Anthropic),
+            ProviderId::Zai => Some(Self::Zai),
+            ProviderId::Openrouter => Some(Self::OpenRouter),
+            ProviderId::Custom => Some(Self::Custom),
             ProviderId::Unspecified => None,
         }
     }
@@ -118,6 +135,10 @@ impl Provider {
         match self {
             Self::OpenAi => ProviderId::Openai,
             Self::Xai => ProviderId::Xai,
+            Self::Anthropic => ProviderId::Anthropic,
+            Self::Zai => ProviderId::Zai,
+            Self::OpenRouter => ProviderId::Openrouter,
+            Self::Custom => ProviderId::Custom,
         }
     }
 
@@ -125,12 +146,20 @@ impl Provider {
         match self {
             Self::OpenAi => 0,
             Self::Xai => 1,
+            Self::Anthropic => 2,
+            Self::Zai => 3,
+            Self::OpenRouter => 4,
+            Self::Custom => unreachable!("custom providers have dynamic identity"),
         }
     }
     fn name(self) -> &'static str {
         match self {
             Self::OpenAi => "OpenAI",
             Self::Xai => "xAI",
+            Self::Anthropic => "Anthropic",
+            Self::Zai => "Z.ai",
+            Self::OpenRouter => "OpenRouter",
+            Self::Custom => "Custom",
         }
     }
 
@@ -138,6 +167,10 @@ impl Provider {
         match self {
             Self::OpenAi => &OPENAI,
             Self::Xai => &GROK,
+            Self::Anthropic => &ANTHROPIC,
+            Self::Zai => &ZAI,
+            Self::OpenRouter => &OPENROUTER,
+            Self::Custom => &OPENROUTER,
         }
     }
 
@@ -145,6 +178,21 @@ impl Provider {
         match self {
             Self::OpenAi => "Connect a ChatGPT subscription or use an OpenAI API key.",
             Self::Xai => "Connect a Grok subscription or use an xAI API key.",
+            Self::Anthropic => "Use an Anthropic API key to access Claude models.",
+            Self::Zai => "Use a Z.ai API key to access GLM models.",
+            Self::OpenRouter => "Use an OpenRouter API key to access routed models.",
+            Self::Custom => "Connect an OpenAI-compatible chat completions API.",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Xai => "xai",
+            Self::Anthropic => "anthropic",
+            Self::Zai => "zai",
+            Self::OpenRouter => "openrouter",
+            Self::Custom => "custom",
         }
     }
 }
@@ -571,6 +619,20 @@ struct State {
     workspace_save_error: String,
     workspace_save_message: String,
     selected: Provider,
+    custom_providers: Vec<beale_contracts::v1::CustomProvider>,
+    custom_error: String,
+    custom_busy: bool,
+    custom_editor_open: bool,
+    custom_edit_id: Option<String>,
+    custom_name_edit: TextEdit,
+    custom_url_edit: TextEdit,
+    custom_models_edit: TextEdit,
+    custom_discovered_models: Vec<beale_contracts::v1::ModelEntry>,
+    custom_lead_edit: TextEdit,
+    custom_small_edit: TextEdit,
+    custom_key_edit: TextEdit,
+    custom_reasoning: bool,
+    custom_delete_id: Option<String>,
     extensions_section: extensions_view::ExtensionSection,
     plugin_tab: extensions_view::PluginTab,
     plugins: Vec<extensions_view::PluginEntry>,
@@ -603,11 +665,12 @@ struct State {
     palette_edits: [TextEdit; 14],
     color_picker: Option<ColorPickerState>,
     connection: ConnectionStatus,
-    auth_status: [AuthStatus; 2],
+    auth_status: [AuthStatus; 5],
     provider_usage: [Option<beale_contracts::v1::ProviderUsageSnapshot>; 2],
     usage_generation: u64,
     auth_loaded: bool,
     lead_provider: Option<Provider>,
+    lead_custom_provider_id: String,
     lead_busy: bool,
     lead_error: String,
     provider_selection_initialized: bool,
@@ -618,14 +681,14 @@ struct State {
     api_key_edit: TextEdit,
     api_key_dialog: bool,
     auth_busy: bool,
-    source_saving: [bool; 2],
-    source_errors: [String; 2],
+    source_saving: [bool; 5],
+    source_errors: [String; 5],
     daybreak_mode: DaybreakMode,
     daybreak_saving: bool,
     daybreak_error: String,
-    model_catalogs: [Option<ModelCatalog>; 4],
-    model_loading: [bool; 4],
-    model_errors: [String; 4],
+    model_catalogs: [Option<ModelCatalog>; 10],
+    model_loading: [bool; 10],
+    model_errors: [String; 10],
     model_saving: bool,
     selection_menu: Option<SelectionMenu>,
     menu_cursor: usize,
@@ -723,6 +786,20 @@ impl Default for State {
             workspace_save_error: String::new(),
             workspace_save_message: String::new(),
             selected: Provider::OpenAi,
+            custom_providers: Vec::new(),
+            custom_error: String::new(),
+            custom_busy: false,
+            custom_editor_open: false,
+            custom_edit_id: None,
+            custom_name_edit: TextEdit::new(""),
+            custom_url_edit: TextEdit::new(""),
+            custom_models_edit: TextEdit::new(""),
+            custom_discovered_models: Vec::new(),
+            custom_lead_edit: TextEdit::new(""),
+            custom_small_edit: TextEdit::new(""),
+            custom_key_edit: TextEdit::new(""),
+            custom_reasoning: false,
+            custom_delete_id: None,
             extensions_section: extensions_view::ExtensionSection::default(),
             plugin_tab: extensions_view::PluginTab::default(),
             plugins: extensions_view::bundled_plugins(),
@@ -767,6 +844,7 @@ impl Default for State {
             usage_generation: 0,
             auth_loaded: false,
             lead_provider: None,
+            lead_custom_provider_id: String::new(),
             lead_busy: false,
             lead_error: String::new(),
             provider_selection_initialized: false,
@@ -777,13 +855,13 @@ impl Default for State {
             api_key_edit: TextEdit::new("").secure(),
             api_key_dialog: false,
             auth_busy: false,
-            source_saving: [false; 2],
+            source_saving: [false; 5],
             source_errors: std::array::from_fn(|_| String::new()),
             daybreak_mode: DaybreakMode::Blue,
             daybreak_saving: false,
             daybreak_error: String::new(),
             model_catalogs: std::array::from_fn(|_| None),
-            model_loading: [false; 4],
+            model_loading: [false; 10],
             model_errors: std::array::from_fn(|_| String::new()),
             model_saving: false,
             selection_menu: None,
@@ -2056,14 +2134,27 @@ fn start_auth_action(state: &mut State, action: Action) {
             state.auth_busy = false;
             match result {
                 Ok(Some(prompt)) => {
-                    if let Err(error) = tx.open_url(&prompt.url) {
+                    if let Some(provider) = prompt.external_provider {
+                        match provider_auth::launch_official_sign_in(provider) {
+                            Ok(message) => {
+                                state.auth_message = message.to_owned();
+                                state.auth_message_is_error = false;
+                            }
+                            Err(error) => {
+                                state.auth_message = error;
+                                state.auth_message_is_error = true;
+                            }
+                        }
+                    } else if let Err(error) = tx.open_url(&prompt.url) {
                         state.auth_message = format!("Could not open browser: {error}");
                         state.auth_message_is_error = true;
                     } else {
                         state.auth_message = "Finish sign-in in your browser.".to_owned();
                         state.auth_message_is_error = false;
                     }
-                    state.sign_in_prompt = Some(prompt);
+                    if prompt.external_provider.is_none() {
+                        state.sign_in_prompt = Some(prompt);
+                    }
                 }
                 Ok(None) => {
                     state.auth_message = "Credential setting saved on the app-server.".to_owned();
@@ -2137,13 +2228,58 @@ fn start_lead_save(state: &mut State, provider: Provider) {
                 .enable_all()
                 .build()
                 .map_err(|_| "Could not initialize app-server connection".to_owned())?;
-            runtime.block_on(provider_auth::set_lead(&client, addr, provider.id()))
+            runtime.block_on(provider_auth::set_lead(&client, addr, provider.id(), ""))
         })();
         handle.update(move |state, _| {
             state.lead_busy = false;
             match result {
                 Ok(()) => {
                     state.lead_provider = Some(provider);
+                }
+                Err(error) => state.lead_error = error,
+            }
+        });
+    });
+}
+
+fn start_custom_lead_save(state: &mut State, id: String) {
+    if state.lead_busy
+        || !state.auth_loaded
+        || !state
+            .custom_providers
+            .iter()
+            .any(|provider| provider.id == id)
+    {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.lead_busy = true;
+    state.lead_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = connection::http_client()
+                .map_err(|_| "Could not initialize app-server connection".to_owned())?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize app-server connection".to_owned())?;
+            runtime.block_on(provider_auth::set_lead(
+                &client,
+                addr,
+                ProviderId::Custom,
+                &id,
+            ))
+        })();
+        handle.update(move |state, _| {
+            state.lead_busy = false;
+            match result {
+                Ok(()) => {
+                    state.lead_provider = Some(Provider::Custom);
+                    state.lead_custom_provider_id = id;
                 }
                 Err(error) => state.lead_error = error,
             }
@@ -2369,23 +2505,34 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 selected: state.workspace_surface_kind == kind,
             })
             .collect(),
-        SelectionMenu::LeadProvider => [Provider::OpenAi, Provider::Xai]
-            .into_iter()
-            .filter(|provider| {
-                let status = &state.auth_status[provider.index()];
-                status.subscription || status.api_key
-            })
-            .map(|provider| in_place_menu::MenuItem {
-                value: match provider {
-                    Provider::OpenAi => "openai",
-                    Provider::Xai => "xai",
-                }
-                .to_owned(),
-                label: provider.name().to_owned(),
-                detail: None,
-                selected: state.lead_provider == Some(provider),
-            })
-            .collect(),
+        SelectionMenu::LeadProvider => {
+            let mut options: Vec<_> = Provider::ALL
+                .into_iter()
+                .filter(|provider| {
+                    let status = &state.auth_status[provider.index()];
+                    status.subscription || status.api_key
+                })
+                .map(|provider| in_place_menu::MenuItem {
+                    value: provider.key().to_owned(),
+                    label: provider.name().to_owned(),
+                    detail: None,
+                    selected: state.lead_provider == Some(provider),
+                })
+                .collect();
+            options.extend(
+                state
+                    .custom_providers
+                    .iter()
+                    .map(|provider| in_place_menu::MenuItem {
+                        value: provider.id.clone(),
+                        label: provider.name.clone(),
+                        detail: Some("Custom API".to_owned()),
+                        selected: state.lead_provider == Some(Provider::Custom)
+                            && state.lead_custom_provider_id == provider.id,
+                    }),
+            );
+            options
+        }
         SelectionMenu::ColorTheme => AppearanceTheme::ALL
             .into_iter()
             .map(|theme| in_place_menu::MenuItem {
@@ -2571,12 +2718,18 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             }
         }
         SelectionMenu::LeadProvider => {
-            let provider = if value == "openai" {
-                Provider::OpenAi
-            } else {
-                Provider::Xai
-            };
-            start_lead_save(state, provider);
+            if let Some(provider) = Provider::ALL
+                .into_iter()
+                .find(|provider| provider.key() == value)
+            {
+                start_lead_save(state, provider);
+            } else if state
+                .custom_providers
+                .iter()
+                .any(|provider| provider.id == value)
+            {
+                start_custom_lead_save(state, value);
+            }
         }
         SelectionMenu::ColorTheme => {
             if let Some(theme) = AppearanceTheme::ALL
@@ -3252,10 +3405,7 @@ fn provider_tab(provider: Provider, selected: bool, theme: ThemeStyle<'_>) -> El
     let color = |value| theme.color(value);
     let name = provider.name();
     row()
-        .key(match provider {
-            Provider::OpenAi => "provider-openai",
-            Provider::Xai => "provider-xai",
-        })
+        .key(format!("provider-{}", provider.key()))
         .role("tab")
         .label(format!(
             "{name} provider view{}",
@@ -3327,11 +3477,16 @@ fn lead_provider_controls(state: &State) -> El {
     let configured = state
         .auth_status
         .iter()
-        .any(|status| status.subscription || status.api_key);
-    let label = match state.lead_provider {
-        Some(Provider::OpenAi) => "OpenAI",
-        Some(Provider::Xai) => "xAI",
-        None => "None",
+        .any(|status| status.subscription || status.api_key)
+        || !state.custom_providers.is_empty();
+    let label = if state.lead_provider == Some(Provider::Custom) {
+        state
+            .custom_providers
+            .iter()
+            .find(|provider| provider.id == state.lead_custom_provider_id)
+            .map_or("Custom", |provider| provider.name.as_str())
+    } else {
+        state.lead_provider.map_or("None", Provider::name)
     };
     row()
         .center_y()
@@ -3788,6 +3943,9 @@ fn daybreak_settings(state: &State) -> El {
 }
 
 fn provider_detail(state: &State) -> El {
+    if state.selected == Provider::Custom {
+        return provider_custom::render(state);
+    }
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
     let provider = state.selected;
@@ -3819,10 +3977,7 @@ fn provider_detail(state: &State) -> El {
                 .color(color("#f2f2f2")),
         );
     let mut detail = col()
-        .key(match provider {
-            Provider::OpenAi => "provider-detail-openai",
-            Provider::Xai => "provider-detail-xai",
-        })
+        .key(format!("provider-detail-{}", provider.key()))
         .role("tabpanel")
         .label(format!("{name} provider settings"))
         .w_full()
@@ -3848,16 +4003,21 @@ fn provider_detail(state: &State) -> El {
         )
         .child(settings_form(
             AUTH_FORM,
-            AUTH_ROWS.iter().map(|spec| {
-                authentication_row(
-                    provider,
-                    auth,
-                    state.auth_loaded,
-                    state.auth_busy,
-                    spec,
-                    theme,
-                )
-            }),
+            AUTH_ROWS
+                .iter()
+                .filter(|spec| {
+                    provider != Provider::OpenRouter || spec.method != AuthMethod::Subscription
+                })
+                .map(|spec| {
+                    authentication_row(
+                        provider,
+                        auth,
+                        state.auth_loaded,
+                        state.auth_busy,
+                        spec,
+                        theme,
+                    )
+                }),
             theme,
         ));
     if state.api_key_dialog {
@@ -4461,33 +4621,72 @@ fn appearance_text_settings(state: &State) -> El {
     content
 }
 
-fn providers_settings_view(state: &State, _cx: &mut Cx<State>) -> Vec<El> {
+fn providers_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
     let theme = state.appearance.style();
     let color = |value| theme.color(value);
-    let mut content = vec![
-        row()
+    let tabs_width = cx.layout_size("app-surface").map_or(1040.0, |size| size[0])
+        - NAVIGATION_RAIL_WIDTH
+        - if state.sidenav_visible {
+            state.sidenav_width + 1.0
+        } else {
+            0.0
+        }
+        - 78.0;
+    let providers = [
+        Provider::OpenAi,
+        Provider::Xai,
+        Provider::Anthropic,
+        Provider::Zai,
+        Provider::OpenRouter,
+        Provider::Custom,
+    ];
+    let tabs = if tabs_width < 530.0 {
+        let mut rows = col().gap(6.0);
+        for chunk in providers.chunks(3) {
+            let mut tab_row = row().gap(6.0);
+            for &provider in chunk {
+                tab_row = tab_row.child(provider_tab(provider, state.selected == provider, theme));
+            }
+            rows = rows.child(tab_row);
+        }
+        rows
+    } else {
+        let mut tab_row = row().gap(6.0);
+        for provider in providers {
+            tab_row = tab_row.child(provider_tab(provider, state.selected == provider, theme));
+        }
+        col().child(tab_row)
+    };
+    let controls = if tabs_width < 780.0 {
+        col()
+            .key("provider-view-tabs")
+            .role("tablist")
+            .label("Provider views")
             .w_full()
-            .h(26.0)
+            .gap(8.0)
+            .child(tabs)
             .child(
                 row()
-                    .key("provider-view-tabs")
-                    .role("tablist")
-                    .label("Provider views")
-                    .gap(6.0)
-                    .child(provider_tab(
-                        Provider::OpenAi,
-                        state.selected == Provider::OpenAi,
-                        theme,
-                    ))
-                    .child(provider_tab(
-                        Provider::Xai,
-                        state.selected == Provider::Xai,
-                        theme,
-                    )),
+                    .w_full()
+                    .child(el().grow(1.0))
+                    .child(lead_provider_controls(state)),
             )
-            .child(el().grow(1.0))
-            .child(lead_provider_controls(state)),
-    ];
+    } else {
+        col()
+            .key("provider-view-tabs")
+            .role("tablist")
+            .label("Provider views")
+            .w_full()
+            .child(
+                row()
+                    .w_full()
+                    .h(26.0)
+                    .child(tabs)
+                    .child(el().grow(1.0))
+                    .child(lead_provider_controls(state)),
+            )
+    };
+    let mut content = vec![controls];
     if !state.lead_error.is_empty() {
         content.push(
             text(state.lead_error.clone())
@@ -5113,6 +5312,12 @@ fn main() -> std::process::ExitCode {
             } else {
                 None
             };
+            let custom_result =
+                if workspace_poll == 0 && matches!(status, ConnectionStatus::Connected { .. }) {
+                    Some(runtime.block_on(provider_custom::list(&client, addr)))
+                } else {
+                    None
+                };
             workspace_poll = (workspace_poll + 1) % 5;
             let auth_result = if matches!(status, ConnectionStatus::Connected { .. }) {
                 runtime.block_on(provider_auth::status(&client, addr)).ok()
@@ -5157,6 +5362,7 @@ fn main() -> std::process::ExitCode {
                 });
             }
             let lead_provider = auth_snapshot.lead.and_then(Provider::from_id);
+            let lead_custom_provider_id = auth_snapshot.lead_custom_provider_id;
             let daybreak_mode = auth_loaded.then_some(auth_snapshot.daybreak_mode);
             if let Some(result) = workspace_result {
                 handle.update_if(move |state, _| state.apply_workspace_list(result));
@@ -5171,11 +5377,22 @@ fn main() -> std::process::ExitCode {
                     }
                 });
             }
+            if let Some(Ok(providers)) = custom_result {
+                handle.update_if(move |state, _| {
+                    if state.custom_providers == providers {
+                        false
+                    } else {
+                        state.custom_providers = providers;
+                        true
+                    }
+                });
+            }
             handle.update_if(move |state, _| {
                 if state.connection == status
                     && state.auth_status == auth_status
                     && state.auth_loaded == auth_loaded
                     && state.lead_provider == lead_provider
+                    && state.lead_custom_provider_id == lead_custom_provider_id
                     && daybreak_mode
                         .is_none_or(|mode| state.daybreak_saving || state.daybreak_mode == mode)
                 {
@@ -5197,6 +5414,7 @@ fn main() -> std::process::ExitCode {
                     state.auth_status = auth_status;
                     state.auth_loaded = auth_loaded;
                     state.lead_provider = lead_provider;
+                    state.lead_custom_provider_id = lead_custom_provider_id;
                     if let Some(mode) = daybreak_mode
                         && !state.daybreak_saving
                     {
@@ -5206,10 +5424,11 @@ fn main() -> std::process::ExitCode {
                         && previous
                             .iter()
                             .all(|item| !item.subscription && !item.api_key)
-                        && state
-                            .auth_status
-                            .iter()
-                            .any(|item| item.subscription || item.api_key);
+                        && (state.lead_provider == Some(Provider::Custom)
+                            || state
+                                .auth_status
+                                .iter()
+                                .any(|item| item.subscription || item.api_key));
                     if auth_loaded && (!state.provider_selection_initialized || first_added) {
                         if let Some(lead) = lead_provider {
                             state.selected = lead;
@@ -5218,24 +5437,26 @@ fn main() -> std::process::ExitCode {
                     } else if let Some(old) = previous_lead
                         && state.selected == old
                         && lead_provider != Some(old)
-                        && !state.auth_status[old.index()].subscription
-                        && !state.auth_status[old.index()].api_key
+                        && (old == Provider::Custom
+                            || (!state.auth_status[old.index()].subscription
+                                && !state.auth_status[old.index()].api_key))
                         && let Some(new_lead) = lead_provider
                     {
                         state.selected = new_lead;
                     }
                     if !auth_loaded
-                        || state
-                            .auth_status
-                            .iter()
-                            .all(|item| !item.subscription && !item.api_key)
+                        || (state.lead_provider != Some(Provider::Custom)
+                            && state
+                                .auth_status
+                                .iter()
+                                .all(|item| !item.subscription && !item.api_key))
                     {
                         state.selection_menu = None;
                     }
                     if previous_lead != lead_provider {
                         state.lead_error.clear();
                     }
-                    for provider in [Provider::OpenAi, Provider::Xai] {
+                    for provider in Provider::ALL {
                         for method in [AuthMethod::Subscription, AuthMethod::ApiKey] {
                             let index = catalog_index(provider, method);
                             let old = if method == AuthMethod::Subscription {
@@ -5980,6 +6201,9 @@ mod tests {
                     api_key: true,
                     ..AuthStatus::default()
                 },
+                AuthStatus::default(),
+                AuthStatus::default(),
+                AuthStatus::default(),
             ],
             ..State::default()
         };
@@ -6000,6 +6224,36 @@ mod tests {
     }
 
     #[test]
+    fn custom_provider_panel_fits_narrow_window() {
+        let state = State {
+            settings_section: SettingsSection::Providers,
+            selected: Provider::Custom,
+            custom_providers: vec![beale_contracts::v1::CustomProvider {
+                id: "custom-example".to_owned(),
+                name: "Example API".to_owned(),
+                base_url: "http://127.0.0.1:12345/v1".to_owned(),
+                models: vec![beale_contracts::v1::ModelEntry {
+                    id: "example-model".to_owned(),
+                    display_name: "Example Model".to_owned(),
+                }],
+                lead_model: "example-model".to_owned(),
+                small_model: "example-model".to_owned(),
+                reasoning: false,
+                api_key_configured: false,
+            }],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (page, _) = runtime.presented("settings-page").unwrap();
+        let (detail, _) = runtime.presented("custom-provider-detail").unwrap();
+        assert!(page[0] + page[2] <= 832.0);
+        assert!((detail[0] - page[0]).abs() < 1.0);
+        assert!((detail[0] + detail[2] - page[0] - page[2]).abs() < 1.0);
+        assert!(runtime.find("custom-provider-custom-example").is_some());
+    }
+
+    #[test]
     fn model_menu_closes_on_escape_and_outside_press() {
         let state = State {
             settings_section: SettingsSection::Providers,
@@ -6009,6 +6263,9 @@ mod tests {
                     subscription: true,
                     ..AuthStatus::default()
                 },
+                AuthStatus::default(),
+                AuthStatus::default(),
+                AuthStatus::default(),
                 AuthStatus::default(),
             ],
             model_catalogs: [
@@ -6026,6 +6283,12 @@ mod tests {
                     lead: "example-lead".to_owned(),
                     small: "example-small".to_owned(),
                 }),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -6087,6 +6350,9 @@ mod tests {
                     ..AuthStatus::default()
                 },
                 AuthStatus::default(),
+                AuthStatus::default(),
+                AuthStatus::default(),
+                AuthStatus::default(),
             ],
             model_catalogs: [
                 Some(ModelCatalog {
@@ -6097,6 +6363,12 @@ mod tests {
                     lead: "example-model".to_owned(),
                     small: "example-model".to_owned(),
                 }),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -6147,7 +6419,13 @@ mod tests {
         let state = State {
             settings_section: SettingsSection::Providers,
             auth_loaded: true,
-            auth_status: [status, AuthStatus::default()],
+            auth_status: std::array::from_fn(|index| {
+                if index == 0 {
+                    status.clone()
+                } else {
+                    AuthStatus::default()
+                }
+            }),
             ..State::default()
         };
         let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
@@ -6184,6 +6462,9 @@ mod tests {
                     ..AuthStatus::default()
                 },
                 AuthStatus::default(),
+                AuthStatus::default(),
+                AuthStatus::default(),
+                AuthStatus::default(),
             ],
             model_catalogs: [
                 Some(ModelCatalog {
@@ -6191,6 +6472,12 @@ mod tests {
                     lead: "example-model-20".to_owned(),
                     small: "example-model-0".to_owned(),
                 }),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -7277,6 +7564,9 @@ mod tests {
                     subscription: true,
                     ..AuthStatus::default()
                 },
+                AuthStatus::default(),
+                AuthStatus::default(),
+                AuthStatus::default(),
             ],
             model_catalogs: [
                 Some(ModelCatalog {
@@ -7302,6 +7592,12 @@ mod tests {
                     lead: "example-xai".to_owned(),
                     small: "example-xai".to_owned(),
                 }),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
             ],
             ..State::default()

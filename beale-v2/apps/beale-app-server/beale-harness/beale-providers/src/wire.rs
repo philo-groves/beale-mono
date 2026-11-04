@@ -9,6 +9,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+mod anthropic;
+
 const MAX_EVENT_BYTES: usize = 1_048_576;
 const MAX_OUTPUT_BYTES: usize = 2_097_152;
 const MAX_REASONING_SUMMARIES: usize = 16;
@@ -54,6 +56,10 @@ fn add_cyber_access(body: &mut Value, program: Option<&str>) {
 pub enum Provider {
     OpenAi,
     Xai,
+    Anthropic,
+    Zai,
+    OpenRouter,
+    Custom,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,12 +93,14 @@ pub struct ToolStepRequest<'a> {
     pub input: &'a [Value],
     pub tools: &'a [Value],
     pub reasoning_effort: Option<&'a str>,
+    pub workspace_root: Option<&'a std::path::Path>,
 }
 
 #[derive(Clone, Copy)]
 enum WireShape {
     Responses,
     Chat,
+    Anthropic,
 }
 
 struct Route {
@@ -143,6 +151,9 @@ pub fn tool_output(provider: Provider, mode: AuthMode, id: &str, output: &str) -
     match route(provider, mode).shape {
         WireShape::Responses => json!({"type":"function_call_output","call_id":id,"output":output}),
         WireShape::Chat => json!({"role":"tool","tool_call_id":id,"content":output}),
+        WireShape::Anthropic => {
+            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":id,"content":output}]})
+        }
     }
 }
 
@@ -175,7 +186,30 @@ fn tool_request_body(
                 "type":"function",
                 "function":{"name":tool["name"],"description":tool["description"],"parameters":tool["parameters"]}
             })).collect();
-            json!({"model":model,"messages":input,"tools":chat_tools,"stream":true})
+            let mut body = json!({"model":model,"messages":input,"tools":chat_tools,"stream":true});
+            if provider == Provider::Custom
+                && let Some(effort) = reasoning_effort
+            {
+                body["reasoning_effort"] = json!(effort);
+            }
+            body
+        }
+        WireShape::Anthropic => {
+            let system = input
+                .iter()
+                .filter(|message| message["role"] == "system")
+                .filter_map(|message| message["content"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let messages: Vec<_> = input
+                .iter()
+                .filter(|message| message["role"] != "system")
+                .cloned()
+                .collect();
+            let native_tools: Vec<Value> = tools.iter().map(|tool| json!({
+                "name":tool["name"],"description":tool["description"],"input_schema":tool["parameters"]
+            })).collect();
+            json!({"model":model,"system":system,"messages":messages,"tools":native_tools,"max_tokens":8192,"stream":true})
         }
     }
 }
@@ -203,6 +237,34 @@ fn route(provider: Provider, mode: AuthMode) -> Route {
             api_key_env: "XAI_API_KEY",
             proxy_header: true,
         },
+        (Provider::Anthropic, _) => Route {
+            endpoint: "https://api.anthropic.com/v1/messages",
+            shape: WireShape::Anthropic,
+            oauth_name: "anthropic",
+            api_key_env: "ANTHROPIC_API_KEY",
+            proxy_header: false,
+        },
+        (Provider::Zai, _) => Route {
+            endpoint: "https://api.z.ai/api/paas/v4/chat/completions",
+            shape: WireShape::Chat,
+            oauth_name: "zai",
+            api_key_env: "ZAI_API_KEY",
+            proxy_header: false,
+        },
+        (Provider::OpenRouter, _) => Route {
+            endpoint: "https://openrouter.ai/api/v1/chat/completions",
+            shape: WireShape::Chat,
+            oauth_name: "openrouter",
+            api_key_env: "OPENROUTER_API_KEY",
+            proxy_header: false,
+        },
+        (Provider::Custom, _) => Route {
+            endpoint: "",
+            shape: WireShape::Chat,
+            oauth_name: "custom",
+            api_key_env: "",
+            proxy_header: false,
+        },
     }
 }
 
@@ -211,10 +273,32 @@ pub struct ProviderClient {
 }
 
 impl ProviderClient {
+    fn custom_request(
+        &self,
+        model: &str,
+        store: &CredentialStore,
+    ) -> Result<(String, String, Option<String>)> {
+        let (id, model_id) = crate::split_qualified_model(model)?;
+        let definition = store
+            .custom_provider(id)?
+            .context("unknown custom provider")?;
+        ensure!(
+            definition.models.iter().any(|entry| entry.id == model_id),
+            "unknown custom provider model"
+        );
+        let token = store.load_api_key(id)?;
+        Ok((
+            format!("{}/chat/completions", definition.base_url),
+            model_id.to_owned(),
+            token,
+        ))
+    }
+
     pub fn new() -> Result<Self> {
         Ok(Self {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()?,
         })
     }
@@ -229,6 +313,14 @@ impl ProviderClient {
         mode: AuthMode,
         store: &CredentialStore,
     ) -> Result<String> {
+        ensure!(
+            mode == AuthMode::ApiKey || matches!(provider, Provider::OpenAi | Provider::Xai),
+            "this provider supports API keys only"
+        );
+        ensure!(
+            provider != Provider::Custom,
+            "custom providers need model-scoped credentials"
+        );
         let route = route(provider, mode);
         let token = match mode {
             AuthMode::ApiKey => store
@@ -266,8 +358,24 @@ impl ProviderClient {
         request: &InferenceRequest,
         store: &CredentialStore,
     ) -> Result<String> {
+        if matches!(provider, Provider::Anthropic | Provider::Zai) && mode == AuthMode::Subscription
+        {
+            let input = input_messages(&request.messages);
+            let step = ToolStepRequest {
+                model: &request.model,
+                input: &input,
+                tools: &[],
+                reasoning_effort: None,
+                workspace_root: None,
+            };
+            return Ok(if provider == Provider::Anthropic {
+                crate::subscription::claude_step(step).await?.text
+            } else {
+                crate::subscription::zcode_step(step).await?.text
+            });
+        }
         ensure!(
-            !request.model.trim().is_empty() && request.model.len() <= 128,
+            !request.model.trim().is_empty() && request.model.len() <= 200,
             "invalid model name"
         );
         ensure!(
@@ -282,7 +390,19 @@ impl ProviderClient {
             "invalid message text"
         );
         let route = route(provider, mode);
-        let token = self.token(provider, mode, store).await?;
+        let (endpoint, model, token) = if provider == Provider::Custom {
+            ensure!(
+                mode == AuthMode::ApiKey,
+                "custom providers support API keys only"
+            );
+            self.custom_request(&request.model, store)?
+        } else {
+            (
+                route.endpoint.to_owned(),
+                request.model.clone(),
+                Some(self.token(provider, mode, store).await?),
+            )
+        };
         let messages: Vec<Value> = request
             .messages
             .iter()
@@ -291,23 +411,35 @@ impl ProviderClient {
         let cyber_program = request_cyber_program(provider, &request.model, store)?;
         let mut body = match route.shape {
             WireShape::Responses => json!({
-                "model": request.model,
+                "model": model,
                 "input": messages,
                 "store": false,
                 "stream": true,
             }),
             WireShape::Chat => json!({
-                "model": request.model,
+                "model": model,
                 "messages": messages,
                 "stream": true,
             }),
+            WireShape::Anthropic => {
+                let system = messages
+                    .iter()
+                    .filter(|message| message["role"] == "system")
+                    .filter_map(|message| message["content"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let messages: Vec<_> = messages
+                    .into_iter()
+                    .filter(|message| message["role"] != "system")
+                    .collect();
+                json!({"model":model,"system":system,"messages":messages,"max_tokens":8192,"stream":true})
+            }
         };
         add_cyber_access(&mut body, cyber_program);
-        let mut builder = self
-            .http
-            .post(route.endpoint)
-            .bearer_auth(token)
-            .json(&body);
+        let mut builder = self.http.post(endpoint).json(&body);
+        if let Some(token) = token {
+            builder = builder.bearer_auth(token);
+        }
         if route.proxy_header {
             builder = builder
                 .header("X-XAI-Token-Auth", "xai-grok-cli")
@@ -315,6 +447,12 @@ impl ProviderClient {
                 .header("x-grok-client-identifier", "beale")
                 .header("x-grok-client-mode", "headless")
                 .header("x-grok-model-override", request.model.as_str());
+        }
+        if provider == Provider::Anthropic {
+            builder = builder.header("anthropic-version", "2026-10-21");
+            if let Ok(workspace) = std::env::var("ANTHROPIC_WORKSPACE_ID") {
+                builder = builder.header("anthropic-workspace-id", workspace);
+            }
         }
         let response = builder.send().await.context("provider request failed")?;
         if !response.status().is_success() {
@@ -332,8 +470,15 @@ impl ProviderClient {
         store: &CredentialStore,
         progress: Option<&mpsc::Sender<ProviderProgress>>,
     ) -> Result<ProviderStep> {
+        if mode == AuthMode::Subscription {
+            match provider {
+                Provider::Anthropic => return crate::subscription::claude_step(request).await,
+                Provider::Zai => return crate::subscription::zcode_step(request).await,
+                _ => {}
+            }
+        }
         ensure!(
-            !request.model.is_empty() && request.model.len() <= 128,
+            !request.model.is_empty() && request.model.len() <= 200,
             "invalid model name"
         );
         ensure!(
@@ -341,22 +486,45 @@ impl ProviderClient {
             "invalid provider input count"
         );
         let route = route(provider, mode);
-        let token = self.token(provider, mode, store).await?;
+        let (endpoint, model, token) = if provider == Provider::Custom {
+            ensure!(
+                mode == AuthMode::ApiKey,
+                "custom providers support API keys only"
+            );
+            self.custom_request(request.model, store)?
+        } else {
+            (
+                route.endpoint.to_owned(),
+                request.model.to_owned(),
+                Some(self.token(provider, mode, store).await?),
+            )
+        };
         let cyber_program = request_cyber_program(provider, request.model, store)?;
+        let custom_reasoning = if provider == Provider::Custom {
+            let (id, _) = crate::split_qualified_model(request.model)?;
+            store
+                .custom_provider(id)?
+                .is_some_and(|definition| definition.reasoning)
+        } else {
+            false
+        };
         let body = tool_request_body(
             provider,
             route.shape,
-            request.model,
+            &model,
             request.input,
             request.tools,
-            request.reasoning_effort,
+            if provider == Provider::Custom && !custom_reasoning {
+                None
+            } else {
+                request.reasoning_effort
+            },
             cyber_program,
         );
-        let mut builder = self
-            .http
-            .post(route.endpoint)
-            .bearer_auth(token)
-            .json(&body);
+        let mut builder = self.http.post(endpoint).json(&body);
+        if let Some(token) = token {
+            builder = builder.bearer_auth(token);
+        }
         if route.proxy_header {
             builder = builder
                 .header("X-XAI-Token-Auth", "xai-grok-cli")
@@ -364,6 +532,12 @@ impl ProviderClient {
                 .header("x-grok-client-identifier", "beale")
                 .header("x-grok-client-mode", "headless")
                 .header("x-grok-model-override", request.model);
+        }
+        if provider == Provider::Anthropic {
+            builder = builder.header("anthropic-version", "2026-10-21");
+            if let Ok(workspace) = std::env::var("ANTHROPIC_WORKSPACE_ID") {
+                builder = builder.header("anthropic-workspace-id", workspace);
+            }
         }
         let response = builder.send().await.context("provider request failed")?;
         if !response.status().is_success() {
@@ -378,6 +552,9 @@ async fn read_tool_stream(
     shape: WireShape,
     progress: Option<&mpsc::Sender<ProviderProgress>>,
 ) -> Result<ProviderStep> {
+    if matches!(shape, WireShape::Anthropic) {
+        return anthropic::read_stream(response, progress).await;
+    }
     let mut stream = response.bytes_stream();
     let mut pending = Vec::new();
     let mut text = String::new();
@@ -518,6 +695,7 @@ async fn read_tool_stream(
                             .await;
                     }
                 }
+                WireShape::Anthropic => unreachable!(),
             }
         }
         if completed {
@@ -583,6 +761,7 @@ async fn read_tool_stream(
                 continuation,
             })
         }
+        WireShape::Anthropic => unreachable!(),
     }
 }
 
@@ -700,6 +879,9 @@ fn apply_chat_event(
 }
 
 async fn read_stream(response: reqwest::Response, shape: WireShape) -> Result<String> {
+    if matches!(shape, WireShape::Anthropic) {
+        return Ok(anthropic::read_stream(response, None).await?.text);
+    }
     let mut stream = response.bytes_stream();
     let mut pending = Vec::new();
     let mut output = String::new();
@@ -780,6 +962,7 @@ fn process_frames(
                     append(output, delta)?;
                 }
             }
+            WireShape::Anthropic => unreachable!(),
         }
     }
     Ok(())
@@ -937,6 +1120,43 @@ mod tests {
         assert_eq!(chat["tools"][0]["function"]["name"], "read");
         assert_eq!(chat["messages"], json!(input));
         assert!(chat.get("access_programs").is_none());
+        let custom = tool_request_body(
+            Provider::Custom,
+            WireShape::Chat,
+            "model-example",
+            &input,
+            &tools,
+            Some("high"),
+            None,
+        );
+        assert_eq!(custom["reasoning_effort"], "high");
+        let anthropic = tool_request_body(
+            Provider::Anthropic,
+            WireShape::Anthropic,
+            "claude-example",
+            &[
+                json!({"role":"system","content":"Example instruction"}),
+                json!({"role":"user","content":"Read example.txt"}),
+            ],
+            &tools,
+            Some("high"),
+            None,
+        );
+        assert_eq!(anthropic["system"], "Example instruction");
+        assert_eq!(anthropic["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            anthropic["tools"][0]["input_schema"],
+            json!({"type":"object"})
+        );
+        assert_eq!(
+            tool_output(
+                Provider::Anthropic,
+                AuthMode::ApiKey,
+                "tool-example",
+                "Example result"
+            ),
+            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-example","content":"Example result"}]})
+        );
     }
 
     #[test]

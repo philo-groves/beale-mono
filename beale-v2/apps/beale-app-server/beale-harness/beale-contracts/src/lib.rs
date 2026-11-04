@@ -19,6 +19,10 @@ pub mod v1 {
         Unspecified = 0,
         Openai = 1,
         Xai = 2,
+        Anthropic = 3,
+        Zai = 4,
+        Openrouter = 5,
+        Custom = 6,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -45,6 +49,8 @@ pub mod v1 {
         pub lead_provider: i32,
         #[prost(enumeration = "DaybreakMode", tag = "3")]
         pub openai_daybreak_mode: i32,
+        #[prost(string, tag = "4")]
+        pub lead_custom_provider_id: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -87,6 +93,70 @@ pub mod v1 {
     pub struct ProviderRequest {
         #[prost(enumeration = "ProviderId", tag = "1")]
         pub provider: i32,
+        #[prost(string, tag = "2")]
+        pub custom_provider_id: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct CustomProvider {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub base_url: String,
+        #[prost(message, repeated, tag = "4")]
+        pub models: Vec<ModelEntry>,
+        #[prost(string, tag = "5")]
+        pub lead_model: String,
+        #[prost(string, tag = "6")]
+        pub small_model: String,
+        #[prost(bool, tag = "7")]
+        pub reasoning: bool,
+        #[prost(bool, tag = "8")]
+        pub api_key_configured: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListCustomProvidersResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub providers: Vec<CustomProvider>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SaveCustomProviderRequest {
+        #[prost(message, optional, tag = "1")]
+        pub provider: Option<CustomProvider>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct CustomProviderRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetCustomProviderApiKeyRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub api_key: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct DiscoverCustomModelsRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub base_url: String,
+        #[prost(string, tag = "3")]
+        pub api_key: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct DiscoverCustomModelsResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub models: Vec<ModelEntry>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -103,6 +173,8 @@ pub mod v1 {
         pub verification_url: String,
         #[prost(string, tag = "2")]
         pub user_code: String,
+        #[prost(bool, tag = "3")]
+        pub launch_official_app: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -632,7 +704,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 23;
+pub const PROTOCOL_MINOR: u32 = 25;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -646,6 +718,9 @@ pub const MODELS_LIST_PATH: &str = "/v1/providers/models/list";
 pub const MODELS_DEFAULTS_PATH: &str = "/v1/providers/models/defaults";
 pub const SOURCE_PRIORITY_PATH: &str = "/v1/providers/source-priority";
 pub const DAYBREAK_MODE_PATH: &str = "/v1/providers/openai/daybreak-mode";
+pub const CUSTOM_PROVIDERS_PATH: &str = "/v1/providers/custom";
+pub const CUSTOM_PROVIDER_API_KEY_PATH: &str = "/v1/providers/custom/api-key";
+pub const CUSTOM_PROVIDER_DISCOVER_PATH: &str = "/v1/providers/custom/discover";
 pub const WORKSPACES_PATH: &str = "/v1/workspaces";
 pub const WORKSPACE_DETAILS_PATH: &str = "/v1/workspaces/{id}";
 pub const WORKSPACE_CAMPAIGN_PATH: &str = "/v1/workspaces/{id}/campaign";

@@ -4,10 +4,10 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use std::time::Duration;
 
-const MAX_CATALOG_BYTES: usize = 2_000_000;
-const MAX_MODELS: usize = 256;
+const MAX_CATALOG_BYTES: usize = 8_000_000;
+const MAX_MODELS: usize = 1024;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelEntry {
     pub id: String,
     pub name: String,
@@ -27,19 +27,30 @@ impl ProviderClient {
         mode: AuthMode,
         store: &CredentialStore,
     ) -> Result<ModelCatalog> {
+        if mode == AuthMode::Subscription && matches!(provider, Provider::Anthropic | Provider::Zai)
+        {
+            return crate::subscription::catalog(provider, store);
+        }
         let token = self.token(provider, mode, store).await?;
         let endpoint = match (provider, mode) {
             (Provider::OpenAi, _) => "https://api.openai.com/v1/models",
             (Provider::Xai, AuthMode::ApiKey) => "https://api.x.ai/v1/language-models",
             (Provider::Xai, AuthMode::Subscription) => "https://cli-chat-proxy.grok.com/v1/models",
+            (Provider::Anthropic, _) => "https://api.anthropic.com/v1/models?limit=256",
+            (Provider::Zai, _) => "https://api.z.ai/api/paas/v4/models",
+            (Provider::OpenRouter, _) => "https://openrouter.ai/api/v1/models",
+            (Provider::Custom, _) => bail!("custom provider models come from its configuration"),
         };
-        let mut request = self
-            .http()
-            .get(endpoint)
-            .bearer_auth(token)
-            .timeout(Duration::from_secs(15));
+        let mut request = self.http().get(endpoint).timeout(Duration::from_secs(15));
+        request = request.bearer_auth(token);
         if provider == Provider::Xai && mode == AuthMode::Subscription {
             request = request.header("X-XAI-Token-Auth", "xai-grok-cli");
+        }
+        if provider == Provider::Anthropic {
+            request = request.header("anthropic-version", "2026-10-21");
+            if let Ok(workspace) = std::env::var("ANTHROPIC_WORKSPACE_ID") {
+                request = request.header("anthropic-workspace-id", workspace);
+            }
         }
         let response = request
             .send()
@@ -87,6 +98,10 @@ pub fn provider_name(provider: Provider) -> &'static str {
     match provider {
         Provider::OpenAi => "openai",
         Provider::Xai => "xai",
+        Provider::Anthropic => "anthropic",
+        Provider::Zai => "zai",
+        Provider::OpenRouter => "openrouter",
+        Provider::Custom => "custom",
     }
 }
 
@@ -135,6 +150,22 @@ fn parse_models(provider: Provider, mode: AuthMode, value: &Value) -> Result<Vec
         {
             continue;
         }
+        if provider == Provider::OpenRouter {
+            let supports_tools = item
+                .get("supported_parameters")
+                .and_then(Value::as_array)
+                .is_some_and(|params| params.iter().any(|param| param.as_str() == Some("tools")));
+            if !supports_tools {
+                continue;
+            }
+            if item
+                .pointer("/architecture/output_modalities")
+                .and_then(Value::as_array)
+                .is_some_and(|outputs| !outputs.iter().any(|value| value.as_str() == Some("text")))
+            {
+                continue;
+            }
+        }
         let name = item
             .get("display_name")
             .or_else(|| item.get("name"))
@@ -156,6 +187,16 @@ fn parse_models(provider: Provider, mode: AuthMode, value: &Value) -> Result<Vec
                 }
             }
         }
+    }
+    if provider == Provider::OpenRouter && !models.iter().any(|model| model.id == "openrouter/auto")
+    {
+        models.insert(
+            0,
+            ModelEntry {
+                id: "openrouter/auto".to_owned(),
+                name: "Auto Router".to_owned(),
+            },
+        );
     }
     if models.is_empty() {
         bail!("provider returned no usable text models");
@@ -194,9 +235,9 @@ pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && !id.contains("..")
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+        && id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        })
 }
 
 fn openai_text_model(id: &str) -> bool {
@@ -241,6 +282,13 @@ fn preferred_models(provider: Provider, small: bool) -> &'static [&'static str] 
             "grok-4.6",
             "grok-build",
         ],
+        (Provider::Anthropic, false) => &["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5"],
+        (Provider::Anthropic, true) => &["claude-haiku-5-5", "claude-haiku-4-5"],
+        (Provider::Zai, false) => &["glm-5.3", "glm-5-turbo", "glm-5.2"],
+        (Provider::Zai, true) => &["glm-5-turbo", "glm-4.7-flash", "glm-4.5-flash"],
+        (Provider::OpenRouter, false) => &["openrouter/auto", "auto"],
+        (Provider::OpenRouter, true) => &["openrouter/auto", "auto"],
+        (Provider::Custom, _) => &[],
     }
 }
 
@@ -301,7 +349,7 @@ mod tests {
 
     #[test]
     fn large_catalog_keeps_available_recommendations() {
-        let mut items: Vec<_> = (0..300)
+        let mut items: Vec<_> = (0..1100)
             .map(|index| json!({"id": format!("gpt-example-{index}")}))
             .collect();
         items.push(json!({"id": "gpt-6.1-sol"}));
@@ -311,5 +359,39 @@ mod tests {
         assert_eq!(models.len(), MAX_MODELS);
         assert_eq!(recommended(Provider::OpenAi, false, &models), "gpt-6.1-sol");
         assert_eq!(recommended(Provider::OpenAi, true, &models), "gpt-6-luna");
+    }
+
+    #[test]
+    fn new_api_catalogs_preserve_provider_model_ids() {
+        let anthropic = parse_models(
+            Provider::Anthropic,
+            AuthMode::ApiKey,
+            &json!({"data":[{"id":"claude-example","display_name":"Claude Example"}]}),
+        )
+        .unwrap();
+        assert_eq!(anthropic[0].name, "Claude Example");
+        let zai = parse_models(
+            Provider::Zai,
+            AuthMode::ApiKey,
+            &json!({"data":[{"id":"glm-example","name":"GLM Example"}]}),
+        )
+        .unwrap();
+        assert_eq!(zai[0].id, "glm-example");
+        let router = parse_models(Provider::OpenRouter, AuthMode::ApiKey,
+            &json!({"data":[
+                {"id":"example-org/tool-model","name":"Tool Model","supported_parameters":["tools"],"architecture":{"output_modalities":["text"]}},
+                {"id":"example-org/image-model","supported_parameters":["tools"],"architecture":{"output_modalities":["image"]}},
+                {"id":"example-org/no-tools","supported_parameters":[]}
+            ]})).unwrap();
+        assert!(router.iter().any(|model| model.id == "openrouter/auto"));
+        assert!(
+            router
+                .iter()
+                .any(|model| model.id == "example-org/tool-model")
+        );
+        assert!(!router.iter().any(
+            |model| model.id == "example-org/image-model" || model.id == "example-org/no-tools"
+        ));
+        assert!(valid_id("example-org/tool-model"));
     }
 }

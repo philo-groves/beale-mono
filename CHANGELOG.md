@@ -6,6 +6,8 @@
 
 #### Added
 
+- Added v2 Anthropic and Z.ai subscription sign-in through the official Claude and ZCode applications, with separate subscription model choices.
+- Added v2 Providers tabs for Anthropic, Z.ai, OpenRouter, and multiple custom OpenAI-compatible APIs, with host-saved keys, model selection, and default-provider support.
 - Added an Uninstall action to installed v2 plugin cards, returning bundled packages to Available.
 - Connected v2 bundled plugin Install actions to the app-server and persisted the Installed tab across restarts.
 - Bundled four v1 managed Agent Plugins packages in v2 Extensions and listed them as Available, uninstalled plugins.
@@ -138,6 +140,8 @@
 
 #### Added
 
+- Added protocol v1.25 official CLI subscription status and session routes for Anthropic and Z.ai, keeping subscription credentials in their own applications and Beale tool execution in the Rust harness.
+- Added protocol v1.24 provider IDs and authenticated custom-provider registration. Anthropic Messages, Z.ai and OpenRouter chat completions, and custom OpenAI-compatible APIs now support streamed turns and base tools; custom keys remain host-only.
 - Added authenticated, idempotent bundled plugin uninstallation in protocol v1.23.
 - Added `beale-extender` with authenticated bundled plugin listing and idempotent installation in protocol v1.22; SQLite schema 11 records installed packages without activating their components.
 - Added protocol v1.21 rule creation and host SQLite schema 10 for ordered custom Auto-Review and Guardian rules, limited to 16 total rules.
