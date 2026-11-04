@@ -31,6 +31,7 @@ pub struct SessionRow {
     pub workspace_id: String,
     pub title: String,
     pub created_at_ms: i64,
+    pub last_message_at_ms: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,6 +44,7 @@ pub struct ArchiveRow {
     pub created_at_ms: i64,
     pub archived_at_ms: i64,
     pub quick_chat: bool,
+    pub last_message_at_ms: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,7 +117,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 11 {
+        if version > 12 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -264,6 +266,15 @@ impl HostDatabase {
                  COMMIT;",
             )?;
         }
+        if version < 12 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE sessions ADD COLUMN last_message_at_ms INTEGER NOT NULL DEFAULT 0;
+                 UPDATE sessions SET last_message_at_ms = created_at_ms;
+                 PRAGMA user_version = 12;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -334,7 +345,7 @@ impl HostDatabase {
     pub fn sessions(&self) -> Result<Vec<SessionRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, workspace_id, title, created_at_ms FROM sessions
+                "SELECT id, workspace_id, title, created_at_ms, last_message_at_ms FROM sessions
                  ORDER BY created_at_ms DESC LIMIT 1025",
             )?;
             let rows = statement.query_map([], session_from_row)?;
@@ -346,7 +357,7 @@ impl HostDatabase {
     pub fn sessions_excluding(&self, workspace_id: &str) -> Result<Vec<SessionRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, workspace_id, title, created_at_ms FROM sessions
+                "SELECT id, workspace_id, title, created_at_ms, last_message_at_ms FROM sessions
                  WHERE workspace_id != ?1 AND archived_at_ms IS NULL
                  ORDER BY created_at_ms DESC LIMIT 1025",
             )?;
@@ -385,7 +396,7 @@ impl HostDatabase {
                                   WHERE session_id = s.id ORDER BY number DESC LIMIT 1), ''),
                         (SELECT COUNT(*) FROM session_turns WHERE session_id = s.id),
                         s.created_at_ms, s.archived_at_ms,
-                        s.workspace_id = 'internal:quick-chats'
+                        s.workspace_id = 'internal:quick-chats', s.last_message_at_ms
                  FROM sessions s
                  LEFT JOIN quick_chat_contexts q ON q.session_id = s.id
                  WHERE s.archived_at_ms IS NOT NULL
@@ -401,6 +412,7 @@ impl HostDatabase {
                     created_at_ms: row.get(5)?,
                     archived_at_ms: row.get(6)?,
                     quick_chat: row.get(7)?,
+                    last_message_at_ms: row.get(8)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -424,7 +436,7 @@ impl HostDatabase {
         self.with_connection(|connection| {
             let session = connection
                 .query_row(
-                    "SELECT id, workspace_id, title, created_at_ms FROM sessions WHERE id = ?1",
+                    "SELECT id, workspace_id, title, created_at_ms, last_message_at_ms FROM sessions WHERE id = ?1",
                     [id],
                     session_from_row,
                 )
@@ -485,9 +497,9 @@ impl HostDatabase {
         self.with_connection(|connection| {
             let transaction = connection.transaction()?;
             transaction.execute(
-                "INSERT INTO sessions(id, workspace_id, title, created_at_ms, archived_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![session.id, session.workspace_id, session.title, session.created_at_ms],
+                "INSERT INTO sessions(id, workspace_id, title, created_at_ms, archived_at_ms, last_message_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+                params![session.id, session.workspace_id, session.title, session.created_at_ms, session.last_message_at_ms],
             )?;
             transaction.execute(
                 "INSERT INTO quick_chat_contexts(session_id, workspace_id) VALUES (?1, ?2)",
@@ -537,8 +549,8 @@ impl HostDatabase {
             let transaction = connection.transaction()?;
             if new_session {
                 transaction.execute(
-                    "INSERT INTO sessions(id, workspace_id, title, created_at_ms) VALUES (?1, ?2, ?3, ?4)",
-                    params![session.id, session.workspace_id, session.title, session.created_at_ms],
+                    "INSERT INTO sessions(id, workspace_id, title, created_at_ms, last_message_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![session.id, session.workspace_id, session.title, session.created_at_ms, session.last_message_at_ms],
                 )?;
             }
             transaction.execute(
@@ -546,6 +558,12 @@ impl HostDatabase {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms],
             )?;
+            if !new_session {
+                transaction.execute(
+                    "UPDATE sessions SET last_message_at_ms = ?2 WHERE id = ?1",
+                    params![session.id, session.last_message_at_ms],
+                )?;
+            }
             for tool in tools {
                 transaction.execute(
                     "INSERT INTO session_tool_calls(id, session_id, turn_number, ordinal, name, summary, arguments, output, is_error)
@@ -769,6 +787,7 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         workspace_id: row.get(1)?,
         title: row.get(2)?,
         created_at_ms: row.get(3)?,
+        last_message_at_ms: row.get(4)?,
     })
 }
 
@@ -850,6 +869,7 @@ mod tests {
             workspace_id: "workspace-example".to_owned(),
             title: "Example prompt".to_owned(),
             created_at_ms: 1,
+            last_message_at_ms: 1,
         };
         let first = TurnRow {
             number: 1,
@@ -866,6 +886,10 @@ mod tests {
             number: 2,
             ..first.clone()
         };
+        let updated_session = SessionRow {
+            last_message_at_ms: 42,
+            ..session.clone()
+        };
         let reasoning = ReasoningSummaryRow {
             turn_number: 2,
             ordinal: 0,
@@ -873,7 +897,7 @@ mod tests {
             text: "Checked the example input.".to_owned(),
         };
         db.append_turn_with_activity(
-            &session,
+            &updated_session,
             &second,
             false,
             &[],
@@ -885,7 +909,7 @@ mod tests {
             db.session(&session.id).unwrap().unwrap().turns,
             [first, second]
         );
-        assert_eq!(db.sessions().unwrap(), [session]);
+        assert_eq!(db.sessions().unwrap(), [updated_session]);
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -903,6 +927,7 @@ mod tests {
                 workspace_id: workspace_id.to_owned(),
                 title: "Example".to_owned(),
                 created_at_ms: 1,
+                last_message_at_ms: 1,
             };
             let turn = TurnRow {
                 number: 1,
@@ -979,6 +1004,7 @@ mod tests {
                 workspace_id: "internal:quick-chats".to_owned(),
                 title: "Example".to_owned(),
                 created_at_ms: 1,
+                last_message_at_ms: 1,
             },
             &TurnRow {
                 number: 1,
@@ -998,6 +1024,7 @@ mod tests {
             .execute_batch(
                 "DROP TABLE plugin_installs;
                  DROP TABLE quick_chat_contexts;
+                 ALTER TABLE sessions DROP COLUMN last_message_at_ms;
                  ALTER TABLE sessions DROP COLUMN archived_at_ms;
                  ALTER TABLE permission_rules DROP COLUMN title;
                  ALTER TABLE permission_rules DROP COLUMN stage;
@@ -1028,7 +1055,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 12;")
+            .execute_batch("PRAGMA user_version = 13;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -1036,7 +1063,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1050,7 +1077,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("DROP TABLE plugin_installs; PRAGMA user_version = 10;")
+            .execute_batch("DROP TABLE plugin_installs; ALTER TABLE sessions DROP COLUMN last_message_at_ms; PRAGMA user_version = 10;")
             .unwrap();
         drop(connection);
         let migrated = HostDatabase::open(&root).unwrap();
@@ -1080,6 +1107,7 @@ mod tests {
         connection
             .execute_batch(
                 "DROP TABLE plugin_installs;
+                 ALTER TABLE sessions DROP COLUMN last_message_at_ms;
                  ALTER TABLE permission_rules DROP COLUMN title;
                  ALTER TABLE permission_rules DROP COLUMN stage;
                  ALTER TABLE permission_rules DROP COLUMN position;
@@ -1117,6 +1145,7 @@ mod tests {
         connection
             .execute_batch(
                 "DROP TABLE plugin_installs;
+                 ALTER TABLE sessions DROP COLUMN last_message_at_ms;
                  ALTER TABLE permission_rules DROP COLUMN stage;
                  ALTER TABLE permission_rules DROP COLUMN position;
                  PRAGMA user_version = 9;",
@@ -1163,6 +1192,7 @@ mod tests {
             db.session("session-example").unwrap().unwrap().turns.len(),
             1
         );
+        assert_eq!(db.sessions().unwrap()[0].last_message_at_ms, 1);
         assert!(db.tool_summaries("session-example").unwrap().is_empty());
         assert!(
             db.reasoning_summaries("session-example")

@@ -320,6 +320,7 @@ message SessionSummary {
   string id = 1;
   string workspace_id = 2;
   string title = 3;
+  uint64 last_message_at_ms = 4;
 }
 
 message ListSessionsResponse {
@@ -335,6 +336,7 @@ message ArchiveEntry {
   uint64 created_at_ms = 6;
   uint64 archived_at_ms = 7;
   bool quick_chat = 8;
+  uint64 last_message_at_ms = 9;
 }
 
 message ListArchiveResponse {

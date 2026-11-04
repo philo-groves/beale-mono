@@ -84,6 +84,7 @@ struct StoredSession {
     workspace_id: String,
     title: String,
     created_at_ms: u128,
+    last_message_at_ms: u64,
 }
 
 struct StoredTurn {
@@ -137,7 +138,11 @@ fn load_persisted(
         .session(&id.to_string())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    if item.turns.is_empty() || item.turns.len() > MAX_TURNS || item.session.created_at_ms < 0 {
+    if item.turns.is_empty()
+        || item.turns.len() > MAX_TURNS
+        || item.session.created_at_ms < 0
+        || item.session.last_message_at_ms < 0
+    {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     let turns = item
@@ -167,6 +172,7 @@ fn load_persisted(
             workspace_id: item.session.workspace_id,
             title: item.session.title,
             created_at_ms: item.session.created_at_ms as u128,
+            last_message_at_ms: item.session.last_message_at_ms as u64,
         },
         turns,
     ))
@@ -177,6 +183,7 @@ fn summary(session: &StoredSession) -> SessionSummary {
         id: session.id.clone(),
         workspace_id: session.workspace_id.clone(),
         title: session.title.clone(),
+        last_message_at_ms: session.last_message_at_ms,
     }
 }
 
@@ -302,6 +309,8 @@ async fn list(
                 id: row.id,
                 workspace_id: row.workspace_id,
                 title: row.title,
+                last_message_at_ms: u64::try_from(row.last_message_at_ms)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             });
         }
     }
@@ -374,6 +383,8 @@ async fn list_archive(
             archived_at_ms: u64::try_from(row.archived_at_ms)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             quick_chat: row.quick_chat,
+            last_message_at_ms: u64::try_from(row.last_message_at_ms)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         });
     }
     Ok(response(ListArchiveResponse { entries }))
@@ -589,17 +600,20 @@ async fn run_turn(
     }
     let reasoning_effort = reasoning_effort_name(request.reasoning_effort)?;
     let _guard = state.write_lock.lock().await;
-    let (session, mut turns) = if request.session_id.is_empty() {
+    let (mut session, mut turns) = if request.session_id.is_empty() {
         let id = Uuid::new_v4();
+        let created_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .as_millis();
         (
             StoredSession {
                 id: id.to_string(),
                 workspace_id: request.workspace_id.clone(),
                 title: title(&request.prompt),
-                created_at_ms: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                    .as_millis(),
+                created_at_ms,
+                last_message_at_ms: u64::try_from(created_at_ms)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             },
             Vec::new(),
         )
@@ -958,6 +972,13 @@ async fn run_turn(
         duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
     });
     let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    session.last_message_at_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .as_millis(),
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     state
         .db
         .append_turn_with_full_activity(
@@ -966,6 +987,8 @@ async fn run_turn(
                 workspace_id: session.workspace_id.clone(),
                 title: session.title.clone(),
                 created_at_ms: i64::try_from(session.created_at_ms)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                last_message_at_ms: i64::try_from(session.last_message_at_ms)
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             },
             &TurnRow {
@@ -1058,6 +1081,7 @@ mod tests {
             workspace_id: Uuid::new_v4().to_string(),
             title: title("Echo example\nmore details"),
             created_at_ms: 1,
+            last_message_at_ms: 1,
         };
         let turn = TurnRow {
             number: 1,
@@ -1073,6 +1097,7 @@ mod tests {
         let (loaded, turns) = load_persisted(&db, id).unwrap();
         let transcript = detail(&db, &loaded, &turns).unwrap();
         assert_eq!(loaded.title, "Echo example");
+        assert_eq!(transcript.summary.as_ref().unwrap().last_message_at_ms, 1);
         assert_eq!(transcript.messages.len(), 2);
         assert_eq!(transcript.messages[0].text, "Echo example");
         assert_eq!(transcript.messages[1].role, SessionRole::Assistant as i32);
@@ -1089,6 +1114,7 @@ mod tests {
             workspace_id: Uuid::new_v4().to_string(),
             title: "Example".to_owned(),
             created_at_ms: 1,
+            last_message_at_ms: 1,
         };
         let turn = TurnRow {
             number: 1,
@@ -1249,6 +1275,7 @@ mod tests {
                 workspace_id,
                 title: "Example session".to_owned(),
                 created_at_ms: 1,
+                last_message_at_ms: 1,
             },
             &TurnRow {
                 number: 1,
@@ -1302,6 +1329,7 @@ mod tests {
         assert_eq!(entries[0].id, session_id);
         assert_eq!(entries[0].model, "model-example");
         assert_eq!(entries[0].turn_count, 1);
+        assert_eq!(entries[0].last_message_at_ms, 1);
         let request = Request::builder()
             .method("POST")
             .uri(format!("/v1/sessions/{session_id}/restore"))
@@ -1319,10 +1347,9 @@ mod tests {
             .unwrap();
         let reply = app.oneshot(request).await.unwrap();
         let body = to_bytes(reply.into_body(), 4096).await.unwrap();
-        assert_eq!(
-            ListSessionsResponse::decode(body).unwrap().sessions.len(),
-            1
-        );
+        let sessions = ListSessionsResponse::decode(body).unwrap().sessions;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].last_message_at_ms, 1);
         assert!(db.session(&session_id).unwrap().is_some());
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
@@ -1406,6 +1433,7 @@ mod tests {
                 workspace_id: quick_chat::WORKSPACE_ID.to_owned(),
                 title: "Example chat".to_owned(),
                 created_at_ms: 1,
+                last_message_at_ms: 1,
             },
             &TurnRow {
                 number: 1,
@@ -1512,6 +1540,7 @@ mod tests {
             workspace_id,
             title: "Example".to_owned(),
             created_at_ms: 1,
+            last_message_at_ms: 1,
         };
         let turn = TurnRow {
             number: 1,

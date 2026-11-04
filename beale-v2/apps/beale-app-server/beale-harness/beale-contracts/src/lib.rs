@@ -511,6 +511,8 @@ pub mod v1 {
         pub workspace_id: String,
         #[prost(string, tag = "3")]
         pub title: String,
+        #[prost(uint64, tag = "4")]
+        pub last_message_at_ms: u64,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -537,6 +539,8 @@ pub mod v1 {
         pub archived_at_ms: u64,
         #[prost(bool, tag = "8")]
         pub quick_chat: bool,
+        #[prost(uint64, tag = "9")]
+        pub last_message_at_ms: u64,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -720,7 +724,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 26;
+pub const PROTOCOL_MINOR: u32 = 27;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

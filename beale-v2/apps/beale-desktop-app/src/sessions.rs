@@ -98,6 +98,7 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
     uuid::Uuid::parse_str(&summary.id).is_ok()
         && uuid::Uuid::parse_str(&summary.workspace_id).is_ok()
         && !summary.title.is_empty()
+        && summary.last_message_at_ms > 0
         && detail.messages.len() <= 64
         && matches!(
             beale_contracts::v1::ProviderId::try_from(detail.provider),
@@ -241,6 +242,7 @@ pub(crate) async fn list(client: &Client, addr: SocketAddr) -> Result<Vec<Sessio
                 || uuid::Uuid::parse_str(&session.workspace_id).is_err()
                 || session.title.is_empty()
                 || session.title.len() > 512
+                || session.last_message_at_ms == 0
         })
     {
         return Err("Invalid app-server session list".to_owned());

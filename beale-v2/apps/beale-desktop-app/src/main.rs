@@ -559,6 +559,8 @@ struct State {
     quick_chat_error: String,
     quick_chat_generation: u64,
     session_summaries: Vec<SessionSummary>,
+    hovered_session_id: Option<String>,
+    hovered_workspace_id: Option<String>,
     archive_session_id: Option<String>,
     archive_session_busy: bool,
     archive_session_error: String,
@@ -732,6 +734,8 @@ impl Default for State {
             quick_chat_error: String::new(),
             quick_chat_generation: 0,
             session_summaries: Vec::new(),
+            hovered_session_id: None,
+            hovered_workspace_id: None,
             archive_session_id: None,
             archive_session_busy: false,
             archive_session_error: String::new(),
@@ -1839,6 +1843,7 @@ fn start_archive_restore(state: &mut State, id: String) {
         id: entry.id.clone(),
         workspace_id: entry.workspace_id.clone(),
         title: entry.title.clone(),
+        last_message_at_ms: entry.last_message_at_ms,
     };
     let Some(handle) = AUTH_HANDLE.get().cloned() else {
         state.archive_error = "Desktop connection is not ready.".to_owned();
@@ -4990,6 +4995,17 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     {
         window = window.child(provider_usage::tooltip(provider, usage, theme));
     }
+    if state.sidenav_visible
+        && state.home_collection == home_sidebar::HomeCollection::Workspaces
+        && !matches!(
+            state.primary_view,
+            PrimaryView::Settings | PrimaryView::Extensions
+        )
+        && let Some(tooltip) = home_sidebar::session_tooltip(state, theme)
+            .or_else(|| home_sidebar::workspace_tooltip(state, theme))
+    {
+        window = window.child(tooltip);
+    }
     if state.primary_view == PrimaryView::WorkspaceCreation
         && let Some(scope) = state.workspace_draft.surface_dialog_scope
     {
@@ -6770,6 +6786,146 @@ mod tests {
     }
 
     #[test]
+    fn hovered_home_session_shows_details_beside_the_sidebar() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let last_message_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            - 7_200_000;
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            session_summaries: vec![SessionSummary {
+                id: session_id.to_owned(),
+                workspace_id: workspace_id.to_owned(),
+                title: "A complete example session title".to_owned(),
+                last_message_at_ms,
+            }],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (session_row, _) = runtime
+            .presented(&format!("home-session-container-{session_id}"))
+            .unwrap();
+        let (fade, resting_opacity) = runtime
+            .presented(&format!("home-session-archive-fade-{session_id}"))
+            .unwrap();
+        assert!(resting_opacity < 0.01);
+        runtime.pointer_move(session_row[0] + 2.0, session_row[1] + session_row[3] / 2.0);
+        runtime.frame(0.3);
+        let (_, hovered_opacity) = runtime
+            .presented(&format!("home-session-archive-fade-{session_id}"))
+            .unwrap();
+        assert!(hovered_opacity > 0.99);
+        let (archive, _) = runtime
+            .presented(&format!("home-archive-session-{session_id}"))
+            .unwrap();
+        assert!(fade[0] + fade[2] <= archive[0]);
+        assert_eq!(
+            runtime.state.hovered_session_id.as_deref(),
+            Some(session_id)
+        );
+        let (sidebar, _) = runtime.presented("home-sidenav").unwrap();
+        let (tooltip, _) = runtime.presented("home-session-tooltip").unwrap();
+        let (title, _) = runtime.presented("home-session-tooltip-title").unwrap();
+        let (age, _) = runtime.presented("home-session-tooltip-age").unwrap();
+        let (workspace, _) = runtime.presented("home-session-tooltip-workspace").unwrap();
+        assert!(
+            runtime
+                .find("home-session-tooltip-workspace-icon")
+                .is_some()
+        );
+        assert!(
+            tooltip[0] >= sidebar[0] + sidebar[2],
+            "tooltip={tooltip:?} sidebar={sidebar:?}"
+        );
+        assert!(title[0] < age[0]);
+        assert!(workspace[1] > title[1]);
+        let (archive_x, archive_y) = runtime
+            .find(&format!("home-archive-session-{session_id}"))
+            .unwrap();
+        runtime.pointer_move(archive_x, archive_y);
+        runtime.frame(0.32);
+        runtime.pointer_down(archive_x, archive_y);
+        runtime.pointer_up(archive_x, archive_y);
+        runtime.frame(0.34);
+        assert_eq!(
+            runtime.state.archive_session_id.as_deref(),
+            Some(session_id)
+        );
+        runtime.pointer_move(600.0, 300.0);
+        runtime.frame(0.36);
+        assert!(runtime.find("home-session-tooltip").is_none());
+    }
+
+    #[test]
+    fn hovered_home_workspace_shows_details_beside_the_sidebar() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "/example/workspaces/a-very-long-synthetic-directory-name/another-synthetic-directory-name/research".to_owned(),
+            }],
+            session_summaries: vec![SessionSummary {
+                id: session_id.to_owned(),
+                workspace_id: workspace_id.to_owned(),
+                title: "Example session".to_owned(),
+                last_message_at_ms: 1,
+            }],
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (workspace_row, _) = runtime
+            .presented(&format!("home-workspace-{workspace_id}"))
+            .unwrap();
+        runtime.pointer_move(
+            workspace_row[0] + 2.0,
+            workspace_row[1] + workspace_row[3] / 2.0,
+        );
+        runtime.frame(0.3);
+        assert_eq!(
+            runtime.state.hovered_workspace_id.as_deref(),
+            Some(workspace_id)
+        );
+        let (sidebar, _) = runtime.presented("home-sidenav").unwrap();
+        let (tooltip, _) = runtime.presented("home-workspace-tooltip").unwrap();
+        let (name, _) = runtime.presented("home-workspace-tooltip-name").unwrap();
+        let (count, _) = runtime
+            .presented("home-workspace-tooltip-sessions")
+            .unwrap();
+        let (directory, _) = runtime
+            .presented("home-workspace-tooltip-directory")
+            .unwrap();
+        let (count_icon, _) = runtime
+            .presented("home-workspace-tooltip-sessions-icon")
+            .unwrap();
+        let (directory_icon, _) = runtime
+            .presented("home-workspace-tooltip-directory-icon")
+            .unwrap();
+        assert!(tooltip[0] >= sidebar[0] + sidebar[2]);
+        assert!(name[1] < count[1] && count[1] < directory[1]);
+        assert!(count_icon[0] < count[0] && directory_icon[0] < directory[0]);
+        assert!(
+            directory[3] < 20.0,
+            "directory should stay on one line: {directory:?}"
+        );
+        runtime.pointer_move(600.0, 300.0);
+        runtime.frame(0.32);
+        assert!(runtime.find("home-workspace-tooltip").is_none());
+    }
+
+    #[test]
     fn home_session_archive_opens_confirmation_and_cancel_preserves_session() {
         let workspace_id = "00000000-0000-4000-8000-000000000001";
         let session_id = "00000000-0000-4000-8000-000000000002";
@@ -6784,6 +6940,7 @@ mod tests {
                 id: session_id.to_owned(),
                 workspace_id: workspace_id.to_owned(),
                 title: "An example research session with a long title".to_owned(),
+                last_message_at_ms: 1,
             }],
             ..State::default()
         };
@@ -6793,11 +6950,15 @@ mod tests {
         let (archive, _) = runtime
             .presented(&format!("home-archive-session-{session_id}"))
             .unwrap();
+        let (fade, _) = runtime
+            .presented(&format!("home-session-archive-fade-{session_id}"))
+            .unwrap();
         let (session_row, _) = runtime
             .presented(&format!("home-session-{session_id}"))
             .unwrap();
         assert!(archive[0] + archive[2] <= sidebar[0] + sidebar[2]);
         assert!(session_row[0] + session_row[2] >= archive[0] + archive[2]);
+        assert!(fade[0] + fade[2] <= archive[0]);
         let (x, y) = runtime
             .find(&format!("home-archive-session-{session_id}"))
             .unwrap();
@@ -6846,6 +7007,7 @@ mod tests {
                     created_at_ms: 1,
                     archived_at_ms: 2,
                     quick_chat: false,
+                    last_message_at_ms: 1,
                 },
                 ArchiveEntry {
                     id: chat_id.to_owned(),
@@ -6856,6 +7018,7 @@ mod tests {
                     created_at_ms: 1,
                     archived_at_ms: 1,
                     quick_chat: true,
+                    last_message_at_ms: 1,
                 },
             ],
             archive_loaded: true,
@@ -7173,6 +7336,7 @@ mod tests {
                 id: session_id.to_owned(),
                 workspace_id: workspace_id.to_owned(),
                 title: "Example Session".to_owned(),
+                last_message_at_ms: 1,
             }],
             new_research_workspace_id: Some(workspace_id.to_owned()),
             session_loading_id: Some(session_id.to_owned()),
@@ -7216,6 +7380,7 @@ mod tests {
                 id: session_id.to_owned(),
                 workspace_id: workspace_id.to_owned(),
                 title: "Echo example".to_owned(),
+                last_message_at_ms: 1,
             }),
             messages: vec![
                 beale_contracts::v1::SessionMessage {
@@ -7320,6 +7485,7 @@ mod tests {
                         id: session_id.to_owned(),
                         workspace_id: workspace_id.to_owned(),
                         title: "Example Session".to_owned(),
+                        last_message_at_ms: 1,
                     }),
                     messages: vec![
                         beale_contracts::v1::SessionMessage {
@@ -7410,6 +7576,7 @@ mod tests {
                     id: "00000000-0000-4000-8000-000000000002".to_owned(),
                     workspace_id: "00000000-0000-4000-8000-000000000001".to_owned(),
                     title: "Example".to_owned(),
+                    last_message_at_ms: 1,
                 }),
                 messages: vec![beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::Assistant as i32,
@@ -7474,6 +7641,7 @@ mod tests {
                     id: session_id.to_owned(),
                     workspace_id: workspace_id.to_owned(),
                     title: "Example".to_owned(),
+                    last_message_at_ms: 1,
                 }),
                 messages: vec![beale_contracts::v1::SessionMessage {
                     role: beale_contracts::v1::SessionRole::Assistant as i32,

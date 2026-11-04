@@ -1,7 +1,9 @@
-use rune::{El, Icon, col, el, icon, row, text};
+use rune::{Align, Color, El, Icon, Side, col, el, icon, row, text};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::icons::{
-    ARCHIVE, CHEVRON_DOWN, CHEVRON_UP, FOLDER_OPEN, NEW_RESEARCH, PLUS, QUICK_CHAT, SEARCH,
+    ARCHIVE, CHAT_BUBBLE, CHEVRON_DOWN, CHEVRON_UP, FOLDER_OPEN, NEW_RESEARCH, PLUS, QUICK_CHAT,
+    SEARCH,
 };
 use crate::{
     SelectionMenu, State, ThemeStyle, form_button, modal_dialog, sidenav_heading,
@@ -146,6 +148,11 @@ fn workspace_action(spec: &SidebarAction, theme: ThemeStyle<'_>) -> El {
 fn session_row(key: String, label: &str, italic: bool, active: bool, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     let font = ui_font(14.0, if active { 550.0 } else { 400.0 });
+    let label_text = text(label.to_owned())
+        .font(if italic { font.italic() } else { font })
+        .color(color(if active { "#f2f2f2" } else { "#b8b8b8" }))
+        .min_w(0.0)
+        .truncate_fade();
     row()
         .key(key)
         .role("button")
@@ -164,13 +171,7 @@ fn session_row(key: String, label: &str, italic: bool, active: bool, theme: Them
         })
         .hover(color("#282828"))
         .child(el().size(15.0, 15.0))
-        .child(
-            text(label.to_owned())
-                .font(if italic { font.italic() } else { font })
-                .color(color(if active { "#f2f2f2" } else { "#b8b8b8" }))
-                .min_w(0.0)
-                .truncate_fade(),
-        )
+        .child(label_text)
 }
 
 pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
@@ -202,7 +203,7 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .child(
             text(state.home_collection.label())
                 .font(ui_font(13.0, 400.0))
-                .color(color("#eeeeee")),
+                .color(color("#b8b8b8")),
         )
         .child(
             icon(
@@ -301,6 +302,20 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .radius(8.0)
                 .continuous_corners()
                 .hover_group()
+                .on_hover_change({
+                    let workspace_id = workspace.id.clone();
+                    move |state: &mut State, inside, _| {
+                        if inside {
+                            state.hovered_workspace_id = Some(workspace_id.clone());
+                            state.hovered_session_id = None;
+                        } else if state.hovered_workspace_id.as_deref()
+                            == Some(workspace_id.as_str())
+                        {
+                            state.hovered_workspace_id = None;
+                        }
+                    }
+                })
+                .hover_delays(Duration::from_millis(250), Duration::ZERO)
                 .hover(color("#282828"))
                 .fill(if selected {
                     color("#303030")
@@ -376,13 +391,35 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                     }
                 });
                 let archive_id = session.id.clone();
+                let hover_id = session.id.clone();
                 group = group.child(
                     row()
                         .key(format!("home-session-container-{}", session.id))
                         .w_full()
                         .center_y()
                         .hover_group()
+                        .on_hover_change(move |state: &mut State, inside, _| {
+                            if inside {
+                                state.hovered_session_id = Some(hover_id.clone());
+                                state.hovered_workspace_id = None;
+                            } else if state.hovered_session_id.as_deref() == Some(hover_id.as_str())
+                            {
+                                state.hovered_session_id = None;
+                            }
+                        })
+                        .hover_delays(Duration::from_millis(250), Duration::ZERO)
                         .child(opener)
+                        .child(
+                            el().key(format!("home-session-archive-fade-{}", session.id))
+                                .inert()
+                                .pin(None, Some(0.0), Some(28.0), Some(0.0))
+                                .w(32.0)
+                                .group_opacity(0.0, 1.0)
+                                .linear_gradient(
+                                    std::f32::consts::FRAC_PI_2,
+                                    [(0.0, Color::TRANSPARENT), (1.0, color("#282828"))],
+                                ),
+                        )
                         .child(
                             el().key(format!("home-archive-session-{}", session.id))
                                 .role("button")
@@ -434,6 +471,176 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         )
         .child(primary)
         .child(collection)
+}
+
+fn time_since_last_message(last_message_at_ms: u64) -> String {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    let seconds = now_ms.saturating_sub(u128::from(last_message_at_ms)) / 1_000;
+    match seconds {
+        0..60 => "now".to_owned(),
+        60..3_600 => format!("{}m", seconds / 60),
+        3_600..86_400 => format!("{}h", seconds / 3_600),
+        86_400..604_800 => format!("{}d", seconds / 86_400),
+        _ => format!("{}w", seconds / 604_800),
+    }
+}
+
+pub(crate) fn session_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
+    let session_id = state.hovered_session_id.as_deref()?;
+    let session = state
+        .session_summaries
+        .iter()
+        .find(|item| item.id == session_id)?;
+    let workspace = state
+        .workspaces
+        .iter()
+        .find(|item| item.id == session.workspace_id)?;
+    Some(
+        col()
+            .key("home-session-tooltip")
+            .inert()
+            .w(320.0)
+            .gap(7.0)
+            .px(12.0)
+            .py(10.0)
+            .radius(12.0)
+            .continuous_corners()
+            .fill(theme.color("#292929"))
+            .shadow(5.0, 16.0, Color::BLACK.alpha(0.45))
+            .child(
+                row()
+                    .w_full()
+                    .items_start()
+                    .gap(12.0)
+                    .child(
+                        text(session.title.clone())
+                            .key("home-session-tooltip-title")
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .wrap()
+                            .font(ui_font(13.0, 550.0))
+                            .color(theme.color("#eeeeee")),
+                    )
+                    .child(
+                        text(time_since_last_message(session.last_message_at_ms))
+                            .key("home-session-tooltip-age")
+                            .font(ui_font(12.0, 400.0))
+                            .color(theme.color("#b8b8b8")),
+                    ),
+            )
+            .child(
+                row()
+                    .w_full()
+                    .gap(6.0)
+                    .center_y()
+                    .child(
+                        icon(&FOLDER_OPEN, 13.0)
+                            .key("home-session-tooltip-workspace-icon")
+                            .color(theme.color("#b8b8b8")),
+                    )
+                    .child(
+                        text(workspace.name.clone())
+                            .key("home-session-tooltip-workspace")
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .font(ui_font(12.0, 400.0))
+                            .color(theme.color("#b8b8b8"))
+                            .wrap(),
+                    ),
+            )
+            .anchored_fit(
+                format!("home-session-{session_id}"),
+                Side::Right,
+                Align::Start,
+                20.0,
+            ),
+    )
+}
+
+pub(crate) fn workspace_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<El> {
+    let workspace_id = state.hovered_workspace_id.as_deref()?;
+    let workspace = state
+        .workspaces
+        .iter()
+        .find(|item| item.id == workspace_id)?;
+    let session_count = state
+        .session_summaries
+        .iter()
+        .filter(|session| session.workspace_id == workspace_id)
+        .count();
+    Some(
+        col()
+            .key("home-workspace-tooltip")
+            .inert()
+            .w(320.0)
+            .gap(7.0)
+            .px(12.0)
+            .py(10.0)
+            .radius(12.0)
+            .continuous_corners()
+            .fill(theme.color("#292929"))
+            .shadow(5.0, 16.0, Color::BLACK.alpha(0.45))
+            .child(
+                text(workspace.name.clone())
+                    .key("home-workspace-tooltip-name")
+                    .w_full()
+                    .wrap()
+                    .font(ui_font(13.0, 550.0))
+                    .color(theme.color("#eeeeee")),
+            )
+            .child(
+                row()
+                    .w_full()
+                    .gap(6.0)
+                    .center_y()
+                    .child(
+                        icon(&CHAT_BUBBLE, 13.0)
+                            .key("home-workspace-tooltip-sessions-icon")
+                            .color(theme.color("#b8b8b8")),
+                    )
+                    .child(
+                        text(format!(
+                            "{session_count} {}",
+                            if session_count == 1 {
+                                "session"
+                            } else {
+                                "sessions"
+                            }
+                        ))
+                        .key("home-workspace-tooltip-sessions")
+                        .font(ui_font(12.0, 400.0))
+                        .color(theme.color("#b8b8b8")),
+                    ),
+            )
+            .child(
+                row()
+                    .w_full()
+                    .gap(6.0)
+                    .center_y()
+                    .child(
+                        icon(&FOLDER_OPEN, 13.0)
+                            .key("home-workspace-tooltip-directory-icon")
+                            .color(theme.color("#b8b8b8")),
+                    )
+                    .child(
+                        text(workspace.directory.clone())
+                            .key("home-workspace-tooltip-directory")
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .truncate_fade()
+                            .font(ui_font(12.0, 400.0))
+                            .color(theme.color("#b8b8b8")),
+                    ),
+            )
+            .anchored_fit(
+                format!("home-workspace-{workspace_id}"),
+                Side::Right,
+                Align::Start,
+                20.0,
+            ),
+    )
 }
 
 fn close_archive_dialog(state: &mut State) {
@@ -512,4 +719,20 @@ pub(crate) fn archive_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
         theme,
         close_archive_dialog,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_message_age_is_compact() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert_eq!(time_since_last_message(now), "now");
+        assert_eq!(time_since_last_message(now - 7_800_000), "2h");
+        assert_eq!(time_since_last_message(now - 259_200_000), "3d");
+    }
 }

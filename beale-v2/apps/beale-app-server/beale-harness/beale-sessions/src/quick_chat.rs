@@ -326,6 +326,8 @@ pub(super) async fn turn(
         title: chat_title,
         created_at_ms: i64::try_from(now.as_millis())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        last_message_at_ms: i64::try_from(now.as_millis())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     };
     let turn = TurnRow {
         number: (turns.len() + 1) as i64,

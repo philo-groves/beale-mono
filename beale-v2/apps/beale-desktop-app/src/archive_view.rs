@@ -84,6 +84,7 @@ pub(crate) async fn list(client: &Client, addr: SocketAddr) -> Result<Vec<Archiv
                 && entry.model.len() <= 256
                 && (1..=32).contains(&entry.turn_count)
                 && entry.created_at_ms > 0
+                && entry.last_message_at_ms > 0
                 && entry.archived_at_ms >= entry.created_at_ms
                 && ids.insert(entry.id.clone())
         })

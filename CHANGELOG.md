@@ -61,6 +61,7 @@
 
 #### Changed
 
+- Muted the v2 Home collection selector and added row-wide session and workspace hover cards with their relevant details.
 - Laid out v2 plugin cards in a responsive grid of up to four columns and removed the line beneath MCP Servers.
 - Simplified v2 plugin cards to Skills and MCP Servers counts without dividers between stats.
 - Replaced the v2 Plugins flat list with content-sized cards in the wide content area, showing clamped descriptions and separate skill, tool, resource, and prompt counts.
@@ -144,6 +145,7 @@
 
 #### Added
 
+- Added protocol v1.27 session and archive summaries with the last-message timestamp. SQLite schema 12 initializes existing sessions from creation time and updates the timestamp after saved turns.
 - Added protocol v1.26 plugin summaries with MCP server counts and an authenticated, on-demand bundled manifest read.
 - Added protocol v1.25 official CLI subscription status and session routes for Anthropic and Z.ai, keeping subscription credentials in their own applications and Beale tool execution in the Rust harness.
 - Added protocol v1.24 provider IDs and authenticated custom-provider registration. Anthropic Messages, Z.ai and OpenRouter chat completions, and custom OpenAI-compatible APIs now support streamed turns and base tools; custom keys remain host-only.

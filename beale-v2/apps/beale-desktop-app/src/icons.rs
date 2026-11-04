@@ -21,6 +21,12 @@ pub(crate) static QUICK_CHAT: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m13 2-3 8h9l-8 12 3-9H5z"/>"#,
 };
 
+pub(crate) static CHAT_BUBBLE: Icon = Icon {
+    name: "lucide-message-circle",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>"#,
+};
+
 pub(crate) static SEARCH: Icon = Icon {
     name: "lucide-search",
     view: 24.0,
