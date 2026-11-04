@@ -57,6 +57,18 @@ pub(crate) static TRASH: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 11v6M14 11v6"/>"#,
 };
 
+pub(crate) static STAR: Icon = Icon {
+    name: "lucide-star",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 2.5 15.1 8.8l7 1-5.05 4.92 1.2 6.96L12 18.4l-6.25 3.28 1.2-6.96L1.9 9.8l7-1z"/>"#,
+};
+
+pub(crate) static STAR_FILLED: Icon = Icon {
+    name: "beale-star-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M12 2.5 15.1 8.8l7 1-5.05 4.92 1.2 6.96L12 18.4l-6.25 3.28 1.2-6.96L1.9 9.8l7-1z"/>"#,
+};
+
 pub(crate) static FOLDER_OPEN: Icon = Icon {
     name: "lucide-folder-open",
     view: 24.0,

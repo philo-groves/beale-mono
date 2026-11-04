@@ -6,14 +6,17 @@ use axum::{
     routing::{get, post},
 };
 use beale_contracts::{
-    FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH, PROTOBUF_CONTENT_TYPE,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
+    FLEET_BROWSER_PREFERRED_PATH, FLEET_BROWSER_REMOVE_PATH, FLEET_BROWSER_SETTINGS_PATH,
+    FLEET_BROWSERS_PATH, FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
+    PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
     v1::{
-        FleetAppServerDescriptor, FleetPairingRequest, FleetPairingResponse,
+        FleetAddBrowserRequest, FleetAppServerDescriptor, FleetBrowsersResponse,
+        FleetPairingRequest, FleetPairingResponse, FleetRemoveBrowserRequest,
+        FleetSetBrowserSettingsRequest, FleetSetPreferredBrowserRequest,
         FleetTotpProvisioningResponse,
     },
 };
-use beale_storage::HostDatabase;
+use beale_storage::{BrowserSettings, HostDatabase, ManualBrowserRow};
 use prost::Message;
 use ring::{
     hmac,
@@ -114,12 +117,206 @@ pub fn router(token: String, db: HostDatabase) -> Router {
         .route(FLEET_DESCRIPTOR_PATH, get(descriptor))
         .route(FLEET_TOTP_PROVISION_PATH, get(provision))
         .route(FLEET_PAIR_PATH, post(pair))
-        .layer(DefaultBodyLimit::max(256))
+        .route(FLEET_BROWSERS_PATH, get(list_browsers).post(add_browser))
+        .route(FLEET_BROWSER_REMOVE_PATH, post(remove_browser))
+        .route(FLEET_BROWSER_SETTINGS_PATH, post(set_browser_settings))
+        .route(FLEET_BROWSER_PREFERRED_PATH, post(set_preferred_browser))
+        .layer(DefaultBodyLimit::max(4_096))
         .with_state(HttpState {
             token,
             db,
             attempts: Arc::new(Mutex::new(Attempts::default())),
         })
+}
+
+fn require_browser_access(state: &HttpState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    if !authorized(headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    enabled(state)
+}
+
+fn protobuf_request(headers: &HeaderMap) -> Result<(), StatusCode> {
+    if headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some(PROTOBUF_CONTENT_TYPE)
+    {
+        return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    Ok(())
+}
+
+async fn list_browsers(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<([(header::HeaderName, &'static str); 2], Vec<u8>), StatusCode> {
+    require_browser_access(&state, &headers)?;
+    let manual = state
+        .db
+        .manual_browsers()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut browsers = crate::browsers::inventory(&manual);
+    for browser in &mut browsers {
+        let settings = state
+            .db
+            .browser_settings(&browser.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        browser.enabled = settings.enabled;
+        browser.all_workspaces = settings.all_workspaces;
+        browser.workspace_ids = settings.workspace_ids;
+    }
+    let saved = state
+        .db
+        .preferred_browser_id()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let preferred = crate::browsers::preferred_id(&browsers, &manual, saved.as_deref());
+    for browser in &mut browsers {
+        browser.preferred = preferred.as_deref() == Some(browser.id.as_str());
+    }
+    let response = FleetBrowsersResponse { browsers };
+    Ok((
+        [
+            (header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        response.encode_to_vec(),
+    ))
+}
+
+async fn add_browser(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    require_browser_access(&state, &headers)?;
+    protobuf_request(&headers)?;
+    let request = FleetAddBrowserRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let path = crate::browsers::validate_manual(&request.name, &request.executable)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let manual = state
+        .db
+        .manual_browsers()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if crate::browsers::detected_path(&path)
+        || manual.len() >= 32
+        || manual
+            .iter()
+            .any(|entry| std::path::Path::new(&entry.executable) == path)
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    let row = ManualBrowserRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: request.name.trim().to_owned(),
+        executable: path
+            .into_os_string()
+            .into_string()
+            .map_err(|_| StatusCode::BAD_REQUEST)?,
+    };
+    state
+        .db
+        .add_manual_browser(&row)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::CREATED)
+}
+
+async fn remove_browser(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    require_browser_access(&state, &headers)?;
+    protobuf_request(&headers)?;
+    let request = FleetRemoveBrowserRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if uuid::Uuid::parse_str(&request.id).is_err() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if state
+        .db
+        .remove_manual_browser(&request.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn set_browser_settings(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    require_browser_access(&state, &headers)?;
+    protobuf_request(&headers)?;
+    let request =
+        FleetSetBrowserSettingsRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if request.workspace_ids.len() > 128
+        || (request.all_workspaces && !request.workspace_ids.is_empty())
+        || request
+            .workspace_ids
+            .iter()
+            .any(|id| uuid::Uuid::parse_str(id).is_err())
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let manual = state
+        .db
+        .manual_browsers()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !crate::browsers::inventory(&manual)
+        .iter()
+        .any(|browser| browser.id == request.id)
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    state
+        .db
+        .set_browser_settings(
+            &request.id,
+            &BrowserSettings {
+                enabled: request.enabled,
+                all_workspaces: request.all_workspaces,
+                workspace_ids: request.workspace_ids,
+            },
+        )
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_preferred_browser(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    require_browser_access(&state, &headers)?;
+    protobuf_request(&headers)?;
+    let request =
+        FleetSetPreferredBrowserRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let manual = state
+        .db
+        .manual_browsers()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let available = crate::browsers::inventory(&manual)
+        .iter()
+        .any(|browser| browser.id == request.id && browser.available);
+    if !available {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if !state
+        .db
+        .browser_settings(&request.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .enabled
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    state
+        .db
+        .set_preferred_browser_id(&request.id)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
@@ -284,6 +481,233 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn browser_inventory_requires_auth_and_persists_manual_entries() {
+        let root =
+            std::env::temp_dir().join(format!("beale-browser-example-{}", uuid::Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let app = router("example-token".to_owned(), db.clone());
+        let request = |method: &str, path: &str, body: Vec<u8>, authenticated: bool| {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", PROTOBUF_CONTENT_TYPE);
+            if authenticated {
+                builder = builder.header("authorization", "Bearer example-token");
+            }
+            builder.body(Body::from(body)).unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", FLEET_BROWSERS_PATH, vec![], false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", FLEET_BROWSERS_PATH, vec![], true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        db.set_feature_enabled(crate::FEATURE_ID, true).unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_BROWSERS_PATH,
+                    FleetAddBrowserRequest {
+                        name: "Example Browser".to_owned(),
+                        executable: "relative/browser".to_owned()
+                    }
+                    .encode_to_vec(),
+                    true
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let executable = root.join(if cfg!(windows) {
+            "example-browser.exe"
+        } else {
+            "example-browser"
+        });
+        std::fs::write(&executable, b"example").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let add = FleetAddBrowserRequest {
+            name: "Example Browser".to_owned(),
+            executable: executable.to_string_lossy().into_owned(),
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_BROWSERS_PATH,
+                    add.encode_to_vec(),
+                    true
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CREATED
+        );
+        let listed = app
+            .clone()
+            .oneshot(request("GET", FLEET_BROWSERS_PATH, vec![], true))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(listed.into_body(), 4096)
+            .await
+            .unwrap();
+        let inventory = FleetBrowsersResponse::decode(bytes).unwrap();
+        let manual = inventory
+            .browsers
+            .iter()
+            .find(|browser| browser.name == "Example Browser")
+            .unwrap();
+        assert!(manual.manual && manual.available && manual.enabled && manual.all_workspaces);
+        let id = manual.id.clone();
+        assert!(!format!("{inventory:?}").contains(&executable.to_string_lossy().to_string()));
+
+        let preference = FleetSetPreferredBrowserRequest { id: id.clone() };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_BROWSER_PREFERRED_PATH,
+                    preference.encode_to_vec(),
+                    false
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_BROWSER_PREFERRED_PATH,
+                    preference.encode_to_vec(),
+                    true
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let listed = app
+            .clone()
+            .oneshot(request("GET", FLEET_BROWSERS_PATH, vec![], true))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(listed.into_body(), 4096)
+            .await
+            .unwrap();
+        let inventory = FleetBrowsersResponse::decode(bytes).unwrap();
+        assert!(
+            inventory
+                .browsers
+                .iter()
+                .find(|browser| browser.id == id)
+                .unwrap()
+                .preferred
+        );
+
+        let workspace_id = uuid::Uuid::nil().to_string();
+        let settings = FleetSetBrowserSettingsRequest {
+            id: id.clone(),
+            enabled: false,
+            all_workspaces: false,
+            workspace_ids: vec![workspace_id.clone()],
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_BROWSER_SETTINGS_PATH,
+                    settings.encode_to_vec(),
+                    false
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_BROWSER_SETTINGS_PATH,
+                    settings.encode_to_vec(),
+                    true
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+
+        drop(app);
+        drop(db);
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert_eq!(reopened.manual_browsers().unwrap().len(), 1);
+        assert_eq!(
+            reopened.preferred_browser_id().unwrap().as_deref(),
+            Some(id.as_str())
+        );
+        assert_eq!(
+            reopened.browser_settings(&id).unwrap(),
+            BrowserSettings {
+                enabled: false,
+                all_workspaces: false,
+                workspace_ids: vec![workspace_id],
+            }
+        );
+        let app = router("example-token".to_owned(), reopened);
+        let listed = app
+            .clone()
+            .oneshot(request("GET", FLEET_BROWSERS_PATH, vec![], true))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(listed.into_body(), 4096)
+            .await
+            .unwrap();
+        let inventory = FleetBrowsersResponse::decode(bytes).unwrap();
+        let manual = inventory
+            .browsers
+            .iter()
+            .find(|browser| browser.id == id)
+            .unwrap();
+        assert!(!manual.enabled && !manual.all_workspaces && manual.workspace_ids.len() == 1);
+        assert!(!manual.preferred);
+        let remove = FleetRemoveBrowserRequest { id: id.clone() }.encode_to_vec();
+        assert_eq!(
+            app.oneshot(request("POST", FLEET_BROWSER_REMOVE_PATH, remove, true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert_eq!(
+            reopened.browser_settings(&id).unwrap().workspace_ids.len(),
+            0
+        );
+        assert!(reopened.preferred_browser_id().unwrap().is_none());
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn totp_matches_rfc_vector_and_limits_replay_and_guesses() {

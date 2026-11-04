@@ -229,6 +229,7 @@ dependencies = [
  "tokio",
  "tower",
  "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -237,6 +238,7 @@ version = "0.1.0"
 dependencies = [
  "beale-contracts",
  "futures-util",
+ "image",
  "prost",
  "qrcodegen",
  "raw-window-handle",
@@ -280,6 +282,7 @@ dependencies = [
  "tower",
  "url",
  "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -11,6 +11,20 @@ use std::{
 pub struct HostDatabase(Arc<Mutex<Connection>>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManualBrowserRow {
+    pub id: String,
+    pub name: String,
+    pub executable: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserSettings {
+    pub enabled: bool,
+    pub all_workspaces: bool,
+    pub workspace_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceRow {
     pub id: String,
     pub name: String,
@@ -144,7 +158,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 17 {
+        if version > 20 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -370,6 +384,47 @@ impl HostDatabase {
                  COMMIT;",
             )?;
         }
+        if version < 18 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS manual_browsers (
+                     id TEXT PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     executable TEXT NOT NULL UNIQUE
+                 );
+                 PRAGMA user_version = 18;
+                 COMMIT;",
+            )?;
+        }
+        if version < 19 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS fleet_browser_settings (
+                     browser_id TEXT PRIMARY KEY,
+                     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+                     all_workspaces INTEGER NOT NULL CHECK (all_workspaces IN (0, 1))
+                 );
+                 CREATE TABLE IF NOT EXISTS fleet_browser_workspace_scope (
+                     browser_id TEXT NOT NULL,
+                     workspace_id TEXT NOT NULL,
+                     PRIMARY KEY(browser_id, workspace_id),
+                     FOREIGN KEY(browser_id) REFERENCES fleet_browser_settings(browser_id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 19;
+                 COMMIT;",
+            )?;
+        }
+        if version < 20 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS fleet_preferred_browser (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     browser_id TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 20;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -379,6 +434,141 @@ impl HostDatabase {
             .lock()
             .map_err(|_| anyhow::anyhow!("host database lock poisoned"))?;
         action(&mut connection)
+    }
+
+    pub fn manual_browsers(&self) -> Result<Vec<ManualBrowserRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection
+                .prepare("SELECT id, name, executable FROM manual_browsers ORDER BY name, id")?;
+            let rows = statement.query_map([], |row| {
+                Ok(ManualBrowserRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    executable: row.get(2)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn add_manual_browser(&self, row: &ManualBrowserRow) -> Result<()> {
+        self.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO manual_browsers(id, name, executable) VALUES (?1, ?2, ?3)",
+                params![row.id, row.name, row.executable],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn remove_manual_browser(&self, id: &str) -> Result<bool> {
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            let removed =
+                transaction.execute("DELETE FROM manual_browsers WHERE id = ?1", [id])? > 0;
+            if removed {
+                transaction.execute(
+                    "DELETE FROM fleet_browser_settings WHERE browser_id = ?1",
+                    [id],
+                )?;
+                transaction.execute(
+                    "DELETE FROM fleet_preferred_browser WHERE id = 1 AND browser_id = ?1",
+                    [id],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(removed)
+        })
+    }
+
+    pub fn browser_settings(&self, id: &str) -> Result<BrowserSettings> {
+        self.with_connection(|connection| {
+            let (enabled, all_workspaces) = connection
+                .query_row(
+                    "SELECT enabled, all_workspaces FROM fleet_browser_settings WHERE browser_id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((true, true));
+            let mut statement = connection.prepare(
+                "SELECT workspace_id FROM fleet_browser_workspace_scope WHERE browser_id = ?1 ORDER BY workspace_id",
+            )?;
+            let ids = statement.query_map([id], |row| row.get(0))?;
+            Ok(BrowserSettings {
+                enabled,
+                all_workspaces,
+                workspace_ids: ids.collect::<rusqlite::Result<Vec<_>>>()?,
+            })
+        })
+    }
+
+    pub fn preferred_browser_id(&self) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT browser_id FROM fleet_preferred_browser WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn set_preferred_browser_id(&self, id: &str) -> Result<()> {
+        ensure!(
+            !id.is_empty() && id.len() <= 80 && !id.chars().any(char::is_control),
+            "invalid browser id"
+        );
+        self.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO fleet_preferred_browser(id, browser_id) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET browser_id = excluded.browser_id",
+                [id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn set_browser_settings(&self, id: &str, settings: &BrowserSettings) -> Result<()> {
+        ensure!(!id.is_empty() && id.len() <= 80, "invalid browser id");
+        ensure!(
+            settings.workspace_ids.len() <= 128,
+            "too many selected workspaces"
+        );
+        ensure!(
+            !settings.all_workspaces || settings.workspace_ids.is_empty(),
+            "all-workspaces scope cannot include workspace ids"
+        );
+        let mut unique = HashSet::new();
+        ensure!(
+            settings.workspace_ids.iter().all(|id| {
+                !id.is_empty()
+                    && id.len() <= 128
+                    && !id.chars().any(char::is_control)
+                    && unique.insert(id)
+            }),
+            "invalid or duplicate workspace id"
+        );
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT INTO fleet_browser_settings(browser_id, enabled, all_workspaces) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(browser_id) DO UPDATE SET enabled = excluded.enabled, all_workspaces = excluded.all_workspaces",
+                params![id, settings.enabled, settings.all_workspaces],
+            )?;
+            transaction.execute("DELETE FROM fleet_browser_workspace_scope WHERE browser_id = ?1", [id])?;
+            for workspace_id in &settings.workspace_ids {
+                transaction.execute(
+                    "INSERT INTO fleet_browser_workspace_scope(browser_id, workspace_id) VALUES (?1, ?2)",
+                    params![id, workspace_id],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
     }
 
     pub fn installed_plugin_names(&self) -> Result<Vec<String>> {
@@ -1422,7 +1612,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 18;")
+            .execute_batch("PRAGMA user_version = 21;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -1430,8 +1620,75 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 18);
+        assert_eq!(version, 21);
         drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_nineteen_migrates_browser_settings() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE fleet_browser_workspace_scope;
+             DROP TABLE fleet_browser_settings;
+             PRAGMA user_version = 18;",
+            )
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        let defaults = BrowserSettings {
+            enabled: true,
+            all_workspaces: true,
+            workspace_ids: Vec::new(),
+        };
+        assert_eq!(
+            migrated.browser_settings("detected:example").unwrap(),
+            defaults
+        );
+        let selected = BrowserSettings {
+            enabled: false,
+            all_workspaces: false,
+            workspace_ids: vec![uuid::Uuid::nil().to_string()],
+        };
+        migrated
+            .set_browser_settings("detected:example", &selected)
+            .unwrap();
+        drop(migrated);
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert_eq!(
+            reopened.browser_settings("detected:example").unwrap(),
+            selected
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_twenty_migrates_preferred_browser() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch("DROP TABLE fleet_preferred_browser; PRAGMA user_version = 19;")
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        assert!(migrated.preferred_browser_id().unwrap().is_none());
+        migrated
+            .set_preferred_browser_id("detected:example")
+            .unwrap();
+        drop(migrated);
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert_eq!(
+            reopened.preferred_browser_id().unwrap().as_deref(),
+            Some("detected:example")
+        );
+        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 

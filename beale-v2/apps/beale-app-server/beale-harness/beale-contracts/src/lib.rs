@@ -862,10 +862,68 @@ pub mod v1 {
         #[prost(string, tag = "1")]
         pub token: String,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetBrowser {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(bool, tag = "3")]
+        pub manual: bool,
+        #[prost(bool, tag = "4")]
+        pub available: bool,
+        #[prost(bool, tag = "5")]
+        pub enabled: bool,
+        #[prost(bool, tag = "6")]
+        pub all_workspaces: bool,
+        #[prost(string, repeated, tag = "7")]
+        pub workspace_ids: Vec<String>,
+        #[prost(bool, tag = "8")]
+        pub preferred: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetBrowsersResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub browsers: Vec<FleetBrowser>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetAddBrowserRequest {
+        #[prost(string, tag = "1")]
+        pub name: String,
+        #[prost(string, tag = "2")]
+        pub executable: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetRemoveBrowserRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetSetBrowserSettingsRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(bool, tag = "2")]
+        pub enabled: bool,
+        #[prost(bool, tag = "3")]
+        pub all_workspaces: bool,
+        #[prost(string, repeated, tag = "4")]
+        pub workspace_ids: Vec<String>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetSetPreferredBrowserRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 37;
+pub const PROTOCOL_MINOR: u32 = 40;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -907,6 +965,10 @@ pub const FEATURE_SCOPE_PATH: &str = "/v1/features/scope";
 pub const FLEET_DESCRIPTOR_PATH: &str = "/v1/fleet/descriptor";
 pub const FLEET_TOTP_PROVISION_PATH: &str = "/v1/fleet/totp-provision";
 pub const FLEET_PAIR_PATH: &str = "/v1/fleet/pair";
+pub const FLEET_BROWSERS_PATH: &str = "/v1/fleet/browsers";
+pub const FLEET_BROWSER_SETTINGS_PATH: &str = "/v1/fleet/browsers/settings";
+pub const FLEET_BROWSER_PREFERRED_PATH: &str = "/v1/fleet/browsers/preferred";
+pub const FLEET_BROWSER_REMOVE_PATH: &str = "/v1/fleet/browsers/remove";
 pub const PLUGIN_INSTALL_PATH: &str = "/v1/plugins/install";
 pub const PLUGIN_UNINSTALL_PATH: &str = "/v1/plugins/uninstall";
 pub const PLUGIN_MANIFEST_PATH: &str = "/v1/plugins/manifest";

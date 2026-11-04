@@ -1,10 +1,13 @@
 //! Desktop-owned app-server connections. Tokens never cross the local app-server API.
 
 use beale_contracts::{
-    FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH, PROTOBUF_CONTENT_TYPE,
-    PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
+    FLEET_BROWSER_PREFERRED_PATH, FLEET_BROWSER_REMOVE_PATH, FLEET_BROWSER_SETTINGS_PATH,
+    FLEET_BROWSERS_PATH, FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
+    PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
     v1::{
-        FleetAppServerDescriptor, FleetPairingRequest, FleetPairingResponse,
+        FleetAddBrowserRequest, FleetAppServerDescriptor, FleetBrowser, FleetBrowsersResponse,
+        FleetPairingRequest, FleetPairingResponse, FleetRemoveBrowserRequest,
+        FleetSetBrowserSettingsRequest, FleetSetPreferredBrowserRequest,
         FleetTotpProvisioningResponse,
     },
 };
@@ -52,6 +55,50 @@ struct SavedConnections {
 pub(crate) struct FleetSnapshot {
     pub(crate) local: FleetServer,
     pub(crate) servers: Vec<FleetServer>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BrowserItem {
+    pub(crate) host_id: String,
+    pub(crate) host_name: String,
+    pub(crate) browser: FleetBrowser,
+}
+
+pub(crate) struct BrowserSnapshot {
+    pub(crate) items: Vec<BrowserItem>,
+    pub(crate) servers: Vec<FleetServer>,
+    pub(crate) error: String,
+}
+
+pub(crate) enum BrowserMutation {
+    Add {
+        host_id: String,
+        name: String,
+        executable: String,
+    },
+    Remove {
+        host_id: String,
+        id: String,
+    },
+    SetSettings {
+        host_id: String,
+        id: String,
+        enabled: bool,
+        all_workspaces: bool,
+        workspace_ids: Vec<String>,
+    },
+    SetPreferred {
+        host_id: String,
+        id: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TailnetDevice {
+    pub(crate) dns_name: String,
+    pub(crate) host_name: String,
+    pub(crate) os_name: String,
+    pub(crate) online: bool,
 }
 
 pub(crate) enum Mutation {
@@ -262,10 +309,92 @@ struct TailnetStatus {
 struct TailnetPeer {
     #[serde(rename = "DNSName", default)]
     dns_name: String,
+    #[serde(rename = "HostName", default)]
+    host_name: String,
+    #[serde(rename = "OS", default)]
+    os_name: String,
     #[serde(rename = "Online", default)]
     online: bool,
     #[serde(rename = "TailscaleIPs", default)]
     ips: Vec<String>,
+}
+
+fn devices_from_status(status: &TailnetStatus) -> Result<Vec<TailnetDevice>, String> {
+    if status.backend_state != "Running" {
+        return Err("Tailscale is not connected.".to_owned());
+    }
+    let self_name = status
+        .self_peer
+        .dns_name
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if self_name.len() > 253 {
+        return Err("Tailscale MagicDNS is unavailable.".to_owned());
+    }
+    normalize_endpoint(&format!("https://{self_name}"))
+        .map_err(|_| "Tailscale MagicDNS is unavailable.".to_owned())?;
+    let (_, tailnet) = self_name
+        .split_once('.')
+        .ok_or("Tailscale MagicDNS is unavailable.")?;
+    let mut devices = status
+        .peers
+        .values()
+        .filter_map(|peer| {
+            let dns_name = peer.dns_name.trim_end_matches('.').to_ascii_lowercase();
+            if dns_name.len() > 253
+                || dns_name.split_once('.').map(|(_, suffix)| suffix) != Some(tailnet)
+                || normalize_endpoint(&format!("https://{dns_name}")).is_err()
+            {
+                return None;
+            }
+            let host_name = if valid_text(&peer.host_name, 100) {
+                peer.host_name.clone()
+            } else {
+                dns_name.split('.').next()?.to_owned()
+            };
+            let os_name = match peer.os_name.to_ascii_lowercase().as_str() {
+                "windows" => "Windows".to_owned(),
+                "darwin" | "macos" => "macOS".to_owned(),
+                "linux" => "Linux".to_owned(),
+                "ios" => "iOS".to_owned(),
+                "android" => "Android".to_owned(),
+                _ if valid_text(&peer.os_name, 40) => peer.os_name.clone(),
+                _ => "Other".to_owned(),
+            };
+            Some(TailnetDevice {
+                dns_name,
+                host_name,
+                os_name,
+                online: peer.online,
+            })
+        })
+        .collect::<Vec<_>>();
+    devices.sort_by(|left, right| {
+        right.online.cmp(&left.online).then_with(|| {
+            left.host_name
+                .to_ascii_lowercase()
+                .cmp(&right.host_name.to_ascii_lowercase())
+        })
+    });
+    let mut seen = HashSet::new();
+    devices.retain(|device| seen.insert(device.dns_name.clone()));
+    devices.truncate(128);
+    Ok(devices)
+}
+
+pub(crate) async fn import_devices() -> Result<Vec<TailnetDevice>, String> {
+    devices_from_status(&tailnet_status().await?)
+}
+
+pub(crate) fn imported_endpoint(device: &TailnetDevice, port_text: &str) -> Result<String, String> {
+    let port = port_text
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port > 0)
+        .ok_or("Enter a valid HTTPS port.")?;
+    normalize_endpoint(&format!("https://{}:{port}", device.dns_name))
+        .map(|(endpoint, _, _)| endpoint)
 }
 
 fn peer_ip(status: &TailnetStatus, host: &str) -> Result<IpAddr, String> {
@@ -360,7 +489,7 @@ async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, String
         .await
         .map_err(|_| "App-server response was interrupted.".to_owned())?
     {
-        if bytes.len() + chunk.len() > 4_096 {
+        if bytes.len() + chunk.len() > 8_192 {
             return Err("App-server response is too large.".to_owned());
         }
         bytes.extend_from_slice(&chunk);
@@ -607,6 +736,232 @@ pub(crate) async fn load() -> Result<FleetSnapshot, String> {
     Ok(FleetSnapshot { local, servers })
 }
 
+async fn local_browser_client() -> Result<(Client, String, String), String> {
+    let addr = crate::connection::configured_addr()
+        .map_err(|_| "Invalid local app-server address.".to_owned())?;
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| "Could not initialize local app-server connection.".to_owned())?;
+    if !matches!(
+        crate::connection::probe(&client, addr).await,
+        crate::ConnectionStatus::Connected { .. }
+    ) {
+        return Err("Local app-server needs the current Beale protocol.".to_owned());
+    }
+    let token = crate::provider_auth::authenticated_token(&client, addr).await?;
+    Ok((client, format!("http://{addr}"), token))
+}
+
+async fn browser_client(host_id: &str) -> Result<(Client, String, String), String> {
+    if host_id == "local" {
+        return local_browser_client().await;
+    }
+    let mut server = read_saved()?
+        .servers
+        .into_iter()
+        .find(|server| server.id == host_id && server.enabled)
+        .ok_or("App server is unavailable.")?;
+    let status = tailnet_status().await?;
+    probe(&mut server, &status).await?;
+    let client = remote_client(&server.endpoint, &status)?;
+    Ok((client, server.endpoint, server.token))
+}
+
+async fn fetch_browsers(
+    client: &Client,
+    base: &str,
+    token: &str,
+) -> Result<Vec<FleetBrowser>, String> {
+    let response = client
+        .get(format!("{base}{FLEET_BROWSERS_PATH}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| "Could not reach app-server browser inventory.".to_owned())?;
+    if !response.status().is_success()
+        || response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some(PROTOBUF_CONTENT_TYPE)
+    {
+        return Err("App-server browser inventory is unavailable.".to_owned());
+    }
+    let response = FleetBrowsersResponse::decode(read_bounded(response).await?.as_slice())
+        .map_err(|_| "Invalid app-server browser inventory.".to_owned())?;
+    if response.browsers.len() > 64
+        || response
+            .browsers
+            .iter()
+            .filter(|browser| browser.preferred)
+            .count()
+            > 1
+        || response.browsers.iter().any(|browser| {
+            !valid_text(&browser.id, 80)
+                || !valid_text(&browser.name, 80)
+                || browser.workspace_ids.len() > 128
+                || (browser.all_workspaces && !browser.workspace_ids.is_empty())
+                || browser
+                    .workspace_ids
+                    .iter()
+                    .any(|id| uuid::Uuid::parse_str(id).is_err())
+                || browser.workspace_ids.iter().collect::<HashSet<_>>().len()
+                    != browser.workspace_ids.len()
+                || (browser.preferred && (!browser.enabled || !browser.available))
+        })
+    {
+        return Err("Invalid app-server browser inventory.".to_owned());
+    }
+    Ok(response.browsers)
+}
+
+pub(crate) async fn load_browsers() -> BrowserSnapshot {
+    let mut items = Vec::new();
+    let mut errors = Vec::new();
+    let mut servers = Vec::new();
+    match local_browser_client().await {
+        Ok((client, base, token)) => match fetch_browsers(&client, &base, &token).await {
+            Ok(browsers) => items.extend(browsers.into_iter().map(|browser| BrowserItem {
+                host_id: "local".to_owned(),
+                host_name: "Local App Server".to_owned(),
+                browser,
+            })),
+            Err(error) => errors.push(error),
+        },
+        Err(error) => errors.push(error),
+    }
+    match read_saved() {
+        Ok(saved) => {
+            servers = saved.servers;
+            let enabled = servers
+                .iter()
+                .filter(|server| server.enabled)
+                .collect::<Vec<_>>();
+            let status = if enabled.is_empty() {
+                None
+            } else {
+                Some(tailnet_status().await)
+            };
+            let remote = join_all(enabled.into_iter().map(|server| {
+                let status = status.as_ref();
+                async move {
+                    let result = match status {
+                        Some(Ok(status)) => {
+                            let mut verified = server.clone();
+                            match probe(&mut verified, status).await {
+                                Ok(()) => match remote_client(&server.endpoint, status) {
+                                    Ok(client) => {
+                                        fetch_browsers(&client, &server.endpoint, &server.token)
+                                            .await
+                                    }
+                                    Err(error) => Err(error),
+                                },
+                                Err(error) => Err(error),
+                            }
+                        }
+                        Some(Err(error)) => Err(error.clone()),
+                        None => Err("Tailscale status is unavailable.".to_owned()),
+                    };
+                    (server, result)
+                }
+            }))
+            .await;
+            for (server, result) in remote {
+                match result {
+                    Ok(browsers) => items.extend(browsers.into_iter().map(|browser| BrowserItem {
+                        host_id: server.id.clone(),
+                        host_name: if server.display_name.is_empty() {
+                            server.host_name.clone()
+                        } else {
+                            server.display_name.clone()
+                        },
+                        browser,
+                    })),
+                    Err(_) => errors.push(format!(
+                        "Browser inventory unavailable on {}.",
+                        if server.display_name.is_empty() {
+                            &server.host_name
+                        } else {
+                            &server.display_name
+                        }
+                    )),
+                }
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    items.sort_by(|left, right| {
+        left.browser
+            .name
+            .cmp(&right.browser.name)
+            .then(left.host_name.cmp(&right.host_name))
+    });
+    BrowserSnapshot {
+        items,
+        servers,
+        error: errors.join(" "),
+    }
+}
+
+pub(crate) async fn mutate_browser(action: BrowserMutation) -> Result<(), String> {
+    let host_id = match &action {
+        BrowserMutation::Add { host_id, .. }
+        | BrowserMutation::Remove { host_id, .. }
+        | BrowserMutation::SetSettings { host_id, .. }
+        | BrowserMutation::SetPreferred { host_id, .. } => host_id,
+    };
+    let (client, base, token) = browser_client(host_id).await?;
+    let (path, body) = match action {
+        BrowserMutation::Add {
+            name, executable, ..
+        } => (
+            FLEET_BROWSERS_PATH,
+            FleetAddBrowserRequest { name, executable }.encode_to_vec(),
+        ),
+        BrowserMutation::Remove { id, .. } => (
+            FLEET_BROWSER_REMOVE_PATH,
+            FleetRemoveBrowserRequest { id }.encode_to_vec(),
+        ),
+        BrowserMutation::SetSettings {
+            id,
+            enabled,
+            all_workspaces,
+            workspace_ids,
+            ..
+        } => (
+            FLEET_BROWSER_SETTINGS_PATH,
+            FleetSetBrowserSettingsRequest {
+                id,
+                enabled,
+                all_workspaces,
+                workspace_ids,
+            }
+            .encode_to_vec(),
+        ),
+        BrowserMutation::SetPreferred { id, .. } => (
+            FLEET_BROWSER_PREFERRED_PATH,
+            FleetSetPreferredBrowserRequest { id }.encode_to_vec(),
+        ),
+    };
+    let response = client
+        .post(format!("{base}{path}"))
+        .bearer_auth(token)
+        .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| "Could not reach app-server browser inventory.".to_owned())?;
+    match response.status() {
+        reqwest::StatusCode::CREATED | reqwest::StatusCode::NO_CONTENT => Ok(()),
+        reqwest::StatusCode::BAD_REQUEST => Err("Enter a name and an absolute path to an existing browser executable on the selected host.".to_owned()),
+        reqwest::StatusCode::CONFLICT => Err("That browser executable is already added.".to_owned()),
+        reqwest::StatusCode::FORBIDDEN => Err("Fleet is disabled on the selected app server.".to_owned()),
+        _ => Err("Could not update app-server browser inventory.".to_owned()),
+    }
+}
+
 pub(crate) async fn mutate(action: Mutation) -> Result<MutationResult, String> {
     let path = preference_path()?;
     let mut saved = read_at(&path)?;
@@ -742,6 +1097,30 @@ mod tests {
         );
         assert!(peer_ip(&status, "remote.other.ts.net").is_err());
         assert!(peer_ip(&status, "missing.example.ts.net").is_err());
+    }
+
+    #[test]
+    fn import_lists_only_valid_tailnet_peers_and_keeps_otp_endpoint_bounded() {
+        let status: TailnetStatus = serde_json::from_str(
+            r#"{"BackendState":"Running","Self":{"DNSName":"local.example.ts.net."},"Peer":{"one":{"DNSName":"online.example.ts.net.","HostName":"Example workstation","OS":"windows","Online":true},"two":{"DNSName":"offline.example.ts.net.","HostName":"Example server","OS":"linux","Online":false},"three":{"DNSName":"other.other.ts.net.","HostName":"Other network","Online":true}}}"#,
+        )
+        .unwrap();
+        let devices = devices_from_status(&status).unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].host_name, "Example workstation");
+        assert_eq!(devices[0].os_name, "Windows");
+        assert!(devices[0].online);
+        assert!(!devices[1].online);
+        assert_eq!(
+            imported_endpoint(&devices[0], "43832").unwrap(),
+            "https://online.example.ts.net:43832"
+        );
+        assert!(imported_endpoint(&devices[0], "0").is_err());
+        let stopped: TailnetStatus = serde_json::from_str(
+            r#"{"BackendState":"Stopped","Self":{"DNSName":"local.example.ts.net."}}"#,
+        )
+        .unwrap();
+        assert!(devices_from_status(&stopped).is_err());
     }
 
     #[test]

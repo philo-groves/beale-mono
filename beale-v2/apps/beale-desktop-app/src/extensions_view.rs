@@ -20,10 +20,10 @@ use crate::{
     form_button,
     form_controls::toggle_button,
     icons::{
-        EXTENSION_DEVICE, EXTENSION_FLAG, EXTENSION_LINKS, EXTENSION_WINDOWS, FEATURES, FLEET,
-        INFO, PLUGINS, PLUS, RESEARCH_KITS, TARGET,
+        CHEVRON_DOWN, CHEVRON_UP, EXTENSION_DEVICE, EXTENSION_FLAG, EXTENSION_LINKS,
+        EXTENSION_WINDOWS, FEATURES, FLEET, INFO, PLUGINS, PLUS, RESEARCH_KITS, TARGET,
     },
-    in_place_menu, modal_dialog, selection_button, sidenav_heading, ui_font,
+    in_place_menu, modal_dialog, sidenav_heading, ui_font,
     workspace_creation::field,
 };
 
@@ -1274,7 +1274,7 @@ pub(crate) fn next_workspace_scope(
     Some((false, next))
 }
 
-fn workspace_scope_label(state: &State, all_workspaces: bool, ids: &[String]) -> String {
+pub(crate) fn workspace_scope_label(state: &State, all_workspaces: bool, ids: &[String]) -> String {
     if all_workspaces {
         return "All Workspaces".to_owned();
     }
@@ -1290,6 +1290,39 @@ fn workspace_scope_label(state: &State, all_workspaces: bool, ids: &[String]) ->
             ),
         _ => format!("{} Workspaces", ids.len()),
     }
+}
+
+pub(crate) fn workspace_scope_button(
+    label: String,
+    open: bool,
+    action: impl Fn(&mut State) + 'static,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let color = |value| theme.color(value);
+    row()
+        .role("button")
+        .label(format!("Workspace scope: {label}"))
+        .h(26.0)
+        .px(8.0)
+        .center_y()
+        .gap(6.0)
+        .radius(8.0)
+        .continuous_corners()
+        .fill(if open {
+            color("#303030")
+        } else {
+            Color::TRANSPARENT
+        })
+        .hover(color("#414141"))
+        .child(
+            text(label)
+                .min_w(0.0)
+                .truncate()
+                .font(ui_font(13.0, 400.0))
+                .color(color("#b8b8b8")),
+        )
+        .child(icon(if open { &CHEVRON_UP } else { &CHEVRON_DOWN }, 13.0).color(color("#b8b8b8")))
+        .on_press(action)
 }
 
 fn stat_row(label: &'static str, value: impl ToString, theme: ThemeStyle<'_>) -> El {
@@ -1433,7 +1466,7 @@ fn plugin_card(index: usize, plugin: &PluginEntry, state: &State, theme: ThemeSt
                 .child(action)
                 .child(if plugin.installed {
                     let menu = SelectionMenu::PluginWorkspaces { index };
-                    selection_button(
+                    workspace_scope_button(
                         workspace_scope_label(state, plugin.all_workspaces, &plugin.workspace_ids),
                         state.selection_menu == Some(menu),
                         move |state| crate::toggle_selection_menu(state, menu),
@@ -1626,7 +1659,7 @@ fn feature_card(index: usize, feature: &FeatureEntry, state: &State, theme: Them
                 .child(action)
                 .child(if feature.enabled {
                     let menu = SelectionMenu::FeatureWorkspaces { index };
-                    selection_button(
+                    workspace_scope_button(
                         workspace_scope_label(
                             state,
                             feature.all_workspaces,

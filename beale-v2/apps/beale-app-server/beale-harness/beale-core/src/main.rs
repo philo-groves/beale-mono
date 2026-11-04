@@ -17,6 +17,8 @@ use tokio::net::TcpListener;
 
 mod auth;
 mod features;
+#[cfg(windows)]
+mod tray;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -114,8 +116,18 @@ async fn serve() -> Result<()> {
         .merge(beale_safety::router(token.clone(), db.clone()))
         .merge(beale_extender::router(token.clone(), db, plugin_data_root)?)
         .merge(auth::router(token, store));
+    #[cfg(windows)]
+    let (tray_exit_tx, tray_exit_rx) = tokio::sync::oneshot::channel();
+    #[cfg(windows)]
+    let _tray = tray::TrayHandle::start(addr, tray_exit_tx)?;
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
+            #[cfg(windows)]
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = tray_exit_rx => {},
+            }
+            #[cfg(not(windows))]
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;

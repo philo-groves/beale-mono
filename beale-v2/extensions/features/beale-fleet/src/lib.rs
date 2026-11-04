@@ -1,5 +1,6 @@
 //! Fleet feature metadata and authenticated host descriptor.
 
+mod browsers;
 mod http;
 pub use http::router;
 

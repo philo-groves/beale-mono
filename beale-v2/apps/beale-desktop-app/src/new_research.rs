@@ -169,7 +169,11 @@ fn choices(state: &State) -> Vec<ModelChoice> {
             })
         })
         .collect();
-    for provider in state.custom_providers.iter() {
+    for provider in state
+        .custom_providers
+        .iter()
+        .filter(|provider| provider.api_key_configured)
+    {
         for model in &provider.models {
             choices.push(ModelChoice {
                 selection: ModelSelection {
@@ -183,6 +187,17 @@ fn choices(state: &State) -> Vec<ModelChoice> {
         }
     }
     choices
+}
+
+fn has_configured_provider(state: &State) -> bool {
+    state
+        .auth_status
+        .iter()
+        .any(|status| status.subscription || status.api_key)
+        || state
+            .custom_providers
+            .iter()
+            .any(|provider| provider.api_key_configured)
 }
 
 fn custom_provider_id(selection: &ModelSelection) -> Option<&str> {
@@ -1081,13 +1096,10 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     let no_workspaces = state.workspace_list_loaded && !has_workspaces;
     let choices = choices(state);
     let selected = selected(state, &choices);
+    let no_provider = state.auth_loaded && !has_configured_provider(state);
     let model_label = selected.map_or_else(
         || {
-            if state
-                .auth_status
-                .iter()
-                .any(|status| status.subscription || status.api_key)
-            {
+            if has_configured_provider(state) {
                 "Loading models…".to_owned()
             } else {
                 "Choose a model".to_owned()
@@ -1154,6 +1166,15 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             .hover(theme.color("#303030"))
             .on_press(toggle_menu);
     }
+    let model_control = if no_provider {
+        text("No provider configured. Add one in Settings to start research.")
+            .key("new-research-provider-warning")
+            .font(ui_font(13.0, 500.0))
+            .color(theme.color("#dca15f"))
+            .pl(8.0)
+    } else {
+        model_button
+    };
     let composer_input = if has_workspaces {
         text_input(&state.new_research_prompt, ui_font(13.5, 400.0))
             .key("new-research-composer-input")
@@ -1205,7 +1226,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 .h(38.0)
                 .px(7.0)
                 .center_y()
-                .child(model_button)
+                .child(model_control)
                 .child(el().grow(1.0))
                 .child(
                     row()
@@ -1660,8 +1681,8 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
 #[cfg(test)]
 mod tests {
     use super::{
-        MenuSection, choices, is_web_link, normalize_goal_limit, options, selected_model,
-        work_duration,
+        MenuSection, choices, has_configured_provider, is_web_link, normalize_goal_limit, options,
+        selected_model, work_duration,
     };
     use crate::{Provider, State};
     use beale_contracts::v1::{CustomProvider, ModelEntry};
@@ -1719,6 +1740,31 @@ mod tests {
             .collect();
         assert_eq!(labels, ["First API", "Second API"]);
         assert_eq!(options(&state, MenuSection::Model).len(), 1);
+    }
+
+    #[test]
+    fn unconfigured_custom_provider_has_no_model_choices() {
+        let mut state = State {
+            custom_providers: vec![CustomProvider {
+                id: "custom-example".to_owned(),
+                name: "Example API".to_owned(),
+                base_url: "https://api.example.test/v1".to_owned(),
+                models: vec![ModelEntry {
+                    id: "example-model".to_owned(),
+                    display_name: "Example Model".to_owned(),
+                }],
+                lead_model: "example-model".to_owned(),
+                small_model: "example-model".to_owned(),
+                reasoning: false,
+                api_key_configured: false,
+            }],
+            ..State::default()
+        };
+        assert!(!has_configured_provider(&state));
+        assert!(choices(&state).is_empty());
+        state.custom_providers[0].api_key_configured = true;
+        assert!(has_configured_provider(&state));
+        assert_eq!(choices(&state).len(), 1);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 mod appearance;
 mod archive_view;
+mod browser_logos;
 mod color_picker;
 mod connection;
 mod desktop_fonts;
@@ -213,6 +214,7 @@ enum SelectionMenu {
     ResearchWorkspace,
     QuickChatWorkspace,
     HomeCollection,
+    FleetAdd,
     ResearchKit,
     SurfaceKind,
     WorkspaceSurfaceKind,
@@ -223,6 +225,9 @@ enum SelectionMenu {
         index: usize,
     },
     FeatureWorkspaces {
+        index: usize,
+    },
+    BrowserWorkspaces {
         index: usize,
     },
     SourcePriority {
@@ -494,13 +499,14 @@ const TYPOGRAPHY_ROWS: [TypographyRowSpec; 2] = [
 ];
 
 const NAVIGATION_RAIL_WIDTH: f32 = 50.0;
+const NAVIGATION_DIVIDER_COLOR: &str = "#555555";
 const SIDENAV_DEFAULT_WIDTH: f32 = 292.0;
 const SIDENAV_MIN_WIDTH: f32 = 240.0;
 const SIDENAV_MAX_WIDTH: f32 = 420.0;
 const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
-    198.0
+    184.0
 } else {
-    122.0
+    106.0
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -711,7 +717,6 @@ struct State {
     lead_custom_provider_id: String,
     lead_busy: bool,
     lead_error: String,
-    provider_selection_initialized: bool,
     native_window_border: bool,
     auth_message: String,
     auth_message_is_error: bool,
@@ -911,7 +916,6 @@ impl Default for State {
             lead_custom_provider_id: String::new(),
             lead_busy: false,
             lead_error: String::new(),
-            provider_selection_initialized: false,
             native_window_border: false,
             auth_message: String::new(),
             auth_message_is_error: false,
@@ -1157,7 +1161,7 @@ impl State {
 
     fn show_section(&mut self, section: SettingsSection) {
         let location = match section {
-            SettingsSection::Providers => ViewLocation::Providers(self.selected),
+            SettingsSection::Providers => ViewLocation::Providers(Provider::Anthropic),
             SettingsSection::Appearance => ViewLocation::Appearance(self.appearance_tab),
             SettingsSection::Safety => ViewLocation::Safety(self.permissions_tab),
             section => ViewLocation::Settings(section),
@@ -2594,6 +2598,22 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 selected: state.home_collection == collection,
             })
             .collect(),
+        SelectionMenu::FleetAdd => [
+            ("manual", "Manually Add", "Enter a Tailscale HTTPS URL"),
+            (
+                "tailscale",
+                "Tailscale Import",
+                "Choose a device on this tailnet",
+            ),
+        ]
+        .into_iter()
+        .map(|(value, label, detail)| in_place_menu::MenuItem {
+            value: value.to_owned(),
+            label: label.to_owned(),
+            detail: Some(detail.to_owned()),
+            selected: false,
+        })
+        .collect(),
         SelectionMenu::Repeat => new_research::RepeatPreset::ALL
             .into_iter()
             .map(|preset| in_place_menu::MenuItem {
@@ -2725,6 +2745,9 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
         SelectionMenu::PluginWorkspaces { .. } | SelectionMenu::FeatureWorkspaces { .. } => {
             extensions_view::workspace_scope_items(state, menu)
         }
+        SelectionMenu::BrowserWorkspaces { index } => {
+            fleet_view::workspace_scope_items(state, index)
+        }
         SelectionMenu::SourcePriority { provider } => {
             let status = &state.auth_status[provider.index()];
             if state.selected != provider || !status.subscription || !status.api_key {
@@ -2780,7 +2803,11 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
     match menu {
         SelectionMenu::PluginWorkspaces { index } => return format!("plugin-scope-{index}"),
         SelectionMenu::FeatureWorkspaces { index } => return format!("feature-scope-{index}"),
+        SelectionMenu::BrowserWorkspaces { index } => {
+            return format!("fleet-browser-scope-{index}");
+        }
         SelectionMenu::HomeCollection => "home-collection-control",
+        SelectionMenu::FleetAdd => "fleet-add-server",
         SelectionMenu::Repeat => "new-research-repeat-control",
         SelectionMenu::GoalMode => "new-research-goal-control",
         SelectionMenu::ResearchWorkspace => "new-research-workspace-control",
@@ -2850,7 +2877,9 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
     }
     if !matches!(
         menu,
-        SelectionMenu::PluginWorkspaces { .. } | SelectionMenu::FeatureWorkspaces { .. }
+        SelectionMenu::PluginWorkspaces { .. }
+            | SelectionMenu::FeatureWorkspaces { .. }
+            | SelectionMenu::BrowserWorkspaces { .. }
     ) {
         state.selection_menu = None;
     }
@@ -2863,6 +2892,11 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
                 state.home_collection = collection;
             }
         }
+        SelectionMenu::FleetAdd => match value.as_str() {
+            "manual" => fleet_view::start_manual_add(state),
+            "tailscale" => fleet_view::start_import(state),
+            _ => {}
+        },
         SelectionMenu::Repeat => {
             if let Some(preset) = new_research::RepeatPreset::ALL
                 .into_iter()
@@ -2942,6 +2976,9 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             if let Some((all, ids)) = extensions_view::next_workspace_scope(state, menu, &value) {
                 extensions_view::start_workspace_scope_save(state, menu, all, ids);
             }
+        }
+        SelectionMenu::BrowserWorkspaces { index } => {
+            fleet_view::select_workspace_scope(state, index, &value);
         }
         SelectionMenu::SourcePriority { provider } => {
             let method = if value == "api-key" {
@@ -3155,7 +3192,8 @@ fn header(state: &State, prefix_width: f32) -> El {
         .h_full()
         .center_y()
         .gap(2.0)
-        .px(8.0);
+        .pl(8.0)
+        .pr(if state.sidenav_visible { 8.0 } else { 0.0 });
     if cfg!(target_os = "macos") {
         left = left.child(el().w(76.0));
     }
@@ -3197,7 +3235,7 @@ fn header(state: &State, prefix_width: f32) -> El {
             .child(
                 el().key("header-divider")
                     .size(1.0, 18.0)
-                    .fill(color("#555555")),
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
             )
             .child(icon(state.settings_section.icon(), 16.0).color(color("#c8c8c8")))
             .child(
@@ -3215,7 +3253,7 @@ fn header(state: &State, prefix_width: f32) -> El {
             .child(
                 el().key("header-divider")
                     .size(1.0, 18.0)
-                    .fill(color("#555555")),
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
             )
             .child(icon(&EXTENSIONS, 16.0).color(color("#c8c8c8")))
             .child(
@@ -3233,7 +3271,7 @@ fn header(state: &State, prefix_width: f32) -> El {
             .child(
                 el().key("header-divider")
                     .size(1.0, 18.0)
-                    .fill(color("#555555")),
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
             )
             .child(icon(&FLEET, 16.0).color(color("#c8c8c8")))
             .child(
@@ -3251,7 +3289,7 @@ fn header(state: &State, prefix_width: f32) -> El {
             .child(
                 el().key("header-divider")
                     .size(1.0, 18.0)
-                    .fill(color("#555555")),
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
             )
             .child(icon(&HOME, 16.0).color(color("#c8c8c8")))
             .child(
@@ -3269,7 +3307,7 @@ fn header(state: &State, prefix_width: f32) -> El {
             .child(
                 el().key("header-divider")
                     .size(1.0, 18.0)
-                    .fill(color("#555555")),
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
             )
             .child(icon(&NEW_RESEARCH, 16.0).color(color("#c8c8c8")))
             .child(
@@ -3291,7 +3329,7 @@ fn header(state: &State, prefix_width: f32) -> El {
             .child(
                 el().key("header-divider")
                     .size(1.0, 18.0)
-                    .fill(color("#555555")),
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
             )
             .child(icon(&FOLDER_OPEN, 16.0).color(color("#c8c8c8")))
             .child(
@@ -3465,7 +3503,7 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             el().key("navigation-conditional-divider")
                 .w(26.0)
                 .h(1.0)
-                .fill(theme.color("#2a2a2a")),
+                .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
         );
         rail = rail.child(nav_button(key, label, glyph, active, theme));
     }
@@ -4856,11 +4894,11 @@ fn providers_settings_view(state: &State, cx: &mut Cx<State>) -> Vec<El> {
         }
         - 78.0;
     let providers = [
-        Provider::OpenAi,
-        Provider::Xai,
         Provider::Anthropic,
-        Provider::Zai,
+        Provider::OpenAi,
         Provider::OpenRouter,
+        Provider::Xai,
+        Provider::Zai,
         Provider::Custom,
     ];
     let tabs = if tabs_width < 530.0 {
@@ -5281,6 +5319,16 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.primary_view == PrimaryView::Fleet && state.fleet.browser_dialog_open {
+        for layer in fleet_view::browser_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Fleet && state.fleet.import_dialog_open {
+        for layer in fleet_view::import_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
     if state.primary_view == PrimaryView::Fleet && state.fleet.details_id.is_some() {
         for layer in fleet_view::details_dialog(state, theme) {
             window = window.child(layer);
@@ -5308,6 +5356,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             }
             SelectionMenu::HomeCollection => {
                 state.primary_view != PrimaryView::Settings && state.sidenav_visible
+            }
+            SelectionMenu::FleetAdd => {
+                state.primary_view == PrimaryView::Fleet
+                    && state.fleet_section == fleet_view::FleetSection::AppServers
             }
             SelectionMenu::GoalMode => {
                 state.primary_view == PrimaryView::NewResearch
@@ -5340,6 +5392,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                         .get(index)
                         .is_some_and(|feature| feature.enabled)
             }
+            SelectionMenu::BrowserWorkspaces { index } => {
+                state.primary_view == PrimaryView::Fleet
+                    && state.fleet_section == fleet_view::FleetSection::Browsers
+                    && state.fleet.browser_scope_enabled(index)
+            }
             _ => {
                 state.primary_view == PrimaryView::Settings
                     && state.settings_section == SettingsSection::Providers
@@ -5356,6 +5413,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             if !items.is_empty() {
                 let (title, width) = match menu {
                     SelectionMenu::HomeCollection => ("Sidebar collection", 170.0),
+                    SelectionMenu::FleetAdd => ("Add App Server", 240.0),
                     SelectionMenu::Repeat => ("Repeat schedule", 190.0),
                     SelectionMenu::GoalMode => ("Goal Mode", 150.0),
                     SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
@@ -5368,7 +5426,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
                     SelectionMenu::TextSize => ("Text Size", 178.0),
                     SelectionMenu::PluginWorkspaces { .. }
-                    | SelectionMenu::FeatureWorkspaces { .. } => ("Workspaces", 240.0),
+                    | SelectionMenu::FeatureWorkspaces { .. }
+                    | SelectionMenu::BrowserWorkspaces { .. } => ("Workspaces", 240.0),
                     SelectionMenu::SourcePriority { .. } => ("Source Priority", 178.0),
                     SelectionMenu::Model { .. } => ("Choose model", 380.0),
                 };
@@ -5700,7 +5759,6 @@ fn main() -> std::process::ExitCode {
                     false
                 } else {
                     let previous = state.auth_status.clone();
-                    let was_loaded = state.auth_loaded;
                     let previous_lead = state.lead_provider;
                     let was_connected =
                         matches!(state.connection, ConnectionStatus::Connected { .. });
@@ -5720,30 +5778,6 @@ fn main() -> std::process::ExitCode {
                         && !state.daybreak_saving
                     {
                         state.daybreak_mode = mode;
-                    }
-                    let first_added = was_loaded
-                        && previous
-                            .iter()
-                            .all(|item| !item.subscription && !item.api_key)
-                        && (state.lead_provider == Some(Provider::Custom)
-                            || state
-                                .auth_status
-                                .iter()
-                                .any(|item| item.subscription || item.api_key));
-                    if auth_loaded && (!state.provider_selection_initialized || first_added) {
-                        if let Some(lead) = lead_provider {
-                            state.selected = lead;
-                        }
-                        state.provider_selection_initialized = true;
-                    } else if let Some(old) = previous_lead
-                        && state.selected == old
-                        && lead_provider != Some(old)
-                        && (old == Provider::Custom
-                            || (!state.auth_status[old.index()].subscription
-                                && !state.auth_status[old.index()].api_key))
-                        && let Some(new_lead) = lead_provider
-                    {
-                        state.selected = new_lead;
                     }
                     if !auth_loaded
                         || (state.lead_provider != Some(Provider::Custom)
@@ -6069,6 +6103,17 @@ mod tests {
         assert!(runtime.find("provider-detail-xai").is_some());
         assert!(runtime.find("provider-detail-openai").is_none());
         assert!(runtime.find("provider-daybreak-mode").is_none());
+
+        let (x, y) = runtime.find("settings-appearance").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("settings-providers").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.selected, Provider::Anthropic);
+        assert!(runtime.find("provider-detail-anthropic").is_some());
     }
 
     #[test]
@@ -7392,6 +7437,36 @@ mod tests {
             runtime.state.session_error,
             "Create a workspace before sending."
         );
+    }
+
+    #[test]
+    fn new_research_without_provider_warns_instead_of_showing_model_selector() {
+        let state = State {
+            primary_view: PrimaryView::NewResearch,
+            auth_loaded: true,
+            workspaces: vec![WorkspaceSummary {
+                id: "00000000-0000-4000-8000-000000000003".to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: std::env::temp_dir()
+                    .join("example-workspace")
+                    .to_string_lossy()
+                    .into_owned(),
+            }],
+            workspace_list_loaded: true,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("new-research-provider-warning").is_some());
+        assert!(runtime.find("new-research-model-control").is_none());
+        assert!(runtime.find("new-research-workspace-warning").is_none());
+
+        runtime.update(|state, _| {
+            state.auth_status[Provider::OpenAi.index()].api_key = true;
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("new-research-provider-warning").is_none());
+        assert!(runtime.find("new-research-model-control").is_some());
     }
 
     #[test]
@@ -9153,6 +9228,21 @@ mod tests {
         assert!(runtime.find("fleet-tab-available").is_some());
         assert!(runtime.find("fleet-tab-enabled").is_some());
 
+        let (x, y) = runtime.find("fleet-add-browser").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.fleet.browser_dialog_open);
+        assert!(runtime.find("fleet-browser-name").is_some());
+        assert!(runtime.find("fleet-browser-path").is_some());
+        let (x, y) = runtime.find("fleet-browser-cancel").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(!runtime.state.fleet.browser_dialog_open);
+
         let (x, y) = runtime.find("fleet-virtual-machines").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -9202,6 +9292,40 @@ mod tests {
     }
 
     #[test]
+    fn fleet_add_menu_opens_the_manual_form() {
+        let mut state = State {
+            primary_view: PrimaryView::Fleet,
+            ..State::default()
+        };
+        state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == "fleet")
+            .unwrap()
+            .enabled = true;
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("fleet-add-server").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::FleetAdd));
+        let items = selection_menu_items(&runtime.state, SelectionMenu::FleetAdd);
+        assert_eq!(items[0].label, "Manually Add");
+        assert_eq!(items[1].label, "Tailscale Import");
+        let (x, y) = runtime.find("selection-menu-item-0").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.fleet.connect_dialog_open);
+        assert!(runtime.find("fleet-connect-dialog").is_some());
+    }
+
+    #[test]
     fn sidenav_edge_tracks_header_and_resizes_within_bounds() {
         fn aligned(runtime: &Runtime<State>) {
             let (sidenav, _) = runtime.presented("settings-sidenav").unwrap();
@@ -9234,14 +9358,19 @@ mod tests {
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
-        let (leading, _) = runtime.presented("header-leading").unwrap();
+        runtime.frame(1.0);
+        let (forward, _) = runtime.presented("header-forward").unwrap();
         let (divider, _) = runtime.presented("header-divider").unwrap();
-        assert!(divider[0] >= leading[0] + leading[2] + 8.0);
+        assert!(
+            (divider[0] - forward[0] - forward[2]).abs() < 1.0,
+            "forward={forward:?}, divider={divider:?}"
+        );
         assert!(runtime.find("settings-sidenav-resize").is_none());
 
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
+        runtime.frame(1.0);
         assert_eq!(runtime.state.sidenav_width, SIDENAV_MIN_WIDTH);
         aligned(&runtime);
     }

@@ -535,3 +535,38 @@ message FleetPairingRequest {
 message FleetPairingResponse {
   string token = 1;
 }
+
+message FleetBrowser {
+  string id = 1;
+  string name = 2;
+  bool manual = 3;
+  bool available = 4;
+  bool enabled = 5;
+  bool all_workspaces = 6;
+  repeated string workspace_ids = 7;
+  bool preferred = 8;
+}
+
+message FleetBrowsersResponse {
+  repeated FleetBrowser browsers = 1;
+}
+
+message FleetAddBrowserRequest {
+  string name = 1;
+  string executable = 2;
+}
+
+message FleetRemoveBrowserRequest {
+  string id = 1;
+}
+
+message FleetSetBrowserSettingsRequest {
+  string id = 1;
+  bool enabled = 2;
+  bool all_workspaces = 3;
+  repeated string workspace_ids = 4;
+}
+
+message FleetSetPreferredBrowserRequest {
+  string id = 1;
+}

@@ -15,5 +15,8 @@ tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell"] }
+
 [dev-dependencies]
 tower = "0.5"

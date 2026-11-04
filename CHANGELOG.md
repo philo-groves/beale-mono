@@ -6,8 +6,12 @@
 
 #### Added
 
+- Fleet browser cards show their Source in the stat rows and a star for the host's preferred browser. Each app-server initially prefers its OS default browser when available and saves explicit choices in SQLite schema 20; protocol v1.40 carries the preference.
+- Fleet browser cards now offer enabled toggles and per-browser workspace selection; detected and manually added browsers default to enabled for all workspaces.
+- Fleet now detects installed Chrome, Safari, Edge, Firefox, Opera, Brave, and DuckDuckGo at conventional host paths and lets users add or remove manual browser executables per app server. Manual entries persist in app-server SQLite schema 18; protocol v1.38 adds authenticated browser inventory and mutation routes.
+- Added a Fleet add menu with manual entry and Tailscale Import. The import dialog lists local tailnet devices and requires an authenticator code before connecting to a selected app server.
 - Listed the local v2 app server first in Fleet and added an authenticator provisioning QR. Remote desktops can pair with a current six-digit code over Tailscale; the host stores the secret in schema 17 and limits failed attempts with exponential backoff. Contract v1.37 requires rebuilt clients and hosts.
-- Added v2 Fleet connection management for multiple Tailscale app servers. The desktop verifies same-tailnet peers and versioned descriptors, saves private local connection entries, and shows OS, contract, and condition cards with enable controls and editable display names. Browsers and Virtual Machines gain All, Available, and Enabled tabs; their inventories remain empty.
+- Added v2 Fleet connection management for multiple Tailscale app servers. The desktop verifies same-tailnet peers and versioned descriptors, saves private local connection entries, and shows OS, contract, and condition cards with enable controls and editable display names. Browsers and Virtual Machines gain tabs.
 - Added App Servers, Browsers, and Virtual Machines navigation to the v2 Fleet sidenav, with App Servers selected first.
 - Listed Fleet in v2 Features, disabled by default; enabling it shows the Fleet rail destination, and disabling it hides the destination and closes its view.
 - Added a v2 Fleet shell with its own sidenav and main title; conditional rail icons now sit below the standard icons after a divider that appears only when the group has visible items.
@@ -72,6 +76,9 @@
 
 #### Changed
 
+- Replaced generic globe marks on v2 Fleet browser cards with the browsers' color logos; manually named browsers without a matching mark retain the globe.
+- Alphabetized the built-in v2 Providers settings tabs, kept Custom last, and made Anthropic the view opened on navigation.
+- Replaced the New Research model selector with a provider setup warning when no provider is configured; custom providers without API keys no longer appear in model choices.
 - Showed a green dot on the New Research ribbon's Goal Mode and Repeat buttons when their draft options are selected.
 - Made v2 Goal Mode's composer menu toggle a visible checkbox and limited its optional turn and duration fields to positive integers.
 - Shortened the v2 settings area label to Settings in the icon rail, header, and sidenav.
@@ -163,6 +170,7 @@
 
 #### Added
 
+- Added a Windows notification-area icon for the v2 app-server using the Beale logo, with running status and a graceful Exit action.
 - Added protocol v1.35 workspace scope fields and authenticated Plugin and Feature scope updates; SQLite schema 16 persists selections and keeps a restricted scope restricted when a workspace is removed. Goal Mode checks its scope before starting or resuming and pauses active goals outside it.
 - Added v1.34 Plugin tool counts and host-owned MCP launch and discovery for installed bundled and locally supplied packages; uninstall stops active stdio servers.
 - Added v1.33 feature catalog tool counts for optional model-facing tools.
@@ -334,6 +342,10 @@
 - Packaged Desktop builds load the renderer and preload from the app root after the main process is split into a chunk, so the window opens after an update.
 
 ### app-server
+
+#### Added
+
+- Protocol v1.39 adds authenticated Fleet browser settings and returns enabled state and workspace scope with browser inventory. SQLite schema 19 persists those settings and migrates existing hosts with browsers enabled for all workspaces.
 
 #### Changed
 
