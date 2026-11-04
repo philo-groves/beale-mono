@@ -12,11 +12,12 @@ use axum::{
     routing::{get, post},
 };
 use beale_contracts::{
-    PLUGIN_INSTALL_PATH, PLUGIN_MANIFEST_PATH, PLUGIN_UNINSTALL_PATH, PLUGINS_PATH,
-    PROTOBUF_CONTENT_TYPE,
+    PLUGIN_INSTALL_PATH, PLUGIN_MANIFEST_PATH, PLUGIN_SCOPE_PATH, PLUGIN_UNINSTALL_PATH,
+    PLUGINS_PATH, PROTOBUF_CONTENT_TYPE,
     v1::{
         GetPluginManifestRequest, InstallPluginRequest, ListPluginsResponse,
-        PluginManifestResponse, PluginSummary, UninstallPluginRequest,
+        PluginManifestResponse, PluginSummary, SetExtensionWorkspaceScopeRequest,
+        UninstallPluginRequest,
     },
 };
 use beale_storage::HostDatabase;
@@ -212,6 +213,8 @@ impl Catalog {
             has_mcp_server: mcp_server_count > 0,
             mcp_server_count,
             mcp_tool_count,
+            workspace_ids: Vec::new(),
+            all_workspaces: true,
         })
     }
 
@@ -235,6 +238,9 @@ impl Catalog {
             .map(|(name, directory)| {
                 let mut summary = self.scan(&name, &directory)?;
                 summary.installed = installed.contains(&name);
+                let scope = db.extension_scope("plugin", &name)?;
+                summary.workspace_ids = scope.workspace_ids;
+                summary.all_workspaces = scope.all_workspaces;
                 Ok(summary)
             })
             .collect()
@@ -296,6 +302,9 @@ impl Catalog {
         let now = i64::try_from(now).context("installation time overflow")?;
         db.install_plugin(name, now)?;
         summary.installed = true;
+        let scope = db.extension_scope("plugin", name)?;
+        summary.workspace_ids = scope.workspace_ids;
+        summary.all_workspaces = scope.all_workspaces;
         Ok(Some(summary))
     }
 
@@ -305,7 +314,12 @@ impl Catalog {
         };
         let summary = self.scan(name, &root)?;
         db.uninstall_plugin(name)?;
-        Ok(Some(summary))
+        let scope = db.extension_scope("plugin", name)?;
+        Ok(Some(PluginSummary {
+            workspace_ids: scope.workspace_ids,
+            all_workspaces: scope.all_workspaces,
+            ..summary
+        }))
     }
 }
 
@@ -344,7 +358,8 @@ pub fn router(token: String, db: HostDatabase, data_root: PathBuf) -> Result<Rou
         .route(PLUGIN_INSTALL_PATH, post(install_route))
         .route(PLUGIN_UNINSTALL_PATH, post(uninstall_route))
         .route(PLUGIN_MANIFEST_PATH, post(manifest_route))
-        .layer(DefaultBodyLimit::max(1_024))
+        .route(PLUGIN_SCOPE_PATH, post(scope_route))
+        .layer(DefaultBodyLimit::max(8_192))
         .with_state(HttpState { token, db, catalog }))
 }
 
@@ -500,6 +515,62 @@ async fn manifest_route(
     ))
 }
 
+async fn scope_route(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<ProtoResponse, StatusCode> {
+    if !authorized(&headers, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some(PROTOBUF_CONTENT_TYPE)
+    {
+        return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    let request =
+        SetExtensionWorkspaceScopeRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if state
+        .catalog
+        .package(&request.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_none()
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let installed = state
+        .db
+        .installed_plugin_names()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !installed.contains(&request.id) {
+        return Err(StatusCode::CONFLICT);
+    }
+    state
+        .db
+        .set_extension_scope(
+            "plugin",
+            &request.id,
+            request.all_workspaces,
+            &request.workspace_ids,
+        )
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let scope = state
+        .db
+        .extension_scope("plugin", &request.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((
+        [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
+        SetExtensionWorkspaceScopeRequest {
+            id: request.id,
+            workspace_ids: scope.workspace_ids,
+            all_workspaces: scope.all_workspaces,
+        }
+        .encode_to_vec(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,6 +578,7 @@ mod tests {
         body::{Body, to_bytes},
         http::Request,
     };
+    use beale_storage::WorkspaceRow;
     use tower::ServiceExt;
 
     #[test]
@@ -744,6 +816,51 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         assert_eq!(plugin.name, "meta-skills");
         assert!(plugin.installed);
         assert_eq!(db.installed_plugin_names().unwrap(), ["meta-skills"]);
+
+        db.replace_workspaces(&[WorkspaceRow {
+            id: "workspace-example".to_owned(),
+            name: "Example workspace".to_owned(),
+            directory: "example-directory".to_owned(),
+        }])
+        .unwrap();
+        let scope = SetExtensionWorkspaceScopeRequest {
+            id: "meta-skills".to_owned(),
+            workspace_ids: vec!["workspace-example".to_owned()],
+            all_workspaces: false,
+        };
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(PLUGIN_SCOPE_PATH)
+                    .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+                    .body(Body::from(scope.encode_to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let saved = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(PLUGIN_SCOPE_PATH)
+                    .header(header::AUTHORIZATION, "Bearer example-token")
+                    .header(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+                    .body(Body::from(scope.encode_to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::OK);
+        assert_eq!(
+            db.extension_scope("plugin", "meta-skills")
+                .unwrap()
+                .workspace_ids,
+            ["workspace-example"]
+        );
 
         let unauthorized = app
             .clone()

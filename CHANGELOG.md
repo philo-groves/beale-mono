@@ -6,7 +6,13 @@
 
 #### Added
 
-- Added Available and Enabled tabs to the v2 Features view; Enabled shows only active features.
+- Listed the local v2 app server first in Fleet and added an authenticator provisioning QR. Remote desktops can pair with a current six-digit code over Tailscale; the host stores the secret in schema 17 and limits failed attempts with exponential backoff. Contract v1.37 requires rebuilt clients and hosts.
+- Added v2 Fleet connection management for multiple Tailscale app servers. The desktop verifies same-tailnet peers and versioned descriptors, saves private local connection entries, and shows OS, contract, and condition cards with enable controls and editable display names. Browsers and Virtual Machines gain All, Available, and Enabled tabs; their inventories remain empty.
+- Added App Servers, Browsers, and Virtual Machines navigation to the v2 Fleet sidenav, with App Servers selected first.
+- Listed Fleet in v2 Features, disabled by default; enabling it shows the Fleet rail destination, and disabling it hides the destination and closes its view.
+- Added a v2 Fleet shell with its own sidenav and main title; conditional rail icons now sit below the standard icons after a divider that appears only when the group has visible items.
+- Added per-card workspace selection for installed v2 Plugins and enabled Features, defaulting to All Workspaces and allowing any subset or no workspaces.
+- Added All Features, Available, and Enabled tabs to the v2 Features view; the latter two filter by enablement.
 - Added MCP server and live tool counts to v2 Plugin cards, including locally supplied Agent Plugins packages.
 - Added Feature card details dialogs that fetch a feature's prompt extension on demand; Goal Mode displays its reusable prompt guidance.
 - Listed Goal Mode in the v2 Features view with an Enable/Disable card; it starts disabled and its composer control appears only while enabled.
@@ -17,7 +23,7 @@
 - Added an Uninstall action to installed v2 plugin cards, returning bundled packages to Available.
 - Connected v2 bundled plugin Install actions to the app-server and persisted the Installed tab across restarts.
 - Bundled four v1 managed Agent Plugins packages in v2 Extensions and listed them as Available, uninstalled plugins.
-- Added a v2 Extensions area with Plugins, Features, and Research Kits navigation; the Plugins view has Available and Installed tabs and an external-source dialog scaffold.
+- Added a v2 Extensions area with Plugins, Features, and Research Kits navigation; the Plugins view has All Plugins, Available, and Installed tabs and an external-source dialog scaffold.
 - Added up and down input-history buttons to v2 workspace session and Quick Chat composers, with unsent-draft restoration and history reset after manual edits or chat changes.
 - Added plus buttons beside v2 Safety rule-set titles and a shared creation dialog for new Auto-Review and Guardian rules.
 - Added v2 Permissions settings with Auto-Review and Guardian tabs and editable, disableable rules.
@@ -30,7 +36,7 @@
 - Displayed provider supplied reasoning summaries in v2 session transcripts beside tool activity.
 - Added expandable v2 session tool rows that fetch arguments and paged output only when opened.
 - Added navigation icon tooltips and a hover-revealed New Research action on each v2 Home workspace row.
-- Started the v2 Rune desktop client with Beale's dark icon rail and an Agent Settings Providers view for OpenAI and xAI.
+- Started the v2 Rune desktop client with Beale's dark icon rail and a Settings Providers view for OpenAI and xAI.
 - Added the v2 desktop custom header with navigation toggle, contextual title, and Windows window controls.
 - Added back and forward buttons to the v2 desktop header for settings sections and provider and appearance views, with muted disabled states.
 - Applied the v1 Beale app icon to the v2 desktop executable and window on Windows and the Dock on macOS.
@@ -38,7 +44,7 @@
 - Added edge and corner resizing to the v2 Windows desktop frame and requested rounded corners on Windows 11.
 - Added a dark grey 1px border around the v2 desktop window on Windows, following rounded corners through DWM on Windows 11.
 - Framed the v2 desktop content surface with the v1 right and bottom inset and removed the header divider.
-- Added the v2 Agent Settings sidenav with the v1 section list and a collapse control; Providers remains the available settings view.
+- Added the v2 Settings sidenav with the v1 section list and a collapse control; Providers remains the available settings view.
 - Reworked the v2 Providers view into top provider tabs with the selected provider's authentication and model configuration sections below.
 - Connected the v2 desktop to the app-server's versioned local health endpoint with live status and a one-shot connection check.
 - Added same-device OpenAI and xAI subscription sign-in, API key configuration, credential status, and forget controls to the v2 Providers view.
@@ -66,6 +72,10 @@
 
 #### Changed
 
+- Showed a green dot on the New Research ribbon's Goal Mode and Repeat buttons when their draft options are selected.
+- Made v2 Goal Mode's composer menu toggle a visible checkbox and limited its optional turn and duration fields to positive integers.
+- Shortened the v2 settings area label to Settings in the icon rail, header, and sidenav.
+- Framed v2 Plugin and Feature card stats with top and bottom dividers, aligned them at the card bottom, and placed compact squircle identity marks beside their names.
 - Displayed model-facing tool counts beneath Prompt Extension on v2 Feature cards; Goal Mode lists its `goal_status` tool.
 - Showed each v2 feature's prompt-extension capability on its card and replaced Plugin and Feature card actions with toggles.
 - Made v2 Goal Mode unlimited by default, with optional max-turn and active-duration controls in its composer menu.
@@ -73,9 +83,9 @@
 - Laid out v2 plugin cards in a responsive grid of up to four columns and removed the line beneath MCP Servers.
 - Simplified v2 plugin cards to Skills and MCP Servers counts without dividers between stats.
 - Replaced the v2 Plugins flat list with content-sized cards in the wide content area, showing clamped descriptions and separate skill, tool, resource, and prompt counts.
-- Renamed the v2 Agent Settings Permissions view to Safety and gave its sidenav entry a shield-check icon.
+- Renamed the v2 Settings Permissions view to Safety and gave its sidenav entry a shield-check icon.
 - Moved each v2 Permissions tab description beneath its rule form title and above the rules.
-- Permissions now opens by default in v2 Agent Settings. Auto-Review and Guardian forms name their rule sets, and editing a rule opens a form dialog for its name and description.
+- Permissions now opens by default in v2 Settings. Auto-Review and Guardian forms name their rule sets, and editing a rule opens a form dialog for its name and description.
 - Replaced v2 Permissions rule text actions with edit icons and a reusable toggle control.
 - Removed the v2 Archive and Providers Refresh buttons; Archive updates on entry, local chat changes, reconnection, and while open.
 - Updated the v2 desktop's Rune and Rune Kit revision to upstream `3730e00c`, with no desktop API changes required.
@@ -98,8 +108,8 @@
 - Matched the v2 desktop font families to the v1 system UI and monospace stacks.
 - Aligned the v2 header title separator with the sidenav edge and added right-edge sidenav resizing with v1 width limits.
 - Replaced the v2 desktop icon approximations with v1 Lucide shapes and pixel-aligned sizes for clearer rendering.
-- Tightened the v2 Agent Settings sidenav spacing and title size, and removed Profile and Prompt sections.
-- Reduced the v2 Agent Settings sidenav title to 18px and removed Features from the settings list.
+- Tightened the v2 Settings sidenav spacing and title size, and removed Profile and Prompt sections.
+- Reduced the v2 Settings sidenav title to 18px and removed Features from the settings list.
 - Defined the v2 settings sidenav and form headings and rows from typed metadata, with one shared form-card renderer.
 - Standardized v2 form action buttons with continuous corners and reduced button and form row height.
 - Styled v2 lead and model selectors with separator-colored outlines, transparent idle fill, filled open state, flipping chevrons, and selected model labels.
@@ -153,6 +163,7 @@
 
 #### Added
 
+- Added protocol v1.35 workspace scope fields and authenticated Plugin and Feature scope updates; SQLite schema 16 persists selections and keeps a restricted scope restricted when a workspace is removed. Goal Mode checks its scope before starting or resuming and pauses active goals outside it.
 - Added v1.34 Plugin tool counts and host-owned MCP launch and discovery for installed bundled and locally supplied packages; uninstall stops active stdio servers.
 - Added v1.33 feature catalog tool counts for optional model-facing tools.
 - Added an authenticated v1.32 feature-details route with Goal Mode's reusable system-prompt extension text.

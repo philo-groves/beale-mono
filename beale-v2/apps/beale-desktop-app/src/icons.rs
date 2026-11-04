@@ -87,6 +87,36 @@ pub(crate) static FLEET: Icon = Icon {
     body: r#"<rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="8" x="2" y="14" rx="2" ry="2"/><line fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x1="6" x2="6.01" y1="6" y2="6"/><line fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x1="6" x2="6.01" y1="18" y2="18"/>"#,
 };
 
+pub(crate) static FLEET_BROWSER: Icon = Icon {
+    name: "lucide-globe",
+    view: 24.0,
+    body: r#"<circle fill="none" stroke="currentColor" stroke-width="2" cx="12" cy="12" r="10"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/>"#,
+};
+
+pub(crate) static FLEET_VIRTUAL_MACHINE: Icon = Icon {
+    name: "lucide-monitor",
+    view: 24.0,
+    body: r#"<rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x="2" y="3" width="20" height="15" rx="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 21h8m-4-3v3"/>"#,
+};
+
+pub(crate) static FLEET_APPLE: Icon = Icon {
+    name: "beale-os-apple",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M15.5 7.5c-1.4 0-2.1.7-3.5.7s-2.1-.7-3.5-.7C6.1 7.5 4.5 9.5 4.5 12c0 4.1 2.7 9 5.1 9 1.1 0 1.6-.7 2.5-.7s1.5.7 2.5.7c2.1 0 4.3-3.8 4.9-6.5-1.8-.6-2.8-1.8-2.8-3.3 0-1.2.7-2.2 1.8-2.9-.8-.5-1.8-.8-3-.8Z"/><path fill="currentColor" d="M12.5 6.6c.1-2.2 1.7-4.1 4-4.6-.1 2.3-1.6 4.1-4 4.6Z"/>"#,
+};
+
+pub(crate) static FLEET_LINUX: Icon = Icon {
+    name: "beale-os-linux",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8 10V6a4 4 0 0 1 8 0v4c2 1.6 3 4.5 3 7.5 0 2.4-1.8 3.5-7 3.5s-7-1.1-7-3.5c0-3 1-5.9 3-7.5Z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M9 11c-1 2-1.4 4.2-.9 6.6M15 11c1 2 1.4 4.2.9 6.6"/><path fill="currentColor" d="M9.2 7.4a.8.8 0 1 0 1.6 0 .8.8 0 0 0-1.6 0Zm4 0a.8.8 0 1 0 1.6 0 .8.8 0 0 0-1.6 0ZM10.3 9.2h3.4L12 11Z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M5.2 20.5 3 22m15.8-1.5L21 22"/>"#,
+};
+
+pub(crate) static FLEET_QR: Icon = Icon {
+    name: "beale-fleet-qr",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 9V3h6M15 3h6v6M21 15v6h-6M9 21H3v-6"/><rect x="6" y="6" width="5" height="5" fill="currentColor"/><rect x="13" y="6" width="5" height="5" fill="currentColor"/><rect x="6" y="13" width="5" height="5" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="2" d="M14 14h2v2h-2zm4 0h2v2h-2zm-4 4h2v2h-2zm4 0h2v2h-2z"/>"#,
+};
+
 pub(crate) static PLUGINS: Icon = Icon {
     name: "lucide-plug",
     view: 24.0,
@@ -103,6 +133,30 @@ pub(crate) static FEATURES: Icon = Icon {
     name: "beale-features",
     view: 24.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3 2.8 8 12 13l9.2-5L12 3ZM2.8 12 12 17l9.2-5M2.8 16 12 21l9.2-5"/>"#,
+};
+
+pub(crate) static EXTENSION_DEVICE: Icon = Icon {
+    name: "beale-extension-device",
+    view: 24.0,
+    body: r#"<rect x="6" y="2" width="12" height="20" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 18h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#,
+};
+
+pub(crate) static EXTENSION_FLAG: Icon = Icon {
+    name: "beale-extension-flag",
+    view: 24.0,
+    body: r#"<path d="M5 21V4m0 1c3-2 5 2 8 0s5 1 7 0v11c-2 1-4-2-7 0s-5-2-8 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+
+pub(crate) static EXTENSION_LINKS: Icon = Icon {
+    name: "beale-extension-links",
+    view: 24.0,
+    body: r#"<path d="M11 8.5 8.5 6a4.2 4.2 0 0 0-6 6L8 17.5a4.2 4.2 0 0 0 6-6L11 8.5Zm2 7 2.5 2.5a4.2 4.2 0 0 0 6-6L16 6.5a4.2 4.2 0 0 0-6 6l3 3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+
+pub(crate) static EXTENSION_WINDOWS: Icon = Icon {
+    name: "beale-extension-windows",
+    view: 24.0,
+    body: r#"<rect x="2" y="2" width="9" height="9" rx="1" fill="currentColor"/><rect x="13" y="2" width="9" height="9" rx="1" fill="currentColor"/><rect x="2" y="13" width="9" height="9" rx="1" fill="currentColor"/><rect x="13" y="13" width="9" height="9" rx="1" fill="currentColor"/>"#,
 };
 
 pub(crate) static RESEARCH_KITS: Icon = Icon {

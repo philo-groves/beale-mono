@@ -22,7 +22,7 @@ pub(crate) fn popup_surface(panel: El, fill: Color) -> El {
 }
 
 pub(crate) fn panel<S: 'static>(
-    anchor: &'static str,
+    anchor: String,
     title: &'static str,
     width: f32,
     active: usize,

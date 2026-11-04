@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -14,6 +15,12 @@ pub struct WorkspaceRow {
     pub id: String,
     pub name: String,
     pub directory: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtensionWorkspaceScope {
+    pub all_workspaces: bool,
+    pub workspace_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,7 +144,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 15 {
+        if version > 17 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -332,6 +339,37 @@ impl HostDatabase {
                  COMMIT;",
             )?;
         }
+        if version < 16 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS extension_scope_modes (
+                     kind TEXT NOT NULL CHECK (kind IN ('plugin', 'feature')),
+                     extension_id TEXT NOT NULL,
+                     all_workspaces INTEGER NOT NULL CHECK (all_workspaces IN (0, 1)),
+                     PRIMARY KEY(kind, extension_id)
+                 );
+                 CREATE TABLE IF NOT EXISTS extension_workspace_scope (
+                     kind TEXT NOT NULL CHECK (kind IN ('plugin', 'feature')),
+                     extension_id TEXT NOT NULL,
+                     workspace_id TEXT NOT NULL,
+                     PRIMARY KEY(kind, extension_id, workspace_id)
+                 );
+                 CREATE INDEX IF NOT EXISTS extension_workspace_scope_workspace ON extension_workspace_scope(workspace_id);
+                 PRAGMA user_version = 16;
+                 COMMIT;",
+            )?;
+        }
+        if version < 17 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS fleet_totp_secret (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     secret BLOB NOT NULL CHECK (length(secret) = 20)
+                 );
+                 PRAGMA user_version = 17;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -394,6 +432,10 @@ impl HostDatabase {
                     params![row.id, row.name, row.directory, i64::try_from(ordinal)?],
                 )?;
             }
+            transaction.execute(
+                "DELETE FROM extension_workspace_scope WHERE workspace_id NOT IN (SELECT id FROM workspaces)",
+                [],
+            )?;
             transaction.commit()?;
             Ok(())
         })
@@ -558,6 +600,127 @@ impl HostDatabase {
         })
     }
 
+    pub fn fleet_totp_secret(&self) -> Result<Option<Vec<u8>>> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT secret FROM fleet_totp_secret WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn get_or_create_fleet_totp_secret(&self, candidate: &[u8]) -> Result<Vec<u8>> {
+        ensure!(candidate.len() == 20, "invalid Fleet TOTP secret length");
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO fleet_totp_secret(id, secret) VALUES (1, ?1)",
+                [candidate],
+            )?;
+            let secret: Vec<u8> = transaction.query_row(
+                "SELECT secret FROM fleet_totp_secret WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )?;
+            transaction.commit()?;
+            ensure!(secret.len() == 20, "invalid stored Fleet TOTP secret");
+            Ok(secret)
+        })
+    }
+
+    pub fn extension_scope(&self, kind: &str, id: &str) -> Result<ExtensionWorkspaceScope> {
+        ensure!(
+            matches!(kind, "plugin" | "feature"),
+            "invalid extension kind"
+        );
+        self.with_connection(|connection| {
+            let all_workspaces = connection.query_row(
+                "SELECT all_workspaces FROM extension_scope_modes WHERE kind = ?1 AND extension_id = ?2",
+                params![kind, id],
+                |row| row.get::<_, bool>(0),
+            ).optional()?.unwrap_or(true);
+            let mut statement = connection.prepare(
+                "SELECT workspace_id FROM extension_workspace_scope WHERE kind = ?1 AND extension_id = ?2 ORDER BY workspace_id",
+            )?;
+            let rows = statement.query_map(params![kind, id], |row| row.get(0))?;
+            Ok(ExtensionWorkspaceScope {
+                all_workspaces,
+                workspace_ids: rows.collect::<rusqlite::Result<Vec<_>>>()?,
+            })
+        })
+    }
+
+    pub fn set_extension_scope(
+        &self,
+        kind: &str,
+        id: &str,
+        all_workspaces: bool,
+        ids: &[String],
+    ) -> Result<()> {
+        ensure!(
+            matches!(kind, "plugin" | "feature"),
+            "invalid extension kind"
+        );
+        ensure!(!id.is_empty() && id.len() <= 128, "invalid extension id");
+        ensure!(ids.len() <= 128, "too many selected workspaces");
+        ensure!(
+            !all_workspaces || ids.is_empty(),
+            "all-workspaces scope cannot include workspace ids"
+        );
+        let mut unique = HashSet::new();
+        ensure!(
+            ids.iter().all(|id| !id.is_empty() && unique.insert(id)),
+            "duplicate or empty workspace id"
+        );
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            for workspace_id in ids {
+                let exists: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id = ?1)",
+                    [workspace_id],
+                    |row| row.get(0),
+                )?;
+                ensure!(exists, "unknown workspace");
+            }
+            transaction.execute(
+                "DELETE FROM extension_workspace_scope WHERE kind = ?1 AND extension_id = ?2",
+                params![kind, id],
+            )?;
+            transaction.execute(
+                "INSERT INTO extension_scope_modes(kind, extension_id, all_workspaces) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(kind, extension_id) DO UPDATE SET all_workspaces = excluded.all_workspaces",
+                params![kind, id, all_workspaces],
+            )?;
+            for workspace_id in ids {
+                transaction.execute(
+                    "INSERT INTO extension_workspace_scope(kind, extension_id, workspace_id) VALUES (?1, ?2, ?3)",
+                    params![kind, id, workspace_id],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn extension_applies_to(&self, kind: &str, id: &str, workspace_id: &str) -> Result<bool> {
+        ensure!(
+            matches!(kind, "plugin" | "feature"),
+            "invalid extension kind"
+        );
+        self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT COALESCE((SELECT all_workspaces FROM extension_scope_modes WHERE kind = ?1 AND extension_id = ?2), 1) = 1
+                        OR EXISTS(SELECT 1 FROM extension_workspace_scope WHERE kind = ?1 AND extension_id = ?2 AND workspace_id = ?3)",
+                params![kind, id, workspace_id],
+                |row| row.get(0),
+            ).map_err(Into::into)
+        })
+    }
+
     pub fn set_feature_enabled(&self, id: &str, enabled: bool) -> Result<()> {
         self.with_connection(|connection| {
             connection.execute(
@@ -574,6 +737,27 @@ impl HostDatabase {
             connection.execute(
                 "UPDATE session_goals SET status = ?1 WHERE status = ?2",
                 params![paused, active],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn pause_active_goals_outside_feature_scope(
+        &self,
+        feature_id: &str,
+        active: i32,
+        paused: i32,
+    ) -> Result<()> {
+        self.with_connection(|connection| {
+            connection.execute(
+                "UPDATE session_goals SET status = ?1 WHERE status = ?2 AND session_id IN (
+                    SELECT sessions.id FROM sessions
+                    WHERE sessions.workspace_id NOT IN (
+                        SELECT workspace_id FROM extension_workspace_scope
+                        WHERE kind = 'feature' AND extension_id = ?3
+                    )
+                 )",
+                params![paused, active, feature_id],
             )?;
             Ok(())
         })
@@ -1238,7 +1422,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 16;")
+            .execute_batch("PRAGMA user_version = 18;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -1246,8 +1430,28 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
         drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fleet_totp_secret_is_created_once_and_survives_restart() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        assert!(db.fleet_totp_secret().unwrap().is_none());
+        assert_eq!(
+            db.get_or_create_fleet_totp_secret(&[7; 20]).unwrap(),
+            [7; 20]
+        );
+        assert_eq!(
+            db.get_or_create_fleet_totp_secret(&[8; 20]).unwrap(),
+            [7; 20]
+        );
+        drop(db);
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert_eq!(reopened.fleet_totp_secret().unwrap().unwrap(), [7; 20]);
+        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1413,6 +1617,120 @@ mod tests {
             .set_feature_enabled("example-feature", false)
             .unwrap();
         assert!(!reopened.feature_enabled("example-feature").unwrap());
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extension_workspace_scope_migrates_and_does_not_broaden_after_deletion() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection.execute_batch(
+            "DROP TABLE extension_workspace_scope; DROP TABLE extension_scope_modes; PRAGMA user_version = 15;"
+        ).unwrap();
+        drop(connection);
+        let db = HostDatabase::open(&root).unwrap();
+        db.replace_workspaces(&[
+            WorkspaceRow {
+                id: "workspace-a".to_owned(),
+                name: "Example A".to_owned(),
+                directory: "example-a".to_owned(),
+            },
+            WorkspaceRow {
+                id: "workspace-b".to_owned(),
+                name: "Example B".to_owned(),
+                directory: "example-b".to_owned(),
+            },
+        ])
+        .unwrap();
+        assert!(
+            db.extension_scope("feature", "goal-mode")
+                .unwrap()
+                .all_workspaces
+        );
+        db.set_extension_scope("feature", "goal-mode", false, &["workspace-a".to_owned()])
+            .unwrap();
+        assert!(
+            db.extension_applies_to("feature", "goal-mode", "workspace-a")
+                .unwrap()
+        );
+        assert!(
+            !db.extension_applies_to("feature", "goal-mode", "workspace-b")
+                .unwrap()
+        );
+        for workspace_id in ["workspace-a", "workspace-b"] {
+            let session = SessionRow {
+                id: format!("session-{workspace_id}"),
+                workspace_id: workspace_id.to_owned(),
+                title: "Example objective".to_owned(),
+                created_at_ms: 1,
+                last_message_at_ms: 1,
+            };
+            let goal = GoalRow {
+                session_id: session.id.clone(),
+                objective: "Example objective".to_owned(),
+                status: 1,
+                turns_used: 1,
+                required_state: String::new(),
+                max_turns: 0,
+                max_duration_minutes: 0,
+                active_ms: 1,
+            };
+            db.append_turn_with_goal_activity(
+                &session,
+                &TurnRow {
+                    number: 1,
+                    provider: 1,
+                    method: 1,
+                    model: "model-example".to_owned(),
+                    prompt: "Example objective".to_owned(),
+                    answer: "Example observation".to_owned(),
+                    duration_ms: 1,
+                    internal_prompt: false,
+                },
+                true,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: Some(&goal),
+                },
+            )
+            .unwrap();
+        }
+        db.pause_active_goals_outside_feature_scope("goal-mode", 1, 4)
+            .unwrap();
+        assert_eq!(db.goal("session-workspace-a").unwrap().unwrap().status, 1);
+        assert_eq!(db.goal("session-workspace-b").unwrap().unwrap().status, 4);
+        assert!(
+            db.set_extension_scope("feature", "goal-mode", false, &["missing".to_owned()])
+                .is_err()
+        );
+        db.replace_workspaces(&[WorkspaceRow {
+            id: "workspace-b".to_owned(),
+            name: "Example B".to_owned(),
+            directory: "example-b".to_owned(),
+        }])
+        .unwrap();
+        drop(db);
+        let reopened = HostDatabase::open(&root).unwrap();
+        let scope = reopened.extension_scope("feature", "goal-mode").unwrap();
+        assert!(!scope.all_workspaces && scope.workspace_ids.is_empty());
+        assert!(
+            !reopened
+                .extension_applies_to("feature", "goal-mode", "workspace-b")
+                .unwrap()
+        );
+        reopened
+            .set_extension_scope("feature", "goal-mode", true, &[])
+            .unwrap();
+        assert!(
+            reopened
+                .extension_applies_to("feature", "goal-mode", "workspace-b")
+                .unwrap()
+        );
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }

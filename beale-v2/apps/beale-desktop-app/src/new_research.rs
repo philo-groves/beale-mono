@@ -917,11 +917,51 @@ fn next_input(state: &mut State) {
     }
 }
 
+fn normalize_goal_limit(edit: &mut TextEdit, max: u64) {
+    let original = edit.text.as_bytes();
+    let mut normalized = String::new();
+    let mut value = 0_u64;
+    let mut anchor = 0;
+    let mut focus = 0;
+    let mut at_limit = false;
+    for (index, byte) in original.iter().copied().enumerate() {
+        if byte.is_ascii_digit() && !at_limit {
+            let digit = u64::from(byte - b'0');
+            if !(normalized.is_empty() && digit == 0) {
+                if let Some(next) = value
+                    .checked_mul(10)
+                    .and_then(|current| current.checked_add(digit))
+                {
+                    if next <= max {
+                        value = next;
+                        normalized.push(char::from(byte));
+                        if index < edit.anchor {
+                            anchor += 1;
+                        }
+                        if index < edit.focus {
+                            focus += 1;
+                        }
+                    } else {
+                        at_limit = true;
+                    }
+                } else {
+                    at_limit = true;
+                }
+            }
+        }
+    }
+    if normalized != edit.text {
+        edit.replace_text(normalized);
+        edit.set_selection(anchor, focus);
+    }
+}
+
 fn goal_limit_field(
     edit: &TextEdit,
     key: &'static str,
     label: &'static str,
     theme: ThemeStyle<'_>,
+    max: u64,
     accessor: fn(&mut State) -> &mut TextEdit,
 ) -> El {
     row()
@@ -945,9 +985,11 @@ fn goal_limit_field(
                 .radius(8.0)
                 .continuous_corners()
                 .fill(theme.color("#303030"))
-                .border(1.0, theme.color("#444444"))
                 .color(theme.color("#eeeeee"))
-                .on_edit(accessor),
+                .on_edit(accessor)
+                .on_input_change(move |state: &mut State, _| {
+                    normalize_goal_limit(accessor(state), max);
+                }),
         )
 }
 
@@ -965,7 +1007,11 @@ pub(crate) fn goal_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                 row()
                     .key("goal-mode-menu-toggle")
                     .role("menuitem")
-                    .label("Goal Mode")
+                    .label(if selected {
+                        "Goal Mode, on"
+                    } else {
+                        "Goal Mode, off"
+                    })
                     .w_full()
                     .h(34.0)
                     .px(8.0)
@@ -981,11 +1027,19 @@ pub(crate) fn goal_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                             .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
                             .color(theme.color("#eeeeee")),
                     )
-                    .child(if selected {
-                        icon(&CHECK, 14.0).color(theme.color("#c8c8c8"))
-                    } else {
-                        el().size(14.0, 14.0)
-                    }),
+                    .child(
+                        el().key("goal-mode-checkbox")
+                            .size(18.0, 18.0)
+                            .center()
+                            .radius(5.0)
+                            .continuous_corners()
+                            .fill(theme.color(if selected { "#eeeeee" } else { "#303030" }))
+                            .child(if selected {
+                                icon(&CHECK, 13.0).color(theme.color("#0d0d0d"))
+                            } else {
+                                el().size(0.0, 0.0)
+                            }),
+                    ),
             )
             .child(el().w_full().h(1.0).fill(theme.color("#3b3b3b")))
             .child(goal_limit_field(
@@ -993,6 +1047,7 @@ pub(crate) fn goal_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                 "goal-mode-max-turns",
                 "Max turns",
                 theme,
+                i64::MAX as u64,
                 |state| &mut state.new_research_goal_max_turns,
             ))
             .child(goal_limit_field(
@@ -1000,11 +1055,20 @@ pub(crate) fn goal_menu(state: &State, theme: ThemeStyle<'_>) -> El {
                 "goal-mode-max-duration",
                 "Max duration (min)",
                 theme,
+                crate::MAX_GOAL_DURATION_MINUTES,
                 |state| &mut state.new_research_goal_max_duration_minutes,
             )),
         theme.color("#242424"),
     )
     .anchored_fit("new-research-goal-control", Side::Bottom, Align::End, 4.0)
+}
+
+fn ribbon_status_dot(key: &'static str, theme: ThemeStyle<'_>) -> El {
+    el().key(key)
+        .absolute(20.0, 1.0)
+        .size(7.0, 7.0)
+        .radius(3.5)
+        .fill(theme.color("#72b783"))
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
@@ -1309,7 +1373,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                     } else {
                         "#a0a0a0"
                     })),
-                ),
+                )
+                .child(if state.new_research_goal_mode {
+                    ribbon_status_dot("new-research-goal-indicator", theme)
+                } else {
+                    el().size(0.0, 0.0)
+                }),
         );
     }
     ribbon = ribbon.child(
@@ -1338,7 +1407,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 } else {
                     "#eeeeee"
                 },
-            ))),
+            )))
+            .child(if state.new_research_repeat != RepeatPreset::None {
+                ribbon_status_dot("new-research-repeat-indicator", theme)
+            } else {
+                el().size(0.0, 0.0)
+            }),
     );
     let mut transcript = col()
         .key("session-transcript")
@@ -1585,9 +1659,30 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
 
 #[cfg(test)]
 mod tests {
-    use super::{MenuSection, choices, is_web_link, options, selected_model, work_duration};
+    use super::{
+        MenuSection, choices, is_web_link, normalize_goal_limit, options, selected_model,
+        work_duration,
+    };
     use crate::{Provider, State};
     use beale_contracts::v1::{CustomProvider, ModelEntry};
+    use rune::TextEdit;
+
+    #[test]
+    fn goal_limit_fields_keep_only_positive_bounded_digits() {
+        let mut edit = TextEdit::new("0");
+        normalize_goal_limit(&mut edit, 120);
+        assert!(edit.text.is_empty());
+
+        let mut edit = TextEdit::new("a0012b");
+        edit.set_selection(2, 6);
+        normalize_goal_limit(&mut edit, 120);
+        assert_eq!(edit.text, "12");
+        assert_eq!((edit.anchor, edit.focus), (0, 2));
+
+        let mut edit = TextEdit::new("1209");
+        normalize_goal_limit(&mut edit, 120);
+        assert_eq!(edit.text, "120");
+    }
 
     #[test]
     fn custom_models_keep_provider_identity_in_composer() {

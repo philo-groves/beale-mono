@@ -729,6 +729,10 @@ pub mod v1 {
         pub mcp_server_count: u32,
         #[prost(uint32, tag = "7")]
         pub mcp_tool_count: u32,
+        #[prost(string, repeated, tag = "8")]
+        pub workspace_ids: Vec<String>,
+        #[prost(bool, tag = "9")]
+        pub all_workspaces: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -751,6 +755,20 @@ pub mod v1 {
         pub has_prompt_extension: bool,
         #[prost(uint32, tag = "6")]
         pub tool_count: u32,
+        #[prost(string, repeated, tag = "7")]
+        pub workspace_ids: Vec<String>,
+        #[prost(bool, tag = "8")]
+        pub all_workspaces: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetExtensionWorkspaceScopeRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, repeated, tag = "2")]
+        pub workspace_ids: Vec<String>,
+        #[prost(bool, tag = "3")]
+        pub all_workspaces: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -810,10 +828,44 @@ pub mod v1 {
         #[prost(string, tag = "2")]
         pub manifest_json: String,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetAppServerDescriptor {
+        #[prost(string, tag = "1")]
+        pub service: String,
+        #[prost(string, tag = "2")]
+        pub host_name: String,
+        #[prost(string, tag = "3")]
+        pub os_name: String,
+        #[prost(string, tag = "4")]
+        pub os_vendor: String,
+        #[prost(uint32, tag = "5")]
+        pub protocol_major: u32,
+        #[prost(uint32, tag = "6")]
+        pub protocol_minor: u32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetTotpProvisioningResponse {
+        #[prost(string, tag = "1")]
+        pub otpauth_uri: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetPairingRequest {
+        #[prost(string, tag = "1")]
+        pub code: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetPairingResponse {
+        #[prost(string, tag = "1")]
+        pub token: String,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 34;
+pub const PROTOCOL_MINOR: u32 = 37;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -851,9 +903,14 @@ pub const PLUGINS_PATH: &str = "/v1/plugins";
 pub const FEATURES_PATH: &str = "/v1/features";
 pub const FEATURE_DETAILS_PATH: &str = "/v1/features/details";
 pub const FEATURE_SET_ENABLED_PATH: &str = "/v1/features/set-enabled";
+pub const FEATURE_SCOPE_PATH: &str = "/v1/features/scope";
+pub const FLEET_DESCRIPTOR_PATH: &str = "/v1/fleet/descriptor";
+pub const FLEET_TOTP_PROVISION_PATH: &str = "/v1/fleet/totp-provision";
+pub const FLEET_PAIR_PATH: &str = "/v1/fleet/pair";
 pub const PLUGIN_INSTALL_PATH: &str = "/v1/plugins/install";
 pub const PLUGIN_UNINSTALL_PATH: &str = "/v1/plugins/uninstall";
 pub const PLUGIN_MANIFEST_PATH: &str = "/v1/plugins/manifest";
+pub const PLUGIN_SCOPE_PATH: &str = "/v1/plugins/scope";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const PROTOBUF_STREAM_CONTENT_TYPE: &str = "application/x-beale-protobuf-stream";
 pub const SESSION_STREAM_MAX_FRAME_BYTES: usize = 4_500_000;

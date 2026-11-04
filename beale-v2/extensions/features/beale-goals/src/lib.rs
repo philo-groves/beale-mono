@@ -1,13 +1,12 @@
 //! Goal Mode's model contract and continuation policy.
 
-mod http;
-pub use http::router;
-
 use anyhow::{Result, bail, ensure};
 use serde_json::{Value, json};
 
 pub const TOOL_NAME: &str = "goal_status";
 pub const FEATURE_ID: &str = "goal-mode";
+pub const FEATURE_NAME: &str = "Goal Mode";
+pub const FEATURE_DESCRIPTION: &str = "Keep working toward a New Research objective across turns, with optional turn and duration limits.";
 pub const HAS_PROMPT_EXTENSION: bool = true;
 pub const TOOL_COUNT: u32 = 1;
 pub const PROMPT_EXTENSION: &str = "## Goal Mode\n\nWork toward the user's objective across turns. Before each final response, call goal_status exactly once. Choose achieved only when the objective has been completed and verified. Choose continue when more work can be done in this session. Choose waiting_on_external_state only when a specific outside change is required; provide it as required_state. The host persists the goal and starts continuation turns while it is active. Do not claim completion based only on a plan or an unverified statement. When continuing, include a concise progress summary, evidence references, and the next concrete step in the final response so later turns retain useful context. Keep durable research notes in the workspace.";

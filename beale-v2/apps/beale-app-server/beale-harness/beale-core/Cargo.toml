@@ -6,14 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["goal-mode"]
+default = ["goal-mode", "fleet"]
 goal-mode = ["beale-sessions/goal-mode", "dep:beale-goals"]
+fleet = ["dep:beale-fleet"]
 
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-extender = { path = "../beale-extender" }
+beale-fleet = { path = "../../../../extensions/features/beale-fleet", optional = true }
 beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
 beale-providers = { path = "../beale-providers" }
 beale-safety = { path = "../beale-safety" }

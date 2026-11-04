@@ -7,13 +7,4 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-axum.workspace = true
-beale-contracts = { path = "../../../apps/beale-app-server/beale-harness/beale-contracts" }
-beale-storage = { path = "../../../apps/beale-app-server/beale-harness/beale-storage" }
-prost.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
-tokio.workspace = true
-tower = "0.5"
-uuid.workspace = true

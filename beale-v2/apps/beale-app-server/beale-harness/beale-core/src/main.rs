@@ -16,6 +16,7 @@ use std::{io::Read, net::SocketAddr};
 use tokio::net::TcpListener;
 
 mod auth;
+mod features;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -105,9 +106,10 @@ async fn serve() -> Result<()> {
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
-        .merge(beale_sessions::router(token.clone(), workspaces)?);
-    #[cfg(feature = "goal-mode")]
-    let app = app.merge(beale_goals::router(token.clone(), db.clone()));
+        .merge(beale_sessions::router(token.clone(), workspaces)?)
+        .merge(features::router(token.clone(), db.clone()));
+    #[cfg(feature = "fleet")]
+    let app = app.merge(beale_fleet::router(token.clone(), db.clone()));
     let app = app
         .merge(beale_safety::router(token.clone(), db.clone()))
         .merge(beale_extender::router(token.clone(), db, plugin_data_root)?)

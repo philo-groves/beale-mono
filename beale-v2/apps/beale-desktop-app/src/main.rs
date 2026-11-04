@@ -11,6 +11,8 @@ mod color_picker;
 mod connection;
 mod desktop_fonts;
 mod extensions_view;
+mod fleet_connection;
+mod fleet_view;
 mod form_controls;
 mod home_sidebar;
 mod icons;
@@ -217,6 +219,12 @@ enum SelectionMenu {
     ColorTheme,
     InterfaceFont,
     TextSize,
+    PluginWorkspaces {
+        index: usize,
+    },
+    FeatureWorkspaces {
+        index: usize,
+    },
     SourcePriority {
         provider: Provider,
     },
@@ -502,6 +510,7 @@ enum PrimaryView {
     WorkspaceCreation,
     Workspace,
     Extensions,
+    Fleet,
     Settings,
 }
 
@@ -516,6 +525,7 @@ enum ViewLocation {
         extensions_view::PluginTab,
         extensions_view::FeatureTab,
     ),
+    Fleet(fleet_view::FleetSection, fleet_view::FleetTab),
     Providers(Provider),
     Appearance(AppearanceTab),
     Safety(permission_settings::PermissionTab),
@@ -642,6 +652,8 @@ struct State {
     custom_reasoning: bool,
     custom_delete_id: Option<String>,
     extensions_section: extensions_view::ExtensionSection,
+    fleet_section: fleet_view::FleetSection,
+    fleet: fleet_view::FleetState,
     plugin_tab: extensions_view::PluginTab,
     feature_tab: extensions_view::FeatureTab,
     plugins: Vec<extensions_view::PluginEntry>,
@@ -655,6 +667,8 @@ struct State {
     feature_busy: bool,
     feature_error: String,
     feature_generation: u64,
+    extension_scope_saving: Option<SelectionMenu>,
+    extension_scope_generation: u64,
     feature_details_id: Option<String>,
     feature_details: Option<beale_contracts::v1::FeatureDetailsResponse>,
     feature_details_loading: bool,
@@ -831,6 +845,8 @@ impl Default for State {
             custom_reasoning: false,
             custom_delete_id: None,
             extensions_section: extensions_view::ExtensionSection::default(),
+            fleet_section: fleet_view::FleetSection::default(),
+            fleet: fleet_view::FleetState::default(),
             plugin_tab: extensions_view::PluginTab::default(),
             feature_tab: extensions_view::FeatureTab::default(),
             plugins: extensions_view::bundled_plugins(),
@@ -844,6 +860,8 @@ impl Default for State {
             feature_busy: false,
             feature_error: String::new(),
             feature_generation: 0,
+            extension_scope_saving: None,
+            extension_scope_generation: 0,
             feature_details_id: None,
             feature_details: None,
             feature_details_loading: false,
@@ -1001,6 +1019,9 @@ impl State {
                 self.feature_tab,
             );
         }
+        if self.primary_view == PrimaryView::Fleet {
+            return ViewLocation::Fleet(self.fleet_section, self.fleet.tab);
+        }
         match self.settings_section {
             SettingsSection::Providers => ViewLocation::Providers(self.selected),
             SettingsSection::Appearance => ViewLocation::Appearance(self.appearance_tab),
@@ -1032,6 +1053,17 @@ impl State {
                 self.extensions_section = section;
                 self.plugin_tab = plugin_tab;
                 self.feature_tab = feature_tab;
+            }
+            ViewLocation::Fleet(section, tab) => {
+                self.primary_view = if extensions_view::fleet_enabled(self) {
+                    PrimaryView::Fleet
+                } else {
+                    PrimaryView::Home
+                };
+                if self.primary_view == PrimaryView::Fleet {
+                    self.fleet_section = section;
+                    self.fleet.select_tab(section, tab);
+                }
             }
             ViewLocation::Providers(provider) => {
                 self.primary_view = PrimaryView::Settings;
@@ -1103,6 +1135,9 @@ impl State {
         }
         if self.primary_view == PrimaryView::Extensions {
             extensions_view::start_load(self);
+        }
+        if self.primary_view == PrimaryView::Fleet {
+            fleet_view::start_load(self);
         }
     }
 
@@ -1648,15 +1683,19 @@ fn drag_color_picker(state: &mut State, drag: &mut Drag, tx: &mut Tx, axis: Pick
 
 static AUTH_HANDLE: std::sync::OnceLock<rune::AppHandle<State>> = std::sync::OnceLock::new();
 
+pub(crate) const MAX_GOAL_DURATION_MINUTES: u64 = i64::MAX as u64 / 60_000;
+
 fn parse_goal_limit(value: &str) -> Option<u64> {
     let value = value.trim();
     if value.is_empty() {
         Some(0)
     } else {
         value
-            .parse::<u64>()
-            .ok()
-            .filter(|limit| *limit <= i64::MAX as u64)
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| value.parse::<u64>().ok())
+            .flatten()
+            .filter(|limit| *limit > 0 && *limit <= i64::MAX as u64)
     }
 }
 
@@ -1702,13 +1741,14 @@ fn start_session_turn(state: &mut State) {
         && session_id.is_empty();
     let (goal_max_turns, goal_max_duration_minutes) = if goal_mode {
         let Some(turns) = parse_goal_limit(&state.new_research_goal_max_turns.text) else {
-            state.session_error = "Max turns must be a whole number.".to_owned();
+            state.session_error = "Max turns must be a positive whole number.".to_owned();
             return;
         };
         let Some(minutes) = parse_goal_limit(&state.new_research_goal_max_duration_minutes.text)
-            .filter(|minutes| *minutes <= i64::MAX as u64 / 60_000)
+            .filter(|minutes| *minutes <= MAX_GOAL_DURATION_MINUTES)
         else {
-            state.session_error = "Max duration must be a whole number of minutes.".to_owned();
+            state.session_error =
+                "Max duration must be a positive whole number of minutes.".to_owned();
             return;
         };
         (turns, minutes)
@@ -2682,6 +2722,9 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 selected: state.appearance.text_size == size,
             })
             .collect(),
+        SelectionMenu::PluginWorkspaces { .. } | SelectionMenu::FeatureWorkspaces { .. } => {
+            extensions_view::workspace_scope_items(state, menu)
+        }
         SelectionMenu::SourcePriority { provider } => {
             let status = &state.auth_status[provider.index()];
             if state.selected != provider || !status.subscription || !status.api_key {
@@ -2733,8 +2776,10 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
     }
 }
 
-fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
+fn selection_menu_anchor(menu: SelectionMenu) -> String {
     match menu {
+        SelectionMenu::PluginWorkspaces { index } => return format!("plugin-scope-{index}"),
+        SelectionMenu::FeatureWorkspaces { index } => return format!("feature-scope-{index}"),
         SelectionMenu::HomeCollection => "home-collection-control",
         SelectionMenu::Repeat => "new-research-repeat-control",
         SelectionMenu::GoalMode => "new-research-goal-control",
@@ -2757,6 +2802,7 @@ fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
             ..
         } => "choose-small-model",
     }
+    .to_owned()
 }
 
 fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
@@ -2802,7 +2848,12 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
     {
         return;
     }
-    state.selection_menu = None;
+    if !matches!(
+        menu,
+        SelectionMenu::PluginWorkspaces { .. } | SelectionMenu::FeatureWorkspaces { .. }
+    ) {
+        state.selection_menu = None;
+    }
     match menu {
         SelectionMenu::HomeCollection => {
             if let Some(collection) = home_sidebar::HomeCollection::ALL
@@ -2885,6 +2936,11 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             if let Some(size) = TextSize::ALL.into_iter().find(|size| size.key() == value) {
                 state.appearance.text_size = size;
                 state.save_appearance();
+            }
+        }
+        SelectionMenu::PluginWorkspaces { .. } | SelectionMenu::FeatureWorkspaces { .. } => {
+            if let Some((all, ids)) = extensions_view::next_workspace_scope(state, menu, &value) {
+                extensions_view::start_workspace_scope_save(state, menu, all, ids);
             }
         }
         SelectionMenu::SourcePriority { provider } => {
@@ -3145,7 +3201,7 @@ fn header(state: &State, prefix_width: f32) -> El {
             )
             .child(icon(state.settings_section.icon(), 16.0).color(color("#c8c8c8")))
             .child(
-                text("Agent Settings")
+                text("Settings")
                     .font(ui_font(13.0, 500.0))
                     .color(color("#e2e2e2")),
             )
@@ -3169,6 +3225,24 @@ fn header(state: &State, prefix_width: f32) -> El {
             )
             .child(
                 text(state.extensions_section.label())
+                    .font(ui_font(13.0, 400.0))
+                    .color(color("#aaaaaa")),
+            );
+    } else if state.primary_view == PrimaryView::Fleet {
+        title = title
+            .child(
+                el().key("header-divider")
+                    .size(1.0, 18.0)
+                    .fill(color("#555555")),
+            )
+            .child(icon(&FLEET, 16.0).color(color("#c8c8c8")))
+            .child(
+                text("Fleet")
+                    .font(ui_font(13.0, 500.0))
+                    .color(color("#e2e2e2")),
+            )
+            .child(
+                text(state.fleet_section.label())
                     .font(ui_font(13.0, 400.0))
                     .color(color("#aaaaaa")),
             );
@@ -3322,6 +3396,11 @@ fn nav_button(
                 s.feature_tab,
             ));
         })
+    } else if key == "nav-fleet" {
+        button.on_press(|s: &mut State| {
+            s.rail_tooltip = None;
+            s.navigate_to(ViewLocation::Fleet(s.fleet_section, s.fleet.tab));
+        })
     } else if active {
         button.on_press(|s: &mut State| {
             s.rail_tooltip = None;
@@ -3350,7 +3429,8 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             "Home",
             &HOME,
             state.primary_view != PrimaryView::Settings
-                && state.primary_view != PrimaryView::Extensions,
+                && state.primary_view != PrimaryView::Extensions
+                && state.primary_view != PrimaryView::Fleet,
             theme,
         ))
         .child(nav_button(
@@ -3360,7 +3440,6 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             false,
             theme,
         ))
-        .child(nav_button("nav-fleet", "Fleet", &FLEET, false, theme))
         .child(nav_button(
             "nav-extensions",
             "Extensions",
@@ -3370,12 +3449,27 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
         ))
         .child(nav_button(
             "nav-settings",
-            "Agent Settings",
+            "Settings",
             &SETTINGS,
             state.primary_view == PrimaryView::Settings,
             theme,
-        ))
-        .child(el().grow(1.0));
+        ));
+    let conditional_icons = extensions_view::fleet_enabled(state).then_some((
+        "nav-fleet",
+        "Fleet",
+        &FLEET,
+        state.primary_view == PrimaryView::Fleet,
+    ));
+    if let Some((key, label, glyph, active)) = conditional_icons {
+        rail = rail.child(
+            el().key("navigation-conditional-divider")
+                .w(26.0)
+                .h(1.0)
+                .fill(theme.color("#2a2a2a")),
+        );
+        rail = rail.child(nav_button(key, label, glyph, active, theme));
+    }
+    rail = rail.child(el().grow(1.0));
     for provider in [Provider::OpenAi, Provider::Xai] {
         if let Some(usage) = &state.provider_usage[provider.index()]
             && !usage.windows.is_empty()
@@ -3460,14 +3554,14 @@ fn settings_sidenav(
     col()
         .key("settings-sidenav")
         .role("navigation")
-        .label("Agent settings sections")
+        .label("Settings sections")
         .w(width)
         .h_full()
         .px(8.0)
         .pt(12.0)
         .fill(color("#111111"))
         .child(
-            sidenav_heading("Agent Settings", theme)
+            sidenav_heading("Settings", theme)
                 .key("settings-sidenav-title")
                 .ml(4.0)
                 .mb(12.0),
@@ -4924,6 +5018,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         for item in extensions_view::render(state, theme, page_width) {
             content = content.child(item);
         }
+    } else if state.primary_view == PrimaryView::Fleet {
+        let page_width = cx
+            .layout_size("content-surface")
+            .map_or(720.0, |size| size[0] - 48.0);
+        for item in fleet_view::render(state, theme, page_width) {
+            content = content.child(item);
+        }
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         content = content.child(workspace_creation::render(state, theme));
     } else if state.primary_view == PrimaryView::Workspace {
@@ -4953,6 +5054,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 PrimaryView::Extensions => {
                     extensions_view::sidenav(state, state.sidenav_width, theme)
                 }
+                PrimaryView::Fleet => fleet_view::sidenav(state, state.sidenav_width, theme),
                 _ => home_sidebar::render(state, state.sidenav_width, theme),
             })
             .child(el().w(1.0).h_full().fill(color("#2a2a2a")));
@@ -4982,7 +5084,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     } else {
         let scroll_watch = if matches!(
             state.primary_view,
-            PrimaryView::Settings | PrimaryView::Extensions
+            PrimaryView::Settings | PrimaryView::Extensions | PrimaryView::Fleet
         ) {
             state.settings_scroll.clone()
         } else {
@@ -4990,7 +5092,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         };
         let scroll_key = if matches!(
             state.primary_view,
-            PrimaryView::Settings | PrimaryView::Extensions
+            PrimaryView::Settings | PrimaryView::Extensions | PrimaryView::Fleet
         ) {
             "settings-scroll"
         } else {
@@ -5000,6 +5102,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         let content_inset = match state.primary_view {
             PrimaryView::Settings => col().w_full().padding(36.0),
             PrimaryView::Extensions => col().w_full().px(24.0).pt(36.0).pb(24.0),
+            PrimaryView::Fleet => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Workspace => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::WorkspaceCreation => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Home | PrimaryView::NewResearch => col().w_full(),
@@ -5020,7 +5123,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     .on_wheel(|state: &mut State, event, tx| {
                         if matches!(
                             state.primary_view,
-                            PrimaryView::Settings | PrimaryView::Extensions
+                            PrimaryView::Settings | PrimaryView::Extensions | PrimaryView::Fleet
                         ) {
                             state.settings_scroll.wheel(event, tx)
                         } else {
@@ -5102,7 +5205,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         && state.home_collection == home_sidebar::HomeCollection::Workspaces
         && !matches!(
             state.primary_view,
-            PrimaryView::Settings | PrimaryView::Extensions
+            PrimaryView::Settings | PrimaryView::Extensions | PrimaryView::Fleet
         )
         && let Some(tooltip) = home_sidebar::session_tooltip(state, theme)
             .or_else(|| home_sidebar::workspace_tooltip(state, theme))
@@ -5173,6 +5276,21 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.primary_view == PrimaryView::Fleet && state.fleet.connect_dialog_open {
+        for layer in fleet_view::connect_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Fleet && state.fleet.details_id.is_some() {
+        for layer in fleet_view::details_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Fleet && state.fleet.qr_dialog_open {
+        for layer in fleet_view::qr_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
     if let Some(menu) = state.selection_menu
         && match menu {
             SelectionMenu::ResearchKit => {
@@ -5206,6 +5324,22 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 state.settings_section == SettingsSection::Appearance
                     && state.appearance_tab == AppearanceTab::Typography
             }
+            SelectionMenu::PluginWorkspaces { index } => {
+                state.primary_view == PrimaryView::Extensions
+                    && state.extensions_section == extensions_view::ExtensionSection::Plugins
+                    && state
+                        .plugins
+                        .get(index)
+                        .is_some_and(|plugin| plugin.installed)
+            }
+            SelectionMenu::FeatureWorkspaces { index } => {
+                state.primary_view == PrimaryView::Extensions
+                    && state.extensions_section == extensions_view::ExtensionSection::Features
+                    && state
+                        .features
+                        .get(index)
+                        .is_some_and(|feature| feature.enabled)
+            }
             _ => {
                 state.primary_view == PrimaryView::Settings
                     && state.settings_section == SettingsSection::Providers
@@ -5233,6 +5367,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::ColorTheme => ("Color Theme", 178.0),
                     SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
                     SelectionMenu::TextSize => ("Text Size", 178.0),
+                    SelectionMenu::PluginWorkspaces { .. }
+                    | SelectionMenu::FeatureWorkspaces { .. } => ("Workspaces", 240.0),
                     SelectionMenu::SourcePriority { .. } => ("Source Priority", 178.0),
                     SelectionMenu::Model { .. } => ("Choose model", 380.0),
                 };
@@ -5680,6 +5816,9 @@ fn main() -> std::process::ExitCode {
                     }
                     if state.primary_view == PrimaryView::Extensions {
                         extensions_view::start_load(state);
+                    }
+                    if state.primary_view == PrimaryView::Fleet {
+                        fleet_view::start_load(state);
                     }
                 });
             }
@@ -7322,6 +7461,7 @@ mod tests {
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
         runtime.on_key = Some(selection_menu_key);
         runtime.frame(0.0);
+        assert!(runtime.find("new-research-repeat-indicator").is_none());
         let (x, y) = runtime.find("new-research-repeat-control").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -7336,6 +7476,11 @@ mod tests {
             runtime.state.new_research_repeat,
             new_research::RepeatPreset::Day
         );
+        assert!(runtime.find("new-research-repeat-indicator").is_some());
+        let (button, _) = runtime.presented("new-research-repeat-control").unwrap();
+        let (dot, _) = runtime.presented("new-research-repeat-indicator").unwrap();
+        assert!(dot[0] > button[0] + button[2] / 2.0);
+        assert!(dot[1] < button[1] + button[3] / 2.0);
         assert!(runtime.state.selection_menu.is_none());
         let (x, y) = runtime.find("new-research-repeat-control").unwrap();
         runtime.pointer_down(x, y);
@@ -7351,6 +7496,20 @@ mod tests {
             runtime.state.new_research_repeat,
             new_research::RepeatPreset::Day
         );
+        assert!(runtime.find("new-research-repeat-indicator").is_some());
+        let (x, y) = runtime.find("new-research-repeat-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("selection-menu-item-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.new_research_repeat,
+            new_research::RepeatPreset::None
+        );
+        assert!(runtime.find("new-research-repeat-indicator").is_none());
     }
 
     #[test]
@@ -7374,6 +7533,7 @@ mod tests {
         let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         assert!(!runtime.state.new_research_goal_mode);
+        assert!(runtime.find("new-research-goal-indicator").is_none());
         let (goal, _) = runtime.presented("new-research-goal-control").unwrap();
         let (repeat, _) = runtime.presented("new-research-repeat-control").unwrap();
         assert!(goal[0] + goal[2] <= repeat[0]);
@@ -7382,11 +7542,12 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(0.1);
         assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::GoalMode));
-        let (x, y) = runtime.find("goal-mode-menu-toggle").unwrap();
+        let (x, y) = runtime.find("goal-mode-checkbox").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.2);
         assert!(runtime.state.new_research_goal_mode);
+        assert!(runtime.find("new-research-goal-indicator").is_some());
         assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::GoalMode));
         assert!(runtime.find("goal-mode-max-turns").is_some());
         assert!(runtime.find("goal-mode-max-duration").is_some());
@@ -7395,6 +7556,12 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(0.3);
         assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::GoalMode));
+        let (x, y) = runtime.find("goal-mode-checkbox").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.4);
+        assert!(!runtime.state.new_research_goal_mode);
+        assert!(runtime.find("new-research-goal-indicator").is_none());
     }
 
     #[test]
@@ -7402,6 +7569,8 @@ mod tests {
         assert_eq!(parse_goal_limit(""), Some(0));
         assert_eq!(parse_goal_limit("  "), Some(0));
         assert_eq!(parse_goal_limit("12"), Some(12));
+        assert_eq!(parse_goal_limit("0"), None);
+        assert_eq!(parse_goal_limit("+1"), None);
         assert_eq!(parse_goal_limit("-1"), None);
         assert_eq!(parse_goal_limit("1.5"), None);
         assert_eq!(parse_goal_limit("9223372036854775808"), None);
@@ -8917,6 +9086,122 @@ mod tests {
     }
 
     #[test]
+    fn fleet_opens_below_the_conditional_rail_divider() {
+        let mut state = State {
+            primary_view: PrimaryView::Home,
+            ..State::default()
+        };
+        let mut disabled =
+            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        disabled.frame(0.0);
+        assert!(disabled.find("nav-fleet").is_none());
+        assert!(disabled.find("navigation-conditional-divider").is_none());
+        state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == "fleet")
+            .unwrap()
+            .enabled = true;
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (settings, _) = runtime.presented("nav-settings").unwrap();
+        let (divider, _) = runtime.presented("navigation-conditional-divider").unwrap();
+        let (fleet, _) = runtime.presented("nav-fleet").unwrap();
+        assert!(settings[1] + settings[3] < divider[1]);
+        assert!(divider[1] + divider[3] < fleet[1]);
+
+        let (x, y) = runtime.find("nav-fleet").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::Fleet);
+        assert!(runtime.find("fleet-sidenav-title").is_some());
+        assert!(runtime.find("fleet-view-title").is_some());
+        assert_eq!(
+            runtime.state.fleet_section,
+            fleet_view::FleetSection::AppServers
+        );
+        assert!(runtime.find("fleet-app-servers").is_some());
+        assert!(runtime.find("fleet-browsers").is_some());
+        assert!(runtime.find("fleet-virtual-machines").is_some());
+        assert!(runtime.find("fleet-server-card-local").is_some());
+        assert!(runtime.find("fleet-local-qr").is_some());
+        assert!(runtime.find("fleet-tab-all").is_some());
+        assert!(runtime.find("fleet-tab-available").is_some());
+        assert!(runtime.find("fleet-tab-enabled").is_some());
+        let (x, y) = runtime.find("fleet-tab-available").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.fleet.tab, fleet_view::FleetTab::Available);
+        assert!(runtime.find("home-no-workspace").is_none());
+
+        let (x, y) = runtime.find("fleet-browsers").unwrap();
+        runtime.pointer_move(x, y);
+        runtime.frame(1.0);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.fleet_section,
+            fleet_view::FleetSection::Browsers
+        );
+        assert_eq!(runtime.state.fleet.tab, fleet_view::FleetTab::All);
+        assert!(runtime.find("fleet-tab-all").is_some());
+        assert!(runtime.find("fleet-tab-available").is_some());
+        assert!(runtime.find("fleet-tab-enabled").is_some());
+
+        let (x, y) = runtime.find("fleet-virtual-machines").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.fleet_section,
+            fleet_view::FleetSection::VirtualMachines
+        );
+        assert_eq!(runtime.state.fleet.tab, fleet_view::FleetTab::All);
+        assert!(runtime.find("fleet-tab-all").is_some());
+        assert!(runtime.find("fleet-tab-available").is_some());
+        assert!(runtime.find("fleet-tab-enabled").is_some());
+
+        runtime.state.go_back();
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.fleet_section,
+            fleet_view::FleetSection::Browsers
+        );
+        runtime.state.go_back();
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.fleet_section,
+            fleet_view::FleetSection::AppServers
+        );
+        runtime.state.go_back();
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.fleet.tab, fleet_view::FleetTab::All);
+        runtime.state.go_back();
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::Home);
+
+        runtime.update(|state, _| {
+            state.navigate_to(ViewLocation::Fleet(state.fleet_section, state.fleet.tab));
+            state
+                .features
+                .iter_mut()
+                .find(|feature| feature.id == "fleet")
+                .unwrap()
+                .enabled = false;
+            state.navigate_to(ViewLocation::Home);
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("nav-fleet").is_none());
+        runtime.state.go_back();
+        assert_eq!(runtime.state.primary_view, PrimaryView::Home);
+    }
+
+    #[test]
     fn sidenav_edge_tracks_header_and_resizes_within_bounds() {
         fn aligned(runtime: &Runtime<State>) {
             let (sidenav, _) = runtime.presented("settings-sidenav").unwrap();
@@ -9019,6 +9304,8 @@ mod tests {
             extensions_view::ExtensionSection::Plugins
         );
         assert!(runtime.find("extensions-sidenav-title").is_some());
+        assert_eq!(runtime.state.plugin_tab, extensions_view::PluginTab::All);
+        assert!(runtime.find("plugin-tab-all").is_some());
         assert!(runtime.find("plugin-tab-available").is_some());
         assert!(runtime.find("plugin-tab-installed").is_some());
         for name in [
@@ -9069,10 +9356,16 @@ mod tests {
             runtime.state.extensions_section,
             extensions_view::ExtensionSection::Features
         );
+        assert!(runtime.find("plugin-tab-all").is_none());
         assert!(runtime.find("plugin-tab-available").is_none());
+        assert_eq!(runtime.state.feature_tab, extensions_view::FeatureTab::All);
+        assert!(runtime.find("feature-tab-all").is_some());
         assert!(runtime.find("feature-tab-available").is_some());
         assert!(runtime.find("feature-tab-enabled").is_some());
         assert!(runtime.find("feature-item-goal-mode").is_some());
+        assert!(runtime.find("feature-item-fleet").is_some());
+        assert!(runtime.find("feature-toggle-fleet").is_some());
+        assert!(runtime.find("feature-tools-fleet").is_some());
         assert!(runtime.find("feature-toggle-goal-mode").is_some());
         assert!(runtime.find("feature-prompt-extension-goal-mode").is_some());
         assert!(runtime.find("feature-tools-goal-mode").is_some());
@@ -9089,10 +9382,38 @@ mod tests {
         assert!(runtime.find("feature-item-goal-mode").is_none());
         runtime.state.go_back();
         runtime.frame(0.0);
+        assert_eq!(runtime.state.feature_tab, extensions_view::FeatureTab::All);
+    }
+
+    #[test]
+    fn active_extension_cards_show_workspace_scope_controls() {
+        let mut state = State {
+            primary_view: PrimaryView::Extensions,
+            ..State::default()
+        };
+        state.plugins[0].installed = true;
+        state.features[0].enabled = true;
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("plugin-scope-0").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
         assert_eq!(
-            runtime.state.feature_tab,
-            extensions_view::FeatureTab::Available
+            runtime.state.selection_menu,
+            Some(SelectionMenu::PluginWorkspaces { index: 0 })
         );
+        assert!(runtime.find("selection-menu-item-0").is_some());
+        runtime.key(KeyEvent {
+            key: Key::Escape,
+            mods: Default::default(),
+        });
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("extensions-features").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("feature-scope-0").is_some());
     }
 
     #[test]
@@ -9172,6 +9493,27 @@ mod tests {
             for card in cards.iter().take(columns) {
                 assert!((card[2] - expected_card_width).abs() < 1.0);
             }
+            let stat_bottoms = [
+                "apple-security-devices",
+                "apple-target-flags",
+                "meta-skills",
+                "microsoft-security-devices",
+            ]
+            .iter()
+            .take(columns)
+            .map(|name| {
+                let (rect, _) = runtime
+                    .presented(&format!("plugin-mcp-count-{name}"))
+                    .unwrap();
+                rect[1] + rect[3]
+            })
+            .collect::<Vec<_>>();
+            assert!(
+                stat_bottoms
+                    .iter()
+                    .all(|bottom| (bottom - stat_bottoms[0]).abs() < 1.0),
+                "stat rows should align at window width {window_width}"
+            );
             if columns < 4 {
                 assert!(cards[columns][1] > cards[0][1]);
             }

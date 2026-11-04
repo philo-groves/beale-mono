@@ -453,6 +453,8 @@ message PluginSummary {
   bool has_mcp_server = 5;
   uint32 mcp_server_count = 6;
   uint32 mcp_tool_count = 7;
+  repeated string workspace_ids = 8;
+  bool all_workspaces = 9;
 }
 
 message ListPluginsResponse {
@@ -466,6 +468,14 @@ message FeatureSummary {
   bool enabled = 4;
   bool has_prompt_extension = 5;
   uint32 tool_count = 6;
+  repeated string workspace_ids = 7;
+  bool all_workspaces = 8;
+}
+
+message SetExtensionWorkspaceScopeRequest {
+  string id = 1;
+  repeated string workspace_ids = 2;
+  bool all_workspaces = 3;
 }
 
 message ListFeaturesResponse {
@@ -503,4 +513,25 @@ message GetPluginManifestRequest {
 message PluginManifestResponse {
   string name = 1;
   string manifest_json = 2;
+}
+
+message FleetAppServerDescriptor {
+  string service = 1;
+  string host_name = 2;
+  string os_name = 3;
+  string os_vendor = 4;
+  uint32 protocol_major = 5;
+  uint32 protocol_minor = 6;
+}
+
+message FleetTotpProvisioningResponse {
+  string otpauth_uri = 1;
+}
+
+message FleetPairingRequest {
+  string code = 1;
+}
+
+message FleetPairingResponse {
+  string token = 1;
 }

@@ -679,6 +679,18 @@ async fn run_turn(
                 .db
                 .feature_enabled(beale_goals::FEATURE_ID)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                || !state
+                    .db
+                    .extension_applies_to(
+                        "feature",
+                        beale_goals::FEATURE_ID,
+                        &detail
+                            .summary
+                            .as_ref()
+                            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+                            .workspace_id,
+                    )
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             {
                 let id = detail
                     .summary
@@ -855,7 +867,11 @@ async fn run_one_turn(
         let feature_enabled = state
             .db
             .feature_enabled(beale_goals::FEATURE_ID)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            && state
+                .db
+                .extension_applies_to("feature", beale_goals::FEATURE_ID, &session.workspace_id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         if request.goal_mode && !feature_enabled {
             return Err(StatusCode::CONFLICT);
         }
