@@ -206,6 +206,7 @@ enum ModelRole {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionMenu {
     LeadProvider,
+    GoalMode,
     Repeat,
     ResearchWorkspace,
     QuickChatWorkspace,
@@ -513,6 +514,7 @@ enum ViewLocation {
     Extensions(
         extensions_view::ExtensionSection,
         extensions_view::PluginTab,
+        extensions_view::FeatureTab,
     ),
     Providers(Provider),
     Appearance(AppearanceTab),
@@ -546,6 +548,9 @@ struct State {
     new_research_model: Option<new_research::ModelSelection>,
     new_research_effort: new_research::Effort,
     new_research_repeat: new_research::RepeatPreset,
+    new_research_goal_mode: bool,
+    new_research_goal_max_turns: TextEdit,
+    new_research_goal_max_duration_minutes: TextEdit,
     quick_chat_open: bool,
     quick_chat_draft: TextEdit,
     quick_chat_input_history: input_history::InputHistory,
@@ -638,12 +643,23 @@ struct State {
     custom_delete_id: Option<String>,
     extensions_section: extensions_view::ExtensionSection,
     plugin_tab: extensions_view::PluginTab,
+    feature_tab: extensions_view::FeatureTab,
     plugins: Vec<extensions_view::PluginEntry>,
     plugin_loading: bool,
     plugin_error: String,
     plugin_installing: Option<String>,
     plugin_uninstalling: Option<String>,
     plugin_generation: u64,
+    features: Vec<extensions_view::FeatureEntry>,
+    feature_loading: bool,
+    feature_busy: bool,
+    feature_error: String,
+    feature_generation: u64,
+    feature_details_id: Option<String>,
+    feature_details: Option<beale_contracts::v1::FeatureDetailsResponse>,
+    feature_details_loading: bool,
+    feature_details_error: String,
+    feature_details_generation: u64,
     plugin_add_dialog_open: bool,
     plugin_source_edit: TextEdit,
     plugin_manifest_name: Option<String>,
@@ -721,6 +737,9 @@ impl Default for State {
             new_research_model: None,
             new_research_effort: new_research::Effort::default(),
             new_research_repeat: new_research::RepeatPreset::default(),
+            new_research_goal_mode: false,
+            new_research_goal_max_turns: TextEdit::new(""),
+            new_research_goal_max_duration_minutes: TextEdit::new(""),
             quick_chat_open: false,
             quick_chat_draft: TextEdit::new(""),
             quick_chat_input_history: input_history::InputHistory::default(),
@@ -813,12 +832,23 @@ impl Default for State {
             custom_delete_id: None,
             extensions_section: extensions_view::ExtensionSection::default(),
             plugin_tab: extensions_view::PluginTab::default(),
+            feature_tab: extensions_view::FeatureTab::default(),
             plugins: extensions_view::bundled_plugins(),
             plugin_loading: false,
             plugin_error: String::new(),
             plugin_installing: None,
             plugin_uninstalling: None,
             plugin_generation: 0,
+            features: extensions_view::bundled_features(),
+            feature_loading: false,
+            feature_busy: false,
+            feature_error: String::new(),
+            feature_generation: 0,
+            feature_details_id: None,
+            feature_details: None,
+            feature_details_loading: false,
+            feature_details_error: String::new(),
+            feature_details_generation: 0,
             plugin_add_dialog_open: false,
             plugin_source_edit: TextEdit::new(""),
             plugin_manifest_name: None,
@@ -965,7 +995,11 @@ impl State {
             return ViewLocation::Workspace(id, self.workspace_tab);
         }
         if self.primary_view == PrimaryView::Extensions {
-            return ViewLocation::Extensions(self.extensions_section, self.plugin_tab);
+            return ViewLocation::Extensions(
+                self.extensions_section,
+                self.plugin_tab,
+                self.feature_tab,
+            );
         }
         match self.settings_section {
             SettingsSection::Providers => ViewLocation::Providers(self.selected),
@@ -993,10 +1027,11 @@ impl State {
                     load_workspace = Some(id);
                 }
             }
-            ViewLocation::Extensions(section, tab) => {
+            ViewLocation::Extensions(section, plugin_tab, feature_tab) => {
                 self.primary_view = PrimaryView::Extensions;
                 self.extensions_section = section;
-                self.plugin_tab = tab;
+                self.plugin_tab = plugin_tab;
+                self.feature_tab = feature_tab;
             }
             ViewLocation::Providers(provider) => {
                 self.primary_view = PrimaryView::Settings;
@@ -1026,6 +1061,11 @@ impl State {
         self.plugin_manifest_loading = false;
         self.plugin_manifest_error.clear();
         self.plugin_manifest_generation = self.plugin_manifest_generation.wrapping_add(1);
+        self.feature_details_id = None;
+        self.feature_details = None;
+        self.feature_details_loading = false;
+        self.feature_details_error.clear();
+        self.feature_details_generation = self.feature_details_generation.wrapping_add(1);
         self.selection_menu = None;
         self.composer_menu_open = false;
         self.color_picker = None;
@@ -1113,6 +1153,9 @@ impl State {
             self.session_pending_prompt = None;
             self.session_error.clear();
             self.new_research_prompt.clear();
+            self.new_research_goal_mode = false;
+            self.new_research_goal_max_turns.clear();
+            self.new_research_goal_max_duration_minutes.clear();
         }
         self.new_research_workspace_id = self
             .selected_research_workspace()
@@ -1211,6 +1254,20 @@ impl State {
                 {
                     existing.kind = SessionStreamKind::ToolFinished as i32;
                     existing.tool = Some(tool);
+                }
+            }
+            Ok(SessionStreamKind::TurnCompleted) => {
+                if let Some(detail) = event.detail {
+                    self.clear_tool_detail();
+                    self.session_live_events.clear();
+                    self.session_elapsed_ms = 0;
+                    self.session_pending_prompt = None;
+                    if let Some(summary) = &detail.summary {
+                        self.session_summaries.retain(|item| item.id != summary.id);
+                        self.session_summaries.insert(0, summary.clone());
+                        self.new_research_workspace_id = Some(summary.workspace_id.clone());
+                    }
+                    self.active_session = Some(detail);
                 }
             }
             _ => {}
@@ -1591,6 +1648,18 @@ fn drag_color_picker(state: &mut State, drag: &mut Drag, tx: &mut Tx, axis: Pick
 
 static AUTH_HANDLE: std::sync::OnceLock<rune::AppHandle<State>> = std::sync::OnceLock::new();
 
+fn parse_goal_limit(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if value.is_empty() {
+        Some(0)
+    } else {
+        value
+            .parse::<u64>()
+            .ok()
+            .filter(|limit| *limit <= i64::MAX as u64)
+    }
+}
+
 fn start_session_turn(state: &mut State) {
     if state.session_busy {
         return;
@@ -1628,6 +1697,24 @@ fn start_session_turn(state: &mut State) {
         .and_then(|detail| detail.summary.as_ref())
         .filter(|summary| summary.workspace_id == workspace_id)
         .map_or_else(String::new, |summary| summary.id.clone());
+    let goal_mode = state.new_research_goal_mode
+        && extensions_view::goal_mode_enabled(state)
+        && session_id.is_empty();
+    let (goal_max_turns, goal_max_duration_minutes) = if goal_mode {
+        let Some(turns) = parse_goal_limit(&state.new_research_goal_max_turns.text) else {
+            state.session_error = "Max turns must be a whole number.".to_owned();
+            return;
+        };
+        let Some(minutes) = parse_goal_limit(&state.new_research_goal_max_duration_minutes.text)
+            .filter(|minutes| *minutes <= i64::MAX as u64 / 60_000)
+        else {
+            state.session_error = "Max duration must be a whole number of minutes.".to_owned();
+            return;
+        };
+        (turns, minutes)
+    } else {
+        (0, 0)
+    };
     let request = SubmitSessionTurnRequest {
         workspace_id,
         session_id,
@@ -1636,6 +1723,9 @@ fn start_session_turn(state: &mut State) {
         model: model.id,
         prompt: prompt.clone(),
         reasoning_effort: state.new_research_effort.wire() as i32,
+        goal_mode,
+        goal_max_turns,
+        goal_max_duration_minutes,
     };
     state.session_generation = state.session_generation.wrapping_add(1);
     let generation = state.session_generation;
@@ -1668,7 +1758,7 @@ fn start_session_turn(state: &mut State) {
         let result = (|| {
             let addr = connection::configured_addr()
                 .map_err(|_| "Invalid local app-server address".to_owned())?;
-            let client = sessions::client()?;
+            let client = sessions::stream_client()?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -2473,6 +2563,12 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 selected: state.new_research_repeat == preset,
             })
             .collect(),
+        SelectionMenu::GoalMode => vec![in_place_menu::MenuItem {
+            value: "toggle".to_owned(),
+            label: "Goal Mode".to_owned(),
+            detail: None,
+            selected: state.new_research_goal_mode,
+        }],
         SelectionMenu::ResearchWorkspace => {
             let selected_id = state
                 .selected_research_workspace()
@@ -2641,6 +2737,7 @@ fn selection_menu_anchor(menu: SelectionMenu) -> &'static str {
     match menu {
         SelectionMenu::HomeCollection => "home-collection-control",
         SelectionMenu::Repeat => "new-research-repeat-control",
+        SelectionMenu::GoalMode => "new-research-goal-control",
         SelectionMenu::ResearchWorkspace => "new-research-workspace-control",
         SelectionMenu::QuickChatWorkspace => "quick-chat-workspace-control",
         SelectionMenu::ResearchKit => "workspace-kit-control",
@@ -2684,7 +2781,8 @@ fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
     state.selection_menu = Some(menu);
     if matches!(
         menu,
-        SelectionMenu::Repeat
+        SelectionMenu::GoalMode
+            | SelectionMenu::Repeat
             | SelectionMenu::ResearchWorkspace
             | SelectionMenu::QuickChatWorkspace
             | SelectionMenu::HomeCollection
@@ -2722,6 +2820,7 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
                 state.new_research_repeat = preset;
             }
         }
+        SelectionMenu::GoalMode => state.new_research_goal_mode = !state.new_research_goal_mode,
         SelectionMenu::ResearchWorkspace => state.new_research_workspace_id = Some(value),
         SelectionMenu::QuickChatWorkspace => {
             state.quick_chat_workspace_id = if value.is_empty() { None } else { Some(value) };
@@ -3217,7 +3316,11 @@ fn nav_button(
     } else if key == "nav-extensions" {
         button.on_press(|s: &mut State| {
             s.rail_tooltip = None;
-            s.navigate_to(ViewLocation::Extensions(s.extensions_section, s.plugin_tab));
+            s.navigate_to(ViewLocation::Extensions(
+                s.extensions_section,
+                s.plugin_tab,
+                s.feature_tab,
+            ));
         })
     } else if active {
         button.on_press(|s: &mut State| {
@@ -5065,6 +5168,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.primary_view == PrimaryView::Extensions && state.feature_details_id.is_some() {
+        for layer in extensions_view::feature_details_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
     if let Some(menu) = state.selection_menu
         && match menu {
             SelectionMenu::ResearchKit => {
@@ -5083,6 +5191,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             SelectionMenu::HomeCollection => {
                 state.primary_view != PrimaryView::Settings && state.sidenav_visible
             }
+            SelectionMenu::GoalMode => {
+                state.primary_view == PrimaryView::NewResearch
+                    && extensions_view::goal_mode_enabled(state)
+            }
             SelectionMenu::Repeat | SelectionMenu::ResearchWorkspace => {
                 state.primary_view == PrimaryView::NewResearch
             }
@@ -5100,53 +5212,61 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             }
         }
     {
-        let items = selection_menu_items(state, menu);
-        if !items.is_empty() {
-            let (title, width) = match menu {
-                SelectionMenu::HomeCollection => ("Sidebar collection", 170.0),
-                SelectionMenu::Repeat => ("Repeat schedule", 190.0),
-                SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
-                SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
-                SelectionMenu::ResearchKit => ("Research Kit", 178.0),
-                SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
-                SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
-                SelectionMenu::LeadProvider => ("Default Provider", 178.0),
-                SelectionMenu::ColorTheme => ("Color Theme", 178.0),
-                SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
-                SelectionMenu::TextSize => ("Text Size", 178.0),
-                SelectionMenu::SourcePriority { .. } => ("Source Priority", 178.0),
-                SelectionMenu::Model { .. } => ("Choose model", 380.0),
-            };
+        if menu == SelectionMenu::GoalMode {
             window = window.child(
-                in_place_menu::panel(
-                    selection_menu_anchor(menu),
-                    title,
-                    width,
-                    state.menu_cursor.min(items.len() - 1),
-                    items,
-                    theme,
-                    (
-                        move |s: &mut State, index| {
-                            if s.selection_menu == Some(menu) {
-                                s.menu_cursor = index;
-                            }
-                        },
-                        move |s: &mut State, value, tx| {
-                            choose_selection_menu_item(s, menu, value, tx);
-                        },
-                    ),
-                )
-                .modal(true, |s: &mut State| s.selection_menu = None)
-                .on_layout_tx(|s: &mut State, _, tx| {
-                    if s.menu_reveal_pending {
-                        s.menu_reveal_pending = false;
-                        tx.scroll_into_view_in(
-                            "selection-menu-scroll",
-                            format!("selection-menu-item-{}", s.menu_cursor),
-                        );
-                    }
-                }),
+                new_research::goal_menu(state, theme)
+                    .modal(true, |s: &mut State| s.selection_menu = None),
             );
+        } else {
+            let items = selection_menu_items(state, menu);
+            if !items.is_empty() {
+                let (title, width) = match menu {
+                    SelectionMenu::HomeCollection => ("Sidebar collection", 170.0),
+                    SelectionMenu::Repeat => ("Repeat schedule", 190.0),
+                    SelectionMenu::GoalMode => ("Goal Mode", 150.0),
+                    SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
+                    SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
+                    SelectionMenu::ResearchKit => ("Research Kit", 178.0),
+                    SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
+                    SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
+                    SelectionMenu::LeadProvider => ("Default Provider", 178.0),
+                    SelectionMenu::ColorTheme => ("Color Theme", 178.0),
+                    SelectionMenu::InterfaceFont => ("Interface Font", 178.0),
+                    SelectionMenu::TextSize => ("Text Size", 178.0),
+                    SelectionMenu::SourcePriority { .. } => ("Source Priority", 178.0),
+                    SelectionMenu::Model { .. } => ("Choose model", 380.0),
+                };
+                window = window.child(
+                    in_place_menu::panel(
+                        selection_menu_anchor(menu),
+                        title,
+                        width,
+                        state.menu_cursor.min(items.len() - 1),
+                        items,
+                        theme,
+                        (
+                            move |s: &mut State, index| {
+                                if s.selection_menu == Some(menu) {
+                                    s.menu_cursor = index;
+                                }
+                            },
+                            move |s: &mut State, value, tx| {
+                                choose_selection_menu_item(s, menu, value, tx);
+                            },
+                        ),
+                    )
+                    .modal(true, |s: &mut State| s.selection_menu = None)
+                    .on_layout_tx(|s: &mut State, _, tx| {
+                        if s.menu_reveal_pending {
+                            s.menu_reveal_pending = false;
+                            tx.scroll_into_view_in(
+                                "selection-menu-scroll",
+                                format!("selection-menu-item-{}", s.menu_cursor),
+                            );
+                        }
+                    }),
+                );
+            }
         }
     }
     if state.primary_view == PrimaryView::NewResearch && state.composer_menu_open {
@@ -5552,6 +5672,7 @@ fn main() -> std::process::ExitCode {
             });
             if poll_archive {
                 handle.update(|state, _| {
+                    extensions_view::start_feature_load(state);
                     if state.primary_view == PrimaryView::Settings
                         && state.settings_section == SettingsSection::Archive
                     {
@@ -7233,6 +7354,115 @@ mod tests {
     }
 
     #[test]
+    fn goal_mode_is_opt_in_through_the_new_research_ribbon() {
+        let disabled_state = State {
+            primary_view: PrimaryView::NewResearch,
+            ..State::default()
+        };
+        let mut disabled = Runtime::new(disabled_state, view, (840.0, 600.0), Env::new(true, 1.0));
+        disabled.frame(0.0);
+        assert!(disabled.find("new-research-goal-control").is_none());
+        let mut state = State {
+            primary_view: PrimaryView::NewResearch,
+            ..State::default()
+        };
+        state.connection = ConnectionStatus::Connected {
+            major: 1,
+            minor: 30,
+        };
+        state.features[0].enabled = true;
+        let mut runtime = Runtime::new(state, view, (840.0, 600.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(!runtime.state.new_research_goal_mode);
+        let (goal, _) = runtime.presented("new-research-goal-control").unwrap();
+        let (repeat, _) = runtime.presented("new-research-repeat-control").unwrap();
+        assert!(goal[0] + goal[2] <= repeat[0]);
+        let (x, y) = runtime.find("new-research-goal-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.1);
+        assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::GoalMode));
+        let (x, y) = runtime.find("goal-mode-menu-toggle").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.2);
+        assert!(runtime.state.new_research_goal_mode);
+        assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::GoalMode));
+        assert!(runtime.find("goal-mode-max-turns").is_some());
+        assert!(runtime.find("goal-mode-max-duration").is_some());
+        let (x, y) = runtime.find("goal-mode-max-turns").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.3);
+        assert_eq!(runtime.state.selection_menu, Some(SelectionMenu::GoalMode));
+    }
+
+    #[test]
+    fn blank_goal_limits_mean_unlimited_and_invalid_values_are_rejected() {
+        assert_eq!(parse_goal_limit(""), Some(0));
+        assert_eq!(parse_goal_limit("  "), Some(0));
+        assert_eq!(parse_goal_limit("12"), Some(12));
+        assert_eq!(parse_goal_limit("-1"), None);
+        assert_eq!(parse_goal_limit("1.5"), None);
+        assert_eq!(parse_goal_limit("9223372036854775808"), None);
+    }
+
+    #[test]
+    fn goal_turn_completion_updates_transcript_without_ending_the_stream() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let mut state = State {
+            session_generation: 1,
+            session_busy: true,
+            session_pending_prompt: Some("Example objective".to_owned()),
+            ..State::default()
+        };
+        let detail = SessionDetail {
+            summary: Some(SessionSummary {
+                id: session_id.to_owned(),
+                workspace_id: workspace_id.to_owned(),
+                title: "Example objective".to_owned(),
+                last_message_at_ms: 1,
+            }),
+            messages: vec![beale_contracts::v1::SessionMessage {
+                role: beale_contracts::v1::SessionRole::Assistant as i32,
+                text: "First observation".to_owned(),
+                ..Default::default()
+            }],
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::ApiKey as i32,
+            model: "model-example".to_owned(),
+            goal: Some(beale_contracts::v1::SessionGoal {
+                objective: "Example objective".to_owned(),
+                status: beale_contracts::v1::GoalStatus::Active as i32,
+                turns_used: 1,
+                required_state: String::new(),
+                max_turns: 0,
+                max_duration_minutes: 0,
+                active_ms: 1,
+            }),
+            first_turn_number: 1,
+        };
+        state.apply_session_progress(
+            1,
+            SessionStreamEvent {
+                kind: SessionStreamKind::TurnCompleted as i32,
+                text: String::new(),
+                tool: None,
+                detail: Some(detail),
+                segment_index: 0,
+            },
+        );
+        assert!(state.session_busy);
+        assert!(state.session_pending_prompt.is_none());
+        assert_eq!(
+            state.active_session.unwrap().messages[0].text,
+            "First observation"
+        );
+        assert_eq!(state.session_summaries[0].id, session_id);
+    }
+
+    #[test]
     fn new_research_workspace_selector_keeps_its_draft_choice() {
         let first = "00000000-0000-4000-8000-000000000001";
         let second = "00000000-0000-4000-8000-000000000002";
@@ -7403,6 +7633,8 @@ mod tests {
             provider: ProviderId::Openai as i32,
             method: AuthMethod::Subscription as i32,
             model: "model-example".to_owned(),
+            goal: None,
+            first_turn_number: 1,
         };
         state.finish_session_turn(1, Ok(detail));
         assert_eq!(state.primary_view, PrimaryView::NewResearch);
@@ -7507,6 +7739,8 @@ mod tests {
                     provider: ProviderId::Openai as i32,
                     method: AuthMethod::Subscription as i32,
                     model: "model-example".to_owned(),
+                    goal: None,
+                    first_turn_number: 1,
                 }),
                 ..State::default()
             },
@@ -7589,6 +7823,8 @@ mod tests {
                 provider: ProviderId::Openai as i32,
                 method: AuthMethod::ApiKey as i32,
                 model: "model-example".to_owned(),
+                goal: None,
+                first_turn_number: 1,
             }),
             session_busy: true,
             session_live_events: vec![SessionStreamEvent {
@@ -7665,6 +7901,8 @@ mod tests {
                 provider: ProviderId::Openai as i32,
                 method: AuthMethod::ApiKey as i32,
                 model: "model-example".to_owned(),
+                goal: None,
+                first_turn_number: 1,
             }),
             ..State::default()
         };
@@ -8826,12 +9064,78 @@ mod tests {
         let (x, y) = runtime.find("extensions-features").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
-        runtime.frame(0.0);
+        runtime.frame(1.0);
         assert_eq!(
             runtime.state.extensions_section,
             extensions_view::ExtensionSection::Features
         );
         assert!(runtime.find("plugin-tab-available").is_none());
+        assert!(runtime.find("feature-tab-available").is_some());
+        assert!(runtime.find("feature-tab-enabled").is_some());
+        assert!(runtime.find("feature-item-goal-mode").is_some());
+        assert!(runtime.find("feature-toggle-goal-mode").is_some());
+        assert!(runtime.find("feature-prompt-extension-goal-mode").is_some());
+        assert!(runtime.find("feature-tools-goal-mode").is_some());
+        assert!(runtime.state.features[0].has_prompt_extension);
+        assert_eq!(runtime.state.features[0].tool_count, 1);
+        let (x, y) = runtime.find("feature-tab-enabled").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.feature_tab,
+            extensions_view::FeatureTab::Enabled
+        );
+        assert!(runtime.find("feature-item-goal-mode").is_none());
+        runtime.state.go_back();
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.feature_tab,
+            extensions_view::FeatureTab::Available
+        );
+    }
+
+    #[test]
+    fn feature_details_button_opens_dialog() {
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::Extensions,
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("extensions-features").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        let (x, y) = runtime.find("feature-details-goal-mode").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.feature_details_id.as_deref(),
+            Some("goal-mode")
+        );
+        assert!(runtime.find("feature-details-dialog").is_some());
+        runtime.update(|state, _| {
+            state.feature_details = Some(beale_contracts::v1::FeatureDetailsResponse {
+                id: "goal-mode".to_owned(),
+                name: "Goal Mode".to_owned(),
+                description: "Example feature".to_owned(),
+                prompt_extension: "Example prompt extension".to_owned(),
+            });
+            state.feature_details_error.clear();
+        });
+        runtime.frame(0.0);
+        assert!(runtime.find("feature-details-prompt").is_some());
+        let (x, y) = runtime.find("feature-details-close").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.state.feature_details_id.is_none());
     }
 
     #[test]

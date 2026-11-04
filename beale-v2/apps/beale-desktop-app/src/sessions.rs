@@ -3,8 +3,8 @@ use beale_contracts::{
     SESSION_STREAM_MAX_FRAME_BYTES, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_STREAM_PATH,
     SESSIONS_PATH,
     v1::{
-        ListSessionsResponse, SessionDetail, SessionRole, SessionStreamEvent, SessionStreamKind,
-        SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
+        GoalStatus, ListSessionsResponse, SessionDetail, SessionRole, SessionStreamEvent,
+        SessionStreamKind, SessionSummary, SessionToolDetailPage, SubmitSessionTurnRequest,
     },
 };
 use prost::Message;
@@ -59,6 +59,15 @@ pub(crate) fn client() -> Result<Client, String> {
         .map_err(|_| "Could not initialize session connection".to_owned())
 }
 
+pub(crate) fn stream_client() -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Could not initialize session connection".to_owned())
+}
+
 fn url(addr: SocketAddr, path: &str) -> String {
     format!("http://{addr}{path}")
 }
@@ -99,7 +108,8 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
         && uuid::Uuid::parse_str(&summary.workspace_id).is_ok()
         && !summary.title.is_empty()
         && summary.last_message_at_ms > 0
-        && detail.messages.len() <= 64
+        && detail.messages.len() <= 128
+        && detail.first_turn_number > 0
         && matches!(
             beale_contracts::v1::ProviderId::try_from(detail.provider),
             Ok(beale_contracts::v1::ProviderId::Openai
@@ -115,6 +125,20 @@ pub(crate) fn valid_detail(detail: &SessionDetail) -> bool {
                 | beale_contracts::v1::AuthMethod::ApiKey)
         )
         && !detail.model.is_empty()
+        && detail.goal.as_ref().is_none_or(|goal| {
+            !goal.objective.trim().is_empty()
+                && goal.objective.len() <= 16_384
+                && goal.turns_used > 0
+                && matches!(
+                    GoalStatus::try_from(goal.status),
+                    Ok(GoalStatus::Active
+                        | GoalStatus::Complete
+                        | GoalStatus::Waiting
+                        | GoalStatus::Paused)
+                )
+                && (goal.status == GoalStatus::Waiting as i32) != goal.required_state.is_empty()
+                && goal.required_state.len() <= 1_024
+        })
         && detail.messages.iter().all(|message| {
             matches!(
                 SessionRole::try_from(message.role),
@@ -177,7 +201,7 @@ fn valid_stream_event(event: &SessionStreamEvent) -> bool {
                         && tool.summary.len() <= 512
                 })
         }
-        Ok(SessionStreamKind::Completed) => {
+        Ok(SessionStreamKind::Completed | SessionStreamKind::TurnCompleted) => {
             event.text.is_empty()
                 && event.tool.is_none()
                 && event.detail.as_ref().is_some_and(valid_detail)
@@ -305,7 +329,6 @@ pub(crate) async fn submit_stream(
     let token = crate::provider_auth::authenticated_token(client, addr).await?;
     let mut response = client
         .post(url(addr, SESSION_TURN_STREAM_PATH))
-        .timeout(Duration::from_secs(3_600))
         .bearer_auth(token)
         .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
         .body(request.encode_to_vec())
@@ -334,6 +357,17 @@ pub(crate) async fn submit_stream(
                 return Err("Invalid app-server session stream event".to_owned());
             }
             match SessionStreamKind::try_from(event.kind) {
+                Ok(SessionStreamKind::TurnCompleted) => {
+                    if event.detail.as_ref().is_none_or(|detail| {
+                        detail
+                            .summary
+                            .as_ref()
+                            .is_none_or(|summary| summary.workspace_id != request.workspace_id)
+                    }) {
+                        return Err("Invalid app-server session detail".to_owned());
+                    }
+                    on_progress(event);
+                }
                 Ok(SessionStreamKind::Completed) => {
                     let detail = event.detail.ok_or("Missing session detail".to_owned())?;
                     if detail.summary.as_ref().is_none_or(|summary| {

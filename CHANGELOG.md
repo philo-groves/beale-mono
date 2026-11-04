@@ -6,6 +6,11 @@
 
 #### Added
 
+- Added Available and Enabled tabs to the v2 Features view; Enabled shows only active features.
+- Added MCP server and live tool counts to v2 Plugin cards, including locally supplied Agent Plugins packages.
+- Added Feature card details dialogs that fetch a feature's prompt extension on demand; Goal Mode displays its reusable prompt guidance.
+- Listed Goal Mode in the v2 Features view with an Enable/Disable card; it starts disabled and its composer control appears only while enabled.
+- Added opt-in v2 Goal Mode for New Research with a dedicated feature crate, host-owned continuation turns, an explicit model status tool, and live intermediate transcript updates.
 - Added a plugin manifest dialog to v2 plugin cards, showing the validated host manifest on demand.
 - Added v2 Anthropic and Z.ai subscription sign-in through the official Claude and ZCode applications, with separate subscription model choices.
 - Added v2 Providers tabs for Anthropic, Z.ai, OpenRouter, and multiple custom OpenAI-compatible APIs, with host-saved keys, model selection, and default-provider support.
@@ -61,6 +66,9 @@
 
 #### Changed
 
+- Displayed model-facing tool counts beneath Prompt Extension on v2 Feature cards; Goal Mode lists its `goal_status` tool.
+- Showed each v2 feature's prompt-extension capability on its card and replaced Plugin and Feature card actions with toggles.
+- Made v2 Goal Mode unlimited by default, with optional max-turn and active-duration controls in its composer menu.
 - Muted the v2 Home collection selector and added row-wide session and workspace hover cards with their relevant details.
 - Laid out v2 plugin cards in a responsive grid of up to four columns and removed the line beneath MCP Servers.
 - Simplified v2 plugin cards to Skills and MCP Servers counts without dividers between stats.
@@ -145,6 +153,12 @@
 
 #### Added
 
+- Added v1.34 Plugin tool counts and host-owned MCP launch and discovery for installed bundled and locally supplied packages; uninstall stops active stdio servers.
+- Added v1.33 feature catalog tool counts for optional model-facing tools.
+- Added an authenticated v1.32 feature-details route with Goal Mode's reusable system-prompt extension text.
+- Added prompt-extension capability metadata to the v1.31 feature catalog; Goal Mode supplies the existing conditional system-prompt section.
+- Added authenticated v1.30 feature listing and enablement routes; SQLite schema 15 persists feature state and defaults Goal Mode to disabled.
+- Added protocol v1.28 Goal Mode request, status, and intermediate-turn events; SQLite schema 13 stores goal state and marks internal continuation prompts without showing them as user messages.
 - Added protocol v1.27 session and archive summaries with the last-message timestamp. SQLite schema 12 initializes existing sessions from creation time and updates the timestamp after saved turns.
 - Added protocol v1.26 plugin summaries with MCP server counts and an authenticated, on-demand bundled manifest read.
 - Added protocol v1.25 official CLI subscription status and session routes for Anthropic and Z.ai, keeping subscription credentials in their own applications and Beale tool execution in the Rust harness.
@@ -179,6 +193,7 @@
 
 #### Changed
 
+- Added protocol v1.29 Goal Mode limits and accumulated work time; SQLite schema 14 migrates saved goals to unlimited defaults and the harness uses a bounded recent context window for long-running goals.
 - Preferred GPT-5.6 Sol for new v2 OpenAI lead-model defaults when the account offers it; saved model choices remain in place.
 - Sent a model-aware Daybreak cyber access marker on every v2 OpenAI Responses request, using the host's Blue or Red setting and rejecting models known to require Red approval under Blue.
 - Moved v2 workspace and session routes and storage from `beale-core` into the `beale-workspaces` and `beale-sessions` crates; `beale-core` now composes their routers.

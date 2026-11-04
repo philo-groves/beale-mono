@@ -5,14 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["goal-mode"]
+goal-mode = ["beale-sessions/goal-mode", "dep:beale-goals"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-extender = { path = "../beale-extender" }
+beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
 beale-providers = { path = "../beale-providers" }
 beale-safety = { path = "../beale-safety" }
-beale-sessions = { path = "../beale-sessions" }
+beale-sessions = { path = "../beale-sessions", default-features = false }
 beale-storage = { path = "../beale-storage" }
 beale-workspaces = { path = "../beale-workspaces" }
 prost.workspace = true

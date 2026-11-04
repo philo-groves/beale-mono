@@ -447,6 +447,7 @@ pub mod v1 {
         ToolFinished = 4,
         Completed = 5,
         Failed = 6,
+        TurnCompleted = 7,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -531,8 +532,8 @@ pub mod v1 {
         pub title: String,
         #[prost(string, tag = "4")]
         pub model: String,
-        #[prost(uint32, tag = "5")]
-        pub turn_count: u32,
+        #[prost(uint64, tag = "5")]
+        pub turn_count: u64,
         #[prost(uint64, tag = "6")]
         pub created_at_ms: u64,
         #[prost(uint64, tag = "7")]
@@ -561,6 +562,38 @@ pub mod v1 {
         pub method: i32,
         #[prost(string, tag = "5")]
         pub model: String,
+        #[prost(message, optional, tag = "6")]
+        pub goal: Option<SessionGoal>,
+        #[prost(uint64, tag = "7")]
+        pub first_turn_number: u64,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum GoalStatus {
+        Unspecified = 0,
+        Active = 1,
+        Complete = 2,
+        Waiting = 3,
+        Paused = 4,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionGoal {
+        #[prost(string, tag = "1")]
+        pub objective: String,
+        #[prost(enumeration = "GoalStatus", tag = "2")]
+        pub status: i32,
+        #[prost(uint64, tag = "3")]
+        pub turns_used: u64,
+        #[prost(string, tag = "4")]
+        pub required_state: String,
+        #[prost(uint64, tag = "5")]
+        pub max_turns: u64,
+        #[prost(uint64, tag = "6")]
+        pub max_duration_minutes: u64,
+        #[prost(uint64, tag = "7")]
+        pub active_ms: u64,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
@@ -592,6 +625,12 @@ pub mod v1 {
         pub prompt: String,
         #[prost(enumeration = "ReasoningEffort", tag = "7")]
         pub reasoning_effort: i32,
+        #[prost(bool, tag = "8")]
+        pub goal_mode: bool,
+        #[prost(uint64, tag = "9")]
+        pub goal_max_turns: u64,
+        #[prost(uint64, tag = "10")]
+        pub goal_max_duration_minutes: u64,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -688,12 +727,62 @@ pub mod v1 {
         pub has_mcp_server: bool,
         #[prost(uint32, tag = "6")]
         pub mcp_server_count: u32,
+        #[prost(uint32, tag = "7")]
+        pub mcp_tool_count: u32,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ListPluginsResponse {
         #[prost(message, repeated, tag = "1")]
         pub plugins: Vec<PluginSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FeatureSummary {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub description: String,
+        #[prost(bool, tag = "4")]
+        pub enabled: bool,
+        #[prost(bool, tag = "5")]
+        pub has_prompt_extension: bool,
+        #[prost(uint32, tag = "6")]
+        pub tool_count: u32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListFeaturesResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub features: Vec<FeatureSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct GetFeatureDetailsRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FeatureDetailsResponse {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub description: String,
+        #[prost(string, tag = "4")]
+        pub prompt_extension: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetFeatureEnabledRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(bool, tag = "2")]
+        pub enabled: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -724,7 +813,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 27;
+pub const PROTOCOL_MINOR: u32 = 34;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -759,6 +848,9 @@ pub const SESSION_TURN_STREAM_PATH: &str = "/v1/sessions/turns/stream";
 pub const SESSION_TOOL_DETAIL_PATH: &str = "/v1/sessions/{id}/tools/{tool_id}";
 pub const PERMISSION_RULES_PATH: &str = "/v1/permissions/rules";
 pub const PLUGINS_PATH: &str = "/v1/plugins";
+pub const FEATURES_PATH: &str = "/v1/features";
+pub const FEATURE_DETAILS_PATH: &str = "/v1/features/details";
+pub const FEATURE_SET_ENABLED_PATH: &str = "/v1/features/set-enabled";
 pub const PLUGIN_INSTALL_PATH: &str = "/v1/plugins/install";
 pub const PLUGIN_UNINSTALL_PATH: &str = "/v1/plugins/uninstall";
 pub const PLUGIN_MANIFEST_PATH: &str = "/v1/plugins/manifest";

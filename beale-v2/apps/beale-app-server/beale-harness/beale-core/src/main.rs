@@ -101,12 +101,16 @@ async fn serve() -> Result<()> {
     let token = store.control_token()?;
     let workspaces = beale_workspaces::WorkspaceStore::new()?;
     let db = beale_storage::HostDatabase::open(workspaces.root())?;
+    let plugin_data_root = workspaces.root().to_path_buf();
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
-        .merge(beale_sessions::router(token.clone(), workspaces)?)
+        .merge(beale_sessions::router(token.clone(), workspaces)?);
+    #[cfg(feature = "goal-mode")]
+    let app = app.merge(beale_goals::router(token.clone(), db.clone()));
+    let app = app
         .merge(beale_safety::router(token.clone(), db.clone()))
-        .merge(beale_extender::router(token.clone(), db)?)
+        .merge(beale_extender::router(token.clone(), db, plugin_data_root)?)
         .merge(auth::router(token, store));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

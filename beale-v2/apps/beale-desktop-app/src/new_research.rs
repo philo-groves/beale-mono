@@ -1,5 +1,5 @@
 use beale_contracts::v1::{
-    AuthMethod, ReasoningEffort, SessionRole, SessionStreamKind, SessionToolSummary,
+    AuthMethod, GoalStatus, ReasoningEffort, SessionRole, SessionStreamKind, SessionToolSummary,
 };
 use rune::{
     Align, Color, El, Key, KeyEvent, ScrollSpec, Side, TextEdit, Transition, Tx, col, el, icon,
@@ -11,7 +11,7 @@ use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method,
     icons::{
         ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT,
-        TERMINAL, WRENCH,
+        TARGET, TERMINAL, WRENCH,
     },
     in_place_menu, input_history, load_tool_detail_page, start_session_turn, toggle_selection_menu,
     toggle_tool_detail, ui_font,
@@ -917,6 +917,96 @@ fn next_input(state: &mut State) {
     }
 }
 
+fn goal_limit_field(
+    edit: &TextEdit,
+    key: &'static str,
+    label: &'static str,
+    theme: ThemeStyle<'_>,
+    accessor: fn(&mut State) -> &mut TextEdit,
+) -> El {
+    row()
+        .w_full()
+        .center_y()
+        .gap(8.0)
+        .child(
+            text(label)
+                .grow(1.0)
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#d4d4d4")),
+        )
+        .child(
+            text_input(edit, ui_font(13.0, 400.0))
+                .key(key)
+                .single_line()
+                .w(106.0)
+                .h(32.0)
+                .padding(7.0)
+                .placeholder("Unlimited", theme.color("#888888"))
+                .radius(8.0)
+                .continuous_corners()
+                .fill(theme.color("#303030"))
+                .border(1.0, theme.color("#444444"))
+                .color(theme.color("#eeeeee"))
+                .on_edit(accessor),
+        )
+}
+
+pub(crate) fn goal_menu(state: &State, theme: ThemeStyle<'_>) -> El {
+    let selected = state.new_research_goal_mode;
+    in_place_menu::popup_surface(
+        col()
+            .key("goal-mode-menu")
+            .role("menu")
+            .label("Goal Mode")
+            .w(265.0)
+            .padding(8.0)
+            .gap(7.0)
+            .child(
+                row()
+                    .key("goal-mode-menu-toggle")
+                    .role("menuitem")
+                    .label("Goal Mode")
+                    .w_full()
+                    .h(34.0)
+                    .px(8.0)
+                    .center_y()
+                    .radius(7.0)
+                    .hover(theme.color("#383838"))
+                    .on_press(|state: &mut State| {
+                        state.new_research_goal_mode = !state.new_research_goal_mode;
+                    })
+                    .child(
+                        text("Goal Mode")
+                            .grow(1.0)
+                            .font(ui_font(14.0, if selected { 550.0 } else { 400.0 }))
+                            .color(theme.color("#eeeeee")),
+                    )
+                    .child(if selected {
+                        icon(&CHECK, 14.0).color(theme.color("#c8c8c8"))
+                    } else {
+                        el().size(14.0, 14.0)
+                    }),
+            )
+            .child(el().w_full().h(1.0).fill(theme.color("#3b3b3b")))
+            .child(goal_limit_field(
+                &state.new_research_goal_max_turns,
+                "goal-mode-max-turns",
+                "Max turns",
+                theme,
+                |state| &mut state.new_research_goal_max_turns,
+            ))
+            .child(goal_limit_field(
+                &state.new_research_goal_max_duration_minutes,
+                "goal-mode-max-duration",
+                "Max duration (min)",
+                theme,
+                |state| &mut state.new_research_goal_max_duration_minutes,
+            )),
+        theme.color("#242424"),
+    )
+    .anchored_fit("new-research-goal-control", Side::Bottom, Align::End, 4.0)
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     let history_entries = state
         .active_session
@@ -1108,6 +1198,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 }),
         );
     let repeat_active = state.selection_menu == Some(SelectionMenu::Repeat);
+    let goal_active = state.selection_menu == Some(SelectionMenu::GoalMode);
     let workspace_menu_active = state.selection_menu == Some(SelectionMenu::ResearchWorkspace);
     let workspace_name = state
         .selected_research_workspace()
@@ -1168,7 +1259,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
     } else {
         workspace_button
     };
-    let ribbon = row()
+    let mut ribbon = row()
         .key("new-research-ribbon")
         .transition(
             Transition::asymmetric(
@@ -1189,35 +1280,66 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .continuous_corners()
         .fill(theme.color("#1b1b1b"))
         .child(workspace_control)
-        .child(el().grow(1.0))
-        .child(
+        .child(el().grow(1.0));
+    if crate::extensions_view::goal_mode_enabled(state) {
+        ribbon = ribbon.child(
             row()
-                .key("new-research-repeat-control")
+                .key("new-research-goal-control")
                 .role("button")
-                .label(format!(
-                    "Repeat schedule: {}",
-                    state.new_research_repeat.label()
-                ))
+                .label(if state.new_research_goal_mode {
+                    "Goal Mode on"
+                } else {
+                    "Goal Mode off"
+                })
                 .size(28.0, 28.0)
                 .justify_center()
                 .center_y()
                 .radius(8.0)
                 .continuous_corners()
-                .fill(if repeat_active {
+                .fill(if goal_active {
                     theme.color("#303030")
                 } else {
                     Color::TRANSPARENT
                 })
                 .hover(theme.color("#303030"))
-                .on_press(|state: &mut State| toggle_selection_menu(state, SelectionMenu::Repeat))
-                .child(icon(&REPEAT, 15.0).color(theme.color(
-                    if state.new_research_repeat == RepeatPreset::None {
-                        "#a0a0a0"
-                    } else {
+                .on_press(|state: &mut State| toggle_selection_menu(state, SelectionMenu::GoalMode))
+                .child(
+                    icon(&TARGET, 15.0).color(theme.color(if state.new_research_goal_mode {
                         "#eeeeee"
-                    },
-                ))),
+                    } else {
+                        "#a0a0a0"
+                    })),
+                ),
         );
+    }
+    ribbon = ribbon.child(
+        row()
+            .key("new-research-repeat-control")
+            .role("button")
+            .label(format!(
+                "Repeat schedule: {}",
+                state.new_research_repeat.label()
+            ))
+            .size(28.0, 28.0)
+            .justify_center()
+            .center_y()
+            .radius(8.0)
+            .continuous_corners()
+            .fill(if repeat_active {
+                theme.color("#303030")
+            } else {
+                Color::TRANSPARENT
+            })
+            .hover(theme.color("#303030"))
+            .on_press(|state: &mut State| toggle_selection_menu(state, SelectionMenu::Repeat))
+            .child(icon(&REPEAT, 15.0).color(theme.color(
+                if state.new_research_repeat == RepeatPreset::None {
+                    "#a0a0a0"
+                } else {
+                    "#eeeeee"
+                },
+            ))),
+    );
     let mut transcript = col()
         .key("session-transcript")
         .w_full()
@@ -1228,6 +1350,18 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .pt(22.0)
         .pb(24.0);
     if let Some(detail) = &state.active_session {
+        if detail.first_turn_number > 1 {
+            transcript = transcript.child(
+                text(format!(
+                    "Showing recent activity from turn {}. Earlier turns remain saved.",
+                    detail.first_turn_number
+                ))
+                .key("session-earlier-activity")
+                .font(ui_font(12.0, 400.0))
+                .color(theme.color("#888888"))
+                .wrap(),
+            );
+        }
         for (index, message) in detail.messages.iter().enumerate() {
             let user = message.role == SessionRole::User as i32;
             if !user {
@@ -1291,6 +1425,51 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 false,
                 theme,
             ));
+        }
+        if !state.session_busy
+            && let Some(goal) = &detail.goal
+        {
+            let status = match GoalStatus::try_from(goal.status) {
+                Ok(GoalStatus::Complete) => Some(("Goal completed".to_owned(), "#b8b8b8")),
+                Ok(GoalStatus::Waiting) => Some((
+                    format!("Goal waiting for: {}", goal.required_state),
+                    "#dca15f",
+                )),
+                Ok(GoalStatus::Paused) if !crate::extensions_view::goal_mode_enabled(state) => {
+                    Some((
+                        "Goal Mode is disabled. Enable it in Features to continue.".to_owned(),
+                        "#dca15f",
+                    ))
+                }
+                Ok(GoalStatus::Paused)
+                    if goal.max_turns != 0 && goal.turns_used >= goal.max_turns =>
+                {
+                    Some(("Goal paused at the max turns limit.".to_owned(), "#dca15f"))
+                }
+                Ok(GoalStatus::Paused)
+                    if goal.max_duration_minutes != 0
+                        && goal.active_ms >= goal.max_duration_minutes.saturating_mul(60_000) =>
+                {
+                    Some((
+                        "Goal paused at the max duration limit.".to_owned(),
+                        "#dca15f",
+                    ))
+                }
+                Ok(GoalStatus::Paused) => Some((
+                    "Goal paused. Send a message to continue.".to_owned(),
+                    "#dca15f",
+                )),
+                _ => None,
+            };
+            if let Some((label, color)) = status {
+                transcript = transcript.child(
+                    text(label)
+                        .key("session-goal-status")
+                        .font(ui_font(12.0, 400.0))
+                        .color(theme.color(color))
+                        .wrap(),
+                );
+            }
         }
     }
     if let Some(prompt) = &state.session_pending_prompt {

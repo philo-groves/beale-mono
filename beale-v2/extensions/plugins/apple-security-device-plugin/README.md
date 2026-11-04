@@ -20,7 +20,7 @@ Use Darwin VM for low-level Darwin inspection without a physical device. Use Tar
 
 ## Installation
 
-Beale v2 lists this bundled package as Available and can record its installation through the app-server. Skill and MCP activation are not connected yet. The package declares its skill at `skills/apple-security-devices/SKILL.md` and its `devices` MCP server in `mcp.json` for the future plugin runtime.
+Beale v2 lists this bundled package as Available and can record its installation through the app-server. On installation, the app-server launches the `devices` MCP server declared in `mcp.json` and discovers its live tool count. Its skill and MCP tools are not yet exposed to sessions. The package declares its skill at `skills/apple-security-devices/SKILL.md`.
 
 Read operations inspect availability and state. Bounded Tart and Darwin VM lifecycle, guest execution, transfer, and console operations are auto-reviewed; physical-iPhone mutation still requires explicit host confirmation.
 

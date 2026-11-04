@@ -36,7 +36,7 @@ pub(super) async fn details(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let id = parse_id(&id)?;
-    let _guard = state.write_lock.lock().await;
+    let _guard = state.quick_chat_lock.lock().await;
     let (saved, turns) = load_persisted(&state.db, id)?;
     if saved.workspace_id != WORKSPACE_ID {
         return Err(StatusCode::NOT_FOUND);
@@ -220,7 +220,7 @@ pub(super) async fn turn(
     if !request.workspace_id.is_empty() && Uuid::parse_str(&request.workspace_id).is_err() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let _guard = state.write_lock.lock().await;
+    let _guard = state.quick_chat_lock.lock().await;
     let context = if request.workspace_id.is_empty() {
         NO_WORKSPACE_CONTEXT.to_owned()
     } else {
@@ -348,6 +348,7 @@ pub(super) async fn turn(
         prompt: prompt.to_owned(),
         answer,
         duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        internal_prompt: false,
     };
     if turns.is_empty() {
         state

@@ -1,0 +1,21 @@
+[
+  "environment_status",
+  "list_tart_vms",
+  "tart_vm_ip",
+  "inspect_tart_vm",
+  "start_tart_vm",
+  "stop_tart_vm",
+  "exec_tart_vm",
+  "copy_to_tart_vm",
+  "copy_from_tart_vm",
+  "list_physical_iphones",
+  "describe_physical_iphone",
+  "install_physical_iphone_app",
+  "launch_physical_iphone_app",
+  "inspect_darwin_vm",
+  "list_darwin_vm_runs",
+  "read_darwin_vm_log",
+  "start_darwin_vm",
+  "stop_darwin_vm",
+  "run_darwin_vm_console_command"
+]

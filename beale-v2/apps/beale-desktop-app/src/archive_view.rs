@@ -82,7 +82,8 @@ pub(crate) async fn list(client: &Client, addr: SocketAddr) -> Result<Vec<Archiv
                 && entry.title.len() <= 256
                 && !entry.model.trim().is_empty()
                 && entry.model.len() <= 256
-                && (1..=32).contains(&entry.turn_count)
+                && entry.turn_count > 0
+                && (!entry.quick_chat || entry.turn_count <= 32)
                 && entry.created_at_ms > 0
                 && entry.last_message_at_ms > 0
                 && entry.archived_at_ms >= entry.created_at_ms

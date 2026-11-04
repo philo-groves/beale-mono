@@ -1,5 +1,7 @@
 //! Host-owned installation registry for bundled Agent Plugins packages.
-//! Installation records a validated package; component activation is separate.
+//! Installed MCP servers are activated by the host and discovered at launch.
+
+mod mcp_runtime;
 
 use anyhow::{Context, Result, ensure};
 use axum::{
@@ -21,9 +23,14 @@ use beale_storage::HostDatabase;
 use prost::Message;
 use serde::Deserialize;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
+};
+use tokio::{
+    sync::Mutex,
+    time::{Duration, timeout},
 };
 
 const BUNDLES: [(&str, &str); 4] = [
@@ -50,29 +57,75 @@ struct Manifest {
 #[derive(Clone)]
 struct Catalog {
     root: PathBuf,
+    data_root: PathBuf,
+    active: Arc<Mutex<HashMap<String, HashMap<String, mcp_runtime::RunningServer>>>>,
 }
 
 impl Catalog {
-    fn bundled() -> Result<Self> {
+    fn bundled(data_root: PathBuf) -> Result<Self> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../../extensions/plugins")
             .canonicalize()
             .context("locate bundled plugins")?;
-        let catalog = Self { root };
+        let catalog = Self {
+            root,
+            data_root,
+            active: Arc::default(),
+        };
         for (name, directory) in BUNDLES {
-            catalog.scan(name, directory)?;
+            catalog.scan(name, &catalog.root.join(directory))?;
         }
         Ok(catalog)
     }
 
-    fn scan(&self, expected_name: &str, directory: &str) -> Result<PluginSummary> {
-        let root = self
-            .root
-            .join(directory)
+    fn packages_root(&self) -> PathBuf {
+        self.data_root.join("plugins").join("packages")
+    }
+
+    fn entries(&self) -> Result<Vec<(String, PathBuf)>> {
+        let mut entries = BUNDLES
+            .iter()
+            .map(|(name, directory)| ((*name).to_owned(), self.root.join(directory)))
+            .collect::<Vec<_>>();
+        let packages = self.packages_root();
+        if packages.exists() {
+            let packages = packages.canonicalize()?;
+            for entry in std::fs::read_dir(&packages)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !valid_name(&name) || BUNDLES.iter().any(|(bundled, _)| *bundled == name) {
+                    continue;
+                }
+                let Ok(path) = entry.path().canonicalize() else {
+                    continue;
+                };
+                if !path.starts_with(&packages) {
+                    continue;
+                }
+                if path.is_dir() && self.scan(&name, &path).is_ok() {
+                    entries.push((name, path));
+                }
+            }
+        }
+        Ok(entries)
+    }
+
+    fn package(&self, name: &str) -> Result<Option<PathBuf>> {
+        Ok(self
+            .entries()?
+            .into_iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, path)| path))
+    }
+
+    fn scan(&self, expected_name: &str, directory: &Path) -> Result<PluginSummary> {
+        let root = directory.canonicalize().context("locate plugin")?;
+        let external_root = self
+            .packages_root()
             .canonicalize()
-            .context("locate plugin")?;
+            .unwrap_or_else(|_| self.packages_root());
         ensure!(
-            root.starts_with(&self.root) && root.is_dir(),
+            (root.starts_with(&self.root) || root.starts_with(&external_root)) && root.is_dir(),
             "invalid plugin root"
         );
         let manifest_path = contained_file(&root, &root.join("plugin.json"))?;
@@ -115,20 +168,41 @@ impl Catalog {
             }
         }
 
-        let mut mcp_server_count = 0_u32;
-        let mcp_path = root.join("mcp.json");
-        if mcp_path.exists() {
-            let mcp_path = contained_file(&root, &mcp_path)?;
+        let mcp_server_count = mcp_runtime::configurations(&root)
+            .map(|servers| servers.len() as u32)
+            .unwrap_or(0);
+        let mut mcp_tool_count = 0_u32;
+        let inventory_path = self
+            .root
+            .parent()
+            .context("locate extension inventory")?
+            .join("apple-security-device-tools.json");
+        if expected_name == "apple-security-devices" && inventory_path.exists() {
+            let inventory_path = contained_file(
+                self.root.parent().context("locate extension inventory")?,
+                &inventory_path,
+            )?;
             ensure!(
-                mcp_path.metadata()?.len() <= 64_000,
-                "MCP configuration is too large"
+                inventory_path.metadata()?.len() <= 64_000,
+                "MCP tool inventory is too large"
             );
-            let config: serde_json::Value = serde_json::from_slice(&std::fs::read(mcp_path)?)?;
-            ensure!(config["$schema"] == MCP_SCHEMA, "unsupported MCP schema");
-            let servers = config["mcpServers"]
-                .as_object()
-                .context("invalid MCP servers")?;
-            mcp_server_count = u32::try_from(servers.len()).context("too many MCP servers")?;
+            let names: Vec<String> = serde_json::from_slice(&std::fs::read(inventory_path)?)?;
+            ensure!(names.len() <= 128, "too many MCP tools");
+            let mut unique = HashSet::new();
+            for name in &names {
+                ensure!(
+                    !name.trim().is_empty()
+                        && name.len() <= 128
+                        && !name.chars().any(char::is_control)
+                        && unique.insert(name),
+                    "invalid MCP tool inventory"
+                );
+            }
+            ensure!(
+                mcp_server_count > 0 || names.is_empty(),
+                "MCP tools require a server"
+            );
+            mcp_tool_count = u32::try_from(names.len()).context("too many MCP tools")?;
         }
         Ok(PluginSummary {
             name: manifest.name,
@@ -137,15 +211,15 @@ impl Catalog {
             skill_count,
             has_mcp_server: mcp_server_count > 0,
             mcp_server_count,
+            mcp_tool_count,
         })
     }
 
     fn manifest(&self, name: &str) -> Result<Option<String>> {
-        let Some((_, directory)) = BUNDLES.iter().find(|(candidate, _)| *candidate == name) else {
+        let Some(root) = self.package(name)? else {
             return Ok(None);
         };
-        self.scan(name, directory)?;
-        let root = self.root.join(directory).canonicalize()?;
+        self.scan(name, &root)?;
         let path = contained_file(&root, &root.join("plugin.json"))?;
         let bytes = std::fs::read(path)?;
         ensure!(bytes.len() <= 64_000, "plugin manifest is too large");
@@ -156,21 +230,68 @@ impl Catalog {
 
     fn list(&self, db: &HostDatabase) -> Result<Vec<PluginSummary>> {
         let installed: HashSet<_> = db.installed_plugin_names()?.into_iter().collect();
-        BUNDLES
+        self.entries()?
             .into_iter()
             .map(|(name, directory)| {
-                let mut summary = self.scan(name, directory)?;
-                summary.installed = installed.contains(name);
+                let mut summary = self.scan(&name, &directory)?;
+                summary.installed = installed.contains(&name);
                 Ok(summary)
             })
             .collect()
     }
 
+    async fn activate(&self, name: &str) -> Result<u32> {
+        let Some(root) = self.package(name)? else {
+            return Ok(0);
+        };
+        let configurations = match mcp_runtime::configurations(&root) {
+            Ok(configurations) => configurations,
+            Err(error) => {
+                self.deactivate(name).await;
+                return Err(error);
+            }
+        };
+        let mut active = self.active.lock().await;
+        let servers = active.entry(name.to_owned()).or_default();
+        servers.retain(|server_name, server| {
+            configurations.contains_key(server_name) && server.alive()
+        });
+        if configurations.is_empty() {
+            return Ok(0);
+        }
+        let data_root = self.data_root.join("plugins").join(name);
+        std::fs::create_dir_all(&data_root)?;
+        let data_root = data_root.canonicalize()?;
+        for (server_name, config) in configurations {
+            if servers.contains_key(&server_name) {
+                continue;
+            }
+            // One server's launch failure must not disable the rest of the plugin.
+            if let Ok(server) = mcp_runtime::RunningServer::launch(&root, &data_root, &config).await
+            {
+                servers.insert(server_name, server);
+            }
+        }
+        let count = servers.values().map(|server| server.tool_count).sum();
+        Ok(count)
+    }
+
+    async fn deactivate(&self, name: &str) {
+        self.active.lock().await.remove(name);
+    }
+
+    async fn retain_installed(&self, installed: &HashSet<&str>) {
+        self.active
+            .lock()
+            .await
+            .retain(|name, _| installed.contains(name.as_str()));
+    }
+
     fn install(&self, db: &HostDatabase, name: &str) -> Result<Option<PluginSummary>> {
-        let Some((_, directory)) = BUNDLES.iter().find(|(candidate, _)| *candidate == name) else {
+        let Some(root) = self.package(name)? else {
             return Ok(None);
         };
-        let mut summary = self.scan(name, directory)?;
+        let mut summary = self.scan(name, &root)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
         let now = i64::try_from(now).context("installation time overflow")?;
         db.install_plugin(name, now)?;
@@ -179,10 +300,10 @@ impl Catalog {
     }
 
     fn uninstall(&self, db: &HostDatabase, name: &str) -> Result<Option<PluginSummary>> {
-        let Some((_, directory)) = BUNDLES.iter().find(|(candidate, _)| *candidate == name) else {
+        let Some(root) = self.package(name)? else {
             return Ok(None);
         };
-        let summary = self.scan(name, directory)?;
+        let summary = self.scan(name, &root)?;
         db.uninstall_plugin(name)?;
         Ok(Some(summary))
     }
@@ -216,8 +337,8 @@ struct HttpState {
     catalog: Catalog,
 }
 
-pub fn router(token: String, db: HostDatabase) -> Result<Router> {
-    let catalog = Catalog::bundled()?;
+pub fn router(token: String, db: HostDatabase, data_root: PathBuf) -> Result<Router> {
+    let catalog = Catalog::bundled(data_root)?;
     Ok(Router::new()
         .route(PLUGINS_PATH, get(list_route))
         .route(PLUGIN_INSTALL_PATH, post(install_route))
@@ -253,10 +374,29 @@ async fn list_route(
     if !authorized(&headers, &state.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let plugins = state
+    let mut plugins = state
         .catalog
         .list(&state.db)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let installed = plugins
+        .iter()
+        .filter(|plugin| plugin.installed)
+        .map(|plugin| plugin.name.as_str())
+        .collect();
+    state.catalog.retain_installed(&installed).await;
+    for plugin in &mut plugins {
+        if plugin.installed && plugin.has_mcp_server {
+            plugin.mcp_tool_count = 0;
+            if let Ok(Ok(count)) = timeout(
+                Duration::from_secs(15),
+                state.catalog.activate(&plugin.name),
+            )
+            .await
+            {
+                plugin.mcp_tool_count = count;
+            }
+        }
+    }
     Ok((
         [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
         ListPluginsResponse { plugins }.encode_to_vec(),
@@ -279,11 +419,22 @@ async fn install_route(
         return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
     let request = InstallPluginRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let plugin = state
+    let mut plugin = state
         .catalog
         .install(&state.db, &request.name)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    if plugin.has_mcp_server {
+        plugin.mcp_tool_count = 0;
+        if let Ok(Ok(count)) = timeout(
+            Duration::from_secs(15),
+            state.catalog.activate(&plugin.name),
+        )
+        .await
+        {
+            plugin.mcp_tool_count = count;
+        }
+    }
     Ok((
         [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
         plugin.encode_to_vec(),
@@ -311,6 +462,7 @@ async fn uninstall_route(
         .uninstall(&state.db, &request.name)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    state.catalog.deactivate(&request.name).await;
     Ok((
         [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
         plugin.encode_to_vec(),
@@ -359,7 +511,7 @@ mod tests {
 
     #[test]
     fn bundled_catalog_installs_idempotently_and_persists() {
-        let catalog = Catalog::bundled().unwrap();
+        let catalog = Catalog::bundled(std::env::temp_dir()).unwrap();
         let root =
             std::env::temp_dir().join(format!("beale-extender-example-{}", std::process::id()));
         let db = HostDatabase::open(&root).unwrap();
@@ -374,6 +526,12 @@ mod tests {
         assert!(!available[1].has_mcp_server);
         assert_eq!(available[0].mcp_server_count, 1);
         assert_eq!(available[1].mcp_server_count, 0);
+        assert_eq!(available[0].mcp_tool_count, 19);
+        assert!(
+            available[1..]
+                .iter()
+                .all(|plugin| plugin.mcp_tool_count == 0)
+        );
         assert!(
             catalog
                 .manifest("apple-security-devices")
@@ -435,13 +593,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discovers_tools_from_a_third_party_stdio_plugin() {
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("beale-extender-third-party-{}", std::process::id()));
+        let package = root.join("plugins/packages/example-tools");
+        std::fs::create_dir_all(&package).unwrap();
+        let invalid = root.join("plugins/packages/invalid-plugin");
+        std::fs::create_dir_all(&invalid).unwrap();
+        std::fs::write(invalid.join("plugin.json"), "{}").unwrap();
+        std::fs::write(package.join("plugin.json"), format!(r#"{{"$schema":"{MANIFEST_SCHEMA}","name":"example-tools","description":"Example tools"}}"#)).unwrap();
+        std::fs::write(package.join("mcp.json"), format!(r#"{{"$schema":"{MCP_SCHEMA}","mcpServers":{{"example":{{"type":"stdio","command":"node","args":["${{PLUGIN_ROOT}}/server.mjs"]}}}}}}"#)).unwrap();
+        std::fs::write(
+            package.join("server.mjs"),
+            r#"
+import readline from 'node:readline';
+for await (const line of readline.createInterface({ input: process.stdin })) {
+  const request = JSON.parse(line);
+  if (request.id === undefined) continue;
+  const result = request.method === 'server/discover'
+    ? { supportedVersions: ['2026-07-28'] }
+    : request.method === 'tools/list'
+      ? { tools: [{ name: 'example_read' }, { name: 'example_write' }] }
+      : {};
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+}
+"#,
+        )
+        .unwrap();
+        let catalog = Catalog::bundled(root.clone()).unwrap();
+        let db = HostDatabase::open(&root).unwrap();
+        let available = catalog.list(&db).unwrap();
+        assert_eq!(available.len(), 5);
+        assert!(
+            available
+                .iter()
+                .any(|plugin| plugin.name == "example-tools" && plugin.mcp_server_count == 1)
+        );
+        catalog.install(&db, "example-tools").unwrap();
+        let config = mcp_runtime::configurations(&package.canonicalize().unwrap()).unwrap();
+        mcp_runtime::RunningServer::launch(
+            &package.canonicalize().unwrap(),
+            &root.canonicalize().unwrap(),
+            &config["example"],
+        )
+        .await
+        .unwrap();
+        assert_eq!(catalog.activate("example-tools").await.unwrap(), 2);
+        assert_eq!(catalog.activate("example-tools").await.unwrap(), 2);
+        assert_eq!(
+            catalog.activate("apple-security-devices").await.unwrap(),
+            19
+        );
+        catalog.deactivate("example-tools").await;
+        catalog.deactivate("apple-security-devices").await;
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn authenticated_protocol_lists_installs_and_uninstalls_bundled_plugin() {
         let root = std::env::temp_dir().join(format!(
             "beale-extender-http-example-{}",
             std::process::id()
         ));
         let db = HostDatabase::open(&root).unwrap();
-        let app = router("example-token".to_owned(), db.clone()).unwrap();
+        let app = router("example-token".to_owned(), db.clone(), root.clone()).unwrap();
         let unauthorized = app
             .clone()
             .oneshot(

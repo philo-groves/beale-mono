@@ -10,6 +10,7 @@ members = [
     "apps/beale-app-server/beale-harness/beale-tools",
     "apps/beale-app-server/beale-harness/beale-workspaces",
     "apps/beale-desktop-app",
+    "extensions/features/beale-goals",
 ]
 resolver = "3"
 

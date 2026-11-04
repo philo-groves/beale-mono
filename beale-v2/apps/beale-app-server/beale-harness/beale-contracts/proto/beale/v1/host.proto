@@ -288,6 +288,7 @@ enum SessionStreamKind {
   SESSION_STREAM_KIND_TOOL_FINISHED = 4;
   SESSION_STREAM_KIND_COMPLETED = 5;
   SESSION_STREAM_KIND_FAILED = 6;
+  SESSION_STREAM_KIND_TURN_COMPLETED = 7;
 }
 
 message SessionStreamEvent {
@@ -332,7 +333,7 @@ message ArchiveEntry {
   string workspace_id = 2;
   string title = 3;
   string model = 4;
-  uint32 turn_count = 5;
+  uint64 turn_count = 5;
   uint64 created_at_ms = 6;
   uint64 archived_at_ms = 7;
   bool quick_chat = 8;
@@ -349,6 +350,26 @@ message SessionDetail {
   ProviderId provider = 3;
   AuthMethod method = 4;
   string model = 5;
+  SessionGoal goal = 6;
+  uint64 first_turn_number = 7; // Earlier turns remain stored when this is greater than one.
+}
+
+enum GoalStatus {
+  GOAL_STATUS_UNSPECIFIED = 0;
+  GOAL_STATUS_ACTIVE = 1;
+  GOAL_STATUS_COMPLETE = 2;
+  GOAL_STATUS_WAITING = 3;
+  GOAL_STATUS_PAUSED = 4;
+}
+
+message SessionGoal {
+  string objective = 1;
+  GoalStatus status = 2;
+  uint64 turns_used = 3;
+  string required_state = 4;
+  uint64 max_turns = 5; // Zero means unlimited.
+  uint64 max_duration_minutes = 6; // Zero means unlimited active work time.
+  uint64 active_ms = 7;
 }
 
 enum ReasoningEffort {
@@ -370,6 +391,9 @@ message SubmitSessionTurnRequest {
   string model = 5;
   string prompt = 6;
   ReasoningEffort reasoning_effort = 7;
+  bool goal_mode = 8;
+  uint64 goal_max_turns = 9; // Zero means unlimited.
+  uint64 goal_max_duration_minutes = 10; // Zero means unlimited active work time.
 }
 
 message QuickChatTurnRequest {
@@ -428,10 +452,40 @@ message PluginSummary {
   uint32 skill_count = 4;
   bool has_mcp_server = 5;
   uint32 mcp_server_count = 6;
+  uint32 mcp_tool_count = 7;
 }
 
 message ListPluginsResponse {
   repeated PluginSummary plugins = 1;
+}
+
+message FeatureSummary {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  bool enabled = 4;
+  bool has_prompt_extension = 5;
+  uint32 tool_count = 6;
+}
+
+message ListFeaturesResponse {
+  repeated FeatureSummary features = 1;
+}
+
+message GetFeatureDetailsRequest {
+  string id = 1;
+}
+
+message FeatureDetailsResponse {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string prompt_extension = 4;
+}
+
+message SetFeatureEnabledRequest {
+  string id = 1;
+  bool enabled = 2;
 }
 
 message InstallPluginRequest {

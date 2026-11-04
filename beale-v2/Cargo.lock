@@ -218,6 +218,7 @@ dependencies = [
  "axum",
  "beale-contracts",
  "beale-extender",
+ "beale-goals",
  "beale-providers",
  "beale-safety",
  "beale-sessions",
@@ -255,10 +256,26 @@ dependencies = [
  "beale-contracts",
  "beale-storage",
  "prost",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "beale-goals"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "beale-contracts",
+ "beale-storage",
+ "prost",
+ "serde_json",
+ "tokio",
+ "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -306,6 +323,7 @@ dependencies = [
  "anyhow",
  "axum",
  "beale-contracts",
+ "beale-goals",
  "beale-providers",
  "beale-safety",
  "beale-storage",

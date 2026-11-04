@@ -10,10 +10,10 @@ use beale_contracts::{
     SESSION_ARCHIVE_PATH, SESSION_DETAIL_PATH, SESSION_RESTORE_PATH, SESSION_TOOL_DETAIL_PATH,
     SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH, SESSIONS_PATH, session_stream_frame,
     v1::{
-        ArchiveEntry, AuthMethod, ListArchiveResponse, ListSessionsResponse, ProviderId,
-        ReasoningEffort, SessionCommentary, SessionDetail, SessionMessage, SessionReasoningSummary,
-        SessionRole, SessionStreamEvent, SessionStreamKind, SessionSummary, SessionToolDetailPage,
-        SessionToolSummary, SubmitSessionTurnRequest,
+        ArchiveEntry, AuthMethod, GoalStatus, ListArchiveResponse, ListSessionsResponse,
+        ProviderId, ReasoningEffort, SessionCommentary, SessionDetail, SessionGoal, SessionMessage,
+        SessionReasoningSummary, SessionRole, SessionStreamEvent, SessionStreamKind,
+        SessionSummary, SessionToolDetailPage, SessionToolSummary, SubmitSessionTurnRequest,
     },
 };
 use beale_providers::{
@@ -21,15 +21,18 @@ use beale_providers::{
     ToolStepRequest, input_messages, tool_output,
 };
 use beale_safety::ReviewRequest;
+#[cfg(any(feature = "goal-mode", test))]
+use beale_storage::GoalRow;
 use beale_storage::{
-    CommentaryRow, HostDatabase, ReasoningSummaryRow, SessionRow, ToolCallRow, TurnRow,
+    CommentaryRow, HostDatabase, ReasoningSummaryRow, SessionRow, ToolCallRow, TurnActivity,
+    TurnRow,
 };
 use beale_tools::{definitions, execute, model_preview, page, summary as tool_summary};
 use futures_util::stream;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{Mutex, mpsc};
@@ -41,7 +44,9 @@ mod quick_chat;
 mod system_prompt;
 use http::{authorized, checked_body, response};
 
-const MAX_TURNS: usize = 32;
+const MAX_ORDINARY_TURNS: i64 = 64;
+const RECENT_TURNS: usize = 64;
+const MAX_RECENT_HISTORY_BYTES: usize = 1_048_576;
 const MAX_HISTORY_BYTES: usize = 4_194_304;
 const MAX_TOOL_ROUNDS: usize = 8;
 const MAX_TOOL_CALLS: usize = 32;
@@ -76,7 +81,8 @@ struct SessionState {
     workspaces: WorkspaceStore,
     credentials: Arc<CredentialStore>,
     provider: Arc<ProviderClient>,
-    write_lock: Arc<Mutex<()>>,
+    session_locks: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+    quick_chat_lock: Arc<Mutex<()>>,
 }
 
 struct StoredSession {
@@ -88,12 +94,14 @@ struct StoredSession {
 }
 
 struct StoredTurn {
+    number: i64,
     provider: i32,
     method: i32,
     model: String,
     prompt: String,
     answer: String,
     duration_ms: u64,
+    internal_prompt: bool,
 }
 
 pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
@@ -118,7 +126,8 @@ pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Route
             workspaces,
             credentials,
             provider: Arc::new(ProviderClient::new()?),
-            write_lock: Arc::new(Mutex::new(())),
+            session_locks: Arc::new(Mutex::new(HashMap::new())),
+            quick_chat_lock: Arc::new(Mutex::new(())),
         }))
 }
 
@@ -130,6 +139,25 @@ fn parse_id(value: &str) -> Result<Uuid, StatusCode> {
     Ok(id)
 }
 
+async fn session_lock(state: &SessionState, id: &str) -> Arc<Mutex<()>> {
+    let mut locks = state.session_locks.lock().await;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(id).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(id.to_owned(), Arc::downgrade(&lock));
+    lock
+}
+
+async fn register_session_lock(state: &SessionState, id: &str, lock: &Arc<Mutex<()>>) {
+    state
+        .session_locks
+        .lock()
+        .await
+        .insert(id.to_owned(), Arc::downgrade(lock));
+}
+
 fn load_persisted(
     db: &HostDatabase,
     id: Uuid,
@@ -139,33 +167,42 @@ fn load_persisted(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     if item.turns.is_empty()
-        || item.turns.len() > MAX_TURNS
+        || item.turns.len() > RECENT_TURNS
         || item.session.created_at_ms < 0
         || item.session.last_message_at_ms < 0
     {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let turns = item
+    let first_number = item.turns[0].number;
+    if first_number <= 0 {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let mut turns = item
         .turns
         .into_iter()
         .enumerate()
         .map(|(index, row)| {
-            if row.duration_ms < 0
-                || row.number
-                    != i64::try_from(index + 1).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            {
+            let expected = first_number
+                .checked_add(i64::try_from(index).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            if row.duration_ms < 0 || row.number != expected {
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
             Ok(StoredTurn {
+                number: row.number,
                 provider: row.provider,
                 method: row.method,
                 model: row.model,
                 prompt: row.prompt,
                 answer: row.answer,
                 duration_ms: row.duration_ms as u64,
+                internal_prompt: row.internal_prompt,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if item.session.workspace_id != quick_chat::WORKSPACE_ID {
+        trim_recent_turns(&mut turns);
+    }
     Ok((
         StoredSession {
             id: item.session.id,
@@ -176,6 +213,18 @@ fn load_persisted(
         },
         turns,
     ))
+}
+
+fn trim_recent_turns(turns: &mut Vec<StoredTurn>) {
+    let mut bytes = turns.iter().fold(0_usize, |total, turn| {
+        total
+            .saturating_add(turn.prompt.len())
+            .saturating_add(turn.answer.len())
+    });
+    while turns.len() > 1 && bytes > MAX_RECENT_HISTORY_BYTES {
+        let removed = turns.remove(0);
+        bytes = bytes.saturating_sub(removed.prompt.len() + removed.answer.len());
+    }
 }
 
 fn summary(session: &StoredSession) -> SessionSummary {
@@ -192,16 +241,20 @@ fn detail(
     session: &StoredSession,
     turns: &[StoredTurn],
 ) -> Result<SessionDetail, StatusCode> {
+    let first_turn = turns
+        .first()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+        .number;
     let tools = db
-        .tool_summaries(&session.id)
+        .tool_summaries_since(&session.id, first_turn)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let reasoning = db
-        .reasoning_summaries(&session.id)
+        .reasoning_summaries_since(&session.id, first_turn)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let commentary = db
-        .commentary(&session.id)
+        .commentary_since(&session.id, first_turn)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if tools.len() > MAX_TURNS * MAX_TOOL_CALLS {
+    if tools.len() > RECENT_TURNS * MAX_TOOL_CALLS {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     let mut messages = Vec::with_capacity(turns.len() * 2);
@@ -211,15 +264,17 @@ fn detail(
         if total > MAX_HISTORY_BYTES {
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
-        messages.push(SessionMessage {
-            role: SessionRole::User as i32,
-            text: turn.prompt.clone(),
-            tools: Vec::new(),
-            reasoning_summaries: Vec::new(),
-            duration_ms: 0,
-            commentary: Vec::new(),
-        });
-        let turn_number = (messages.len() / 2 + 1) as i64;
+        if !turn.internal_prompt {
+            messages.push(SessionMessage {
+                role: SessionRole::User as i32,
+                text: turn.prompt.clone(),
+                tools: Vec::new(),
+                reasoning_summaries: Vec::new(),
+                duration_ms: 0,
+                commentary: Vec::new(),
+            });
+        }
+        let turn_number = turn.number;
         let turn_tools: Vec<_> = tools
             .iter()
             .filter(|tool| tool.turn_number == turn_number)
@@ -268,12 +323,52 @@ fn detail(
         });
     }
     let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let goal = db
+        .goal(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(|goal| {
+            let turns_used =
+                u64::try_from(goal.turns_used).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let max_turns =
+                u64::try_from(goal.max_turns).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let max_duration_minutes = u64::try_from(goal.max_duration_minutes)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let active_ms =
+                u64::try_from(goal.active_ms).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if turns_used == 0
+                || goal.objective.trim().is_empty()
+                || goal.objective.len() > 16_384
+                || !matches!(
+                    GoalStatus::try_from(goal.status),
+                    Ok(GoalStatus::Active
+                        | GoalStatus::Complete
+                        | GoalStatus::Waiting
+                        | GoalStatus::Paused)
+                )
+                || (goal.status == GoalStatus::Waiting as i32) == goal.required_state.is_empty()
+            {
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            Ok(SessionGoal {
+                objective: goal.objective,
+                status: goal.status,
+                turns_used,
+                required_state: goal.required_state,
+                max_turns,
+                max_duration_minutes,
+                active_ms,
+            })
+        })
+        .transpose()?;
     Ok(SessionDetail {
         summary: Some(summary(session)),
         messages,
         provider: latest.provider,
         method: latest.method,
         model: latest.model.clone(),
+        goal,
+        first_turn_number: u64::try_from(first_turn)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     })
 }
 
@@ -294,7 +389,6 @@ async fn list(
     if !authorized(&headers, &state.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let _guard = state.write_lock.lock().await;
     let rows = state
         .db
         .sessions_excluding(quick_chat::WORKSPACE_ID)
@@ -326,7 +420,8 @@ async fn archive(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let id = parse_id(&id)?.to_string();
-    let _guard = state.write_lock.lock().await;
+    let lock = session_lock(&state, &id).await;
+    let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
     let session = state
         .db
         .session(&id)
@@ -369,7 +464,7 @@ async fn list_archive(
         if !row.quick_chat && !state.workspaces.contains(&row.workspace_id)? {
             continue;
         }
-        if row.turn_count <= 0 || row.turn_count > MAX_TURNS as i64 {
+        if row.turn_count <= 0 {
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
         entries.push(ArchiveEntry {
@@ -377,7 +472,8 @@ async fn list_archive(
             workspace_id: row.workspace_id,
             title: row.title,
             model: row.model,
-            turn_count: row.turn_count as u32,
+            turn_count: u64::try_from(row.turn_count)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             created_at_ms: u64::try_from(row.created_at_ms)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             archived_at_ms: u64::try_from(row.archived_at_ms)
@@ -399,7 +495,8 @@ async fn restore(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let id = parse_id(&id)?.to_string();
-    let _guard = state.write_lock.lock().await;
+    let lock = session_lock(&state, &id).await;
+    let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
     let session = state
         .db
         .session(&id)
@@ -427,7 +524,6 @@ async fn details(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let id = parse_id(&id)?;
-    let _guard = state.write_lock.lock().await;
     let (session, turns) = load_persisted(&state.db, id)?;
     if !state.workspaces.contains(&session.workspace_id)? {
         return Err(StatusCode::NOT_FOUND);
@@ -449,7 +545,6 @@ async fn tool_details(
     let offset = query.get("offset").map_or(Ok(0usize), |value| {
         value.parse::<usize>().map_err(|_| StatusCode::BAD_REQUEST)
     })?;
-    let _guard = state.write_lock.lock().await;
     let (session, _) = load_persisted(&state.db, id)?;
     if !state.workspaces.contains(&session.workspace_id)? {
         return Err(StatusCode::NOT_FOUND);
@@ -561,10 +656,96 @@ fn reasoning_effort_name(value: i32) -> Result<Option<&'static str>, StatusCode>
     }
 }
 
+#[cfg(feature = "goal-mode")]
+async fn run_turn(
+    state: SessionState,
+    mut request: SubmitSessionTurnRequest,
+    progress: Option<mpsc::Sender<SessionStreamEvent>>,
+) -> Result<SessionDetail, StatusCode> {
+    let lock = if request.session_id.is_empty() {
+        Arc::new(Mutex::new(()))
+    } else {
+        session_lock(&state, &request.session_id).await
+    };
+    let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
+    let mut automatic = false;
+    loop {
+        let detail =
+            run_one_turn(&state, request.clone(), progress.clone(), automatic, &lock).await?;
+        if let Some(goal) = &detail.goal
+            && goal.status == GoalStatus::Active as i32
+        {
+            if !state
+                .db
+                .feature_enabled(beale_goals::FEATURE_ID)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            {
+                let id = detail
+                    .summary
+                    .as_ref()
+                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+                    .id
+                    .clone();
+                state
+                    .db
+                    .set_goal_status(&id, GoalStatus::Paused as i32)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let (session, turns) = load_persisted(&state.db, parse_id(&id)?)?;
+                return self::detail(&state.db, &session, &turns);
+            }
+            if let Some(tx) = &progress {
+                let _ = tx
+                    .send(SessionStreamEvent {
+                        kind: SessionStreamKind::TurnCompleted as i32,
+                        text: String::new(),
+                        tool: None,
+                        detail: Some(detail.clone()),
+                        segment_index: 0,
+                    })
+                    .await;
+            }
+            request.session_id = detail
+                .summary
+                .as_ref()
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+                .id
+                .clone();
+            request.prompt = beale_goals::continuation_prompt(&goal.objective)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            request.goal_mode = false;
+            request.goal_max_turns = 0;
+            request.goal_max_duration_minutes = 0;
+            automatic = true;
+            continue;
+        }
+        return Ok(detail);
+    }
+}
+
+#[cfg(not(feature = "goal-mode"))]
 async fn run_turn(
     state: SessionState,
     request: SubmitSessionTurnRequest,
     progress: Option<mpsc::Sender<SessionStreamEvent>>,
+) -> Result<SessionDetail, StatusCode> {
+    if request.goal_mode {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let lock = if request.session_id.is_empty() {
+        Arc::new(Mutex::new(()))
+    } else {
+        session_lock(&state, &request.session_id).await
+    };
+    let _guard = lock.try_lock().map_err(|_| StatusCode::CONFLICT)?;
+    run_one_turn(&state, request, progress, false, &lock).await
+}
+
+async fn run_one_turn(
+    state: &SessionState,
+    request: SubmitSessionTurnRequest,
+    progress: Option<mpsc::Sender<SessionStreamEvent>>,
+    automatic: bool,
+    lock: &Arc<Mutex<()>>,
 ) -> Result<SessionDetail, StatusCode> {
     let started = Instant::now();
     let _workspace_id = parse_id(&request.workspace_id)?;
@@ -599,9 +780,24 @@ async fn run_turn(
         return Err(StatusCode::BAD_REQUEST);
     }
     let reasoning_effort = reasoning_effort_name(request.reasoning_effort)?;
-    let _guard = state.write_lock.lock().await;
+    if !request.goal_mode && (request.goal_max_turns != 0 || request.goal_max_duration_minutes != 0)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if request.goal_max_turns > i64::MAX as u64
+        || request.goal_max_duration_minutes > i64::MAX as u64 / 60_000
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    #[cfg(not(feature = "goal-mode"))]
+    if request.goal_mode {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    #[cfg(not(feature = "goal-mode"))]
+    let _ = automatic;
     let (mut session, mut turns) = if request.session_id.is_empty() {
         let id = Uuid::new_v4();
+        register_session_lock(state, &id.to_string(), lock).await;
         let created_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -625,9 +821,94 @@ async fn run_turn(
         }
         (session, turns)
     };
-    if turns.len() >= MAX_TURNS {
+    let next_turn_number = turns.last().map_or(Ok(1), |turn| {
+        turn.number.checked_add(1).ok_or(StatusCode::CONFLICT)
+    })?;
+    let persisted_goal = state
+        .db
+        .goal(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    #[cfg(feature = "goal-mode")]
+    let mut goal = persisted_goal;
+    #[cfg(not(feature = "goal-mode"))]
+    let goal = persisted_goal;
+    if let Some(saved) = &goal
+        && (saved.turns_used < 0
+            || saved.active_ms < 0
+            || saved.max_turns < 0
+            || saved.max_duration_minutes < 0
+            || !matches!(
+                GoalStatus::try_from(saved.status),
+                Ok(GoalStatus::Active
+                    | GoalStatus::Complete
+                    | GoalStatus::Waiting
+                    | GoalStatus::Paused)
+            ))
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    if goal.is_none() && next_turn_number > MAX_ORDINARY_TURNS {
         return Err(StatusCode::CONFLICT);
     }
+    #[cfg(feature = "goal-mode")]
+    {
+        let feature_enabled = state
+            .db
+            .feature_enabled(beale_goals::FEATURE_ID)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if request.goal_mode && !feature_enabled {
+            return Err(StatusCode::CONFLICT);
+        }
+        if automatic && !feature_enabled {
+            state
+                .db
+                .set_goal_status(&session.id, GoalStatus::Paused as i32)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            return detail(&state.db, &session, &turns);
+        }
+        if !feature_enabled
+            && let Some(goal) = goal.as_mut()
+            && goal.status == GoalStatus::Active as i32
+        {
+            goal.status = GoalStatus::Paused as i32;
+        }
+        if request.goal_mode && !turns.is_empty() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if request.goal_mode && turns.is_empty() {
+            goal = Some(GoalRow {
+                session_id: session.id.clone(),
+                objective: request.prompt.clone(),
+                status: GoalStatus::Active as i32,
+                turns_used: 0,
+                required_state: String::new(),
+                max_turns: request.goal_max_turns as i64,
+                max_duration_minutes: request.goal_max_duration_minutes as i64,
+                active_ms: 0,
+            });
+        } else if !automatic
+            && feature_enabled
+            && let Some(goal) = goal.as_mut()
+            && matches!(
+                GoalStatus::try_from(goal.status),
+                Ok(GoalStatus::Waiting | GoalStatus::Paused)
+            )
+        {
+            let limits = beale_goals::Limits {
+                max_turns: goal.max_turns as u64,
+                max_duration_minutes: goal.max_duration_minutes as u64,
+            };
+            if !limits.reached(goal.turns_used as u64, goal.active_ms as u64) {
+                goal.status = GoalStatus::Active as i32;
+                goal.required_state.clear();
+            }
+        }
+    }
+    let goal_active = goal
+        .as_ref()
+        .is_some_and(|goal| goal.status == GoalStatus::Active as i32);
+    #[cfg(not(feature = "goal-mode"))]
+    let _ = goal_active;
     let mut messages = Vec::with_capacity(turns.len() * 2 + 1);
     for turn in &turns {
         messages.push(TextMessage {
@@ -673,12 +954,36 @@ async fn run_turn(
             .join("; "),
     );
     let mut input = input_messages(&messages);
-    let system = system_prompt::load(state.workspaces.root(), &[]).map_err(|error| {
+    #[cfg(feature = "goal-mode")]
+    let goal_section = goal.as_ref().filter(|_| goal_active).map(|goal| {
+        beale_goals::system_section(
+            beale_goals::Limits {
+                max_turns: goal.max_turns as u64,
+                max_duration_minutes: goal.max_duration_minutes as u64,
+            },
+            goal.turns_used as u64,
+            goal.active_ms as u64,
+        )
+    });
+    #[cfg(feature = "goal-mode")]
+    let sections: Vec<&str> = goal_section.iter().map(String::as_str).collect();
+    #[cfg(not(feature = "goal-mode"))]
+    let sections: Vec<&str> = Vec::new();
+    let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
         eprintln!("session system prompt failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     input.insert(0, json!({"role":"system","content":system}));
+    #[cfg(feature = "goal-mode")]
+    let mut definitions = definitions();
+    #[cfg(not(feature = "goal-mode"))]
     let definitions = definitions();
+    #[cfg(feature = "goal-mode")]
+    if goal_active {
+        definitions.push(beale_goals::definition());
+    }
+    #[cfg(feature = "goal-mode")]
+    let mut goal_signal: Option<beale_goals::Signal> = None;
     let mut tool_rows = Vec::<ToolCallRow>::new();
     let mut reasoning_rows = Vec::<ReasoningSummaryRow>::new();
     let mut commentary_rows = Vec::<CommentaryRow>::new();
@@ -768,7 +1073,7 @@ async fn run_turn(
             }
             reasoning_bytes += summary.len();
             reasoning_rows.push(ReasoningSummaryRow {
-                turn_number: (turns.len() + 1) as i64,
+                turn_number: next_turn_number,
                 ordinal: reasoning_rows.len() as i64,
                 after_tool_count: tool_rows.len() as i64,
                 text: summary,
@@ -791,7 +1096,7 @@ async fn run_turn(
             if !text.trim().is_empty() {
                 commentary_bytes += text.len();
                 commentary_rows.push(CommentaryRow {
-                    turn_number: (turns.len() + 1) as i64,
+                    turn_number: next_turn_number,
                     ordinal: commentary_rows.len() as i64,
                     after_tool_count: tool_rows.len() as i64,
                     text,
@@ -824,7 +1129,11 @@ async fn run_turn(
             }
             let id = Uuid::new_v4().to_string();
             let args: Result<Value, _> = serde_json::from_str(&call.arguments);
-            let summary = tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null));
+            let summary = if call.name == "goal_status" {
+                "Record Goal Mode status".to_owned()
+            } else {
+                tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
+            };
             if call.name != "tool_result_page"
                 && let Some(tx) = &progress
             {
@@ -844,6 +1153,23 @@ async fn run_turn(
                     .await;
             }
             let (output, is_error) = match args {
+                #[cfg(feature = "goal-mode")]
+                Ok(args) if call.name == beale_goals::TOOL_NAME && goal_active => {
+                    if goal_signal.is_some() {
+                        (
+                            "Goal status was already recorded for this turn.".to_owned(),
+                            true,
+                        )
+                    } else {
+                        match beale_goals::parse_signal(&args) {
+                            Ok(signal) => {
+                                goal_signal = Some(signal);
+                                ("Goal status recorded.".to_owned(), false)
+                            }
+                            Err(error) => (format!("Invalid goal status: {error}"), true),
+                        }
+                    }
+                }
                 Ok(args) if call.name == "tool_result_page" => {
                     let result = (|| {
                         let source_id = args
@@ -933,7 +1259,7 @@ async fn run_turn(
                 }
                 tool_rows.push(ToolCallRow {
                     id: id.clone(),
-                    turn_number: (turns.len() + 1) as i64,
+                    turn_number: next_turn_number,
                     ordinal: tool_rows.len() as i64,
                     name: call.name.clone(),
                     summary,
@@ -963,13 +1289,45 @@ async fn run_turn(
         }
         answer = INTERRUPTED_ANSWER.to_owned();
     }
+    #[cfg(feature = "goal-mode")]
+    if let Some(goal) = goal.as_mut().filter(|_| goal_active) {
+        goal.turns_used = goal.turns_used.checked_add(1).ok_or(StatusCode::CONFLICT)?;
+        goal.active_ms = goal.active_ms.saturating_add(
+            i64::try_from(started.elapsed().as_millis().min(i64::MAX as u128))
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        );
+        let signal = if answer == INTERRUPTED_ANSWER {
+            None
+        } else {
+            goal_signal
+        };
+        match beale_goals::after_turn(
+            signal,
+            goal.turns_used as u64,
+            goal.active_ms as u64,
+            beale_goals::Limits {
+                max_turns: goal.max_turns as u64,
+                max_duration_minutes: goal.max_duration_minutes as u64,
+            },
+        ) {
+            beale_goals::Outcome::Active => {}
+            beale_goals::Outcome::Complete => goal.status = GoalStatus::Complete as i32,
+            beale_goals::Outcome::Waiting(required) => {
+                goal.status = GoalStatus::Waiting as i32;
+                goal.required_state = required;
+            }
+            beale_goals::Outcome::Paused => goal.status = GoalStatus::Paused as i32,
+        }
+    }
     turns.push(StoredTurn {
+        number: next_turn_number,
         provider: request.provider,
         method: request.method,
         model: request.model,
         prompt: request.prompt,
         answer,
         duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        internal_prompt: automatic,
     });
     let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     session.last_message_at_ms = u64::try_from(
@@ -981,7 +1339,7 @@ async fn run_turn(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     state
         .db
-        .append_turn_with_full_activity(
+        .append_turn_with_goal_activity(
             &SessionRow {
                 id: session.id.clone(),
                 workspace_id: session.workspace_id.clone(),
@@ -992,8 +1350,7 @@ async fn run_turn(
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             },
             &TurnRow {
-                number: i64::try_from(turns.len())
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                number: next_turn_number,
                 provider: latest.provider,
                 method: latest.method,
                 model: latest.model.clone(),
@@ -1001,13 +1358,18 @@ async fn run_turn(
                 answer: latest.answer.clone(),
                 duration_ms: i64::try_from(latest.duration_ms)
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+                internal_prompt: latest.internal_prompt,
             },
-            turns.len() == 1,
-            &tool_rows,
-            &reasoning_rows,
-            &commentary_rows,
+            next_turn_number == 1,
+            TurnActivity {
+                tools: &tool_rows,
+                reasoning: &reasoning_rows,
+                commentary: &commentary_rows,
+                goal: goal.as_ref(),
+            },
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    trim_recent_turns(&mut turns);
     detail(&state.db, &session, &turns)
 }
 
@@ -1059,6 +1421,9 @@ mod tests {
             model: "model-example".to_owned(),
             prompt: "Example prompt".to_owned(),
             reasoning_effort: ReasoningEffort::High as i32,
+            goal_mode: false,
+            goal_max_turns: 0,
+            goal_max_duration_minutes: 0,
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert_eq!(
@@ -1070,6 +1435,173 @@ mod tests {
             Ok(None)
         );
         assert_eq!(reasoning_effort_name(99), Err(StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn goal_contract_round_trips_as_an_opt_in() {
+        let request = SubmitSessionTurnRequest {
+            workspace_id: Uuid::new_v4().to_string(),
+            session_id: String::new(),
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::ApiKey as i32,
+            model: "model-example".to_owned(),
+            prompt: "Inspect ExampleCo's test repository".to_owned(),
+            reasoning_effort: ReasoningEffort::High as i32,
+            goal_mode: true,
+            goal_max_turns: 12,
+            goal_max_duration_minutes: 45,
+        };
+        let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        assert!(decoded.goal_mode);
+        assert_eq!(decoded.goal_max_turns, 12);
+        assert_eq!(decoded.goal_max_duration_minutes, 45);
+        assert_eq!(decoded.prompt, request.prompt);
+    }
+
+    #[test]
+    fn goal_continuation_keeps_model_context_and_hides_its_internal_prompt() {
+        let root = std::env::temp_dir().join(format!("beale-goal-example-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let id = Uuid::new_v4();
+        let session = SessionRow {
+            id: id.to_string(),
+            workspace_id: Uuid::new_v4().to_string(),
+            title: "Example objective".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 2,
+        };
+        let first = TurnRow {
+            number: 1,
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::ApiKey as i32,
+            model: "model-example".to_owned(),
+            prompt: "Example objective".to_owned(),
+            answer: "First observation".to_owned(),
+            duration_ms: 1,
+            internal_prompt: false,
+        };
+        let goal = GoalRow {
+            session_id: session.id.clone(),
+            objective: first.prompt.clone(),
+            status: GoalStatus::Active as i32,
+            turns_used: 1,
+            required_state: String::new(),
+            max_turns: 0,
+            max_duration_minutes: 0,
+            active_ms: 1,
+        };
+        db.append_turn_with_goal_activity(
+            &session,
+            &first,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: Some(&goal),
+            },
+        )
+        .unwrap();
+        let second = TurnRow {
+            number: 2,
+            prompt: "Internal continuation".to_owned(),
+            answer: "Verified result".to_owned(),
+            internal_prompt: true,
+            ..first
+        };
+        let done = GoalRow {
+            status: GoalStatus::Complete as i32,
+            turns_used: 2,
+            ..goal
+        };
+        db.append_turn_with_goal_activity(
+            &session,
+            &second,
+            false,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: Some(&done),
+            },
+        )
+        .unwrap();
+        let (loaded, turns) = load_persisted(&db, id).unwrap();
+        assert_eq!(turns[1].prompt, "Internal continuation");
+        assert!(turns[1].internal_prompt);
+        let transcript = detail(&db, &loaded, &turns).unwrap();
+        assert_eq!(transcript.messages.len(), 3);
+        assert_eq!(transcript.messages[2].role, SessionRole::Assistant as i32);
+        assert_eq!(transcript.messages[2].text, "Verified result");
+        assert_eq!(transcript.goal.unwrap().status, GoalStatus::Complete as i32);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn goal_history_can_advance_beyond_the_ordinary_session_limit() {
+        let root =
+            std::env::temp_dir().join(format!("beale-goal-history-example-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let id = Uuid::new_v4();
+        let session = SessionRow {
+            id: id.to_string(),
+            workspace_id: Uuid::new_v4().to_string(),
+            title: "Example objective".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        for number in 1..=70 {
+            let turn = TurnRow {
+                number,
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::ApiKey as i32,
+                model: "model-example".to_owned(),
+                prompt: if number == 1 {
+                    "Example objective"
+                } else {
+                    "Internal continuation"
+                }
+                .to_owned(),
+                answer: format!("Example observation {number}"),
+                duration_ms: 1,
+                internal_prompt: number != 1,
+            };
+            let goal = GoalRow {
+                session_id: session.id.clone(),
+                objective: "Example objective".to_owned(),
+                status: GoalStatus::Active as i32,
+                turns_used: number,
+                required_state: String::new(),
+                max_turns: 0,
+                max_duration_minutes: 0,
+                active_ms: number,
+            };
+            db.append_turn_with_goal_activity(
+                &session,
+                &turn,
+                number == 1,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: Some(&goal),
+                },
+            )
+            .unwrap();
+        }
+        let (loaded, turns) = load_persisted(&db, id).unwrap();
+        assert_eq!(turns.first().unwrap().number, 7);
+        assert_eq!(turns.last().unwrap().number, 70);
+        let transcript = detail(&db, &loaded, &turns).unwrap();
+        assert_eq!(transcript.first_turn_number, 7);
+        assert_eq!(transcript.goal.unwrap().turns_used, 70);
+        assert_eq!(
+            transcript.messages.last().unwrap().text,
+            "Example observation 70"
+        );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1091,6 +1623,7 @@ mod tests {
             prompt: "Echo example".to_owned(),
             answer: "Echo example".to_owned(),
             duration_ms: 1_234,
+            internal_prompt: false,
         };
         let db = HostDatabase::open(&root).unwrap();
         db.append_turn(&session, &turn, true).unwrap();
@@ -1124,6 +1657,7 @@ mod tests {
             prompt: "Read example".to_owned(),
             answer: "Done".to_owned(),
             duration_ms: 2_345,
+            internal_prompt: false,
         };
         let tool = ToolCallRow {
             id: Uuid::new_v4().to_string(),
@@ -1243,6 +1777,9 @@ mod tests {
             model: "model-example".to_owned(),
             prompt: "Echo example".to_owned(),
             reasoning_effort: ReasoningEffort::High as i32,
+            goal_mode: false,
+            goal_max_turns: 0,
+            goal_max_duration_minutes: 0,
         };
         let request = Request::builder()
             .method("POST")
@@ -1285,6 +1822,7 @@ mod tests {
                 prompt: "Example question".to_owned(),
                 answer: "Example answer".to_owned(),
                 duration_ms: 1,
+                internal_prompt: false,
             },
             true,
         )
@@ -1443,6 +1981,7 @@ mod tests {
                 prompt: "Example question".to_owned(),
                 answer: "Example answer".to_owned(),
                 duration_ms: 1,
+                internal_prompt: false,
             },
             "",
         )
@@ -1500,6 +2039,9 @@ mod tests {
             model: "model-example".to_owned(),
             prompt: "Example prompt".to_owned(),
             reasoning_effort: ReasoningEffort::High as i32,
+            goal_mode: false,
+            goal_max_turns: 0,
+            goal_max_duration_minutes: 0,
         };
         let request = Request::builder()
             .method("POST")
@@ -1550,6 +2092,7 @@ mod tests {
             prompt: "Read".to_owned(),
             answer: "Done".to_owned(),
             duration_ms: 3_456,
+            internal_prompt: false,
         };
         let tool = ToolCallRow {
             id: Uuid::new_v4().to_string(),

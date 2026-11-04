@@ -13,7 +13,8 @@ beale-storage = { path = "../beale-storage" }
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
 tower = "0.5"

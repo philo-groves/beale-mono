@@ -35,6 +35,18 @@ pub struct SessionRow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoalRow {
+    pub session_id: String,
+    pub objective: String,
+    pub status: i32,
+    pub turns_used: i64,
+    pub required_state: String,
+    pub max_turns: i64,
+    pub max_duration_minutes: i64,
+    pub active_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchiveRow {
     pub id: String,
     pub workspace_id: String,
@@ -56,6 +68,7 @@ pub struct TurnRow {
     pub prompt: String,
     pub answer: String,
     pub duration_ms: i64,
+    pub internal_prompt: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,6 +108,13 @@ pub struct CommentaryRow {
     pub text: String,
 }
 
+pub struct TurnActivity<'a> {
+    pub tools: &'a [ToolCallRow],
+    pub reasoning: &'a [ReasoningSummaryRow],
+    pub commentary: &'a [CommentaryRow],
+    pub goal: Option<&'a GoalRow>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionWithTurns {
     pub session: SessionRow,
@@ -117,7 +137,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 12 {
+        if version > 15 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -272,6 +292,43 @@ impl HostDatabase {
                  ALTER TABLE sessions ADD COLUMN last_message_at_ms INTEGER NOT NULL DEFAULT 0;
                  UPDATE sessions SET last_message_at_ms = created_at_ms;
                  PRAGMA user_version = 12;
+                 COMMIT;",
+            )?;
+        }
+        if version < 13 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE session_turns ADD COLUMN internal_prompt INTEGER NOT NULL DEFAULT 0;
+                 CREATE TABLE session_goals (
+                     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                     objective TEXT NOT NULL,
+                     status INTEGER NOT NULL,
+                     turns_used INTEGER NOT NULL,
+                     required_state TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 13;
+                 COMMIT;",
+            )?;
+        }
+        if version < 14 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE session_goals ADD COLUMN max_turns INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE session_goals ADD COLUMN max_duration_minutes INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE session_goals ADD COLUMN active_ms INTEGER NOT NULL DEFAULT 0;
+                 PRAGMA user_version = 14;
+                 COMMIT;",
+            )?;
+        }
+        if version < 15 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS feature_states (
+                     id TEXT PRIMARY KEY,
+                     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+                 );
+                 UPDATE session_goals SET status = 4 WHERE status = 1;
+                 PRAGMA user_version = 15;
                  COMMIT;",
             )?;
         }
@@ -445,8 +502,10 @@ impl HostDatabase {
                 return Ok(None);
             };
             let mut statement = connection.prepare(
-                "SELECT number, provider, method, model, prompt, answer, duration_ms FROM session_turns
-                 WHERE session_id = ?1 ORDER BY number LIMIT 33",
+                "SELECT number, provider, method, model, prompt, answer, duration_ms, internal_prompt
+                 FROM (SELECT number, provider, method, model, prompt, answer, duration_ms, internal_prompt
+                       FROM session_turns WHERE session_id = ?1 ORDER BY number DESC LIMIT 64)
+                 ORDER BY number",
             )?;
             let rows = statement.query_map([id], |row| {
                 Ok(TurnRow {
@@ -457,12 +516,76 @@ impl HostDatabase {
                     prompt: row.get(4)?,
                     answer: row.get(5)?,
                     duration_ms: row.get(6)?,
+                    internal_prompt: row.get(7)?,
                 })
             })?;
             Ok(Some(SessionWithTurns {
                 session,
                 turns: rows.collect::<rusqlite::Result<Vec<_>>>()?,
             }))
+        })
+    }
+
+    pub fn goal(&self, session_id: &str) -> Result<Option<GoalRow>> {
+        self.with_connection(|connection| {
+            connection.query_row(
+                "SELECT session_id, objective, status, turns_used, required_state, max_turns, max_duration_minutes, active_ms FROM session_goals WHERE session_id = ?1",
+                [session_id],
+                |row| Ok(GoalRow {
+                    session_id: row.get(0)?,
+                    objective: row.get(1)?,
+                    status: row.get(2)?,
+                    turns_used: row.get(3)?,
+                    required_state: row.get(4)?,
+                    max_turns: row.get(5)?,
+                    max_duration_minutes: row.get(6)?,
+                    active_ms: row.get(7)?,
+                }),
+            ).optional().map_err(Into::into)
+        })
+    }
+
+    pub fn feature_enabled(&self, id: &str) -> Result<bool> {
+        self.with_connection(|connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT enabled FROM feature_states WHERE id = ?1",
+                    [id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()?
+                .unwrap_or(false))
+        })
+    }
+
+    pub fn set_feature_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        self.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO feature_states(id, enabled) VALUES (?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled",
+                params![id, enabled],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn pause_active_goals(&self, active: i32, paused: i32) -> Result<()> {
+        self.with_connection(|connection| {
+            connection.execute(
+                "UPDATE session_goals SET status = ?1 WHERE status = ?2",
+                params![paused, active],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn set_goal_status(&self, session_id: &str, status: i32) -> Result<()> {
+        self.with_connection(|connection| {
+            connection.execute(
+                "UPDATE session_goals SET status = ?1 WHERE session_id = ?2",
+                params![status, session_id],
+            )?;
+            Ok(())
         })
     }
 
@@ -506,9 +629,9 @@ impl HostDatabase {
                 params![session.id, workspace_id],
             )?;
             transaction.execute(
-                "INSERT INTO session_turns(session_id, number, provider, method, model, prompt, answer, duration_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms],
+                "INSERT INTO session_turns(session_id, number, provider, method, model, prompt, answer, duration_ms, internal_prompt)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms, turn.internal_prompt],
             )?;
             transaction.commit()?;
             Ok(())
@@ -545,6 +668,26 @@ impl HostDatabase {
         reasoning: &[ReasoningSummaryRow],
         commentary: &[CommentaryRow],
     ) -> Result<()> {
+        self.append_turn_with_goal_activity(
+            session,
+            turn,
+            new_session,
+            TurnActivity {
+                tools,
+                reasoning,
+                commentary,
+                goal: None,
+            },
+        )
+    }
+
+    pub fn append_turn_with_goal_activity(
+        &self,
+        session: &SessionRow,
+        turn: &TurnRow,
+        new_session: bool,
+        activity: TurnActivity<'_>,
+    ) -> Result<()> {
         self.with_connection(|connection| {
             let transaction = connection.transaction()?;
             if new_session {
@@ -554,9 +697,9 @@ impl HostDatabase {
                 )?;
             }
             transaction.execute(
-                "INSERT INTO session_turns(session_id, number, provider, method, model, prompt, answer, duration_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms],
+                "INSERT INTO session_turns(session_id, number, provider, method, model, prompt, answer, duration_ms, internal_prompt)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms, turn.internal_prompt],
             )?;
             if !new_session {
                 transaction.execute(
@@ -564,25 +707,36 @@ impl HostDatabase {
                     params![session.id, session.last_message_at_ms],
                 )?;
             }
-            for tool in tools {
+            for tool in activity.tools {
                 transaction.execute(
                     "INSERT INTO session_tool_calls(id, session_id, turn_number, ordinal, name, summary, arguments, output, is_error)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![tool.id, session.id, turn.number, tool.ordinal, tool.name, tool.summary, tool.arguments, tool.output, tool.is_error],
                 )?;
             }
-            for item in reasoning {
+            for item in activity.reasoning {
                 transaction.execute(
                     "INSERT INTO session_reasoning_summaries(session_id, turn_number, ordinal, after_tool_count, text)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![session.id, turn.number, item.ordinal, item.after_tool_count, item.text],
                 )?;
             }
-            for item in commentary {
+            for item in activity.commentary {
                 transaction.execute(
                     "INSERT INTO session_commentary(session_id, turn_number, ordinal, after_tool_count, text)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![session.id, turn.number, item.ordinal, item.after_tool_count, item.text],
+                )?;
+            }
+            if let Some(goal) = activity.goal {
+                ensure!(goal.session_id == session.id, "goal session mismatch");
+                transaction.execute(
+                    "INSERT INTO session_goals(session_id, objective, status, turns_used, required_state, max_turns, max_duration_minutes, active_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(session_id) DO UPDATE SET status = excluded.status,
+                         turns_used = excluded.turns_used, required_state = excluded.required_state,
+                         active_ms = excluded.active_ms",
+                    params![goal.session_id, goal.objective, goal.status, goal.turns_used, goal.required_state, goal.max_turns, goal.max_duration_minutes, goal.active_ms],
                 )?;
             }
             transaction.commit()?;
@@ -591,12 +745,20 @@ impl HostDatabase {
     }
 
     pub fn tool_summaries(&self, session_id: &str) -> Result<Vec<ToolCallSummaryRow>> {
+        self.tool_summaries_since(session_id, 1)
+    }
+
+    pub fn tool_summaries_since(
+        &self,
+        session_id: &str,
+        first_turn: i64,
+    ) -> Result<Vec<ToolCallSummaryRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT id, turn_number, name, summary, is_error FROM session_tool_calls
-                 WHERE session_id = ?1 ORDER BY turn_number, ordinal LIMIT 1025",
+                 WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 2049",
             )?;
-            let rows = statement.query_map([session_id], |row| {
+            let rows = statement.query_map(params![session_id, first_turn], |row| {
                 Ok(ToolCallSummaryRow {
                     id: row.get(0)?,
                     turn_number: row.get(1)?,
@@ -611,12 +773,20 @@ impl HostDatabase {
     }
 
     pub fn reasoning_summaries(&self, session_id: &str) -> Result<Vec<ReasoningSummaryRow>> {
+        self.reasoning_summaries_since(session_id, 1)
+    }
+
+    pub fn reasoning_summaries_since(
+        &self,
+        session_id: &str,
+        first_turn: i64,
+    ) -> Result<Vec<ReasoningSummaryRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT turn_number, ordinal, after_tool_count, text FROM session_reasoning_summaries
-                 WHERE session_id = ?1 ORDER BY turn_number, ordinal LIMIT 1025",
+                 WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 8193",
             )?;
-            let rows = statement.query_map([session_id], |row| {
+            let rows = statement.query_map(params![session_id, first_turn], |row| {
                 Ok(ReasoningSummaryRow {
                     turn_number: row.get(0)?,
                     ordinal: row.get(1)?,
@@ -630,12 +800,20 @@ impl HostDatabase {
     }
 
     pub fn commentary(&self, session_id: &str) -> Result<Vec<CommentaryRow>> {
+        self.commentary_since(session_id, 1)
+    }
+
+    pub fn commentary_since(
+        &self,
+        session_id: &str,
+        first_turn: i64,
+    ) -> Result<Vec<CommentaryRow>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
                 "SELECT turn_number, ordinal, after_tool_count, text FROM session_commentary
-                 WHERE session_id = ?1 ORDER BY turn_number, ordinal LIMIT 1025",
+                 WHERE session_id = ?1 AND turn_number >= ?2 ORDER BY turn_number, ordinal LIMIT 8193",
             )?;
-            let rows = statement.query_map([session_id], |row| {
+            let rows = statement.query_map(params![session_id, first_turn], |row| {
                 Ok(CommentaryRow {
                     turn_number: row.get(0)?,
                     ordinal: row.get(1)?,
@@ -879,6 +1057,7 @@ mod tests {
             prompt: "Example prompt".to_owned(),
             answer: "Example answer".to_owned(),
             duration_ms: 1_234,
+            internal_prompt: false,
         };
         db.append_turn(&session, &first, true).unwrap();
         assert!(db.append_turn(&session, &first, false).is_err());
@@ -937,6 +1116,7 @@ mod tests {
                 prompt: "Example question".to_owned(),
                 answer: "Example answer".to_owned(),
                 duration_ms: 1,
+                internal_prompt: false,
             };
             if workspace_id == "internal:quick-chats" {
                 db.append_new_quick_chat_turn(&session, &turn, "workspace-example")
@@ -1014,6 +1194,7 @@ mod tests {
                 prompt: "Example question".to_owned(),
                 answer: "Example answer".to_owned(),
                 duration_ms: 1,
+                internal_prompt: false,
             },
             true,
         )
@@ -1022,7 +1203,9 @@ mod tests {
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE plugin_installs;
+                "DROP TABLE session_goals;
+                 ALTER TABLE session_turns DROP COLUMN internal_prompt;
+                 DROP TABLE plugin_installs;
                  DROP TABLE quick_chat_contexts;
                  ALTER TABLE sessions DROP COLUMN last_message_at_ms;
                  ALTER TABLE sessions DROP COLUMN archived_at_ms;
@@ -1055,7 +1238,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 13;")
+            .execute_batch("PRAGMA user_version = 16;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -1063,8 +1246,174 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 16);
         drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_thirteen_adds_goal_state_and_internal_prompt_flag() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example objective".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: 1,
+            method: 1,
+            model: "model-example".to_owned(),
+            prompt: "Example objective".to_owned(),
+            answer: "Example observation".to_owned(),
+            duration_ms: 1,
+            internal_prompt: false,
+        };
+        db.append_turn(&session, &turn, true).unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE session_goals;
+             ALTER TABLE session_turns DROP COLUMN internal_prompt;
+             PRAGMA user_version = 12;",
+            )
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        assert!(!migrated.session(&session.id).unwrap().unwrap().turns[0].internal_prompt);
+        assert!(migrated.goal(&session.id).unwrap().is_none());
+        let goal = GoalRow {
+            session_id: session.id.clone(),
+            objective: "Example objective".to_owned(),
+            status: 1,
+            turns_used: 2,
+            required_state: String::new(),
+            max_turns: 12,
+            max_duration_minutes: 45,
+            active_ms: 2,
+        };
+        let continuation = TurnRow {
+            number: 2,
+            prompt: "Internal continuation".to_owned(),
+            internal_prompt: true,
+            ..turn
+        };
+        migrated
+            .append_turn_with_goal_activity(
+                &session,
+                &continuation,
+                false,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: Some(&goal),
+                },
+            )
+            .unwrap();
+        assert_eq!(migrated.goal(&session.id).unwrap(), Some(goal));
+        assert!(migrated.session(&session.id).unwrap().unwrap().turns[1].internal_prompt);
+        drop(migrated);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_fourteen_adds_unlimited_goal_defaults() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example objective".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: 1,
+            method: 1,
+            model: "model-example".to_owned(),
+            prompt: "Example objective".to_owned(),
+            answer: "Example observation".to_owned(),
+            duration_ms: 1,
+            internal_prompt: false,
+        };
+        let goal = GoalRow {
+            session_id: session.id.clone(),
+            objective: turn.prompt.clone(),
+            status: 1,
+            turns_used: 1,
+            required_state: String::new(),
+            max_turns: 12,
+            max_duration_minutes: 45,
+            active_ms: 1,
+        };
+        db.append_turn_with_goal_activity(
+            &session,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: Some(&goal),
+            },
+        )
+        .unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE session_goals DROP COLUMN max_turns;
+             ALTER TABLE session_goals DROP COLUMN max_duration_minutes;
+             ALTER TABLE session_goals DROP COLUMN active_ms;
+             PRAGMA user_version = 13;",
+            )
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        assert_eq!(
+            migrated.goal(&session.id).unwrap(),
+            Some(GoalRow {
+                status: 4,
+                max_turns: 0,
+                max_duration_minutes: 0,
+                active_ms: 0,
+                ..goal
+            })
+        );
+        drop(migrated);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_fifteen_defaults_features_off_and_persists_enablement() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch("INSERT INTO sessions(id, workspace_id, title, created_at_ms, last_message_at_ms) VALUES ('session-example', 'workspace-example', 'Example objective', 1, 1);
+                INSERT INTO session_goals(session_id, objective, status, turns_used, required_state) VALUES ('session-example', 'Example objective', 1, 1, '');
+                DROP TABLE feature_states; PRAGMA user_version = 14;")
+            .unwrap();
+        drop(connection);
+        let db = HostDatabase::open(&root).unwrap();
+        assert!(!db.feature_enabled("example-feature").unwrap());
+        assert_eq!(db.goal("session-example").unwrap().unwrap().status, 4);
+        db.set_feature_enabled("example-feature", true).unwrap();
+        drop(db);
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert!(reopened.feature_enabled("example-feature").unwrap());
+        reopened
+            .set_feature_enabled("example-feature", false)
+            .unwrap();
+        assert!(!reopened.feature_enabled("example-feature").unwrap());
+        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1077,7 +1426,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("DROP TABLE plugin_installs; ALTER TABLE sessions DROP COLUMN last_message_at_ms; PRAGMA user_version = 10;")
+            .execute_batch("DROP TABLE session_goals; ALTER TABLE session_turns DROP COLUMN internal_prompt; DROP TABLE plugin_installs; ALTER TABLE sessions DROP COLUMN last_message_at_ms; PRAGMA user_version = 10;")
             .unwrap();
         drop(connection);
         let migrated = HostDatabase::open(&root).unwrap();
@@ -1106,7 +1455,9 @@ mod tests {
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE plugin_installs;
+                "DROP TABLE session_goals;
+                 ALTER TABLE session_turns DROP COLUMN internal_prompt;
+                 DROP TABLE plugin_installs;
                  ALTER TABLE sessions DROP COLUMN last_message_at_ms;
                  ALTER TABLE permission_rules DROP COLUMN title;
                  ALTER TABLE permission_rules DROP COLUMN stage;
@@ -1144,7 +1495,9 @@ mod tests {
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE plugin_installs;
+                "DROP TABLE session_goals;
+                 ALTER TABLE session_turns DROP COLUMN internal_prompt;
+                 DROP TABLE plugin_installs;
                  ALTER TABLE sessions DROP COLUMN last_message_at_ms;
                  ALTER TABLE permission_rules DROP COLUMN stage;
                  ALTER TABLE permission_rules DROP COLUMN position;
