@@ -9624,6 +9624,16 @@ mod tests {
         };
         for (window_width, columns) in [(1600.0, 4), (1250.0, 3), (980.0, 2), (760.0, 1)] {
             let runtime = make(window_width);
+            if columns == 4 {
+                for name in [
+                    "apple-security-devices",
+                    "apple-target-flags",
+                    "meta-skills",
+                    "microsoft-security-devices",
+                ] {
+                    assert!(runtime.find(&format!("plugin-mark-badge-{name}")).is_some());
+                }
+            }
             let (page, _) = runtime.presented("settings-page").unwrap();
             let cards = [
                 "apple-security-devices",

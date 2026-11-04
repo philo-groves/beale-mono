@@ -136,15 +136,27 @@ pub(crate) static FLEET_VIRTUAL_MACHINE: Icon = Icon {
 };
 
 pub(crate) static FLEET_APPLE: Icon = Icon {
-    name: "beale-os-apple",
-    view: 24.0,
-    body: r#"<path fill="currentColor" d="M15.5 7.5c-1.4 0-2.1.7-3.5.7s-2.1-.7-3.5-.7C6.1 7.5 4.5 9.5 4.5 12c0 4.1 2.7 9 5.1 9 1.1 0 1.6-.7 2.5-.7s1.5.7 2.5.7c2.1 0 4.3-3.8 4.9-6.5-1.8-.6-2.8-1.8-2.8-3.3 0-1.2.7-2.2 1.8-2.9-.8-.5-1.8-.8-3-.8Z"/><path fill="currentColor" d="M12.5 6.6c.1-2.2 1.7-4.1 4-4.6-.1 2.3-1.6 4.1-4 4.6Z"/>"#,
+    name: "bootstrap-apple",
+    view: 16.0,
+    body: include_str!("../assets/fleet-logos/apple.svg"),
 };
 
 pub(crate) static FLEET_LINUX: Icon = Icon {
-    name: "beale-os-linux",
+    name: "bootstrap-tux",
+    view: 16.0,
+    body: include_str!("../assets/fleet-logos/tux.svg"),
+};
+
+pub(crate) static FLEET_WINDOWS: Icon = Icon {
+    name: "bootstrap-windows",
+    view: 16.0,
+    body: include_str!("../assets/fleet-logos/windows.svg"),
+};
+
+pub(crate) static PLUGIN_META: Icon = Icon {
+    name: "tabler-brand-meta",
     view: 24.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8 10V6a4 4 0 0 1 8 0v4c2 1.6 3 4.5 3 7.5 0 2.4-1.8 3.5-7 3.5s-7-1.1-7-3.5c0-3 1-5.9 3-7.5Z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M9 11c-1 2-1.4 4.2-.9 6.6M15 11c1 2 1.4 4.2.9 6.6"/><path fill="currentColor" d="M9.2 7.4a.8.8 0 1 0 1.6 0 .8.8 0 0 0-1.6 0Zm4 0a.8.8 0 1 0 1.6 0 .8.8 0 0 0-1.6 0ZM10.3 9.2h3.4L12 11Z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M5.2 20.5 3 22m15.8-1.5L21 22"/>"#,
+    body: include_str!("../assets/plugin-logos/meta.svg"),
 };
 
 pub(crate) static FLEET_QR: Icon = Icon {
@@ -181,18 +193,6 @@ pub(crate) static EXTENSION_FLAG: Icon = Icon {
     name: "beale-extension-flag",
     view: 24.0,
     body: r#"<path d="M5 21V4m0 1c3-2 5 2 8 0s5 1 7 0v11c-2 1-4-2-7 0s-5-2-8 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
-};
-
-pub(crate) static EXTENSION_LINKS: Icon = Icon {
-    name: "beale-extension-links",
-    view: 24.0,
-    body: r#"<path d="M11 8.5 8.5 6a4.2 4.2 0 0 0-6 6L8 17.5a4.2 4.2 0 0 0 6-6L11 8.5Zm2 7 2.5 2.5a4.2 4.2 0 0 0 6-6L16 6.5a4.2 4.2 0 0 0-6 6l3 3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
-};
-
-pub(crate) static EXTENSION_WINDOWS: Icon = Icon {
-    name: "beale-extension-windows",
-    view: 24.0,
-    body: r#"<rect x="2" y="2" width="9" height="9" rx="1" fill="currentColor"/><rect x="13" y="2" width="9" height="9" rx="1" fill="currentColor"/><rect x="2" y="13" width="9" height="9" rx="1" fill="currentColor"/><rect x="13" y="13" width="9" height="9" rx="1" fill="currentColor"/>"#,
 };
 
 pub(crate) static RESEARCH_KITS: Icon = Icon {
@@ -326,3 +326,20 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
     view: 24.0,
     body: r#"<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.321-1.915zM15 12a3 3 0 1 0-6 0 3 3 0 0 0 6 0z" fill="currentColor" fill-rule="evenodd"/>"#,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{FLEET_APPLE, FLEET_LINUX, FLEET_WINDOWS, PLUGIN_META};
+
+    #[test]
+    fn vendor_svgs_rasterize_in_rune() {
+        for mark in [&FLEET_APPLE, &FLEET_WINDOWS, &FLEET_LINUX, &PLUGIN_META] {
+            let coverage = rune::text::icon_coverage(mark, 32);
+            assert!(
+                coverage.iter().filter(|&&pixel| pixel > 0).count() > 40,
+                "{} did not rasterize",
+                mark.name
+            );
+        }
+    }
+}

@@ -78,6 +78,8 @@
 
 #### Changed
 
+- Replaced the four bundled v2 Plugin placeholders with Apple, Windows, and Meta vendor marks and compact purpose badges.
+- Replaced the v2 Fleet App Server and Virtual Machine OS placeholders with MIT-licensed Apple, Windows, and Tux vector marks.
 - Replaced generic globe marks on v2 Fleet browser cards with the browsers' color logos; manually named browsers without a matching mark retain the globe.
 - Alphabetized the built-in v2 Providers settings tabs, kept Custom last, and made Anthropic the view opened on navigation.
 - Replaced the New Research model selector with a provider setup warning when no provider is configured; custom providers without API keys no longer appear in model choices.

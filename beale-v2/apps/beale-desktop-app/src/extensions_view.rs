@@ -20,8 +20,9 @@ use crate::{
     form_button,
     form_controls::toggle_button,
     icons::{
-        CHEVRON_DOWN, CHEVRON_UP, EXTENSION_DEVICE, EXTENSION_FLAG, EXTENSION_LINKS,
-        EXTENSION_WINDOWS, FEATURES, FLEET, INFO, PLUGINS, PLUS, RESEARCH_KITS, TARGET,
+        CHEVRON_DOWN, CHEVRON_UP, EXTENSION_DEVICE, EXTENSION_FLAG, FEATURES, FLEET, FLEET_APPLE,
+        FLEET_VIRTUAL_MACHINE, FLEET_WINDOWS, INFO, PLUGIN_META, PLUGINS, PLUS, RESEARCH_KITS,
+        TARGET, WRENCH,
     },
     in_place_menu, modal_dialog, sidenav_heading, ui_font,
     workspace_creation::field,
@@ -1367,14 +1368,27 @@ fn extension_mark(
 }
 
 fn plugin_mark(name: &str, theme: ThemeStyle<'_>) -> El {
-    let (glyph, background, foreground) = match name {
-        "apple-security-devices" => (&EXTENSION_DEVICE, "#2b3d4b", "#c8e0ed"),
-        "apple-target-flags" => (&EXTENSION_FLAG, "#49343c", "#f0cad4"),
-        "meta-skills" => (&EXTENSION_LINKS, "#273e5c", "#b8d9fa"),
-        "microsoft-security-devices" => (&EXTENSION_WINDOWS, "#344454", "#d2e6f3"),
-        _ => (&PLUGINS, "#303030", "#e2e2e2"),
+    let (logo, badge, foreground, size) = match name {
+        "apple-security-devices" => (&FLEET_APPLE, &EXTENSION_DEVICE, "#f2f2f2", 29.0),
+        "apple-target-flags" => (&FLEET_APPLE, &EXTENSION_FLAG, "#f2f2f2", 29.0),
+        "microsoft-security-devices" => (&FLEET_WINDOWS, &FLEET_VIRTUAL_MACHINE, "#0078d4", 29.0),
+        "meta-skills" => (&PLUGIN_META, &WRENCH, "#0866ff", 31.0),
+        _ => return extension_mark(&PLUGINS, "#303030", "#e2e2e2", theme),
     };
-    extension_mark(glyph, background, foreground, theme)
+    el().size(40.0, 40.0)
+        .center()
+        .child(icon(logo, size).color(theme.color(foreground)))
+        .child(
+            el().key(format!("plugin-mark-badge-{name}"))
+                .absolute(22.0, 22.0)
+                .size(18.0, 18.0)
+                .center()
+                .radius(6.0)
+                .continuous_corners()
+                .fill(theme.color("#242424"))
+                .border(1.0, theme.color("#303030"))
+                .child(icon(badge, 12.0).color(theme.color("#f2f2f2"))),
+        )
 }
 
 fn feature_mark(id: &str, theme: ThemeStyle<'_>) -> El {

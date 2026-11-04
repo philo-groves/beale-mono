@@ -11,9 +11,9 @@ use crate::{
     form_button,
     form_controls::toggle_button,
     icons::{
-        EXTENSION_WINDOWS, FLEET, FLEET_APPLE, FLEET_BROWSER, FLEET_LINUX, FLEET_QR,
-        FLEET_VIRTUAL_MACHINE, INFO, PLUS, STAR, STAR_FILLED, TRASH, VM_CLONE, VM_CLONE_FILLED,
-        VM_RUN, VM_RUN_FILLED,
+        FLEET, FLEET_APPLE, FLEET_BROWSER, FLEET_LINUX, FLEET_QR, FLEET_VIRTUAL_MACHINE,
+        FLEET_WINDOWS, INFO, PLUS, STAR, STAR_FILLED, TRASH, VM_CLONE, VM_CLONE_FILLED, VM_RUN,
+        VM_RUN_FILLED,
     },
     modal_dialog, sidenav_heading, ui_font,
 };
@@ -821,18 +821,15 @@ fn server_name(server: &FleetServer) -> &str {
 }
 
 fn server_mark(server: &FleetServer, theme: ThemeStyle<'_>) -> El {
-    let (glyph, background, foreground) = match server.os_vendor.as_str() {
-        "Apple" => (&FLEET_APPLE, "#393939", "#e5e5e5"),
-        "Microsoft" => (&EXTENSION_WINDOWS, "#273e58", "#c7dff3"),
-        "Linux" => (&FLEET_LINUX, "#50432b", "#f0dda9"),
-        _ => (&FLEET, "#303030", "#e2e2e2"),
+    let (glyph, foreground, size) = match server.os_vendor.as_str() {
+        "Apple" => (&FLEET_APPLE, "#f2f2f2", 28.0),
+        "Microsoft" => (&FLEET_WINDOWS, "#0078d4", 28.0),
+        "Linux" => (&FLEET_LINUX, "#f2f2f2", 30.0),
+        _ => (&FLEET, "#bdbdbd", 25.0),
     };
     el().size(40.0, 40.0)
-        .radius(12.0)
-        .continuous_corners()
-        .fill(theme.color(background))
         .center()
-        .child(icon(glyph, 23.0).color(theme.color(foreground)))
+        .child(icon(glyph, size).color(theme.color(foreground)))
 }
 
 fn server_card(server: &FleetServer, state: &State, theme: ThemeStyle<'_>) -> El {
@@ -905,7 +902,7 @@ fn server_card(server: &FleetServer, state: &State, theme: ThemeStyle<'_>) -> El
                 ),
                 stat_row("Condition", server.condition.clone(), theme),
             ],
-            16.0,
+            12.0,
             theme,
         ))
         .child(
@@ -1210,7 +1207,7 @@ fn vm_allowance_button(
         .hover(theme.color("#303030"))
         .child(
             icon(if active { filled } else { outline }, 17.0).color(theme.color(if active {
-                "#e9c873"
+                "#f2f2f2"
             } else {
                 "#bdbdbd"
             })),
@@ -1304,10 +1301,22 @@ fn virtual_machine_card(
                 .child(
                     el().size(40.0, 40.0)
                         .center()
-                        .radius(12.0)
-                        .continuous_corners()
-                        .fill(theme.color("#273e58"))
-                        .child(icon(&EXTENSION_WINDOWS, 23.0).color(theme.color("#c7dff3"))),
+                        .child(icon(&FLEET_WINDOWS, 28.0).color(theme.color("#0078d4")))
+                        .child(
+                            el().key(format!("fleet-vm-badge-{index}"))
+                                .absolute(18.0, 27.0)
+                                .size(22.0, 13.0)
+                                .center()
+                                .radius(6.5)
+                                .continuous_corners()
+                                .fill(theme.color("#242424"))
+                                .border(1.0, theme.color("#303030"))
+                                .child(
+                                    text("VM")
+                                        .font(ui_font(9.0, 650.0))
+                                        .color(theme.color("#f2f2f2")),
+                                ),
+                        ),
                 )
                 .child(
                     text(item.machine.name.clone())
@@ -1415,7 +1424,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
     let mut cards = row()
         .key("fleet-cards")
         .w_full()
-        .mt(16.0)
+        .mt(6.0)
         .gaps(16.0, 16.0)
         .equal_columns(
             ((page_width + 16.0) / (220.0 + 16.0))
@@ -2264,6 +2273,7 @@ mod tests {
                 .is_some()
         );
         assert!(runtime.find("fleet-vm-toggle-0").is_some());
+        assert!(runtime.find("fleet-vm-badge-0").is_some());
         assert!(runtime.find("fleet-vm-scope-0").is_some());
         assert!(runtime.find("fleet-vm-run-0").is_some());
         assert!(runtime.find("fleet-vm-clone-0").is_some());
