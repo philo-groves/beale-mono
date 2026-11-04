@@ -13,6 +13,7 @@ import {
   DEFAULT_SHELL_REVIEW_MODELS,
   createSurfaceTools,
   createReportTools,
+  createTriageTools,
   createResearchStorageLayout,
   effectiveClaimClassifications,
   createResearchToolRegistry,
@@ -250,6 +251,9 @@ async function createResearchToolBridgeRuntime(
           ? { requireVerifiedFinding: true, requireSubmissionPacket: true, claimStore: findingStore }
           : {})
       }));
+      if (resolvedProfile.profile.id === 'security-research' && runbookStore) {
+        tools.push(...createTriageTools(findingStore, runbookStore, reports));
+      }
     }
 
 

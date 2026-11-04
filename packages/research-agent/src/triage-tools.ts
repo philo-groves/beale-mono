@@ -32,13 +32,13 @@ export function createTriageTools(claims: ResearchClaimStore, runbooks: RunbookS
       claimId: { type: "string", description: "Verified, reportable security finding." },
       expectedRevision: { type: "integer", minimum: 1 },
       packetPath: { type: "string", description: "Workspace ZIP containing README.md, manifest.json, and a poc/ file. The app-server imports it into durable triage storage." },
-      replayRunId: { type: "string", description: "Successful full run of the finding's reproduction runbook in a distinct authorized environment." },
-      reason: { type: "string", description: "What the independent replay proved and the packet's remaining limits." },
+      replayRunId: { type: "string", description: "Successful current full run of the finding's reproduction runbook from a recorded authorized execution." },
+      reason: { type: "string", description: "What the current replay proved and the packet's remaining limits." },
     },
   };
   return [{
     descriptor: { name: "triage.package", transportName: "triage_package",
-      description: "Accept a portable PoC ZIP for a verified, reportable finding after a successful full replay in a distinct authorized environment. The packet must include a manifest, reproduction steps, hashes, and a PoC file. Reporting reuses the accepted packet.",
+      description: "Accept a portable PoC ZIP for a verified, reportable finding after a successful current full run from a recorded authorized execution. Verification supplies the independent review; triage checks current reproduction and packet integrity. The packet must include a manifest, reproduction steps, hashes, and a PoC file. Reporting reuses the accepted packet.",
       actionClasses: ["synthesize"], sideEffects: "write", requiredPermissions: ["artifact:write"],
       inputSchema: parameters, metadata: { family: "triage", format: "zip" } },
     parameters,
@@ -90,9 +90,8 @@ function verifyReplay(finding: FindingSummary, runbooks: RunbookStore, runId: st
   if (!book) throw new Error("The finding's reproduction runbook is unavailable.");
   const replay = runbooks.getExecution(book.id, runId, { limit: 1 });
   if (replay.status !== "succeeded" || !replay.fullRun || replay.contentRevision !== book.contentRevision
-    || replay.sourceRevision !== finding.sourceRevision || !replay.environmentFingerprint
-    || replay.environmentFingerprint === finding.environmentFingerprint) {
-    throw new Error("Triage requires a successful current full reproduction on a distinct authorized environment.");
+    || replay.sourceRevision !== finding.sourceRevision || !replay.environmentFingerprint) {
+    throw new Error("Triage requires a successful current full reproduction from a recorded authorized runbook execution.");
   }
 }
 

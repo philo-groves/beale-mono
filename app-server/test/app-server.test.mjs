@@ -1402,6 +1402,7 @@ test("exposes the in-Beale durable tool registry to Codex with enforced effect r
   assert.equal(descriptors.get("runbook.run").sideEffects, "process");
   assert.equal(descriptors.get("prior_art.search").sideEffects, "network");
   assert.equal(descriptors.get("prior_art.fetch").sideEffects, "network");
+  assert.equal(descriptors.get("triage.package").sideEffects, "write");
 
   await assert.rejects(
     callAppServerResearchTool({

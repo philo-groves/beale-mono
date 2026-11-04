@@ -16,6 +16,11 @@
 - A paused Research Track can resume with a revised set of ready targets without resetting its pass or surface progress.
 - Research Track routes reportable verified claims with stale reproduction or review provenance to Investigators, then routes stale proof packets back to Triagers before reporting.
 - Research Track discovery and Reviewers stop standalone proof work when a claim is downrated to low or informational without a credible program-level impact path.
+- Triage packaging accepts a current full reproduction from either the finding's original environment or another recorded authorized execution; the verified finding state remains the independent-review gate.
+
+#### Fixed
+
+- The app-server research-tool bridge exposes `triage.package` whenever security reporting and runbooks are enabled, matching the managed Reporting tool catalog.
 
 ## 0.9.6
 
