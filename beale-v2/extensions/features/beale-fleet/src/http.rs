@@ -8,21 +8,24 @@ use axum::{
 use beale_contracts::{
     FLEET_BROWSER_PREFERRED_PATH, FLEET_BROWSER_REMOVE_PATH, FLEET_BROWSER_SETTINGS_PATH,
     FLEET_BROWSERS_PATH, FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
-    PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
+    FLEET_VIRTUAL_MACHINE_SETTINGS_PATH, FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
     v1::{
         FleetAddBrowserRequest, FleetAppServerDescriptor, FleetBrowsersResponse,
         FleetPairingRequest, FleetPairingResponse, FleetRemoveBrowserRequest,
         FleetSetBrowserSettingsRequest, FleetSetPreferredBrowserRequest,
-        FleetTotpProvisioningResponse,
+        FleetSetVirtualMachineSettingsRequest, FleetTotpProvisioningResponse, FleetVirtualMachine,
+        FleetVirtualMachinesResponse,
     },
 };
-use beale_storage::{BrowserSettings, HostDatabase, ManualBrowserRow};
+use beale_storage::{BrowserSettings, HostDatabase, ManualBrowserRow, VirtualMachineSettings};
 use prost::Message;
 use ring::{
     hmac,
     rand::{SecureRandom, SystemRandom},
 };
 use std::{
+    collections::HashSet,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -121,6 +124,11 @@ pub fn router(token: String, db: HostDatabase) -> Router {
         .route(FLEET_BROWSER_REMOVE_PATH, post(remove_browser))
         .route(FLEET_BROWSER_SETTINGS_PATH, post(set_browser_settings))
         .route(FLEET_BROWSER_PREFERRED_PATH, post(set_preferred_browser))
+        .route(FLEET_VIRTUAL_MACHINES_PATH, get(list_virtual_machines))
+        .route(
+            FLEET_VIRTUAL_MACHINE_SETTINGS_PATH,
+            post(set_virtual_machine_settings),
+        )
         .layer(DefaultBodyLimit::max(4_096))
         .with_state(HttpState {
             token,
@@ -129,7 +137,7 @@ pub fn router(token: String, db: HostDatabase) -> Router {
         })
 }
 
-fn require_browser_access(state: &HttpState, headers: &HeaderMap) -> Result<(), StatusCode> {
+fn require_fleet_access(state: &HttpState, headers: &HeaderMap) -> Result<(), StatusCode> {
     if !authorized(headers, &state.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -151,7 +159,7 @@ async fn list_browsers(
     State(state): State<HttpState>,
     headers: HeaderMap,
 ) -> Result<([(header::HeaderName, &'static str); 2], Vec<u8>), StatusCode> {
-    require_browser_access(&state, &headers)?;
+    require_fleet_access(&state, &headers)?;
     let manual = state
         .db
         .manual_browsers()
@@ -184,12 +192,95 @@ async fn list_browsers(
     ))
 }
 
+async fn list_virtual_machines(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<([(header::HeaderName, &'static str); 2], Vec<u8>), StatusCode> {
+    require_fleet_access(&state, &headers)?;
+    let mut virtual_machines = crate::virtual_machines::inventory()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    for machine in &mut virtual_machines {
+        let settings = state
+            .db
+            .virtual_machine_settings(&machine.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        machine.enabled = settings.enabled;
+        machine.all_workspaces = settings.all_workspaces;
+        machine.workspace_ids = settings.workspace_ids;
+        machine.can_run = settings.can_run;
+        machine.can_clone = settings.can_clone;
+    }
+    let response = FleetVirtualMachinesResponse { virtual_machines };
+    Ok((
+        [
+            (header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        response.encode_to_vec(),
+    ))
+}
+
+async fn set_virtual_machine_settings(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    require_fleet_access(&state, &headers)?;
+    protobuf_request(&headers)?;
+    let request =
+        FleetSetVirtualMachineSettingsRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if !valid_virtual_machine_settings_request(&request) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let inventory = crate::virtual_machines::inventory()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    save_virtual_machine_settings(&state.db, &inventory, request)
+}
+
+fn valid_virtual_machine_settings_request(request: &FleetSetVirtualMachineSettingsRequest) -> bool {
+    request
+        .id
+        .strip_prefix("hyper-v:")
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        && request.workspace_ids.len() <= 128
+        && (!request.all_workspaces || request.workspace_ids.is_empty())
+        && request
+            .workspace_ids
+            .iter()
+            .all(|id| uuid::Uuid::parse_str(id).is_ok())
+        && request.workspace_ids.iter().collect::<HashSet<_>>().len() == request.workspace_ids.len()
+}
+
+fn save_virtual_machine_settings(
+    db: &HostDatabase,
+    inventory: &[FleetVirtualMachine],
+    request: FleetSetVirtualMachineSettingsRequest,
+) -> Result<StatusCode, StatusCode> {
+    if !inventory.iter().any(|machine| machine.id == request.id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    db.set_virtual_machine_settings(
+        &request.id,
+        &VirtualMachineSettings {
+            enabled: request.enabled,
+            all_workspaces: request.all_workspaces,
+            workspace_ids: request.workspace_ids,
+            can_run: request.can_run,
+            can_clone: request.can_clone,
+        },
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn add_browser(
     State(state): State<HttpState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, StatusCode> {
-    require_browser_access(&state, &headers)?;
+    require_fleet_access(&state, &headers)?;
     protobuf_request(&headers)?;
     let request = FleetAddBrowserRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let path = crate::browsers::validate_manual(&request.name, &request.executable)
@@ -226,7 +317,7 @@ async fn remove_browser(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, StatusCode> {
-    require_browser_access(&state, &headers)?;
+    require_fleet_access(&state, &headers)?;
     protobuf_request(&headers)?;
     let request = FleetRemoveBrowserRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
     if uuid::Uuid::parse_str(&request.id).is_err() {
@@ -248,7 +339,7 @@ async fn set_browser_settings(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, StatusCode> {
-    require_browser_access(&state, &headers)?;
+    require_fleet_access(&state, &headers)?;
     protobuf_request(&headers)?;
     let request =
         FleetSetBrowserSettingsRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -290,7 +381,7 @@ async fn set_preferred_browser(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, StatusCode> {
-    require_browser_access(&state, &headers)?;
+    require_fleet_access(&state, &headers)?;
     protobuf_request(&headers)?;
     let request =
         FleetSetPreferredBrowserRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -482,6 +573,57 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
+    #[test]
+    fn virtual_machine_settings_require_a_detected_id_and_persist_allowances() {
+        let root = std::env::temp_dir().join(format!("beale-vm-example-{}", uuid::Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let id = "hyper-v:00000000-0000-4000-8000-000000000001".to_owned();
+        let inventory = vec![FleetVirtualMachine {
+            id: id.clone(),
+            name: "Example VM".to_owned(),
+            provider: "Hyper-V".to_owned(),
+            state: "Off".to_owned(),
+            generation: 2,
+            enabled: true,
+            all_workspaces: true,
+            workspace_ids: Vec::new(),
+            can_run: false,
+            can_clone: false,
+        }];
+        assert_eq!(
+            db.virtual_machine_settings(&id).unwrap(),
+            VirtualMachineSettings::default()
+        );
+        let request = FleetSetVirtualMachineSettingsRequest {
+            id: id.clone(),
+            enabled: true,
+            all_workspaces: false,
+            workspace_ids: vec![uuid::Uuid::nil().to_string()],
+            can_run: true,
+            can_clone: false,
+        };
+        assert!(valid_virtual_machine_settings_request(&request));
+        assert_eq!(
+            save_virtual_machine_settings(&db, &[], request.clone()),
+            Err(StatusCode::NOT_FOUND)
+        );
+        assert_eq!(
+            save_virtual_machine_settings(&db, &inventory, request.clone()),
+            Ok(StatusCode::NO_CONTENT)
+        );
+        let mut invalid = request.clone();
+        invalid.workspace_ids.push(uuid::Uuid::nil().to_string());
+        assert!(!valid_virtual_machine_settings_request(&invalid));
+        drop(db);
+        let reopened = HostDatabase::open(&root).unwrap();
+        let saved = reopened.virtual_machine_settings(&id).unwrap();
+        assert!(saved.enabled && saved.can_run && !saved.can_clone);
+        assert!(!saved.all_workspaces);
+        assert_eq!(saved.workspace_ids, request.workspace_ids);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn browser_inventory_requires_auth_and_persists_manual_entries() {
         let root =
@@ -509,6 +651,48 @@ mod tests {
         assert_eq!(
             app.clone()
                 .oneshot(request("GET", FLEET_BROWSERS_PATH, vec![], true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", FLEET_VIRTUAL_MACHINES_PATH, vec![], false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", FLEET_VIRTUAL_MACHINES_PATH, vec![], true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_VIRTUAL_MACHINE_SETTINGS_PATH,
+                    vec![],
+                    false,
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(request(
+                    "POST",
+                    FLEET_VIRTUAL_MACHINE_SETTINGS_PATH,
+                    vec![],
+                    true,
+                ))
                 .await
                 .unwrap()
                 .status(),

@@ -69,6 +69,30 @@ pub(crate) static STAR_FILLED: Icon = Icon {
     body: r#"<path fill="currentColor" d="M12 2.5 15.1 8.8l7 1-5.05 4.92 1.2 6.96L12 18.4l-6.25 3.28 1.2-6.96L1.9 9.8l7-1z"/>"#,
 };
 
+pub(crate) static VM_RUN: Icon = Icon {
+    name: "beale-vm-run",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M6 3.5 20 12 6 20.5Z"/>"#,
+};
+
+pub(crate) static VM_RUN_FILLED: Icon = Icon {
+    name: "beale-vm-run-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M6 3.5 20 12 6 20.5Z"/>"#,
+};
+
+pub(crate) static VM_CLONE: Icon = Icon {
+    name: "beale-vm-clone",
+    view: 24.0,
+    body: r#"<rect x="8" y="8" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#,
+};
+
+pub(crate) static VM_CLONE_FILLED: Icon = Icon {
+    name: "beale-vm-clone-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M5 3h9a2 2 0 0 1 2 2v1H8a2 2 0 0 0-2 2v8H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm5 5h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/>"#,
+};
+
 pub(crate) static FOLDER_OPEN: Icon = Icon {
     name: "lucide-folder-open",
     view: 24.0,

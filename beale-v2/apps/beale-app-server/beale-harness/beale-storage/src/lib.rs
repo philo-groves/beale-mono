@@ -25,6 +25,27 @@ pub struct BrowserSettings {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VirtualMachineSettings {
+    pub enabled: bool,
+    pub all_workspaces: bool,
+    pub workspace_ids: Vec<String>,
+    pub can_run: bool,
+    pub can_clone: bool,
+}
+
+impl Default for VirtualMachineSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            all_workspaces: true,
+            workspace_ids: Vec::new(),
+            can_run: false,
+            can_clone: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceRow {
     pub id: String,
     pub name: String,
@@ -158,7 +179,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 20 {
+        if version > 21 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -425,6 +446,26 @@ impl HostDatabase {
                  COMMIT;",
             )?;
         }
+        if version < 21 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS fleet_vm_settings (
+                     vm_id TEXT PRIMARY KEY,
+                     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+                     all_workspaces INTEGER NOT NULL CHECK (all_workspaces IN (0, 1)),
+                     can_run INTEGER NOT NULL CHECK (can_run IN (0, 1)),
+                     can_clone INTEGER NOT NULL CHECK (can_clone IN (0, 1))
+                 );
+                 CREATE TABLE IF NOT EXISTS fleet_vm_workspace_scope (
+                     vm_id TEXT NOT NULL,
+                     workspace_id TEXT NOT NULL,
+                     PRIMARY KEY(vm_id, workspace_id),
+                     FOREIGN KEY(vm_id) REFERENCES fleet_vm_settings(vm_id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 21;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -563,6 +604,87 @@ impl HostDatabase {
             for workspace_id in &settings.workspace_ids {
                 transaction.execute(
                     "INSERT INTO fleet_browser_workspace_scope(browser_id, workspace_id) VALUES (?1, ?2)",
+                    params![id, workspace_id],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn virtual_machine_settings(&self, id: &str) -> Result<VirtualMachineSettings> {
+        self.with_connection(|connection| {
+            let Some((enabled, all_workspaces, can_run, can_clone)) = connection
+                .query_row(
+                    "SELECT enabled, all_workspaces, can_run, can_clone FROM fleet_vm_settings WHERE vm_id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?
+            else {
+                return Ok(VirtualMachineSettings::default());
+            };
+            let mut statement = connection.prepare(
+                "SELECT workspace_id FROM fleet_vm_workspace_scope WHERE vm_id = ?1 ORDER BY workspace_id",
+            )?;
+            let ids = statement.query_map([id], |row| row.get(0))?;
+            Ok(VirtualMachineSettings {
+                enabled,
+                all_workspaces,
+                workspace_ids: ids.collect::<rusqlite::Result<Vec<_>>>()?,
+                can_run,
+                can_clone,
+            })
+        })
+    }
+
+    pub fn set_virtual_machine_settings(
+        &self,
+        id: &str,
+        settings: &VirtualMachineSettings,
+    ) -> Result<()> {
+        ensure!(
+            !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control),
+            "invalid VM id"
+        );
+        ensure!(
+            settings.workspace_ids.len() <= 128,
+            "too many selected workspaces"
+        );
+        ensure!(
+            !settings.all_workspaces || settings.workspace_ids.is_empty(),
+            "all-workspaces scope cannot include workspace ids"
+        );
+        let mut unique = HashSet::new();
+        ensure!(
+            settings.workspace_ids.iter().all(|workspace_id| {
+                uuid::Uuid::parse_str(workspace_id).is_ok() && unique.insert(workspace_id)
+            }),
+            "invalid or duplicate workspace id"
+        );
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT INTO fleet_vm_settings(vm_id, enabled, all_workspaces, can_run, can_clone)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(vm_id) DO UPDATE SET enabled = excluded.enabled,
+                     all_workspaces = excluded.all_workspaces,
+                     can_run = excluded.can_run, can_clone = excluded.can_clone",
+                params![
+                    id,
+                    settings.enabled,
+                    settings.all_workspaces,
+                    settings.can_run,
+                    settings.can_clone
+                ],
+            )?;
+            transaction.execute(
+                "DELETE FROM fleet_vm_workspace_scope WHERE vm_id = ?1",
+                [id],
+            )?;
+            for workspace_id in &settings.workspace_ids {
+                transaction.execute(
+                    "INSERT INTO fleet_vm_workspace_scope(vm_id, workspace_id) VALUES (?1, ?2)",
                     params![id, workspace_id],
                 )?;
             }
@@ -1612,7 +1734,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 21;")
+            .execute_batch("PRAGMA user_version = 22;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -1620,7 +1742,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 21);
+        assert_eq!(version, 22);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1688,6 +1810,43 @@ mod tests {
             reopened.preferred_browser_id().unwrap().as_deref(),
             Some("detected:example")
         );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_twenty_one_defaults_vm_allowances_off_and_persists_changes() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE fleet_vm_workspace_scope;
+                 DROP TABLE fleet_vm_settings;
+                 PRAGMA user_version = 20;",
+            )
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        let id = "hyper-v:00000000-0000-4000-8000-000000000001";
+        assert_eq!(
+            migrated.virtual_machine_settings(id).unwrap(),
+            VirtualMachineSettings::default()
+        );
+        let selected = VirtualMachineSettings {
+            enabled: false,
+            all_workspaces: false,
+            workspace_ids: vec![uuid::Uuid::nil().to_string()],
+            can_run: true,
+            can_clone: true,
+        };
+        migrated
+            .set_virtual_machine_settings(id, &selected)
+            .unwrap();
+        drop(migrated);
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert_eq!(reopened.virtual_machine_settings(id).unwrap(), selected);
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }

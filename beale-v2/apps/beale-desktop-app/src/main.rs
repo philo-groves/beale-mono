@@ -230,6 +230,9 @@ enum SelectionMenu {
     BrowserWorkspaces {
         index: usize,
     },
+    VirtualMachineWorkspaces {
+        index: usize,
+    },
     SourcePriority {
         provider: Provider,
     },
@@ -2748,6 +2751,9 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
         SelectionMenu::BrowserWorkspaces { index } => {
             fleet_view::workspace_scope_items(state, index)
         }
+        SelectionMenu::VirtualMachineWorkspaces { index } => {
+            fleet_view::vm_workspace_scope_items(state, index)
+        }
         SelectionMenu::SourcePriority { provider } => {
             let status = &state.auth_status[provider.index()];
             if state.selected != provider || !status.subscription || !status.api_key {
@@ -2805,6 +2811,9 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
         SelectionMenu::FeatureWorkspaces { index } => return format!("feature-scope-{index}"),
         SelectionMenu::BrowserWorkspaces { index } => {
             return format!("fleet-browser-scope-{index}");
+        }
+        SelectionMenu::VirtualMachineWorkspaces { index } => {
+            return format!("fleet-vm-scope-{index}");
         }
         SelectionMenu::HomeCollection => "home-collection-control",
         SelectionMenu::FleetAdd => "fleet-add-server",
@@ -2880,6 +2889,7 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
         SelectionMenu::PluginWorkspaces { .. }
             | SelectionMenu::FeatureWorkspaces { .. }
             | SelectionMenu::BrowserWorkspaces { .. }
+            | SelectionMenu::VirtualMachineWorkspaces { .. }
     ) {
         state.selection_menu = None;
     }
@@ -2979,6 +2989,9 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
         }
         SelectionMenu::BrowserWorkspaces { index } => {
             fleet_view::select_workspace_scope(state, index, &value);
+        }
+        SelectionMenu::VirtualMachineWorkspaces { index } => {
+            fleet_view::select_vm_workspace_scope(state, index, &value);
         }
         SelectionMenu::SourcePriority { provider } => {
             let method = if value == "api-key" {
@@ -5397,6 +5410,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     && state.fleet_section == fleet_view::FleetSection::Browsers
                     && state.fleet.browser_scope_enabled(index)
             }
+            SelectionMenu::VirtualMachineWorkspaces { index } => {
+                state.primary_view == PrimaryView::Fleet
+                    && state.fleet_section == fleet_view::FleetSection::VirtualMachines
+                    && state.fleet.vm_scope_enabled(index)
+            }
             _ => {
                 state.primary_view == PrimaryView::Settings
                     && state.settings_section == SettingsSection::Providers
@@ -5427,7 +5445,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::TextSize => ("Text Size", 178.0),
                     SelectionMenu::PluginWorkspaces { .. }
                     | SelectionMenu::FeatureWorkspaces { .. }
-                    | SelectionMenu::BrowserWorkspaces { .. } => ("Workspaces", 240.0),
+                    | SelectionMenu::BrowserWorkspaces { .. }
+                    | SelectionMenu::VirtualMachineWorkspaces { .. } => ("Workspaces", 240.0),
                     SelectionMenu::SourcePriority { .. } => ("Source Priority", 178.0),
                     SelectionMenu::Model { .. } => ("Choose model", 380.0),
                 };

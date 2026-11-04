@@ -2,6 +2,7 @@
 
 mod browsers;
 mod http;
+mod virtual_machines;
 pub use http::router;
 
 pub const FEATURE_ID: &str = "fleet";

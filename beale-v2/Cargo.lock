@@ -278,6 +278,8 @@ dependencies = [
  "beale-storage",
  "prost",
  "ring",
+ "serde",
+ "serde_json",
  "tokio",
  "tower",
  "url",

@@ -6,6 +6,8 @@
 
 #### Added
 
+- Fleet VM cards now save an enabled toggle, workspace scope, and separate Can Run and Can Clone allowances; both allowances default off.
+- Fleet now lists Hyper-V virtual machines detected by each reachable Windows app-server, with host, state, source, and generation in VM cards.
 - Fleet browser cards show their Source in the stat rows and a star for the host's preferred browser. Each app-server initially prefers its OS default browser when available and saves explicit choices in SQLite schema 20; protocol v1.40 carries the preference.
 - Fleet browser cards now offer enabled toggles and per-browser workspace selection; detected and manually added browsers default to enabled for all workspaces.
 - Fleet now detects installed Chrome, Safari, Edge, Firefox, Opera, Brave, and DuckDuckGo at conventional host paths and lets users add or remove manual browser executables per app server. Manual entries persist in app-server SQLite schema 18; protocol v1.38 adds authenticated browser inventory and mutation routes.
@@ -170,6 +172,8 @@
 
 #### Added
 
+- Protocol v1.42 adds authenticated VM settings updates and returns host-saved scope and allowances in inventory. SQLite schema 21 stores the settings with Can Run and Can Clone off by default; rebuild connected clients and hosts together.
+- Protocol v1.41 adds authenticated, read-only Hyper-V VM inventory on Windows hosts; other hosts return an empty inventory. Rebuild connected desktops and app-servers together.
 - Added a Windows notification-area icon for the v2 app-server using the Beale logo, with running status and a graceful Exit action.
 - Added protocol v1.35 workspace scope fields and authenticated Plugin and Feature scope updates; SQLite schema 16 persists selections and keeps a restricted scope restricted when a workspace is removed. Goal Mode checks its scope before starting or resuming and pauses active goals outside it.
 - Added v1.34 Plugin tool counts and host-owned MCP launch and discovery for installed bundled and locally supplied packages; uninstall stops active stdio servers.

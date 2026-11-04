@@ -433,14 +433,12 @@ fn preferred_id_with_hint(
             let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
             if let Some(entry) = manual.iter().find(|entry| {
                 Path::new(&entry.executable).canonicalize().ok().as_deref() == Some(path.as_path())
-            }) {
-                if let Some(browser) = browsers
-                    .iter()
-                    .filter(eligible)
-                    .find(|browser| browser.id == entry.id)
-                {
-                    return Some(browser.id.clone());
-                }
+            }) && let Some(browser) = browsers
+                .iter()
+                .filter(eligible)
+                .find(|browser| browser.id == entry.id)
+            {
+                return Some(browser.id.clone());
             }
             for definition in DEFINITIONS {
                 if definition

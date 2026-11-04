@@ -6,12 +6,14 @@ use crate::{
     extensions_view::{workspace_scope_button, workspace_scope_label},
     fleet_connection::{
         self, BrowserItem, BrowserMutation, FleetServer, Mutation, MutationResult, TailnetDevice,
+        VirtualMachineItem, VirtualMachineMutation,
     },
     form_button,
     form_controls::toggle_button,
     icons::{
         EXTENSION_WINDOWS, FLEET, FLEET_APPLE, FLEET_BROWSER, FLEET_LINUX, FLEET_QR,
-        FLEET_VIRTUAL_MACHINE, INFO, PLUS, STAR, STAR_FILLED, TRASH,
+        FLEET_VIRTUAL_MACHINE, INFO, PLUS, STAR, STAR_FILLED, TRASH, VM_CLONE, VM_CLONE_FILLED,
+        VM_RUN, VM_RUN_FILLED,
     },
     modal_dialog, sidenav_heading, ui_font,
 };
@@ -39,8 +41,10 @@ impl FleetTab {
         match self {
             Self::All => format!("All {}", section.label()),
             Self::Available if section == FleetSection::Browsers => "Detected".to_owned(),
+            Self::Available if section == FleetSection::VirtualMachines => "Running".to_owned(),
             Self::Available => "Available".to_owned(),
             Self::Enabled if section == FleetSection::Browsers => "Manually Added".to_owned(),
+            Self::Enabled if section == FleetSection::VirtualMachines => "Not Running".to_owned(),
             Self::Enabled => "Enabled".to_owned(),
         }
     }
@@ -64,6 +68,11 @@ pub(crate) struct FleetState {
     browser_busy: bool,
     browser_error: String,
     browser_generation: u64,
+    virtual_machines: Vec<VirtualMachineItem>,
+    vm_loading: bool,
+    vm_busy: bool,
+    vm_error: String,
+    vm_generation: u64,
     pub(crate) browser_dialog_open: bool,
     browser_host_id: String,
     browser_name_edit: TextEdit,
@@ -106,6 +115,11 @@ impl Default for FleetState {
             browser_busy: false,
             browser_error: String::new(),
             browser_generation: 0,
+            virtual_machines: Vec::new(),
+            vm_loading: false,
+            vm_busy: false,
+            vm_error: String::new(),
+            vm_generation: 0,
             browser_dialog_open: false,
             browser_host_id: "local".to_owned(),
             browser_name_edit: TextEdit::new(""),
@@ -181,6 +195,12 @@ impl FleetState {
             .is_some_and(|item| item.browser.enabled)
     }
 
+    pub(crate) fn vm_scope_enabled(&self, index: usize) -> bool {
+        self.virtual_machines
+            .get(index)
+            .is_some_and(|item| item.machine.enabled)
+    }
+
     pub(crate) fn tab_for(&self, section: FleetSection) -> FleetTab {
         self.tabs[section.index()]
     }
@@ -248,6 +268,12 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
 pub(crate) fn start_load(state: &mut State) {
     if state.primary_view == PrimaryView::Fleet && state.fleet_section == FleetSection::Browsers {
         start_browser_load(state);
+        return;
+    }
+    if state.primary_view == PrimaryView::Fleet
+        && state.fleet_section == FleetSection::VirtualMachines
+    {
+        start_virtual_machine_load(state);
         return;
     }
     if state.primary_view != PrimaryView::Fleet
@@ -320,6 +346,76 @@ fn start_browser_load(state: &mut State) {
             }
         });
     });
+}
+
+fn start_virtual_machine_load(state: &mut State) {
+    if state.fleet.vm_loading || state.fleet.vm_busy {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        return;
+    };
+    state.fleet.vm_loading = true;
+    state.fleet.vm_generation = state.fleet.vm_generation.wrapping_add(1);
+    let generation = state.fleet.vm_generation;
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|runtime| runtime.block_on(fleet_connection::load_virtual_machines()));
+        handle.update(move |state, _| {
+            if state.fleet.vm_generation != generation {
+                return;
+            }
+            state.fleet.vm_loading = false;
+            match result {
+                Ok(snapshot) => {
+                    state.fleet.virtual_machines = snapshot.items;
+                    state.fleet.servers = snapshot.servers;
+                    state.fleet.vm_error = snapshot.error;
+                }
+                Err(_) => state.fleet.vm_error = "Could not initialize VM inventory.".to_owned(),
+            }
+        });
+    });
+}
+
+fn start_virtual_machine_mutation(state: &mut State, action: VirtualMachineMutation) {
+    if state.fleet.vm_busy {
+        return;
+    }
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.fleet.vm_error = "Desktop is not ready.".to_owned();
+        return;
+    };
+    state.fleet.vm_busy = true;
+    state.fleet.vm_error.clear();
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "Could not initialize VM settings.".to_owned())
+            .and_then(|runtime| runtime.block_on(fleet_connection::mutate_virtual_machine(action)));
+        handle.update(move |state, _| {
+            state.fleet.vm_busy = false;
+            match result {
+                Ok(()) => start_virtual_machine_load(state),
+                Err(error) => state.fleet.vm_error = error,
+            }
+        });
+    });
+}
+
+fn virtual_machine_mutation(item: &VirtualMachineItem) -> VirtualMachineMutation {
+    VirtualMachineMutation {
+        host_id: item.host_id.clone(),
+        id: item.machine.id.clone(),
+        enabled: item.machine.enabled,
+        all_workspaces: item.machine.all_workspaces,
+        workspace_ids: item.machine.workspace_ids.clone(),
+        can_run: item.machine.can_run,
+        can_clone: item.machine.can_clone,
+    }
 }
 
 fn start_browser_mutation(state: &mut State, action: BrowserMutation) {
@@ -426,6 +522,75 @@ pub(crate) fn select_workspace_scope(state: &mut State, index: usize, value: &st
             workspace_ids,
         },
     );
+}
+
+pub(crate) fn vm_workspace_scope_items(
+    state: &State,
+    index: usize,
+) -> Vec<crate::in_place_menu::MenuItem> {
+    let Some(item) = state
+        .fleet
+        .virtual_machines
+        .get(index)
+        .filter(|item| item.machine.enabled)
+    else {
+        return Vec::new();
+    };
+    std::iter::once(crate::in_place_menu::MenuItem {
+        value: String::new(),
+        label: "All Workspaces".to_owned(),
+        detail: None,
+        selected: item.machine.all_workspaces,
+    })
+    .chain(
+        state
+            .workspaces
+            .iter()
+            .map(|workspace| crate::in_place_menu::MenuItem {
+                value: workspace.id.clone(),
+                label: workspace.name.clone(),
+                detail: None,
+                selected: item.machine.workspace_ids.contains(&workspace.id),
+            }),
+    )
+    .collect()
+}
+
+pub(crate) fn select_vm_workspace_scope(state: &mut State, index: usize, value: &str) {
+    let Some(item) = state
+        .fleet
+        .virtual_machines
+        .get(index)
+        .filter(|item| item.machine.enabled)
+    else {
+        return;
+    };
+    let (all_workspaces, workspace_ids) = if value.is_empty() {
+        (true, Vec::new())
+    } else {
+        if !state
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == value)
+        {
+            return;
+        }
+        let mut ids = if item.machine.all_workspaces {
+            Vec::new()
+        } else {
+            item.machine.workspace_ids.clone()
+        };
+        if let Some(position) = ids.iter().position(|id| id == value) {
+            ids.remove(position);
+        } else {
+            ids.push(value.to_owned());
+        }
+        (false, ids)
+    };
+    let mut action = virtual_machine_mutation(item);
+    action.all_workspaces = all_workspaces;
+    action.workspace_ids = workspace_ids;
+    start_virtual_machine_mutation(state, action);
 }
 
 fn start_mutation(state: &mut State, action: Mutation) {
@@ -1000,6 +1165,172 @@ fn browser_mark(name: &str, theme: ThemeStyle<'_>) -> El {
     }
 }
 
+#[derive(Clone, Copy)]
+enum VmAllowance {
+    Run,
+    Clone,
+}
+
+fn vm_allowance_button(
+    index: usize,
+    item: &VirtualMachineItem,
+    allowance: VmAllowance,
+    state: &State,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let (key, name, active, outline, filled) = match allowance {
+        VmAllowance::Run => (
+            "run",
+            "Can Run",
+            item.machine.can_run,
+            &VM_RUN,
+            &VM_RUN_FILLED,
+        ),
+        VmAllowance::Clone => (
+            "clone",
+            "Can Clone",
+            item.machine.can_clone,
+            &VM_CLONE,
+            &VM_CLONE_FILLED,
+        ),
+    };
+    let mut button = el()
+        .key(format!("fleet-vm-{key}-{index}"))
+        .role("button")
+        .label(format!(
+            "{} {name} allowance: {}",
+            item.machine.name,
+            if active { "On" } else { "Off" }
+        ))
+        .help(format!("{name}: {}", if active { "On" } else { "Off" }))
+        .size(26.0, 26.0)
+        .center()
+        .radius(8.0)
+        .continuous_corners()
+        .hover(theme.color("#303030"))
+        .child(
+            icon(if active { filled } else { outline }, 17.0).color(theme.color(if active {
+                "#e9c873"
+            } else {
+                "#bdbdbd"
+            })),
+        );
+    if !state.fleet.vm_busy {
+        let mut action = virtual_machine_mutation(item);
+        match allowance {
+            VmAllowance::Run => action.can_run = !active,
+            VmAllowance::Clone => action.can_clone = !active,
+        }
+        button = button.on_press(move |state: &mut State| {
+            start_virtual_machine_mutation(state, action.clone());
+        });
+    }
+    button
+}
+
+fn virtual_machine_card(
+    index: usize,
+    item: &VirtualMachineItem,
+    state: &State,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let enabled = item.machine.enabled;
+    let mut toggle = toggle_button(
+        format!("fleet-vm-toggle-{index}"),
+        format!("{} virtual machine", item.machine.name),
+        enabled,
+        !state.fleet.vm_busy,
+        theme,
+    );
+    if !state.fleet.vm_busy {
+        let mut action = virtual_machine_mutation(item);
+        action.enabled = !enabled;
+        toggle = toggle.on_press(move |state: &mut State| {
+            start_virtual_machine_mutation(state, action.clone());
+        });
+    }
+    let footer = row()
+        .w_full()
+        .pt(12.0)
+        .center_y()
+        .child(toggle)
+        .child(if enabled {
+            let menu = SelectionMenu::VirtualMachineWorkspaces { index };
+            workspace_scope_button(
+                workspace_scope_label(
+                    state,
+                    item.machine.all_workspaces,
+                    &item.machine.workspace_ids,
+                ),
+                state.selection_menu == Some(menu),
+                move |state| crate::toggle_selection_menu(state, menu),
+                theme,
+            )
+            .key(format!("fleet-vm-scope-{index}"))
+            .ml(5.0)
+            .min_w(0.0)
+            .max_w(140.0)
+        } else {
+            el().size(0.0, 0.0)
+        })
+        .child(el().grow(1.0))
+        .child(vm_allowance_button(
+            index,
+            item,
+            VmAllowance::Run,
+            state,
+            theme,
+        ))
+        .child(vm_allowance_button(index, item, VmAllowance::Clone, state, theme).mr(-5.0));
+    col()
+        .key(format!(
+            "fleet-vm-card-{}-{}",
+            item.host_id, item.machine.id
+        ))
+        .w_full()
+        .min_w(0.0)
+        .min_h(170.0)
+        .px(12.0)
+        .pt(16.0)
+        .pb(14.0)
+        .radius(24.0)
+        .continuous_corners()
+        .border(1.0, theme.color("#303030"))
+        .child(
+            row()
+                .w_full()
+                .gap(10.0)
+                .center_y()
+                .child(
+                    el().size(40.0, 40.0)
+                        .center()
+                        .radius(12.0)
+                        .continuous_corners()
+                        .fill(theme.color("#273e58"))
+                        .child(icon(&EXTENSION_WINDOWS, 23.0).color(theme.color("#c7dff3"))),
+                )
+                .child(
+                    text(item.machine.name.clone())
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .max_lines(2)
+                        .font(ui_font(16.0, 600.0))
+                        .color(theme.color("#f2f2f2")),
+                ),
+        )
+        .child(stat_block(
+            [
+                stat_row("Host", item.host_name.clone(), theme),
+                stat_row("Status", item.machine.state.clone(), theme),
+                stat_row("Source", item.machine.provider.clone(), theme),
+                stat_row("Generation", item.machine.generation.to_string(), theme),
+            ],
+            12.0,
+            theme,
+        ))
+        .child(footer)
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> Vec<El> {
     let section = state.fleet_section;
     let title = text(section.label())
@@ -1072,6 +1403,15 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
                 .color(theme.color("#e07676")),
         );
     }
+    if section == FleetSection::VirtualMachines && !state.fleet.vm_error.is_empty() {
+        content.push(
+            text(state.fleet.vm_error.clone())
+                .key("fleet-vm-error")
+                .mt(10.0)
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#e07676")),
+        );
+    }
     let mut cards = row()
         .key("fleet-cards")
         .w_full()
@@ -1124,6 +1464,25 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             cards = cards.child(browser_card(index, item, state, theme));
         }
     }
+    if section == FleetSection::VirtualMachines {
+        for (index, item) in state
+            .fleet
+            .virtual_machines
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                let running = item.machine.state.starts_with("Running");
+                match state.fleet.tab {
+                    FleetTab::All => true,
+                    FleetTab::Available => running,
+                    FleetTab::Enabled => !running,
+                }
+            })
+        {
+            count += 1;
+            cards = cards.child(virtual_machine_card(index, item, state, theme));
+        }
+    }
     if count == 0 {
         let empty = match (section, state.fleet.tab) {
             (FleetSection::AppServers, FleetTab::All) if state.fleet.loading => {
@@ -1136,7 +1495,14 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, page_width: f32) -> V
             (FleetSection::Browsers, FleetTab::Enabled) => "No manually added browsers.",
             (FleetSection::Browsers, FleetTab::Available) => "No browsers detected.",
             (FleetSection::Browsers, _) => "No browsers available.",
-            (FleetSection::VirtualMachines, _) => "No virtual machines available.",
+            (FleetSection::VirtualMachines, _) if state.fleet.vm_loading => {
+                "Loading virtual machines…"
+            }
+            (FleetSection::VirtualMachines, FleetTab::Available) => "No running virtual machines.",
+            (FleetSection::VirtualMachines, FleetTab::Enabled) => {
+                "No virtual machines are stopped or paused."
+            }
+            (FleetSection::VirtualMachines, _) => "No virtual machines detected.",
         };
         cards = cards.child(
             text(empty)
@@ -1852,6 +2218,62 @@ mod tests {
             runtime
                 .find("fleet-browser-preferred-local-detected:example")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn hyper_v_card_uses_fleet_card_layout() {
+        let item = VirtualMachineItem {
+            host_id: "local".to_owned(),
+            host_name: "Local App Server".to_owned(),
+            machine: beale_contracts::v1::FleetVirtualMachine {
+                id: "hyper-v:00000000-0000-4000-8000-000000000001".to_owned(),
+                name: "Example VM".to_owned(),
+                provider: "Hyper-V".to_owned(),
+                state: "Off".to_owned(),
+                generation: 2,
+                enabled: true,
+                all_workspaces: true,
+                workspace_ids: Vec::new(),
+                can_run: false,
+                can_clone: false,
+            },
+        };
+        let mut state = State::default();
+        state.fleet.virtual_machines.push(item);
+        assert!(vm_workspace_scope_items(&state, 0)[0].selected);
+        assert!(!state.fleet.virtual_machines[0].machine.can_run);
+        assert!(!state.fleet.virtual_machines[0].machine.can_clone);
+        let mut runtime = Runtime::new(
+            state,
+            |state, _| {
+                virtual_machine_card(
+                    0,
+                    &state.fleet.virtual_machines[0],
+                    state,
+                    state.appearance.style(),
+                )
+            },
+            (300.0, 240.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .find("fleet-vm-card-local-hyper-v:00000000-0000-4000-8000-000000000001")
+                .is_some()
+        );
+        assert!(runtime.find("fleet-vm-toggle-0").is_some());
+        assert!(runtime.find("fleet-vm-scope-0").is_some());
+        assert!(runtime.find("fleet-vm-run-0").is_some());
+        assert!(runtime.find("fleet-vm-clone-0").is_some());
+        assert_eq!(
+            FleetTab::Available.label(FleetSection::VirtualMachines),
+            "Running"
+        );
+        assert_eq!(
+            FleetTab::Enabled.label(FleetSection::VirtualMachines),
+            "Not Running"
         );
     }
 

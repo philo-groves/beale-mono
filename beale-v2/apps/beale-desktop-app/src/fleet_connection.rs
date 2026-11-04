@@ -3,12 +3,14 @@
 use beale_contracts::{
     FLEET_BROWSER_PREFERRED_PATH, FLEET_BROWSER_REMOVE_PATH, FLEET_BROWSER_SETTINGS_PATH,
     FLEET_BROWSERS_PATH, FLEET_DESCRIPTOR_PATH, FLEET_PAIR_PATH, FLEET_TOTP_PROVISION_PATH,
-    PROTOBUF_CONTENT_TYPE, PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
+    FLEET_VIRTUAL_MACHINE_SETTINGS_PATH, FLEET_VIRTUAL_MACHINES_PATH, PROTOBUF_CONTENT_TYPE,
+    PROTOCOL_MAJOR, PROTOCOL_MINOR, SERVICE_NAME,
     v1::{
         FleetAddBrowserRequest, FleetAppServerDescriptor, FleetBrowser, FleetBrowsersResponse,
         FleetPairingRequest, FleetPairingResponse, FleetRemoveBrowserRequest,
         FleetSetBrowserSettingsRequest, FleetSetPreferredBrowserRequest,
-        FleetTotpProvisioningResponse,
+        FleetSetVirtualMachineSettingsRequest, FleetTotpProvisioningResponse, FleetVirtualMachine,
+        FleetVirtualMachinesResponse,
     },
 };
 use futures_util::future::join_all;
@@ -68,6 +70,30 @@ pub(crate) struct BrowserSnapshot {
     pub(crate) items: Vec<BrowserItem>,
     pub(crate) servers: Vec<FleetServer>,
     pub(crate) error: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct VirtualMachineItem {
+    pub(crate) host_id: String,
+    pub(crate) host_name: String,
+    pub(crate) machine: FleetVirtualMachine,
+}
+
+pub(crate) struct VirtualMachineSnapshot {
+    pub(crate) items: Vec<VirtualMachineItem>,
+    pub(crate) servers: Vec<FleetServer>,
+    pub(crate) error: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct VirtualMachineMutation {
+    pub(crate) host_id: String,
+    pub(crate) id: String,
+    pub(crate) enabled: bool,
+    pub(crate) all_workspaces: bool,
+    pub(crate) workspace_ids: Vec<String>,
+    pub(crate) can_run: bool,
+    pub(crate) can_clone: bool,
 }
 
 pub(crate) enum BrowserMutation {
@@ -902,6 +928,185 @@ pub(crate) async fn load_browsers() -> BrowserSnapshot {
         items,
         servers,
         error: errors.join(" "),
+    }
+}
+
+async fn fetch_virtual_machines(
+    client: &Client,
+    base: &str,
+    token: &str,
+) -> Result<Vec<FleetVirtualMachine>, String> {
+    let response = client
+        .get(format!("{base}{FLEET_VIRTUAL_MACHINES_PATH}"))
+        .bearer_auth(token)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|_| "Could not reach app-server VM inventory.".to_owned())?;
+    if !response.status().is_success()
+        || response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some(PROTOBUF_CONTENT_TYPE)
+    {
+        return Err("App-server VM inventory is unavailable.".to_owned());
+    }
+    let response = FleetVirtualMachinesResponse::decode(read_bounded(response).await?.as_slice())
+        .map_err(|_| "Invalid app-server VM inventory.".to_owned())?;
+    if response.virtual_machines.len() > 256
+        || response.virtual_machines.iter().any(|machine| {
+            machine
+                .id
+                .strip_prefix("hyper-v:")
+                .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+                || !valid_text(&machine.name, 120)
+                || machine.provider != "Hyper-V"
+                || !valid_text(&machine.state, 40)
+                || !matches!(machine.generation, 1 | 2)
+                || machine.workspace_ids.len() > 128
+                || (machine.all_workspaces && !machine.workspace_ids.is_empty())
+                || machine
+                    .workspace_ids
+                    .iter()
+                    .any(|id| uuid::Uuid::parse_str(id).is_err())
+                || machine.workspace_ids.iter().collect::<HashSet<_>>().len()
+                    != machine.workspace_ids.len()
+        })
+        || response
+            .virtual_machines
+            .iter()
+            .map(|machine| &machine.id)
+            .collect::<HashSet<_>>()
+            .len()
+            != response.virtual_machines.len()
+    {
+        return Err("Invalid app-server VM inventory.".to_owned());
+    }
+    Ok(response.virtual_machines)
+}
+
+pub(crate) async fn load_virtual_machines() -> VirtualMachineSnapshot {
+    let mut items = Vec::new();
+    let mut errors = Vec::new();
+    let mut servers = Vec::new();
+    match local_browser_client().await {
+        Ok((client, base, token)) => match fetch_virtual_machines(&client, &base, &token).await {
+            Ok(machines) => items.extend(machines.into_iter().map(|machine| VirtualMachineItem {
+                host_id: "local".to_owned(),
+                host_name: "Local App Server".to_owned(),
+                machine,
+            })),
+            Err(error) => errors.push(error),
+        },
+        Err(error) => errors.push(error),
+    }
+    match read_saved() {
+        Ok(saved) => {
+            servers = saved.servers;
+            let enabled = servers
+                .iter()
+                .filter(|server| server.enabled)
+                .collect::<Vec<_>>();
+            let status = if enabled.is_empty() {
+                None
+            } else {
+                Some(tailnet_status().await)
+            };
+            let remote = join_all(enabled.into_iter().map(|server| {
+                let status = status.as_ref();
+                async move {
+                    let result = match status {
+                        Some(Ok(status)) => {
+                            let mut verified = server.clone();
+                            match probe(&mut verified, status).await {
+                                Ok(()) => match remote_client(&server.endpoint, status) {
+                                    Ok(client) => {
+                                        fetch_virtual_machines(
+                                            &client,
+                                            &server.endpoint,
+                                            &server.token,
+                                        )
+                                        .await
+                                    }
+                                    Err(error) => Err(error),
+                                },
+                                Err(error) => Err(error),
+                            }
+                        }
+                        Some(Err(error)) => Err(error.clone()),
+                        None => Err("Tailscale status is unavailable.".to_owned()),
+                    };
+                    (server, result)
+                }
+            }))
+            .await;
+            for (server, result) in remote {
+                match result {
+                    Ok(machines) => {
+                        items.extend(machines.into_iter().map(|machine| VirtualMachineItem {
+                            host_id: server.id.clone(),
+                            host_name: if server.display_name.is_empty() {
+                                server.host_name.clone()
+                            } else {
+                                server.display_name.clone()
+                            },
+                            machine,
+                        }))
+                    }
+                    Err(_) => errors.push(format!(
+                        "VM inventory unavailable on {}.",
+                        if server.display_name.is_empty() {
+                            &server.host_name
+                        } else {
+                            &server.display_name
+                        }
+                    )),
+                }
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    items.sort_by(|left, right| {
+        left.machine
+            .name
+            .cmp(&right.machine.name)
+            .then(left.host_name.cmp(&right.host_name))
+    });
+    VirtualMachineSnapshot {
+        items,
+        servers,
+        error: errors.join(" "),
+    }
+}
+
+pub(crate) async fn mutate_virtual_machine(action: VirtualMachineMutation) -> Result<(), String> {
+    let (client, base, token) = browser_client(&action.host_id).await?;
+    let request = FleetSetVirtualMachineSettingsRequest {
+        id: action.id,
+        enabled: action.enabled,
+        all_workspaces: action.all_workspaces,
+        workspace_ids: action.workspace_ids,
+        can_run: action.can_run,
+        can_clone: action.can_clone,
+    };
+    let response = client
+        .post(format!("{base}{FLEET_VIRTUAL_MACHINE_SETTINGS_PATH}"))
+        .bearer_auth(token)
+        .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+        .timeout(Duration::from_secs(15))
+        .body(request.encode_to_vec())
+        .send()
+        .await
+        .map_err(|_| "Could not reach app-server VM settings.".to_owned())?;
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(()),
+        reqwest::StatusCode::BAD_REQUEST => Err("Invalid VM workspace selection.".to_owned()),
+        reqwest::StatusCode::NOT_FOUND => Err("Virtual machine is no longer available.".to_owned()),
+        reqwest::StatusCode::FORBIDDEN => {
+            Err("Fleet is disabled on the selected app server.".to_owned())
+        }
+        _ => Err("Could not update app-server VM settings.".to_owned()),
     }
 }
 

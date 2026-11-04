@@ -570,3 +570,29 @@ message FleetSetBrowserSettingsRequest {
 message FleetSetPreferredBrowserRequest {
   string id = 1;
 }
+
+message FleetVirtualMachine {
+  string id = 1;
+  string name = 2;
+  string provider = 3;
+  string state = 4;
+  uint32 generation = 5;
+  bool enabled = 6;
+  bool all_workspaces = 7;
+  repeated string workspace_ids = 8;
+  bool can_run = 9;
+  bool can_clone = 10;
+}
+
+message FleetVirtualMachinesResponse {
+  repeated FleetVirtualMachine virtual_machines = 1;
+}
+
+message FleetSetVirtualMachineSettingsRequest {
+  string id = 1;
+  bool enabled = 2;
+  bool all_workspaces = 3;
+  repeated string workspace_ids = 4;
+  bool can_run = 5;
+  bool can_clone = 6;
+}

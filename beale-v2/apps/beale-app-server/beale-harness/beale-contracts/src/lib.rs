@@ -920,10 +920,56 @@ pub mod v1 {
         #[prost(string, tag = "1")]
         pub id: String,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetVirtualMachine {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(string, tag = "3")]
+        pub provider: String,
+        #[prost(string, tag = "4")]
+        pub state: String,
+        #[prost(uint32, tag = "5")]
+        pub generation: u32,
+        #[prost(bool, tag = "6")]
+        pub enabled: bool,
+        #[prost(bool, tag = "7")]
+        pub all_workspaces: bool,
+        #[prost(string, repeated, tag = "8")]
+        pub workspace_ids: Vec<String>,
+        #[prost(bool, tag = "9")]
+        pub can_run: bool,
+        #[prost(bool, tag = "10")]
+        pub can_clone: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetVirtualMachinesResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub virtual_machines: Vec<FleetVirtualMachine>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FleetSetVirtualMachineSettingsRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(bool, tag = "2")]
+        pub enabled: bool,
+        #[prost(bool, tag = "3")]
+        pub all_workspaces: bool,
+        #[prost(string, repeated, tag = "4")]
+        pub workspace_ids: Vec<String>,
+        #[prost(bool, tag = "5")]
+        pub can_run: bool,
+        #[prost(bool, tag = "6")]
+        pub can_clone: bool,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 40;
+pub const PROTOCOL_MINOR: u32 = 42;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -969,6 +1015,8 @@ pub const FLEET_BROWSERS_PATH: &str = "/v1/fleet/browsers";
 pub const FLEET_BROWSER_SETTINGS_PATH: &str = "/v1/fleet/browsers/settings";
 pub const FLEET_BROWSER_PREFERRED_PATH: &str = "/v1/fleet/browsers/preferred";
 pub const FLEET_BROWSER_REMOVE_PATH: &str = "/v1/fleet/browsers/remove";
+pub const FLEET_VIRTUAL_MACHINES_PATH: &str = "/v1/fleet/virtual-machines";
+pub const FLEET_VIRTUAL_MACHINE_SETTINGS_PATH: &str = "/v1/fleet/virtual-machines/settings";
 pub const PLUGIN_INSTALL_PATH: &str = "/v1/plugins/install";
 pub const PLUGIN_UNINSTALL_PATH: &str = "/v1/plugins/uninstall";
 pub const PLUGIN_MANIFEST_PATH: &str = "/v1/plugins/manifest";

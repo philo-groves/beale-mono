@@ -8,6 +8,4 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 rusqlite.workspace = true
-
-[dev-dependencies]
 uuid.workspace = true
