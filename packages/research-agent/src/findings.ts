@@ -710,8 +710,9 @@ export class ResearchClaimStore {
     if (!current) throw new Error(`Research claim not found: ${id}.`);
     requireCanonicalClaim(current);
     if (current.revision !== input.expectedRevision) throw new Error(`Research claim revision conflict for ${id}.`);
-    if (current.status !== "verified" || current.securityTracking?.reportability?.decision !== "reportable") {
-      throw new Error("Triage packets require a verified, reportable security finding.");
+    if (!["verified", "report_ready"].includes(current.status)
+      || current.securityTracking?.reportability?.decision !== "reportable") {
+      throw new Error("Triage packets require a verified or report-ready, reportable security finding.");
     }
     if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > 128 * 1024 * 1024
       || !/^sha256:[a-f0-9]{64}$/u.test(input.contentHash)) {

@@ -21,6 +21,7 @@
 #### Fixed
 
 - The app-server research-tool bridge exposes `triage.package` whenever security reporting and runbooks are enabled, matching the managed Reporting tool catalog.
+- Report-ready findings can re-accept a repaired portable PoC packet against an existing successful current replay without changing the finding verdict or status.
 
 ## 0.9.6
 

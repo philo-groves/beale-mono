@@ -428,10 +428,33 @@ test('verified findings flow through policy triage, portable replay packet, and 
     outcome = await reportTools.execute({ id: 'report-after-triage', toolName: 'report.create',
       actionClass: 'synthesize', input: reportInput });
     assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
-    assert.equal(outcome.result.output.report.submissionPacket.contentHash, finding.securityTracking.triage.packet.contentHash);
-    assert.equal(outcome.result.output.sourceFinding.status, 'report_ready');
+    const createdReport = outcome.result.output.report;
+    finding = outcome.result.output.sourceFinding;
+    assert.equal(createdReport.submissionPacket.contentHash, finding.securityTracking.triage.packet.contentHash);
+    assert.equal(finding.status, 'report_ready');
     state.funnel.finishSession('epoch-report');
     assert.deepEqual(state.funnel.reserveForSession('epoch-done', 3), []);
+
+    const reportDocument = state.reports.get(createdReport.id);
+    const repairedReport = state.reports.revise({
+      id: reportDocument.id,
+      expectedRevision: reportDocument.revision,
+      content: reportDocument.content,
+      summary: reportDocument.summary,
+      status: reportDocument.status,
+      submissionPacketPath: packetPath,
+    }).report;
+    assert.notEqual(repairedReport.submissionPacket.contentHash, finding.securityTracking.triage.packet.contentHash);
+
+    outcome = await triageTools.execute({ id: 'triage-repair-report-ready-example', toolName: 'triage.package',
+      actionClass: 'synthesize', input: { claimId: finding.id, expectedRevision: finding.revision,
+        packetPath, replayRunId: 'example-portable-run',
+        reason: 'Re-accept the repaired report packet against its existing successful replay.' } });
+    assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
+    finding = outcome.result.output.finding;
+    assert.equal(finding.status, 'report_ready');
+    assert.equal(finding.securityTracking.triage.packet.contentHash, repairedReport.submissionPacket.contentHash);
+    assert.deepEqual(state.funnel.reserveForSession('epoch-repaired-report-ready', 3), []);
   } finally { await state.close(); }
 });
 
