@@ -2,8 +2,8 @@ use beale_contracts::v1::{
     AuthMethod, ReasoningEffort, SessionRole, SessionStreamKind, SessionToolSummary,
 };
 use rune::{
-    Align, Color, El, Key, KeyEvent, ScrollSpec, Side, Transition, Tx, col, el, icon, row, text,
-    text_input,
+    Align, Color, El, Key, KeyEvent, ScrollSpec, Side, TextEdit, Transition, Tx, col, el, icon,
+    row, text, text_input,
 };
 use rune_kit::{Markdown, MarkdownStyle};
 
@@ -13,7 +13,7 @@ use crate::{
         ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT,
         TERMINAL, WRENCH,
     },
-    in_place_menu, load_tool_detail_page, start_session_turn, toggle_selection_menu,
+    in_place_menu, input_history, load_tool_detail_page, start_session_turn, toggle_selection_menu,
     toggle_tool_detail, ui_font,
 };
 
@@ -828,7 +828,37 @@ fn live_tool(tool: &SessionToolSummary, finished: bool, theme: ThemeStyle<'_>) -
         )
 }
 
+fn previous_input(state: &mut State) {
+    let entries = state
+        .active_session
+        .as_ref()
+        .map(|detail| input_history::session_entries(&detail.messages))
+        .unwrap_or_default();
+    if let Some(value) = state
+        .session_input_history
+        .previous(&entries, &state.new_research_prompt.text)
+    {
+        state.new_research_prompt = TextEdit::new(value);
+    }
+}
+
+fn next_input(state: &mut State) {
+    let entries = state
+        .active_session
+        .as_ref()
+        .map(|detail| input_history::session_entries(&detail.messages))
+        .unwrap_or_default();
+    if let Some(value) = state.session_input_history.next(&entries) {
+        state.new_research_prompt = TextEdit::new(value);
+    }
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
+    let history_entries = state
+        .active_session
+        .as_ref()
+        .map(|detail| input_history::session_entries(&detail.messages))
+        .unwrap_or_default();
     let has_workspaces = !state.workspaces.is_empty();
     let no_workspaces = state.workspace_list_loaded && !has_workspaces;
     let choices = choices(state);
@@ -918,6 +948,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             .color(theme.color("#eeeeee"))
             .placeholder("Research with Beale", theme.color("#888888"))
             .on_edit(|state: &mut State| &mut state.new_research_prompt)
+            .on_input_change(|state: &mut State, _| state.session_input_history.reset())
             .on_submit(|state: &mut State, _| state.new_research_prompt.insert("\n"))
     } else {
         el().key("new-research-composer-input")
@@ -958,6 +989,31 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
                 .center_y()
                 .child(model_button)
                 .child(el().grow(1.0))
+                .child(
+                    row()
+                        .gap(2.0)
+                        .mr(7.0)
+                        .child(input_history::button(
+                            "session-history-previous",
+                            "Previous sent message",
+                            &CHEVRON_UP,
+                            state
+                                .session_input_history
+                                .can_previous(history_entries.len()),
+                            ("#bdbdbd", "#686868"),
+                            theme,
+                            previous_input,
+                        ))
+                        .child(input_history::button(
+                            "session-history-next",
+                            "Next sent message",
+                            &CHEVRON_DOWN,
+                            state.session_input_history.can_next(),
+                            ("#bdbdbd", "#686868"),
+                            theme,
+                            next_input,
+                        )),
+                )
                 .child({
                     let available = has_workspaces
                         && !state.new_research_prompt.text.trim().is_empty()

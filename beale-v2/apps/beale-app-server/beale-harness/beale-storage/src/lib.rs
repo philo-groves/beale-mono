@@ -115,7 +115,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 10 {
+        if version > 11 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -254,6 +254,16 @@ impl HostDatabase {
                  COMMIT;",
             )?;
         }
+        if version < 11 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE plugin_installs (
+                     name TEXT PRIMARY KEY, installed_at_ms INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 11;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
 
@@ -263,6 +273,31 @@ impl HostDatabase {
             .lock()
             .map_err(|_| anyhow::anyhow!("host database lock poisoned"))?;
         action(&mut connection)
+    }
+
+    pub fn installed_plugin_names(&self) -> Result<Vec<String>> {
+        self.with_connection(|connection| {
+            let mut statement =
+                connection.prepare("SELECT name FROM plugin_installs ORDER BY name")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn install_plugin(&self, name: &str, installed_at_ms: i64) -> Result<bool> {
+        self.with_connection(|connection| {
+            Ok(connection.execute(
+                "INSERT OR IGNORE INTO plugin_installs(name, installed_at_ms) VALUES (?1, ?2)",
+                params![name, installed_at_ms],
+            )? > 0)
+        })
+    }
+
+    pub fn uninstall_plugin(&self, name: &str) -> Result<bool> {
+        self.with_connection(|connection| {
+            Ok(connection.execute("DELETE FROM plugin_installs WHERE name = ?1", [name])? > 0)
+        })
     }
 
     pub fn workspaces(&self) -> Result<Vec<WorkspaceRow>> {
@@ -961,7 +996,8 @@ mod tests {
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE quick_chat_contexts;
+                "DROP TABLE plugin_installs;
+                 DROP TABLE quick_chat_contexts;
                  ALTER TABLE sessions DROP COLUMN archived_at_ms;
                  ALTER TABLE permission_rules DROP COLUMN title;
                  ALTER TABLE permission_rules DROP COLUMN stage;
@@ -992,7 +1028,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 11;")
+            .execute_batch("PRAGMA user_version = 12;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -1000,8 +1036,36 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_eleven_adds_plugin_install_registry() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        db.save_permission_rule("auto-scope", "Scope", "Example instruction", true)
+            .unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch("DROP TABLE plugin_installs; PRAGMA user_version = 10;")
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        assert!(migrated.installed_plugin_names().unwrap().is_empty());
+        assert!(migrated.install_plugin("example-plugin", 123).unwrap());
+        assert!(!migrated.install_plugin("example-plugin", 456).unwrap());
+        assert_eq!(
+            migrated.installed_plugin_names().unwrap(),
+            ["example-plugin"]
+        );
+        assert_eq!(
+            migrated.permission_rule("auto-scope").unwrap().unwrap().0,
+            "Scope"
+        );
+        drop(migrated);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1015,7 +1079,8 @@ mod tests {
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
             .execute_batch(
-                "ALTER TABLE permission_rules DROP COLUMN title;
+                "DROP TABLE plugin_installs;
+                 ALTER TABLE permission_rules DROP COLUMN title;
                  ALTER TABLE permission_rules DROP COLUMN stage;
                  ALTER TABLE permission_rules DROP COLUMN position;
                  PRAGMA user_version = 8;",
@@ -1051,7 +1116,8 @@ mod tests {
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
             .execute_batch(
-                "ALTER TABLE permission_rules DROP COLUMN stage;
+                "DROP TABLE plugin_installs;
+                 ALTER TABLE permission_rules DROP COLUMN stage;
                  ALTER TABLE permission_rules DROP COLUMN position;
                  PRAGMA user_version = 9;",
             )

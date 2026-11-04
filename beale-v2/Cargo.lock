@@ -217,6 +217,7 @@ dependencies = [
  "anyhow",
  "axum",
  "beale-contracts",
+ "beale-extender",
  "beale-providers",
  "beale-safety",
  "beale-sessions",
@@ -243,6 +244,21 @@ dependencies = [
  "tokio",
  "uuid",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "beale-extender"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "beale-contracts",
+ "beale-storage",
+ "prost",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

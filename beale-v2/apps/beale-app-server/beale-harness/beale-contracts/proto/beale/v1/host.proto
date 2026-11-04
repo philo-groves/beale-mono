@@ -373,3 +373,23 @@ message CreatePermissionRuleRequest {
   string title = 2;
   string instruction = 3;
 }
+
+message PluginSummary {
+  string name = 1;
+  string description = 2;
+  bool installed = 3;
+  uint32 skill_count = 4;
+  bool has_mcp_server = 5;
+}
+
+message ListPluginsResponse {
+  repeated PluginSummary plugins = 1;
+}
+
+message InstallPluginRequest {
+  string name = 1;
+}
+
+message UninstallPluginRequest {
+  string name = 1;
+}

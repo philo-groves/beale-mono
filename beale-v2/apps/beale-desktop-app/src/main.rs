@@ -10,10 +10,12 @@ mod archive_view;
 mod color_picker;
 mod connection;
 mod desktop_fonts;
+mod extensions_view;
 mod form_controls;
 mod home_sidebar;
 mod icons;
 mod in_place_menu;
+mod input_history;
 mod modal_dialog;
 mod new_research;
 mod permission_settings;
@@ -450,6 +452,7 @@ enum PrimaryView {
     NewResearch,
     WorkspaceCreation,
     Workspace,
+    Extensions,
     Settings,
 }
 
@@ -459,6 +462,10 @@ enum ViewLocation {
     NewResearch,
     WorkspaceCreation(workspace_creation::CreationTab),
     Workspace(uuid::Uuid, workspace_view::WorkspaceTab),
+    Extensions(
+        extensions_view::ExtensionSection,
+        extensions_view::PluginTab,
+    ),
     Providers(Provider),
     Appearance(AppearanceTab),
     Safety(permission_settings::PermissionTab),
@@ -486,12 +493,14 @@ struct State {
     primary_view: PrimaryView,
     home_collection: home_sidebar::HomeCollection,
     new_research_prompt: TextEdit,
+    session_input_history: input_history::InputHistory,
     new_research_workspace_id: Option<String>,
     new_research_model: Option<new_research::ModelSelection>,
     new_research_effort: new_research::Effort,
     new_research_repeat: new_research::RepeatPreset,
     quick_chat_open: bool,
     quick_chat_draft: TextEdit,
+    quick_chat_input_history: input_history::InputHistory,
     quick_chat_id: Option<String>,
     quick_chat_title: String,
     quick_chat_workspace_id: Option<String>,
@@ -562,6 +571,16 @@ struct State {
     workspace_save_error: String,
     workspace_save_message: String,
     selected: Provider,
+    extensions_section: extensions_view::ExtensionSection,
+    plugin_tab: extensions_view::PluginTab,
+    plugins: Vec<extensions_view::PluginEntry>,
+    plugin_loading: bool,
+    plugin_error: String,
+    plugin_installing: Option<String>,
+    plugin_uninstalling: Option<String>,
+    plugin_generation: u64,
+    plugin_add_dialog_open: bool,
+    plugin_source_edit: TextEdit,
     settings_section: SettingsSection,
     appearance_tab: AppearanceTab,
     permissions_tab: permission_settings::PermissionTab,
@@ -626,12 +645,14 @@ impl Default for State {
             primary_view: PrimaryView::Settings,
             home_collection: home_sidebar::HomeCollection::default(),
             new_research_prompt: TextEdit::new(""),
+            session_input_history: input_history::InputHistory::default(),
             new_research_workspace_id: None,
             new_research_model: None,
             new_research_effort: new_research::Effort::default(),
             new_research_repeat: new_research::RepeatPreset::default(),
             quick_chat_open: false,
             quick_chat_draft: TextEdit::new(""),
+            quick_chat_input_history: input_history::InputHistory::default(),
             quick_chat_id: None,
             quick_chat_title: "Quick Chat".to_owned(),
             quick_chat_workspace_id: None,
@@ -702,6 +723,16 @@ impl Default for State {
             workspace_save_error: String::new(),
             workspace_save_message: String::new(),
             selected: Provider::OpenAi,
+            extensions_section: extensions_view::ExtensionSection::default(),
+            plugin_tab: extensions_view::PluginTab::default(),
+            plugins: extensions_view::bundled_plugins(),
+            plugin_loading: false,
+            plugin_error: String::new(),
+            plugin_installing: None,
+            plugin_uninstalling: None,
+            plugin_generation: 0,
+            plugin_add_dialog_open: false,
+            plugin_source_edit: TextEdit::new(""),
             settings_section: SettingsSection::Safety,
             appearance_tab: AppearanceTab::Colors,
             permissions_tab: permission_settings::PermissionTab::AutoReview,
@@ -798,6 +829,7 @@ impl State {
         self.quick_chat_busy = false;
         self.quick_chat_error.clear();
         self.quick_chat_draft.clear();
+        self.quick_chat_input_history.reset();
         if self.selection_menu == Some(SelectionMenu::QuickChatWorkspace) {
             self.selection_menu = None;
         }
@@ -838,6 +870,9 @@ impl State {
         {
             return ViewLocation::Workspace(id, self.workspace_tab);
         }
+        if self.primary_view == PrimaryView::Extensions {
+            return ViewLocation::Extensions(self.extensions_section, self.plugin_tab);
+        }
         match self.settings_section {
             SettingsSection::Providers => ViewLocation::Providers(self.selected),
             SettingsSection::Appearance => ViewLocation::Appearance(self.appearance_tab),
@@ -864,6 +899,11 @@ impl State {
                     load_workspace = Some(id);
                 }
             }
+            ViewLocation::Extensions(section, tab) => {
+                self.primary_view = PrimaryView::Extensions;
+                self.extensions_section = section;
+                self.plugin_tab = tab;
+            }
             ViewLocation::Providers(provider) => {
                 self.primary_view = PrimaryView::Settings;
                 self.settings_section = SettingsSection::Providers;
@@ -885,6 +925,8 @@ impl State {
             }
         }
         self.notice = None;
+        self.plugin_add_dialog_open = false;
+        self.plugin_source_edit.clear();
         self.selection_menu = None;
         self.composer_menu_open = false;
         self.color_picker = None;
@@ -919,6 +961,9 @@ impl State {
             && self.settings_section == SettingsSection::Safety
         {
             permission_settings::start_load(self);
+        }
+        if self.primary_view == PrimaryView::Extensions {
+            extensions_view::start_load(self);
         }
     }
 
@@ -956,6 +1001,7 @@ impl State {
     }
 
     fn start_new_research(&mut self) {
+        self.session_input_history.reset();
         self.clear_tool_detail();
         self.session_live_events.clear();
         self.session_elapsed_ms = 0;
@@ -1497,6 +1543,7 @@ fn start_session_turn(state: &mut State) {
     state.session_elapsed_ms = 0;
     state.session_pending_prompt = Some(prompt);
     state.new_research_prompt.clear();
+    state.session_input_history.reset();
     let timer_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let timer_handle = handle.clone();
     let timer_flag = timer_running.clone();
@@ -1561,6 +1608,7 @@ fn start_session_load(state: &mut State, id: String) {
         .map(|summary| summary.workspace_id.clone());
     state.active_session = None;
     state.new_research_prompt.clear();
+    state.session_input_history.reset();
     state.navigate_to(ViewLocation::NewResearch);
     std::thread::spawn(move || {
         let result = (|| {
@@ -2828,6 +2876,24 @@ fn header(state: &State, prefix_width: f32) -> El {
                     .font(ui_font(13.0, 400.0))
                     .color(color("#aaaaaa")),
             );
+    } else if state.primary_view == PrimaryView::Extensions {
+        title = title
+            .child(
+                el().key("header-divider")
+                    .size(1.0, 18.0)
+                    .fill(color("#555555")),
+            )
+            .child(icon(&EXTENSIONS, 16.0).color(color("#c8c8c8")))
+            .child(
+                text("Extensions")
+                    .font(ui_font(13.0, 500.0))
+                    .color(color("#e2e2e2")),
+            )
+            .child(
+                text(state.extensions_section.label())
+                    .font(ui_font(13.0, 400.0))
+                    .color(color("#aaaaaa")),
+            );
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         title = title
             .child(
@@ -2969,6 +3035,11 @@ fn nav_button(
             s.rail_tooltip = None;
             s.show_section(s.settings_section);
         })
+    } else if key == "nav-extensions" {
+        button.on_press(|s: &mut State| {
+            s.rail_tooltip = None;
+            s.navigate_to(ViewLocation::Extensions(s.extensions_section, s.plugin_tab));
+        })
     } else if active {
         button.on_press(|s: &mut State| {
             s.rail_tooltip = None;
@@ -2996,7 +3067,8 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             "nav-home",
             "Home",
             &HOME,
-            state.primary_view != PrimaryView::Settings,
+            state.primary_view != PrimaryView::Settings
+                && state.primary_view != PrimaryView::Extensions,
             theme,
         ))
         .child(nav_button(
@@ -3007,7 +3079,13 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             theme,
         ))
         .child(nav_button("nav-fleet", "Fleet", &FLEET, false, theme))
-        .child(nav_button("nav-plugins", "Plugins", &PLUGINS, false, theme))
+        .child(nav_button(
+            "nav-extensions",
+            "Extensions",
+            &EXTENSIONS,
+            state.primary_view == PrimaryView::Extensions,
+            theme,
+        ))
         .child(nav_button(
             "nav-settings",
             "Agent Settings",
@@ -4505,6 +4583,16 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     .color(color("#c8c8c8")),
             );
         }
+    } else if state.primary_view == PrimaryView::Extensions {
+        content = content.child(
+            text(state.extensions_section.label())
+                .key("extensions-view-title")
+                .font(view_title_font())
+                .color(color("#f2f2f2")),
+        );
+        for item in extensions_view::render(state, theme) {
+            content = content.child(item);
+        }
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         content = content.child(workspace_creation::render(state, theme));
     } else if state.primary_view == PrimaryView::Workspace {
@@ -4524,15 +4612,17 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .fill(color("#111111"));
     if state.sidenav_visible {
         settings_surface = settings_surface
-            .child(if state.primary_view != PrimaryView::Settings {
-                home_sidebar::render(state, state.sidenav_width, theme)
-            } else {
-                settings_sidenav(
+            .child(match state.primary_view {
+                PrimaryView::Settings => settings_sidenav(
                     state.settings_section,
                     &state.connection,
                     state.sidenav_width,
                     theme,
-                )
+                ),
+                PrimaryView::Extensions => {
+                    extensions_view::sidenav(state, state.sidenav_width, theme)
+                }
+                _ => home_sidebar::render(state, state.sidenav_width, theme),
             })
             .child(el().w(1.0).h_full().fill(color("#2a2a2a")));
     }
@@ -4559,12 +4649,18 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 ),
         );
     } else {
-        let scroll_watch = if state.primary_view == PrimaryView::Settings {
+        let scroll_watch = if matches!(
+            state.primary_view,
+            PrimaryView::Settings | PrimaryView::Extensions
+        ) {
             state.settings_scroll.clone()
         } else {
             state.workspace_scroll.clone()
         };
-        let scroll_key = if state.primary_view == PrimaryView::Settings {
+        let scroll_key = if matches!(
+            state.primary_view,
+            PrimaryView::Settings | PrimaryView::Extensions
+        ) {
             "settings-scroll"
         } else {
             "workspace-scroll"
@@ -4572,6 +4668,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         let scroll_bar = scroll_watch.clone();
         let content_inset = match state.primary_view {
             PrimaryView::Settings => col().w_full().padding(36.0),
+            PrimaryView::Extensions => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Workspace => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::WorkspaceCreation => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Home | PrimaryView::NewResearch => col().w_full(),
@@ -4590,7 +4687,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     .scroll_edge_fade(16.0)
                     .on_scroll_offset(move |position| scroll_watch.watch_scroll(position))
                     .on_wheel(|state: &mut State, event, tx| {
-                        if state.primary_view == PrimaryView::Settings {
+                        if matches!(
+                            state.primary_view,
+                            PrimaryView::Settings | PrimaryView::Extensions
+                        ) {
                             state.settings_scroll.wheel(event, tx)
                         } else {
                             state.workspace_scroll.wheel(event, tx)
@@ -4713,6 +4813,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         && (state.permission_edit_id.is_some() || state.permission_creating)
     {
         for layer in permission_settings::edit_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Extensions && state.plugin_add_dialog_open {
+        for layer in extensions_view::add_dialog(state, theme) {
             window = window.child(layer);
         }
     }
@@ -5185,6 +5290,9 @@ fn main() -> std::process::ExitCode {
                         && state.settings_section == SettingsSection::Archive
                     {
                         start_archive_load(state);
+                    }
+                    if state.primary_view == PrimaryView::Extensions {
+                        extensions_view::start_load(state);
                     }
                 });
             }
@@ -6288,6 +6396,64 @@ mod tests {
     }
 
     #[test]
+    fn quick_chat_history_buttons_restore_the_current_draft() {
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::Home,
+                quick_chat_open: true,
+                quick_chat_id: Some("00000000-0000-4000-8000-000000000001".to_owned()),
+                quick_chat_draft: TextEdit::new("Unsent example"),
+                quick_chat_messages: vec![
+                    beale_contracts::v1::QuickChatMessage {
+                        role: beale_contracts::v1::SessionRole::User as i32,
+                        text: "First example".to_owned(),
+                    },
+                    beale_contracts::v1::QuickChatMessage {
+                        role: beale_contracts::v1::SessionRole::Assistant as i32,
+                        text: "First reply".to_owned(),
+                    },
+                    beale_contracts::v1::QuickChatMessage {
+                        role: beale_contracts::v1::SessionRole::User as i32,
+                        text: "Second example".to_owned(),
+                    },
+                    beale_contracts::v1::QuickChatMessage {
+                        role: beale_contracts::v1::SessionRole::Assistant as i32,
+                        text: "Second reply".to_owned(),
+                    },
+                ],
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(1.0);
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+        };
+        click(&mut runtime, "quick-chat-history-previous");
+        assert_eq!(runtime.state.quick_chat_draft.text, "Second example");
+        click(&mut runtime, "quick-chat-history-previous");
+        assert_eq!(runtime.state.quick_chat_draft.text, "First example");
+        click(&mut runtime, "quick-chat-history-next");
+        assert_eq!(runtime.state.quick_chat_draft.text, "Second example");
+        click(&mut runtime, "quick-chat-history-next");
+        assert_eq!(runtime.state.quick_chat_draft.text, "Unsent example");
+        click(&mut runtime, "quick-chat-history-previous");
+        let (x, y) = runtime.find("quick-chat-input").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.paste(" edited");
+        runtime.frame(0.0);
+        assert!(!runtime.state.quick_chat_input_history.can_next());
+        runtime.state.close_quick_chat();
+        assert!(!runtime.state.quick_chat_input_history.can_next());
+    }
+
+    #[test]
     fn home_session_archive_opens_confirmation_and_cancel_preserves_session() {
         let workspace_id = "00000000-0000-4000-8000-000000000001";
         let session_id = "00000000-0000-4000-8000-000000000002";
@@ -6781,6 +6947,79 @@ mod tests {
         reopened.frame(0.0);
         assert!(reopened.find("new-research-ribbon").is_none());
         assert!(reopened.find("new-research-composer").is_some());
+    }
+
+    #[test]
+    fn session_history_buttons_restore_the_current_draft() {
+        let workspace_id = "00000000-0000-4000-8000-000000000001";
+        let session_id = "00000000-0000-4000-8000-000000000002";
+        let mut runtime = Runtime::new(
+            State {
+                primary_view: PrimaryView::NewResearch,
+                workspaces: vec![WorkspaceSummary {
+                    id: workspace_id.to_owned(),
+                    name: "Example Workspace".to_owned(),
+                    directory: "example-directory".to_owned(),
+                }],
+                new_research_workspace_id: Some(workspace_id.to_owned()),
+                new_research_prompt: TextEdit::new("Unsent example"),
+                active_session: Some(SessionDetail {
+                    summary: Some(SessionSummary {
+                        id: session_id.to_owned(),
+                        workspace_id: workspace_id.to_owned(),
+                        title: "Example Session".to_owned(),
+                    }),
+                    messages: vec![
+                        beale_contracts::v1::SessionMessage {
+                            role: beale_contracts::v1::SessionRole::User as i32,
+                            text: "First example".to_owned(),
+                            ..Default::default()
+                        },
+                        beale_contracts::v1::SessionMessage {
+                            role: beale_contracts::v1::SessionRole::Assistant as i32,
+                            text: "First reply".to_owned(),
+                            ..Default::default()
+                        },
+                        beale_contracts::v1::SessionMessage {
+                            role: beale_contracts::v1::SessionRole::User as i32,
+                            text: "Second example".to_owned(),
+                            ..Default::default()
+                        },
+                    ],
+                    provider: ProviderId::Openai as i32,
+                    method: AuthMethod::Subscription as i32,
+                    model: "model-example".to_owned(),
+                }),
+                ..State::default()
+            },
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
+        runtime.frame(0.0);
+        let click = |runtime: &mut Runtime<State>, key: &str| {
+            let (x, y) = runtime.find(key).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+        };
+        click(&mut runtime, "session-history-previous");
+        assert_eq!(runtime.state.new_research_prompt.text, "Second example");
+        click(&mut runtime, "session-history-previous");
+        assert_eq!(runtime.state.new_research_prompt.text, "First example");
+        click(&mut runtime, "session-history-next");
+        assert_eq!(runtime.state.new_research_prompt.text, "Second example");
+        click(&mut runtime, "session-history-next");
+        assert_eq!(runtime.state.new_research_prompt.text, "Unsent example");
+        click(&mut runtime, "session-history-previous");
+        let (x, y) = runtime.find("new-research-composer-input").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.paste(" edited");
+        runtime.frame(0.0);
+        assert!(!runtime.state.session_input_history.can_next());
+        runtime.state.start_new_research();
+        assert!(!runtime.state.session_input_history.can_next());
     }
 
     #[test]
@@ -7996,5 +8235,100 @@ mod tests {
         runtime.frame(0.0);
         assert_eq!(runtime.state.settings_section, SettingsSection::Providers);
         assert!(runtime.find("provider-openai").is_some());
+    }
+
+    #[test]
+    fn extensions_navigation_opens_plugin_tabs_and_source_dialog() {
+        let mut runtime =
+            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("nav-extensions").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::Extensions);
+        assert_eq!(
+            runtime.state.extensions_section,
+            extensions_view::ExtensionSection::Plugins
+        );
+        assert!(runtime.find("extensions-sidenav-title").is_some());
+        assert!(runtime.find("plugin-tab-available").is_some());
+        assert!(runtime.find("plugin-tab-installed").is_some());
+        for name in [
+            "apple-security-devices",
+            "apple-target-flags",
+            "meta-skills",
+            "microsoft-security-devices",
+        ] {
+            assert!(runtime.find(&format!("plugin-item-{name}")).is_some());
+        }
+        let (x, y) = runtime.find("plugin-tab-installed").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.plugin_tab,
+            extensions_view::PluginTab::Installed
+        );
+        assert!(runtime.find("plugin-item-apple-security-devices").is_none());
+        let (x, y) = runtime.find("plugin-add-source").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("plugin-source-dialog").is_some());
+        let (x, y) = runtime.find("plugin-source-close").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(!runtime.state.plugin_add_dialog_open);
+        let (x, y) = runtime.find("extensions-features").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert_eq!(
+            runtime.state.extensions_section,
+            extensions_view::ExtensionSection::Features
+        );
+        assert!(runtime.find("plugin-tab-available").is_none());
+    }
+
+    #[test]
+    fn plugin_cards_use_wide_content_and_wrap_at_narrow_widths() {
+        let make = |width| {
+            let mut runtime = Runtime::new(
+                State {
+                    primary_view: PrimaryView::Extensions,
+                    ..State::default()
+                },
+                view,
+                (width, 720.0),
+                Env::new(true, 1.0),
+            );
+            runtime.frame(1.0);
+            runtime
+        };
+        let wide = make(1600.0);
+        let (page, _) = wide.presented("settings-page").unwrap();
+        assert!(page[2] > 760.0);
+        let (first, _) = wide
+            .presented("plugin-item-apple-security-devices")
+            .unwrap();
+        let (fourth, _) = wide
+            .presented("plugin-item-microsoft-security-devices")
+            .unwrap();
+        assert!(first[3] <= 310.0);
+        assert!(fourth[0] > first[0]);
+        assert_eq!(fourth[1], first[1]);
+
+        let narrow = make(760.0);
+        let (first, _) = narrow
+            .presented("plugin-item-apple-security-devices")
+            .unwrap();
+        let (second, _) = narrow.presented("plugin-item-apple-target-flags").unwrap();
+        let (description, _) = narrow
+            .presented("plugin-description-apple-security-devices")
+            .unwrap();
+        assert!(second[1] > first[1]);
+        assert!(description[3] <= 60.0);
     }
 }

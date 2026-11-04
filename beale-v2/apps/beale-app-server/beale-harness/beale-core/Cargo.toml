@@ -9,6 +9,7 @@ license.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
+beale-extender = { path = "../beale-extender" }
 beale-providers = { path = "../beale-providers" }
 beale-safety = { path = "../beale-safety" }
 beale-sessions = { path = "../beale-sessions" }

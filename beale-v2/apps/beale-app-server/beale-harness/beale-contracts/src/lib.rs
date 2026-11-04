@@ -597,10 +597,42 @@ pub mod v1 {
         #[prost(string, tag = "3")]
         pub instruction: String,
     }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct PluginSummary {
+        #[prost(string, tag = "1")]
+        pub name: String,
+        #[prost(string, tag = "2")]
+        pub description: String,
+        #[prost(bool, tag = "3")]
+        pub installed: bool,
+        #[prost(uint32, tag = "4")]
+        pub skill_count: u32,
+        #[prost(bool, tag = "5")]
+        pub has_mcp_server: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListPluginsResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub plugins: Vec<PluginSummary>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct InstallPluginRequest {
+        #[prost(string, tag = "1")]
+        pub name: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UninstallPluginRequest {
+        #[prost(string, tag = "1")]
+        pub name: String,
+    }
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 21;
+pub const PROTOCOL_MINOR: u32 = 23;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -631,6 +663,9 @@ pub const QUICK_CHAT_TURNS_PATH: &str = "/v1/quick-chats/turns";
 pub const SESSION_TURN_STREAM_PATH: &str = "/v1/sessions/turns/stream";
 pub const SESSION_TOOL_DETAIL_PATH: &str = "/v1/sessions/{id}/tools/{tool_id}";
 pub const PERMISSION_RULES_PATH: &str = "/v1/permissions/rules";
+pub const PLUGINS_PATH: &str = "/v1/plugins";
+pub const PLUGIN_INSTALL_PATH: &str = "/v1/plugins/install";
+pub const PLUGIN_UNINSTALL_PATH: &str = "/v1/plugins/uninstall";
 pub const PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
 pub const PROTOBUF_STREAM_CONTENT_TYPE: &str = "application/x-beale-protobuf-stream";
 pub const SESSION_STREAM_MAX_FRAME_BYTES: usize = 4_500_000;

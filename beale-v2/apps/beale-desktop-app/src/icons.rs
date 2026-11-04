@@ -75,6 +75,24 @@ pub(crate) static PLUGINS: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 22v-5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 8V2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 8V2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>"#,
 };
 
+pub(crate) static EXTENSIONS: Icon = Icon {
+    name: "beale-extensions",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 3h6a1 1 0 0 1 1 1v6h-2a2 2 0 0 0 0 4h2v6a1 1 0 0 1-1 1h-6v-2a2 2 0 0 0-4 0v2H4a1 1 0 0 1-1-1v-6h2a2 2 0 0 0 0-4H3V4a1 1 0 0 1 1-1h6v2a2 2 0 0 0 4 0V3Z"/>"#,
+};
+
+pub(crate) static FEATURES: Icon = Icon {
+    name: "beale-features",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3 2.8 8 12 13l9.2-5L12 3ZM2.8 12 12 17l9.2-5M2.8 16 12 21l9.2-5"/>"#,
+};
+
+pub(crate) static RESEARCH_KITS: Icon = Icon {
+    name: "beale-research-kits",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 6c-2.2-1.6-5-2-9-1.5v14c4-.5 6.8 0 9 1.5 2.2-1.5 5-2 9-1.5v-14c-4-.5-6.8-.1-9 1.5ZM12 6v14"/>"#,
+};
+
 pub(crate) static SETTINGS: Icon = Icon {
     name: "lucide-settings",
     view: 24.0,

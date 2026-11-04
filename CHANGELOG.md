@@ -6,6 +6,11 @@
 
 #### Added
 
+- Added an Uninstall action to installed v2 plugin cards, returning bundled packages to Available.
+- Connected v2 bundled plugin Install actions to the app-server and persisted the Installed tab across restarts.
+- Bundled four v1 managed Agent Plugins packages in v2 Extensions and listed them as Available, uninstalled plugins.
+- Added a v2 Extensions area with Plugins, Features, and Research Kits navigation; the Plugins view has Available and Installed tabs and an external-source dialog scaffold.
+- Added up and down input-history buttons to v2 workspace session and Quick Chat composers, with unsent-draft restoration and history reset after manual edits or chat changes.
 - Added plus buttons beside v2 Safety rule-set titles and a shared creation dialog for new Auto-Review and Guardian rules.
 - Added v2 Permissions settings with Auto-Review and Guardian tabs and editable, disableable rules.
 - Added v2 Archive settings with Sessions and Quick Chats tabs, compact stats, and Restore actions; restored Quick Chats reopen in the dock.
@@ -53,6 +58,7 @@
 
 #### Changed
 
+- Replaced the v2 Plugins flat list with content-sized cards in the wide content area, showing clamped descriptions and separate skill, tool, resource, and prompt counts.
 - Renamed the v2 Agent Settings Permissions view to Safety and gave its sidenav entry a shield-check icon.
 - Moved each v2 Permissions tab description beneath its rule form title and above the rules.
 - Permissions now opens by default in v2 Agent Settings. Auto-Review and Guardian forms name their rule sets, and editing a rule opens a form dialog for its name and description.
@@ -132,6 +138,8 @@
 
 #### Added
 
+- Added authenticated, idempotent bundled plugin uninstallation in protocol v1.23.
+- Added `beale-extender` with authenticated bundled plugin listing and idempotent installation in protocol v1.22; SQLite schema 11 records installed packages without activating their components.
 - Added protocol v1.21 rule creation and host SQLite schema 10 for ordered custom Auto-Review and Guardian rules, limited to 16 total rules.
 - Added protocol v1.20 rule-name updates and host SQLite schema 9; existing saved rule settings migrate with their default names intact.
 - Added protocol v1.19 permission rule operations and SQLite schema 8 for host-owned Auto-Review and Guardian settings. Read, write, edit, and Bash calls receive small-model review and optional lead-model review after a denial; review failures deny the call.

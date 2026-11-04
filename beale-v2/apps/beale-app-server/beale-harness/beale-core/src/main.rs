@@ -105,7 +105,8 @@ async fn serve() -> Result<()> {
         .route(HEALTH_PATH, get(health))
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
         .merge(beale_sessions::router(token.clone(), workspaces)?)
-        .merge(beale_safety::router(token.clone(), db))
+        .merge(beale_safety::router(token.clone(), db.clone()))
+        .merge(beale_extender::router(token.clone(), db)?)
         .merge(auth::router(token, store));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

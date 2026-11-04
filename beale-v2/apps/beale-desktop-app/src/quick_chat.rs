@@ -10,6 +10,7 @@ use std::{net::SocketAddr, time::Duration};
 use crate::{
     AUTH_HANDLE, ConnectionStatus, SelectionMenu, State, ThemeStyle,
     icons::{ARROW_UP, CHEVRON_DOWN, CHEVRON_UP, CLOSE, FOLDER_OPEN},
+    input_history,
     new_research::transcript_message,
     provider_auth, toggle_selection_menu, ui_font,
 };
@@ -153,6 +154,7 @@ pub(crate) fn send(state: &mut State) {
     state.quick_chat_error.clear();
     state.quick_chat_pending = Some(prompt.clone());
     state.quick_chat_draft.clear();
+    state.quick_chat_input_history.reset();
     std::thread::spawn(move || {
         let result = (|| {
             let addr = crate::connection::configured_addr()
@@ -188,6 +190,23 @@ pub(crate) fn send(state: &mut State) {
             }
         });
     });
+}
+
+fn previous_input(state: &mut State) {
+    let entries = input_history::quick_chat_entries(&state.quick_chat_messages);
+    if let Some(value) = state
+        .quick_chat_input_history
+        .previous(&entries, &state.quick_chat_draft.text)
+    {
+        state.quick_chat_draft = TextEdit::new(value);
+    }
+}
+
+fn next_input(state: &mut State) {
+    let entries = input_history::quick_chat_entries(&state.quick_chat_messages);
+    if let Some(value) = state.quick_chat_input_history.next(&entries) {
+        state.quick_chat_draft = TextEdit::new(value);
+    }
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -> El {
@@ -371,6 +390,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
         panel = panel.child(col().w_full().px(20.0).child(body));
     }
     let font = ui_font(13.5, 400.0);
+    let history_entries = input_history::quick_chat_entries(&state.quick_chat_messages);
     let composer = row()
         .key("quick-chat-composer")
         .w_full()
@@ -395,8 +415,29 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                 .color(theme.color(palette.text))
                 .placeholder("Send a quick message", theme.color(palette.muted))
                 .on_edit(|state: &mut State| &mut state.quick_chat_draft)
+                .on_input_change(|state: &mut State, _| state.quick_chat_input_history.reset())
                 .on_submit(|state: &mut State, _| send(state)),
         )
+        .child(input_history::button(
+            "quick-chat-history-previous",
+            "Previous Quick Chat message",
+            &CHEVRON_UP,
+            state
+                .quick_chat_input_history
+                .can_previous(history_entries.len()),
+            (palette.muted, palette.border),
+            theme,
+            previous_input,
+        ))
+        .child(input_history::button(
+            "quick-chat-history-next",
+            "Next Quick Chat message",
+            &CHEVRON_DOWN,
+            state.quick_chat_input_history.can_next(),
+            (palette.muted, palette.border),
+            theme,
+            next_input,
+        ))
         .child({
             let available =
                 !state.quick_chat_busy && !state.quick_chat_draft.text.trim().is_empty();
