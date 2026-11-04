@@ -13,9 +13,12 @@ import {
   DEFAULT_SHELL_REVIEW_MODELS,
   createSurfaceTools,
   createReportTools,
+  createTriageTools,
   createResearchStorageLayout,
   effectiveClaimClassifications,
   createResearchToolRegistry,
+  createPriorArtFetchTool,
+  createPriorArtSearchTool,
   createRunbookExecutionTool,
   createRunbookExecutor,
   createRunbookTools,
@@ -30,8 +33,11 @@ import {
   type ModelAuthor,
   type ResearchExecutableTool,
   type ResearchToolDescriptor,
-  type ResearchToolExecutionRecord
+  type ResearchToolRegistry,
+  type ResearchToolExecutionRecord,
+  type ResearchWorkspaceAuthorizationContext,
 } from '@beale/app-server-runtime/runtime-services';
+import type { AppServerResearchToolEffect } from '@beale/app-server-runtime/protocol';
 import type { AppServerProtocolStorage } from './appServerProtocolClient.js';
 
 export interface AppServerResearchToolContext {
@@ -79,7 +85,7 @@ export async function listAppServerResearchTools(
 export async function callAppServerResearchTool(
   input: AppServerResearchToolCall,
   storage: AppServerProtocolStorage,
-  expectedEffect: 'read' | 'mutating',
+  expectedEffect: AppServerResearchToolEffect,
   signal?: AbortSignal
 ): Promise<ResearchToolExecutionRecord> {
   if (typeof input.toolName !== 'string' || !input.toolName.trim()) {
@@ -90,18 +96,19 @@ export async function callAppServerResearchTool(
   try {
     const tool = runtime.registry.find(input.toolName);
     if (!tool) throw new Error(`Research tool is unavailable in this workspace: ${input.toolName}`);
-    const isRead = tool.descriptor.sideEffects === 'none' || tool.descriptor.sideEffects === 'read';
-    if ((expectedEffect === 'read') !== isRead) {
+    const effect = researchToolEffect(tool.descriptor);
+    if (effect !== expectedEffect) {
       throw new Error(
-        isRead
-          ? `${tool.descriptor.name} is read-only; invoke it through the read research-tool operation.`
-          : `${tool.descriptor.name} has ${tool.descriptor.sideEffects} side effects; invoke it through the mutating research-tool operation.`
+        `${tool.descriptor.name} has ${tool.descriptor.sideEffects} side effects; invoke it through the ${effect} research-tool operation.`
       );
+    }
+    if (tool.descriptor.name === 'runbook.run' && runtime.runbookAuthorizationError) {
+      throw new Error(runtime.runbookAuthorizationError);
     }
     return await runtime.registry.execute({
       id: `codex_${randomUUID()}`,
       toolName: tool.descriptor.name,
-      actionClass: tool.descriptor.actionClasses[0] ?? (isRead ? 'recall' : 'synthesize'),
+      actionClass: tool.descriptor.actionClasses[0] ?? (effect === 'mutating' ? 'synthesize' : 'recall'),
       input: input.toolInput
     }, {
       ...(signal ? { signal } : {}),
@@ -121,7 +128,8 @@ async function createResearchToolBridgeRuntime(
   input: AppServerResearchToolContext,
   storage: AppServerProtocolStorage
 ): Promise<{
-  registry: ReturnType<typeof createResearchToolRegistry>;
+  registry: ResearchToolRegistry;
+  runbookAuthorizationError: string | null;
   close(): Promise<void>;
 }> {
   const resolvedProfile = await resolveStoredResearchProfile({
@@ -173,6 +181,14 @@ async function createResearchToolBridgeRuntime(
       explicitResources: binding.resources ?? [],
       ...(binding.authorization ? { authorization: binding.authorization } : {})
     });
+    const priorArtHistory = {
+      store: resources.priorArt,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {})
+    };
+    tools.push(
+      createPriorArtSearchTool({ history: priorArtHistory }),
+      createPriorArtFetchTool({ history: priorArtHistory })
+    );
     close.unshift(() => resources.close());
     const surfaces = new SurfaceStore({
       databasePath: storage.databasePath,
@@ -235,6 +251,9 @@ async function createResearchToolBridgeRuntime(
           ? { requireVerifiedFinding: true, requireSubmissionPacket: true, claimStore: findingStore }
           : {})
       }));
+      if (resolvedProfile.profile.id === 'security-research' && runbookStore) {
+        tools.push(...createTriageTools(findingStore, runbookStore, reports));
+      }
     }
 
 
@@ -265,6 +284,7 @@ async function createResearchToolBridgeRuntime(
     }));
 
     return {
+      runbookAuthorizationError: runbookExecutionAuthorizationError(binding.authorization),
       registry: createResearchToolRegistry(tools),
       async close() {
         for (const cleanup of close) await cleanup();
@@ -274,4 +294,32 @@ async function createResearchToolBridgeRuntime(
     for (const cleanup of close) await cleanup();
     throw error;
   }
+}
+
+function researchToolEffect(descriptor: ResearchToolDescriptor): AppServerResearchToolEffect {
+  if (descriptor.sideEffects === 'none' || descriptor.sideEffects === 'read') return 'read';
+  if (descriptor.sideEffects === 'network') return 'network';
+  return 'mutating';
+}
+
+function runbookExecutionAuthorizationError(
+  authorization: ResearchWorkspaceAuthorizationContext | undefined,
+  now = Date.now()
+): string | null {
+  if (!authorization?.recorded) {
+    return 'Runbook execution through the research-tool bridge requires recorded authorization.';
+  }
+  if (authorization.activeFrom) {
+    const activeFrom = Date.parse(authorization.activeFrom);
+    if (!Number.isFinite(activeFrom) || activeFrom > now) {
+      return 'Runbook execution through the research-tool bridge requires currently active recorded authorization.';
+    }
+  }
+  if (authorization.expiresAt) {
+    const expiresAt = Date.parse(authorization.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+      return 'Runbook execution through the research-tool bridge requires unexpired recorded authorization.';
+    }
+  }
+  return null;
 }

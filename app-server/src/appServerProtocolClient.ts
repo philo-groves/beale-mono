@@ -53,6 +53,8 @@ import {
 import {
   appServerProtocolDescriptor,
   decodeClaimBoardTransitionRequest,
+  APP_SERVER_RESEARCH_TOOL_EFFECTS,
+  type AppServerResearchToolOperation,
   type BealeMemoryNotificationFeed,
   type AppServerProtocolOperation
 } from '@beale/app-server-runtime/protocol';
@@ -100,7 +102,7 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
   }
   if (operation.startsWith('research.tools.')) {
     return researchToolOperation(
-      operation as 'research.tools.list' | 'research.tools.read' | 'research.tools.mutate',
+      operation as AppServerResearchToolOperation,
       options
     );
   }
@@ -161,7 +163,7 @@ async function invokeOperation(operation: AppServerProtocolOperation, options: I
 }
 
 async function researchToolOperation(
-  operation: 'research.tools.list' | 'research.tools.read' | 'research.tools.mutate',
+  operation: AppServerResearchToolOperation,
   options: InvokeAppServerProtocolOptions
 ): Promise<unknown> {
   const storage = requiredStorage(options.storage);
@@ -169,10 +171,11 @@ async function researchToolOperation(
   if (operation === 'research.tools.list') {
     return listAppServerResearchTools(input as unknown as AppServerResearchToolContext, storage);
   }
+  const effect = APP_SERVER_RESEARCH_TOOL_EFFECTS[operation];
   return callAppServerResearchTool(
     input as unknown as AppServerResearchToolCall,
     storage,
-    operation === 'research.tools.read' ? 'read' : 'mutating',
+    effect,
     options.signal
   );
 }

@@ -365,8 +365,12 @@ test('verified findings flow through policy triage, portable replay packet, and 
     finding = state.claims.revise(finding.id, { expectedRevision: finding.revision, reason: 'Example program policy assessed.',
       securityTracking: { reportability: { decision: 'reportable', basis: 'The authorized pre-auth boundary crosses the program threshold.',
         policyRefs: ['example-policy:scope', 'example-policy:impact'] } } });
-    recordRunbookExecution(state.runbooks, book.id, 'example-portable-run', {
+    recordRunbookExecution(state.runbooks, book.id, 'example-distinct-run', {
       sourceRevision: finding.sourceRevision, environmentFingerprint: 'example-environment-b',
+      actorId: 'agent-example-triage',
+    });
+    recordRunbookExecution(state.runbooks, book.id, 'example-portable-run', {
+      sourceRevision: finding.sourceRevision, environmentFingerprint: finding.environmentFingerprint,
       actorId: 'agent-example-triage',
     });
     const files = {
@@ -382,6 +386,11 @@ test('verified findings flow through policy triage, portable replay packet, and 
     };
     const packetPath = join(state.root, 'example-poc.zip');
     await writeFile(packetPath, Buffer.from(zipSync({ ...files, 'manifest.json': strToU8(JSON.stringify(manifest)) })));
+    const distinctManifest = { ...manifest, replayRunId: 'example-distinct-run' };
+    const distinctPacketPath = join(state.root, 'example-distinct-poc.zip');
+    await writeFile(distinctPacketPath, Buffer.from(zipSync({
+      ...files, 'manifest.json': strToU8(JSON.stringify(distinctManifest)),
+    })));
     const triageTools = createResearchToolRegistry(createTriageTools(state.claims, state.runbooks, state.reports));
     const invalidPacketPath = join(state.root, 'incomplete.zip');
     await writeFile(invalidPacketPath, Buffer.from(zipSync({ 'README.md': strToU8('No proof or manifest.') })));
@@ -392,7 +401,7 @@ test('verified findings flow through policy triage, portable replay packet, and 
     assert.match(outcome.result.error.message, /README.md, manifest.json, and a poc\/ file/);
     outcome = await triageTools.execute({ id: 'triage-package-example', toolName: 'triage.package',
       actionClass: 'synthesize', input: { claimId: finding.id, expectedRevision: finding.revision,
-        packetPath, replayRunId: 'example-portable-run', reason: 'The full proof replayed in a distinct example environment.' } });
+        packetPath, replayRunId: 'example-portable-run', reason: 'The full proof replayed in the finding original authorized environment.' } });
     assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
     finding = outcome.result.output.finding;
     const database = new DatabaseSync(state.graph.databasePath);
@@ -411,17 +420,41 @@ test('verified findings flow through policy triage, portable replay packet, and 
     state.funnel.finishSession('epoch-retriage');
     outcome = await triageTools.execute({ id: 'triage-repackage-example', toolName: 'triage.package',
       actionClass: 'synthesize', input: { claimId: finding.id, expectedRevision: finding.revision,
-        packetPath, replayRunId: 'example-portable-run', reason: 'The revised example claim has a current replay packet.' } });
+        packetPath: distinctPacketPath, replayRunId: 'example-distinct-run',
+        reason: 'The revised example claim also has a current replay from another authorized environment.' } });
     assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
     finding = outcome.result.output.finding;
     assert.deepEqual(state.funnel.reserveForSession('epoch-report', 2).map((item) => item.role), ['reporter']);
     outcome = await reportTools.execute({ id: 'report-after-triage', toolName: 'report.create',
       actionClass: 'synthesize', input: reportInput });
     assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
-    assert.equal(outcome.result.output.report.submissionPacket.contentHash, finding.securityTracking.triage.packet.contentHash);
-    assert.equal(outcome.result.output.sourceFinding.status, 'report_ready');
+    const createdReport = outcome.result.output.report;
+    finding = outcome.result.output.sourceFinding;
+    assert.equal(createdReport.submissionPacket.contentHash, finding.securityTracking.triage.packet.contentHash);
+    assert.equal(finding.status, 'report_ready');
     state.funnel.finishSession('epoch-report');
     assert.deepEqual(state.funnel.reserveForSession('epoch-done', 3), []);
+
+    const reportDocument = state.reports.get(createdReport.id);
+    const repairedReport = state.reports.revise({
+      id: reportDocument.id,
+      expectedRevision: reportDocument.revision,
+      content: reportDocument.content,
+      summary: reportDocument.summary,
+      status: reportDocument.status,
+      submissionPacketPath: packetPath,
+    }).report;
+    assert.notEqual(repairedReport.submissionPacket.contentHash, finding.securityTracking.triage.packet.contentHash);
+
+    outcome = await triageTools.execute({ id: 'triage-repair-report-ready-example', toolName: 'triage.package',
+      actionClass: 'synthesize', input: { claimId: finding.id, expectedRevision: finding.revision,
+        packetPath, replayRunId: 'example-portable-run',
+        reason: 'Re-accept the repaired report packet against its existing successful replay.' } });
+    assert.equal(outcome.result.status, 'complete', outcome.result.error?.message);
+    finding = outcome.result.output.finding;
+    assert.equal(finding.status, 'report_ready');
+    assert.equal(finding.securityTracking.triage.packet.contentHash, repairedReport.submissionPacket.contentHash);
+    assert.deepEqual(state.funnel.reserveForSession('epoch-repaired-report-ready', 3), []);
   } finally { await state.close(); }
 });
 

@@ -632,7 +632,11 @@ export class AppServerHostService {
       ...(storage ? { storage } : {}),
       ...(request.signal ? { signal: request.signal } : {})
     });
+    const networkResearchMutation = request.operation === 'research.tools.network'
+      && isRecord(result) && isRecord(result.result) && isRecord(result.result.output)
+      && nonEmpty(result.result.output.savedHistoryId) !== null;
     const researchMutation = request.operation === 'research.tools.mutate'
+      || networkResearchMutation
       || ['claim.mark_duplicate', 'claim.undo_duplicate', 'claim.board_transition', 'history.mark_duplicate', 'history.undo_duplicate', 'report.revise_content', 'report.update_triage_status', 'report.replace_packet', 'report.replace_recording'].includes(request.operation)
       || request.operation === 'workspace.state' && isRecord(request.input) && ['saveScope', 'setResearchSubject', 'addWorkspaceRules', 'addWorkspaceRule'].includes(String(request.input.action));
     if (workspace && storage && researchMutation && readWorkspaceProject(workspace.workspacePath)) {

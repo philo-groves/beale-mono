@@ -94,6 +94,7 @@ export const BEALE_APP_SERVER_CAPABILITIES = [
   "memory.notifications.v3",
   "host.operations.v1",
   "research.tools.v1",
+  "research.tools.network.v1",
   "source.clone-modes.v1",
   "host.shutdown-guard.v1",
   "workspace.memory-backend.v1",
@@ -983,6 +984,7 @@ export const APP_SERVER_PROTOCOL_CAPABILITIES = [
   "knowledge.report-packet-replace.v1",
   "knowledge.report-recording-replace.v1",
   "knowledge.report-list.v1",
+  "research.tools.network.v1",
 ] as const;
 
 /** @deprecated Import the protocol-named constants from `@beale/app-server-runtime/protocol`. */
@@ -1008,13 +1010,23 @@ export const APP_SERVER_PROTOCOL_OPERATIONS = [
   "suggestion.generate", "suggestion.select", "suggestion.steering", "prompt.expand",
   "profile.resolve", "auth.list", "auth.status", "auth.verify", "auth.logout", "model.list",
   "tools.list", "tools.config", "config.show", "config.set",
-  "research.tools.list", "research.tools.read", "research.tools.mutate",
+  "research.tools.list", "research.tools.read", "research.tools.network", "research.tools.mutate",
   "source.inspect", "source.materialize", "plugin.list", "plugin.add_filesystem",
   "plugin.add_repository", "plugin.set_enabled", "plugin.remove", "plugin.runtime",
   "workspace.project",
 ] as const;
 
 export type AppServerProtocolOperation = (typeof APP_SERVER_PROTOCOL_OPERATIONS)[number];
+export type AppServerResearchToolOperation = Extract<AppServerProtocolOperation, `research.tools.${string}`>;
+export const APP_SERVER_RESEARCH_TOOL_EFFECTS = {
+  "research.tools.read": "read",
+  "research.tools.network": "network",
+  "research.tools.mutate": "mutating",
+} as const;
+export type AppServerResearchToolEffectOperation = keyof typeof APP_SERVER_RESEARCH_TOOL_EFFECTS;
+export type AppServerResearchToolEffect =
+  (typeof APP_SERVER_RESEARCH_TOOL_EFFECTS)[AppServerResearchToolEffectOperation];
+
 
 export type FleetBackend = "tart" | "hyper-v";
 export type FleetRole = "primary" | "guest";

@@ -42,6 +42,7 @@ import {
   callAppServerResearchTool,
   listAppServerResearchTools,
 } from "../dist/researchToolBridge.js";
+import { invokeAppServerProtocol } from "../dist/appServerProtocolClient.js";
 import { WorkspaceDatabase } from "../dist/workspaceDatabase.js";
 import { initializeWorkspaceProjectAsync } from "../dist/workspaceCheckpoints.js";
 import { WorkspaceRegistry } from "../dist/workspaceRegistryStore.js";
@@ -1399,6 +1400,9 @@ test("exposes the in-Beale durable tool registry to Codex with enforced effect r
   ]);
   assert.equal(descriptors.get("resource.catalog").sideEffects, "write");
   assert.equal(descriptors.get("runbook.run").sideEffects, "process");
+  assert.equal(descriptors.get("prior_art.search").sideEffects, "network");
+  assert.equal(descriptors.get("prior_art.fetch").sideEffects, "network");
+  assert.equal(descriptors.get("triage.package").sideEffects, "write");
 
   await assert.rejects(
     callAppServerResearchTool({
@@ -1418,6 +1422,37 @@ test("exposes the in-Beale durable tool registry to Codex with enforced effect r
   }, storage, "mutating");
   assert.equal(created.result.status, "complete", JSON.stringify(created.result));
 
+  const publicDocumentServer = createServer((_request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end("<html><head><title>Example service policy</title></head><body><p>Administrative exports require an authenticated operator.</p></body></html>");
+  });
+  await new Promise((resolve) => publicDocumentServer.listen(0, "127.0.0.1", resolve));
+  try {
+    const publicDocumentUrl = `http://127.0.0.1:${publicDocumentServer.address().port}/authorization`;
+    await assert.rejects(
+      callAppServerResearchTool({
+        ...context,
+        toolName: "prior_art.fetch",
+        toolInput: { resourceId: created.result.output.resource.id, url: publicDocumentUrl },
+      }, storage, "read"),
+      /network research-tool operation/,
+    );
+    const fetched = await invokeAppServerProtocol("research.tools.network", {
+      input: {
+        ...context,
+        toolName: "prior_art.fetch",
+        toolInput: { resourceId: created.result.output.resource.id, url: publicDocumentUrl },
+      },
+      storage,
+    });
+    assert.equal(fetched.result.status, "complete", JSON.stringify(fetched.result));
+    assert.equal(fetched.result.output.title, "Example service policy");
+    assert.match(fetched.result.output.text, /Administrative exports require an authenticated operator/);
+    assert.match(fetched.result.output.savedHistoryId, /^prior_art_/u);
+  } finally {
+    await new Promise((resolve) => publicDocumentServer.close(resolve));
+  }
+
   const listed = await callAppServerResearchTool({
     ...context,
     toolName: "resource.catalog",
@@ -1431,6 +1466,15 @@ test("exposes the in-Beale durable tool registry to Codex with enforced effect r
       purpose: "Inspect the example service." } }, storage, "mutating");
   assert.equal(touch.result.status, "blocked");
   assert.match(touch.result.summary, /recorded scope inclusion or rule/);
+
+  await assert.rejects(
+    callAppServerResearchTool({
+      ...context,
+      toolName: "runbook.run",
+      toolInput: { runbookId: "runbook-example" },
+    }, storage, "mutating"),
+    /recorded authorization/,
+  );
 });
 
 test("research Subject rebinding migrates workspace-owned research identity", () => {
