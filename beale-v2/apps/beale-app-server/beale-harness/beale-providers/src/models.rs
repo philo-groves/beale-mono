@@ -72,7 +72,19 @@ impl ProviderClient {
             bytes.extend_from_slice(&chunk);
         }
         let value: Value = serde_json::from_slice(&bytes).context("invalid provider model list")?;
-        let models = parse_models(provider, mode, &value)?;
+        let models = filter_for_daybreak(
+            parse_models(provider, mode, &value)?,
+            provider,
+            if provider == Provider::OpenAi {
+                Some(store.daybreak_mode()?)
+            } else {
+                None
+            },
+        );
+        ensure!(
+            !models.is_empty(),
+            "no models available for the selected Daybreak mode"
+        );
         let saved = store.load_model_defaults(provider_name(provider), mode_name(mode))?;
         let lead_model = saved
             .as_ref()
@@ -91,6 +103,21 @@ impl ProviderClient {
             lead_model,
             small_model,
         })
+    }
+}
+
+fn filter_for_daybreak(
+    models: Vec<ModelEntry>,
+    provider: Provider,
+    daybreak_mode: Option<&str>,
+) -> Vec<ModelEntry> {
+    if provider == Provider::OpenAi && daybreak_mode == Some("blue") {
+        models
+            .into_iter()
+            .filter(|model| !crate::wire::openai_requires_daybreak_red(&model.id))
+            .collect()
+    } else {
+        models
     }
 }
 
@@ -311,6 +338,13 @@ mod tests {
         assert_eq!(models[0].id, "gpt-5.6-sol");
         assert_eq!(recommended(Provider::OpenAi, false, &models), "gpt-5.6-sol");
         assert_eq!(recommended(Provider::OpenAi, true, &models), "gpt-6-luna");
+        let blue = filter_for_daybreak(models.clone(), Provider::OpenAi, Some("blue"));
+        assert_eq!(blue.len(), 2);
+        assert!(blue.iter().all(|model| model.id != "gpt-6.1-sol"));
+        assert_eq!(
+            filter_for_daybreak(models.clone(), Provider::OpenAi, Some("red")),
+            models
+        );
     }
 
     #[test]

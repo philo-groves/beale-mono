@@ -269,6 +269,7 @@ fn parse_step(value: &Value, tools: &[Value]) -> Result<ProviderStep> {
         ]
     };
     Ok(ProviderStep {
+        response_id: None,
         text: text.to_owned(),
         calls,
         reasoning_summaries: Vec::new(),

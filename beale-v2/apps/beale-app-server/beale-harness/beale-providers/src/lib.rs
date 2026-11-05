@@ -12,7 +12,8 @@ pub use custom::{CustomProvider, qualified_model, split_qualified_model, valid_c
 pub use models::{ModelCatalog, ModelEntry, mode_name, provider_name};
 pub use oauth::{login_openai, login_openai_with_prompt, login_xai, login_xai_with_prompt};
 pub use wire::{
-    AuthMode, InferenceRequest, Provider, ProviderClient, ProviderProgress, ProviderStep,
-    TextMessage, TextRole, ToolCall, ToolStepRequest, input_messages, tool_output,
+    AuthMode, InferenceRequest, OpenAiConnection, Provider, ProviderClient, ProviderProgress,
+    ProviderStep, TextMessage, TextRole, ToolCall, ToolStepRequest, input_messages,
+    provider_error_message, tool_output,
 };
 pub mod custom;

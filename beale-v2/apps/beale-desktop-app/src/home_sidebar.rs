@@ -1,4 +1,4 @@
-use rune::{Align, Color, El, Icon, Side, col, el, icon, row, text};
+use rune::{Align, Color, El, Icon, ScrollSpec, Side, col, el, icon, row, text};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::icons::{
@@ -235,6 +235,10 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .key("home-collection")
         .w_full()
         .grow(1.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
         .mt(12.0)
         .gap(6.0)
         .child(header);
@@ -356,11 +360,13 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                     .on_press(State::start_new_research),
                 );
             }
-            for session in state
+            let sessions: Vec<_> = state
                 .session_summaries
                 .iter()
                 .filter(|session| session.workspace_id == workspace.id)
-            {
+                .collect();
+            let expanded = state.expanded_session_workspaces.contains(&workspace.id);
+            for session in sessions.iter().take(if expanded { usize::MAX } else { 5 }) {
                 let session_id = session.id.clone();
                 let active = state.primary_view == crate::PrimaryView::NewResearch
                     && (state.session_loading_id.as_deref() == Some(session.id.as_str())
@@ -438,6 +444,36 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                                     state.archive_session_error.clear();
                                 })
                                 .child(icon(&ARCHIVE, 15.0).color(color("#bdbdbd"))),
+                        ),
+                );
+            }
+            if sessions.len() > 5 {
+                let workspace_id = workspace.id.clone();
+                let label = if expanded { "Show less" } else { "Show more" };
+                group = group.child(
+                    row()
+                        .key(format!("home-session-toggle-{}", workspace.id))
+                        .role("button")
+                        .label(label)
+                        .w_full()
+                        .h(28.0)
+                        .px(4.0)
+                        .center_y()
+                        .gap(10.0)
+                        .radius(8.0)
+                        .hover(color("#282828"))
+                        .on_press(move |state: &mut State| {
+                            if !state.expanded_session_workspaces.remove(&workspace_id) {
+                                state
+                                    .expanded_session_workspaces
+                                    .insert(workspace_id.clone());
+                            }
+                        })
+                        .child(el().size(15.0, 15.0))
+                        .child(
+                            text(label)
+                                .font(ui_font(13.0, 400.0))
+                                .color(color("#969696")),
                         ),
                 );
             }

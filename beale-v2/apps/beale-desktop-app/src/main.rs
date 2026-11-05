@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 mod appearance;
 mod archive_view;
+mod automations_view;
 mod browser_logos;
 mod color_picker;
 mod connection;
@@ -210,8 +211,10 @@ enum ModelRole {
 enum SelectionMenu {
     LeadProvider,
     GoalMode,
+    SessionGraph,
     Repeat,
     ResearchWorkspace,
+    ResearchWorkspaceHeading,
     QuickChatWorkspace,
     HomeCollection,
     FleetAdd,
@@ -515,6 +518,7 @@ const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrimaryView {
     Home,
+    Automations,
     NewResearch,
     WorkspaceCreation,
     Workspace,
@@ -526,6 +530,7 @@ enum PrimaryView {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ViewLocation {
     Home,
+    Automations,
     NewResearch,
     WorkspaceCreation(workspace_creation::CreationTab),
     Workspace(uuid::Uuid, workspace_view::WorkspaceTab),
@@ -560,7 +565,9 @@ impl ViewHistory {
 
 struct State {
     primary_view: PrimaryView,
+    automations: automations_view::AutomationState,
     home_collection: home_sidebar::HomeCollection,
+    expanded_session_workspaces: std::collections::HashSet<String>,
     new_research_prompt: TextEdit,
     session_input_history: input_history::InputHistory,
     new_research_workspace_id: Option<String>,
@@ -570,6 +577,11 @@ struct State {
     new_research_goal_mode: bool,
     new_research_goal_max_turns: TextEdit,
     new_research_goal_max_duration_minutes: TextEdit,
+    new_research_graph_id: String,
+    new_research_graph_models: [Option<Vec<new_research::ModelSelection>>; 4],
+    new_research_graph_concurrency: [Option<u32>; 4],
+    graph_editor: Option<new_research::GraphEditor>,
+    graph_editor_max_concurrent: TextEdit,
     quick_chat_open: bool,
     quick_chat_draft: TextEdit,
     quick_chat_input_history: input_history::InputHistory,
@@ -752,7 +764,9 @@ impl Default for State {
     fn default() -> Self {
         Self {
             primary_view: PrimaryView::Settings,
+            automations: automations_view::AutomationState::default(),
             home_collection: home_sidebar::HomeCollection::default(),
+            expanded_session_workspaces: std::collections::HashSet::new(),
             new_research_prompt: TextEdit::new(""),
             session_input_history: input_history::InputHistory::default(),
             new_research_workspace_id: None,
@@ -762,6 +776,13 @@ impl Default for State {
             new_research_goal_mode: false,
             new_research_goal_max_turns: TextEdit::new(""),
             new_research_goal_max_duration_minutes: TextEdit::new(""),
+            new_research_graph_id: beale_graphs::SIMPLE_ID.to_owned(),
+            new_research_graph_models: std::array::from_fn(|_| None),
+            new_research_graph_concurrency: std::array::from_fn(|index| {
+                beale_graphs::SIMPLE_GRAPH.nodes[index].default_max_concurrent()
+            }),
+            graph_editor: None,
+            graph_editor_max_concurrent: TextEdit::new(""),
             quick_chat_open: false,
             quick_chat_draft: TextEdit::new(""),
             quick_chat_input_history: input_history::InputHistory::default(),
@@ -1011,6 +1032,9 @@ impl State {
         if self.primary_view == PrimaryView::NewResearch {
             return ViewLocation::NewResearch;
         }
+        if self.primary_view == PrimaryView::Automations {
+            return ViewLocation::Automations;
+        }
         if self.primary_view == PrimaryView::WorkspaceCreation {
             return ViewLocation::WorkspaceCreation(self.workspace_draft.tab);
         }
@@ -1041,6 +1065,10 @@ impl State {
         let mut load_workspace = None;
         match location {
             ViewLocation::Home => self.primary_view = PrimaryView::Home,
+            ViewLocation::Automations => {
+                self.primary_view = PrimaryView::Automations;
+                self.automations.loaded = false;
+            }
             ViewLocation::NewResearch => self.primary_view = PrimaryView::NewResearch,
             ViewLocation::WorkspaceCreation(tab) => {
                 self.primary_view = PrimaryView::WorkspaceCreation;
@@ -1146,6 +1174,9 @@ impl State {
         if self.primary_view == PrimaryView::Fleet {
             fleet_view::start_load(self);
         }
+        if self.primary_view == PrimaryView::Automations {
+            automations_view::start_load(self);
+        }
     }
 
     fn navigate_to(&mut self, location: ViewLocation) {
@@ -1199,6 +1230,13 @@ impl State {
             self.new_research_goal_max_turns.clear();
             self.new_research_goal_max_duration_minutes.clear();
         }
+        self.new_research_graph_id = beale_graphs::SIMPLE_ID.to_owned();
+        self.new_research_graph_models = std::array::from_fn(|_| None);
+        self.new_research_graph_concurrency = std::array::from_fn(|index| {
+            beale_graphs::SIMPLE_GRAPH.nodes[index].default_max_concurrent()
+        });
+        self.graph_editor = None;
+        self.graph_editor_max_concurrent.clear();
         self.new_research_workspace_id = self
             .selected_research_workspace()
             .map(|item| item.id.clone());
@@ -1762,6 +1800,27 @@ fn start_session_turn(state: &mut State) {
     } else {
         (0, 0)
     };
+    let repeat_preset =
+        if session_id.is_empty() && state.new_research_repeat != new_research::RepeatPreset::None {
+            state.new_research_repeat.key().to_owned()
+        } else {
+            String::new()
+        };
+    let graph_id = if session_id.is_empty() && extensions_view::graphs_enabled(state) {
+        state.new_research_graph_id.clone()
+    } else {
+        String::new()
+    };
+    let graph_models = if graph_id == beale_graphs::SIMPLE_ID {
+        new_research::graph_model_config(state)
+    } else {
+        Vec::new()
+    };
+    let graph_node_concurrency = if graph_id == beale_graphs::SIMPLE_ID {
+        new_research::graph_concurrency_config(state)
+    } else {
+        Vec::new()
+    };
     let request = SubmitSessionTurnRequest {
         workspace_id,
         session_id,
@@ -1773,6 +1832,10 @@ fn start_session_turn(state: &mut State) {
         goal_mode,
         goal_max_turns,
         goal_max_duration_minutes,
+        repeat_preset,
+        graph_id,
+        graph_models,
+        graph_node_concurrency,
     };
     state.session_generation = state.session_generation.wrapping_add(1);
     let generation = state.session_generation;
@@ -2340,6 +2403,7 @@ fn start_model_list(state: &mut State, provider: Provider, method: AuthMethod) {
     let Some(handle) = AUTH_HANDLE.get().cloned() else {
         return;
     };
+    let requested_daybreak_mode = (provider == Provider::OpenAi).then_some(state.daybreak_mode);
     state.model_loading[index] = true;
     state.model_errors[index].clear();
     std::thread::spawn(move || {
@@ -2355,6 +2419,11 @@ fn start_model_list(state: &mut State, provider: Provider, method: AuthMethod) {
         })();
         handle.update(move |state, _| {
             state.model_loading[index] = false;
+            if requested_daybreak_mode.is_some_and(|mode| mode != state.daybreak_mode) {
+                state.model_catalogs[index] = None;
+                start_model_list(state, provider, method);
+                return;
+            }
             let authenticated = match method {
                 AuthMethod::Subscription => state.auth_status[provider.index()].subscription,
                 AuthMethod::ApiKey => state.auth_status[provider.index()].api_key,
@@ -2523,7 +2592,25 @@ fn start_daybreak_save(state: &mut State, mode: DaybreakMode) {
         handle.update(move |state, _| {
             state.daybreak_saving = false;
             match result {
-                Ok(()) => state.daybreak_mode = mode,
+                Ok(()) => {
+                    state.daybreak_mode = mode;
+                    for method in [AuthMethod::Subscription, AuthMethod::ApiKey] {
+                        let index = catalog_index(Provider::OpenAi, method);
+                        state.model_catalogs[index] = None;
+                        let configured = match method {
+                            AuthMethod::Subscription => {
+                                state.auth_status[Provider::OpenAi.index()].subscription
+                            }
+                            AuthMethod::ApiKey => {
+                                state.auth_status[Provider::OpenAi.index()].api_key
+                            }
+                            _ => false,
+                        };
+                        if configured {
+                            start_model_list(state, Provider::OpenAi, method);
+                        }
+                    }
+                }
                 Err(error) => state.daybreak_error = error,
             }
         });
@@ -2632,7 +2719,19 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
             detail: None,
             selected: state.new_research_goal_mode,
         }],
-        SelectionMenu::ResearchWorkspace => {
+        SelectionMenu::SessionGraph => [
+            (beale_graphs::SIMPLE_ID, beale_graphs::SIMPLE_NAME),
+            ("", "Independent"),
+        ]
+        .into_iter()
+        .map(|(value, label)| in_place_menu::MenuItem {
+            value: value.to_owned(),
+            label: label.to_owned(),
+            detail: None,
+            selected: state.new_research_graph_id == value,
+        })
+        .collect(),
+        SelectionMenu::ResearchWorkspace | SelectionMenu::ResearchWorkspaceHeading => {
             let selected_id = state
                 .selected_research_workspace()
                 .map(|item| item.id.as_str());
@@ -2819,7 +2918,9 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
         SelectionMenu::FleetAdd => "fleet-add-server",
         SelectionMenu::Repeat => "new-research-repeat-control",
         SelectionMenu::GoalMode => "new-research-goal-control",
+        SelectionMenu::SessionGraph => "new-research-graph-control",
         SelectionMenu::ResearchWorkspace => "new-research-workspace-control",
+        SelectionMenu::ResearchWorkspaceHeading => "new-research-heading-workspace-control",
         SelectionMenu::QuickChatWorkspace => "quick-chat-workspace-control",
         SelectionMenu::ResearchKit => "workspace-kit-control",
         SelectionMenu::SurfaceKind => "workspace-surface-kind-control",
@@ -2864,8 +2965,10 @@ fn toggle_selection_menu(state: &mut State, menu: SelectionMenu) {
     if matches!(
         menu,
         SelectionMenu::GoalMode
+            | SelectionMenu::SessionGraph
             | SelectionMenu::Repeat
             | SelectionMenu::ResearchWorkspace
+            | SelectionMenu::ResearchWorkspaceHeading
             | SelectionMenu::QuickChatWorkspace
             | SelectionMenu::HomeCollection
     ) {
@@ -2916,7 +3019,10 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
             }
         }
         SelectionMenu::GoalMode => state.new_research_goal_mode = !state.new_research_goal_mode,
-        SelectionMenu::ResearchWorkspace => state.new_research_workspace_id = Some(value),
+        SelectionMenu::SessionGraph => state.new_research_graph_id = value,
+        SelectionMenu::ResearchWorkspace | SelectionMenu::ResearchWorkspaceHeading => {
+            state.new_research_workspace_id = Some(value);
+        }
         SelectionMenu::QuickChatWorkspace => {
             state.quick_chat_workspace_id = if value.is_empty() { None } else { Some(value) };
         }
@@ -3297,6 +3403,19 @@ fn header(state: &State, prefix_width: f32) -> El {
                     .font(ui_font(13.0, 400.0))
                     .color(color("#aaaaaa")),
             );
+    } else if state.primary_view == PrimaryView::Automations {
+        title = title
+            .child(
+                el().key("header-divider")
+                    .size(1.0, 18.0)
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
+            )
+            .child(icon(&AUTOMATIONS, 16.0).color(color("#c8c8c8")))
+            .child(
+                text("Automations")
+                    .font(ui_font(13.0, 500.0))
+                    .color(color("#e2e2e2")),
+            );
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         title = title
             .child(
@@ -3397,8 +3516,15 @@ fn nav_button(
     theme: ThemeStyle<'_>,
 ) -> El {
     let color = |value| theme.color(value);
-    let glyph = if active && key == "nav-settings" {
-        &SETTINGS_FILLED
+    let glyph = if active {
+        match key {
+            "nav-home" => &HOME_FILLED,
+            "nav-automations" => &AUTOMATIONS_FILLED,
+            "nav-extensions" => &EXTENSIONS_FILLED,
+            "nav-settings" => &SETTINGS_FILLED,
+            "nav-fleet" => &FLEET_FILLED,
+            _ => glyph,
+        }
     } else {
         glyph
     };
@@ -3452,6 +3578,11 @@ fn nav_button(
             s.rail_tooltip = None;
             s.navigate_to(ViewLocation::Fleet(s.fleet_section, s.fleet.tab));
         })
+    } else if key == "nav-automations" {
+        button.on_press(|s: &mut State| {
+            s.rail_tooltip = None;
+            s.navigate_to(ViewLocation::Automations);
+        })
     } else if active {
         button.on_press(|s: &mut State| {
             s.rail_tooltip = None;
@@ -3481,14 +3612,15 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             &HOME,
             state.primary_view != PrimaryView::Settings
                 && state.primary_view != PrimaryView::Extensions
-                && state.primary_view != PrimaryView::Fleet,
+                && state.primary_view != PrimaryView::Fleet
+                && state.primary_view != PrimaryView::Automations,
             theme,
         ))
         .child(nav_button(
             "nav-automations",
             "Automations",
             &AUTOMATIONS,
-            false,
+            state.primary_view == PrimaryView::Automations,
             theme,
         ))
         .child(nav_button(
@@ -5076,6 +5208,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         for item in fleet_view::render(state, theme, page_width) {
             content = content.child(item);
         }
+    } else if state.primary_view == PrimaryView::Automations {
+        for item in automations_view::render(state, theme) {
+            content = content.child(item);
+        }
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         content = content.child(workspace_creation::render(state, theme));
     } else if state.primary_view == PrimaryView::Workspace {
@@ -5106,6 +5242,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     extensions_view::sidenav(state, state.sidenav_width, theme)
                 }
                 PrimaryView::Fleet => fleet_view::sidenav(state, state.sidenav_width, theme),
+                PrimaryView::Automations => {
+                    automations_view::sidenav(state, state.sidenav_width, theme)
+                }
                 _ => home_sidebar::render(state, state.sidenav_width, theme),
             })
             .child(el().w(1.0).h_full().fill(color("#2a2a2a")));
@@ -5118,7 +5257,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .min_h(0.0)
         .fill(color("#0d0d0d"));
     if state.primary_view == PrimaryView::NewResearch {
-        main_content = main_content.child(new_research::render(state, theme));
+        let graph_width = cx
+            .layout_size("content-surface")
+            .map_or(640.0, |size| (size[0] - 80.0).max(180.0));
+        main_content = main_content.child(new_research::render(state, theme, graph_width));
     } else if state.primary_view == PrimaryView::Home {
         main_content = main_content.child(
             el().key("home-no-workspace")
@@ -5135,7 +5277,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     } else {
         let scroll_watch = if matches!(
             state.primary_view,
-            PrimaryView::Settings | PrimaryView::Extensions | PrimaryView::Fleet
+            PrimaryView::Settings
+                | PrimaryView::Extensions
+                | PrimaryView::Fleet
+                | PrimaryView::Automations
         ) {
             state.settings_scroll.clone()
         } else {
@@ -5143,7 +5288,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         };
         let scroll_key = if matches!(
             state.primary_view,
-            PrimaryView::Settings | PrimaryView::Extensions | PrimaryView::Fleet
+            PrimaryView::Settings
+                | PrimaryView::Extensions
+                | PrimaryView::Fleet
+                | PrimaryView::Automations
         ) {
             "settings-scroll"
         } else {
@@ -5154,6 +5302,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             PrimaryView::Settings => col().w_full().padding(36.0),
             PrimaryView::Extensions => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Fleet => col().w_full().px(24.0).pt(36.0).pb(24.0),
+            PrimaryView::Automations => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Workspace => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::WorkspaceCreation => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Home | PrimaryView::NewResearch => col().w_full(),
@@ -5174,7 +5323,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     .on_wheel(|state: &mut State, event, tx| {
                         if matches!(
                             state.primary_view,
-                            PrimaryView::Settings | PrimaryView::Extensions | PrimaryView::Fleet
+                            PrimaryView::Settings
+                                | PrimaryView::Extensions
+                                | PrimaryView::Fleet
+                                | PrimaryView::Automations
                         ) {
                             state.settings_scroll.wheel(event, tx)
                         } else {
@@ -5277,6 +5429,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.primary_view == PrimaryView::Automations
+        && let Some(layers) = automations_view::confirmation(state, theme)
+    {
+        for layer in layers {
+            window = window.child(layer);
+        }
+    }
     if state.primary_view == PrimaryView::Workspace
         && let Some(scope) = state.workspace_surface_dialog_scope
     {
@@ -5301,6 +5460,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     }
     if state.archive_session_id.is_some() {
         for layer in home_sidebar::archive_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::NewResearch
+        && state.active_session.is_none()
+        && state.graph_editor.is_some()
+    {
+        for layer in new_research::graph_editor_dialog(state, theme) {
             window = window.child(layer);
         }
     }
@@ -5381,6 +5548,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             SelectionMenu::Repeat | SelectionMenu::ResearchWorkspace => {
                 state.primary_view == PrimaryView::NewResearch
             }
+            SelectionMenu::ResearchWorkspaceHeading => {
+                state.primary_view == PrimaryView::NewResearch && state.active_session.is_none()
+            }
+            SelectionMenu::SessionGraph => {
+                state.primary_view == PrimaryView::NewResearch
+                    && state.active_session.is_none()
+                    && extensions_view::graphs_enabled(state)
+            }
             SelectionMenu::QuickChatWorkspace => {
                 state.quick_chat_open && state.quick_chat_id.is_none() && !state.quick_chat_busy
             }
@@ -5434,7 +5609,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::FleetAdd => ("Add App Server", 240.0),
                     SelectionMenu::Repeat => ("Repeat schedule", 190.0),
                     SelectionMenu::GoalMode => ("Goal Mode", 150.0),
+                    SelectionMenu::SessionGraph => ("Session Graph", 190.0),
                     SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
+                    SelectionMenu::ResearchWorkspaceHeading => ("Workspace", 280.0),
                     SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
                     SelectionMenu::ResearchKit => ("Research Kit", 178.0),
                     SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
@@ -5873,6 +6050,9 @@ fn main() -> std::process::ExitCode {
                     if state.primary_view == PrimaryView::Fleet {
                         fleet_view::start_load(state);
                     }
+                    if state.primary_view == PrimaryView::Automations {
+                        automations_view::start_load(state);
+                    }
                 });
             }
             std::thread::sleep(Duration::from_secs(2));
@@ -5886,6 +6066,172 @@ fn main() -> std::process::ExitCode {
 mod tests {
     use super::*;
     use rune::{Env, Runtime, WheelEvent};
+
+    #[test]
+    fn automations_navigation_shows_future_details_and_cancel_choice() {
+        let mut state = State {
+            primary_view: PrimaryView::Home,
+            ..State::default()
+        };
+        state
+            .automations
+            .jobs
+            .push(beale_contracts::v1::AutomationJob {
+                id: uuid::Uuid::new_v4().to_string(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                workspace_id: uuid::Uuid::new_v4().to_string(),
+                title: "Example scheduled research".to_owned(),
+                repeat_preset: "day".to_owned(),
+                next_run_at_ms: 1_900_000_000_000,
+                last_run_at_ms: 1_800_000_000_000,
+                canceled: false,
+            });
+        state
+            .automations
+            .runs
+            .push(beale_contracts::v1::AutomationRun {
+                id: uuid::Uuid::new_v4().to_string(),
+                job_id: state.automations.jobs[0].id.clone(),
+                session_id: String::new(),
+                title: "Example active research".to_owned(),
+                started_at_ms: 1_800_000_060_000,
+                completed_at_ms: 0,
+                status: beale_contracts::v1::AutomationRunStatus::Active as i32,
+                error: String::new(),
+            });
+        state
+            .automations
+            .runs
+            .push(beale_contracts::v1::AutomationRun {
+                id: uuid::Uuid::new_v4().to_string(),
+                job_id: state.automations.jobs[0].id.clone(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                title: "Example past research".to_owned(),
+                started_at_ms: 1_800_000_000_000,
+                completed_at_ms: 1_800_000_030_000,
+                status: beale_contracts::v1::AutomationRunStatus::Complete as i32,
+                error: String::new(),
+            });
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (x, y) = runtime.find("nav-automations").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(runtime.state.primary_view, PrimaryView::Automations);
+        assert!(runtime.find("automations-schedule-job").is_some());
+        assert!(runtime.find("automations-Active-label").is_some());
+        assert!(runtime.find("automations-Future-label").is_some());
+        assert!(runtime.find("automations-Past-label").is_some());
+        assert!(
+            runtime
+                .find(&format!(
+                    "automation-run-active-{}",
+                    runtime.state.automations.runs[0].id
+                ))
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find(&format!(
+                    "automation-run-past-{}",
+                    runtime.state.automations.runs[1].id
+                ))
+                .is_some()
+        );
+        let job_key = format!(
+            "automation-job-future-{}",
+            runtime.state.automations.jobs[0].id
+        );
+        let (x, y) = runtime.find(&job_key).unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.automations.selected_id.as_deref(),
+            Some(runtime.state.automations.jobs[0].id.as_str()),
+        );
+        assert!(runtime.find("automations-cancel-series").is_some());
+        let (x, y) = runtime.find("automations-cancel-series").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        assert!(runtime.find("automations-cancel-dialog").is_some());
+    }
+
+    #[test]
+    fn automation_sections_show_five_rows_until_expanded() {
+        for section in ["active", "future", "past"] {
+            let mut state = State {
+                primary_view: PrimaryView::Automations,
+                ..State::default()
+            };
+            for index in 1..=6 {
+                let id = format!("00000000-0000-4000-8000-{index:012x}");
+                if section == "future" {
+                    state
+                        .automations
+                        .jobs
+                        .push(beale_contracts::v1::AutomationJob {
+                            id,
+                            session_id: uuid::Uuid::new_v4().to_string(),
+                            workspace_id: uuid::Uuid::new_v4().to_string(),
+                            title: format!("Example job {index}"),
+                            repeat_preset: "day".to_owned(),
+                            next_run_at_ms: 1_900_000_000_000,
+                            last_run_at_ms: 1_800_000_000_000,
+                            canceled: false,
+                        });
+                } else {
+                    let active = section == "active";
+                    state
+                        .automations
+                        .runs
+                        .push(beale_contracts::v1::AutomationRun {
+                            id,
+                            job_id: uuid::Uuid::new_v4().to_string(),
+                            session_id: if active {
+                                String::new()
+                            } else {
+                                uuid::Uuid::new_v4().to_string()
+                            },
+                            title: format!("Example run {index}"),
+                            started_at_ms: 1_800_000_000_000,
+                            completed_at_ms: if active { 0 } else { 1_800_000_030_000 },
+                            status: if active {
+                                beale_contracts::v1::AutomationRunStatus::Active as i32
+                            } else {
+                                beale_contracts::v1::AutomationRunStatus::Complete as i32
+                            },
+                            error: String::new(),
+                        });
+                }
+            }
+            let sixth = format!(
+                "automation-{}-{section}-00000000-0000-4000-8000-000000000006",
+                if section == "future" { "job" } else { "run" }
+            );
+            let fifth = format!(
+                "automation-{}-{section}-00000000-0000-4000-8000-000000000005",
+                if section == "future" { "job" } else { "run" }
+            );
+            let toggle = format!("automations-{section}-toggle");
+            let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            assert!(runtime.find(&fifth).is_some());
+            assert!(runtime.find(&sixth).is_none());
+            let (x, y) = runtime.find(&toggle).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0 / 60.0);
+            assert!(runtime.find(&sixth).is_some());
+            let (x, y) = runtime.find(&toggle).unwrap();
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(1.0 / 60.0);
+            assert!(runtime.find(&sixth).is_none());
+        }
+    }
 
     #[test]
     fn safety_tabs_show_editable_host_rules_without_shields() {
@@ -7659,6 +8005,279 @@ mod tests {
     }
 
     #[test]
+    fn graph_choice_is_shown_before_a_session_and_defaults_to_simple() {
+        let mut state = State {
+            primary_view: PrimaryView::NewResearch,
+            workspaces: vec![WorkspaceSummary {
+                id: "00000000-0000-4000-8000-000000000010".to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            new_research_workspace_id: Some("00000000-0000-4000-8000-000000000010".to_owned()),
+            ..State::default()
+        };
+        state.connection = ConnectionStatus::Connected {
+            major: 1,
+            minor: 47,
+        };
+        state.auth_status[Provider::OpenAi.index()].subscription = true;
+        state.model_catalogs[catalog_index(Provider::OpenAi, AuthMethod::Subscription)] =
+            Some(ModelCatalog {
+                models: vec![
+                    provider_models::ModelEntry {
+                        id: "example-lead".to_owned(),
+                        name: "Example Lead".to_owned(),
+                    },
+                    provider_models::ModelEntry {
+                        id: "example-small".to_owned(),
+                        name: "Example Small".to_owned(),
+                    },
+                ],
+                lead: "example-lead".to_owned(),
+                small: "example-small".to_owned(),
+            });
+        state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+            .unwrap()
+            .enabled = true;
+        let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.new_research_graph_id, beale_graphs::SIMPLE_ID);
+        assert!(runtime.find("new-research-workspace-heading").is_some());
+        assert!(runtime.find("new-research-graph-description").is_some());
+        assert!(runtime.find("new-research-simple-graph").is_some());
+        for role in beale_graphs::SIMPLE_GRAPH.nodes {
+            assert!(
+                runtime
+                    .find(&format!("new-research-graph-node-{}", role.id()))
+                    .is_some()
+            );
+        }
+        let (x, y) = runtime.find("new-research-graph-node-scout").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.05);
+        assert_eq!(
+            runtime
+                .state
+                .graph_editor
+                .as_ref()
+                .map(|editor| editor.role),
+            Some(beale_graphs::Role::Scout)
+        );
+        assert!(runtime.find("graph-editor-dialog").is_some());
+        assert!(runtime.find("graph-editor-max-concurrent").is_some());
+        let (x, y) = runtime
+            .find("graph-editor-model-OpenAI-example-small")
+            .unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.07);
+        let (x, y) = runtime.find("graph-editor-save").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.08);
+        assert!(runtime.state.graph_editor.is_none());
+        let scout_models: Vec<_> = new_research::graph_model_config(&runtime.state)
+            .into_iter()
+            .filter(|model| model.node_id == "scout")
+            .map(|model| model.model)
+            .collect();
+        assert_eq!(scout_models, ["example-lead", "example-small"]);
+        assert!(
+            runtime
+                .find("new-research-graph-other-models-scout")
+                .is_some()
+        );
+        assert_eq!(
+            runtime.state.new_research_graph_concurrency,
+            [Some(1), None, None, None]
+        );
+        let (x, y) = runtime.find("new-research-graph-node-scout").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.081);
+        runtime.state.graph_editor_max_concurrent = TextEdit::new("3");
+        runtime.frame(0.082);
+        let (x, y) = runtime.find("graph-editor-save").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.083);
+        assert_eq!(runtime.state.new_research_graph_concurrency[1], Some(3));
+        let (x, y) = runtime.find("new-research-graph-node-main").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.085);
+        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
+        let (x, y) = runtime
+            .find("graph-editor-model-OpenAI-example-small")
+            .unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.09);
+        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
+        runtime.state.graph_editor_max_concurrent = TextEdit::new("2");
+        runtime.frame(0.095);
+        let (x, y) = runtime.find("graph-editor-save").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.098);
+        let main_models: Vec<_> = new_research::graph_model_config(&runtime.state)
+            .into_iter()
+            .filter(|model| model.node_id == "main")
+            .map(|model| model.model)
+            .collect();
+        assert_eq!(main_models, ["example-small"]);
+        assert!(
+            runtime
+                .find("new-research-graph-other-models-main")
+                .is_none()
+        );
+        assert_eq!(runtime.state.new_research_graph_concurrency[0], Some(2));
+        assert_eq!(
+            new_research::graph_concurrency_config(&runtime.state).len(),
+            2
+        );
+        assert_eq!(
+            new_research::graph_concurrency_config(&runtime.state)[0].max_concurrent,
+            2
+        );
+        let (x, y) = runtime.find("new-research-graph-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.1);
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::SessionGraph)
+        );
+        let (x, y) = runtime.find("selection-menu-item-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.2);
+        assert!(runtime.state.new_research_graph_id.is_empty());
+        assert!(runtime.find("new-research-simple-graph").is_none());
+    }
+
+    #[test]
+    fn graph_nodes_stay_inside_the_preview_at_narrow_widths() {
+        for width in [1200.0, 900.0, 720.0, 600.0] {
+            let mut state = State {
+                primary_view: PrimaryView::NewResearch,
+                workspaces: vec![WorkspaceSummary {
+                    id: "00000000-0000-4000-8000-000000000010".to_owned(),
+                    name: "Example Workspace".to_owned(),
+                    directory: "example-directory".to_owned(),
+                }],
+                new_research_workspace_id: Some("00000000-0000-4000-8000-000000000010".to_owned()),
+                ..State::default()
+            };
+            state.connection = ConnectionStatus::Connected {
+                major: 1,
+                minor: 47,
+            };
+            state
+                .features
+                .iter_mut()
+                .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+                .unwrap()
+                .enabled = true;
+            let mut runtime = Runtime::new(state, view, (width, 700.0), Env::new(true, 1.0));
+            runtime.frame(0.0);
+            runtime.frame(0.01);
+            let (stage, _) = runtime.presented("new-research-simple-graph").unwrap();
+            let (surface, _) = runtime.presented("content-surface").unwrap();
+            assert!(stage[0] >= surface[0] - 1.0);
+            assert!(stage[0] + stage[2] <= surface[0] + surface[2] + 1.0);
+            for role in beale_graphs::SIMPLE_GRAPH.nodes {
+                let (node, _) = runtime
+                    .presented(&format!("new-research-graph-node-{}", role.id()))
+                    .unwrap();
+                assert!(
+                    node[0] >= stage[0] - 1.0,
+                    "{} at window width {width}",
+                    role.id()
+                );
+                assert!(
+                    node[0] + node[2] <= stage[0] + stage[2] + 1.0,
+                    "{} at window width {width}",
+                    role.id()
+                );
+                assert!(node[1] >= stage[1] - 1.0);
+                assert!(node[1] + node[3] <= stage[1] + stage[3] + 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn new_research_heading_does_not_require_graphs() {
+        let state = State {
+            primary_view: PrimaryView::NewResearch,
+            workspaces: vec![WorkspaceSummary {
+                id: "00000000-0000-4000-8000-000000000011".to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            new_research_workspace_id: Some("00000000-0000-4000-8000-000000000011".to_owned()),
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("new-research-workspace-heading").is_some());
+        assert!(runtime.find("new-research-graph-control").is_none());
+    }
+
+    #[test]
+    fn new_research_heading_switches_workspace_in_place() {
+        let first_id = "00000000-0000-4000-8000-000000000011";
+        let second_id = "00000000-0000-4000-8000-000000000012";
+        let state = State {
+            primary_view: PrimaryView::NewResearch,
+            workspaces: vec![
+                WorkspaceSummary {
+                    id: first_id.to_owned(),
+                    name: "Example First".to_owned(),
+                    directory: "example-first".to_owned(),
+                },
+                WorkspaceSummary {
+                    id: second_id.to_owned(),
+                    name: "Example Second".to_owned(),
+                    directory: "example-second".to_owned(),
+                },
+            ],
+            new_research_workspace_id: Some(first_id.to_owned()),
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (900.0, 700.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .find("new-research-heading-workspace-underline")
+                .is_some()
+        );
+        let (x, y) = runtime
+            .find("new-research-heading-workspace-control")
+            .unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.1);
+        assert_eq!(
+            runtime.state.selection_menu,
+            Some(SelectionMenu::ResearchWorkspaceHeading)
+        );
+        let (x, y) = runtime.find("selection-menu-item-1").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.2);
+        assert_eq!(
+            runtime.state.new_research_workspace_id.as_deref(),
+            Some(second_id)
+        );
+        assert_eq!(runtime.state.selection_menu, None);
+    }
+
+    #[test]
     fn blank_goal_limits_mean_unlimited_and_invalid_values_are_rejected() {
         assert_eq!(parse_goal_limit(""), Some(0));
         assert_eq!(parse_goal_limit("  "), Some(0));
@@ -7705,6 +8324,9 @@ mod tests {
                 active_ms: 1,
             }),
             first_turn_number: 1,
+            graph_id: String::new(),
+            graph_models: vec![],
+            graph_node_concurrency: vec![],
         };
         state.apply_session_progress(
             1,
@@ -7898,6 +8520,9 @@ mod tests {
             model: "model-example".to_owned(),
             goal: None,
             first_turn_number: 1,
+            graph_id: String::new(),
+            graph_models: vec![],
+            graph_node_concurrency: vec![],
         };
         state.finish_session_turn(1, Ok(detail));
         assert_eq!(state.primary_view, PrimaryView::NewResearch);
@@ -8004,6 +8629,9 @@ mod tests {
                     model: "model-example".to_owned(),
                     goal: None,
                     first_turn_number: 1,
+                    graph_id: String::new(),
+                    graph_models: vec![],
+                    graph_node_concurrency: vec![],
                 }),
                 ..State::default()
             },
@@ -8088,6 +8716,9 @@ mod tests {
                 model: "model-example".to_owned(),
                 goal: None,
                 first_turn_number: 1,
+                graph_id: String::new(),
+                graph_models: vec![],
+                graph_node_concurrency: vec![],
             }),
             session_busy: true,
             session_live_events: vec![SessionStreamEvent {
@@ -8166,6 +8797,9 @@ mod tests {
                 model: "model-example".to_owned(),
                 goal: None,
                 first_turn_number: 1,
+                graph_id: String::new(),
+                graph_models: vec![],
+                graph_node_concurrency: vec![],
             }),
             ..State::default()
         };
@@ -8526,6 +9160,45 @@ mod tests {
                 .is_some()
         );
         assert!(home.find("home-workspaces-empty").is_none());
+    }
+
+    #[test]
+    fn workspace_sessions_show_five_rows_until_expanded() {
+        let workspace_id = "00000000-0000-4000-8000-000000000010";
+        let state = State {
+            primary_view: PrimaryView::Home,
+            workspaces: vec![WorkspaceSummary {
+                id: workspace_id.to_owned(),
+                name: "Example Workspace".to_owned(),
+                directory: "example-directory".to_owned(),
+            }],
+            session_summaries: (1..=6)
+                .map(|index| SessionSummary {
+                    id: format!("00000000-0000-4000-8000-{index:012x}"),
+                    workspace_id: workspace_id.to_owned(),
+                    title: format!("Example session {index}"),
+                    last_message_at_ms: 1_800_000_000_000,
+                })
+                .collect(),
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        let fifth = "home-session-container-00000000-0000-4000-8000-000000000005";
+        let sixth = "home-session-container-00000000-0000-4000-8000-000000000006";
+        let toggle = format!("home-session-toggle-{workspace_id}");
+        runtime.frame(0.0);
+        assert!(runtime.find(fifth).is_some());
+        assert!(runtime.find(sixth).is_none());
+        let (x, y) = runtime.find(&toggle).unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.find(sixth).is_some());
+        let (x, y) = runtime.find(&toggle).unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.find(sixth).is_none());
     }
 
     #[test]
@@ -9438,7 +10111,7 @@ mod tests {
     }
 
     #[test]
-    fn extensions_navigation_opens_plugin_tabs_and_source_dialog() {
+    fn extensions_navigation_opens_features_first_and_keeps_plugin_views() {
         let mut runtime =
             Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
         runtime.frame(0.0);
@@ -9449,9 +10122,21 @@ mod tests {
         assert_eq!(runtime.state.primary_view, PrimaryView::Extensions);
         assert_eq!(
             runtime.state.extensions_section,
-            extensions_view::ExtensionSection::Plugins
+            extensions_view::ExtensionSection::Features
         );
         assert!(runtime.find("extensions-sidenav-title").is_some());
+        assert!(runtime.find("feature-tab-all").is_some());
+        let (features, _) = runtime.presented("extensions-features").unwrap();
+        let (plugins, _) = runtime.presented("extensions-plugins").unwrap();
+        assert!(features[1] < plugins[1]);
+        let (x, y) = runtime.find("extensions-plugins").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0);
+        assert_eq!(
+            runtime.state.extensions_section,
+            extensions_view::ExtensionSection::Plugins
+        );
         assert_eq!(runtime.state.plugin_tab, extensions_view::PluginTab::All);
         assert!(runtime.find("plugin-tab-all").is_some());
         assert!(runtime.find("plugin-tab-available").is_some());
@@ -9511,6 +10196,8 @@ mod tests {
         assert!(runtime.find("feature-tab-available").is_some());
         assert!(runtime.find("feature-tab-enabled").is_some());
         assert!(runtime.find("feature-item-goal-mode").is_some());
+        assert!(runtime.find("feature-item-graphs").is_some());
+        assert!(runtime.find("feature-toggle-graphs").is_some());
         assert!(runtime.find("feature-item-fleet").is_some());
         assert!(runtime.find("feature-toggle-fleet").is_some());
         assert!(runtime.find("feature-tools-fleet").is_some());
@@ -9537,6 +10224,7 @@ mod tests {
     fn active_extension_cards_show_workspace_scope_controls() {
         let mut state = State {
             primary_view: PrimaryView::Extensions,
+            extensions_section: extensions_view::ExtensionSection::Plugins,
             ..State::default()
         };
         state.plugins[0].installed = true;
@@ -9613,6 +10301,7 @@ mod tests {
             let mut runtime = Runtime::new(
                 State {
                     primary_view: PrimaryView::Extensions,
+                    extensions_section: extensions_view::ExtensionSection::Plugins,
                     ..State::default()
                 },
                 view,

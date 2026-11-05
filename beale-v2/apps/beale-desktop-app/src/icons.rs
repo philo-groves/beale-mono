@@ -9,6 +9,12 @@ pub(crate) static HOME: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>"#,
 };
 
+pub(crate) static HOME_FILLED: Icon = Icon {
+    name: "beale-house-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" fill-rule="evenodd" d="M12 2a2 2 0 0 0-1.3.48l-7 6A2 2 0 0 0 3 10v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9a2 2 0 0 0-.7-1.52l-7-6A2 2 0 0 0 12 2Zm-2 19v-7h4v7z"/>"#,
+};
+
 pub(crate) static NEW_RESEARCH: Icon = Icon {
     name: "lucide-square-pen",
     view: 24.0,
@@ -105,6 +111,12 @@ pub(crate) static AUTOMATIONS: Icon = Icon {
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M16 14v2.2l1.6 1"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M16 2v4"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 10h5"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 2v4"/><circle fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" cx="16" cy="16" r="6"/>"#,
 };
 
+pub(crate) static AUTOMATIONS_FILLED: Icon = Icon {
+    name: "beale-calendar-clock-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M8 2a1 1 0 0 1 1 1v1h6V3a1 1 0 1 1 2 0v1h2a3 3 0 0 1 3 3v4h-2V9H4v10a1 1 0 0 0 1 1h4v2H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h2V3a1 1 0 0 1 1-1Z"/><path fill="currentColor" fill-rule="evenodd" d="M16 10a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M16 13.4v2.8l1.7 1"/>"#,
+};
+
 pub(crate) static REPEAT: Icon = Icon {
     name: "lucide-repeat",
     view: 24.0,
@@ -121,6 +133,12 @@ pub(crate) static FLEET: Icon = Icon {
     name: "lucide-server",
     view: 24.0,
     body: r#"<rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="8" x="2" y="14" rx="2" ry="2"/><line fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x1="6" x2="6.01" y1="6" y2="6"/><line fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" x1="6" x2="6.01" y1="18" y2="18"/>"#,
+};
+
+pub(crate) static FLEET_FILLED: Icon = Icon {
+    name: "beale-server-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" fill-rule="evenodd" d="M4 2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2ZM4 14h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2Zm2 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"/>"#,
 };
 
 pub(crate) static FLEET_BROWSER: Icon = Icon {
@@ -175,6 +193,12 @@ pub(crate) static EXTENSIONS: Icon = Icon {
     name: "beale-extensions",
     view: 24.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 3h6a1 1 0 0 1 1 1v6h-2a2 2 0 0 0 0 4h2v6a1 1 0 0 1-1 1h-6v-2a2 2 0 0 0-4 0v2H4a1 1 0 0 1-1-1v-6h2a2 2 0 0 0 0-4H3V4a1 1 0 0 1 1-1h6v2a2 2 0 0 0 4 0V3Z"/>"#,
+};
+
+pub(crate) static EXTENSIONS_FILLED: Icon = Icon {
+    name: "beale-extensions-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M14 3h6a1 1 0 0 1 1 1v6h-2a2 2 0 0 0 0 4h2v6a1 1 0 0 1-1 1h-6v-2a2 2 0 0 0-4 0v2H4a1 1 0 0 1-1-1v-6h2a2 2 0 0 0 0-4H3V4a1 1 0 0 1 1-1h6v2a2 2 0 0 0 4 0V3Z"/>"#,
 };
 
 pub(crate) static FEATURES: Icon = Icon {
@@ -329,11 +353,32 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
 
 #[cfg(test)]
 mod tests {
-    use super::{FLEET_APPLE, FLEET_LINUX, FLEET_WINDOWS, PLUGIN_META};
+    use super::{
+        AUTOMATIONS_FILLED, EXTENSIONS_FILLED, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX,
+        FLEET_WINDOWS, HOME_FILLED, PLUGIN_META, SETTINGS_FILLED,
+    };
 
     #[test]
     fn vendor_svgs_rasterize_in_rune() {
         for mark in [&FLEET_APPLE, &FLEET_WINDOWS, &FLEET_LINUX, &PLUGIN_META] {
+            let coverage = rune::text::icon_coverage(mark, 32);
+            assert!(
+                coverage.iter().filter(|&&pixel| pixel > 0).count() > 40,
+                "{} did not rasterize",
+                mark.name
+            );
+        }
+    }
+
+    #[test]
+    fn active_rail_icons_rasterize_in_rune() {
+        for mark in [
+            &HOME_FILLED,
+            &AUTOMATIONS_FILLED,
+            &EXTENSIONS_FILLED,
+            &SETTINGS_FILLED,
+            &FLEET_FILLED,
+        ] {
             let coverage = rune::text::icon_coverage(mark, 32);
             assert!(
                 coverage.iter().filter(|&&pixel| pixel > 0).count() > 40,

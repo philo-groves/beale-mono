@@ -6,6 +6,8 @@
 
 #### Added
 
+- Added a Graphs feature card, disabled by default, and a centered New Research graph dropdown beneath a workspace heading. The dotted-underlined workspace name opens an in-place selector. Simple Graph uses clickable Rune nodes for Main Agent, Scout, Reviewer, and Prover. Node forms allow one main model, multiple subagent models, and optional Max Concurrent values; only Main defaults to 1. Independent is also available. The graph settings are saved when the session begins.
+- Added an Automations sidebar with Active, Future, and Past run sections. Repeated first turns save a job titled from the session; Future details can skip one occurrence or cancel its series. The desktop updates run status while the view is open and opens completed runs in their sessions.
 - Fleet VM cards now save an enabled toggle, workspace scope, and separate Can Run and Can Clone allowances; both allowances default off.
 - Fleet now lists Hyper-V virtual machines detected by each reachable Windows app-server, with host, state, source, and generation in VM cards.
 - Fleet browser cards show their Source in the stat rows and a star for the host's preferred browser. Each app-server initially prefers its OS default browser when available and saves explicit choices in SQLite schema 20; protocol v1.40 carries the preference.
@@ -29,7 +31,7 @@
 - Added an Uninstall action to installed v2 plugin cards, returning bundled packages to Available.
 - Connected v2 bundled plugin Install actions to the app-server and persisted the Installed tab across restarts.
 - Bundled four v1 managed Agent Plugins packages in v2 Extensions and listed them as Available, uninstalled plugins.
-- Added a v2 Extensions area with Plugins, Features, and Research Kits navigation; the Plugins view has All Plugins, Available, and Installed tabs and an external-source dialog scaffold.
+- Added a v2 Extensions area with Features, Plugins, and Research Kits navigation; Features opens by default, while Plugins has All Plugins, Available, and Installed tabs and an external-source dialog scaffold.
 - Added up and down input-history buttons to v2 workspace session and Quick Chat composers, with unsent-draft restoration and history reset after manual edits or chat changes.
 - Added plus buttons beside v2 Safety rule-set titles and a shared creation dialog for new Auto-Review and Guardian rules.
 - Added v2 Permissions settings with Auto-Review and Guardian tabs and editable, disableable rules.
@@ -78,6 +80,8 @@
 
 #### Changed
 
+- Home workspace session lists and Automations Active, Future, and Past lists show five rows by default, with Show more and Show less controls for longer lists.
+- The v2 icon rail uses filled glyphs for active destinations and outline glyphs for inactive destinations.
 - Replaced the four bundled v2 Plugin placeholders with Apple, Windows, and Meta vendor marks and compact purpose badges.
 - Replaced the v2 Fleet App Server and Virtual Machine OS placeholders with MIT-licensed Apple, Windows, and Tux vector marks.
 - Replaced generic globe marks on v2 Fleet browser cards with the browsers' color logos; manually named browsers without a matching mark retain the globe.
@@ -172,8 +176,22 @@
 
 ### app-server
 
+#### Changed
+
+- OpenAI inference and session tool turns now use the Responses WebSocket with `store: false`; same-connection tool rounds use response IDs and a failed send or missing response ID triggers host-held context replay. Requests enable server-side compaction and group tools in a namespace for subscription use.
+
+#### Fixed
+
+- Reassembled streamed OpenAI output items by their output index and retained completed tool calls when the terminal response carried an empty output array, preventing reasoning-only turns caused by dropped tool items.
+- Excluded OpenAI models that require Daybreak Red from the Blue-mode model catalog and refreshed desktop model choices after changing Daybreak Mode. A blocked session turn now explains the required mode instead of showing a generic provider error.
+- Show safe provider failure codes and actionable subscription, access, rate-limit, and incomplete-response errors in streamed v2 session turns instead of a generic failure. Handle Responses stream error events, including failures after reasoning has begun.
+
 #### Added
 
+- Simple Graph now runs Scout, Reviewer, and Prover subagents through a manager-controlled delegation tool. Batches use saved role models and concurrency limits, fresh contexts, reviewed base tools, paginated results, and session-retained tool activity. The main agent keeps the final response.
+- Protocol v1.47 adds per-role Max Concurrent values to graph session requests and details and limits Simple Graph's main role to one model. SQLite schema 26 stores the graph configuration atomically with the first turn; existing graph selections retain their ID and model choices. Graphs starts disabled and checks workspace scope.
+- SQLite schema 24 stores OpenAI session replay context, including encrypted reasoning and compaction items, atomically with completed turns.
+- Protocol v1.44 adds automation run status to authenticated listing. SQLite schema 23 stores saved run options and occurrence history; existing jobs keep their schedule with default effort and Goal Mode options. The app-server executes due jobs in separate sessions, recovers interrupted runs, and skips older missed occurrences. Rebuild clients and hosts together.
 - Protocol v1.42 adds authenticated VM settings updates and returns host-saved scope and allowances in inventory. SQLite schema 21 stores the settings with Can Run and Can Clone off by default; rebuild connected clients and hosts together.
 - Protocol v1.41 adds authenticated, read-only Hyper-V VM inventory on Windows hosts; other hosts return an empty inventory. Rebuild connected desktops and app-servers together.
 - Added a Windows notification-area icon for the v2 app-server using the Beale logo, with running status and a graceful Exit action.

@@ -6,29 +6,32 @@ use axum::{
     routing::{get, post},
 };
 use beale_contracts::{
-    ARCHIVE_PATH, PROTOBUF_STREAM_CONTENT_TYPE, QUICK_CHAT_DETAIL_PATH, QUICK_CHAT_TURNS_PATH,
-    SESSION_ARCHIVE_PATH, SESSION_DETAIL_PATH, SESSION_RESTORE_PATH, SESSION_TOOL_DETAIL_PATH,
-    SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH, SESSIONS_PATH, session_stream_frame,
+    ARCHIVE_PATH, AUTOMATIONS_CANCEL_PATH, AUTOMATIONS_PATH, PROTOBUF_STREAM_CONTENT_TYPE,
+    QUICK_CHAT_DETAIL_PATH, QUICK_CHAT_TURNS_PATH, SESSION_ARCHIVE_PATH, SESSION_DETAIL_PATH,
+    SESSION_RESTORE_PATH, SESSION_TOOL_DETAIL_PATH, SESSION_TURN_STREAM_PATH, SESSION_TURNS_PATH,
+    SESSIONS_PATH, session_stream_frame,
     v1::{
-        ArchiveEntry, AuthMethod, GoalStatus, ListArchiveResponse, ListSessionsResponse,
-        ProviderId, ReasoningEffort, SessionCommentary, SessionDetail, SessionGoal, SessionMessage,
-        SessionReasoningSummary, SessionRole, SessionStreamEvent, SessionStreamKind,
-        SessionSummary, SessionToolDetailPage, SessionToolSummary, SubmitSessionTurnRequest,
+        ArchiveEntry, AuthMethod, GoalStatus, GraphNodeConcurrency, GraphNodeModel,
+        ListArchiveResponse, ListSessionsResponse, ProviderId, ReasoningEffort, SessionCommentary,
+        SessionDetail, SessionGoal, SessionGraphConfig, SessionMessage, SessionReasoningSummary,
+        SessionRole, SessionStreamEvent, SessionStreamKind, SessionSummary, SessionToolDetailPage,
+        SessionToolSummary, SubmitSessionTurnRequest,
     },
 };
 use beale_providers::{
-    AuthMode, CredentialStore, Provider, ProviderClient, ProviderProgress, TextMessage, TextRole,
-    ToolStepRequest, input_messages, tool_output,
+    AuthMode, CredentialStore, OpenAiConnection, Provider, ProviderClient, ProviderProgress,
+    TextMessage, TextRole, ToolStepRequest, input_messages, provider_error_message, tool_output,
 };
 use beale_safety::ReviewRequest;
 #[cfg(any(feature = "goal-mode", test))]
 use beale_storage::GoalRow;
 use beale_storage::{
-    CommentaryRow, HostDatabase, ReasoningSummaryRow, SessionRow, ToolCallRow, TurnActivity,
-    TurnRow,
+    AutomationOptions, CommentaryRow, HostDatabase, ReasoningSummaryRow, SessionRow, ToolCallRow,
+    TurnActivity, TurnMetadata, TurnRow,
 };
 use beale_tools::{definitions, execute, model_preview, page, summary as tool_summary};
 use futures_util::stream;
+use prost::Message;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -39,6 +42,9 @@ use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
 use beale_workspaces::WorkspaceStore;
+mod automations;
+#[cfg(feature = "graphs")]
+mod graphs;
 mod http;
 mod quick_chat;
 mod system_prompt;
@@ -55,6 +61,127 @@ const MAX_COMMENTARY_BYTES_PER_TURN: usize = 8_192;
 const TOOL_PAGE_BYTES: usize = 8_000;
 const INTERRUPTED_ANSWER: &str =
     "The provider could not complete this turn. Tool activity was saved.";
+
+fn compact_openai_context(input: &[Value]) -> Vec<Value> {
+    let start = input
+        .iter()
+        .rposition(|item| item.get("type").and_then(Value::as_str) == Some("compaction"))
+        .unwrap_or(0);
+    input[start..].to_vec()
+}
+
+fn validate_graph_selection(
+    db: &HostDatabase,
+    graph_id: &str,
+    graph_models: &[GraphNodeModel],
+    graph_node_concurrency: &[GraphNodeConcurrency],
+    session_id: &str,
+    workspace_id: &str,
+) -> Result<(), StatusCode> {
+    if graph_id.is_empty() {
+        return if graph_models.is_empty() && graph_node_concurrency.is_empty() {
+            Ok(())
+        } else {
+            Err(StatusCode::BAD_REQUEST)
+        };
+    }
+    #[cfg(feature = "graphs")]
+    {
+        if !session_id.is_empty() || !beale_graphs::known_graph(graph_id) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if graph_models.len() > 64 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        if graph_node_concurrency.len() > 4 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut per_role = [0_usize; 4];
+        for item in graph_models {
+            let Some(role) = beale_graphs::Role::from_id(&item.node_id) else {
+                return Err(StatusCode::BAD_REQUEST);
+            };
+            per_role[role.index()] += 1;
+            if per_role[role.index()] > role.max_models()
+                || item.model.is_empty()
+                || item.model.len() > 256
+                || !item.model.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+                })
+                || !matches!(ProviderId::try_from(item.provider), Ok(provider) if provider != ProviderId::Unspecified)
+                || !matches!(AuthMethod::try_from(item.method), Ok(method) if method != AuthMethod::Unspecified)
+                || !seen.insert((
+                    item.node_id.as_str(),
+                    item.provider,
+                    item.method,
+                    item.model.as_str(),
+                ))
+            {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+        let mut limited_roles = std::collections::HashSet::new();
+        for item in graph_node_concurrency {
+            if beale_graphs::Role::from_id(&item.node_id).is_none()
+                || item.max_concurrent == 0
+                || item.max_concurrent > beale_graphs::MAX_CONCURRENT
+                || !limited_roles.insert(item.node_id.as_str())
+            {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+        if !db
+            .feature_enabled(beale_graphs::FEATURE_ID)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            || !db
+                .extension_applies_to("feature", beale_graphs::FEATURE_ID, workspace_id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            return Err(StatusCode::CONFLICT);
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "graphs"))]
+    {
+        let _ = (
+            db,
+            graph_models,
+            graph_node_concurrency,
+            session_id,
+            workspace_id,
+        );
+        Err(StatusCode::BAD_REQUEST)
+    }
+}
+
+fn encoded_graph_config(request: &SubmitSessionTurnRequest) -> Option<Vec<u8>> {
+    if request.graph_id.is_empty() {
+        return None;
+    }
+    let concurrency = request.graph_node_concurrency.clone();
+    #[cfg(feature = "graphs")]
+    let mut concurrency = concurrency;
+    #[cfg(feature = "graphs")]
+    if request.graph_id == beale_graphs::SIMPLE_ID
+        && !concurrency
+            .iter()
+            .any(|item| item.node_id == beale_graphs::Role::Main.id())
+        && let Some(max_concurrent) = beale_graphs::Role::Main.default_max_concurrent()
+    {
+        concurrency.push(GraphNodeConcurrency {
+            node_id: beale_graphs::Role::Main.id().to_owned(),
+            max_concurrent,
+        });
+    }
+    Some(
+        SessionGraphConfig {
+            models: request.graph_models.clone(),
+            concurrency,
+        }
+        .encode_to_vec(),
+    )
+}
 
 fn append_tool_result(
     input: &mut Vec<Value>,
@@ -105,9 +232,7 @@ struct StoredTurn {
 }
 
 pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Router> {
-    let db = HostDatabase::open(workspaces.root())?;
-    system_prompt::ensure_file(workspaces.root())?;
-    let credentials = Arc::new(CredentialStore::at(workspaces.root().to_path_buf()));
+    let state = build_state(token, workspaces)?;
     Ok(Router::new()
         .route(SESSIONS_PATH, get(list))
         .route(SESSION_DETAIL_PATH, get(details))
@@ -116,19 +241,35 @@ pub fn router(token: String, workspaces: WorkspaceStore) -> anyhow::Result<Route
         .route(ARCHIVE_PATH, get(list_archive))
         .route(SESSION_TOOL_DETAIL_PATH, get(tool_details))
         .route(SESSION_TURNS_PATH, post(submit_turn))
+        .route(AUTOMATIONS_PATH, get(automations::list))
+        .route(AUTOMATIONS_CANCEL_PATH, post(automations::cancel))
         .route(SESSION_TURN_STREAM_PATH, post(stream_turn))
         .route(QUICK_CHAT_TURNS_PATH, post(quick_chat::turn))
         .route(QUICK_CHAT_DETAIL_PATH, get(quick_chat::details))
         .layer(DefaultBodyLimit::max(20_000))
-        .with_state(SessionState {
-            token,
-            db,
-            workspaces,
-            credentials,
-            provider: Arc::new(ProviderClient::new()?),
-            session_locks: Arc::new(Mutex::new(HashMap::new())),
-            quick_chat_lock: Arc::new(Mutex::new(())),
-        }))
+        .with_state(state))
+}
+
+fn build_state(token: String, workspaces: WorkspaceStore) -> anyhow::Result<SessionState> {
+    let db = HostDatabase::open(workspaces.root())?;
+    system_prompt::ensure_file(workspaces.root())?;
+    let credentials = Arc::new(CredentialStore::at(workspaces.root().to_path_buf()));
+    Ok(SessionState {
+        token,
+        db,
+        workspaces,
+        credentials,
+        provider: Arc::new(ProviderClient::new()?),
+        session_locks: Arc::new(Mutex::new(HashMap::new())),
+        quick_chat_lock: Arc::new(Mutex::new(())),
+    })
+}
+
+pub fn start_automation_scheduler(
+    workspaces: WorkspaceStore,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    let state = build_state(String::new(), workspaces)?;
+    Ok(tokio::spawn(automations::run_worker(state)))
 }
 
 fn parse_id(value: &str) -> Result<Uuid, StatusCode> {
@@ -360,6 +501,14 @@ fn detail(
             })
         })
         .transpose()?;
+    let graph_config = db
+        .session_graph_config(&session.id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .filter(|bytes| !bytes.is_empty())
+        .map(|bytes| SessionGraphConfig::decode(bytes.as_slice()))
+        .transpose()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .unwrap_or_default();
     Ok(SessionDetail {
         summary: Some(summary(session)),
         messages,
@@ -369,6 +518,12 @@ fn detail(
         goal,
         first_turn_number: u64::try_from(first_turn)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        graph_id: db
+            .session_graph_id(&session.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .unwrap_or_default(),
+        graph_models: graph_config.models,
+        graph_node_concurrency: graph_config.concurrency,
     })
 }
 
@@ -628,10 +783,20 @@ async fn stream_turn(
         };
         let _ = tx.send(event).await;
     });
-    let frames = stream::unfold(rx, |mut rx| async move {
+    let frames = stream::unfold((rx, false), |(mut rx, finished)| async move {
+        if finished {
+            return None;
+        }
         while let Some(event) = rx.recv().await {
             if let Some(frame) = session_stream_frame(&event) {
-                return Some((Ok::<Bytes, std::io::Error>(Bytes::from(frame)), rx));
+                let terminal = matches!(
+                    SessionStreamKind::try_from(event.kind),
+                    Ok(SessionStreamKind::Completed | SessionStreamKind::Failed)
+                );
+                return Some((
+                    Ok::<Bytes, std::io::Error>(Bytes::from(frame)),
+                    (rx, terminal),
+                ));
             }
         }
         None
@@ -727,6 +892,7 @@ async fn run_turn(
             request.goal_mode = false;
             request.goal_max_turns = 0;
             request.goal_max_duration_minutes = 0;
+            request.repeat_preset.clear();
             automatic = true;
             continue;
         }
@@ -801,6 +967,35 @@ async fn run_one_turn(
     {
         return Err(StatusCode::BAD_REQUEST);
     }
+    if !request.repeat_preset.is_empty()
+        && (!request.session_id.is_empty()
+            || !matches!(
+                request.repeat_preset.as_str(),
+                "minute" | "hour" | "day" | "week" | "month"
+            ))
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    validate_graph_selection(
+        &state.db,
+        &request.graph_id,
+        &request.graph_models,
+        &request.graph_node_concurrency,
+        &request.session_id,
+        &request.workspace_id,
+    )?;
+    #[cfg(feature = "graphs")]
+    if request.graph_id == beale_graphs::SIMPLE_ID
+        && request.graph_models.iter().any(|model| {
+            model.node_id == beale_graphs::Role::Main.id()
+                && (model.provider != request.provider
+                    || model.method != request.method
+                    || model.model != request.model)
+        })
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let graph_config = encoded_graph_config(&request);
     #[cfg(not(feature = "goal-mode"))]
     if request.goal_mode {
         return Err(StatusCode::BAD_REQUEST);
@@ -969,7 +1164,78 @@ async fn run_one_turn(
             .collect::<Vec<_>>()
             .join("; "),
     );
+    #[cfg(feature = "graphs")]
+    let saved_graph_id = if request.graph_id.is_empty() {
+        state
+            .db
+            .session_graph_id(&session.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .unwrap_or_default()
+    } else {
+        request.graph_id.clone()
+    };
+    #[cfg(feature = "graphs")]
+    let active_graph = if saved_graph_id.is_empty()
+        || !state
+            .db
+            .feature_enabled(beale_graphs::FEATURE_ID)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        || !state
+            .db
+            .extension_applies_to("feature", beale_graphs::FEATURE_ID, &session.workspace_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        None
+    } else {
+        beale_graphs::runtime(&saved_graph_id)
+    };
+    #[cfg(feature = "graphs")]
+    let active_graph_config = if active_graph.is_some() {
+        if let Some(bytes) = &graph_config {
+            SessionGraphConfig::decode(bytes.as_slice())
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        } else {
+            state
+                .db
+                .session_graph_config(&session.id)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .filter(|bytes| !bytes.is_empty())
+                .map(|bytes| SessionGraphConfig::decode(bytes.as_slice()))
+                .transpose()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .unwrap_or_default()
+        }
+    } else {
+        SessionGraphConfig::default()
+    };
+    #[cfg(feature = "graphs")]
+    let graph_fallback = GraphNodeModel {
+        node_id: beale_graphs::Role::Main.id().to_owned(),
+        provider: request.provider,
+        method: request.method,
+        model: request.model.clone(),
+    };
+    #[cfg(feature = "graphs")]
+    let graph_section =
+        active_graph.map(|runtime| runtime.system_section(&active_graph_config, &graph_fallback));
     let mut input = input_messages(&messages);
+    if provider == Provider::OpenAi
+        && turns.last().is_some_and(|turn| {
+            turn.provider == request.provider
+                && turn.method == request.method
+                && turn.model == request.model
+                && turn.answer != INTERRUPTED_ANSWER
+        })
+        && let Some(saved) = state
+            .db
+            .provider_context(&session.id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        let mut previous: Vec<Value> =
+            serde_json::from_str(&saved).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        previous.push(json!({"role":"user","content":request.prompt}));
+        input = previous;
+    }
     #[cfg(feature = "goal-mode")]
     let goal_section = goal.as_ref().filter(|_| goal_active).map(|goal| {
         beale_goals::system_section(
@@ -982,21 +1248,41 @@ async fn run_one_turn(
         )
     });
     #[cfg(feature = "goal-mode")]
-    let sections: Vec<&str> = goal_section.iter().map(String::as_str).collect();
+    let mut sections: Vec<&str> = goal_section.iter().map(String::as_str).collect();
     #[cfg(not(feature = "goal-mode"))]
-    let sections: Vec<&str> = Vec::new();
+    let mut sections: Vec<&str> = Vec::new();
+    #[cfg(feature = "graphs")]
+    sections.extend(graph_section.iter().map(String::as_str));
+    #[cfg(not(feature = "graphs"))]
+    let _ = &mut sections;
     let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
         eprintln!("session system prompt failed: {error:#}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    input.insert(0, json!({"role":"system","content":system}));
-    #[cfg(feature = "goal-mode")]
+    #[cfg(feature = "graphs")]
+    let child_system = if active_graph.is_some() {
+        system_prompt::load(state.workspaces.root(), &[]).map_err(|error| {
+            eprintln!("subagent system prompt failed: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+    } else {
+        String::new()
+    };
+    if provider != Provider::OpenAi {
+        input.insert(0, json!({"role":"system","content":system}));
+    }
+    let mut openai_connection = OpenAiConnection::default();
+    #[cfg(any(feature = "goal-mode", feature = "graphs"))]
     let mut definitions = definitions();
-    #[cfg(not(feature = "goal-mode"))]
+    #[cfg(not(any(feature = "goal-mode", feature = "graphs")))]
     let definitions = definitions();
     #[cfg(feature = "goal-mode")]
     if goal_active {
         definitions.push(beale_goals::definition());
+    }
+    #[cfg(feature = "graphs")]
+    if let Some(runtime) = active_graph {
+        definitions.push(runtime.tool_definition());
     }
     #[cfg(feature = "goal-mode")]
     let mut goal_signal: Option<beale_goals::Signal> = None;
@@ -1006,6 +1292,8 @@ async fn run_one_turn(
     let mut reasoning_bytes = 0_usize;
     let mut commentary_bytes = 0_usize;
     let mut call_count = 0_usize;
+    #[cfg(feature = "graphs")]
+    let mut delegated_count = 0_usize;
     let mut answer = None;
     'rounds: for round in 0..MAX_TOOL_ROUNDS {
         let (provider_tx, forward) = if let Some(client_tx) = progress.clone() {
@@ -1039,22 +1327,37 @@ async fn run_one_turn(
         } else {
             (None, None)
         };
-        let step = state
-            .provider
-            .tool_step(
-                provider,
-                mode,
-                ToolStepRequest {
-                    model: &request.model,
-                    input: &input,
-                    tools: &definitions,
-                    reasoning_effort,
-                    workspace_root: Some(&workspace),
-                },
-                &state.credentials,
-                provider_tx.as_ref(),
-            )
-            .await;
+        let step_request = ToolStepRequest {
+            model: &request.model,
+            input: &input,
+            tools: &definitions,
+            instructions: (provider == Provider::OpenAi).then_some(system.as_str()),
+            reasoning_effort,
+            workspace_root: Some(&workspace),
+        };
+        let step = if provider == Provider::OpenAi {
+            state
+                .provider
+                .openai_tool_step(
+                    mode,
+                    step_request,
+                    &state.credentials,
+                    provider_tx.as_ref(),
+                    &mut openai_connection,
+                )
+                .await
+        } else {
+            state
+                .provider
+                .tool_step(
+                    provider,
+                    mode,
+                    step_request,
+                    &state.credentials,
+                    provider_tx.as_ref(),
+                )
+                .await
+        };
         drop(provider_tx);
         if let Some(forward) = forward {
             let _ = forward.await;
@@ -1064,6 +1367,17 @@ async fn run_one_turn(
             Err(error) => {
                 eprintln!("session provider turn failed: {error:#}");
                 if tool_rows.is_empty() {
+                    if let Some(tx) = &progress {
+                        let _ = tx
+                            .send(SessionStreamEvent {
+                                kind: SessionStreamKind::Failed as i32,
+                                text: provider_error_message(provider, mode, &error),
+                                tool: None,
+                                detail: None,
+                                segment_index: 0,
+                            })
+                            .await;
+                    }
                     return Err(StatusCode::BAD_GATEWAY);
                 }
                 answer = Some(INTERRUPTED_ANSWER.to_owned());
@@ -1095,6 +1409,7 @@ async fn run_one_turn(
                 text: summary,
             });
         }
+        input.extend(step.continuation);
         if step.calls.is_empty() {
             answer = Some(step.text);
             break;
@@ -1129,7 +1444,6 @@ async fn run_one_turn(
             break;
         }
         call_count += step.calls.len();
-        input.extend(step.continuation);
         let mut anthropic_tool_results = Vec::new();
         for call in step.calls {
             if call.id.is_empty()
@@ -1147,6 +1461,8 @@ async fn run_one_turn(
             let args: Result<Value, _> = serde_json::from_str(&call.arguments);
             let summary = if call.name == "goal_status" {
                 "Record Goal Mode status".to_owned()
+            } else if cfg!(feature = "graphs") && call.name == "graph_delegate" {
+                "Delegate to graph subagents".to_owned()
             } else {
                 tool_summary(&call.name, args.as_ref().unwrap_or(&Value::Null))
             };
@@ -1168,6 +1484,8 @@ async fn run_one_turn(
                     })
                     .await;
             }
+            #[cfg(feature = "graphs")]
+            let mut child_tools = Vec::<ToolCallRow>::new();
             let (output, is_error) = match args {
                 #[cfg(feature = "goal-mode")]
                 Ok(args) if call.name == beale_goals::TOOL_NAME && goal_active => {
@@ -1184,6 +1502,42 @@ async fn run_one_turn(
                             }
                             Err(error) => (format!("Invalid goal status: {error}"), true),
                         }
+                    }
+                }
+                #[cfg(feature = "graphs")]
+                Ok(args) if call.name == beale_graphs::DELEGATE_TOOL && active_graph.is_some() => {
+                    let count = args
+                        .get("assignments")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len);
+                    if count == 0
+                        || count
+                            > beale_graphs::MAX_ASSIGNMENTS_PER_TURN.saturating_sub(delegated_count)
+                    {
+                        (
+                            "Subagent assignment limit reached for this turn.".to_owned(),
+                            true,
+                        )
+                    } else {
+                        delegated_count += count;
+                        let result = graphs::delegate(
+                            &saved_graph_id,
+                            graphs::ChildContext {
+                                state,
+                                workspace: &workspace,
+                                workspace_context: &workspace_context,
+                                base_system: &child_system,
+                                reasoning_effort,
+                                turn_number: next_turn_number,
+                                progress: progress.as_ref(),
+                            },
+                            &args,
+                            &active_graph_config,
+                            &graph_fallback,
+                        )
+                        .await;
+                        child_tools = result.tools;
+                        (result.output, result.is_error)
                     }
                 }
                 Ok(args) if call.name == "tool_result_page" => {
@@ -1283,6 +1637,11 @@ async fn run_one_turn(
                     output: output.clone(),
                     is_error,
                 });
+                #[cfg(feature = "graphs")]
+                for mut child in child_tools {
+                    child.ordinal = tool_rows.len() as i64;
+                    tool_rows.push(child);
+                }
                 model_preview(&output, &id)
             };
             append_tool_result(
@@ -1301,6 +1660,22 @@ async fn run_one_turn(
     let mut answer = answer.ok_or(StatusCode::BAD_GATEWAY)?;
     if answer.trim().is_empty() || history_bytes.saturating_add(answer.len()) > MAX_HISTORY_BYTES {
         if tool_rows.is_empty() {
+            if let Some(tx) = &progress {
+                let text = if answer.trim().is_empty() {
+                    "The provider completed without a message or tool call. Try again."
+                } else {
+                    "The provider answer exceeded this session's history limit."
+                };
+                let _ = tx
+                    .send(SessionStreamEvent {
+                        kind: SessionStreamKind::Failed as i32,
+                        text: text.to_owned(),
+                        tool: None,
+                        detail: None,
+                        segment_index: 0,
+                    })
+                    .await;
+            }
             return Err(StatusCode::BAD_GATEWAY);
         }
         answer = INTERRUPTED_ANSWER.to_owned();
@@ -1345,7 +1720,23 @@ async fn run_one_turn(
         duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         internal_prompt: automatic,
     });
+    let repeat_preset = request.repeat_preset;
+    let automation_options = AutomationOptions {
+        reasoning_effort: request.reasoning_effort,
+        goal_mode: request.goal_mode,
+        goal_max_turns: request.goal_max_turns,
+        goal_max_duration_minutes: request.goal_max_duration_minutes,
+    };
     let latest = turns.last().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let provider_context_json =
+        if provider == Provider::OpenAi && latest.answer != INTERRUPTED_ANSWER {
+            Some(
+                serde_json::to_string(&compact_openai_context(&input))
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            )
+        } else {
+            None
+        };
     session.last_message_at_ms = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1353,18 +1744,19 @@ async fn run_one_turn(
             .as_millis(),
     )
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let session_row = SessionRow {
+        id: session.id.clone(),
+        workspace_id: session.workspace_id.clone(),
+        title: session.title.clone(),
+        created_at_ms: i64::try_from(session.created_at_ms)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        last_message_at_ms: i64::try_from(session.last_message_at_ms)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    };
     state
         .db
-        .append_turn_with_goal_activity(
-            &SessionRow {
-                id: session.id.clone(),
-                workspace_id: session.workspace_id.clone(),
-                title: session.title.clone(),
-                created_at_ms: i64::try_from(session.created_at_ms)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-                last_message_at_ms: i64::try_from(session.last_message_at_ms)
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-            },
+        .append_turn_with_metadata(
+            &session_row,
             &TurnRow {
                 number: next_turn_number,
                 provider: latest.provider,
@@ -1383,6 +1775,12 @@ async fn run_one_turn(
                 commentary: &commentary_rows,
                 goal: goal.as_ref(),
             },
+            (!repeat_preset.is_empty()).then_some((repeat_preset.as_str(), automation_options)),
+            TurnMetadata {
+                provider_context_json: provider_context_json.as_deref(),
+                graph_id: (!request.graph_id.is_empty()).then_some(request.graph_id.as_str()),
+                graph_config: graph_config.as_deref(),
+            },
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     trim_recent_turns(&mut turns);
@@ -1396,6 +1794,191 @@ mod tests {
     use axum::{body::Body, http::Request};
     use prost::Message;
     use tower::ServiceExt;
+
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn graph_selection_requires_an_enabled_in_scope_feature_and_new_session() {
+        let root = std::env::temp_dir().join(format!("beale-graph-example-{}", Uuid::new_v4()));
+        let db = HostDatabase::open(&root).unwrap();
+        let workspace = Uuid::new_v4().to_string();
+        let other = Uuid::new_v4().to_string();
+        db.replace_workspaces(
+            &[workspace.as_str(), other.as_str()]
+                .into_iter()
+                .map(|id| beale_storage::WorkspaceRow {
+                    id: id.to_owned(),
+                    name: "Example workspace".to_owned(),
+                    directory: format!("example-directory-{id}"),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(
+            validate_graph_selection(&db, "simple", &[], &[], "", &workspace),
+            Err(StatusCode::CONFLICT)
+        );
+        db.set_feature_enabled(beale_graphs::FEATURE_ID, true)
+            .unwrap();
+        assert_eq!(
+            validate_graph_selection(&db, "simple", &[], &[], "", &workspace),
+            Ok(())
+        );
+        let model = GraphNodeModel {
+            node_id: "scout".to_owned(),
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::Subscription as i32,
+            model: "model-example".to_owned(),
+        };
+        assert_eq!(
+            validate_graph_selection(
+                &db,
+                "simple",
+                std::slice::from_ref(&model),
+                &[],
+                "",
+                &workspace
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_graph_selection(
+                &db,
+                "simple",
+                &[model.clone(), model.clone()],
+                &[],
+                "",
+                &workspace
+            ),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let invalid_model = GraphNodeModel {
+            model: "example-model\nignore-instructions".to_owned(),
+            ..model.clone()
+        };
+        assert_eq!(
+            validate_graph_selection(&db, "simple", &[invalid_model], &[], "", &workspace),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            validate_graph_selection(&db, "", std::slice::from_ref(&model), &[], "", &workspace),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let main = GraphNodeModel {
+            node_id: "main".to_owned(),
+            ..model.clone()
+        };
+        let another_main = GraphNodeModel {
+            model: "model-example-two".to_owned(),
+            ..main.clone()
+        };
+        assert_eq!(
+            validate_graph_selection(&db, "simple", &[main, another_main], &[], "", &workspace),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let limit = GraphNodeConcurrency {
+            node_id: "scout".to_owned(),
+            max_concurrent: 2,
+        };
+        assert_eq!(
+            validate_graph_selection(
+                &db,
+                "simple",
+                &[],
+                std::slice::from_ref(&limit),
+                "",
+                &workspace
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_graph_selection(
+                &db,
+                "simple",
+                &[],
+                &[limit.clone(), limit.clone()],
+                "",
+                &workspace
+            ),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            validate_graph_selection(
+                &db,
+                "simple",
+                &[],
+                &[GraphNodeConcurrency {
+                    max_concurrent: 0,
+                    ..limit
+                }],
+                "",
+                &workspace
+            ),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let mut unknown_role = model;
+        unknown_role.node_id = "unknown".to_owned();
+        assert_eq!(
+            validate_graph_selection(&db, "simple", &[unknown_role], &[], "", &workspace),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            validate_graph_selection(&db, "unknown", &[], &[], "", &workspace),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            validate_graph_selection(&db, "simple", &[], &[], "session-example", &workspace),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        db.set_extension_scope("feature", beale_graphs::FEATURE_ID, false, &[other])
+            .unwrap();
+        assert_eq!(
+            validate_graph_selection(&db, "simple", &[], &[], "", &workspace),
+            Err(StatusCode::CONFLICT)
+        );
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn simple_graph_defaults_only_main_concurrency() {
+        let request = SubmitSessionTurnRequest {
+            graph_id: beale_graphs::SIMPLE_ID.to_owned(),
+            graph_node_concurrency: vec![GraphNodeConcurrency {
+                node_id: "scout".to_owned(),
+                max_concurrent: 3,
+            }],
+            ..Default::default()
+        };
+        let bytes = encoded_graph_config(&request).unwrap();
+        let saved = SessionGraphConfig::decode(bytes.as_slice()).unwrap();
+        assert_eq!(saved.concurrency.len(), 2);
+        assert!(
+            saved
+                .concurrency
+                .iter()
+                .any(|item| item.node_id == "main" && item.max_concurrent == 1)
+        );
+        assert!(
+            saved
+                .concurrency
+                .iter()
+                .any(|item| item.node_id == "scout" && item.max_concurrent == 3)
+        );
+        assert!(encoded_graph_config(&SubmitSessionTurnRequest::default()).is_none());
+    }
+
+    #[test]
+    fn keeps_latest_compaction_and_all_following_items_for_replay() {
+        let context = vec![
+            json!({"role":"user","content":"Old"}),
+            json!({"type":"compaction","encrypted_content":"opaque-example"}),
+            json!({"role":"user","content":"New"}),
+            json!({"type":"reasoning","encrypted_content":"reasoning-example"}),
+        ];
+        assert_eq!(compact_openai_context(&context), context[1..]);
+        assert_eq!(compact_openai_context(&context[0..1]), context[0..1]);
+    }
 
     #[test]
     fn anthropic_parallel_results_share_one_follow_up_message() {
@@ -1440,8 +2023,26 @@ mod tests {
             goal_mode: false,
             goal_max_turns: 0,
             goal_max_duration_minutes: 0,
+            repeat_preset: String::new(),
+            graph_id: "simple".to_owned(),
+            graph_models: vec![GraphNodeModel {
+                node_id: "scout".to_owned(),
+                provider: ProviderId::Openai as i32,
+                method: AuthMethod::Subscription as i32,
+                model: "model-example".to_owned(),
+            }],
+            graph_node_concurrency: vec![GraphNodeConcurrency {
+                node_id: "main".to_owned(),
+                max_concurrent: 1,
+            }],
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.graph_id, "simple");
+        assert_eq!(decoded.graph_models, request.graph_models);
+        assert_eq!(
+            decoded.graph_node_concurrency,
+            request.graph_node_concurrency
+        );
         assert_eq!(
             reasoning_effort_name(decoded.reasoning_effort),
             Ok(Some("high"))
@@ -1466,6 +2067,10 @@ mod tests {
             goal_mode: true,
             goal_max_turns: 12,
             goal_max_duration_minutes: 45,
+            repeat_preset: String::new(),
+            graph_id: String::new(),
+            graph_models: vec![],
+            graph_node_concurrency: vec![],
         };
         let decoded = SubmitSessionTurnRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert!(decoded.goal_mode);
@@ -1654,6 +2259,70 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(feature = "graphs")]
+    #[test]
+    fn saved_graph_models_return_in_session_detail() {
+        let root = std::env::temp_dir().join(format!("beale-graph-example-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4();
+        let session = SessionRow {
+            id: id.to_string(),
+            workspace_id: Uuid::new_v4().to_string(),
+            title: "Example".to_owned(),
+            created_at_ms: 1,
+            last_message_at_ms: 1,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::Subscription as i32,
+            model: "model-example".to_owned(),
+            prompt: "Example prompt".to_owned(),
+            answer: "Example answer".to_owned(),
+            duration_ms: 1,
+            internal_prompt: false,
+        };
+        let graph_model = GraphNodeModel {
+            node_id: "scout".to_owned(),
+            provider: ProviderId::Openai as i32,
+            method: AuthMethod::Subscription as i32,
+            model: "model-example".to_owned(),
+        };
+        let encoded = SessionGraphConfig {
+            models: vec![graph_model.clone()],
+            concurrency: vec![GraphNodeConcurrency {
+                node_id: "main".to_owned(),
+                max_concurrent: 1,
+            }],
+        }
+        .encode_to_vec();
+        let db = HostDatabase::open(&root).unwrap();
+        db.append_turn_with_metadata(
+            &session,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                graph_id: Some(beale_graphs::SIMPLE_ID),
+                graph_config: Some(&encoded),
+                ..TurnMetadata::default()
+            },
+        )
+        .unwrap();
+        let (loaded, turns) = load_persisted(&db, id).unwrap();
+        let detail = detail(&db, &loaded, &turns).unwrap();
+        assert_eq!(detail.graph_id, beale_graphs::SIMPLE_ID);
+        assert_eq!(detail.graph_models, [graph_model]);
+        assert_eq!(detail.graph_node_concurrency[0].max_concurrent, 1);
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn transcript_keeps_full_tool_details_on_host_until_requested() {
         let root = std::env::temp_dir().join(format!("beale-session-example-{}", Uuid::new_v4()));
@@ -1796,6 +2465,10 @@ mod tests {
             goal_mode: false,
             goal_max_turns: 0,
             goal_max_duration_minutes: 0,
+            repeat_preset: String::new(),
+            graph_id: String::new(),
+            graph_models: vec![],
+            graph_node_concurrency: vec![],
         };
         let request = Request::builder()
             .method("POST")
@@ -2058,6 +2731,10 @@ mod tests {
             goal_mode: false,
             goal_max_turns: 0,
             goal_max_duration_minutes: 0,
+            repeat_preset: String::new(),
+            graph_id: String::new(),
+            graph_models: vec![],
+            graph_node_concurrency: vec![],
         };
         let request = Request::builder()
             .method("POST")

@@ -8,12 +8,14 @@ license.workspace = true
 [features]
 default = ["goal-mode"]
 goal-mode = ["dep:beale-goals"]
+graphs = ["dep:beale-graphs"]
 
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 beale-contracts = { path = "../beale-contracts" }
 beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
+beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
 beale-providers = { path = "../beale-providers" }
 beale-safety = { path = "../beale-safety" }
 beale-storage = { path = "../beale-storage" }

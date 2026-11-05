@@ -566,6 +566,40 @@ pub mod v1 {
         pub goal: Option<SessionGoal>,
         #[prost(uint64, tag = "7")]
         pub first_turn_number: u64,
+        #[prost(string, tag = "8")]
+        pub graph_id: String,
+        #[prost(message, repeated, tag = "9")]
+        pub graph_models: Vec<GraphNodeModel>,
+        #[prost(message, repeated, tag = "10")]
+        pub graph_node_concurrency: Vec<GraphNodeConcurrency>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct GraphNodeModel {
+        #[prost(string, tag = "1")]
+        pub node_id: String,
+        #[prost(enumeration = "ProviderId", tag = "2")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "3")]
+        pub method: i32,
+        #[prost(string, tag = "4")]
+        pub model: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct GraphNodeConcurrency {
+        #[prost(string, tag = "1")]
+        pub node_id: String,
+        #[prost(uint32, tag = "2")]
+        pub max_concurrent: u32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SessionGraphConfig {
+        #[prost(message, repeated, tag = "1")]
+        pub models: Vec<GraphNodeModel>,
+        #[prost(message, repeated, tag = "2")]
+        pub concurrency: Vec<GraphNodeConcurrency>,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
@@ -631,6 +665,80 @@ pub mod v1 {
         pub goal_max_turns: u64,
         #[prost(uint64, tag = "10")]
         pub goal_max_duration_minutes: u64,
+        #[prost(string, tag = "11")]
+        pub repeat_preset: String,
+        #[prost(string, tag = "12")]
+        pub graph_id: String,
+        #[prost(message, repeated, tag = "13")]
+        pub graph_models: Vec<GraphNodeModel>,
+        #[prost(message, repeated, tag = "14")]
+        pub graph_node_concurrency: Vec<GraphNodeConcurrency>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct AutomationJob {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub session_id: String,
+        #[prost(string, tag = "3")]
+        pub workspace_id: String,
+        #[prost(string, tag = "4")]
+        pub title: String,
+        #[prost(string, tag = "5")]
+        pub repeat_preset: String,
+        #[prost(uint64, tag = "6")]
+        pub next_run_at_ms: u64,
+        #[prost(uint64, tag = "7")]
+        pub last_run_at_ms: u64,
+        #[prost(bool, tag = "8")]
+        pub canceled: bool,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListAutomationJobsResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub jobs: Vec<AutomationJob>,
+        #[prost(message, repeated, tag = "2")]
+        pub runs: Vec<AutomationRun>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum AutomationRunStatus {
+        Unspecified = 0,
+        Active = 1,
+        Complete = 2,
+        Failed = 3,
+        Interrupted = 4,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct AutomationRun {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(string, tag = "2")]
+        pub job_id: String,
+        #[prost(string, tag = "3")]
+        pub session_id: String,
+        #[prost(string, tag = "4")]
+        pub title: String,
+        #[prost(uint64, tag = "5")]
+        pub started_at_ms: u64,
+        #[prost(uint64, tag = "6")]
+        pub completed_at_ms: u64,
+        #[prost(enumeration = "AutomationRunStatus", tag = "7")]
+        pub status: i32,
+        #[prost(string, tag = "8")]
+        pub error: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct CancelAutomationRequest {
+        #[prost(string, tag = "1")]
+        pub id: String,
+        #[prost(bool, tag = "2")]
+        pub series: bool,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -969,7 +1077,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 42;
+pub const PROTOCOL_MINOR: u32 = 47;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1002,6 +1110,8 @@ pub const SESSION_TURNS_PATH: &str = "/v1/sessions/turns";
 pub const QUICK_CHAT_TURNS_PATH: &str = "/v1/quick-chats/turns";
 pub const SESSION_TURN_STREAM_PATH: &str = "/v1/sessions/turns/stream";
 pub const SESSION_TOOL_DETAIL_PATH: &str = "/v1/sessions/{id}/tools/{tool_id}";
+pub const AUTOMATIONS_PATH: &str = "/v1/automations";
+pub const AUTOMATIONS_CANCEL_PATH: &str = "/v1/automations/cancel";
 pub const PERMISSION_RULES_PATH: &str = "/v1/permissions/rules";
 pub const PLUGINS_PATH: &str = "/v1/plugins";
 pub const FEATURES_PATH: &str = "/v1/features";

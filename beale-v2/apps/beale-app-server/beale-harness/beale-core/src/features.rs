@@ -45,6 +45,15 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_fleet::TOOL_COUNT,
             prompt_extension: beale_fleet::PROMPT_EXTENSION,
         },
+        #[cfg(feature = "graphs")]
+        FeatureSpec {
+            id: beale_graphs::FEATURE_ID,
+            name: beale_graphs::FEATURE_NAME,
+            description: beale_graphs::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_graphs::HAS_PROMPT_EXTENSION,
+            tool_count: beale_graphs::TOOL_COUNT,
+            prompt_extension: beale_graphs::PROMPT_EXTENSION,
+        },
     ]
 }
 
@@ -299,6 +308,17 @@ mod tests {
             .await
             .unwrap();
         let catalog = ListFeaturesResponse::decode(bytes).unwrap();
+        #[cfg(feature = "graphs")]
+        {
+            let graphs = catalog
+                .features
+                .iter()
+                .find(|feature| feature.id == beale_graphs::FEATURE_ID)
+                .unwrap();
+            assert!(!graphs.enabled);
+            assert_eq!(graphs.tool_count, 1);
+            assert!(graphs.has_prompt_extension);
+        }
         let goal = catalog
             .features
             .iter()

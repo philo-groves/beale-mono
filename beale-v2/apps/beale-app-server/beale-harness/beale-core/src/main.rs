@@ -108,7 +108,7 @@ async fn serve() -> Result<()> {
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
-        .merge(beale_sessions::router(token.clone(), workspaces)?)
+        .merge(beale_sessions::router(token.clone(), workspaces.clone())?)
         .merge(features::router(token.clone(), db.clone()));
     #[cfg(feature = "fleet")]
     let app = app.merge(beale_fleet::router(token.clone(), db.clone()));
@@ -120,7 +120,8 @@ async fn serve() -> Result<()> {
     let (tray_exit_tx, tray_exit_rx) = tokio::sync::oneshot::channel();
     #[cfg(windows)]
     let _tray = tray::TrayHandle::start(addr, tray_exit_tx)?;
-    axum::serve(listener, app)
+    let scheduler = beale_sessions::start_automation_scheduler(workspaces)?;
+    let result = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             #[cfg(windows)]
             tokio::select! {
@@ -130,7 +131,9 @@ async fn serve() -> Result<()> {
             #[cfg(not(windows))]
             let _ = tokio::signal::ctrl_c().await;
         })
-        .await?;
+        .await;
+    scheduler.abort();
+    result?;
     Ok(())
 }
 

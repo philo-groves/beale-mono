@@ -31,13 +31,13 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum ExtensionSection {
     #[default]
-    Plugins,
     Features,
+    Plugins,
     ResearchKits,
 }
 
 impl ExtensionSection {
-    const ALL: [Self; 3] = [Self::Plugins, Self::Features, Self::ResearchKits];
+    const ALL: [Self; 3] = [Self::Features, Self::Plugins, Self::ResearchKits];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -153,6 +153,15 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         workspace_ids: Vec::new(),
         all_workspaces: true,
     }, FeatureEntry {
+        id: beale_graphs::FEATURE_ID.to_owned(),
+        name: beale_graphs::FEATURE_NAME.to_owned(),
+        description: beale_graphs::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: false,
+        tool_count: 0,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
         id: "fleet".to_owned(),
         name: "Fleet".to_owned(),
         description: "Open the Fleet area in the desktop app.".to_owned(),
@@ -175,6 +184,19 @@ pub(crate) fn goal_mode_enabled(state: &State) -> bool {
     matches!(state.connection, ConnectionStatus::Connected { .. })
         && state.features.iter().any(|feature| {
             feature.id == "goal-mode"
+                && feature.enabled
+                && (feature.all_workspaces
+                    || state
+                        .new_research_workspace_id
+                        .as_ref()
+                        .is_some_and(|workspace_id| feature.workspace_ids.contains(workspace_id)))
+        })
+}
+
+pub(crate) fn graphs_enabled(state: &State) -> bool {
+    matches!(state.connection, ConnectionStatus::Connected { .. })
+        && state.features.iter().any(|feature| {
+            feature.id == beale_graphs::FEATURE_ID
                 && feature.enabled
                 && (feature.all_workspaces
                     || state
@@ -1394,6 +1416,7 @@ fn plugin_mark(name: &str, theme: ThemeStyle<'_>) -> El {
 fn feature_mark(id: &str, theme: ThemeStyle<'_>) -> El {
     let (glyph, background, foreground) = match id {
         "goal-mode" => (&TARGET, "#4b3b2b", "#f2d6a2"),
+        "graphs" => (&FEATURES, "#37414b", "#d4e6f2"),
         "fleet" => (&FLEET, "#34404b", "#c9deeb"),
         _ => (&FEATURES, "#303030", "#e2e2e2"),
     };
@@ -2063,17 +2086,17 @@ mod tests {
             ..State::default()
         };
         assert_eq!(state.feature_tab, FeatureTab::All);
-        assert_eq!(feature_rows(&state).count(), 2);
+        assert_eq!(feature_rows(&state).count(), 3);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 2);
+        assert_eq!(feature_rows(&state).count(), 3);
         state.feature_tab = FeatureTab::Enabled;
         assert_eq!(feature_rows(&state).count(), 0);
         state.features[0].enabled = true;
         assert_eq!(feature_rows(&state).count(), 1);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 1);
-        state.feature_tab = FeatureTab::All;
         assert_eq!(feature_rows(&state).count(), 2);
+        state.feature_tab = FeatureTab::All;
+        assert_eq!(feature_rows(&state).count(), 3);
     }
 
     #[test]

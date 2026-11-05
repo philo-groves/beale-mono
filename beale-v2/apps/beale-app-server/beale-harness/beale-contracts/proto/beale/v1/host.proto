@@ -352,6 +352,26 @@ message SessionDetail {
   string model = 5;
   SessionGoal goal = 6;
   uint64 first_turn_number = 7; // Earlier turns remain stored when this is greater than one.
+  string graph_id = 8; // Empty when the session has no orchestration graph.
+  repeated GraphNodeModel graph_models = 9; // Saved role model choices; graph execution is separate.
+  repeated GraphNodeConcurrency graph_node_concurrency = 10; // Configured per-role maximums.
+}
+
+message GraphNodeModel {
+  string node_id = 1;
+  ProviderId provider = 2;
+  AuthMethod method = 3;
+  string model = 4;
+}
+
+message GraphNodeConcurrency {
+  string node_id = 1;
+  uint32 max_concurrent = 2; // Positive; an absent role has no configured maximum.
+}
+
+message SessionGraphConfig {
+  repeated GraphNodeModel models = 1;
+  repeated GraphNodeConcurrency concurrency = 2;
 }
 
 enum GoalStatus {
@@ -394,6 +414,50 @@ message SubmitSessionTurnRequest {
   bool goal_mode = 8;
   uint64 goal_max_turns = 9; // Zero means unlimited.
   uint64 goal_max_duration_minutes = 10; // Zero means unlimited active work time.
+  string repeat_preset = 11; // Empty for no repeat; accepted only on the first turn.
+  string graph_id = 12; // Chosen graph on the first turn; empty for no graph or later turns.
+  repeated GraphNodeModel graph_models = 13; // Role model choices on the first turn only.
+  repeated GraphNodeConcurrency graph_node_concurrency = 14; // Per-role maximums on the first turn only.
+}
+
+message AutomationJob {
+  string id = 1;
+  string session_id = 2;
+  string workspace_id = 3;
+  string title = 4;
+  string repeat_preset = 5;
+  uint64 next_run_at_ms = 6;
+  uint64 last_run_at_ms = 7;
+  bool canceled = 8;
+}
+
+message ListAutomationJobsResponse {
+  repeated AutomationJob jobs = 1;
+  repeated AutomationRun runs = 2;
+}
+
+enum AutomationRunStatus {
+  AUTOMATION_RUN_STATUS_UNSPECIFIED = 0;
+  AUTOMATION_RUN_STATUS_ACTIVE = 1;
+  AUTOMATION_RUN_STATUS_COMPLETE = 2;
+  AUTOMATION_RUN_STATUS_FAILED = 3;
+  AUTOMATION_RUN_STATUS_INTERRUPTED = 4;
+}
+
+message AutomationRun {
+  string id = 1;
+  string job_id = 2;
+  string session_id = 3;
+  string title = 4;
+  uint64 started_at_ms = 5;
+  uint64 completed_at_ms = 6;
+  AutomationRunStatus status = 7;
+  string error = 8;
+}
+
+message CancelAutomationRequest {
+  string id = 1;
+  bool series = 2; // False skips the next occurrence.
 }
 
 message QuickChatTurnRequest {

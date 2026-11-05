@@ -202,6 +202,7 @@ pub(super) async fn read_stream(
         "Anthropic returned no tool calls"
     );
     Ok(ProviderStep {
+        response_id: None,
         text,
         calls,
         reasoning_summaries: Vec::new(),

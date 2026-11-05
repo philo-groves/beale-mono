@@ -1,0 +1,11 @@
+[package]
+name = "beale-graphs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+beale-contracts = { path = "../../../apps/beale-app-server/beale-harness/beale-contracts" }
+serde_json.workspace = true
+

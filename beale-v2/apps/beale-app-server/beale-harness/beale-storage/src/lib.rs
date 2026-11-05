@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail, ensure};
+use chrono::{DateTime, Datelike, Months, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     collections::HashSet,
@@ -74,6 +75,109 @@ pub struct SessionRow {
     pub title: String,
     pub created_at_ms: i64,
     pub last_message_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutomationJobRow {
+    pub id: String,
+    pub session_id: String,
+    pub workspace_id: String,
+    pub title: String,
+    pub repeat_preset: String,
+    pub next_run_at_ms: i64,
+    pub last_run_at_ms: i64,
+    pub canceled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutomationOptions {
+    pub reasoning_effort: i32,
+    pub goal_mode: bool,
+    pub goal_max_turns: u64,
+    pub goal_max_duration_minutes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutomationRunRow {
+    pub id: String,
+    pub job_id: String,
+    pub session_id: Option<String>,
+    pub title: String,
+    pub started_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+    pub status: i32,
+    pub error: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutomationClaim {
+    pub run_id: String,
+    pub job_id: String,
+    pub workspace_id: String,
+    pub provider: i32,
+    pub method: i32,
+    pub model: String,
+    pub prompt: String,
+    pub options: AutomationOptions,
+}
+
+pub fn automation_next_run(preset: &str, anchor_ms: i64, occurrence: u32) -> Result<i64> {
+    ensure!(occurrence > 0, "invalid automation occurrence");
+    let interval: i64 = match preset {
+        "minute" => 60_000,
+        "hour" => 3_600_000,
+        "day" => 86_400_000,
+        "week" => 604_800_000,
+        "month" => {
+            let date = DateTime::<Utc>::from_timestamp_millis(anchor_ms)
+                .context("invalid automation time")?;
+            return date
+                .checked_add_months(Months::new(occurrence))
+                .map(|next| next.timestamp_millis())
+                .context("automation time overflow");
+        }
+        _ => bail!("invalid automation repeat preset"),
+    };
+    anchor_ms
+        .checked_add(
+            interval
+                .checked_mul(i64::from(occurrence))
+                .context("automation time overflow")?,
+        )
+        .context("automation time overflow")
+}
+
+fn next_automation_after(
+    preset: &str,
+    anchor_ms: i64,
+    minimum: u32,
+    now_ms: i64,
+) -> Result<(u32, i64)> {
+    let mut occurrence = minimum.max(1);
+    if preset == "month" {
+        let anchor = DateTime::<Utc>::from_timestamp_millis(anchor_ms)
+            .context("invalid automation anchor")?;
+        let now = DateTime::<Utc>::from_timestamp_millis(now_ms).context("invalid current time")?;
+        let months = (now.year() - anchor.year()) * 12 + now.month() as i32 - anchor.month() as i32;
+        occurrence = occurrence.max(u32::try_from(months.max(0))?);
+    } else {
+        let interval = automation_next_run(preset, 0, 1)?;
+        if now_ms >= anchor_ms {
+            let elapsed = now_ms
+                .checked_sub(anchor_ms)
+                .context("automation time overflow")?;
+            occurrence = occurrence.max(u32::try_from(elapsed / interval + 1)?);
+        }
+    }
+    loop {
+        let due = automation_next_run(preset, anchor_ms, occurrence)?;
+        if due > now_ms {
+            return Ok((occurrence, due));
+        }
+        occurrence = occurrence
+            .checked_add(1)
+            .context("automation occurrence overflow")?;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +261,13 @@ pub struct TurnActivity<'a> {
     pub goal: Option<&'a GoalRow>,
 }
 
+#[derive(Default)]
+pub struct TurnMetadata<'a> {
+    pub provider_context_json: Option<&'a str>,
+    pub graph_id: Option<&'a str>,
+    pub graph_config: Option<&'a [u8]>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionWithTurns {
     pub session: SessionRow,
@@ -179,7 +290,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 21 {
+        if version > 26 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -466,7 +577,327 @@ impl HostDatabase {
                  COMMIT;",
             )?;
         }
+        if version < 22 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS automation_jobs (
+                     id TEXT PRIMARY KEY,
+                     session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+                     workspace_id TEXT NOT NULL,
+                     title TEXT NOT NULL,
+                     repeat_preset TEXT NOT NULL,
+                     next_run_at_ms INTEGER NOT NULL,
+                     last_run_at_ms INTEGER NOT NULL,
+                     next_occurrence INTEGER NOT NULL DEFAULT 1,
+                     canceled INTEGER NOT NULL DEFAULT 0 CHECK (canceled IN (0, 1))
+                 );
+                 CREATE INDEX IF NOT EXISTS automation_jobs_next_run ON automation_jobs(canceled, next_run_at_ms);
+                 PRAGMA user_version = 22;
+                 COMMIT;",
+            )?;
+        }
+        if version < 23 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS automation_job_options (
+                     job_id TEXT PRIMARY KEY REFERENCES automation_jobs(id) ON DELETE CASCADE,
+                     reasoning_effort INTEGER NOT NULL,
+                     goal_mode INTEGER NOT NULL CHECK (goal_mode IN (0, 1)),
+                     goal_max_turns INTEGER NOT NULL,
+                     goal_max_duration_minutes INTEGER NOT NULL,
+                     anchor_at_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS automation_runs (
+                     id TEXT PRIMARY KEY,
+                     job_id TEXT NOT NULL REFERENCES automation_jobs(id) ON DELETE CASCADE,
+                     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+                     title TEXT NOT NULL,
+                     started_at_ms INTEGER NOT NULL,
+                     completed_at_ms INTEGER,
+                     status INTEGER NOT NULL CHECK (status IN (1, 2, 3, 4)),
+                     lease_expires_at_ms INTEGER NOT NULL DEFAULT 0,
+                     error TEXT NOT NULL DEFAULT ''
+                 );
+                 CREATE INDEX IF NOT EXISTS automation_runs_job_status ON automation_runs(job_id, status);
+                 INSERT OR IGNORE INTO automation_job_options
+                     (job_id, reasoning_effort, goal_mode, goal_max_turns, goal_max_duration_minutes, anchor_at_ms)
+                 SELECT id, 0, 0, 0, 0, last_run_at_ms FROM automation_jobs;
+                 INSERT OR IGNORE INTO automation_runs
+                     (id, job_id, session_id, title, started_at_ms, completed_at_ms, status)
+                 SELECT a.id, a.id, a.session_id, a.title, s.created_at_ms,
+                        a.last_run_at_ms, 2
+                 FROM automation_jobs a JOIN sessions s ON s.id = a.session_id;
+                 PRAGMA user_version = 23;
+                 COMMIT;",
+            )?;
+        }
+        if version < 24 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS session_provider_context (
+                     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                     context_json TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 24;
+                 COMMIT;",
+            )?;
+        }
+        if version < 25 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS session_graphs (
+                     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                     graph_id TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 25;
+                 COMMIT;",
+            )?;
+        }
+        if version < 26 {
+            let has_config: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('session_graphs') WHERE name = 'config_blob')",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_config {
+                connection.execute_batch("PRAGMA user_version = 26;")?;
+            } else {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     ALTER TABLE session_graphs ADD COLUMN config_blob BLOB NOT NULL DEFAULT X'';
+                     PRAGMA user_version = 26;
+                     COMMIT;",
+                )?;
+            }
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
+    }
+
+    pub fn session_graph_id(&self, session_id: &str) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT graph_id FROM session_graphs WHERE session_id = ?1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn session_graph_config(&self, session_id: &str) -> Result<Option<Vec<u8>>> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT config_blob FROM session_graphs WHERE session_id = ?1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn provider_context(&self, session_id: &str) -> Result<Option<String>> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT context_json FROM session_provider_context WHERE session_id = ?1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn automation_jobs(&self) -> Result<Vec<AutomationJobRow>> {
+        self.with_connection(|db| {
+            let mut query = db.prepare(
+                "SELECT id, session_id, workspace_id, title, repeat_preset,
+                        next_run_at_ms, last_run_at_ms, canceled
+                 FROM automation_jobs ORDER BY canceled, next_run_at_ms, title",
+            )?;
+            let rows = query.query_map([], |row| {
+                Ok(AutomationJobRow {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    workspace_id: row.get(2)?,
+                    title: row.get(3)?,
+                    repeat_preset: row.get(4)?,
+                    next_run_at_ms: row.get(5)?,
+                    last_run_at_ms: row.get(6)?,
+                    canceled: row.get(7)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn automation_runs(&self) -> Result<Vec<AutomationRunRow>> {
+        self.with_connection(|db| {
+            let mut query = db.prepare(
+                "SELECT id, job_id, session_id, title, started_at_ms, completed_at_ms, status, error
+                 FROM automation_runs ORDER BY status = 1 DESC, started_at_ms DESC LIMIT 1024",
+            )?;
+            let rows = query.query_map([], |row| {
+                Ok(AutomationRunRow {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    session_id: row.get(2)?,
+                    title: row.get(3)?,
+                    started_at_ms: row.get(4)?,
+                    completed_at_ms: row.get(5)?,
+                    status: row.get(6)?,
+                    error: row.get(7)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn add_automation_job(&self, session: &SessionRow, preset: &str) -> Result<()> {
+        let next = automation_next_run(preset, session.last_message_at_ms, 1)?;
+        self.with_connection(|db| {
+            let transaction = db.transaction()?;
+            transaction.execute(
+                "INSERT INTO automation_jobs
+                 (id, session_id, workspace_id, title, repeat_preset, next_run_at_ms, last_run_at_ms)
+                 VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6)",
+                params![session.id, session.workspace_id, session.title, preset, next, session.last_message_at_ms],
+            )?;
+            insert_initial_automation_run(&transaction, session, AutomationOptions::default())?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn cancel_automation(&self, id: &str, series: bool) -> Result<bool> {
+        self.with_connection(|db| {
+            let current: Option<(String, i64, i64)> = db
+                .query_row(
+                    "SELECT a.repeat_preset, o.anchor_at_ms, a.next_occurrence
+                     FROM automation_jobs a JOIN automation_job_options o ON o.job_id = a.id
+                     WHERE a.id = ?1 AND a.canceled = 0",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((preset, anchor, occurrence)) = current else { return Ok(false) };
+            if series {
+                db.execute("UPDATE automation_jobs SET canceled = 1 WHERE id = ?1", [id])?;
+            } else {
+                let next_occurrence = occurrence.checked_add(1).context("automation occurrence overflow")?;
+                let next = automation_next_run(&preset, anchor, u32::try_from(next_occurrence)?)?;
+                db.execute(
+                    "UPDATE automation_jobs SET next_run_at_ms = ?2, next_occurrence = ?3 WHERE id = ?1",
+                    params![id, next, next_occurrence],
+                )?;
+            }
+            Ok(true)
+        })
+    }
+
+    pub fn claim_due_automation(&self, now_ms: i64) -> Result<Option<AutomationClaim>> {
+        self.with_connection(|db| {
+            let transaction = db.transaction()?;
+            type Due = (String, String, String, i64, i64, String, i32, i32, String, String, i32, bool, i64, i64);
+            let due: Option<Due> = transaction.query_row(
+                "SELECT a.id, a.workspace_id, a.repeat_preset, a.next_occurrence, o.anchor_at_ms,
+                        a.title, t.provider, t.method, t.model, t.prompt,
+                        o.reasoning_effort, o.goal_mode, o.goal_max_turns, o.goal_max_duration_minutes
+                 FROM automation_jobs a
+                 JOIN automation_job_options o ON o.job_id = a.id
+                 JOIN session_turns t ON t.session_id = a.session_id AND t.number = 1
+                 WHERE a.canceled = 0 AND a.next_run_at_ms <= ?1
+                   AND NOT EXISTS (SELECT 1 FROM automation_runs r WHERE r.job_id = a.id AND r.status = 1)
+                 ORDER BY a.next_run_at_ms LIMIT 1",
+                [now_ms],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?)),
+            ).optional()?;
+            let Some((job_id, workspace_id, preset, occurrence, anchor, title, provider, method,
+                model, prompt, effort, goal_mode, max_turns, max_minutes)) = due else { return Ok(None) };
+            let next_minimum = u32::try_from(occurrence.checked_add(1).context("automation occurrence overflow")?)?;
+            let (next_occurrence, next_due) = next_automation_after(&preset, anchor, next_minimum, now_ms)?;
+            let goal_max_turns = u64::try_from(max_turns)?;
+            let goal_max_duration_minutes = u64::try_from(max_minutes)?;
+            let run_id = uuid::Uuid::new_v4().to_string();
+            transaction.execute(
+                "UPDATE automation_jobs SET next_occurrence = ?2, next_run_at_ms = ?3 WHERE id = ?1",
+                params![job_id, next_occurrence, next_due],
+            )?;
+            transaction.execute(
+                "INSERT INTO automation_runs(id, job_id, title, started_at_ms, status, lease_expires_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, 1, ?5)",
+                params![run_id, job_id, title, now_ms, now_ms.checked_add(30_000).context("lease overflow")?],
+            )?;
+            transaction.commit()?;
+            Ok(Some(AutomationClaim {
+                run_id, job_id, workspace_id, provider, method, model, prompt,
+                options: AutomationOptions {
+                    reasoning_effort: effort, goal_mode,
+                    goal_max_turns,
+                    goal_max_duration_minutes,
+                },
+            }))
+        })
+    }
+
+    pub fn finish_automation_run(
+        &self,
+        run_id: &str,
+        session_id: Option<&str>,
+        status: i32,
+        error: &str,
+        finished_at_ms: i64,
+    ) -> Result<bool> {
+        ensure!(matches!(status, 2 | 3), "invalid automation finish status");
+        ensure!(error.len() <= 512, "automation error is too long");
+        self.with_connection(|db| {
+            let transaction = db.transaction()?;
+            let changed = transaction.execute(
+                "UPDATE automation_runs SET session_id = ?2, completed_at_ms = ?3, status = ?4,
+                 error = ?5, lease_expires_at_ms = 0
+                 WHERE id = ?1 AND status = 1",
+                params![run_id, session_id, finished_at_ms, status, error],
+            )?;
+            if changed == 1 && status == 2 {
+                transaction.execute(
+                    "UPDATE automation_jobs SET last_run_at_ms = ?2 WHERE id =
+                     (SELECT job_id FROM automation_runs WHERE id = ?1)",
+                    params![run_id, finished_at_ms],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(changed == 1)
+        })
+    }
+
+    pub fn interrupt_automation_runs(&self, at_ms: i64) -> Result<usize> {
+        self.with_connection(|db| {
+            Ok(db.execute(
+                "UPDATE automation_runs SET status = 4, completed_at_ms = ?1,
+             lease_expires_at_ms = 0,
+             error = 'The app-server stopped before this occurrence completed.'
+             WHERE status = 1 AND lease_expires_at_ms <= ?1",
+                [at_ms],
+            )?)
+        })
+    }
+
+    pub fn renew_automation_lease(&self, run_id: &str, at_ms: i64) -> Result<bool> {
+        let expires = at_ms.checked_add(30_000).context("lease overflow")?;
+        self.with_connection(|db| {
+            Ok(db.execute(
+                "UPDATE automation_runs SET lease_expires_at_ms = ?2 WHERE id = ?1 AND status = 1",
+                params![run_id, expires],
+            )? == 1)
+        })
     }
 
     fn with_connection<T>(&self, action: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
@@ -1184,12 +1615,72 @@ impl HostDatabase {
         new_session: bool,
         activity: TurnActivity<'_>,
     ) -> Result<()> {
+        self.append_turn_with_goal_and_automation(session, turn, new_session, activity, None)
+    }
+
+    pub fn append_turn_with_goal_and_automation(
+        &self,
+        session: &SessionRow,
+        turn: &TurnRow,
+        new_session: bool,
+        activity: TurnActivity<'_>,
+        repeat_preset: Option<(&str, AutomationOptions)>,
+    ) -> Result<()> {
+        self.append_turn_with_metadata(
+            session,
+            turn,
+            new_session,
+            activity,
+            repeat_preset,
+            TurnMetadata::default(),
+        )
+    }
+
+    pub fn append_turn_with_metadata(
+        &self,
+        session: &SessionRow,
+        turn: &TurnRow,
+        new_session: bool,
+        activity: TurnActivity<'_>,
+        repeat_preset: Option<(&str, AutomationOptions)>,
+        metadata: TurnMetadata<'_>,
+    ) -> Result<()> {
+        let TurnMetadata {
+            provider_context_json,
+            graph_id,
+            graph_config,
+        } = metadata;
+        ensure!(
+            provider_context_json.is_none_or(|value| value.len() <= 8_388_608),
+            "provider context is too large"
+        );
+        ensure!(
+            repeat_preset.is_none() || new_session,
+            "repeat requires a new session"
+        );
+        ensure!(
+            graph_id.is_none_or(|id| new_session && !id.is_empty() && id.len() <= 64),
+            "graph requires a new session"
+        );
+        ensure!(
+            graph_config.is_none_or(|value| graph_id.is_some() && value.len() <= 32_768),
+            "graph config requires a graph and must be bounded"
+        );
+        let automation_next = repeat_preset
+            .map(|(preset, _)| automation_next_run(preset, session.last_message_at_ms, 1))
+            .transpose()?;
         self.with_connection(|connection| {
             let transaction = connection.transaction()?;
             if new_session {
                 transaction.execute(
                     "INSERT INTO sessions(id, workspace_id, title, created_at_ms, last_message_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![session.id, session.workspace_id, session.title, session.created_at_ms, session.last_message_at_ms],
+                )?;
+            }
+            if let Some(graph_id) = graph_id {
+                transaction.execute(
+                    "INSERT INTO session_graphs(session_id, graph_id, config_blob) VALUES (?1, ?2, ?3)",
+                    params![session.id, graph_id, graph_config.unwrap_or_default()],
                 )?;
             }
             transaction.execute(
@@ -1201,6 +1692,13 @@ impl HostDatabase {
                 transaction.execute(
                     "UPDATE sessions SET last_message_at_ms = ?2 WHERE id = ?1",
                     params![session.id, session.last_message_at_ms],
+                )?;
+            }
+            if let Some(context_json) = provider_context_json {
+                transaction.execute(
+                    "INSERT INTO session_provider_context(session_id, context_json) VALUES (?1, ?2)
+                     ON CONFLICT(session_id) DO UPDATE SET context_json = excluded.context_json",
+                    params![session.id, context_json],
                 )?;
             }
             for tool in activity.tools {
@@ -1234,6 +1732,15 @@ impl HostDatabase {
                          active_ms = excluded.active_ms",
                     params![goal.session_id, goal.objective, goal.status, goal.turns_used, goal.required_state, goal.max_turns, goal.max_duration_minutes, goal.active_ms],
                 )?;
+            }
+            if let (Some((preset, options)), Some(next)) = (repeat_preset, automation_next) {
+                transaction.execute(
+                    "INSERT INTO automation_jobs
+                     (id, session_id, workspace_id, title, repeat_preset, next_run_at_ms, last_run_at_ms)
+                     VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![session.id, session.workspace_id, session.title, preset, next, session.last_message_at_ms],
+                )?;
+                insert_initial_automation_run(&transaction, session, options)?;
             }
             transaction.commit()?;
             Ok(())
@@ -1465,6 +1972,33 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
     })
 }
 
+fn insert_initial_automation_run(
+    transaction: &rusqlite::Transaction<'_>,
+    session: &SessionRow,
+    options: AutomationOptions,
+) -> Result<()> {
+    transaction.execute(
+        "INSERT INTO automation_job_options
+         (job_id, reasoning_effort, goal_mode, goal_max_turns, goal_max_duration_minutes, anchor_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![session.id, options.reasoning_effort, options.goal_mode,
+            i64::try_from(options.goal_max_turns)?, i64::try_from(options.goal_max_duration_minutes)?,
+            session.last_message_at_ms],
+    )?;
+    transaction.execute(
+        "INSERT INTO automation_runs
+         (id, job_id, session_id, title, started_at_ms, completed_at_ms, status)
+         VALUES (?1, ?1, ?1, ?2, ?3, ?4, 2)",
+        params![
+            session.id,
+            session.title,
+            session.created_at_ms,
+            session.last_message_at_ms
+        ],
+    )?;
+    Ok(())
+}
+
 fn private_root(root: &Path) -> Result<()> {
     std::fs::create_dir_all(root).context("create private host data directory")?;
     #[cfg(windows)]
@@ -1508,6 +2042,201 @@ mod tests {
 
     fn root() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("beale-storage-example-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn automation_series_persists_and_skips_one_occurrence() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let anchor = chrono::DateTime::parse_from_rfc3339("2026-01-31T12:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example job".to_owned(),
+            created_at_ms: anchor,
+            last_message_at_ms: anchor,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: 1,
+            method: 1,
+            model: "model-example".to_owned(),
+            prompt: "Example prompt".to_owned(),
+            answer: "Example answer".to_owned(),
+            duration_ms: 1,
+            internal_prompt: false,
+        };
+        db.append_turn_with_goal_and_automation(
+            &session,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            Some(("month", AutomationOptions::default())),
+        )
+        .unwrap();
+        assert_eq!(db.automation_jobs().unwrap()[0].title, "Example job");
+        assert!(db.cancel_automation(&session.id, false).unwrap());
+        assert_eq!(
+            db.automation_jobs().unwrap()[0].next_run_at_ms,
+            chrono::DateTime::parse_from_rfc3339("2026-03-31T12:00:00Z")
+                .unwrap()
+                .timestamp_millis()
+        );
+        drop(db);
+        let reopened = HostDatabase::open(&root).unwrap();
+        assert_eq!(reopened.automation_jobs().unwrap().len(), 1);
+        assert!(reopened.cancel_automation(&session.id, true).unwrap());
+        assert!(reopened.automation_jobs().unwrap()[0].canceled);
+        assert!(!reopened.cancel_automation(&session.id, true).unwrap());
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn due_automation_is_claimed_once_and_recovers_after_lease_expiry() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let anchor = 1_800_000_000_000_i64;
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example scheduled job".to_owned(),
+            created_at_ms: anchor,
+            last_message_at_ms: anchor,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: 1,
+            method: 2,
+            model: "model-example".to_owned(),
+            prompt: "Example prompt".to_owned(),
+            answer: "Example answer".to_owned(),
+            duration_ms: 1,
+            internal_prompt: false,
+        };
+        db.append_turn_with_goal_and_automation(
+            &session,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            Some((
+                "minute",
+                AutomationOptions {
+                    reasoning_effort: 3,
+                    goal_mode: true,
+                    goal_max_turns: 4,
+                    goal_max_duration_minutes: 5,
+                },
+            )),
+        )
+        .unwrap();
+        let due = anchor + 60_000;
+        assert!(db.claim_due_automation(due - 1).unwrap().is_none());
+        let claim = db.claim_due_automation(due).unwrap().unwrap();
+        assert_eq!(claim.prompt, "Example prompt");
+        assert_eq!(claim.model, "model-example");
+        assert_eq!(claim.options.reasoning_effort, 3);
+        assert!(claim.options.goal_mode);
+        assert_eq!(claim.options.goal_max_turns, 4);
+        assert_eq!(claim.options.goal_max_duration_minutes, 5);
+        assert!(db.claim_due_automation(due).unwrap().is_none());
+        assert_eq!(db.automation_runs().unwrap()[0].status, 1);
+        assert_eq!(db.interrupt_automation_runs(due + 29_999).unwrap(), 0);
+        assert!(
+            db.renew_automation_lease(&claim.run_id, due + 20_000)
+                .unwrap()
+        );
+        assert_eq!(db.interrupt_automation_runs(due + 40_000).unwrap(), 0);
+        assert!(
+            db.finish_automation_run(&claim.run_id, Some(&session.id), 2, "", due + 40_000)
+                .unwrap()
+        );
+        assert_eq!(db.automation_runs().unwrap()[0].status, 2);
+        assert_eq!(
+            db.automation_jobs().unwrap()[0].next_run_at_ms,
+            anchor + 120_000
+        );
+        let next = db.claim_due_automation(anchor + 120_000).unwrap().unwrap();
+        assert_eq!(db.interrupt_automation_runs(anchor + 150_000).unwrap(), 1);
+        assert_eq!(db.automation_runs().unwrap()[0].status, 4);
+        assert!(
+            !db.finish_automation_run(&next.run_id, None, 3, "failed", anchor + 150_000)
+                .unwrap()
+        );
+        let late = db.claim_due_automation(anchor + 720_000).unwrap().unwrap();
+        assert_eq!(late.prompt, "Example prompt");
+        assert_eq!(
+            db.automation_jobs().unwrap()[0].next_run_at_ms,
+            anchor + 780_000
+        );
+        assert!(db.claim_due_automation(anchor + 720_000).unwrap().is_none());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_twenty_three_migrates_existing_automation_jobs() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example scheduled job".to_owned(),
+            created_at_ms: 1_800_000_000_000,
+            last_message_at_ms: 1_800_000_000_000,
+        };
+        db.append_turn(
+            &session,
+            &TurnRow {
+                number: 1,
+                provider: 1,
+                method: 1,
+                model: "model-example".to_owned(),
+                prompt: "Example prompt".to_owned(),
+                answer: "Example answer".to_owned(),
+                duration_ms: 1,
+                internal_prompt: false,
+            },
+            true,
+        )
+        .unwrap();
+        db.add_automation_job(&session, "hour").unwrap();
+        db.with_connection(|connection| {
+            connection.execute_batch(
+                "DROP TABLE automation_runs;
+                 DROP TABLE automation_job_options;
+                 PRAGMA user_version = 22;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        drop(db);
+        let migrated = HostDatabase::open(&root).unwrap();
+        assert_eq!(migrated.automation_jobs().unwrap().len(), 1);
+        assert_eq!(
+            migrated.automation_runs().unwrap()[0].session_id,
+            Some(session.id)
+        );
+        assert_eq!(migrated.automation_runs().unwrap()[0].status, 2);
+        let claim = migrated
+            .claim_due_automation(1_800_003_600_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(claim.options, AutomationOptions::default());
+        drop(migrated);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1555,7 +2284,32 @@ mod tests {
             duration_ms: 1_234,
             internal_prompt: false,
         };
-        db.append_turn(&session, &first, true).unwrap();
+        db.append_turn_with_metadata(
+            &session,
+            &first,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                provider_context_json: None,
+                graph_id: Some("simple"),
+                graph_config: Some(b"example-config"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.session_graph_id(&session.id).unwrap().as_deref(),
+            Some("simple")
+        );
+        assert_eq!(
+            db.session_graph_config(&session.id).unwrap().as_deref(),
+            Some(b"example-config".as_slice())
+        );
         assert!(db.append_turn(&session, &first, false).is_err());
         let second = TurnRow {
             number: 2,
@@ -1571,20 +2325,63 @@ mod tests {
             after_tool_count: 0,
             text: "Checked the example input.".to_owned(),
         };
-        db.append_turn_with_activity(
+        let context = "[{\"type\":\"compaction\",\"encrypted_content\":\"opaque-example\"}]";
+        db.append_turn_with_metadata(
             &updated_session,
             &second,
             false,
-            &[],
-            std::slice::from_ref(&reasoning),
+            TurnActivity {
+                tools: &[],
+                reasoning: std::slice::from_ref(&reasoning),
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                provider_context_json: Some(context),
+                graph_id: None,
+                graph_config: None,
+            },
         )
         .unwrap();
+        assert_eq!(
+            db.provider_context(&session.id).unwrap().as_deref(),
+            Some(context)
+        );
+        assert!(
+            db.append_turn_with_metadata(
+                &updated_session,
+                &second,
+                false,
+                TurnActivity {
+                    tools: &[],
+                    reasoning: &[],
+                    commentary: &[],
+                    goal: None,
+                },
+                None,
+                TurnMetadata {
+                    provider_context_json: Some("[]"),
+                    graph_id: None,
+                    graph_config: None,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.provider_context(&session.id).unwrap().as_deref(),
+            Some(context)
+        );
         assert_eq!(db.reasoning_summaries(&session.id).unwrap(), [reasoning]);
         assert_eq!(
             db.session(&session.id).unwrap().unwrap().turns,
             [first, second]
         );
         assert_eq!(db.sessions().unwrap(), [updated_session]);
+        assert_eq!(
+            db.session_graph_id(&session.id).unwrap().as_deref(),
+            Some("simple")
+        );
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1734,7 +2531,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 22;")
+            .execute_batch("PRAGMA user_version = 27;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -1742,8 +2539,41 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 22);
+        assert_eq!(version, 27);
         drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_twenty_five_preserves_graph_ids_with_empty_node_settings() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        drop(db);
+        let connection = Connection::open(root.join("state.sqlite")).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE session_graphs DROP COLUMN config_blob;
+                 INSERT INTO sessions(id, workspace_id, title, created_at_ms, last_message_at_ms)
+                 VALUES ('session-example', 'workspace-example', 'Example', 1, 1);
+                 INSERT INTO session_graphs(session_id, graph_id)
+                 VALUES ('session-example', 'simple');
+                 PRAGMA user_version = 25;",
+            )
+            .unwrap();
+        drop(connection);
+        let migrated = HostDatabase::open(&root).unwrap();
+        assert_eq!(
+            migrated
+                .session_graph_id("session-example")
+                .unwrap()
+                .as_deref(),
+            Some("simple")
+        );
+        assert_eq!(
+            migrated.session_graph_config("session-example").unwrap(),
+            Some(Vec::new())
+        );
+        drop(migrated);
         std::fs::remove_dir_all(root).unwrap();
     }
 
