@@ -219,7 +219,6 @@ enum SelectionMenu {
     QuickChatWorkspace,
     HomeCollection,
     FleetAdd,
-    ResearchKit,
     SurfaceKind,
     WorkspaceSurfaceKind,
     ColorTheme,
@@ -646,8 +645,17 @@ struct State {
     workspace_surfaces_revision: u64,
     workspace_rules_revision: u64,
     workspace_name_edit: TextEdit,
+    workspace_name_dialog_open: bool,
+    workspace_name_dialog_value: TextEdit,
+    workspace_name_dialog_error: String,
     workspace_guidance_edit: TextEdit,
     workspace_surface_edits: Vec<WorkspaceSurface>,
+    workspace_surface_hovered: Option<usize>,
+    workspace_surface_selected: Option<usize>,
+    workspace_surface_connecting: Option<usize>,
+    workspace_surface_relationship_target: Option<usize>,
+    workspace_surface_relationship_label: TextEdit,
+    workspace_surface_relationship_error: String,
     workspace_rule_edits: Vec<String>,
     workspace_rule_input: TextEdit,
     workspace_rule_dialog_open: bool,
@@ -848,8 +856,17 @@ impl Default for State {
             workspace_surfaces_revision: 0,
             workspace_rules_revision: 0,
             workspace_name_edit: TextEdit::new(""),
+            workspace_name_dialog_open: false,
+            workspace_name_dialog_value: TextEdit::new(""),
+            workspace_name_dialog_error: String::new(),
             workspace_guidance_edit: TextEdit::new(""),
             workspace_surface_edits: Vec::new(),
+            workspace_surface_hovered: None,
+            workspace_surface_selected: None,
+            workspace_surface_connecting: None,
+            workspace_surface_relationship_target: None,
+            workspace_surface_relationship_label: TextEdit::new(""),
+            workspace_surface_relationship_error: String::new(),
             workspace_rule_edits: Vec::new(),
             workspace_rule_input: TextEdit::new(""),
             workspace_rule_dialog_open: false,
@@ -1168,6 +1185,9 @@ impl State {
         self.workspace_rule_dialog_open = false;
         self.workspace_rule_dialog_error.clear();
         self.workspace_rule_input.clear();
+        self.workspace_name_dialog_open = false;
+        self.workspace_name_dialog_error.clear();
+        self.workspace_name_dialog_value.clear();
         self.workspace_save_error.clear();
         self.workspace_save_message.clear();
         if let Some(id) = load_workspace {
@@ -1226,7 +1246,7 @@ impl State {
         self.workspace_create_error.clear();
         self.workspace_scroll = SettingsScroll::for_key("workspace-scroll");
         self.navigate_to(ViewLocation::WorkspaceCreation(
-            workspace_creation::CreationTab::Foundation,
+            workspace_creation::CreationTab::Import,
         ));
     }
 
@@ -1421,10 +1441,18 @@ impl State {
     }
 
     fn cancel_workspace_creation(&mut self) {
-        if self.workspace_create_busy {
+        if self.workspace_create_busy || self.workspace_draft.import_pending_id.is_some() {
             return;
         }
         self.leave_workspace_creation();
+    }
+
+    fn cancel_workspace_import(&mut self) {
+        if let Some(cancel) = self.workspace_draft.import_cancel.take() {
+            let _ = cancel.send(());
+        }
+        self.workspace_draft.import_pending_id = None;
+        self.workspace_draft.import_log.clear();
     }
 
     fn leave_workspace_creation(&mut self) {
@@ -1482,6 +1510,33 @@ impl State {
                     self.leave_workspace_creation();
                 }
             }
+            Err(error) => self.workspace_create_error = error,
+        }
+    }
+
+    fn finish_workspace_import(
+        &mut self,
+        id: uuid::Uuid,
+        result: Result<beale_contracts::v1::WorkspaceImportResult, String>,
+        tx: &mut Tx,
+    ) {
+        if self.workspace_draft.import_pending_id != Some(id) {
+            return;
+        }
+        self.workspace_draft.import_pending_id = None;
+        self.workspace_draft.import_cancel = None;
+        self.workspace_draft.import_log.clear();
+        match result {
+            Ok(result) => match self.workspace_draft.apply_import(result) {
+                Ok(()) => {
+                    self.workspace_draft.error = None;
+                    self.navigate_to(ViewLocation::WorkspaceCreation(
+                        workspace_creation::CreationTab::Foundation,
+                    ));
+                    tx.scroll_to_y("workspace-scroll", 0.0);
+                }
+                Err(error) => self.workspace_draft.error = Some(error),
+            },
             Err(error) => self.workspace_create_error = error,
         }
     }
@@ -1550,6 +1605,10 @@ impl State {
                 );
                 self.workspace_guidance_edit = TextEdit::new(&sections.details.guidance);
                 self.workspace_surface_edits = sections.details.surfaces.clone();
+                self.workspace_surface_hovered = None;
+                self.workspace_surface_selected = None;
+                self.workspace_surface_connecting = None;
+                self.workspace_surface_relationship_target = None;
                 self.workspace_rule_edits = sections.details.rules.clone();
                 if let Some(summary) = &sections.details.summary
                     && let Some(item) = self
@@ -1596,7 +1655,7 @@ impl State {
                     self.workspace_name_edit = TextEdit::new(summary.name);
                 }
                 self.workspace_guidance_edit = TextEdit::new(saved.guidance);
-                self.workspace_save_message = "Foundation saved.".to_owned();
+                self.workspace_save_message = "General saved.".to_owned();
             }
             Ok(WorkspaceSaveResult::Surfaces(saved)) => {
                 self.workspace_surfaces_revision = saved.revision;
@@ -2253,6 +2312,11 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
                     kind: surface.kind,
                     scope: surface.scope,
                     value: surface.value.clone(),
+                    id: surface.id.clone(),
+                    mapping_progress: surface.mapping_progress,
+                    threat_modeling_progress: surface.threat_modeling_progress,
+                    analysis_progress: surface.analysis_progress,
+                    relationships: surface.relationships.clone(),
                 })
                 .collect(),
         });
@@ -2315,6 +2379,78 @@ fn start_workspace_details(state: &mut State, id: uuid::Uuid) {
             runtime.block_on(workspaces::load_sections(&client, addr, id))
         })();
         handle.update(move |state, _| state.finish_workspace_details(id, generation, result));
+    });
+}
+
+fn start_workspace_import(state: &mut State) {
+    if state.workspace_draft.import_pending_id.is_some()
+        || !matches!(state.connection, ConnectionStatus::Connected { .. })
+    {
+        state.workspace_draft.error = Some("Connect to the app-server to import this workspace.");
+        return;
+    }
+    let Some(model) = new_research::default_model(state) else {
+        state.workspace_draft.error = Some("Configure a default large model before importing.");
+        return;
+    };
+    let Some(handle) = AUTH_HANDLE.get().cloned() else {
+        state.workspace_draft.error = Some("Desktop connection is not ready.");
+        return;
+    };
+    let id = uuid::Uuid::new_v4();
+    let request = beale_contracts::v1::WorkspaceImportRequest {
+        provider: model.provider.id() as i32,
+        method: model.method as i32,
+        model: model.id,
+        instructions: state
+            .workspace_draft
+            .import_instructions
+            .text
+            .trim()
+            .to_owned(),
+    };
+    state.workspace_draft.import_pending_id = Some(id);
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    state.workspace_draft.import_cancel = Some(cancel_tx);
+    state.workspace_draft.import_log.clear();
+    state.workspace_draft.error = None;
+    state.workspace_create_error.clear();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let addr = connection::configured_addr()
+                .map_err(|_| "Invalid local app-server address".to_owned())?;
+            let client = workspaces::import_client()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "Could not initialize import connection".to_owned())?;
+            runtime.block_on(workspaces::import_stream(
+                &client,
+                addr,
+                request,
+                cancel_rx,
+                |message| {
+                    let handle = handle.clone();
+                    handle.update(move |state, _| {
+                        if state.workspace_draft.import_pending_id == Some(id) {
+                            if state.workspace_draft.import_log.len() + message.len() > 12_000 {
+                                let keep =
+                                    state.workspace_draft.import_log.len().saturating_sub(8_000);
+                                let boundary = state
+                                    .workspace_draft
+                                    .import_log
+                                    .char_indices()
+                                    .find(|(index, _)| *index >= keep)
+                                    .map_or(0, |(index, _)| index);
+                                state.workspace_draft.import_log.drain(..boundary);
+                            }
+                            state.workspace_draft.import_log.push_str(&message);
+                        }
+                    });
+                },
+            ))
+        })();
+        handle.update(move |state, tx| state.finish_workspace_import(id, result, tx));
     });
 }
 
@@ -2783,12 +2919,6 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
                 }),
         )
         .collect(),
-        SelectionMenu::ResearchKit => vec![in_place_menu::MenuItem {
-            value: "none".to_owned(),
-            label: "None".to_owned(),
-            detail: None,
-            selected: true,
-        }],
         SelectionMenu::SurfaceKind => workspace_creation::SurfaceKind::ALL
             .into_iter()
             .map(|kind| in_place_menu::MenuItem {
@@ -2940,7 +3070,6 @@ fn selection_menu_anchor(menu: SelectionMenu) -> String {
         SelectionMenu::ResearchWorkspace => "new-research-workspace-control",
         SelectionMenu::ResearchWorkspaceHeading => "new-research-heading-workspace-control",
         SelectionMenu::QuickChatWorkspace => "quick-chat-workspace-control",
-        SelectionMenu::ResearchKit => "workspace-kit-control",
         SelectionMenu::SurfaceKind => "workspace-surface-kind-control",
         SelectionMenu::WorkspaceSurfaceKind => "saved-workspace-surface-kind-control",
         SelectionMenu::LeadProvider => "lead-provider-control",
@@ -3044,7 +3173,6 @@ fn choose_selection_menu_item(state: &mut State, menu: SelectionMenu, value: Str
         SelectionMenu::QuickChatWorkspace => {
             state.quick_chat_workspace_id = if value.is_empty() { None } else { Some(value) };
         }
-        SelectionMenu::ResearchKit => {}
         SelectionMenu::SurfaceKind => {
             if let Some(kind) = workspace_creation::SurfaceKind::ALL
                 .into_iter()
@@ -5273,7 +5401,15 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         let campaign_height = cx
             .layout_size("content-surface")
             .map_or(420.0, |size| (size[1] - 180.0).max(300.0));
-        content = content.child(workspace_view::render(state, theme, campaign_height));
+        let page_width = cx
+            .layout_size("content-surface")
+            .map_or(840.0, |size| (size[0] - 48.0).min(1300.0));
+        content = content.child(workspace_view::render(
+            state,
+            theme,
+            campaign_height,
+            page_width,
+        ));
     }
     let mut body = row().key("body").w_full().grow(1.0).pr(6.0).pb(6.0);
     body = body.child(rail(state, theme));
@@ -5474,6 +5610,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         window = window.child(tooltip);
     }
     if state.primary_view == PrimaryView::WorkspaceCreation
+        && let Some(edit) = state.workspace_draft.basic_dialog
+    {
+        for layer in workspace_creation::basic_dialog(state, edit, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::WorkspaceCreation
         && let Some(scope) = state.workspace_draft.surface_dialog_scope
     {
         for layer in workspace_creation::surface_dialog(state, scope, theme) {
@@ -5494,6 +5637,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.primary_view == PrimaryView::Workspace && state.workspace_name_dialog_open {
+        for layer in workspace_view::name_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
     if state.primary_view == PrimaryView::Workspace
         && let Some(scope) = state.workspace_surface_dialog_scope
     {
@@ -5505,6 +5653,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         && state.workspace_surface_delete_index.is_some()
     {
         for layer in workspace_view::surface_delete_dialog(state, theme) {
+            window = window.child(layer);
+        }
+    }
+    if state.primary_view == PrimaryView::Workspace
+        && state.workspace_surface_relationship_target.is_some()
+    {
+        for layer in workspace_view::relationship_dialog(state, theme) {
             window = window.child(layer);
         }
     }
@@ -5577,12 +5732,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             window = window.child(layer);
         }
     }
+    if state.primary_view == PrimaryView::WorkspaceCreation
+        && state.workspace_draft.import_pending_id.is_some()
+    {
+        window = window.child(quick_chat::render_import(state, theme, cx));
+    }
     if let Some(menu) = state.selection_menu
         && match menu {
-            SelectionMenu::ResearchKit => {
-                state.primary_view == PrimaryView::WorkspaceCreation
-                    && state.workspace_draft.tab == workspace_creation::CreationTab::Foundation
-            }
             SelectionMenu::SurfaceKind => {
                 state.primary_view == PrimaryView::WorkspaceCreation
                     && state.workspace_draft.tab == workspace_creation::CreationTab::Surfaces
@@ -5671,7 +5827,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                     SelectionMenu::ResearchWorkspace => ("Workspace", 280.0),
                     SelectionMenu::ResearchWorkspaceHeading => ("Workspace", 280.0),
                     SelectionMenu::QuickChatWorkspace => ("Quick Chat workspace", 280.0),
-                    SelectionMenu::ResearchKit => ("Research Kit", 178.0),
                     SelectionMenu::SurfaceKind => ("Surface Type", 178.0),
                     SelectionMenu::WorkspaceSurfaceKind => ("Surface Type", 178.0),
                     SelectionMenu::LeadProvider => ("Default Provider", 178.0),
@@ -8771,7 +8926,7 @@ mod tests {
     }
 
     #[test]
-    fn session_history_buttons_restore_the_current_draft() {
+    fn session_history_arrow_keys_restore_the_current_draft() {
         let workspace_id = "00000000-0000-4000-8000-000000000001";
         let session_id = "00000000-0000-4000-8000-000000000002";
         let mut runtime = Runtime::new(
@@ -8824,21 +8979,46 @@ mod tests {
             Env::new(true, 1.0),
         );
         runtime.frame(0.0);
-        let click = |runtime: &mut Runtime<State>, key: &str| {
-            let (x, y) = runtime.find(key).unwrap();
-            runtime.pointer_down(x, y);
-            runtime.pointer_up(x, y);
+        assert!(runtime.find("session-history-previous").is_none());
+        assert!(runtime.find("session-history-next").is_none());
+        let (x, y) = runtime.find("new-research-composer-input").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+        let press_arrow = |runtime: &mut Runtime<State>, key: Key| {
+            runtime.key(KeyEvent {
+                key,
+                mods: rune::Mods::default(),
+            });
             runtime.frame(0.0);
         };
-        click(&mut runtime, "session-history-previous");
+        press_arrow(&mut runtime, Key::Up);
         assert_eq!(runtime.state.new_research_prompt.text, "Second example");
-        click(&mut runtime, "session-history-previous");
+        press_arrow(&mut runtime, Key::Up);
         assert_eq!(runtime.state.new_research_prompt.text, "First example");
-        click(&mut runtime, "session-history-next");
+        press_arrow(&mut runtime, Key::Down);
         assert_eq!(runtime.state.new_research_prompt.text, "Second example");
-        click(&mut runtime, "session-history-next");
+        press_arrow(&mut runtime, Key::Down);
         assert_eq!(runtime.state.new_research_prompt.text, "Unsent example");
-        click(&mut runtime, "session-history-previous");
+        runtime
+            .state
+            .new_research_prompt
+            .replace_text("First line\nSecond line");
+        runtime.frame(0.0);
+        press_arrow(&mut runtime, Key::Up);
+        assert_eq!(
+            runtime.state.new_research_prompt.text,
+            "First line\nSecond line"
+        );
+        assert_eq!(
+            runtime
+                .state
+                .new_research_prompt
+                .line_of_byte(runtime.state.new_research_prompt.focus),
+            0
+        );
+        press_arrow(&mut runtime, Key::Up);
+        assert_eq!(runtime.state.new_research_prompt.text, "Second example");
         let (x, y) = runtime.find("new-research-composer-input").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -9453,6 +9633,8 @@ mod tests {
                 value: "example.test".to_owned(),
                 created_by: SurfaceCreator::Agent as i32,
                 out_of_scope_reason: String::new(),
+                id: "surface-example".to_owned(),
+                ..Default::default()
             }],
             rules: vec!["Stay within scope.".to_owned()],
         };
@@ -9494,6 +9676,22 @@ mod tests {
             loaded.frame(1.0 / 60.0);
             assert!(loaded.find(expected).is_some(), "{expected}");
             if tab == "workspace-tab-surfaces" {
+                assert!(loaded.find("workspace-surface-network").is_some());
+                let (node_x, node_y) = loaded.find("workspace-surface-node-0").unwrap();
+                loaded.pointer_move(node_x, node_y);
+                loaded.frame(1.0 / 60.0);
+                assert!(loaded.find("workspace-surface-name-0").is_some());
+                loaded.pointer_down(node_x, node_y);
+                loaded.pointer_up(node_x, node_y);
+                loaded.frame(1.0 / 60.0);
+                let (x, y) = loaded.find("workspace-surface-progress-0-0").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
+                assert_eq!(
+                    loaded.state.workspace_surface_edits[0].mapping_progress,
+                    100
+                );
                 let (x, y) = loaded.find("saved-workspace-add-in-scope-surface").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
@@ -9528,6 +9726,28 @@ mod tests {
                 assert_eq!(
                     loaded.state.workspace_surface_edits[1].scope,
                     SurfaceScope::InScope as i32
+                );
+                let (x, y) = loaded.find("workspace-surface-connect").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
+                let (x, y) = loaded.find("workspace-surface-node-1").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
+                assert!(
+                    loaded
+                        .find("workspace-surface-relationship-dialog")
+                        .is_some()
+                );
+                loaded.state.workspace_surface_relationship_label = TextEdit::new("contains");
+                let (x, y) = loaded.find("workspace-surface-relationship-add").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0 / 60.0);
+                assert_eq!(
+                    loaded.state.workspace_surface_edits[0].relationships[0].label,
+                    "contains"
                 );
                 let (x, y) = loaded.find("saved-workspace-surface-edit-0").unwrap();
                 loaded.pointer_down(x, y);
@@ -9644,10 +9864,25 @@ mod tests {
                 assert!(loaded.find("saved-workspace-rule-dialog").is_none());
             }
         }
-        assert!(loaded.find("saved-workspace-name-input").is_some());
+        let mut loaded = Runtime::new(loaded.state, view, (2200.0, 900.0), Env::new(true, 1.0));
+        loaded.frame(0.0);
+        assert!(loaded.find("saved-workspace-name-value").is_some());
+        assert!(loaded.find("saved-workspace-name-input").is_none());
+        assert!(loaded.find("saved-workspace-directory-edit").is_none());
         assert!(loaded.find("saved-workspace-guidance-input").is_some());
         assert!(loaded.find("saved-workspace-save-disabled").is_some());
-        loaded.state.workspace_name_edit = TextEdit::new("Renamed Example Workspace");
+        let (x, y) = loaded.find("saved-workspace-name-edit").unwrap();
+        loaded.pointer_down(x, y);
+        loaded.pointer_up(x, y);
+        loaded.frame(1.0);
+        assert!(loaded.state.workspace_name_dialog_open);
+        assert!(loaded.find("saved-workspace-name-dialog").is_some());
+        loaded.state.workspace_name_dialog_value = TextEdit::new("Renamed Example Workspace");
+        let (x, y) = loaded.find("saved-workspace-name-dialog-apply").unwrap();
+        loaded.pointer_down(x, y);
+        loaded.pointer_up(x, y);
+        loaded.frame(1.0);
+        assert!(loaded.find("saved-workspace-name-dialog").is_none());
         let mut edited = Runtime::new(loaded.state, view, (2200.0, 900.0), Env::new(true, 1.0));
         edited.frame(0.0);
         assert!(edited.find("saved-workspace-save").is_some());
@@ -9691,20 +9926,82 @@ mod tests {
         let (creation_title, _) = runtime.presented("workspace-creation-title").unwrap();
         assert!((creation_title[1] - settings_title[1]).abs() < 1.0);
         assert!((creation_title[3] - settings_title[3]).abs() < 1.0);
-        assert!(runtime.find("workspace-kit-control").is_some());
-        assert!(runtime.find("workspace-name-input").is_some());
-        assert!(runtime.find("workspace-directory-input").is_some());
+        assert_eq!(
+            runtime.state.workspace_draft.tab,
+            workspace_creation::CreationTab::Import
+        );
+        assert!(runtime.find("workspace-import-source-form").is_some());
+        assert!(runtime.find("workspace-import-source-None").is_some());
+        runtime.state.workspace_draft.import_pending_id = Some(uuid::Uuid::new_v4());
+        runtime.frame(2.0);
+        let (panel, _) = runtime.presented("workspace-import-chat").unwrap();
+        let (ribbon, _) = runtime.presented("workspace-import-chat-ribbon").unwrap();
+        let (body, _) = runtime.presented("workspace-import-chat-content").unwrap();
+        let (composer, _) = runtime.presented("workspace-import-chat-composer").unwrap();
+        assert!((panel[2] - ribbon[2] - 40.0).abs() < 1.0);
+        assert!((body[2] - ribbon[2]).abs() < 1.0);
+        assert!((panel[2] - composer[2]).abs() < 1.0);
+        assert!(
+            runtime
+                .find("workspace-import-chat-content-left-border")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .find("workspace-import-chat-content-right-border")
+                .is_some()
+        );
+        assert!(runtime.presented("workspace-import-chat-request").is_some());
+        click(&mut runtime, "workspace-import-chat-close");
+        assert!(runtime.state.workspace_draft.import_pending_id.is_none());
+        click(&mut runtime, "workspace-import-source-Research Kit");
+        assert!(runtime.find("workspace-import-details-form").is_some());
+        click(&mut runtime, "workspace-next");
+        assert!(runtime.find("workspace-creation-error").is_some());
+        click(&mut runtime, "workspace-import-source-Custom Instructions");
+        assert!(runtime.find("workspace-import-instructions").is_some());
+        click(&mut runtime, "workspace-import-source-None");
+        click(&mut runtime, "workspace-next");
+        assert_eq!(
+            runtime.state.workspace_draft.tab,
+            workspace_creation::CreationTab::Foundation
+        );
+        assert!(runtime.find("workspace-name-input").is_none());
+        assert!(runtime.find("workspace-directory-input").is_none());
+        assert!(runtime.find("workspace-name-edit").is_some());
+        assert!(runtime.find("workspace-directory-edit").is_some());
         assert!(runtime.find("workspace-guidance-input").is_some());
         assert!(runtime.find("workspace-research-subject-input").is_none());
-        let (name, _) = runtime.presented("workspace-name-input").unwrap();
-        let (directory, _) = runtime.presented("workspace-directory-input").unwrap();
+        let (name, _) = runtime.presented("workspace-name-value").unwrap();
+        let (directory, _) = runtime.presented("workspace-directory-value").unwrap();
+        let (name_value, _) = runtime.presented("workspace-name-value-value").unwrap();
+        let (name_edit, _) = runtime.presented("workspace-name-edit").unwrap();
+        let (directory_value, _) = runtime
+            .presented("workspace-directory-value-value")
+            .unwrap();
+        let (directory_edit, _) = runtime.presented("workspace-directory-edit").unwrap();
         let (picker, _) = runtime.presented("workspace-directory-picker").unwrap();
-        let (kit, _) = runtime.presented("workspace-kit-control").unwrap();
         let (guidance, _) = runtime.presented("workspace-guidance-row").unwrap();
-        assert!(name[1] < directory[1] && directory[1] < kit[1]);
-        assert!(picker[0] + picker[2] <= directory[0]);
-        assert!(kit[1] < guidance[1]);
+        assert!(name[1] < directory[1]);
+        assert!(name_edit[0] - (name_value[0] + name_value[2]) <= 8.0);
+        assert!(directory_edit[0] - (directory_value[0] + directory_value[2]) <= 8.0);
+        assert!(picker[0] + picker[2] <= directory[0] + directory[2]);
+        assert!(directory[1] < guidance[1]);
         assert!(runtime.find("workspace-guidance-form").is_none());
+        click(&mut runtime, "workspace-name-edit");
+        assert!(runtime.find("workspace-basic-dialog-input").is_some());
+        click(&mut runtime, "workspace-basic-dialog-apply");
+        assert!(runtime.find("workspace-basic-dialog-error").is_some());
+        runtime.state.workspace_draft.basic_dialog_value = TextEdit::new("Example Workspace");
+        click(&mut runtime, "workspace-basic-dialog-apply");
+        assert_eq!(runtime.state.workspace_draft.name.text, "Example Workspace");
+        assert!(runtime.find("workspace-basic-dialog").is_none());
+        click(&mut runtime, "workspace-directory-edit");
+        assert!(runtime.find("workspace-basic-dialog-input").is_some());
+        runtime.state.workspace_draft.basic_dialog_value = TextEdit::new("relative/example");
+        click(&mut runtime, "workspace-basic-dialog-apply");
+        assert!(runtime.find("workspace-basic-dialog-error").is_some());
+        click(&mut runtime, "workspace-basic-dialog-cancel");
         click(&mut runtime, "workspace-directory-picker");
         assert_eq!(
             runtime.file_dialog().map(|(kind, _)| kind),
@@ -9732,21 +10029,16 @@ mod tests {
             runtime.state.workspace_draft.directory.text,
             selected_directory.to_string_lossy()
         );
-        let kits = selection_menu_items(&runtime.state, SelectionMenu::ResearchKit);
-        assert_eq!(kits.len(), 1);
-        assert_eq!(kits[0].label, "None");
-        click(&mut runtime, "workspace-kit-control");
-        assert!(runtime.find("selection-menu-item-0").is_some());
-        assert!(runtime.find("selection-menu-item-1").is_none());
-        click(&mut runtime, "selection-menu-item-0");
-        assert!(runtime.state.selection_menu.is_none());
+        runtime.state.workspace_draft.directory.clear();
+        runtime.frame(0.0);
         click(&mut runtime, "workspace-next");
         assert_eq!(
             runtime.state.workspace_draft.tab,
             workspace_creation::CreationTab::Foundation
         );
         assert!(runtime.find("workspace-creation-error").is_some());
-        runtime.state.workspace_draft.name = TextEdit::new("Example Workspace");
+        runtime.state.workspace_draft.directory =
+            TextEdit::new(selected_directory.to_string_lossy());
         runtime.frame(0.0);
         click(&mut runtime, "workspace-next");
         assert_eq!(

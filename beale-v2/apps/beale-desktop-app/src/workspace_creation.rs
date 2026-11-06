@@ -1,8 +1,10 @@
 use rune::{Color, El, FileDialogOptions, TextEdit, Tx, col, el, icon, row, text, text_input};
 
 use crate::{
-    FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button, form_label_font,
-    icons::{FOLDER_OPEN, PLUS},
+    FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
+    form_controls::icon_action_button,
+    form_item_row, form_label_font,
+    icons::{FOLDER_OPEN, PEN, PLUS},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
     toggle_selection_menu, ui_font, view_title_font,
 };
@@ -10,6 +12,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum CreationTab {
     #[default]
+    Import,
     Foundation,
     Surfaces,
     Rules,
@@ -21,11 +24,16 @@ struct TabSpec {
     label: &'static str,
 }
 
-const TABS: [TabSpec; 3] = [
+const TABS: [TabSpec; 4] = [
+    TabSpec {
+        tab: CreationTab::Import,
+        key: "workspace-tab-import",
+        label: "Import",
+    },
     TabSpec {
         tab: CreationTab::Foundation,
         key: "workspace-tab-foundation",
-        label: "Foundation",
+        label: "General",
     },
     TabSpec {
         tab: CreationTab::Surfaces,
@@ -38,6 +46,111 @@ const TABS: [TabSpec; 3] = [
         label: "Rules",
     },
 ];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BasicEdit {
+    Name,
+    Directory,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ImportSource {
+    #[default]
+    None,
+    ResearchKit,
+    CustomInstructions,
+}
+
+impl ImportSource {
+    const ALL: [Self; 3] = [Self::None, Self::ResearchKit, Self::CustomInstructions];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::ResearchKit => "Research Kit",
+            Self::CustomInstructions => "Custom Instructions",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::None => "Configure workspace details manually.",
+            Self::ResearchKit => "Prepare surfaces and rules from a Research Kit.",
+            Self::CustomInstructions => {
+                "Prepare a draft from your instructions with the default large model."
+            }
+        }
+    }
+}
+
+fn home_directory() -> Option<std::path::PathBuf> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+pub(crate) fn display_directory(value: &str) -> String {
+    let path = std::path::Path::new(value);
+    if let Some(home) = home_directory() {
+        if let Ok(relative) = path.strip_prefix(&home) {
+            let suffix = relative.to_string_lossy().replace('\\', "/");
+            return if suffix.is_empty() {
+                "~/".to_owned()
+            } else {
+                format!("~/{suffix}")
+            };
+        }
+        if cfg!(windows) {
+            let path = value.replace('\\', "/");
+            let home = home.to_string_lossy().replace('\\', "/");
+            let path = path.strip_prefix("//?/").unwrap_or(&path);
+            let home = home.strip_prefix("//?/").unwrap_or(&home);
+            if let Some(prefix) = path.get(..home.len())
+                && prefix.eq_ignore_ascii_case(home)
+                && let Some(suffix) = path.get(home.len()..)
+                && (suffix.is_empty() || suffix.starts_with('/'))
+            {
+                let suffix = suffix.trim_start_matches('/');
+                return if suffix.is_empty() {
+                    "~/".to_owned()
+                } else {
+                    format!("~/{suffix}")
+                };
+            }
+        }
+    }
+    value.to_owned()
+}
+
+pub(crate) fn value_with_actions(
+    key: &'static str,
+    value: String,
+    width: f32,
+    actions: Vec<El>,
+    theme: ThemeStyle<'_>,
+) -> El {
+    let empty = value.trim().is_empty();
+    let mut control = row()
+        .key(key)
+        .w(width)
+        .min_w(0.0)
+        .h(32.0)
+        .center_y()
+        .gap(6.0)
+        .child(el().grow(1.0))
+        .child(
+            text(if empty { "Required".to_owned() } else { value })
+                .key(format!("{key}-value"))
+                .min_w(0.0)
+                .truncate()
+                .font(ui_font(14.0, 400.0))
+                .color(theme.color(if empty { "#dca15f" } else { "#e2e2e2" })),
+        );
+    for action in actions {
+        control = control.child(action);
+    }
+    control
+}
 
 impl CreationTab {
     pub(crate) fn label(self) -> &'static str {
@@ -137,8 +250,16 @@ pub(crate) struct Surface {
 pub(crate) struct WorkspaceDraft {
     pub(crate) tab: CreationTab,
     unlocked: usize,
+    pub(crate) import_source: ImportSource,
+    pub(crate) import_instructions: TextEdit,
+    pub(crate) import_pending_id: Option<uuid::Uuid>,
+    pub(crate) import_cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    pub(crate) import_log: String,
     pub(crate) name: TextEdit,
     pub(crate) directory: TextEdit,
+    pub(crate) basic_dialog: Option<BasicEdit>,
+    pub(crate) basic_dialog_value: TextEdit,
+    pub(crate) basic_dialog_error: Option<&'static str>,
     pub(crate) guidance: TextEdit,
     pub(crate) surface_kind: SurfaceKind,
     pub(crate) surface_value: TextEdit,
@@ -154,10 +275,18 @@ pub(crate) struct WorkspaceDraft {
 impl Default for WorkspaceDraft {
     fn default() -> Self {
         Self {
-            tab: CreationTab::Foundation,
+            tab: CreationTab::Import,
             unlocked: 0,
+            import_source: ImportSource::None,
+            import_instructions: TextEdit::new(""),
+            import_pending_id: None,
+            import_cancel: None,
+            import_log: String::new(),
             name: TextEdit::new(""),
             directory: TextEdit::new(""),
+            basic_dialog: None,
+            basic_dialog_value: TextEdit::new(""),
+            basic_dialog_error: None,
             guidance: TextEdit::new(""),
             surface_kind: SurfaceKind::default(),
             surface_value: TextEdit::new(""),
@@ -173,6 +302,120 @@ impl Default for WorkspaceDraft {
 }
 
 impl WorkspaceDraft {
+    pub(crate) fn apply_import(
+        &mut self,
+        result: beale_contracts::v1::WorkspaceImportResult,
+    ) -> Result<(), &'static str> {
+        use beale_contracts::v1::{SurfaceKind as WireKind, SurfaceScope as WireScope};
+        if result.name.trim().is_empty()
+            || result.name.chars().count() > 200
+            || result.name.chars().any(char::is_control)
+            || result.guidance.len() > 20_000
+            || result.surfaces.is_empty()
+            || result.surfaces.len() > 256
+            || result.rules.len() > 128
+            || result
+                .rules
+                .iter()
+                .any(|rule| rule.is_empty() || rule.len() > 2_000)
+        {
+            return Err("The model returned an incomplete import.");
+        }
+        let mut surfaces = Vec::with_capacity(result.surfaces.len());
+        for item in result.surfaces {
+            if item.value.trim().is_empty()
+                || item.value.len() > 2_000
+                || item.value.chars().any(char::is_control)
+            {
+                return Err("The model returned an invalid surface.");
+            }
+            let kind = match WireKind::try_from(item.kind) {
+                Ok(WireKind::Repository) => SurfaceKind::Repository,
+                Ok(WireKind::Documentation) => SurfaceKind::Documentation,
+                Ok(WireKind::Binary) => SurfaceKind::Binary,
+                Ok(WireKind::Service) => SurfaceKind::Service,
+                Ok(WireKind::Domain) => SurfaceKind::Domain,
+                Ok(WireKind::Other) => SurfaceKind::Other,
+                _ => return Err("The model returned an unknown surface kind."),
+            };
+            let scope = match WireScope::try_from(item.scope) {
+                Ok(WireScope::InScope) => SurfaceScope::InScope,
+                Ok(WireScope::OutOfScope) => SurfaceScope::OutOfScope,
+                _ => return Err("The model returned an unknown surface scope."),
+            };
+            surfaces.push(Surface {
+                kind,
+                scope,
+                value: item.value,
+                created_by: SurfaceCreator::Agent,
+                out_of_scope_reason: (scope == SurfaceScope::OutOfScope)
+                    .then(|| "Imported from custom instructions".to_owned()),
+            });
+        }
+        if !surfaces
+            .iter()
+            .any(|item| item.scope == SurfaceScope::InScope)
+        {
+            return Err("The import needs an in-scope surface.");
+        }
+        self.name = TextEdit::new(result.name);
+        self.guidance = TextEdit::new(result.guidance);
+        self.surfaces = surfaces;
+        self.rules = result.rules;
+        self.unlocked = self.unlocked.max(CreationTab::Foundation.index());
+        Ok(())
+    }
+
+    fn open_basic_dialog(&mut self, edit: BasicEdit) {
+        self.basic_dialog_value = TextEdit::new(match edit {
+            BasicEdit::Name => &self.name.text,
+            BasicEdit::Directory => &self.directory.text,
+        });
+        self.basic_dialog_error = None;
+        self.basic_dialog = Some(edit);
+    }
+
+    pub(crate) fn close_basic_dialog(&mut self) {
+        self.basic_dialog = None;
+        self.basic_dialog_value.clear();
+        self.basic_dialog_error = None;
+    }
+
+    fn apply_basic_dialog(&mut self) {
+        let Some(edit) = self.basic_dialog else {
+            return;
+        };
+        let value = self.basic_dialog_value.text.trim();
+        match edit {
+            BasicEdit::Name => {
+                if value.is_empty()
+                    || value.chars().count() > 200
+                    || value.chars().any(char::is_control)
+                {
+                    self.basic_dialog_error = Some("Enter a name of at most 200 characters.");
+                    return;
+                }
+                self.name = TextEdit::new(value);
+            }
+            BasicEdit::Directory => {
+                let path = if let Some(relative) = value
+                    .strip_prefix("~/")
+                    .or_else(|| value.strip_prefix("~\\"))
+                {
+                    home_directory().map(|home| home.join(relative))
+                } else {
+                    Some(std::path::PathBuf::from(value))
+                };
+                let Some(path) = path.filter(|path| path.is_absolute()) else {
+                    self.basic_dialog_error = Some("Use an absolute directory or ~/ path.");
+                    return;
+                };
+                self.directory = TextEdit::new(path.to_string_lossy());
+            }
+        }
+        self.error = None;
+        self.close_basic_dialog();
+    }
     fn open_surface_dialog(&mut self, scope: SurfaceScope) {
         self.surface_kind = SurfaceKind::default();
         self.surface_value.clear();
@@ -192,6 +435,21 @@ impl WorkspaceDraft {
 
     fn validate_tab(&self, tab: CreationTab) -> Option<&'static str> {
         match tab {
+            CreationTab::Import if self.import_source == ImportSource::ResearchKit => {
+                Some("Research Kits are not available yet.")
+            }
+            CreationTab::Import
+                if self.import_source == ImportSource::CustomInstructions
+                    && self.import_instructions.text.trim().is_empty() =>
+            {
+                Some("Enter custom instructions to import.")
+            }
+            CreationTab::Import
+                if self.import_source == ImportSource::CustomInstructions
+                    && self.import_instructions.text.len() > 16_384 =>
+            {
+                Some("Custom instructions must be at most 16 KB.")
+            }
             CreationTab::Foundation if self.name.text.trim().is_empty() => {
                 Some("Workspace name is required.")
             }
@@ -269,8 +527,17 @@ impl WorkspaceDraft {
 }
 
 pub(crate) fn advance(state: &mut State, tx: &mut Tx) {
+    if state.workspace_draft.import_pending_id.is_some() {
+        return;
+    }
     if let Some(error) = state.workspace_draft.validate_current() {
         state.workspace_draft.error = Some(error);
+        return;
+    }
+    if state.workspace_draft.tab == CreationTab::Import
+        && state.workspace_draft.import_source == ImportSource::CustomInstructions
+    {
+        crate::start_workspace_import(state);
         return;
     }
     if let Some(next) = state.workspace_draft.tab.next() {
@@ -279,6 +546,106 @@ pub(crate) fn advance(state: &mut State, tx: &mut Tx) {
         state.navigate_to(ViewLocation::WorkspaceCreation(next));
         tx.scroll_to_y("workspace-scroll", 0.0);
     }
+}
+
+fn import_source_option(state: &State, source: ImportSource, theme: ThemeStyle<'_>) -> El {
+    let selected = state.workspace_draft.import_source == source;
+    let description = source.description();
+    form_item_row()
+        .key(format!("workspace-import-source-{}", source.label()))
+        .role("radio")
+        .label(source.label())
+        .help(description)
+        .child(
+            col()
+                .grow(1.0)
+                .gap(4.0)
+                .child(
+                    text(source.label())
+                        .font(form_label_font())
+                        .color(theme.color("#e2e2e2")),
+                )
+                .child(
+                    text(description)
+                        .font(ui_font(14.0, 400.0))
+                        .color(theme.color("#969696")),
+                ),
+        )
+        .child(
+            el().size(18.0, 18.0)
+                .radius(9.0)
+                .center()
+                .border(
+                    1.0,
+                    theme.color(if selected { "#c8c8c8" } else { "#555555" }),
+                )
+                .child(if selected {
+                    el().size(8.0, 8.0).radius(4.0).fill(theme.color("#e2e2e2"))
+                } else {
+                    el()
+                }),
+        )
+        .on_press(move |s: &mut State| {
+            if s.workspace_draft.import_pending_id.is_none() {
+                s.workspace_draft.import_source = source;
+                s.workspace_draft.error = None;
+            }
+        })
+}
+
+fn import(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+    let mut forms = vec![settings_form(
+        FormSpec {
+            key: "workspace-import-source-form",
+            heading: "Import Source",
+        },
+        ImportSource::ALL
+            .into_iter()
+            .map(|source| import_source_option(state, source, theme)),
+        theme,
+    )];
+    match state.workspace_draft.import_source {
+        ImportSource::None => {}
+        ImportSource::ResearchKit => {
+            forms.push(settings_form(
+                FormSpec {
+                    key: "workspace-import-details-form",
+                    heading: "Import Details",
+                },
+                [col()
+                    .w_full()
+                    .py(12.0)
+                    .gap(6.0)
+                    .child(
+                        text("Research Kit")
+                            .font(form_label_font())
+                            .color(theme.color("#e2e2e2")),
+                    )
+                    .child(
+                        text("No Research Kits available yet.")
+                            .font(ui_font(14.0, 400.0))
+                            .color(theme.color("#969696")),
+                    )],
+                theme,
+            ));
+        }
+        ImportSource::CustomInstructions => {
+            forms.push(settings_form(
+                FormSpec { key: "workspace-import-details-form", heading: "Import Details" },
+                [col().w_full().py(12.0).gap(8.0)
+                    .child(text("Custom Instructions").font(form_label_font()).color(theme.color("#e2e2e2")))
+                    .child(text("Describe the authorized research scope, relevant sources, and rules. The default large model will prepare a draft for review.").font(ui_font(14.0, 400.0)).color(theme.color("#969696")).wrap())
+                    .child(text_input(&state.workspace_draft.import_instructions, ui_font(14.0, 400.0))
+                        .key("workspace-import-instructions")
+                        .w_full().h(180.0).padding(10.0).radius(8.0)
+                        .fill(theme.color("#282828")).color(theme.color("#e2e2e2"))
+                        .placeholder("Describe what to import", theme.color("#888888"))
+                        .on_edit(|s: &mut State| &mut s.workspace_draft.import_instructions))],
+                theme,
+            ));
+        }
+    }
+    forms
 }
 
 fn tab_button(spec: &TabSpec, state: &State, theme: ThemeStyle<'_>) -> El {
@@ -375,91 +742,89 @@ pub(crate) fn field(
 }
 
 fn foundation(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
-    let kit = selection_button(
-        "None",
-        state.selection_menu == Some(SelectionMenu::ResearchKit),
-        |s| toggle_selection_menu(s, SelectionMenu::ResearchKit),
-        theme,
-    )
-    .key("workspace-kit-control");
     let details = settings_form(
         FormSpec {
             key: "workspace-details-form",
-            heading: "Workspace Details",
+            heading: "Basic Information",
         },
         [
             row_with_control(
                 "Workspace Name",
                 "The name shown throughout Beale.",
-                field(
-                    &state.workspace_draft.name,
-                    "workspace-name-input",
-                    "Name",
+                value_with_actions(
+                    "workspace-name-value",
+                    state.workspace_draft.name.text.clone(),
+                    320.0,
+                    vec![
+                        icon_action_button(
+                            "workspace-name-edit",
+                            "Edit workspace name",
+                            &PEN,
+                            theme,
+                        )
+                        .on_press(|s: &mut State| {
+                            s.workspace_draft.open_basic_dialog(BasicEdit::Name)
+                        }),
+                    ],
                     theme,
-                    |s| &mut s.workspace_draft.name,
                 ),
                 theme,
             ),
             row_with_control(
                 "Workspace Directory",
                 "Directory for this workspace on the host.",
-                row()
-                    .center_y()
-                    .gap(6.0)
-                    .child(
-                        el().key("workspace-directory-picker")
-                            .role("button")
-                            .label("Choose workspace directory")
-                            .size(32.0, 32.0)
-                            .center()
-                            .radius(8.0)
-                            .continuous_corners()
-                            .border(1.0, theme.color("#2c2c2c"))
-                            .hover(theme.color("#303030"))
-                            .on_press_tx(|s: &mut State, tx| {
-                                let path =
-                                    std::path::Path::new(s.workspace_draft.directory.text.trim());
-                                let directory = path.is_dir().then(|| path.to_path_buf());
-                                tx.open_folder(
-                                    FileDialogOptions {
-                                        title: "Choose Workspace Directory".to_owned(),
-                                        directory,
-                                        ..Default::default()
-                                    },
-                                    |s: &mut State, result, _| {
-                                        if s.primary_view != crate::PrimaryView::WorkspaceCreation {
-                                            return;
+                value_with_actions(
+                    "workspace-directory-value",
+                    display_directory(&state.workspace_draft.directory.text),
+                    320.0,
+                    vec![
+                        icon_action_button(
+                            "workspace-directory-edit",
+                            "Edit workspace directory",
+                            &PEN,
+                            theme,
+                        )
+                        .on_press(|s: &mut State| {
+                            s.workspace_draft.open_basic_dialog(BasicEdit::Directory)
+                        }),
+                        icon_action_button(
+                            "workspace-directory-picker",
+                            "Choose workspace directory",
+                            &FOLDER_OPEN,
+                            theme,
+                        )
+                        .on_press_tx(|s: &mut State, tx| {
+                            let path =
+                                std::path::Path::new(s.workspace_draft.directory.text.trim());
+                            let directory = path.is_dir().then(|| path.to_path_buf());
+                            tx.open_folder(
+                                FileDialogOptions {
+                                    title: "Choose Workspace Directory".to_owned(),
+                                    directory,
+                                    ..Default::default()
+                                },
+                                |s: &mut State, result, _| {
+                                    if s.primary_view != crate::PrimaryView::WorkspaceCreation {
+                                        return;
+                                    }
+                                    match result {
+                                        Ok(Some(path)) => {
+                                            s.workspace_draft.directory =
+                                                TextEdit::new(path.to_string_lossy());
+                                            s.workspace_draft.error = None;
                                         }
-                                        match result {
-                                            Ok(Some(path)) => {
-                                                s.workspace_draft.directory =
-                                                    TextEdit::new(path.to_string_lossy());
-                                                s.workspace_draft.error = None;
-                                            }
-                                            Ok(None) => {}
-                                            Err(_) => {
-                                                s.workspace_draft.error =
-                                                    Some("Could not open the folder picker.")
-                                            }
+                                        Ok(None) => {}
+                                        Err(_) => {
+                                            s.workspace_draft.error =
+                                                Some("Could not open the folder picker.")
                                         }
-                                    },
-                                );
-                            })
-                            .child(icon(&FOLDER_OPEN, 16.0).color(theme.color("#bdbdbd"))),
-                    )
-                    .child(field(
-                        &state.workspace_draft.directory,
-                        "workspace-directory-input",
-                        "Absolute path",
-                        theme,
-                        |s| &mut s.workspace_draft.directory,
-                    )),
-                theme,
-            ),
-            row_with_control(
-                "Research Kit",
-                "Optional surface and rule acquisition kit.",
-                kit,
+                                    }
+                                },
+                            );
+                        }),
+                    ],
+                    theme,
+                ),
                 theme,
             ),
             col()
@@ -504,6 +869,73 @@ fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
         surface_list(state, SurfaceScope::InScope, theme),
         surface_list(state, SurfaceScope::OutOfScope, theme),
     ]
+}
+
+pub(crate) fn basic_dialog(state: &State, edit: BasicEdit, theme: ThemeStyle<'_>) -> [El; 2] {
+    let (title, label, placeholder, focus_return) = match edit {
+        BasicEdit::Name => (
+            "Edit Workspace Name",
+            "Workspace Name",
+            "Name",
+            "workspace-name-edit",
+        ),
+        BasicEdit::Directory => (
+            "Edit Workspace Directory",
+            "Workspace Directory",
+            "Absolute path or ~/ path",
+            "workspace-directory-edit",
+        ),
+    };
+    let mut body = col().w_full().gap(10.0).child(settings_form_card(
+        [row_with_control(
+            label,
+            "Enter the value for this workspace.",
+            field(
+                &state.workspace_draft.basic_dialog_value,
+                "workspace-basic-dialog-input",
+                placeholder,
+                theme,
+                |s| &mut s.workspace_draft.basic_dialog_value,
+            )
+            .w(300.0),
+            theme,
+        )],
+        theme,
+    ));
+    if let Some(error) = state.workspace_draft.basic_dialog_error {
+        body = body.child(
+            text(error)
+                .key("workspace-basic-dialog-error")
+                .font(ui_font(14.0, 400.0))
+                .color(theme.color("#e07676")),
+        );
+    }
+    let actions = row()
+        .w_full()
+        .gap(8.0)
+        .child(el().grow(1.0))
+        .child(
+            form_button("Cancel", theme)
+                .key("workspace-basic-dialog-cancel")
+                .on_press(|s: &mut State| s.workspace_draft.close_basic_dialog()),
+        )
+        .child(
+            form_button("Apply", theme)
+                .key("workspace-basic-dialog-apply")
+                .on_press(|s: &mut State| s.workspace_draft.apply_basic_dialog()),
+        );
+    modal_dialog::render(
+        modal_dialog::DialogSpec {
+            key: "workspace-basic-dialog",
+            title,
+            width: 540.0,
+            focus_return,
+        },
+        body,
+        actions,
+        theme,
+        |s: &mut State| s.workspace_draft.close_basic_dialog(),
+    )
 }
 
 pub(crate) fn surface_dialog(state: &State, scope: SurfaceScope, theme: ThemeStyle<'_>) -> [El; 2] {
@@ -795,6 +1227,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
             tabs
         });
     let forms = match state.workspace_draft.tab {
+        CreationTab::Import => import(state, theme),
         CreationTab::Foundation => foundation(state, theme),
         CreationTab::Surfaces => surfaces(state, theme),
         CreationTab::Rules => rules(state, theme),
@@ -824,17 +1257,28 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         .gap(8.0)
         .child(el().grow(1.0));
     let cancel = form_button("Cancel", theme).key("workspace-cancel");
-    actions = actions.child(if state.workspace_create_busy {
-        cancel
-    } else {
-        cancel.on_press(request_cancel)
-    });
+    actions = actions.child(
+        if state.workspace_create_busy || state.workspace_draft.import_pending_id.is_some() {
+            cancel
+        } else {
+            cancel.on_press(request_cancel)
+        },
+    );
     if state.workspace_draft.tab.next().is_some() {
-        actions = actions.child(
-            form_button("Next", theme)
-                .key("workspace-next")
-                .on_press_tx(advance),
-        );
+        let next = form_button(
+            if state.workspace_draft.import_pending_id.is_some() {
+                "Preparing…"
+            } else {
+                "Next"
+            },
+            theme,
+        )
+        .key("workspace-next");
+        actions = actions.child(if state.workspace_draft.import_pending_id.is_some() {
+            next
+        } else {
+            next.on_press_tx(advance)
+        });
     } else {
         let ready = matches!(state.connection, crate::ConnectionStatus::Connected { .. })
             && !state.workspace_create_busy;
@@ -876,4 +1320,61 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>) -> El {
         );
     }
     page
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imported_draft_opens_general_with_model_surfaces_and_rules() {
+        use beale_contracts::v1::{
+            SurfaceKind as WireKind, SurfaceScope as WireScope, WorkspaceImportResult,
+            WorkspaceSurfaceInput,
+        };
+        let mut draft = WorkspaceDraft {
+            import_source: ImportSource::CustomInstructions,
+            ..WorkspaceDraft::default()
+        };
+        draft
+            .apply_import(WorkspaceImportResult {
+                name: "Example Workspace".to_owned(),
+                guidance: "Follow authorized scope.".to_owned(),
+                surfaces: vec![WorkspaceSurfaceInput {
+                    kind: WireKind::Domain as i32,
+                    scope: WireScope::InScope as i32,
+                    value: "example.test".to_owned(),
+                    ..Default::default()
+                }],
+                rules: vec!["Stay within scope.".to_owned()],
+            })
+            .unwrap();
+        assert_eq!(draft.name.text, "Example Workspace");
+        assert!(draft.directory.text.is_empty());
+        assert_eq!(draft.surfaces[0].created_by, SurfaceCreator::Agent);
+        assert_eq!(draft.rules, ["Stay within scope."]);
+        assert!(draft.validate_tab(CreationTab::Surfaces).is_none());
+    }
+
+    #[test]
+    fn home_paths_are_compact_only_for_display() {
+        let Some(home) = home_directory() else { return };
+        let path = home.join("example-workspace");
+        assert_eq!(
+            display_directory(&path.to_string_lossy()),
+            "~/example-workspace"
+        );
+        if cfg!(windows) {
+            assert_eq!(
+                display_directory(&format!(r"\\?\{}", path.to_string_lossy())),
+                "~/example-workspace"
+            );
+        }
+        let mut draft = WorkspaceDraft::default();
+        draft.open_basic_dialog(BasicEdit::Directory);
+        draft.basic_dialog_value = TextEdit::new("~/example-workspace");
+        draft.apply_basic_dialog();
+        assert_eq!(std::path::Path::new(&draft.directory.text), path);
+        assert!(draft.basic_dialog.is_none());
+    }
 }

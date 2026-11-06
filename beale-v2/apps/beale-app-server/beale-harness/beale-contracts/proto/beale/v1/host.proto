@@ -205,6 +205,16 @@ message WorkspaceSurfaceInput {
   SurfaceKind kind = 1;
   SurfaceScope scope = 2;
   string value = 3;
+  string id = 4;
+  uint32 mapping_progress = 5;
+  uint32 threat_modeling_progress = 6;
+  uint32 analysis_progress = 7;
+  repeated SurfaceRelationship relationships = 8;
+}
+
+message SurfaceRelationship {
+  string target_id = 1;
+  string label = 2;
 }
 
 message CreateWorkspaceRequest {
@@ -213,6 +223,33 @@ message CreateWorkspaceRequest {
   string guidance = 3;
   repeated WorkspaceSurfaceInput surfaces = 4;
   repeated string rules = 5;
+}
+
+message WorkspaceImportRequest {
+  ProviderId provider = 1;
+  AuthMethod method = 2;
+  string model = 3;
+  string instructions = 4;
+}
+
+message WorkspaceImportResult {
+  string name = 1;
+  string guidance = 2;
+  repeated WorkspaceSurfaceInput surfaces = 3;
+  repeated string rules = 4;
+}
+
+enum WorkspaceImportEventKind {
+  WORKSPACE_IMPORT_EVENT_KIND_UNSPECIFIED = 0;
+  WORKSPACE_IMPORT_EVENT_KIND_PROGRESS = 1;
+  WORKSPACE_IMPORT_EVENT_KIND_COMPLETED = 2;
+  WORKSPACE_IMPORT_EVENT_KIND_FAILED = 3;
+}
+
+message WorkspaceImportEvent {
+  WorkspaceImportEventKind kind = 1;
+  string text = 2;
+  WorkspaceImportResult result = 3;
 }
 
 message WorkspaceSummary {
@@ -237,6 +274,11 @@ message WorkspaceSurface {
   string value = 3;
   SurfaceCreator created_by = 4;
   string out_of_scope_reason = 5;
+  string id = 6;
+  uint32 mapping_progress = 7;
+  uint32 threat_modeling_progress = 8;
+  uint32 analysis_progress = 9;
+  repeated SurfaceRelationship relationships = 10;
 }
 
 message WorkspaceDetails {

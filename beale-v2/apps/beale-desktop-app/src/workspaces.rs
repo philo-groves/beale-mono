@@ -1,10 +1,13 @@
 use beale_contracts::{
-    PROTOBUF_CONTENT_TYPE, WORKSPACES_PATH,
+    PROTOBUF_CONTENT_TYPE, PROTOBUF_STREAM_CONTENT_TYPE, SESSION_STREAM_MAX_FRAME_BYTES,
+    WORKSPACE_IMPORT_STREAM_PATH, WORKSPACES_PATH,
     v1::{
         CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceCreator, SurfaceKind, SurfaceScope,
         UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
         UpdateWorkspaceSurfacesRequest, WorkspaceCampaign, WorkspaceDetails, WorkspaceFoundation,
-        WorkspaceRules, WorkspaceSummary, WorkspaceSurfaceInput, WorkspaceSurfaces,
+        WorkspaceImportEvent, WorkspaceImportEventKind, WorkspaceImportRequest,
+        WorkspaceImportResult, WorkspaceRules, WorkspaceSummary, WorkspaceSurfaceInput,
+        WorkspaceSurfaces,
     },
 };
 use prost::Message;
@@ -40,6 +43,99 @@ pub(crate) fn client() -> Result<Client, String> {
         .map_err(|_| "Could not initialize workspace connection".to_owned())
 }
 
+pub(crate) fn import_client() -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Could not initialize import connection".to_owned())
+}
+
+pub(crate) async fn import_stream(
+    client: &Client,
+    addr: SocketAddr,
+    request: WorkspaceImportRequest,
+    mut cancel: tokio::sync::oneshot::Receiver<()>,
+    mut progress: impl FnMut(String),
+) -> Result<WorkspaceImportResult, String> {
+    let token = crate::provider_auth::authenticated_token(client, addr).await?;
+    let mut response = tokio::select! {
+        response = client
+            .post(format!("http://{addr}{WORKSPACE_IMPORT_STREAM_PATH}"))
+            .bearer_auth(token)
+            .header(CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)
+            .body(request.encode_to_vec())
+            .send() => response.map_err(|_| "Could not start workspace import".to_owned())?,
+        _ = &mut cancel => return Err("Workspace import canceled".to_owned()),
+    };
+    if response.status() != StatusCode::OK {
+        return Err(format!(
+            "Workspace import unavailable ({})",
+            response.status()
+        ));
+    }
+    if response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some(PROTOBUF_STREAM_CONTENT_TYPE)
+    {
+        return Err("Invalid workspace import stream".to_owned());
+    }
+    let mut pending = Vec::new();
+    loop {
+        let chunk = tokio::select! {
+            chunk = response.chunk() => chunk.map_err(|_| "Workspace import was interrupted".to_owned())?,
+            _ = &mut cancel => return Err("Workspace import canceled".to_owned()),
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        pending.extend_from_slice(&chunk);
+        loop {
+            if pending.len() < 4 {
+                break;
+            }
+            let size = u32::from_be_bytes(
+                pending[..4]
+                    .try_into()
+                    .map_err(|_| "Invalid import frame".to_owned())?,
+            ) as usize;
+            if size == 0 || size > SESSION_STREAM_MAX_FRAME_BYTES {
+                return Err("Invalid import frame size".to_owned());
+            }
+            if pending.len() < size + 4 {
+                break;
+            }
+            let event = WorkspaceImportEvent::decode(&pending[4..size + 4])
+                .map_err(|_| "Invalid import event".to_owned())?;
+            pending.drain(..size + 4);
+            match WorkspaceImportEventKind::try_from(event.kind) {
+                Ok(WorkspaceImportEventKind::Progress)
+                    if event.result.is_none() && event.text.len() <= 16_384 =>
+                {
+                    progress(event.text)
+                }
+                Ok(WorkspaceImportEventKind::Completed) if event.text.is_empty() => {
+                    let result = event.result.ok_or("Missing import draft".to_owned())?;
+                    if result.name.trim().is_empty() || result.surfaces.is_empty() {
+                        return Err("Invalid import draft".to_owned());
+                    }
+                    return Ok(result);
+                }
+                Ok(WorkspaceImportEventKind::Failed)
+                    if event.result.is_none() && !event.text.is_empty() =>
+                {
+                    return Err(event.text);
+                }
+                _ => return Err("Invalid import event".to_owned()),
+            }
+        }
+    }
+    Err("Workspace import ended before completion".to_owned())
+}
+
 pub(crate) fn request_from_draft(
     draft: &WorkspaceDraft,
 ) -> Result<CreateWorkspaceRequest, &'static str> {
@@ -67,6 +163,7 @@ pub(crate) fn request_from_draft(
                     DraftSurfaceScope::OutOfScope => SurfaceScope::OutOfScope,
                 } as i32,
                 value: surface.value.trim().to_owned(),
+                ..Default::default()
             })
             .collect(),
         rules: draft.rules.clone(),
@@ -430,6 +527,7 @@ mod tests {
                 value: "example.test".to_owned(),
                 created_by: SurfaceCreator::User as i32,
                 out_of_scope_reason: String::new(),
+                ..Default::default()
             }],
             rules: vec!["Stay within scope.".to_owned()],
         };

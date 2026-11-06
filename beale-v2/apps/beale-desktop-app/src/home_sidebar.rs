@@ -8,6 +8,7 @@ use crate::icons::{
 use crate::{
     SelectionMenu, State, ThemeStyle, form_button, modal_dialog, sidenav_heading,
     start_session_archive, start_session_load, toggle_selection_menu, ui_font,
+    workspace_creation::display_directory,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -680,7 +681,7 @@ pub(crate) fn workspace_tooltip(state: &State, theme: ThemeStyle<'_>) -> Option<
                             .color(theme.color("#b8b8b8")),
                     )
                     .child(
-                        text(workspace.directory.clone())
+                        text(display_directory(&workspace.directory))
                             .key("home-workspace-tooltip-directory")
                             .grow(1.0)
                             .min_w(0.0)

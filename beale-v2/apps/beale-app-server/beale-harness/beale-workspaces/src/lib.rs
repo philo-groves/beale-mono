@@ -9,10 +9,11 @@ use beale_contracts::{
     WORKSPACE_CAMPAIGN_PATH, WORKSPACE_DETAILS_PATH, WORKSPACE_FOUNDATION_PATH,
     WORKSPACE_RULES_PATH, WORKSPACE_SURFACES_PATH, WORKSPACES_PATH,
     v1::{
-        CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceCreator, SurfaceKind, SurfaceScope,
-        UpdateWorkspaceFoundationRequest, UpdateWorkspaceRulesRequest,
-        UpdateWorkspaceSurfacesRequest, WorkspaceCampaign, WorkspaceDetails, WorkspaceFoundation,
-        WorkspaceRules, WorkspaceSummary, WorkspaceSurface, WorkspaceSurfaces,
+        CreateWorkspaceRequest, ListWorkspacesResponse, SurfaceCreator, SurfaceKind,
+        SurfaceRelationship, SurfaceScope, UpdateWorkspaceFoundationRequest,
+        UpdateWorkspaceRulesRequest, UpdateWorkspaceSurfacesRequest, WorkspaceCampaign,
+        WorkspaceDetails, WorkspaceFoundation, WorkspaceRules, WorkspaceSummary, WorkspaceSurface,
+        WorkspaceSurfaces,
     },
 };
 use beale_storage::{HostDatabase, WorkspaceRow};
@@ -28,6 +29,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 mod http;
+mod import;
 use http::{authorized, checked_body, response};
 
 const DIRECTORIES: [&str; 10] = [
@@ -99,23 +101,45 @@ struct StoredManifest {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredSurface {
+    #[serde(default)]
+    id: String,
     kind: String,
     scope: String,
     value: String,
     created_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     out_of_scope_reason: Option<String>,
+    #[serde(default)]
+    mapping_progress: u32,
+    #[serde(default)]
+    threat_modeling_progress: u32,
+    #[serde(default)]
+    analysis_progress: u32,
+    #[serde(default)]
+    relationships: Vec<StoredRelationship>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredRelationship {
+    target_id: String,
+    label: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SurfaceRecord {
+    id: String,
     kind: &'static str,
     scope: &'static str,
     value: String,
     created_by: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     out_of_scope_reason: Option<&'static str>,
+    mapping_progress: u32,
+    threat_modeling_progress: u32,
+    analysis_progress: u32,
+    relationships: Vec<StoredRelationship>,
 }
 
 struct ValidatedWorkspace {
@@ -255,38 +279,7 @@ impl WorkspaceStore {
         let surfaces = manifest
             .surfaces
             .into_iter()
-            .map(|surface| {
-                let kind = match surface.kind.as_str() {
-                    "repository" => SurfaceKind::Repository,
-                    "documentation" => SurfaceKind::Documentation,
-                    "binary" => SurfaceKind::Binary,
-                    "service" => SurfaceKind::Service,
-                    "domain" => SurfaceKind::Domain,
-                    "other" => SurfaceKind::Other,
-                    _ => return Err(WorkspaceError::Internal("invalid workspace surface kind")),
-                };
-                let scope = match surface.scope.as_str() {
-                    "in_scope" => SurfaceScope::InScope,
-                    "out_of_scope" => SurfaceScope::OutOfScope,
-                    _ => return Err(WorkspaceError::Internal("invalid workspace surface scope")),
-                };
-                let created_by = match surface.created_by.as_str() {
-                    "user" => SurfaceCreator::User,
-                    "agent" => SurfaceCreator::Agent,
-                    _ => {
-                        return Err(WorkspaceError::Internal(
-                            "invalid workspace surface creator",
-                        ));
-                    }
-                };
-                Ok(WorkspaceSurface {
-                    kind: kind as i32,
-                    scope: scope as i32,
-                    value: surface.value,
-                    created_by: created_by as i32,
-                    out_of_scope_reason: surface.out_of_scope_reason.unwrap_or_default(),
-                })
-            })
+            .map(surface_dto)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(WorkspaceDetails {
             summary: Some(WorkspaceSummary {
@@ -603,6 +596,11 @@ fn summary(entry: &RegistryEntry) -> WorkspaceSummary {
 }
 
 fn surface_dto(surface: StoredSurface) -> Result<WorkspaceSurface, WorkspaceError> {
+    let id = if surface.id.is_empty() {
+        legacy_surface_id(&surface.kind, &surface.value)
+    } else {
+        surface.id.clone()
+    };
     let kind = match surface.kind.as_str() {
         "repository" => SurfaceKind::Repository,
         "documentation" => SurfaceKind::Documentation,
@@ -632,7 +630,23 @@ fn surface_dto(surface: StoredSurface) -> Result<WorkspaceSurface, WorkspaceErro
         value: surface.value,
         created_by: created_by as i32,
         out_of_scope_reason: surface.out_of_scope_reason.unwrap_or_default(),
+        id,
+        mapping_progress: surface.mapping_progress,
+        threat_modeling_progress: surface.threat_modeling_progress,
+        analysis_progress: surface.analysis_progress,
+        relationships: surface
+            .relationships
+            .into_iter()
+            .map(|relationship| SurfaceRelationship {
+                target_id: relationship.target_id,
+                label: relationship.label,
+            })
+            .collect(),
     })
+}
+
+fn legacy_surface_id(kind: &str, value: &str) -> String {
+    format!("legacy:{kind}:{}", value.to_lowercase())
 }
 
 fn validate_surface_update(
@@ -645,7 +659,10 @@ fn validate_surface_update(
     let mut seen = HashSet::new();
     let mut has_in_scope = false;
     let mut result = Vec::with_capacity(inputs.len());
+    let mut ids = HashSet::new();
+    let mut legacy_rows = Vec::with_capacity(inputs.len());
     for input in inputs {
+        let legacy_client = input.id.is_empty();
         let kind = match SurfaceKind::try_from(input.kind) {
             Ok(SurfaceKind::Repository) => "repository",
             Ok(SurfaceKind::Documentation) => "documentation",
@@ -667,28 +684,120 @@ fn validate_surface_update(
         if !valid_text(value, 2_048, false) || !seen.insert((kind, value.to_lowercase())) {
             return Err(WorkspaceError::Invalid);
         }
-        let previous = existing
-            .iter()
-            .find(|item| item.kind == kind && item.value.eq_ignore_ascii_case(value));
-        let created_by = previous.map_or("user", |item| item.created_by.as_str());
+        let previous = existing.iter().find(|item| {
+            let id = if item.id.is_empty() {
+                legacy_surface_id(&item.kind, &item.value)
+            } else {
+                item.id.clone()
+            };
+            id == input.id
+                || (legacy_client && item.kind == kind && item.value.eq_ignore_ascii_case(value))
+        });
+        if previous.is_none() && !input.id.is_empty() && Uuid::parse_str(&input.id).is_err() {
+            return Err(WorkspaceError::Invalid);
+        }
+        let id = previous.map_or_else(
+            || {
+                if input.id.is_empty() {
+                    Uuid::new_v4().to_string()
+                } else {
+                    input.id.clone()
+                }
+            },
+            |item| {
+                if item.id.is_empty() {
+                    legacy_surface_id(&item.kind, &item.value)
+                } else {
+                    item.id.clone()
+                }
+            },
+        );
+        let mapping_progress = if legacy_client {
+            previous.map_or(0, |item| item.mapping_progress)
+        } else {
+            input.mapping_progress
+        };
+        let threat_modeling_progress = if legacy_client && scope == "in_scope" {
+            previous.map_or(0, |item| item.threat_modeling_progress)
+        } else {
+            input.threat_modeling_progress
+        };
+        let analysis_progress = if legacy_client && scope == "in_scope" {
+            previous.map_or(0, |item| item.analysis_progress)
+        } else {
+            input.analysis_progress
+        };
+        if !ids.insert(id.clone())
+            || mapping_progress > 100
+            || threat_modeling_progress > 100
+            || analysis_progress > 100
+            || (scope == "out_of_scope"
+                && (threat_modeling_progress != 0 || analysis_progress != 0))
+            || input.relationships.len() > 64
+        {
+            return Err(WorkspaceError::Invalid);
+        }
+        let unchanged = previous.is_some_and(|item| {
+            item.kind == kind && item.scope == scope && item.value.eq_ignore_ascii_case(value)
+        });
+        let created_by = if unchanged {
+            previous.map_or("user", |item| item.created_by.as_str())
+        } else {
+            "user"
+        };
         let reason = if scope == "out_of_scope" {
             previous
-                .filter(|item| item.scope == "out_of_scope")
+                .filter(|_| unchanged)
                 .and_then(|item| item.out_of_scope_reason.clone())
                 .or_else(|| Some("Set in workspace".to_owned()))
         } else {
             None
         };
+        let relationships = if legacy_client {
+            previous.map_or_else(Vec::new, |item| item.relationships.clone())
+        } else {
+            input
+                .relationships
+                .into_iter()
+                .map(|relationship| StoredRelationship {
+                    target_id: relationship.target_id,
+                    label: relationship.label.trim().to_owned(),
+                })
+                .collect()
+        };
+        legacy_rows.push(legacy_client);
         result.push(StoredSurface {
+            id,
             kind: kind.to_owned(),
             scope: scope.to_owned(),
             value: value.to_owned(),
             created_by: created_by.to_owned(),
             out_of_scope_reason: reason,
+            mapping_progress,
+            threat_modeling_progress,
+            analysis_progress,
+            relationships,
         });
     }
     if !has_in_scope {
         return Err(WorkspaceError::Invalid);
+    }
+    for (surface, legacy_client) in result.iter_mut().zip(legacy_rows) {
+        if legacy_client {
+            surface
+                .relationships
+                .retain(|relationship| ids.contains(&relationship.target_id));
+        }
+        let mut targets = HashSet::new();
+        for relationship in &surface.relationships {
+            if relationship.target_id == surface.id
+                || !ids.contains(&relationship.target_id)
+                || !targets.insert(&relationship.target_id)
+                || !valid_text(&relationship.label, 80, false)
+            {
+                return Err(WorkspaceError::Invalid);
+            }
+        }
     }
     Ok(result)
 }
@@ -790,11 +899,16 @@ fn validate(request: CreateWorkspaceRequest) -> Result<ValidatedWorkspace, Works
             return Err(WorkspaceError::Invalid);
         }
         surfaces.push(SurfaceRecord {
+            id: Uuid::new_v4().to_string(),
             kind,
             scope,
             value: value.to_owned(),
             created_by: "user",
             out_of_scope_reason: reason,
+            mapping_progress: 0,
+            threat_modeling_progress: 0,
+            analysis_progress: 0,
+            relationships: Vec::new(),
         });
     }
     if !has_in_scope {
@@ -852,6 +966,10 @@ struct WorkspaceState {
 pub fn router(token: String, store: WorkspaceStore) -> Router {
     Router::new()
         .route(WORKSPACES_PATH, get(list).post(create))
+        .route(
+            beale_contracts::WORKSPACE_IMPORT_STREAM_PATH,
+            axum::routing::post(import::stream),
+        )
         .route(WORKSPACE_DETAILS_PATH, get(details))
         .route(WORKSPACE_CAMPAIGN_PATH, get(campaign))
         .route(
@@ -1033,6 +1151,57 @@ async fn update_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surface_graph_preserves_ids_and_restricts_out_of_scope_progress() {
+        let source_id = Uuid::new_v4().to_string();
+        let target_id = Uuid::new_v4().to_string();
+        let existing: Vec<StoredSurface> = serde_json::from_value(serde_json::json!([
+            {"id": source_id, "kind": "domain", "scope": "in_scope", "value": "example.test", "createdBy": "user"},
+            {"id": target_id, "kind": "service", "scope": "out_of_scope", "value": "boundary.example.test", "createdBy": "agent", "outOfScopeReason": "Excluded by operator"}
+        ])).unwrap();
+        let inputs = vec![
+            beale_contracts::v1::WorkspaceSurfaceInput {
+                id: source_id.clone(),
+                kind: SurfaceKind::Domain as i32,
+                scope: SurfaceScope::InScope as i32,
+                value: "renamed.example.test".to_owned(),
+                mapping_progress: 100,
+                threat_modeling_progress: 50,
+                relationships: vec![SurfaceRelationship {
+                    target_id: target_id.clone(),
+                    label: "calls".to_owned(),
+                }],
+                ..Default::default()
+            },
+            beale_contracts::v1::WorkspaceSurfaceInput {
+                id: target_id.clone(),
+                kind: SurfaceKind::Service as i32,
+                scope: SurfaceScope::OutOfScope as i32,
+                value: "boundary.example.test".to_owned(),
+                mapping_progress: 100,
+                ..Default::default()
+            },
+        ];
+        let saved = validate_surface_update(inputs.clone(), &existing).unwrap();
+        assert_eq!(saved[0].id, source_id);
+        assert_eq!(saved[0].relationships[0].target_id, target_id);
+        assert_eq!(saved[0].threat_modeling_progress, 50);
+        assert_eq!(saved[1].created_by, "agent");
+        let mut invalid = inputs;
+        invalid[1].analysis_progress = 1;
+        assert!(validate_surface_update(invalid, &existing).is_err());
+        let legacy = vec![beale_contracts::v1::WorkspaceSurfaceInput {
+            kind: SurfaceKind::Domain as i32,
+            scope: SurfaceScope::InScope as i32,
+            value: "renamed.example.test".to_owned(),
+            ..Default::default()
+        }];
+        let preserved = validate_surface_update(legacy, &saved).unwrap();
+        assert_eq!(preserved[0].id, source_id);
+        assert_eq!(preserved[0].mapping_progress, 100);
+        assert!(preserved[0].relationships.is_empty());
+    }
     use axum::{
         body::{Body, to_bytes},
         http::{Request, header},
@@ -1051,11 +1220,13 @@ mod tests {
                     kind: SurfaceKind::Domain as i32,
                     scope: SurfaceScope::InScope as i32,
                     value: "example.test".to_owned(),
+                    ..Default::default()
                 },
                 beale_contracts::v1::WorkspaceSurfaceInput {
                     kind: SurfaceKind::Domain as i32,
                     scope: SurfaceScope::OutOfScope as i32,
                     value: "excluded.example.test".to_owned(),
+                    ..Default::default()
                 },
             ],
             rules: vec!["Do not contact excluded third parties.".to_owned()],
@@ -1288,6 +1459,8 @@ mod tests {
                 .status(),
             StatusCode::CONFLICT
         );
+        let initial_surfaces = store.details(&summary.id).unwrap().surfaces;
+        let new_surface_id = Uuid::new_v4().to_string();
         let surface_update = UpdateWorkspaceSurfacesRequest {
             expected_revision: 1,
             surfaces: vec![
@@ -1295,11 +1468,20 @@ mod tests {
                     kind: SurfaceKind::Domain as i32,
                     scope: SurfaceScope::InScope as i32,
                     value: "example.test".to_owned(),
+                    id: initial_surfaces[0].id.clone(),
+                    mapping_progress: 100,
+                    relationships: vec![SurfaceRelationship {
+                        target_id: new_surface_id.clone(),
+                        label: "references".to_owned(),
+                    }],
+                    ..Default::default()
                 },
                 beale_contracts::v1::WorkspaceSurfaceInput {
                     kind: SurfaceKind::Documentation as i32,
                     scope: SurfaceScope::OutOfScope as i32,
                     value: "excluded.example.test".to_owned(),
+                    id: new_surface_id.clone(),
+                    ..Default::default()
                 },
             ],
         };
@@ -1312,8 +1494,15 @@ mod tests {
         let saved =
             WorkspaceSurfaces::decode(to_bytes(saved.into_body(), 65_536).await.unwrap()).unwrap();
         assert_eq!(saved.revision, 2);
+        assert_eq!(saved.surfaces[0].id, initial_surfaces[0].id);
+        assert_eq!(saved.surfaces[0].mapping_progress, 100);
+        assert_eq!(saved.surfaces[0].relationships[0].target_id, new_surface_id);
         assert_eq!(saved.surfaces[1].created_by, SurfaceCreator::User as i32);
         assert_eq!(saved.surfaces[1].out_of_scope_reason, "Set in workspace");
+        assert_eq!(
+            store.details(&summary.id).unwrap().surfaces[0].relationships[0].label,
+            "references"
+        );
         let rule_update = UpdateWorkspaceRulesRequest {
             expected_revision: 1,
             rules: vec!["Stay within scope.".to_owned()],

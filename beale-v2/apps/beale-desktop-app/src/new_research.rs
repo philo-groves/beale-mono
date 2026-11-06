@@ -230,29 +230,38 @@ fn selected<'a>(state: &State, choices: &'a [ModelChoice]) -> Option<&'a ModelCh
         .new_research_model
         .as_ref()
         .and_then(|selection| choices.iter().find(|choice| &choice.selection == selection))
-        .or_else(|| {
-            state.lead_provider.and_then(|provider| {
-                choices
-                    .iter()
-                    .find(|choice| {
+        .or_else(|| default_choice(state, choices))
+}
+
+fn default_choice<'a>(state: &State, choices: &'a [ModelChoice]) -> Option<&'a ModelChoice> {
+    state
+        .lead_provider
+        .and_then(|provider| {
+            choices
+                .iter()
+                .find(|choice| {
+                    choice.selection.provider == provider
+                        && choice.provider_default
+                        && (provider != Provider::Custom
+                            || custom_provider_id(&choice.selection)
+                                == Some(state.lead_custom_provider_id.as_str()))
+                })
+                .or_else(|| {
+                    choices.iter().find(|choice| {
                         choice.selection.provider == provider
-                            && choice.provider_default
                             && (provider != Provider::Custom
                                 || custom_provider_id(&choice.selection)
                                     == Some(state.lead_custom_provider_id.as_str()))
                     })
-                    .or_else(|| {
-                        choices.iter().find(|choice| {
-                            choice.selection.provider == provider
-                                && (provider != Provider::Custom
-                                    || custom_provider_id(&choice.selection)
-                                        == Some(state.lead_custom_provider_id.as_str()))
-                        })
-                    })
-            })
+                })
         })
         .or_else(|| choices.iter().find(|choice| choice.provider_default))
         .or_else(|| choices.first())
+}
+
+pub(crate) fn default_model(state: &State) -> Option<ModelSelection> {
+    let choices = choices(state);
+    default_choice(state, &choices).map(|choice| choice.selection.clone())
 }
 
 pub(crate) fn selected_model(state: &State) -> Option<ModelSelection> {
@@ -1545,7 +1554,7 @@ fn previous_input(state: &mut State) {
         .session_input_history
         .previous(&entries, &state.new_research_prompt.text)
     {
-        state.new_research_prompt = TextEdit::new(value);
+        state.new_research_prompt.replace_text(value);
     }
 }
 
@@ -1556,7 +1565,45 @@ fn next_input(state: &mut State) {
         .map(|detail| input_history::session_entries(&detail.messages))
         .unwrap_or_default();
     if let Some(value) = state.session_input_history.next(&entries) {
-        state.new_research_prompt = TextEdit::new(value);
+        state.new_research_prompt.replace_text(value);
+    }
+}
+
+fn composer_history_key(state: &mut State, event: &KeyEvent, _: &mut Tx) -> bool {
+    if event.mods.shift
+        || event.mods.cmd
+        || event.mods.alt
+        || event.mods.ctrl
+        || event.mods.logo
+        || state.new_research_prompt.preedit.is_some()
+    {
+        return false;
+    }
+
+    match event.key {
+        Key::Up => {
+            let entries = state
+                .active_session
+                .as_ref()
+                .map(|detail| input_history::session_entries(&detail.messages))
+                .unwrap_or_default();
+            if !state.session_input_history.can_previous(entries.len())
+                || (!state.session_input_history.can_next()
+                    && state
+                        .new_research_prompt
+                        .line_of_byte(state.new_research_prompt.focus)
+                        > 0)
+            {
+                return false;
+            }
+            previous_input(state);
+            true
+        }
+        Key::Down if state.session_input_history.can_next() => {
+            next_input(state);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -1715,11 +1762,6 @@ fn ribbon_status_dot(key: &'static str, theme: ThemeStyle<'_>) -> El {
 }
 
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
-    let history_entries = state
-        .active_session
-        .as_ref()
-        .map(|detail| input_history::session_entries(&detail.messages))
-        .unwrap_or_default();
     let has_workspaces = !state.workspaces.is_empty();
     let no_workspaces = state.workspace_list_loaded && !has_workspaces;
     let choices = choices(state);
@@ -1816,6 +1858,7 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
             .placeholder("Research with Beale", theme.color("#888888"))
             .on_edit(|state: &mut State| &mut state.new_research_prompt)
             .on_input_change(|state: &mut State, _| state.session_input_history.reset())
+            .on_input_key(composer_history_key)
             .on_submit(|state: &mut State, _| state.new_research_prompt.insert("\n"))
     } else {
         el().key("new-research-composer-input")
@@ -1856,31 +1899,6 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, available_width: f32)
                 .center_y()
                 .child(model_control)
                 .child(el().grow(1.0))
-                .child(
-                    row()
-                        .gap(2.0)
-                        .mr(7.0)
-                        .child(input_history::button(
-                            "session-history-previous",
-                            "Previous sent message",
-                            &CHEVRON_UP,
-                            state
-                                .session_input_history
-                                .can_previous(history_entries.len()),
-                            ("#bdbdbd", "#686868"),
-                            theme,
-                            previous_input,
-                        ))
-                        .child(input_history::button(
-                            "session-history-next",
-                            "Next sent message",
-                            &CHEVRON_DOWN,
-                            state.session_input_history.can_next(),
-                            ("#bdbdbd", "#686868"),
-                            theme,
-                            next_input,
-                        )),
-                )
                 .child({
                     let available = has_workspaces
                         && !state.new_research_prompt.text.trim().is_empty()

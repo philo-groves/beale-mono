@@ -63,6 +63,7 @@ pub(super) async fn details(
 }
 
 fn workspace_context(details: WorkspaceDetails) -> Result<String, StatusCode> {
+    let relationships = super::surface_relationship_lines(&details.surfaces);
     let summary = details.summary.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut context = format!(
         "## Selected Workspace\n\nName: {}\n\nGuidance:\n{}\n",
@@ -88,6 +89,15 @@ fn workspace_context(details: WorkspaceDetails) -> Result<String, StatusCode> {
             if !surface.out_of_scope_reason.is_empty() {
                 context.push_str(&format!(" ({})", surface.out_of_scope_reason));
             }
+            context.push('\n');
+        }
+        context.push_str("Out-of-scope surfaces are boundary references only.\n");
+    }
+    if !relationships.is_empty() {
+        context.push_str("\nUser-recorded relationships (context, not evidence):\n");
+        for relationship in relationships {
+            context.push_str("- ");
+            context.push_str(&relationship);
             context.push('\n');
         }
     }
@@ -381,7 +391,7 @@ pub(super) async fn turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beale_contracts::v1::{WorkspaceSummary, WorkspaceSurface};
+    use beale_contracts::v1::{SurfaceRelationship, WorkspaceSummary, WorkspaceSurface};
 
     #[test]
     fn selected_workspace_context_includes_guidance_and_scope() {
@@ -392,19 +402,36 @@ mod tests {
                 directory: "example-directory".to_owned(),
             }),
             guidance: "Use synthetic examples.".to_owned(),
-            surfaces: vec![WorkspaceSurface {
-                kind: 1,
-                scope: SurfaceScope::OutOfScope as i32,
-                value: "example.test".to_owned(),
-                created_by: 1,
-                out_of_scope_reason: "Excluded by operator".to_owned(),
-            }],
+            surfaces: vec![
+                WorkspaceSurface {
+                    kind: 1,
+                    scope: SurfaceScope::OutOfScope as i32,
+                    value: "example.test".to_owned(),
+                    created_by: 1,
+                    out_of_scope_reason: "Excluded by operator".to_owned(),
+                    id: "boundary-surface".to_owned(),
+                    ..Default::default()
+                },
+                WorkspaceSurface {
+                    kind: 4,
+                    scope: SurfaceScope::InScope as i32,
+                    value: "service.example.test".to_owned(),
+                    id: "service-surface".to_owned(),
+                    relationships: vec![SurfaceRelationship {
+                        target_id: "boundary-surface".to_owned(),
+                        label: "depends on".to_owned(),
+                    }],
+                    ..Default::default()
+                },
+            ],
             rules: vec!["Use only authorized surfaces.".to_owned()],
         })
         .unwrap();
         assert!(context.contains("Example Workspace"));
         assert!(context.contains("Use synthetic examples."));
         assert!(context.contains("Out of scope: example.test (Excluded by operator)"));
+        assert!(context.contains("service.example.test —depends on→ example.test"));
+        assert!(context.contains("Out-of-scope surfaces are boundary references only."));
         assert!(context.contains("Use only authorized surfaces."));
         assert!(!context.contains("example-directory"));
     }

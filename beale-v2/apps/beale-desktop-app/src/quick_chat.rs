@@ -209,11 +209,159 @@ fn next_input(state: &mut State) {
     }
 }
 
+fn panel_header(theme: ThemeStyle<'_>, heading: El, action: Option<El>, key: &'static str) -> El {
+    let mut header = row()
+        .key(key)
+        .w_full()
+        .h(HEADER_HEIGHT)
+        .px(13.0)
+        .center_y()
+        .gap(8.0)
+        .corners([17.0, 17.0, 0.0, 0.0])
+        .continuous_corners()
+        .fill(theme.color(theme.palette().card))
+        .child(heading)
+        .child(el().grow(1.0));
+    if let Some(action) = action {
+        header = header.child(action);
+    }
+    header
+}
+
+fn panel_base(theme: ThemeStyle<'_>, key: &'static str, label: &'static str, header: El) -> El {
+    col()
+        .key(key)
+        .raise()
+        .role("dialog")
+        .label(label)
+        .pin(None, None, Some(14.0), Some(14.0))
+        .w(PANEL_WIDTH)
+        .radius(17.0)
+        .continuous_corners()
+        .shadow(
+            5.0,
+            22.0,
+            Color::BLACK.alpha(if theme.is_dark() { 0.6 } else { 0.25 }),
+        )
+        .transition(Transition::asymmetric(
+            Transition::offset(PANEL_WIDTH + 24.0, 0.0).combined(Transition::opacity()),
+            Transition::offset(PANEL_WIDTH + 24.0, 0.0).combined(Transition::opacity()),
+        ))
+        .child(col().w_full().px(20.0).child(header))
+}
+
+fn panel_body(theme: ThemeStyle<'_>, content: El, height: f32, prefix: &'static str) -> El {
+    row()
+        .key(format!("{prefix}-content"))
+        .w_full()
+        .h(height)
+        .fill(theme.color(theme.palette().chrome))
+        .child(
+            el().key(format!("{prefix}-content-left-border"))
+                .w(1.0)
+                .h_full()
+                .fill(theme.color(theme.palette().card)),
+        )
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .h_full()
+                .min_h(0.0)
+                .scroll(ScrollSpec { stick_bottom: true })
+                .child(content),
+        )
+        .child(
+            el().key(format!("{prefix}-content-right-border"))
+                .w(1.0)
+                .h_full()
+                .fill(theme.color(theme.palette().card)),
+        )
+}
+
+fn composer_shell(theme: ThemeStyle<'_>, key: &'static str) -> El {
+    row()
+        .key(key)
+        .w_full()
+        .h(COMPOSER_HEIGHT)
+        .px(10.0)
+        .center_y()
+        .gap(7.0)
+        .radius(17.0)
+        .continuous_corners()
+        .fill(theme.color(theme.palette().raised))
+}
+
+pub(crate) fn render_import(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -> El {
+    let title = text("Preparing Import")
+        .font(ui_font(13.0, 550.0))
+        .color(theme.color(theme.palette().text));
+    let close = el()
+        .key("workspace-import-chat-close")
+        .role("button")
+        .label("Cancel workspace import")
+        .size(27.0, 27.0)
+        .radius(8.0)
+        .center()
+        .hover(theme.color(theme.palette().border))
+        .on_press(State::cancel_workspace_import)
+        .child(icon(&CLOSE, 15.0).color(theme.color(theme.palette().muted)));
+    let header = panel_header(theme, title, Some(close), "workspace-import-chat-ribbon");
+    let window_height = cx.layout_size("app-surface").map_or(720.0, |size| size[1]);
+    let body_height = (window_height - 155.0).clamp(150.0, 350.0);
+    let progress = if state.workspace_draft.import_log.trim().is_empty() {
+        "Connecting to the model…".to_owned()
+    } else {
+        state.workspace_draft.import_log.clone()
+    };
+    let content = col()
+        .key("workspace-import-chat-content-list")
+        .w_full()
+        .gap(12.0)
+        .px(14.0)
+        .py(14.0)
+        .child(transcript_message(
+            "workspace-import-chat-request".to_owned(),
+            state.workspace_draft.import_instructions.text.clone(),
+            true,
+            false,
+            theme,
+        ))
+        .child(transcript_message(
+            "workspace-import-chat-progress".to_owned(),
+            progress,
+            false,
+            false,
+            theme,
+        ))
+        .child(
+            text("Working…")
+                .font(ui_font(12.5, 400.0))
+                .color(theme.color(theme.palette().muted)),
+        );
+    panel_base(
+        theme,
+        "workspace-import-chat",
+        "Preparing workspace import",
+        header,
+    )
+    .child(col().w_full().px(20.0).child(panel_body(
+        theme,
+        content,
+        body_height,
+        "workspace-import-chat",
+    )))
+    .child(
+        composer_shell(theme, "workspace-import-chat-composer").child(
+            text("Preparing workspace draft…")
+                .font(ui_font(13.5, 400.0))
+                .color(theme.color(theme.palette().muted)),
+        ),
+    )
+}
+
 pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -> El {
     let palette = theme.palette();
-    let ribbon_fill = theme.color(palette.card);
-    let composer_fill = theme.color(palette.raised);
-    let body_fill = theme.color(palette.chrome);
     let present_count =
         state.quick_chat_messages.len() + usize::from(state.quick_chat_pending.is_some());
     let show_body = present_count > 0 || !state.quick_chat_error.is_empty();
@@ -277,48 +425,18 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                 .color(theme.color(palette.muted)),
             )
     };
-    let header = row()
-        .key("quick-chat-ribbon")
-        .w_full()
-        .h(HEADER_HEIGHT)
-        .px(13.0)
-        .center_y()
-        .gap(8.0)
-        .corners([17.0, 17.0, 0.0, 0.0])
-        .continuous_corners()
-        .fill(ribbon_fill)
-        .child(heading)
-        .child(el().grow(1.0))
-        .child(
-            el().key("quick-chat-close")
-                .role("button")
-                .label("Close Quick Chat")
-                .size(27.0, 27.0)
-                .radius(8.0)
-                .center()
-                .hover(theme.color(palette.border))
-                .on_press(State::close_quick_chat)
-                .child(icon(&CLOSE, 15.0).color(theme.color(palette.muted))),
-        );
-    let mut panel = col()
-        .key("quick-chat-panel")
-        .raise()
-        .role("dialog")
-        .label("Quick Chat")
-        .pin(None, None, Some(14.0), Some(14.0))
-        .w(PANEL_WIDTH)
-        .radius(17.0)
-        .continuous_corners()
-        .shadow(
-            5.0,
-            22.0,
-            Color::BLACK.alpha(if theme.is_dark() { 0.6 } else { 0.25 }),
-        )
-        .transition(Transition::asymmetric(
-            Transition::offset(PANEL_WIDTH + 24.0, 0.0).combined(Transition::opacity()),
-            Transition::offset(PANEL_WIDTH + 24.0, 0.0).combined(Transition::opacity()),
-        ))
-        .child(col().w_full().px(20.0).child(header));
+    let close = el()
+        .key("quick-chat-close")
+        .role("button")
+        .label("Close Quick Chat")
+        .size(27.0, 27.0)
+        .radius(8.0)
+        .center()
+        .hover(theme.color(palette.border))
+        .on_press(State::close_quick_chat)
+        .child(icon(&CLOSE, 15.0).color(theme.color(palette.muted)));
+    let header = panel_header(theme, heading, Some(close), "quick-chat-ribbon");
+    let mut panel = panel_base(theme, "quick-chat-panel", "Quick Chat", header);
     if show_body {
         let mut content = col()
             .key("quick-chat-content-list")
@@ -361,46 +479,12 @@ pub(crate) fn render(state: &State, theme: ThemeStyle<'_>, cx: &mut Cx<State>) -
                     .wrap(),
             );
         }
-        let body = row()
-            .key("quick-chat-content")
-            .w_full()
-            .h(body_height)
-            .fill(body_fill)
-            .child(
-                el().key("quick-chat-content-left-border")
-                    .w(1.0)
-                    .h_full()
-                    .fill(ribbon_fill),
-            )
-            .child(
-                col()
-                    .grow(1.0)
-                    .min_w(0.0)
-                    .h_full()
-                    .min_h(0.0)
-                    .scroll(ScrollSpec { stick_bottom: true })
-                    .child(content),
-            )
-            .child(
-                el().key("quick-chat-content-right-border")
-                    .w(1.0)
-                    .h_full()
-                    .fill(ribbon_fill),
-            );
+        let body = panel_body(theme, content, body_height, "quick-chat");
         panel = panel.child(col().w_full().px(20.0).child(body));
     }
     let font = ui_font(13.5, 400.0);
     let history_entries = input_history::quick_chat_entries(&state.quick_chat_messages);
-    let composer = row()
-        .key("quick-chat-composer")
-        .w_full()
-        .h(COMPOSER_HEIGHT)
-        .px(10.0)
-        .center_y()
-        .gap(7.0)
-        .radius(17.0)
-        .continuous_corners()
-        .fill(composer_fill)
+    let composer = composer_shell(theme, "quick-chat-composer")
         .child(
             text_input(&state.quick_chat_draft, font)
                 .key("quick-chat-input")

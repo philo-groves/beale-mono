@@ -15,7 +15,7 @@ use beale_contracts::{
         ListArchiveResponse, ListSessionsResponse, ProviderId, ReasoningEffort, SessionCommentary,
         SessionDetail, SessionGoal, SessionGraphConfig, SessionMessage, SessionReasoningSummary,
         SessionRole, SessionStreamEvent, SessionStreamKind, SessionSummary, SessionToolDetailPage,
-        SessionToolSummary, SubmitSessionTurnRequest,
+        SessionToolSummary, SubmitSessionTurnRequest, WorkspaceSurface,
     },
 };
 use beale_providers::{
@@ -43,6 +43,23 @@ use uuid::Uuid;
 
 use beale_workspaces::WorkspaceStore;
 mod automations;
+
+fn surface_relationship_lines(surfaces: &[WorkspaceSurface]) -> Vec<String> {
+    let names: HashMap<_, _> = surfaces
+        .iter()
+        .map(|surface| (surface.id.as_str(), surface.value.as_str()))
+        .collect();
+    surfaces
+        .iter()
+        .flat_map(|surface| {
+            surface.relationships.iter().filter_map(|relationship| {
+                names
+                    .get(relationship.target_id.as_str())
+                    .map(|target| format!("{} —{}→ {target}", surface.value, relationship.label))
+            })
+        })
+        .collect()
+}
 #[cfg(feature = "graphs")]
 mod graphs;
 mod http;
@@ -1148,7 +1165,7 @@ async fn run_one_turn(
     let workspace = state.workspaces.directory(&request.workspace_id)?;
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
     let workspace_context = format!(
-        "Guidance: {}\nRules: {}\nSurfaces: {}",
+        "Guidance: {}\nRules: {}\nSurfaces: {}\nOut-of-scope surfaces are boundary references only.\nUser-recorded relationships (context, not evidence): {}",
         workspace_details.guidance,
         workspace_details.rules.join("; "),
         workspace_details
@@ -1166,6 +1183,7 @@ async fn run_one_turn(
             ))
             .collect::<Vec<_>>()
             .join("; "),
+        surface_relationship_lines(&workspace_details.surfaces).join("; "),
     );
     #[cfg(feature = "graphs")]
     let saved_graph_id = if request.graph_id.is_empty() {

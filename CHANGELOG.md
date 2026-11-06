@@ -6,6 +6,8 @@
 
 #### Added
 
+- Added a v2 workspace surface network with type icons, three progress segments, hover labels, and labeled connections between any surfaces. Out-of-scope surfaces stay muted and support mapping progress only. Protocol v1.50 stores surface identities, progress, and relationships in workspace manifests; older manifests load with defaults.
+- Added an Import-first v2 workspace creation flow. None keeps manual setup; Custom Instructions uses the configured default large model and host read/bash tools to prepare a reviewed scope and rules draft, with transient progress. Research Kit selection shows an unavailable placeholder. Protocol v1.49 adds a streamed import route.
 - Added the optional v2 Tracking dashboard with seven-day subscription remaining history and daily model usage charts for duration or reported tokens. Main and subagent model calls are recorded in app-server SQLite schema 27; protocol v1.48 adds an authenticated history read route. Existing usage is not backfilled.
 - Added a Graphs feature card, disabled by default, and a centered New Research graph dropdown beneath a workspace heading. The dotted-underlined workspace name opens an in-place selector. Simple Orchestra uses clickable Rune nodes for Main Agent, Scout, Reviewer, and Prover. Node forms allow one main model and multiple subagent models; Main has a fixed concurrency maximum of 1 while subagent limits are optional. No Graph shows a single editable Main Agent node with the same fixed maximum and no delegation. Orchestra settings are saved when the session begins.
 - Added an Automations sidebar with Active, Future, and Past run sections. Repeated first turns save a job titled from the session; Future details can skip one occurrence or cancel its series. The desktop updates run status while the view is open and opens completed runs in their sessions.
@@ -33,7 +35,7 @@
 - Connected v2 bundled plugin Install actions to the app-server and persisted the Installed tab across restarts.
 - Bundled four v1 managed Agent Plugins packages in v2 Extensions and listed them as Available, uninstalled plugins.
 - Added a v2 Extensions area with Features, Plugins, and Research Kits navigation; Features opens by default, while Plugins has All Plugins, Available, and Installed tabs and an external-source dialog scaffold.
-- Added up and down input-history buttons to v2 workspace session and Quick Chat composers, with unsent-draft restoration and history reset after manual edits or chat changes.
+- Added input history to v2 workspace session and Quick Chat composers, with unsent-draft restoration and history reset after manual edits or chat changes.
 - Added plus buttons beside v2 Safety rule-set titles and a shared creation dialog for new Auto-Review and Guardian rules.
 - Added v2 Permissions settings with Auto-Review and Guardian tabs and editable, disableable rules.
 - Added v2 Archive settings with Sessions and Quick Chats tabs, compact stats, and Restore actions; restored Quick Chats reopen in the dock.
@@ -63,7 +65,7 @@
 - Added v2 Appearance settings with Colors and Typography tabs, four themes, per-theme Heat Palette colors, an interface font choice, and text sizing, saved locally by the desktop.
 - Added an OpenAI-only Daybreak Mode form to the v2 Providers view, with Blue selected by default and Red available as a host-saved choice.
 - Added the v2 Home view with a data-driven v1-style sidebar for research actions and workspaces; its main content remains blank while session flows are built.
-- Added a v2 New Workspace flow with Foundation, Surfaces, and Rules views, a None-only Research Kit selector, and no Research Subject field.
+- Added a v2 New Workspace flow with General, Surfaces, and Rules views and no Research Subject field.
 - Connected v2 desktop workspace creation and Home workspace listing to the authenticated app-server v1.6 protocol, with server validation errors shown beside the draft.
 - Added clickable saved workspaces with Campaign, Surfaces, Rules, and Foundation tabs, host-backed forms, and the v1 wide content container.
 - Enabled section-specific editing of saved workspace names, guidance, surfaces, and rules with revision conflict feedback.
@@ -81,6 +83,8 @@
 
 #### Changed
 
+- Moved v2 session composer history navigation to the Up and Down keys and removed its history buttons.
+- Renamed v2 workspace Foundation tabs to General and Workspace Details to Basic Information. Name and new-workspace directory values now use edit dialogs and a folder picker; empty required values show a warning, and displayed paths under the user home use `~/`.
 - Gave Automations Active runs a pulse icon and Schedule a Job a calendar-plus icon.
 - Renamed the Automations sidenav's Jobs heading and empty list labels to Runs, and added a search icon beside the heading.
 - Home workspace rows now show an indented, muted No Sessions label when empty; Automations empty rows align with their section items.
@@ -169,6 +173,7 @@
 
 #### Fixed
 
+- Let v2 Custom Instructions imports continue past the former tool and round cutoffs. Import progress now uses the shared Quick Chat ribbon, bordered body, and rounded footer, omits final JSON from its transcript, and can be canceled from the panel.
 - Kept the selected saved session row active while its details load, preventing a temporary New Session row in the Home sidebar.
 - Kept v2 popup menus above the New Research composer when their bounds overlap.
 - Layered the v2 New Research composer above its exiting ribbon so the ribbon slides beneath it.

@@ -329,6 +329,24 @@ pub mod v1 {
         pub scope: i32,
         #[prost(string, tag = "3")]
         pub value: String,
+        #[prost(string, tag = "4")]
+        pub id: String,
+        #[prost(uint32, tag = "5")]
+        pub mapping_progress: u32,
+        #[prost(uint32, tag = "6")]
+        pub threat_modeling_progress: u32,
+        #[prost(uint32, tag = "7")]
+        pub analysis_progress: u32,
+        #[prost(message, repeated, tag = "8")]
+        pub relationships: Vec<SurfaceRelationship>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceRelationship {
+        #[prost(string, tag = "1")]
+        pub target_id: String,
+        #[prost(string, tag = "2")]
+        pub label: String,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -343,6 +361,49 @@ pub mod v1 {
         pub surfaces: Vec<WorkspaceSurfaceInput>,
         #[prost(string, repeated, tag = "5")]
         pub rules: Vec<String>,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceImportRequest {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "2")]
+        pub method: i32,
+        #[prost(string, tag = "3")]
+        pub model: String,
+        #[prost(string, tag = "4")]
+        pub instructions: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceImportResult {
+        #[prost(string, tag = "1")]
+        pub name: String,
+        #[prost(string, tag = "2")]
+        pub guidance: String,
+        #[prost(message, repeated, tag = "3")]
+        pub surfaces: Vec<WorkspaceSurfaceInput>,
+        #[prost(string, repeated, tag = "4")]
+        pub rules: Vec<String>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum WorkspaceImportEventKind {
+        Unspecified = 0,
+        Progress = 1,
+        Completed = 2,
+        Failed = 3,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WorkspaceImportEvent {
+        #[prost(enumeration = "WorkspaceImportEventKind", tag = "1")]
+        pub kind: i32,
+        #[prost(string, tag = "2")]
+        pub text: String,
+        #[prost(message, optional, tag = "3")]
+        pub result: Option<WorkspaceImportResult>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -381,6 +442,16 @@ pub mod v1 {
         pub created_by: i32,
         #[prost(string, tag = "5")]
         pub out_of_scope_reason: String,
+        #[prost(string, tag = "6")]
+        pub id: String,
+        #[prost(uint32, tag = "7")]
+        pub mapping_progress: u32,
+        #[prost(uint32, tag = "8")]
+        pub threat_modeling_progress: u32,
+        #[prost(uint32, tag = "9")]
+        pub analysis_progress: u32,
+        #[prost(message, repeated, tag = "10")]
+        pub relationships: Vec<SurfaceRelationship>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1125,7 +1196,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 48;
+pub const PROTOCOL_MINOR: u32 = 50;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
@@ -1144,6 +1215,7 @@ pub const CUSTOM_PROVIDERS_PATH: &str = "/v1/providers/custom";
 pub const CUSTOM_PROVIDER_API_KEY_PATH: &str = "/v1/providers/custom/api-key";
 pub const CUSTOM_PROVIDER_DISCOVER_PATH: &str = "/v1/providers/custom/discover";
 pub const WORKSPACES_PATH: &str = "/v1/workspaces";
+pub const WORKSPACE_IMPORT_STREAM_PATH: &str = "/v1/workspaces/import/stream";
 pub const WORKSPACE_DETAILS_PATH: &str = "/v1/workspaces/{id}";
 pub const WORKSPACE_CAMPAIGN_PATH: &str = "/v1/workspaces/{id}/campaign";
 pub const WORKSPACE_FOUNDATION_PATH: &str = "/v1/workspaces/{id}/foundation";
