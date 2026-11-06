@@ -63,6 +63,24 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_tracking::TOOL_COUNT,
             prompt_extension: beale_tracking::PROMPT_EXTENSION,
         },
+        #[cfg(feature = "surfaces")]
+        FeatureSpec {
+            id: beale_surfaces::FEATURE_ID,
+            name: beale_surfaces::FEATURE_NAME,
+            description: beale_surfaces::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_surfaces::HAS_PROMPT_EXTENSION,
+            tool_count: beale_surfaces::TOOL_COUNT,
+            prompt_extension: beale_surfaces::PROMPT_EXTENSION,
+        },
+        #[cfg(feature = "knowledge")]
+        FeatureSpec {
+            id: beale_knowledge::FEATURE_ID,
+            name: beale_knowledge::FEATURE_NAME,
+            description: beale_knowledge::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_knowledge::HAS_PROMPT_EXTENSION,
+            tool_count: beale_knowledge::TOOL_COUNT,
+            prompt_extension: beale_knowledge::PROMPT_EXTENSION,
+        },
     ]
 }
 
@@ -320,6 +338,16 @@ mod tests {
             .await
             .unwrap();
         let catalog = ListFeaturesResponse::decode(bytes).unwrap();
+        #[cfg(feature = "surfaces")]
+        {
+            let surfaces = catalog
+                .features
+                .iter()
+                .find(|feature| feature.id == beale_surfaces::FEATURE_ID)
+                .unwrap();
+            assert!(!surfaces.enabled);
+            assert_eq!(surfaces.tool_count, 4);
+        }
         #[cfg(feature = "graphs")]
         {
             let graphs = catalog

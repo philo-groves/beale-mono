@@ -207,6 +207,7 @@ name = "beale-contracts"
 version = "0.1.0"
 dependencies = [
  "prost",
+ "serde",
  "sha2",
 ]
 
@@ -221,10 +222,12 @@ dependencies = [
  "beale-fleet",
  "beale-goals",
  "beale-graphs",
+ "beale-knowledge",
  "beale-providers",
  "beale-safety",
  "beale-sessions",
  "beale-storage",
+ "beale-surfaces",
  "beale-tracking",
  "beale-workspaces",
  "prost",
@@ -240,6 +243,8 @@ version = "0.1.0"
 dependencies = [
  "beale-contracts",
  "beale-graphs",
+ "beale-knowledge",
+ "beale-surfaces",
  "beale-tracking",
  "chrono",
  "futures-util",
@@ -309,6 +314,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "beale-knowledge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "beale-contracts",
+ "beale-storage",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "beale-providers"
 version = "0.1.0"
 dependencies = [
@@ -356,9 +376,11 @@ dependencies = [
  "beale-contracts",
  "beale-goals",
  "beale-graphs",
+ "beale-knowledge",
  "beale-providers",
  "beale-safety",
  "beale-storage",
+ "beale-surfaces",
  "beale-tools",
  "beale-workspaces",
  "futures-util",
@@ -374,8 +396,26 @@ name = "beale-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "beale-contracts",
  "chrono",
  "rusqlite",
+ "serde_json",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
+name = "beale-surfaces"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "beale-contracts",
+ "beale-workspaces",
+ "prost",
+ "serde_json",
+ "tokio",
+ "tower",
  "uuid",
 ]
 

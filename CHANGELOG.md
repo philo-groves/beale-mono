@@ -6,7 +6,10 @@
 
 #### Added
 
-- Added a v2 workspace surface network with type icons, three progress segments, hover labels, and labeled connections between any surfaces. Out-of-scope surfaces stay muted and support mapping progress only. Protocol v1.50 stores surface identities, progress, and relationships in workspace manifests; older manifests load with defaults.
+- Added the optional V2 Knowledge Base feature with workspace-owned memories, leads, and evidence-gated observed findings. One search and detail path covers both record kinds; short IDs, revision history, links, duplicate relationships, and host-validated read/bash evidence keep reusable context distinct from security claims. Host database schema 31 and protocol v1.53 add the storage and JSON client contract. Reproduced and verified stages remain unavailable until Knowledge owns a qualifying verifier.
+- Added the optional Surfaces feature, disabled by default, with four model tools for adding, editing, getting, and querying workspace surfaces. The app-server records timestamped revisions with before and after values and retains deleted surface lineage in schema 5; protocol v1.52 exposes this history.
+- Expanded v2 surface definitions with validated specific types, typed locators, names, parent links, descriptions, scope basis, provenance, and typed connections. Custom Instructions imports carry this context through workspace creation; selected nodes and session context display it with its source.
+- Added a v2 workspace surface network with type icons, hover labels, and labeled connections between any surfaces. Protocol v1.50 introduced surface identities and relationships in workspace manifests; older manifests load with defaults.
 - Added an Import-first v2 workspace creation flow. None keeps manual setup; Custom Instructions uses the configured default large model and host read/bash tools to prepare a reviewed scope and rules draft, with transient progress. Research Kit selection shows an unavailable placeholder. Protocol v1.49 adds a streamed import route.
 - Added the optional v2 Tracking dashboard with seven-day subscription remaining history and daily model usage charts for duration or reported tokens. Main and subagent model calls are recorded in app-server SQLite schema 27; protocol v1.48 adds an authenticated history read route. Existing usage is not backfilled.
 - Added a Graphs feature card, disabled by default, and a centered New Research graph dropdown beneath a workspace heading. The dotted-underlined workspace name opens an in-place selector. Simple Orchestra uses clickable Rune nodes for Main Agent, Scout, Reviewer, and Prover. Node forms allow one main model and multiple subagent models; Main has a fixed concurrency maximum of 1 while subagent limits are optional. No Graph shows a single editable Main Agent node with the same fixed maximum and no delegation. Orchestra settings are saved when the session begins.
@@ -83,6 +86,9 @@
 
 #### Changed
 
+- Replaced the three surface progress gates with a single outline colored from grey to red by update count, scaled to the most edited surface. Surfaces are optional at workspace creation and hidden from default model context; Rules remain available for general scope.
+- Assigned workspace-local `S1`, `S2`, … surface IDs through the app-server. Existing v3 manifests map old IDs and connections to short IDs on read and persist schema 5 on the next write; deleted numbers are not reused. Protocol v1.51 added optional surface definitions so older clients preserve fields they do not know.
+- Laid out the v2 workspace surface network by recorded connections, with related surfaces clustered and unconnected surfaces spread across rows.
 - Made the v2 workspace surface graph fill the main content area with a square grid, compact icon nodes, and drag panning beneath the floating workspace title. Surfaces, Settings, and Rules remain in the title row, and Manage Surfaces stays fixed at the bottom right.
 - Moved v2 session composer history navigation to the Up and Down keys and removed its history buttons.
 - Renamed v2 workspace Foundation tabs to General and Workspace Details to Basic Information. Name and new-workspace directory values now use edit dialogs and a folder picker; empty required values show a warning, and displayed paths under the user home use `~/`.

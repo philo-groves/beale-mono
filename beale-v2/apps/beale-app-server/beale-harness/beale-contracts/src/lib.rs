@@ -1,5 +1,7 @@
 //! Versioned client-to-host wire contracts. No host-only types belong here.
 
+pub mod knowledge;
+
 pub mod v1 {
     /// `proto/beale/v1/host.proto` is the source wire schema. Field tags and
     /// types must change together here and in that file.
@@ -339,6 +341,8 @@ pub mod v1 {
         pub analysis_progress: u32,
         #[prost(message, repeated, tag = "8")]
         pub relationships: Vec<SurfaceRelationship>,
+        #[prost(message, optional, tag = "9")]
+        pub definition: Option<SurfaceDefinition>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -347,6 +351,62 @@ pub mod v1 {
         pub target_id: String,
         #[prost(string, tag = "2")]
         pub label: String,
+        #[prost(string, tag = "3")]
+        pub type_id: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceLocator {
+        #[prost(string, tag = "1")]
+        pub kind: String,
+        #[prost(string, tag = "2")]
+        pub value: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceDefinition {
+        #[prost(string, tag = "1")]
+        pub type_id: String,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(message, optional, tag = "3")]
+        pub locator: Option<SurfaceLocator>,
+        #[prost(string, tag = "4")]
+        pub parent_id: String,
+        #[prost(string, tag = "5")]
+        pub summary: String,
+        #[prost(string, tag = "6")]
+        pub context: String,
+        #[prost(string, tag = "7")]
+        pub scope_basis: String,
+        #[prost(bool, tag = "8")]
+        pub scope_descendants: bool,
+        #[prost(string, tag = "9")]
+        pub source: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceChange {
+        #[prost(string, tag = "1")]
+        pub field: String,
+        #[prost(string, tag = "2")]
+        pub before_json: String,
+        #[prost(string, tag = "3")]
+        pub after_json: String,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SurfaceRevision {
+        #[prost(uint64, tag = "1")]
+        pub number: u64,
+        #[prost(uint64, tag = "2")]
+        pub at_ms: u64,
+        #[prost(string, tag = "3")]
+        pub actor: String,
+        #[prost(string, tag = "4")]
+        pub action: String,
+        #[prost(message, repeated, tag = "5")]
+        pub changes: Vec<SurfaceChange>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -452,6 +512,16 @@ pub mod v1 {
         pub analysis_progress: u32,
         #[prost(message, repeated, tag = "10")]
         pub relationships: Vec<SurfaceRelationship>,
+        #[prost(message, optional, tag = "11")]
+        pub definition: Option<SurfaceDefinition>,
+        #[prost(uint64, tag = "12")]
+        pub created_at_ms: u64,
+        #[prost(uint64, tag = "13")]
+        pub updated_at_ms: u64,
+        #[prost(uint64, tag = "14")]
+        pub revision: u64,
+        #[prost(message, repeated, tag = "15")]
+        pub lineage: Vec<SurfaceRevision>,
     }
 
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1196,7 +1266,7 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 50;
+pub const PROTOCOL_MINOR: u32 = 53;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";

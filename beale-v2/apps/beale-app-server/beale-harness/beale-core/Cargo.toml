@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["goal-mode", "fleet", "graphs", "tracking"]
+default = ["goal-mode", "fleet", "graphs", "tracking", "surfaces", "knowledge"]
+knowledge = ["beale-sessions/knowledge", "dep:beale-knowledge"]
+surfaces = ["beale-sessions/surfaces", "dep:beale-surfaces"]
 goal-mode = ["beale-sessions/goal-mode", "dep:beale-goals"]
 fleet = ["dep:beale-fleet"]
 graphs = ["beale-sessions/graphs", "dep:beale-graphs"]
@@ -20,7 +22,9 @@ beale-extender = { path = "../beale-extender" }
 beale-fleet = { path = "../../../../extensions/features/beale-fleet", optional = true }
 beale-graphs = { path = "../../../../extensions/features/beale-graphs", optional = true }
 beale-goals = { path = "../../../../extensions/features/beale-goals", optional = true }
+beale-knowledge = { path = "../../../../extensions/features/beale-knowledge", optional = true }
 beale-tracking = { path = "../../../../extensions/features/beale-tracking", optional = true }
+beale-surfaces = { path = "../../../../extensions/features/beale-surfaces", optional = true }
 beale-providers = { path = "../beale-providers" }
 beale-safety = { path = "../beale-safety" }
 beale-sessions = { path = "../beale-sessions", default-features = false }

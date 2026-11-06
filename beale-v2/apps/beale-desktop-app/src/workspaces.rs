@@ -20,7 +20,7 @@ use crate::workspace_creation::{
 
 const MAX_LIST_BYTES: usize = 2_097_152;
 const MAX_CREATE_BYTES: usize = 4_096;
-const MAX_DETAILS_BYTES: usize = 1_048_576;
+const MAX_DETAILS_BYTES: usize = 8_000_000;
 pub(crate) const WORKSPACE_CONFLICT_MESSAGE: &str =
     "Workspace changed elsewhere. Reload it before saving.";
 
@@ -119,7 +119,7 @@ pub(crate) async fn import_stream(
                 }
                 Ok(WorkspaceImportEventKind::Completed) if event.text.is_empty() => {
                     let result = event.result.ok_or("Missing import draft".to_owned())?;
-                    if result.name.trim().is_empty() || result.surfaces.is_empty() {
+                    if result.name.trim().is_empty() {
                         return Err("Invalid import draft".to_owned());
                     }
                     return Ok(result);
@@ -163,6 +163,9 @@ pub(crate) fn request_from_draft(
                     DraftSurfaceScope::OutOfScope => SurfaceScope::OutOfScope,
                 } as i32,
                 value: surface.value.trim().to_owned(),
+                id: surface.id.clone(),
+                definition: surface.definition.clone(),
+                relationships: surface.relationships.clone(),
                 ..Default::default()
             })
             .collect(),
@@ -470,6 +473,9 @@ mod tests {
                 value: "example.test".to_owned(),
                 created_by: DraftSurfaceCreator::User,
                 out_of_scope_reason: None,
+                id: String::new(),
+                definition: None,
+                relationships: Vec::new(),
             },
             Surface {
                 kind: DraftSurfaceKind::Documentation,
@@ -477,6 +483,9 @@ mod tests {
                 value: "excluded.example.test".to_owned(),
                 created_by: DraftSurfaceCreator::User,
                 out_of_scope_reason: Some("Set at workspace creation".to_owned()),
+                id: String::new(),
+                definition: None,
+                relationships: Vec::new(),
             },
         ];
         draft.rules.push("Keep within scope.".to_owned());
@@ -496,11 +505,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_scope_and_invalid_host_summaries() {
+    fn accepts_rule_only_workspace_and_rejects_invalid_host_summaries() {
         let mut draft = WorkspaceDraft::default();
         draft.name = TextEdit::new("Example Workspace");
         draft.directory = TextEdit::new(std::env::temp_dir().to_string_lossy());
         assert!(request_from_draft(&draft).is_err());
+        draft.rules.push("Use only authorized systems.".to_owned());
+        assert!(request_from_draft(&draft).unwrap().surfaces.is_empty());
         let invalid = ListWorkspacesResponse {
             workspaces: vec![WorkspaceSummary {
                 id: "not-a-uuid".to_owned(),

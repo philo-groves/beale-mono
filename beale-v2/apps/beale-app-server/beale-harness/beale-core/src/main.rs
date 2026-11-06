@@ -110,6 +110,8 @@ async fn serve() -> Result<()> {
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
         .merge(beale_sessions::router(token.clone(), workspaces.clone())?)
         .merge(features::router(token.clone(), db.clone()));
+    #[cfg(feature = "knowledge")]
+    let app = app.merge(beale_knowledge::router(token.clone(), db.clone()));
     #[cfg(feature = "tracking")]
     let app = app.merge(beale_tracking::router(token.clone(), db.clone()));
     #[cfg(feature = "fleet")]

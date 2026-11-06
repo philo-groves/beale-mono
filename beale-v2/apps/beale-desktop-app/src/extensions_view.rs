@@ -171,6 +171,24 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         workspace_ids: Vec::new(),
         all_workspaces: true,
     }, FeatureEntry {
+        id: beale_knowledge::FEATURE_ID.to_owned(),
+        name: beale_knowledge::FEATURE_NAME.to_owned(),
+        description: beale_knowledge::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: false,
+        tool_count: beale_knowledge::TOOL_COUNT as usize,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
+        id: beale_surfaces::FEATURE_ID.to_owned(),
+        name: beale_surfaces::FEATURE_NAME.to_owned(),
+        description: beale_surfaces::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: false,
+        tool_count: beale_surfaces::TOOL_COUNT as usize,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
+    }, FeatureEntry {
         id: beale_tracking::FEATURE_ID.to_owned(),
         name: beale_tracking::FEATURE_NAME.to_owned(),
         description: beale_tracking::FEATURE_DESCRIPTION.to_owned(),
@@ -194,6 +212,28 @@ pub(crate) fn tracking_enabled(state: &State) -> bool {
         .features
         .iter()
         .any(|feature| feature.id == beale_tracking::FEATURE_ID && feature.enabled)
+}
+
+pub(crate) fn surfaces_enabled(state: &State, workspace_id: &str) -> bool {
+    state.features.iter().any(|feature| {
+        feature.id == beale_surfaces::FEATURE_ID
+            && feature.enabled
+            && (feature.all_workspaces || feature.workspace_ids.iter().any(|id| id == workspace_id))
+    })
+}
+
+pub(crate) fn knowledge_enabled(state: &State, workspace_id: &str) -> bool {
+    state.features.iter().any(|feature| {
+        feature.id == beale_knowledge::FEATURE_ID
+            && feature.enabled
+            && (feature.all_workspaces || feature.workspace_ids.iter().any(|id| id == workspace_id))
+    })
+}
+
+pub(crate) fn surfaces_enabled_for_creation(state: &State) -> bool {
+    state.features.iter().any(|feature| {
+        feature.id == beale_surfaces::FEATURE_ID && feature.enabled && feature.all_workspaces
+    })
 }
 
 pub(crate) fn goal_mode_enabled(state: &State) -> bool {
@@ -850,6 +890,17 @@ pub(crate) fn start_feature_load(state: &mut State) {
             if state.primary_view == crate::PrimaryView::Tracking && !tracking_enabled(state) {
                 state.navigate_to(ViewLocation::Home);
             }
+            if let Some(id) = state.workspace_id
+                && ((state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
+                    && !surfaces_enabled(state, &id.to_string()))
+                    || (state.workspace_tab == crate::workspace_view::WorkspaceTab::Knowledge
+                        && !knowledge_enabled(state, &id.to_string())))
+            {
+                state.navigate_to(ViewLocation::Workspace(
+                    id,
+                    crate::workspace_view::WorkspaceTab::Rules,
+                ));
+            }
         });
     });
 }
@@ -910,6 +961,18 @@ fn start_feature_toggle(state: &mut State, id: String, enabled: bool) {
                         && !tracking_enabled(state)
                     {
                         state.navigate_to(ViewLocation::Home);
+                    }
+                    if let Some(id) = state.workspace_id
+                        && ((state.workspace_tab == crate::workspace_view::WorkspaceTab::Surfaces
+                            && !surfaces_enabled(state, &id.to_string()))
+                            || (state.workspace_tab
+                                == crate::workspace_view::WorkspaceTab::Knowledge
+                                && !knowledge_enabled(state, &id.to_string())))
+                    {
+                        state.navigate_to(ViewLocation::Workspace(
+                            id,
+                            crate::workspace_view::WorkspaceTab::Rules,
+                        ));
                     }
                 }
                 Err(error) => state.feature_error = error,
@@ -1003,6 +1066,15 @@ pub(crate) fn start_workspace_scope_save(
                     }
                     if !goal_mode_enabled(state) {
                         state.new_research_goal_mode = false;
+                    }
+                    if let Some(workspace_id) = state.workspace_id
+                        && state.workspace_tab == crate::workspace_view::WorkspaceTab::Knowledge
+                        && !knowledge_enabled(state, &workspace_id.to_string())
+                    {
+                        state.navigate_to(ViewLocation::Workspace(
+                            workspace_id,
+                            crate::workspace_view::WorkspaceTab::Rules,
+                        ));
                     }
                 }
                 Err(error) if is_plugin => state.plugin_error = error,
@@ -2112,17 +2184,17 @@ mod tests {
             ..State::default()
         };
         assert_eq!(state.feature_tab, FeatureTab::All);
-        assert_eq!(feature_rows(&state).count(), 4);
+        assert_eq!(feature_rows(&state).count(), 6);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 4);
+        assert_eq!(feature_rows(&state).count(), 6);
         state.feature_tab = FeatureTab::Enabled;
         assert_eq!(feature_rows(&state).count(), 0);
         state.features[0].enabled = true;
         assert_eq!(feature_rows(&state).count(), 1);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 3);
+        assert_eq!(feature_rows(&state).count(), 5);
         state.feature_tab = FeatureTab::All;
-        assert_eq!(feature_rows(&state).count(), 4);
+        assert_eq!(feature_rows(&state).count(), 6);
     }
 
     #[test]

@@ -1,10 +1,10 @@
 use beale_contracts::v1::{
-    SurfaceCreator, SurfaceKind, SurfaceRelationship, SurfaceScope, WorkspaceDetails,
-    WorkspaceSurface,
+    SurfaceCreator, SurfaceDefinition, SurfaceKind, SurfaceLocator, SurfaceRelationship,
+    SurfaceScope, WorkspaceDetails, WorkspaceSurface,
 };
 use rune::{
-    Color, Drag, El, Icon, LineCap, Phase, Shape, TextEdit, Tx, canvas, col, el, icon, row, text,
-    text_input,
+    Color, Drag, El, Icon, LineCap, Phase, ScrollSpec, Shape, TextEdit, Tx, canvas, col, el, icon,
+    row, text, text_input,
 };
 
 use crate::{
@@ -23,18 +23,25 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum WorkspaceTab {
     Campaign,
+    Knowledge,
     Foundation,
-    #[default]
     Surfaces,
+    #[default]
     Rules,
 }
 
 impl WorkspaceTab {
-    const ALL: [Self; 3] = [Self::Surfaces, Self::Rules, Self::Foundation];
+    const ALL: [Self; 4] = [
+        Self::Knowledge,
+        Self::Surfaces,
+        Self::Rules,
+        Self::Foundation,
+    ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Campaign => "Campaign",
+            Self::Knowledge => "Knowledge",
             Self::Surfaces => "Surfaces",
             Self::Rules => "Rules",
             Self::Foundation => "Settings",
@@ -44,6 +51,7 @@ impl WorkspaceTab {
     fn key(self) -> &'static str {
         match self {
             Self::Campaign => "workspace-tab-campaign",
+            Self::Knowledge => "workspace-tab-knowledge",
             Self::Surfaces => "workspace-tab-surfaces",
             Self::Rules => "workspace-tab-rules",
             Self::Foundation => "workspace-tab-settings",
@@ -54,7 +62,7 @@ impl WorkspaceTab {
 fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
     let tab_icon = match tab {
-        WorkspaceTab::Surfaces | WorkspaceTab::Campaign => &TARGET,
+        WorkspaceTab::Surfaces | WorkspaceTab::Campaign | WorkspaceTab::Knowledge => &TARGET,
         WorkspaceTab::Foundation => &SETTINGS,
         WorkspaceTab::Rules => &SAFETY,
     };
@@ -107,6 +115,52 @@ fn draft_kind(kind: i32) -> DraftKind {
         Ok(SurfaceKind::Domain) => DraftKind::Domain,
         _ => DraftKind::Other,
     }
+}
+
+fn surface_type_id(kind: i32) -> &'static str {
+    match SurfaceKind::try_from(kind) {
+        Ok(SurfaceKind::Repository) => "repository",
+        Ok(SurfaceKind::Documentation) => "documentation",
+        Ok(SurfaceKind::Binary) => "binary",
+        Ok(SurfaceKind::Service) => "service",
+        Ok(SurfaceKind::Domain) => "domain",
+        _ => "other",
+    }
+}
+
+fn open_surface_editor(state: &mut State, index: Option<usize>, scope: DraftScope) {
+    state.workspace_surface_edit_index = index;
+    state.workspace_surface_dialog_scope = Some(scope);
+    state.workspace_surface_error.clear();
+    let surface = index.and_then(|index| state.workspace_surface_edits.get(index));
+    state.workspace_surface_kind =
+        surface.map_or(DraftKind::default(), |surface| draft_kind(surface.kind));
+    state.workspace_surface_value =
+        TextEdit::new(surface.map_or("", |surface| surface.value.as_str()));
+    let definition = surface.and_then(|surface| surface.definition.as_ref());
+    state.workspace_surface_type_id =
+        TextEdit::new(definition.map_or("", |item| item.type_id.as_str()));
+    state.workspace_surface_name = TextEdit::new(definition.map_or("", |item| item.name.as_str()));
+    state.workspace_surface_locator_kind = TextEdit::new(
+        definition
+            .and_then(|item| item.locator.as_ref())
+            .map_or("freeform", |locator| locator.kind.as_str()),
+    );
+    state.workspace_surface_locator_value = TextEdit::new(
+        definition
+            .and_then(|item| item.locator.as_ref())
+            .map_or("", |locator| locator.value.as_str()),
+    );
+    state.workspace_surface_parent_id =
+        TextEdit::new(definition.map_or("", |item| item.parent_id.as_str()));
+    state.workspace_surface_summary =
+        TextEdit::new(definition.map_or("", |item| item.summary.as_str()));
+    state.workspace_surface_context =
+        TextEdit::new(definition.map_or("", |item| item.context.as_str()));
+    state.workspace_surface_scope_basis =
+        TextEdit::new(definition.map_or("", |item| item.scope_basis.as_str()));
+    state.workspace_surface_scope_descendants =
+        definition.is_some_and(|item| item.scope_descendants);
 }
 
 fn foundation(state: &State, details: &WorkspaceDetails, theme: ThemeStyle<'_>) -> El {
@@ -335,9 +389,9 @@ fn surface_icon(kind: i32) -> &'static Icon {
 }
 
 fn arc(cx: f32, cy: f32, radius: f32, start: f32, end: f32) -> Vec<[f32; 2]> {
-    (0..=16)
+    (0..=40)
         .map(|step| {
-            let angle = (start + (end - start) * step as f32 / 16.0).to_radians();
+            let angle = (start + (end - start) * step as f32 / 40.0).to_radians();
             [cx + radius * angle.cos(), cy + radius * angle.sin()]
         })
         .collect()
@@ -353,15 +407,11 @@ fn network(
     let surfaces = &state.workspace_surface_edits;
     let width = available_width.max(1.0);
     let height = available_height.max(1.0);
-    let columns = ((width / 64.0).floor() as usize).max(2);
+    let positions = crate::workspace_surface_layout::layout(surfaces, width, height);
     let position = |index: usize| -> [f32; 2] {
-        let row = index / columns;
-        let column = index % columns;
-        let count = (surfaces.len() - row * columns).min(columns);
-        let step = width / (count + 1) as f32;
         [
-            step * (column + 1) as f32 + state.workspace_surface_pan[0],
-            130.0 + row as f32 * 64.0 + state.workspace_surface_pan[1],
+            positions[index][0] + state.workspace_surface_pan[0],
+            positions[index][1] + state.workspace_surface_pan[1],
         ]
     };
     let hovered = state.workspace_surface_hovered;
@@ -377,6 +427,23 @@ fn network(
         }
     }
     for (index, surface) in surfaces.iter().enumerate() {
+        if let Some(parent_id) = surface
+            .definition
+            .as_ref()
+            .map(|definition| definition.parent_id.as_str())
+            && let Some(parent) = surfaces
+                .iter()
+                .position(|candidate| candidate.id == parent_id)
+        {
+            let active = hovered == Some(index) || hovered == Some(parent);
+            shape = shape.line(
+                position(parent),
+                position(index),
+                if active { 2.0 } else { 1.5 },
+                LineCap::Round,
+                theme.color(if active { "#91abc0" } else { "#526575" }),
+            );
+        }
         for relationship in &surface.relationships {
             let Some(target) = surfaces
                 .iter()
@@ -396,41 +463,26 @@ fn network(
             );
         }
     }
+    let max_updates = surfaces
+        .iter()
+        .map(|surface| surface.revision.saturating_sub(1))
+        .max()
+        .unwrap_or(0);
     for (index, surface) in surfaces.iter().enumerate() {
         let [x, y] = position(index);
-        let out = surface.scope == SurfaceScope::OutOfScope as i32;
-        let values = [
-            surface.mapping_progress,
-            surface.threat_modeling_progress,
-            surface.analysis_progress,
-        ];
-        let colors = ["#69a8c9", "#c2a368", "#8bb995"];
-        for segment in 0..3 {
-            let start = -90.0 + segment as f32 * 120.0 + 9.0;
-            let end = start + 102.0;
-            shape = shape.stroke(
-                arc(x, y, 18.0, start, end),
-                2.5,
-                theme.color(if out && segment > 0 {
-                    "#292929"
-                } else {
-                    "#454545"
-                }),
-            );
-            if values[segment] > 0 && !(out && segment > 0) {
-                shape = shape.stroke(
-                    arc(
-                        x,
-                        y,
-                        18.0,
-                        start,
-                        start + 102.0 * values[segment] as f32 / 100.0,
-                    ),
-                    2.5,
-                    theme.color(if out { "#666666" } else { colors[segment] }),
-                );
-            }
-        }
+        let intensity = if max_updates == 0 {
+            0.0
+        } else {
+            surface.revision.saturating_sub(1) as f32 / max_updates as f32
+        };
+        let channel = |grey: f32, red: f32| (grey + (red - grey) * intensity).round() as u8;
+        let outline = format!(
+            "#{:02x}{:02x}{:02x}",
+            channel(85.0, 220.0),
+            channel(85.0, 65.0),
+            channel(85.0, 65.0)
+        );
+        shape = shape.stroke(arc(x, y, 18.0, -90.0, 270.0), 3.0, theme.color(&outline));
     }
     let mut stage = el()
         .key("workspace-surface-network")
@@ -456,10 +508,11 @@ fn network(
         let [x, y] = position(index);
         let out = surface.scope == SurfaceScope::OutOfScope as i32;
         let label = format!(
-            "{} · {}{}",
+            "{} · {}{} · {} updates",
             draft_kind(surface.kind).label(),
             surface.value,
-            if out { " · Out of scope" } else { "" }
+            if out { " · Out of scope" } else { "" },
+            surface.revision.saturating_sub(1),
         );
         let node = el()
             .key(format!("workspace-surface-node-{index}"))
@@ -487,6 +540,7 @@ fn network(
                     if source != index {
                         state.workspace_surface_relationship_target = Some(index);
                         state.workspace_surface_relationship_label = TextEdit::new("");
+                        state.workspace_surface_relationship_type_id = TextEdit::new("");
                         state.workspace_surface_relationship_error.clear();
                         state.workspace_surface_selected = Some(source);
                     }
@@ -651,47 +705,22 @@ fn network(
     page.child(actions)
 }
 
-fn progress_button(index: usize, stage: usize, value: u32, theme: ThemeStyle<'_>) -> El {
-    let label = ["Surface mapping", "Threat modeling", "Analysis"][stage];
-    let done = value == 100;
-    row()
-        .key(format!("workspace-surface-progress-{index}-{stage}"))
-        .role("button")
-        .label(format!(
-            "{label}: {}",
-            if done {
-                "complete"
-            } else if value == 0 {
-                "not started"
-            } else {
-                "in progress"
-            }
-        ))
-        .h(30.0)
-        .px(10.0)
-        .center_y()
-        .radius(8.0)
-        .continuous_corners()
-        .fill(theme.color(if done { "#294137" } else { "#2b2b2b" }))
-        .hover(theme.color(if done { "#355344" } else { "#383838" }))
+fn surface_detail(label: &str, value: &str, theme: ThemeStyle<'_>) -> El {
+    col()
+        .w_full()
+        .gap(2.0)
         .child(
-            text(format!("{label} {}", if done { "✓" } else { "○" }))
-                .font(ui_font(12.0, 500.0))
-                .color(theme.color(if done { "#a6d1b2" } else { "#b9b9b9" })),
+            text(label.to_owned())
+                .font(ui_font(11.0, 500.0))
+                .color(theme.color("#999999")),
         )
-        .on_press(move |state: &mut State| {
-            if state.workspace_save_busy.is_some() {
-                return;
-            }
-            if let Some(surface) = state.workspace_surface_edits.get_mut(index) {
-                let progress = match stage {
-                    0 => &mut surface.mapping_progress,
-                    1 => &mut surface.threat_modeling_progress,
-                    _ => &mut surface.analysis_progress,
-                };
-                *progress = if *progress == 100 { 0 } else { 100 };
-            }
-        })
+        .child(
+            text(value.to_owned())
+                .w_full()
+                .wrap()
+                .font(ui_font(12.0, 400.0))
+                .color(theme.color("#dddddd")),
+        )
 }
 
 fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
@@ -705,6 +734,11 @@ fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
     let mut details = col()
         .key("workspace-surface-network-details")
         .w_full()
+        .max_h(450.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
         .gap(10.0)
         .padding(12.0)
         .radius(10.0)
@@ -735,22 +769,62 @@ fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
                         .color(theme.color("#999999")),
                 ),
         );
-    let mut progress =
-        row()
-            .w_full()
-            .gap(6.0)
-            .child(progress_button(index, 0, surface.mapping_progress, theme));
-    if !out {
-        progress = progress
-            .child(progress_button(
-                index,
-                1,
-                surface.threat_modeling_progress,
-                theme,
-            ))
-            .child(progress_button(index, 2, surface.analysis_progress, theme));
+    details = details.child(surface_detail("ID", &surface.id, theme));
+    details = details.child(surface_detail(
+        "Updates",
+        &surface.revision.saturating_sub(1).to_string(),
+        theme,
+    ));
+    let updated = chrono::DateTime::from_timestamp_millis(surface.updated_at_ms as i64)
+        .map_or_else(
+            || "Unknown (predates tracking)".to_owned(),
+            |time| time.format("%Y-%m-%d %H:%M UTC").to_string(),
+        );
+    details = details.child(surface_detail("Last updated", &updated, theme));
+    for event in surface.lineage.iter().rev().take(5) {
+        let fields = event
+            .changes
+            .iter()
+            .map(|change| change.field.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        details = details.child(surface_detail(
+            &format!("Revision {} · {}", event.number, event.actor),
+            &format!("{} · {}", event.action, fields),
+            theme,
+        ));
     }
-    details = details.child(progress);
+    if let Some(definition) = &surface.definition {
+        details = details.child(surface_detail("Specific type", &definition.type_id, theme));
+        if !definition.name.is_empty() && definition.name != surface.value {
+            details = details.child(surface_detail("Name", &definition.name, theme));
+        }
+        if let Some(locator) = &definition.locator {
+            details = details.child(surface_detail(
+                "Locator",
+                &format!("{}: {}", locator.kind, locator.value),
+                theme,
+            ));
+        }
+        for (label, value) in [
+            ("Parent", &definition.parent_id),
+            ("Summary", &definition.summary),
+            ("Security context", &definition.context),
+            ("Scope basis", &definition.scope_basis),
+        ] {
+            if !value.is_empty() {
+                details = details.child(surface_detail(label, value, theme));
+            }
+        }
+        if definition.scope_descendants {
+            details = details.child(surface_detail(
+                "Scope boundary",
+                "Covers descendants",
+                theme,
+            ));
+        }
+        details = details.child(surface_detail("Source", &definition.source, theme));
+    }
     if state.workspace_surface_edits.len() > 1 {
         let connecting = state.workspace_surface_connecting == Some(index);
         details = details.child(
@@ -796,12 +870,21 @@ fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
                 .center_y()
                 .gap(8.0)
                 .child(
-                    text(format!("{} → {}", relationship.label, target))
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .truncate()
-                        .font(ui_font(12.0, 400.0))
-                        .color(theme.color("#b8b8b8")),
+                    text(format!(
+                        "{}{} → {}",
+                        relationship.label,
+                        if relationship.type_id.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", relationship.type_id)
+                        },
+                        target
+                    ))
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .truncate()
+                    .font(ui_font(12.0, 400.0))
+                    .color(theme.color("#b8b8b8")),
                 )
                 .child(
                     icon_action_button(
@@ -829,6 +912,7 @@ fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
 fn close_relationship_dialog(state: &mut State) {
     state.workspace_surface_relationship_target = None;
     state.workspace_surface_relationship_label.clear();
+    state.workspace_surface_relationship_type_id.clear();
     state.workspace_surface_relationship_error.clear();
 }
 
@@ -843,6 +927,16 @@ fn commit_relationship(state: &mut State) {
     if label.is_empty() || label.chars().count() > 80 || label.chars().any(char::is_control) {
         state.workspace_surface_relationship_error =
             "Enter a relationship label of at most 80 characters.".to_owned();
+        return;
+    }
+    let type_id = state.workspace_surface_relationship_type_id.text.trim();
+    if type_id.len() > 64
+        || !type_id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'_'
+        })
+    {
+        state.workspace_surface_relationship_error =
+            "Use a lowercase relationship type of at most 64 characters.".to_owned();
         return;
     }
     let Some(target_id) = state
@@ -869,6 +963,7 @@ fn commit_relationship(state: &mut State) {
     surface.relationships.push(SurfaceRelationship {
         target_id,
         label: label.to_owned(),
+        type_id: type_id.to_owned(),
     });
     close_relationship_dialog(state);
 }
@@ -894,18 +989,32 @@ pub(crate) fn relationship_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
                 .color(theme.color("#bdbdbd")),
         )
         .child(settings_form_card(
-            [row_with_control(
-                "Relationship",
-                "How these surfaces are connected.",
-                field(
-                    &state.workspace_surface_relationship_label,
-                    "workspace-surface-relationship-input",
-                    "e.g. contains, calls, depends on",
+            [
+                row_with_control(
+                    "Relationship",
+                    "How these surfaces are connected.",
+                    field(
+                        &state.workspace_surface_relationship_label,
+                        "workspace-surface-relationship-input",
+                        "e.g. contains, calls, depends on",
+                        theme,
+                        |state| &mut state.workspace_surface_relationship_label,
+                    ),
                     theme,
-                    |state| &mut state.workspace_surface_relationship_label,
                 ),
-                theme,
-            )],
+                row_with_control(
+                    "Connection type",
+                    "Optional machine-readable type, such as contains or depends_on.",
+                    field(
+                        &state.workspace_surface_relationship_type_id,
+                        "workspace-surface-relationship-type",
+                        "contains",
+                        theme,
+                        |state| &mut state.workspace_surface_relationship_type_id,
+                    ),
+                    theme,
+                ),
+            ],
             theme,
         ));
     if !state.workspace_surface_relationship_error.is_empty() {
@@ -981,7 +1090,16 @@ fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                     } else {
                         "User"
                     };
-                    let mut label = format!("{kind} · {} · {creator}", surface.value);
+                    let mut label =
+                        format!("{} · {kind} · {} · {creator}", surface.id, surface.value);
+                    if let Some(definition) = &surface.definition {
+                        if !definition.type_id.is_empty() {
+                            label.push_str(&format!(" · {}", definition.type_id));
+                        }
+                        if !definition.parent_id.is_empty() {
+                            label.push_str(&format!(" · child of {}", definition.parent_id));
+                        }
+                    }
                     if !surface.out_of_scope_reason.is_empty() {
                         label.push_str(&format!(" · {}", surface.out_of_scope_reason));
                     }
@@ -1002,16 +1120,12 @@ fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                     } else {
                         edit.on_press(move |state: &mut State| {
                             let surface = &state.workspace_surface_edits[index];
-                            state.workspace_surface_kind = draft_kind(surface.kind);
-                            state.workspace_surface_value = rune::TextEdit::new(&surface.value);
-                            state.workspace_surface_error.clear();
-                            state.workspace_surface_edit_index = Some(index);
-                            state.workspace_surface_dialog_scope =
-                                Some(if surface.scope == SurfaceScope::InScope as i32 {
-                                    DraftScope::InScope
-                                } else {
-                                    DraftScope::OutOfScope
-                                });
+                            let scope = if surface.scope == SurfaceScope::InScope as i32 {
+                                DraftScope::InScope
+                            } else {
+                                DraftScope::OutOfScope
+                            };
+                            open_surface_editor(state, Some(index), scope);
                         })
                     };
                     list = list.child(
@@ -1068,11 +1182,7 @@ fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
                     add_button
                 } else {
                     add_button.on_press(move |state: &mut State| {
-                        state.workspace_surface_kind = DraftKind::default();
-                        state.workspace_surface_value.clear();
-                        state.workspace_surface_error.clear();
-                        state.workspace_surface_edit_index = None;
-                        state.workspace_surface_dialog_scope = Some(draft_scope);
+                        open_surface_editor(state, None, draft_scope);
                     })
                 };
                 settings_form_with_action(
@@ -1279,6 +1389,35 @@ fn commit_surface(state: &mut State) {
         state.workspace_surface_error = "That surface is already listed.".to_owned();
         return;
     }
+    let definition = SurfaceDefinition {
+        type_id: if state.workspace_surface_type_id.text.trim().is_empty() {
+            surface_type_id(kind as i32).to_owned()
+        } else {
+            state.workspace_surface_type_id.text.trim().to_owned()
+        },
+        name: state.workspace_surface_name.text.trim().to_owned(),
+        locator: Some(SurfaceLocator {
+            kind: state.workspace_surface_locator_kind.text.trim().to_owned(),
+            value: if state.workspace_surface_locator_value.text.trim().is_empty() {
+                value.to_owned()
+            } else {
+                state.workspace_surface_locator_value.text.trim().to_owned()
+            },
+        }),
+        parent_id: state.workspace_surface_parent_id.text.trim().to_owned(),
+        summary: state.workspace_surface_summary.text.trim().to_owned(),
+        context: state.workspace_surface_context.text.trim().to_owned(),
+        scope_basis: state.workspace_surface_scope_basis.text.trim().to_owned(),
+        scope_descendants: state.workspace_surface_scope_descendants,
+        source: "operator".to_owned(),
+    };
+    if scope == DraftScope::InScope
+        && definition.scope_descendants
+        && definition.scope_basis.is_empty()
+    {
+        state.workspace_surface_error = "Explain why this scope covers children.".to_owned();
+        return;
+    }
     if let Some(index) = state.workspace_surface_edit_index {
         let Some(surface) = state.workspace_surface_edits.get_mut(index) else {
             close_surface_dialog(state);
@@ -1294,7 +1433,16 @@ fn commit_surface(state: &mut State) {
         }
         surface.kind = kind as i32;
         surface.value = value.to_owned();
+        surface.definition = Some(definition);
     } else {
+        let mut temporary_number = 1;
+        while state
+            .workspace_surface_edits
+            .iter()
+            .any(|surface| surface.id == format!("M{temporary_number}"))
+        {
+            temporary_number += 1;
+        }
         state.workspace_surface_edits.push(WorkspaceSurface {
             kind: kind as i32,
             scope: if scope == DraftScope::InScope {
@@ -1309,7 +1457,8 @@ fn commit_surface(state: &mut State) {
             } else {
                 String::new()
             },
-            id: uuid::Uuid::new_v4().to_string(),
+            id: format!("M{temporary_number}"),
+            definition: Some(definition),
             ..Default::default()
         });
     }
@@ -1340,10 +1489,133 @@ pub(crate) fn surface_dialog(state: &State, scope: DraftScope, theme: ThemeStyle
                 ),
                 theme,
             ),
+            row_with_control(
+                "Specific type",
+                "For example code.module or api.endpoint.",
+                field(
+                    &state.workspace_surface_type_id,
+                    "saved-workspace-surface-type-id",
+                    "repository",
+                    theme,
+                    |state| &mut state.workspace_surface_type_id,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Name",
+                "Short display name; defaults to the identifier.",
+                field(
+                    &state.workspace_surface_name,
+                    "saved-workspace-surface-name",
+                    "Display name",
+                    theme,
+                    |state| &mut state.workspace_surface_name,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Locator kind",
+                "freeform, git_url, repository_path, url, domain, or artifact.",
+                field(
+                    &state.workspace_surface_locator_kind,
+                    "saved-workspace-surface-locator-kind",
+                    "freeform",
+                    theme,
+                    |state| &mut state.workspace_surface_locator_kind,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Locator",
+                "Typed address or path; defaults to the identifier.",
+                field(
+                    &state.workspace_surface_locator_value,
+                    "saved-workspace-surface-locator",
+                    "Locator value",
+                    theme,
+                    |state| &mut state.workspace_surface_locator_value,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Parent ID",
+                "Optional containing surface, such as S8.",
+                field(
+                    &state.workspace_surface_parent_id,
+                    "saved-workspace-surface-parent",
+                    "S8",
+                    theme,
+                    |state| &mut state.workspace_surface_parent_id,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Summary",
+                "What this surface does.",
+                field(
+                    &state.workspace_surface_summary,
+                    "saved-workspace-surface-summary",
+                    "Purpose",
+                    theme,
+                    |state| &mut state.workspace_surface_summary,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Security context",
+                "Interfaces, trust boundaries, and assumptions.",
+                field(
+                    &state.workspace_surface_context,
+                    "saved-workspace-surface-context",
+                    "Context",
+                    theme,
+                    |state| &mut state.workspace_surface_context,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Scope basis",
+                "Recorded reason for this scope decision.",
+                field(
+                    &state.workspace_surface_scope_basis,
+                    "saved-workspace-surface-scope-basis",
+                    "Scope basis",
+                    theme,
+                    |state| &mut state.workspace_surface_scope_basis,
+                ),
+                theme,
+            ),
+            row_with_control(
+                "Descendant coverage",
+                "Whether this recorded boundary covers children.",
+                form_button(
+                    if state.workspace_surface_scope_descendants {
+                        "Covers children"
+                    } else {
+                        "Does not cover children"
+                    },
+                    theme,
+                )
+                .key("saved-workspace-surface-descendants")
+                .on_press(|state: &mut State| {
+                    state.workspace_surface_scope_descendants =
+                        !state.workspace_surface_scope_descendants
+                }),
+                theme,
+            ),
         ],
         theme,
     );
-    let mut body = col().w_full().gap(10.0).child(form);
+    let mut body = col()
+        .key("saved-workspace-surface-dialog-body")
+        .w_full()
+        .max_h(480.0)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .gap(10.0)
+        .child(form);
     if !state.workspace_surface_error.is_empty() {
         body = body.child(
             text(state.workspace_surface_error.clone())
@@ -1408,6 +1680,16 @@ fn confirm_surface_delete(state: &mut State) {
     if let Some(index) = state.workspace_surface_delete_index.take()
         && index < state.workspace_surface_edits.len()
     {
+        let id = &state.workspace_surface_edits[index].id;
+        if state.workspace_surface_edits.iter().any(|surface| {
+            surface
+                .definition
+                .as_ref()
+                .is_some_and(|definition| definition.parent_id == *id)
+        }) {
+            state.workspace_save_error = "Reparent or remove child surfaces first.".to_owned();
+            return;
+        }
         let removed = state.workspace_surface_edits.remove(index);
         for surface in &mut state.workspace_surface_edits {
             surface
@@ -1503,6 +1785,16 @@ pub(crate) fn render(
         .continuous_corners()
         .fill(theme.color("#0d0d0d"));
     for tab in WorkspaceTab::ALL {
+        if tab == WorkspaceTab::Surfaces
+            && !crate::extensions_view::surfaces_enabled(state, &id.to_string())
+        {
+            continue;
+        }
+        if tab == WorkspaceTab::Knowledge
+            && !crate::extensions_view::knowledge_enabled(state, &id.to_string())
+        {
+            continue;
+        }
         tabs = tabs.child(tab_button(tab, state.workspace_tab == tab, id, theme));
     }
     let header = row()
@@ -1553,6 +1845,9 @@ pub(crate) fn render(
                 ),
         );
     }
+    if state.workspace_tab == WorkspaceTab::Knowledge {
+        return page.child(crate::knowledge_view::render(state, theme));
+    }
     let details = state.workspace_details.as_ref().filter(|details| {
         details
             .summary
@@ -1565,6 +1860,7 @@ pub(crate) fn render(
             WorkspaceTab::Rules => rules(state, theme),
             WorkspaceTab::Foundation => vec![foundation(state, details, theme)],
             WorkspaceTab::Campaign => Vec::new(),
+            WorkspaceTab::Knowledge => Vec::new(),
         };
         for form in forms {
             page = page.child(form);
@@ -1577,6 +1873,7 @@ pub(crate) fn render(
             WorkspaceTab::Surfaces => state.workspace_surface_edits != details.surfaces,
             WorkspaceTab::Rules => state.workspace_rule_edits != details.rules,
             WorkspaceTab::Campaign => false,
+            WorkspaceTab::Knowledge => false,
         };
         let tab = state.workspace_tab;
         let saving = state.workspace_save_busy == Some(tab);
@@ -1656,6 +1953,9 @@ pub(crate) fn render(
 pub(crate) fn graph_open(state: &State) -> bool {
     state.primary_view == crate::PrimaryView::Workspace
         && state.workspace_tab == WorkspaceTab::Surfaces
+        && state
+            .workspace_id
+            .is_some_and(|id| crate::extensions_view::surfaces_enabled(state, &id.to_string()))
         && !state.workspace_surface_management_open
         && state.workspace_id.is_some_and(|id| {
             state.workspace_details.as_ref().is_some_and(|details| {

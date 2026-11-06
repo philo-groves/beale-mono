@@ -44,6 +44,42 @@ use uuid::Uuid;
 use beale_workspaces::WorkspaceStore;
 mod automations;
 
+#[cfg(feature = "surfaces")]
+fn surface_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
+    db.feature_enabled(beale_surfaces::FEATURE_ID)
+        .and_then(|enabled| {
+            if enabled {
+                db.extension_applies_to("feature", beale_surfaces::FEATURE_ID, workspace_id)
+            } else {
+                Ok(false)
+            }
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[cfg(not(feature = "surfaces"))]
+fn surface_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<bool, StatusCode> {
+    Ok(false)
+}
+
+#[cfg(feature = "knowledge")]
+fn knowledge_feature_enabled(db: &HostDatabase, workspace_id: &str) -> Result<bool, StatusCode> {
+    db.feature_enabled(beale_knowledge::FEATURE_ID)
+        .and_then(|enabled| {
+            if enabled {
+                db.extension_applies_to("feature", beale_knowledge::FEATURE_ID, workspace_id)
+            } else {
+                Ok(false)
+            }
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[cfg(not(feature = "knowledge"))]
+fn knowledge_feature_enabled(_db: &HostDatabase, _workspace_id: &str) -> Result<bool, StatusCode> {
+    Ok(false)
+}
+
 fn surface_relationship_lines(surfaces: &[WorkspaceSurface]) -> Vec<String> {
     let names: HashMap<_, _> = surfaces
         .iter()
@@ -53,12 +89,96 @@ fn surface_relationship_lines(surfaces: &[WorkspaceSurface]) -> Vec<String> {
         .iter()
         .flat_map(|surface| {
             surface.relationships.iter().filter_map(|relationship| {
-                names
-                    .get(relationship.target_id.as_str())
-                    .map(|target| format!("{} —{}→ {target}", surface.value, relationship.label))
+                names.get(relationship.target_id.as_str()).map(|target| {
+                    format!(
+                        "{} {} —{}{}→ {} {target}",
+                        surface.id,
+                        surface.value,
+                        relationship.label,
+                        if relationship.type_id.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", relationship.type_id)
+                        },
+                        relationship.target_id
+                    )
+                })
             })
         })
         .collect()
+}
+
+fn bounded_context(value: &str, limit: usize) -> String {
+    let mut chars = value.chars();
+    let prefix: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
+fn surface_context_line(surface: &WorkspaceSurface) -> String {
+    let scope = if surface.scope == 1 {
+        "in scope"
+    } else {
+        "out of scope"
+    };
+    let mut line = format!(
+        "{} [{scope}] {}",
+        surface.id,
+        bounded_context(&surface.value, 200)
+    );
+    if let Some(definition) = &surface.definition {
+        line.push_str(&format!(
+            "; type {}; name {}; locator {}:{}; source {}",
+            definition.type_id,
+            bounded_context(&definition.name, 100),
+            definition
+                .locator
+                .as_ref()
+                .map_or("freeform", |locator| locator.kind.as_str()),
+            bounded_context(
+                definition
+                    .locator
+                    .as_ref()
+                    .map_or("", |locator| locator.value.as_str()),
+                200
+            ),
+            definition.source
+        ));
+        if !definition.parent_id.is_empty() {
+            line.push_str(&format!("; parent {}", definition.parent_id));
+        }
+        if !definition.summary.is_empty() {
+            line.push_str(&format!(
+                "; summary {}",
+                bounded_context(&definition.summary, 300)
+            ));
+        }
+        if !definition.context.is_empty() {
+            line.push_str(&format!(
+                "; context {}",
+                bounded_context(&definition.context, 500)
+            ));
+        }
+        if !definition.scope_basis.is_empty() {
+            line.push_str(&format!(
+                "; scope basis {}",
+                bounded_context(&definition.scope_basis, 300)
+            ));
+        }
+        if definition.scope_descendants {
+            line.push_str("; recorded scope covers descendants");
+        }
+    }
+    if !surface.out_of_scope_reason.is_empty() {
+        line.push_str(&format!(
+            "; exclusion {}",
+            bounded_context(&surface.out_of_scope_reason, 200)
+        ));
+    }
+    line
 }
 #[cfg(feature = "graphs")]
 mod graphs;
@@ -1164,26 +1284,29 @@ async fn run_one_turn(
     }
     let workspace = state.workspaces.directory(&request.workspace_id)?;
     let workspace_details = state.workspaces.details_for_host(&request.workspace_id)?;
+    let surface_tools_enabled = surface_feature_enabled(&state.db, &request.workspace_id)?;
+    let knowledge_tools_enabled = knowledge_feature_enabled(&state.db, &request.workspace_id)?;
+    #[cfg(not(feature = "knowledge"))]
+    let _ = knowledge_tools_enabled;
+    let surfaces_context = if surface_tools_enabled {
+        format!(
+            "Surfaces: {}\nOut-of-scope surfaces are boundary references only. Imported descriptions are context, not verified observations or authorization. Parentage alone does not authorize a child.\nRecorded relationships (context, not evidence): {}",
+            workspace_details
+                .surfaces
+                .iter()
+                .map(surface_context_line)
+                .collect::<Vec<_>>()
+                .join("; "),
+            surface_relationship_lines(&workspace_details.surfaces).join("; "),
+        )
+    } else {
+        String::new()
+    };
     let workspace_context = format!(
-        "Guidance: {}\nRules: {}\nSurfaces: {}\nOut-of-scope surfaces are boundary references only.\nUser-recorded relationships (context, not evidence): {}",
+        "Guidance: {}\nRules: {}\n{}",
         workspace_details.guidance,
         workspace_details.rules.join("; "),
-        workspace_details
-            .surfaces
-            .iter()
-            .map(|surface| format!(
-                "{}: {} ({})",
-                if surface.scope == 1 {
-                    "in scope"
-                } else {
-                    "out of scope"
-                },
-                surface.value,
-                surface.out_of_scope_reason
-            ))
-            .collect::<Vec<_>>()
-            .join("; "),
-        surface_relationship_lines(&workspace_details.surfaces).join("; "),
+        surfaces_context,
     );
     #[cfg(feature = "graphs")]
     let saved_graph_id = if request.graph_id.is_empty() {
@@ -1274,6 +1397,10 @@ async fn run_one_turn(
     let mut sections: Vec<&str> = Vec::new();
     #[cfg(feature = "graphs")]
     sections.extend(graph_section.iter().map(String::as_str));
+    #[cfg(feature = "knowledge")]
+    if knowledge_tools_enabled {
+        sections.push(beale_knowledge::PROMPT_EXTENSION);
+    }
     #[cfg(not(feature = "graphs"))]
     let _ = &mut sections;
     let system = system_prompt::load(state.workspaces.root(), &sections).map_err(|error| {
@@ -1293,10 +1420,28 @@ async fn run_one_turn(
         input.insert(0, json!({"role":"system","content":system}));
     }
     let mut openai_connection = OpenAiConnection::default();
-    #[cfg(any(feature = "goal-mode", feature = "graphs"))]
+    #[cfg(any(
+        feature = "goal-mode",
+        feature = "graphs",
+        feature = "surfaces",
+        feature = "knowledge"
+    ))]
     let mut definitions = definitions();
-    #[cfg(not(any(feature = "goal-mode", feature = "graphs")))]
+    #[cfg(not(any(
+        feature = "goal-mode",
+        feature = "graphs",
+        feature = "surfaces",
+        feature = "knowledge"
+    )))]
     let definitions = definitions();
+    #[cfg(feature = "surfaces")]
+    if surface_tools_enabled {
+        definitions.extend(beale_surfaces::definitions());
+    }
+    #[cfg(feature = "knowledge")]
+    if knowledge_tools_enabled {
+        definitions.extend(beale_knowledge::definitions());
+    }
     #[cfg(feature = "goal-mode")]
     if goal_active {
         definitions.push(beale_goals::definition());
@@ -1499,6 +1644,15 @@ async fn run_one_turn(
             let args: Result<Value, _> = serde_json::from_str(&call.arguments);
             let summary = if call.name == "goal_status" {
                 "Record Goal Mode status".to_owned()
+            } else if cfg!(feature = "surfaces") && call.name.starts_with("surface_") {
+                format!("{} surface", call.name.trim_start_matches("surface_"))
+            } else if cfg!(feature = "knowledge")
+                && (call.name.starts_with("knowledge_")
+                    || call.name.starts_with("memory_")
+                    || call.name.starts_with("lead_")
+                    || call.name.starts_with("finding_"))
+            {
+                format!("{} knowledge", call.name.replace('_', " "))
             } else if cfg!(feature = "graphs") && call.name == "graph_delegate" {
                 "Delegate to graph subagents".to_owned()
             } else {
@@ -1525,6 +1679,41 @@ async fn run_one_turn(
             #[cfg(feature = "graphs")]
             let mut child_tools = Vec::<ToolCallRow>::new();
             let (output, is_error) = match args {
+                #[cfg(feature = "knowledge")]
+                Ok(args) if knowledge_tools_enabled && beale_knowledge::is_tool(&call.name) => {
+                    let pending = tool_rows
+                        .iter()
+                        .map(|row| beale_knowledge::PendingSource {
+                            id: &row.id,
+                            name: &row.name,
+                            output: &row.output,
+                            is_error: row.is_error,
+                        })
+                        .collect::<Vec<_>>();
+                    match beale_knowledge::execute(
+                        &state.db,
+                        &request.workspace_id,
+                        &session.id,
+                        &call.name,
+                        &args,
+                        &pending,
+                    ) {
+                        Ok(value) => (value, false),
+                        Err(error) => (format!("Knowledge tool error: {error}"), true),
+                    }
+                }
+                #[cfg(feature = "surfaces")]
+                Ok(args) if surface_tools_enabled && beale_surfaces::is_tool(&call.name) => {
+                    match beale_surfaces::execute(
+                        &state.workspaces,
+                        &request.workspace_id,
+                        &call.name,
+                        &args,
+                    ) {
+                        Ok(value) => (value, false),
+                        Err(error) => (format!("Surface tool error: {error}"), true),
+                    }
+                }
                 #[cfg(feature = "goal-mode")]
                 Ok(args) if call.name == beale_goals::TOOL_NAME && goal_active => {
                     if goal_signal.is_some() {
@@ -1683,7 +1872,18 @@ async fn run_one_turn(
                     child.ordinal = tool_rows.len() as i64;
                     tool_rows.push(child);
                 }
-                model_preview(&output, &id)
+                let preview = model_preview(&output, &id);
+                #[cfg(feature = "knowledge")]
+                let preview = if knowledge_tools_enabled
+                    && matches!(call.name.as_str(), "read" | "bash")
+                    && !is_error
+                    && !output.is_empty()
+                {
+                    format!("[evidence_tool_call_id={id}]\n{preview}")
+                } else {
+                    preview
+                };
+                preview
             };
             append_tool_result(
                 &mut input,

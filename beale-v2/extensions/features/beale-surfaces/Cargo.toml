@@ -1,0 +1,19 @@
+[package]
+name = "beale-surfaces"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+beale-contracts = { path = "../../../apps/beale-app-server/beale-harness/beale-contracts" }
+beale-workspaces = { path = "../../../apps/beale-app-server/beale-harness/beale-workspaces" }
+serde_json.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+prost.workspace = true
+tokio.workspace = true
+tower = "0.5"
+uuid.workspace = true

@@ -206,15 +206,48 @@ message WorkspaceSurfaceInput {
   SurfaceScope scope = 2;
   string value = 3;
   string id = 4;
-  uint32 mapping_progress = 5;
-  uint32 threat_modeling_progress = 6;
-  uint32 analysis_progress = 7;
+  uint32 mapping_progress = 5 [deprecated = true];
+  uint32 threat_modeling_progress = 6 [deprecated = true];
+  uint32 analysis_progress = 7 [deprecated = true];
   repeated SurfaceRelationship relationships = 8;
+  SurfaceDefinition definition = 9;
 }
 
 message SurfaceRelationship {
   string target_id = 1;
   string label = 2;
+  string type_id = 3;
+}
+
+message SurfaceLocator {
+  string kind = 1;
+  string value = 2;
+}
+
+message SurfaceDefinition {
+  string type_id = 1;
+  string name = 2;
+  SurfaceLocator locator = 3;
+  string parent_id = 4;
+  string summary = 5;
+  string context = 6;
+  string scope_basis = 7;
+  bool scope_descendants = 8;
+  string source = 9;
+}
+
+message SurfaceChange {
+  string field = 1;
+  string before_json = 2;
+  string after_json = 3;
+}
+
+message SurfaceRevision {
+  uint64 number = 1;
+  uint64 at_ms = 2;
+  string actor = 3;
+  string action = 4;
+  repeated SurfaceChange changes = 5;
 }
 
 message CreateWorkspaceRequest {
@@ -275,10 +308,15 @@ message WorkspaceSurface {
   SurfaceCreator created_by = 4;
   string out_of_scope_reason = 5;
   string id = 6;
-  uint32 mapping_progress = 7;
-  uint32 threat_modeling_progress = 8;
-  uint32 analysis_progress = 9;
+  uint32 mapping_progress = 7 [deprecated = true];
+  uint32 threat_modeling_progress = 8 [deprecated = true];
+  uint32 analysis_progress = 9 [deprecated = true];
   repeated SurfaceRelationship relationships = 10;
+  SurfaceDefinition definition = 11;
+  uint64 created_at_ms = 12;
+  uint64 updated_at_ms = 13;
+  uint64 revision = 14;
+  repeated SurfaceRevision lineage = 15;
 }
 
 message WorkspaceDetails {

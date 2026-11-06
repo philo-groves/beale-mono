@@ -8,6 +8,10 @@ use std::{
     time::Duration,
 };
 
+mod knowledge;
+
+pub use knowledge::EvidenceInput;
+
 #[derive(Clone)]
 pub struct HostDatabase(Arc<Mutex<Connection>>);
 
@@ -316,7 +320,7 @@ impl HostDatabase {
     pub fn open(root: &Path) -> Result<Self> {
         private_root(root)?;
         let path = root.join("state.sqlite");
-        let connection = Connection::open(&path).context("open host database")?;
+        let mut connection = Connection::open(&path).context("open host database")?;
         #[cfg(windows)]
         restrict_windows_acl(&path, false)?;
         #[cfg(unix)]
@@ -328,7 +332,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 27 {
+        if version > 31 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -730,6 +734,73 @@ impl HostDatabase {
                  PRAGMA user_version = 27;
                  COMMIT;",
             )?;
+        }
+        if version < 28 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS knowledge_counters (
+                     workspace_id TEXT PRIMARY KEY,
+                     next_memory INTEGER NOT NULL DEFAULT 1,
+                     next_claim INTEGER NOT NULL DEFAULT 1,
+                     next_evidence INTEGER NOT NULL DEFAULT 1
+                 );
+                 CREATE TABLE IF NOT EXISTS knowledge_records (
+                     workspace_id TEXT NOT NULL,
+                     id TEXT NOT NULL,
+                     kind TEXT NOT NULL CHECK (kind IN ('memory', 'claim')),
+                     title TEXT NOT NULL,
+                     summary TEXT NOT NULL,
+                     category TEXT NOT NULL,
+                     role TEXT NOT NULL,
+                     status TEXT NOT NULL,
+                     surface_id TEXT NOT NULL,
+                     duplicate_of TEXT NOT NULL,
+                     updated_at_ms INTEGER NOT NULL,
+                     revision INTEGER NOT NULL,
+                     record_json TEXT NOT NULL,
+                     PRIMARY KEY(workspace_id, id)
+                 );
+                 CREATE INDEX IF NOT EXISTS knowledge_records_workspace_updated
+                     ON knowledge_records(workspace_id, updated_at_ms DESC, id);
+                 PRAGMA user_version = 28;
+                 COMMIT;",
+            )?;
+        }
+        if version < 29 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS knowledge_tool_sources (
+                     id TEXT PRIMARY KEY,
+                     workspace_id TEXT NOT NULL,
+                     session_id TEXT NOT NULL,
+                     tool_name TEXT NOT NULL CHECK (tool_name IN ('read', 'bash')),
+                     output_sha256 TEXT NOT NULL,
+                     output TEXT NOT NULL DEFAULT '',
+                     created_at_ms INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 29;
+                 COMMIT;",
+            )?;
+        }
+        if version < 30 {
+            let has_output: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('knowledge_tool_sources') WHERE name = 'output')",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_output {
+                connection.execute_batch("PRAGMA user_version = 30;")?;
+            } else {
+                connection.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     ALTER TABLE knowledge_tool_sources ADD COLUMN output TEXT NOT NULL DEFAULT '';
+                     PRAGMA user_version = 30;
+                     COMMIT;",
+                )?;
+            }
+        }
+        if version < 31 {
+            knowledge::migrate_revisions(&mut connection)?;
         }
         Ok(Self(Arc::new(Mutex::new(connection))))
     }
@@ -2817,7 +2888,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 28;")
+            .execute_batch("PRAGMA user_version = 32;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -2825,7 +2896,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 28);
+        assert_eq!(version, 32);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }

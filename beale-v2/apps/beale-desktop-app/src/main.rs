@@ -20,6 +20,7 @@ mod home_sidebar;
 mod icons;
 mod in_place_menu;
 mod input_history;
+mod knowledge_view;
 mod modal_dialog;
 mod new_research;
 mod permission_settings;
@@ -33,6 +34,7 @@ mod sessions;
 mod settings_scroll;
 mod tracking_view;
 mod workspace_creation;
+mod workspace_surface_layout;
 mod workspace_view;
 mod workspaces;
 use appearance::{
@@ -658,13 +660,24 @@ struct State {
     workspace_surface_connecting: Option<usize>,
     workspace_surface_relationship_target: Option<usize>,
     workspace_surface_relationship_label: TextEdit,
+    workspace_surface_relationship_type_id: TextEdit,
     workspace_surface_relationship_error: String,
     workspace_rule_edits: Vec<String>,
+    knowledge: knowledge_view::KnowledgeViewState,
     workspace_rule_input: TextEdit,
     workspace_rule_dialog_open: bool,
     workspace_rule_dialog_error: String,
     workspace_surface_kind: workspace_creation::SurfaceKind,
     workspace_surface_value: TextEdit,
+    workspace_surface_type_id: TextEdit,
+    workspace_surface_name: TextEdit,
+    workspace_surface_locator_kind: TextEdit,
+    workspace_surface_locator_value: TextEdit,
+    workspace_surface_parent_id: TextEdit,
+    workspace_surface_summary: TextEdit,
+    workspace_surface_context: TextEdit,
+    workspace_surface_scope_basis: TextEdit,
+    workspace_surface_scope_descendants: bool,
     workspace_surface_dialog_scope: Option<workspace_creation::SurfaceScope>,
     workspace_surface_edit_index: Option<usize>,
     workspace_surface_delete_index: Option<usize>,
@@ -872,13 +885,24 @@ impl Default for State {
             workspace_surface_connecting: None,
             workspace_surface_relationship_target: None,
             workspace_surface_relationship_label: TextEdit::new(""),
+            workspace_surface_relationship_type_id: TextEdit::new(""),
             workspace_surface_relationship_error: String::new(),
             workspace_rule_edits: Vec::new(),
+            knowledge: knowledge_view::KnowledgeViewState::default(),
             workspace_rule_input: TextEdit::new(""),
             workspace_rule_dialog_open: false,
             workspace_rule_dialog_error: String::new(),
             workspace_surface_kind: workspace_creation::SurfaceKind::default(),
             workspace_surface_value: TextEdit::new(""),
+            workspace_surface_type_id: TextEdit::new(""),
+            workspace_surface_name: TextEdit::new(""),
+            workspace_surface_locator_kind: TextEdit::new("freeform"),
+            workspace_surface_locator_value: TextEdit::new(""),
+            workspace_surface_parent_id: TextEdit::new(""),
+            workspace_surface_summary: TextEdit::new(""),
+            workspace_surface_context: TextEdit::new(""),
+            workspace_surface_scope_basis: TextEdit::new(""),
+            workspace_surface_scope_descendants: false,
             workspace_surface_dialog_scope: None,
             workspace_surface_edit_index: None,
             workspace_surface_delete_index: None,
@@ -1110,11 +1134,25 @@ impl State {
             ViewLocation::NewResearch => self.primary_view = PrimaryView::NewResearch,
             ViewLocation::WorkspaceCreation(tab) => {
                 self.primary_view = PrimaryView::WorkspaceCreation;
-                self.workspace_draft.tab = tab;
+                self.workspace_draft.tab = if tab == workspace_creation::CreationTab::Surfaces
+                    && !extensions_view::surfaces_enabled_for_creation(self)
+                {
+                    workspace_creation::CreationTab::Rules
+                } else {
+                    tab
+                };
             }
             ViewLocation::Workspace(id, tab) => {
                 self.primary_view = PrimaryView::Workspace;
-                self.workspace_tab = tab;
+                self.workspace_tab = if (tab == workspace_view::WorkspaceTab::Surfaces
+                    && !extensions_view::surfaces_enabled(self, &id.to_string()))
+                    || (tab == workspace_view::WorkspaceTab::Knowledge
+                        && !extensions_view::knowledge_enabled(self, &id.to_string()))
+                {
+                    workspace_view::WorkspaceTab::Rules
+                } else {
+                    tab
+                };
                 if self.workspace_id != Some(id) {
                     self.workspace_id = Some(id);
                     self.workspace_details = None;
@@ -1198,6 +1236,11 @@ impl State {
         self.workspace_save_message.clear();
         if let Some(id) = load_workspace {
             start_workspace_details(self, id);
+        }
+        if self.primary_view == PrimaryView::Workspace
+            && self.workspace_tab == workspace_view::WorkspaceTab::Knowledge
+        {
+            knowledge_view::start_load(self);
         }
         if self.primary_view == PrimaryView::Settings
             && self.settings_section == SettingsSection::Archive
@@ -1443,7 +1486,11 @@ impl State {
         self.workspace_surface_management_open = false;
         self.navigate_to(ViewLocation::Workspace(
             id,
-            workspace_view::WorkspaceTab::Surfaces,
+            if extensions_view::surfaces_enabled(self, &id.to_string()) {
+                workspace_view::WorkspaceTab::Surfaces
+            } else {
+                workspace_view::WorkspaceTab::Rules
+            },
         ));
     }
 
@@ -2283,7 +2330,9 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
     let Some(id) = state.workspace_id else {
         return;
     };
-    if tab == workspace_view::WorkspaceTab::Campaign {
+    if tab == workspace_view::WorkspaceTab::Campaign
+        || tab == workspace_view::WorkspaceTab::Knowledge
+    {
         return;
     }
     if tab == workspace_view::WorkspaceTab::Foundation
@@ -2292,13 +2341,16 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
         state.workspace_save_error = "Workspace name is required.".to_owned();
         return;
     }
-    if tab == workspace_view::WorkspaceTab::Surfaces
+    if matches!(
+        tab,
+        workspace_view::WorkspaceTab::Surfaces | workspace_view::WorkspaceTab::Rules
+    ) && state.workspace_rule_edits.is_empty()
         && !state
             .workspace_surface_edits
             .iter()
             .any(|surface| surface.scope == beale_contracts::v1::SurfaceScope::InScope as i32)
     {
-        state.workspace_save_error = "Add at least one in-scope surface.".to_owned();
+        state.workspace_save_error = "Add a rule that records the authorized scope.".to_owned();
         return;
     }
     let Some(handle) = AUTH_HANDLE.get().cloned() else {
@@ -2323,10 +2375,9 @@ fn start_workspace_save(state: &mut State, tab: workspace_view::WorkspaceTab) {
                     scope: surface.scope,
                     value: surface.value.clone(),
                     id: surface.id.clone(),
-                    mapping_progress: surface.mapping_progress,
-                    threat_modeling_progress: surface.threat_modeling_progress,
-                    analysis_progress: surface.analysis_progress,
                     relationships: surface.relationships.clone(),
+                    definition: surface.definition.clone(),
+                    ..Default::default()
                 })
                 .collect(),
         });
@@ -6302,6 +6353,17 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
+    fn with_surface_feature(mut state: super::State) -> super::State {
+        state.features = super::extensions_view::bundled_features();
+        if let Some(feature) = state
+            .features
+            .iter_mut()
+            .find(|item| item.id == beale_surfaces::FEATURE_ID)
+        {
+            feature.enabled = true;
+        }
+        state
+    }
     use super::*;
     use rune::{Env, Runtime, WheelEvent};
 
@@ -9606,12 +9668,12 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
         };
-        let state = State {
+        let state = with_surface_feature(State {
             primary_view: PrimaryView::Home,
             workspaces: vec![summary.clone()],
             workspace_list_loaded: true,
             ..State::default()
-        };
+        });
         let mut runtime = Runtime::new(state, view, (2200.0, 900.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         let (x, y) = runtime.find(&format!("home-workspace-{id}")).unwrap();
@@ -9709,15 +9771,8 @@ mod tests {
                 loaded.pointer_down(node_x, node_y);
                 loaded.pointer_up(node_x, node_y);
                 loaded.frame(1.0 / 60.0);
-                let (x, y) = loaded.find("workspace-surface-progress-0-0").unwrap();
-                loaded.pointer_down(x, y);
-                loaded.pointer_up(x, y);
-                loaded.frame(1.0 / 60.0);
-                assert_eq!(
-                    loaded.state.workspace_surface_edits[0].mapping_progress,
-                    100
-                );
-                assert!(loaded.find("saved-workspace-save").is_some());
+                assert!(loaded.find("workspace-surface-network-details").is_some());
+                assert!(loaded.find("workspace-surface-progress-0-0").is_none());
                 loaded.frame(1.0);
                 let (x, y) = loaded.find("workspace-surface-manage").unwrap();
                 loaded.pointer_down(x, y);
@@ -9950,6 +10005,39 @@ mod tests {
     }
 
     #[test]
+    fn optional_workspace_features_are_hidden_by_default() {
+        let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000004").unwrap();
+        let mut state = State::default();
+        state.open_workspace(id);
+        assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Rules);
+        state.apply_view_location(ViewLocation::Workspace(
+            id,
+            workspace_view::WorkspaceTab::Knowledge,
+        ));
+        assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Rules);
+        state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == beale_knowledge::FEATURE_ID)
+            .unwrap()
+            .enabled = true;
+        state.apply_view_location(ViewLocation::Workspace(
+            id,
+            workspace_view::WorkspaceTab::Knowledge,
+        ));
+        assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Knowledge);
+        state.apply_view_location(ViewLocation::Workspace(
+            id,
+            workspace_view::WorkspaceTab::Surfaces,
+        ));
+        assert_eq!(state.workspace_tab, workspace_view::WorkspaceTab::Rules);
+        assert_eq!(
+            workspace_creation::CreationTab::Foundation.next(false),
+            Some(workspace_creation::CreationTab::Rules)
+        );
+    }
+
+    #[test]
     fn surface_network_covers_content_and_pans_beneath_title() {
         use beale_contracts::v1::{SurfaceKind, SurfaceScope, WorkspaceSurface};
 
@@ -9985,14 +10073,14 @@ mod tests {
             surfaces: surfaces.clone(),
             rules: Vec::new(),
         };
-        let state = State {
+        let state = with_surface_feature(State {
             primary_view: PrimaryView::Workspace,
             workspace_id: Some(id),
             workspace_tab: workspace_view::WorkspaceTab::Surfaces,
             workspace_details: Some(details),
             workspace_surface_edits: surfaces,
             ..State::default()
-        };
+        });
         let mut runtime = Runtime::new(state, view, (2200.0, 1200.0), Env::new(true, 1.0));
         runtime.frame(0.0);
         let (content, _) = runtime.presented("content-surface").unwrap();
@@ -10046,8 +10134,12 @@ mod tests {
             runtime.pointer_up(x, y);
             runtime.frame(1.0);
         }
-        let mut runtime =
-            Runtime::new(State::default(), view, (1040.0, 720.0), Env::new(true, 1.0));
+        let mut runtime = Runtime::new(
+            with_surface_feature(State::default()),
+            view,
+            (1040.0, 720.0),
+            Env::new(true, 1.0),
+        );
         runtime.frame(0.0);
         let (settings_title, _) = runtime.presented("settings-view-title").unwrap();
         click(&mut runtime, "nav-home");

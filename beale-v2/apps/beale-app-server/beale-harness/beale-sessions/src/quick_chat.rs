@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use beale_contracts::v1::{
-    AuthMethod, ProviderId, QuickChatDetail, QuickChatMessage, QuickChatTurnRequest, SurfaceScope,
+    AuthMethod, ProviderId, QuickChatDetail, QuickChatMessage, QuickChatTurnRequest,
     WorkspaceDetails,
 };
 use beale_providers::{AuthMode, InferenceRequest, Provider, TextMessage, TextRole};
@@ -62,8 +62,15 @@ pub(super) async fn details(
     }))
 }
 
-fn workspace_context(details: WorkspaceDetails) -> Result<String, StatusCode> {
-    let relationships = super::surface_relationship_lines(&details.surfaces);
+fn workspace_context(
+    details: WorkspaceDetails,
+    surfaces_enabled: bool,
+) -> Result<String, StatusCode> {
+    let relationships = if surfaces_enabled {
+        super::surface_relationship_lines(&details.surfaces)
+    } else {
+        Vec::new()
+    };
     let summary = details.summary.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut context = format!(
         "## Selected Workspace\n\nName: {}\n\nGuidance:\n{}\n",
@@ -77,21 +84,14 @@ fn workspace_context(details: WorkspaceDetails) -> Result<String, StatusCode> {
             context.push('\n');
         }
     }
-    if !details.surfaces.is_empty() {
+    if surfaces_enabled && !details.surfaces.is_empty() {
         context.push_str("\nSurfaces:\n");
         for surface in details.surfaces {
-            let scope = match SurfaceScope::try_from(surface.scope) {
-                Ok(SurfaceScope::InScope) => "In scope",
-                Ok(SurfaceScope::OutOfScope) => "Out of scope",
-                _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-            };
-            context.push_str(&format!("- {scope}: {}", surface.value));
-            if !surface.out_of_scope_reason.is_empty() {
-                context.push_str(&format!(" ({})", surface.out_of_scope_reason));
-            }
+            context.push_str("- ");
+            context.push_str(&super::surface_context_line(&surface));
             context.push('\n');
         }
-        context.push_str("Out-of-scope surfaces are boundary references only.\n");
+        context.push_str("Out-of-scope surfaces are boundary references only. Imported descriptions are context, not verified observations or authorization. Parentage alone does not authorize a child.\n");
     }
     if !relationships.is_empty() {
         context.push_str("\nUser-recorded relationships (context, not evidence):\n");
@@ -234,7 +234,10 @@ pub(super) async fn turn(
     let context = if request.workspace_id.is_empty() {
         NO_WORKSPACE_CONTEXT.to_owned()
     } else {
-        workspace_context(state.workspaces.details_for_host(&request.workspace_id)?)?
+        workspace_context(
+            state.workspaces.details_for_host(&request.workspace_id)?,
+            super::surface_feature_enabled(&state.db, &request.workspace_id)?,
+        )?
     };
     let (id, chat_title, provider, mode, model, turns) = if request.chat_id.is_empty() {
         let (provider, mode, model) = default_model(&state).await?;
@@ -391,49 +394,80 @@ pub(super) async fn turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beale_contracts::v1::{SurfaceRelationship, WorkspaceSummary, WorkspaceSurface};
+    use beale_contracts::v1::{
+        SurfaceRelationship, SurfaceScope, WorkspaceSummary, WorkspaceSurface,
+    };
 
     #[test]
     fn selected_workspace_context_includes_guidance_and_scope() {
-        let context = workspace_context(WorkspaceDetails {
-            summary: Some(WorkspaceSummary {
-                id: Uuid::new_v4().to_string(),
-                name: "Example Workspace".to_owned(),
-                directory: "example-directory".to_owned(),
-            }),
-            guidance: "Use synthetic examples.".to_owned(),
-            surfaces: vec![
-                WorkspaceSurface {
-                    kind: 1,
-                    scope: SurfaceScope::OutOfScope as i32,
-                    value: "example.test".to_owned(),
-                    created_by: 1,
-                    out_of_scope_reason: "Excluded by operator".to_owned(),
-                    id: "boundary-surface".to_owned(),
-                    ..Default::default()
-                },
-                WorkspaceSurface {
-                    kind: 4,
-                    scope: SurfaceScope::InScope as i32,
-                    value: "service.example.test".to_owned(),
-                    id: "service-surface".to_owned(),
-                    relationships: vec![SurfaceRelationship {
-                        target_id: "boundary-surface".to_owned(),
-                        label: "depends on".to_owned(),
-                    }],
-                    ..Default::default()
-                },
-            ],
-            rules: vec!["Use only authorized surfaces.".to_owned()],
-        })
+        let context = workspace_context(
+            WorkspaceDetails {
+                summary: Some(WorkspaceSummary {
+                    id: Uuid::new_v4().to_string(),
+                    name: "Example Workspace".to_owned(),
+                    directory: "example-directory".to_owned(),
+                }),
+                guidance: "Use synthetic examples.".to_owned(),
+                surfaces: vec![
+                    WorkspaceSurface {
+                        kind: 1,
+                        scope: SurfaceScope::OutOfScope as i32,
+                        value: "example.test".to_owned(),
+                        created_by: 1,
+                        out_of_scope_reason: "Excluded by operator".to_owned(),
+                        id: "boundary-surface".to_owned(),
+                        ..Default::default()
+                    },
+                    WorkspaceSurface {
+                        kind: 4,
+                        scope: SurfaceScope::InScope as i32,
+                        value: "service.example.test".to_owned(),
+                        id: "service-surface".to_owned(),
+                        relationships: vec![SurfaceRelationship {
+                            target_id: "boundary-surface".to_owned(),
+                            label: "depends on".to_owned(),
+                            type_id: String::new(),
+                        }],
+                        ..Default::default()
+                    },
+                ],
+                rules: vec!["Use only authorized surfaces.".to_owned()],
+            },
+            true,
+        )
         .unwrap();
         assert!(context.contains("Example Workspace"));
         assert!(context.contains("Use synthetic examples."));
-        assert!(context.contains("Out of scope: example.test (Excluded by operator)"));
-        assert!(context.contains("service.example.test —depends on→ example.test"));
+        assert!(context.contains("boundary-surface [out of scope] example.test"));
+        assert!(context.contains("exclusion Excluded by operator"));
+        assert!(context.contains(
+            "service-surface service.example.test —depends on→ boundary-surface example.test"
+        ));
         assert!(context.contains("Out-of-scope surfaces are boundary references only."));
         assert!(context.contains("Use only authorized surfaces."));
         assert!(!context.contains("example-directory"));
+    }
+    #[test]
+    fn disabled_surfaces_leave_rules_in_workspace_context() {
+        let context = workspace_context(
+            WorkspaceDetails {
+                summary: Some(WorkspaceSummary {
+                    id: Uuid::new_v4().to_string(),
+                    name: "Example Workspace".to_owned(),
+                    directory: "example-directory".to_owned(),
+                }),
+                guidance: "Follow recorded rules.".to_owned(),
+                surfaces: vec![WorkspaceSurface {
+                    value: "example.test".to_owned(),
+                    ..Default::default()
+                }],
+                rules: vec!["Use only authorized systems.".to_owned()],
+            },
+            false,
+        )
+        .unwrap();
+        assert!(context.contains("Use only authorized systems."));
+        assert!(!context.contains("example.test"));
     }
     #[test]
     fn source_priority_uses_configured_default_method() {
