@@ -83,6 +83,7 @@
 
 #### Changed
 
+- Made the v2 workspace surface graph fill the main content area with a square grid, compact icon nodes, and drag panning beneath the floating workspace title. Surfaces, Settings, and Rules remain in the title row, and Manage Surfaces stays fixed at the bottom right.
 - Moved v2 session composer history navigation to the Up and Down keys and removed its history buttons.
 - Renamed v2 workspace Foundation tabs to General and Workspace Details to Basic Information. Name and new-workspace directory values now use edit dialogs and a folder picker; empty required values show a warning, and displayed paths under the user home use `~/`.
 - Gave Automations Active runs a pulse icon and Schedule a Job a calendar-plus icon.

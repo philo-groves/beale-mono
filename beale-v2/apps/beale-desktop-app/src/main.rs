@@ -650,6 +650,9 @@ struct State {
     workspace_name_dialog_error: String,
     workspace_guidance_edit: TextEdit,
     workspace_surface_edits: Vec<WorkspaceSurface>,
+    workspace_surface_pan: [f32; 2],
+    workspace_surface_pan_origin: [f32; 2],
+    workspace_surface_management_open: bool,
     workspace_surface_hovered: Option<usize>,
     workspace_surface_selected: Option<usize>,
     workspace_surface_connecting: Option<usize>,
@@ -861,6 +864,9 @@ impl Default for State {
             workspace_name_dialog_error: String::new(),
             workspace_guidance_edit: TextEdit::new(""),
             workspace_surface_edits: Vec::new(),
+            workspace_surface_pan: [0.0; 2],
+            workspace_surface_pan_origin: [0.0; 2],
+            workspace_surface_management_open: false,
             workspace_surface_hovered: None,
             workspace_surface_selected: None,
             workspace_surface_connecting: None,
@@ -1434,9 +1440,10 @@ impl State {
     }
 
     fn open_workspace(&mut self, id: uuid::Uuid) {
+        self.workspace_surface_management_open = false;
         self.navigate_to(ViewLocation::Workspace(
             id,
-            workspace_view::WorkspaceTab::Campaign,
+            workspace_view::WorkspaceTab::Surfaces,
         ));
     }
 
@@ -1605,6 +1612,9 @@ impl State {
                 );
                 self.workspace_guidance_edit = TextEdit::new(&sections.details.guidance);
                 self.workspace_surface_edits = sections.details.surfaces.clone();
+                self.workspace_surface_pan = [0.0; 2];
+                self.workspace_surface_pan_origin = [0.0; 2];
+                self.workspace_surface_management_open = false;
                 self.workspace_surface_hovered = None;
                 self.workspace_surface_selected = None;
                 self.workspace_surface_connecting = None;
@@ -1655,7 +1665,7 @@ impl State {
                     self.workspace_name_edit = TextEdit::new(summary.name);
                 }
                 self.workspace_guidance_edit = TextEdit::new(saved.guidance);
-                self.workspace_save_message = "General saved.".to_owned();
+                self.workspace_save_message = "Settings saved.".to_owned();
             }
             Ok(WorkspaceSaveResult::Surfaces(saved)) => {
                 self.workspace_surfaces_revision = saved.revision;
@@ -5340,10 +5350,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     let mut content = col()
         .key("settings-page")
         .w_full()
-        .max_w(if state.primary_view == PrimaryView::Settings {
-            760.0
-        } else {
-            1300.0
+        .max_w(match state.primary_view {
+            PrimaryView::Settings => 760.0,
+            PrimaryView::Workspace => f32::MAX,
+            _ => 1300.0,
         })
         .self_center()
         .gap(20.0);
@@ -5397,17 +5407,17 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         }
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         content = content.child(workspace_creation::render(state, theme));
-    } else if state.primary_view == PrimaryView::Workspace {
-        let campaign_height = cx
+    } else if state.primary_view == PrimaryView::Workspace && !workspace_view::graph_open(state) {
+        let resource_height = cx
             .layout_size("content-surface")
-            .map_or(420.0, |size| (size[1] - 180.0).max(300.0));
+            .map_or(600.0, |size| (size[1] - 120.0).max(300.0));
         let page_width = cx
             .layout_size("content-surface")
-            .map_or(840.0, |size| (size[0] - 48.0).min(1300.0));
+            .map_or(840.0, |size| size[0] - 48.0);
         content = content.child(workspace_view::render(
             state,
             theme,
-            campaign_height,
+            resource_height,
             page_width,
         ));
     }
@@ -5465,6 +5475,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                         .color(color("#969696")),
                 ),
         );
+    } else if workspace_view::graph_open(state) {
+        let [width, height] = cx.layout_size("content-surface").unwrap_or([840.0, 600.0]);
+        main_content = main_content.child(workspace_view::render(state, theme, height, width));
     } else {
         let scroll_watch = if matches!(
             state.primary_view,
@@ -5497,7 +5510,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             PrimaryView::Fleet => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Automations => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Tracking => col().w_full().px(24.0).pt(36.0).pb(24.0),
-            PrimaryView::Workspace => col().w_full().px(24.0).pt(36.0).pb(24.0),
+            PrimaryView::Workspace => col().w_full().px(24.0).pt(25.0).pb(24.0),
             PrimaryView::WorkspaceCreation => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Home | PrimaryView::NewResearch => col().w_full(),
         };
@@ -9582,7 +9595,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_workspace_opens_campaign_and_shows_recorded_forms() {
+    fn saved_workspace_opens_surface_graph_and_shows_recorded_forms() {
         use beale_contracts::v1::{SurfaceCreator, SurfaceKind, SurfaceScope, WorkspaceSurface};
         let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
         let summary = WorkspaceSummary {
@@ -9607,20 +9620,24 @@ mod tests {
         runtime.frame(1.0 / 60.0);
         assert_eq!(runtime.state.primary_view, PrimaryView::Workspace);
         assert_eq!(runtime.state.workspace_id, Some(id));
-        assert!(runtime.find("workspace-campaign-empty").is_some());
+        assert_eq!(
+            runtime.state.workspace_tab,
+            workspace_view::WorkspaceTab::Surfaces
+        );
+        assert!(runtime.find("workspace-campaign-empty").is_none());
         for key in [
-            "workspace-tab-campaign",
-            "workspace-tab-foundation",
             "workspace-tab-surfaces",
+            "workspace-tab-settings",
             "workspace-tab-rules",
         ] {
             assert!(runtime.find(key).is_some(), "{key}");
+            let (button, _) = runtime.presented(key).unwrap();
+            assert_eq!([button[2], button[3]], [32.0, 32.0]);
         }
         let tab_positions = [
-            "workspace-tab-campaign",
-            "workspace-tab-foundation",
             "workspace-tab-surfaces",
             "workspace-tab-rules",
+            "workspace-tab-settings",
         ]
         .map(|key| runtime.presented(key).unwrap().0[0]);
         assert!(tab_positions.windows(2).all(|pair| pair[0] < pair[1]));
@@ -9654,29 +9671,37 @@ mod tests {
         );
         let mut loaded = Runtime::new(runtime.state, view, (2200.0, 900.0), Env::new(true, 1.0));
         loaded.frame(0.0);
-        let (content_rect, _) = loaded.presented("settings-page").unwrap();
-        assert!(content_rect[2] >= 1299.0 && content_rect[2] <= 1301.0);
+        let (content_rect, _) = loaded.presented("content-surface").unwrap();
+        assert!(content_rect[2] > 1300.0);
+        assert!(loaded.find("workspace-surface-network").is_some());
+        assert!(loaded.find("saved-workspace-in-scope-surfaces").is_none());
+        let (header, _) = loaded.presented("workspace-view-header").unwrap();
+        let (title_container, _) = loaded.presented("workspace-title-squircle").unwrap();
+        let (tabs, _) = loaded.presented("workspace-view-tabs").unwrap();
+        assert!((title_container[0] - header[0] + 18.0).abs() < 1.0);
+        assert!((tabs[0] + tabs[2] - header[0] - header[2]).abs() < 1.0);
+        assert!(title_container[2] < header[2] / 2.0);
         let (workspace_title, _) = loaded.presented("workspace-view-title").unwrap();
-        let mut settings =
-            Runtime::new(State::default(), view, (2200.0, 900.0), Env::new(true, 1.0));
-        settings.frame(0.0);
-        let (settings_title, _) = settings.presented("settings-view-title").unwrap();
-        assert!((workspace_title[1] - settings_title[1]).abs() < 1.0);
+        assert!((workspace_title[0] - content_rect[0] - 24.0).abs() < 1.0);
+        assert!(workspace_title[1] >= title_container[1]);
         for (tab, expected) in [
-            (
-                "workspace-tab-surfaces",
-                "saved-workspace-in-scope-surfaces",
-            ),
+            ("workspace-tab-surfaces", "workspace-surface-network"),
             ("workspace-tab-rules", "saved-workspace-rules-form"),
-            ("workspace-tab-foundation", "saved-workspace-details-form"),
+            ("workspace-tab-settings", "saved-workspace-details-form"),
         ] {
             let (x, y) = loaded.find(tab).unwrap();
             loaded.pointer_down(x, y);
             loaded.pointer_up(x, y);
             loaded.frame(1.0 / 60.0);
             assert!(loaded.find(expected).is_some(), "{expected}");
+            let (current_title, _) = loaded.presented("workspace-view-title").unwrap();
+            assert!((current_title[0] - workspace_title[0]).abs() < 1.0);
+            if tab != "workspace-tab-surfaces" {
+                assert!(loaded.find("workspace-surface-network").is_none());
+            }
             if tab == "workspace-tab-surfaces" {
                 assert!(loaded.find("workspace-surface-network").is_some());
+                loaded.frame(1.0);
                 let (node_x, node_y) = loaded.find("workspace-surface-node-0").unwrap();
                 loaded.pointer_move(node_x, node_y);
                 loaded.frame(1.0 / 60.0);
@@ -9692,6 +9717,14 @@ mod tests {
                     loaded.state.workspace_surface_edits[0].mapping_progress,
                     100
                 );
+                assert!(loaded.find("saved-workspace-save").is_some());
+                loaded.frame(1.0);
+                let (x, y) = loaded.find("workspace-surface-manage").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(loaded.find("saved-workspace-in-scope-surfaces").is_some());
+                assert!(loaded.find("workspace-surface-network").is_none());
                 let (x, y) = loaded.find("saved-workspace-add-in-scope-surface").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
@@ -9727,6 +9760,11 @@ mod tests {
                     loaded.state.workspace_surface_edits[1].scope,
                     SurfaceScope::InScope as i32
                 );
+                let (x, y) = loaded.find("workspace-surface-management-back").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
+                assert!(loaded.find("workspace-surface-network").is_some());
                 let (x, y) = loaded.find("workspace-surface-connect").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
@@ -9749,6 +9787,10 @@ mod tests {
                     loaded.state.workspace_surface_edits[0].relationships[0].label,
                     "contains"
                 );
+                let (x, y) = loaded.find("workspace-surface-manage").unwrap();
+                loaded.pointer_down(x, y);
+                loaded.pointer_up(x, y);
+                loaded.frame(1.0);
                 let (x, y) = loaded.find("saved-workspace-surface-edit-0").unwrap();
                 loaded.pointer_down(x, y);
                 loaded.pointer_up(x, y);
@@ -9905,6 +9947,95 @@ mod tests {
         );
         assert_eq!(edited.state.workspace_foundation_revision, 2);
         assert_eq!(edited.state.workspaces[0].name, "Renamed Example Workspace");
+    }
+
+    #[test]
+    fn surface_network_covers_content_and_pans_beneath_title() {
+        use beale_contracts::v1::{SurfaceKind, SurfaceScope, WorkspaceSurface};
+
+        let id = uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
+        let summary = WorkspaceSummary {
+            id: id.to_string(),
+            name: "Example Workspace".to_owned(),
+            directory: std::env::temp_dir()
+                .join("example-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let kinds = [
+            SurfaceKind::Repository,
+            SurfaceKind::Documentation,
+            SurfaceKind::Binary,
+            SurfaceKind::Service,
+            SurfaceKind::Domain,
+            SurfaceKind::Other,
+        ];
+        let surfaces = (0..600)
+            .map(|index| WorkspaceSurface {
+                id: format!("surface-example-{index}"),
+                kind: kinds[index % kinds.len()] as i32,
+                scope: SurfaceScope::InScope as i32,
+                value: format!("surface-{index}.example.test"),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let details = WorkspaceDetails {
+            summary: Some(summary),
+            guidance: String::new(),
+            surfaces: surfaces.clone(),
+            rules: Vec::new(),
+        };
+        let state = State {
+            primary_view: PrimaryView::Workspace,
+            workspace_id: Some(id),
+            workspace_tab: workspace_view::WorkspaceTab::Surfaces,
+            workspace_details: Some(details),
+            workspace_surface_edits: surfaces,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (2200.0, 1200.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (content, _) = runtime.presented("content-surface").unwrap();
+        let (stage, _) = runtime.presented("workspace-surface-network").unwrap();
+        let (node_before, _) = runtime.presented("workspace-surface-node-0").unwrap();
+        let (title, _) = runtime.presented("workspace-title-squircle").unwrap();
+        let (manage, _) = runtime.presented("workspace-surface-manage").unwrap();
+        assert_eq!(stage, content);
+        assert_eq!([node_before[2], node_before[3]], [18.0, 18.0]);
+        assert!(title[2] < content[2] / 2.0);
+        assert!((manage[0] + manage[2] - content[0] - content[2] + 24.0).abs() < 2.0);
+        assert!((manage[1] + manage[3] - content[1] - content[3] + 24.0).abs() < 2.0);
+        for removed in [
+            "workspace-surface-network-legend",
+            "workspace-surface-legend-out-of-scope",
+            "workspace-surface-network-resize",
+        ] {
+            assert!(runtime.find(removed).is_none(), "{removed}");
+        }
+        let labels = runtime
+            .elements()
+            .into_iter()
+            .filter_map(|element| element.text)
+            .collect::<Vec<_>>();
+        assert!(!labels.iter().any(|label| label == "Surface Network"));
+        assert!(!labels.iter().any(|label| label == "Repositories 100"));
+        assert!(
+            !labels
+                .iter()
+                .any(|label| label.starts_with("Select a surface"))
+        );
+
+        let x = stage[0] + stage[2] - 24.0;
+        let y = stage[1] + stage[3] / 2.0;
+        runtime.pointer_down(x, y);
+        runtime.pointer_move(x, y - 110.0);
+        runtime.frame(0.0);
+        assert_eq!(runtime.state.workspace_surface_pan, [0.0, -110.0]);
+        let (node_after, _) = runtime.presented("workspace-surface-node-0").unwrap();
+        assert!((node_after[1] - node_before[1] + 110.0).abs() < 1.0);
+        assert!(node_after[1] < title[1] + title[3]);
+        runtime.pointer_up(x, y - 110.0);
+        runtime.frame(0.0);
     }
 
     #[test]

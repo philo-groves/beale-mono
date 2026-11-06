@@ -3,14 +3,15 @@ use beale_contracts::v1::{
     WorkspaceSurface,
 };
 use rune::{
-    Color, El, Icon, LineCap, Shape, TextEdit, canvas, col, el, icon, row, text, text_input,
+    Color, Drag, El, Icon, LineCap, Phase, Shape, TextEdit, Tx, canvas, col, el, icon, row, text,
+    text_input,
 };
 
 use crate::{
     FormSpec, SelectionMenu, State, ThemeStyle, ViewLocation, form_button,
     form_controls::icon_action_button,
     form_label_font,
-    icons::{PEN, PLUS, TRASH},
+    icons::{PEN, PLUS, SAFETY, SETTINGS, TARGET, TRASH},
     modal_dialog, selection_button, settings_form, settings_form_card, settings_form_with_action,
     toggle_selection_menu, ui_font, view_title_font,
     workspace_creation::{
@@ -21,27 +22,22 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum WorkspaceTab {
-    #[default]
     Campaign,
     Foundation,
+    #[default]
     Surfaces,
     Rules,
 }
 
 impl WorkspaceTab {
-    const ALL: [Self; 4] = [
-        Self::Campaign,
-        Self::Foundation,
-        Self::Surfaces,
-        Self::Rules,
-    ];
+    const ALL: [Self; 3] = [Self::Surfaces, Self::Rules, Self::Foundation];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Campaign => "Campaign",
             Self::Surfaces => "Surfaces",
             Self::Rules => "Rules",
-            Self::Foundation => "General",
+            Self::Foundation => "Settings",
         }
     }
 
@@ -50,21 +46,24 @@ impl WorkspaceTab {
             Self::Campaign => "workspace-tab-campaign",
             Self::Surfaces => "workspace-tab-surfaces",
             Self::Rules => "workspace-tab-rules",
-            Self::Foundation => "workspace-tab-foundation",
+            Self::Foundation => "workspace-tab-settings",
         }
     }
 }
 
 fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeStyle<'_>) -> El {
     let color = |value| theme.color(value);
-    row()
-        .key(tab.key())
+    let tab_icon = match tab {
+        WorkspaceTab::Surfaces | WorkspaceTab::Campaign => &TARGET,
+        WorkspaceTab::Foundation => &SETTINGS,
+        WorkspaceTab::Rules => &SAFETY,
+    };
+    el().key(tab.key())
         .role("tab")
         .label(tab.label())
-        .h(26.0)
-        .px(12.0)
+        .size(32.0, 32.0)
         .center()
-        .radius(8.0)
+        .radius(10.0)
         .continuous_corners()
         .fill(if selected {
             color("#333333")
@@ -72,12 +71,9 @@ fn tab_button(tab: WorkspaceTab, selected: bool, id: uuid::Uuid, theme: ThemeSty
             Color::TRANSPARENT
         })
         .hover(color("#303030"))
-        .child(
-            text(tab.label())
-                .font(ui_font(14.0, if selected { 600.0 } else { 450.0 }))
-                .color(color("#e2e2e2")),
-        )
+        .child(icon(tab_icon, 17.0).color(color("#e2e2e2")))
         .on_press_tx(move |state: &mut State, tx| {
+            state.workspace_surface_management_open = false;
             state.navigate_to(ViewLocation::Workspace(id, tab));
             tx.scroll_to_y("workspace-scroll", 0.0);
         })
@@ -347,21 +343,39 @@ fn arc(cx: f32, cy: f32, radius: f32, start: f32, end: f32) -> Vec<[f32; 2]> {
         .collect()
 }
 
-fn network(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
+fn network(
+    state: &State,
+    theme: ThemeStyle<'_>,
+    available_width: f32,
+    available_height: f32,
+    header: El,
+) -> El {
     let surfaces = &state.workspace_surface_edits;
-    let width = available_width.max(340.0);
-    let columns = ((width / 155.0).floor() as usize).clamp(2, 6);
-    let rows = surfaces.len().div_ceil(columns).max(1);
-    let height = rows as f32 * 136.0 + 56.0;
+    let width = available_width.max(1.0);
+    let height = available_height.max(1.0);
+    let columns = ((width / 64.0).floor() as usize).max(2);
     let position = |index: usize| -> [f32; 2] {
         let row = index / columns;
         let column = index % columns;
         let count = (surfaces.len() - row * columns).min(columns);
         let step = width / (count + 1) as f32;
-        [step * (column + 1) as f32, 72.0 + row as f32 * 136.0]
+        [
+            step * (column + 1) as f32 + state.workspace_surface_pan[0],
+            130.0 + row as f32 * 64.0 + state.workspace_surface_pan[1],
+        ]
     };
     let hovered = state.workspace_surface_hovered;
     let mut shape = Shape::new();
+    let grid_color = theme.color("#303030");
+    for x in (16..width as usize).step_by(28) {
+        for y in (16..height as usize).step_by(28) {
+            let (x, y) = (x as f32, y as f32);
+            shape = shape.fill(
+                vec![[x, y], [x + 2.0, y], [x + 2.0, y + 2.0], [x, y + 2.0]],
+                grid_color,
+            );
+        }
+    }
     for (index, surface) in surfaces.iter().enumerate() {
         for relationship in &surface.relationships {
             let Some(target) = surfaces
@@ -395,8 +409,8 @@ fn network(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
             let start = -90.0 + segment as f32 * 120.0 + 9.0;
             let end = start + 102.0;
             shape = shape.stroke(
-                arc(x, y, 29.0, start, end),
-                4.0,
+                arc(x, y, 18.0, start, end),
+                2.5,
                 theme.color(if out && segment > 0 {
                     "#292929"
                 } else {
@@ -408,11 +422,11 @@ fn network(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
                     arc(
                         x,
                         y,
-                        29.0,
+                        18.0,
                         start,
                         start + 102.0 * values[segment] as f32 / 100.0,
                     ),
-                    4.0,
+                    2.5,
                     theme.color(if out { "#666666" } else { colors[segment] }),
                 );
             }
@@ -421,11 +435,23 @@ fn network(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
     let mut stage = el()
         .key("workspace-surface-network")
         .size(width, height)
-        .radius(14.0)
-        .continuous_corners()
-        .fill(theme.color("#1b1b1b"))
-        .border(1.0, theme.color("#333333"))
-        .child(canvas(shape).absolute(0.0, 0.0).size(width, height));
+        .child(canvas(shape).absolute(0.0, 0.0).size(width, height))
+        .on_drag(|state: &mut State, drag: &mut Drag, tx: &mut Tx| {
+            tx.instant();
+            match drag.phase {
+                Phase::Down => state.workspace_surface_pan_origin = state.workspace_surface_pan,
+                Phase::Move => {
+                    state.workspace_surface_pan = [
+                        state.workspace_surface_pan_origin[0] + drag.dx,
+                        state.workspace_surface_pan_origin[1] + drag.dy,
+                    ];
+                }
+                Phase::Up if drag.cancelled() => {
+                    state.workspace_surface_pan = state.workspace_surface_pan_origin;
+                }
+                Phase::Up => {}
+            }
+        });
     for (index, surface) in surfaces.iter().enumerate() {
         let [x, y] = position(index);
         let out = surface.scope == SurfaceScope::OutOfScope as i32;
@@ -439,15 +465,11 @@ fn network(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
             .key(format!("workspace-surface-node-{index}"))
             .role("button")
             .label(label.clone())
-            .absolute(x - 26.0, y - 26.0)
-            .size(52.0, 52.0)
+            .absolute(x - 9.0, y - 9.0)
+            .size(18.0, 18.0)
             .center()
-            .radius(26.0)
-            .continuous_corners()
-            .fill(theme.color(if out { "#252525" } else { "#2c2c2c" }))
-            .hover(theme.color(if out { "#303030" } else { "#393939" }))
             .child(
-                icon(surface_icon(surface.kind), 24.0).color(theme.color(if out {
+                icon(surface_icon(surface.kind), 18.0).color(theme.color(if out {
                     "#777777"
                 } else {
                     "#e0e0e0"
@@ -476,7 +498,7 @@ fn network(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
         if hovered == Some(index) {
             stage = stage.child(
                 el().key(format!("workspace-surface-name-{index}"))
-                    .absolute((x - 110.0).max(4.0).min((width - 224.0).max(4.0)), y + 39.0)
+                    .absolute((x - 110.0).max(4.0).min((width - 224.0).max(4.0)), y + 26.0)
                     .w(220.0)
                     .px(8.0)
                     .py(5.0)
@@ -550,28 +572,83 @@ fn network(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
             }
         }
     }
-    let mut panel = col().w_full().gap(10.0).child(
-        text("Surface Network")
-            .font(ui_font(16.0, 600.0))
-            .color(theme.color("#ededed")),
+    let dirty = state
+        .workspace_details
+        .as_ref()
+        .is_some_and(|details| surfaces.as_slice() != details.surfaces.as_slice());
+    let saving = state.workspace_save_busy == Some(WorkspaceTab::Surfaces);
+    let mut actions = row()
+        .key("workspace-surface-actions")
+        .absolute(24.0, height - 50.0)
+        .w((width - 48.0).max(0.0))
+        .center_y()
+        .gap(8.0)
+        .child(el().grow(1.0));
+    if dirty || saving {
+        let can_save = dirty && !saving && !state.workspace_details_loading;
+        let save =
+            form_button(if saving { "Saving…" } else { "Save Changes" }, theme).key(if can_save {
+                "saved-workspace-save"
+            } else {
+                "saved-workspace-save-disabled"
+            });
+        actions = actions.child(if can_save {
+            save.on_press(|state: &mut State| {
+                crate::start_workspace_save(state, WorkspaceTab::Surfaces)
+            })
+        } else {
+            save
+        });
+    }
+    actions = actions.child(
+        form_button("Manage Surfaces", theme)
+            .key("workspace-surface-manage")
+            .on_press(|state: &mut State| state.workspace_surface_management_open = true),
     );
-    let mut legend = row().w_full().gap(16.0);
-    for (label, color) in [
-        ("● Surface mapping", "#69a8c9"),
-        ("● Threat modeling", "#c2a368"),
-        ("● Analysis", "#8bb995"),
-        ("● Out of scope", "#777777"),
-    ] {
-        legend = legend.child(
-            text(label)
-                .font(ui_font(11.0, 450.0))
-                .color(theme.color(color)),
+    let mut page = el()
+        .key("workspace-view-page")
+        .size(width, height)
+        .child(stage)
+        .child(header.absolute(24.0, 25.0).w((width - 48.0).max(0.0)));
+    if state.workspace_surface_selected.is_some() {
+        page = page.child(
+            surface_network_details(state, theme)
+                .absolute(24.0, 96.0)
+                .w((width - 48.0).min(460.0)),
         );
     }
-    panel = panel.child(legend);
-    panel = panel.child(row().w_full().center().child(stage));
-    panel = panel.child(surface_network_details(state, theme));
-    panel
+    if !state.workspace_save_error.is_empty() {
+        let mut status = col().key("saved-workspace-save-error").gap(8.0).child(
+            text(state.workspace_save_error.clone())
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#e07676")),
+        );
+        if state.workspace_save_error == crate::workspaces::WORKSPACE_CONFLICT_MESSAGE {
+            status = status.child(
+                form_button("Reload Workspace", theme)
+                    .key("saved-workspace-reload")
+                    .on_press(move |state: &mut State| {
+                        if let Some(id) = state.workspace_id {
+                            crate::start_workspace_details(state, id);
+                        }
+                    }),
+            );
+        }
+        page = page.child(
+            status
+                .absolute(24.0, height - 110.0)
+                .w((width - 48.0).min(460.0)),
+        );
+    } else if !state.workspace_save_message.is_empty() {
+        page = page.child(
+            text(state.workspace_save_message.clone())
+                .key("saved-workspace-save-message")
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#969696"))
+                .absolute(24.0, height - 60.0),
+        );
+    }
+    page.child(actions)
 }
 
 fn progress_button(index: usize, stage: usize, value: u32, theme: ThemeStyle<'_>) -> El {
@@ -619,9 +696,7 @@ fn progress_button(index: usize, stage: usize, value: u32, theme: ThemeStyle<'_>
 
 fn surface_network_details(state: &State, theme: ThemeStyle<'_>) -> El {
     let Some(index) = state.workspace_surface_selected else {
-        return text("Select a surface to update progress or connect it to another surface.")
-            .font(ui_font(12.0, 400.0))
-            .color(theme.color("#969696"));
+        return col();
     };
     let Some(surface) = state.workspace_surface_edits.get(index) else {
         return col();
@@ -864,8 +939,24 @@ pub(crate) fn relationship_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
     )
 }
 
-fn surfaces(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> Vec<El> {
-    let mut forms = vec![network(state, theme, available_width)];
+fn surfaces(state: &State, theme: ThemeStyle<'_>) -> Vec<El> {
+    let mut forms = vec![
+        row()
+            .key("workspace-surface-management-header")
+            .w_full()
+            .center_y()
+            .child(
+                text("Manage Surfaces")
+                    .font(ui_font(16.0, 600.0))
+                    .color(theme.color("#ededed")),
+            )
+            .child(el().grow(1.0))
+            .child(
+                form_button("Back to Graph", theme)
+                    .key("workspace-surface-management-back")
+                    .on_press(|state: &mut State| state.workspace_surface_management_open = false),
+            ),
+    ];
     forms.extend(
         [SurfaceScope::InScope, SurfaceScope::OutOfScope]
             .into_iter()
@@ -1389,7 +1480,7 @@ pub(crate) fn surface_delete_dialog(state: &State, theme: ThemeStyle<'_>) -> [El
 pub(crate) fn render(
     state: &State,
     theme: ThemeStyle<'_>,
-    campaign_height: f32,
+    resource_height: f32,
     page_width: f32,
 ) -> El {
     let Some(id) = state.workspace_id else {
@@ -1404,27 +1495,56 @@ pub(crate) fn render(
         .key("workspace-view-tabs")
         .role("tablist")
         .label("Workspace views")
-        .w_full()
-        .gap(6.0);
+        .h(42.0)
+        .px(5.0)
+        .gap(3.0)
+        .center_y()
+        .radius(14.0)
+        .continuous_corners()
+        .fill(theme.color("#0d0d0d"));
     for tab in WorkspaceTab::ALL {
         tabs = tabs.child(tab_button(tab, state.workspace_tab == tab, id, theme));
+    }
+    let header = row()
+        .key("workspace-view-header")
+        .w_full()
+        .center_y()
+        .gap(12.0)
+        .child(
+            row()
+                .key("workspace-title-squircle")
+                .ml(-18.0)
+                .min_w(0.0)
+                .max_w(420.0)
+                .h(56.0)
+                .px(18.0)
+                .center_y()
+                .radius(16.0)
+                .continuous_corners()
+                .fill(theme.color("#0d0d0d"))
+                .child(
+                    text(name)
+                        .key("workspace-view-title")
+                        .truncate()
+                        .font(view_title_font())
+                        .color(theme.color("#f2f2f2")),
+                ),
+        )
+        .child(el().grow(1.0))
+        .child(tabs);
+    if graph_open(state) {
+        return network(state, theme, page_width, resource_height, header);
     }
     let mut page = col()
         .key("workspace-view-page")
         .w_full()
-        .gap(20.0)
-        .child(
-            text(name)
-                .key("workspace-view-title")
-                .font(view_title_font())
-                .color(theme.color("#f2f2f2")),
-        )
-        .child(tabs);
+        .gap(14.0)
+        .child(header);
     if state.workspace_tab == WorkspaceTab::Campaign {
         return page.child(
             el().key("workspace-campaign-empty")
                 .w_full()
-                .min_h(campaign_height)
+                .min_h(resource_height)
                 .center()
                 .child(
                     text("No campaign features are enabled.")
@@ -1441,7 +1561,7 @@ pub(crate) fn render(
     });
     if let Some(details) = details {
         let forms = match state.workspace_tab {
-            WorkspaceTab::Surfaces => surfaces(state, theme, page_width),
+            WorkspaceTab::Surfaces => surfaces(state, theme),
             WorkspaceTab::Rules => rules(state, theme),
             WorkspaceTab::Foundation => vec![foundation(state, details, theme)],
             WorkspaceTab::Campaign => Vec::new(),
@@ -1467,13 +1587,16 @@ pub(crate) fn render(
                 "saved-workspace-save-disabled"
             },
         );
-        page = page.child(row().w_full().child(el().grow(1.0)).child(
-            if dirty && !saving && !state.workspace_details_loading {
-                save.on_press(move |state: &mut State| crate::start_workspace_save(state, tab))
-            } else {
-                save
-            },
-        ));
+        if state.workspace_tab != WorkspaceTab::Surfaces || state.workspace_surface_management_open
+        {
+            page = page.child(row().w_full().child(el().grow(1.0)).child(
+                if dirty && !saving && !state.workspace_details_loading {
+                    save.on_press(move |state: &mut State| crate::start_workspace_save(state, tab))
+                } else {
+                    save
+                },
+            ));
+        }
         if !state.workspace_save_error.is_empty() {
             page = page.child(
                 text(state.workspace_save_error.clone())
@@ -1528,4 +1651,18 @@ pub(crate) fn render(
         );
     }
     page
+}
+
+pub(crate) fn graph_open(state: &State) -> bool {
+    state.primary_view == crate::PrimaryView::Workspace
+        && state.workspace_tab == WorkspaceTab::Surfaces
+        && !state.workspace_surface_management_open
+        && state.workspace_id.is_some_and(|id| {
+            state.workspace_details.as_ref().is_some_and(|details| {
+                details
+                    .summary
+                    .as_ref()
+                    .is_some_and(|summary| summary.id == id.to_string())
+            })
+        })
 }
