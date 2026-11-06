@@ -9,7 +9,6 @@ use rune_kit::{Markdown, MarkdownStyle};
 
 use crate::{
     Provider, SelectionMenu, State, ThemeStyle, catalog_index, effective_model_method, form_button,
-    form_label_font,
     icons::{
         ARROW_UP, BRAIN, CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CHEVRON_UP, FOLDER_OPEN, REPEAT,
         TARGET, TERMINAL, WRENCH,
@@ -29,6 +28,7 @@ pub(crate) struct ModelSelection {
 pub(crate) struct GraphEditor {
     pub(crate) role: beale_graphs::Role,
     pub(crate) models: Vec<ModelSelection>,
+    pub(crate) model_menu_open: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -659,11 +659,14 @@ pub(crate) fn graph_concurrency_config(
         .nodes
         .iter()
         .filter_map(|role| {
-            state.new_research_graph_concurrency[role.index()].map(|max_concurrent| {
-                beale_contracts::v1::GraphNodeConcurrency {
-                    node_id: role.id().to_owned(),
-                    max_concurrent,
-                }
+            (if *role == beale_graphs::Role::Main {
+                Some(1)
+            } else {
+                state.new_research_graph_concurrency[role.index()]
+            })
+            .map(|max_concurrent| beale_contracts::v1::GraphNodeConcurrency {
+                node_id: role.id().to_owned(),
+                max_concurrent,
             })
         })
         .collect()
@@ -742,7 +745,11 @@ fn graph_node(state: &State, placement: beale_graphs::NodeLayout, theme: ThemeSt
             .color(theme.color("#999999")),
         );
     }
-    let max_concurrent = state.new_research_graph_concurrency[role.index()];
+    let max_concurrent = if role == beale_graphs::Role::Main {
+        Some(1)
+    } else {
+        state.new_research_graph_concurrency[role.index()]
+    };
     let mut role_row = row().w_full().h(18.0).center_y().gap(4.0).child(
         text(role.label())
             .grow(1.0)
@@ -752,6 +759,7 @@ fn graph_node(state: &State, placement: beale_graphs::NodeLayout, theme: ThemeSt
     if let Some(max) = max_concurrent {
         role_row = role_row.child(
             text(format!("{max} Max"))
+                .key(format!("new-research-graph-node-{}-max", role.id()))
                 .font(ui_font(11.0, 400.0))
                 .color(theme.color("#999999")),
         );
@@ -773,6 +781,7 @@ fn graph_node(state: &State, placement: beale_graphs::NodeLayout, theme: ThemeSt
             state.graph_editor = Some(GraphEditor {
                 role,
                 models: role_models(state, role),
+                model_menu_open: false,
             });
             state.graph_editor_max_concurrent = TextEdit::new(
                 state.new_research_graph_concurrency[role.index()]
@@ -871,6 +880,20 @@ fn graph_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> 
     row().w_full().center().child(stage)
 }
 
+fn main_only_preview(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
+    let stage_width = available_width.clamp(180.0, 640.0);
+    let main = beale_graphs::NodeLayout {
+        role: beale_graphs::Role::Main,
+        x: (stage_width - 170.0) / 2.0,
+        y: 15.0,
+    };
+    row().w_full().center().child(
+        el().key("new-research-no-graph")
+            .size(stage_width, 106.0)
+            .child(graph_node(state, main, theme)),
+    )
+}
+
 fn close_graph_editor(state: &mut State) {
     state.graph_editor = None;
     state.graph_editor_max_concurrent.clear();
@@ -878,26 +901,148 @@ fn close_graph_editor(state: &mut State) {
 
 pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 2] {
     let editor = state.graph_editor.as_ref().expect("dialog requires editor");
-    let mut list = col()
-        .key("graph-editor-model-list")
-        .w_full()
-        .max_h(250.0)
-        .min_h(0.0)
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        });
     let model_choices = choices(state);
+    let model_label = match editor.models.as_slice() {
+        [] => "Choose models".to_owned(),
+        [selection] => model_choices
+            .iter()
+            .find(|choice| choice.selection == *selection)
+            .map_or_else(|| "Choose models".to_owned(), |choice| choice.name.clone()),
+        models => format!("{} models selected", models.len()),
+    };
+    let model_control = selection_button(
+        model_label,
+        editor.model_menu_open,
+        |state| {
+            if let Some(editor) = state.graph_editor.as_mut() {
+                editor.model_menu_open = !editor.model_menu_open;
+            }
+        },
+        theme,
+    )
+    .key("graph-editor-model-control");
+    let max_concurrent = if editor.role == beale_graphs::Role::Main {
+        text("1")
+            .key("graph-editor-fixed-max-concurrent")
+            .font(ui_font(14.0, 400.0))
+            .color(theme.color("#bdbdbd"))
+    } else {
+        field(
+            &state.graph_editor_max_concurrent,
+            "graph-editor-max-concurrent",
+            "Unlimited",
+            theme,
+            |state| &mut state.graph_editor_max_concurrent,
+        )
+        .w(110.0)
+        .on_input_change(|state: &mut State, _| {
+            normalize_goal_limit(
+                &mut state.graph_editor_max_concurrent,
+                beale_graphs::MAX_CONCURRENT as u64,
+            );
+        })
+    };
+    let no_graph = state.new_research_graph_id.is_empty();
+    let mut rows = vec![
+        row_with_control(
+            "Role",
+            if no_graph {
+                "This session's agent."
+            } else {
+                "Role in this session graph."
+            },
+            text(editor.role.label())
+                .font(ui_font(14.0, 400.0))
+                .color(theme.color("#bdbdbd")),
+            theme,
+        ),
+        row_with_control(
+            if editor.role == beale_graphs::Role::Main {
+                "Model"
+            } else {
+                "Allowed Models"
+            },
+            if editor.role == beale_graphs::Role::Main {
+                "Choose one model for the main agent."
+            } else {
+                "Choose up to 16 models for this role."
+            },
+            model_control,
+            theme,
+        ),
+    ];
+    rows.push(row_with_control(
+        "Max Concurrent",
+        if editor.role == beale_graphs::Role::Main {
+            "The main agent runs one turn at a time."
+        } else {
+            "Maximum simultaneous agents for this role."
+        },
+        max_concurrent,
+        theme,
+    ));
+    let body = settings_form_card(rows, theme);
+    let mut save = form_button("Save", theme).key("graph-editor-save");
+    if !editor.models.is_empty() {
+        save = save.on_press(|state: &mut State| {
+            if let Some(editor) = state.graph_editor.take() {
+                if editor.role == beale_graphs::Role::Main {
+                    state.new_research_graph_concurrency[editor.role.index()] = Some(1);
+                } else if !state.new_research_graph_id.is_empty() {
+                    state.new_research_graph_concurrency[editor.role.index()] = state
+                        .graph_editor_max_concurrent
+                        .text
+                        .parse()
+                        .ok()
+                        .or_else(|| editor.role.default_max_concurrent());
+                }
+                state.graph_editor_max_concurrent.clear();
+                if editor.role == beale_graphs::Role::Main {
+                    state.new_research_model = editor.models.first().cloned();
+                }
+                state.new_research_graph_models[editor.role.index()] = Some(editor.models);
+            }
+        });
+    } else {
+        save = save.opacity(0.45);
+    }
+    modal_dialog::render(
+        modal_dialog::DialogSpec {
+            key: "graph-editor-dialog",
+            title: if no_graph {
+                "Edit Main Agent"
+            } else {
+                "Edit Graph Node"
+            },
+            width: 520.0,
+            focus_return: "new-research-graph-control",
+        },
+        body,
+        row()
+            .w_full()
+            .gap(8.0)
+            .child(el().grow(1.0))
+            .child(form_button("Cancel", theme).on_press(close_graph_editor))
+            .child(save),
+        theme,
+        close_graph_editor,
+    )
+}
+
+pub(crate) fn graph_editor_model_menu(state: &State, theme: ThemeStyle<'_>) -> El {
+    let editor = state.graph_editor.as_ref().expect("menu requires editor");
+    let model_choices = choices(state);
+    let height = (model_choices.len() as f32 * 44.0 + 12.0).clamp(58.0, 320.0);
+    let mut list = col().w_full().gap(2.0);
     if model_choices.is_empty() {
         list = list.child(
             text("Connect a provider to choose models for this role.")
+                .padding(10.0)
                 .font(ui_font(13.0, 400.0))
                 .color(theme.color("#aaaaaa")),
         );
     }
-    for (index, choice) in model_choices.into_iter().enumerate() {
-        if index > 0 {
-            list = list.child(el().w_full().h(1.0).fill(theme.color("#2c2c2c")));
-        }
+    for choice in model_choices {
         let selection = choice.selection.clone();
         let checked = editor.models.contains(&selection);
         let single_model = editor.role == beale_graphs::Role::Main;
@@ -921,20 +1066,19 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
                 .center_y()
                 .gap(8.0)
                 .radius(8.0)
-                .hover(theme.color("#303030"))
+                .hover(theme.color("#383838"))
                 .on_press(move |state: &mut State| {
                     if let Some(editor) = state.graph_editor.as_mut() {
-                        if editor.role == beale_graphs::Role::Main {
+                        if single_model {
                             editor.models.clear();
                             editor.models.push(selection.clone());
-                        } else {
-                            if let Some(index) =
-                                editor.models.iter().position(|item| item == &selection)
-                            {
-                                editor.models.remove(index);
-                            } else if editor.models.len() < editor.role.max_models() {
-                                editor.models.push(selection.clone());
-                            }
+                            editor.model_menu_open = false;
+                        } else if let Some(index) =
+                            editor.models.iter().position(|item| item == &selection)
+                        {
+                            editor.models.remove(index);
+                        } else if editor.models.len() < editor.role.max_models() {
+                            editor.models.push(selection.clone());
                         }
                     }
                 })
@@ -943,7 +1087,7 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
                     text(choice.name)
                         .grow(1.0)
                         .truncate()
-                        .font(ui_font(13.0, 400.0))
+                        .font(ui_font(14.0, 400.0))
                         .color(theme.color("#eeeeee")),
                 )
                 .child(if checked {
@@ -953,104 +1097,34 @@ pub(crate) fn graph_editor_dialog(state: &State, theme: ThemeStyle<'_>) -> [El; 
                 }),
         );
     }
-    let model_section = col()
-        .w_full()
-        .py(12.0)
-        .gap(7.0)
-        .child(
-            text(if editor.role == beale_graphs::Role::Main {
-                "Model"
-            } else {
-                "Allowed Models"
-            })
-            .font(form_label_font())
-            .color(theme.color("#e2e2e2")),
-        )
-        .child(
-            text(if editor.role == beale_graphs::Role::Main {
-                "Choose one model for the main agent."
-            } else {
-                "Choose up to 16 models for this role."
-            })
-            .font(ui_font(14.0, 400.0))
-            .color(theme.color("#969696")),
-        )
-        .child(list);
-    let max_concurrent = field(
-        &state.graph_editor_max_concurrent,
-        "graph-editor-max-concurrent",
-        if editor.role == beale_graphs::Role::Main {
-            "1"
-        } else {
-            "Unlimited"
-        },
-        theme,
-        |state| &mut state.graph_editor_max_concurrent,
-    )
-    .w(110.0)
-    .on_input_change(|state: &mut State, _| {
-        normalize_goal_limit(
-            &mut state.graph_editor_max_concurrent,
-            beale_graphs::MAX_CONCURRENT as u64,
-        );
-    });
-    let body = settings_form_card(
-        [
-            row_with_control(
-                "Role",
-                "Role in this session graph.",
-                text(editor.role.label())
-                    .font(ui_font(14.0, 400.0))
-                    .color(theme.color("#bdbdbd")),
-                theme,
+    in_place_menu::popup_surface(
+        col()
+            .key("graph-editor-model-menu")
+            .role("menu")
+            .label("Allowed models")
+            .w(280.0)
+            .h(height)
+            .min_h(0.0)
+            .padding(6.0)
+            .child(
+                col()
+                    .key("graph-editor-model-menu-scroll")
+                    .w_full()
+                    .grow(1.0)
+                    .min_h(0.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .child(list),
             ),
-            model_section,
-            row_with_control(
-                "Max Concurrent",
-                "Maximum simultaneous agents for this role.",
-                max_concurrent,
-                theme,
-            ),
-        ],
-        theme,
-    );
-    let mut save = form_button("Save", theme).key("graph-editor-save");
-    if !editor.models.is_empty() {
-        save = save.on_press(|state: &mut State| {
-            if let Some(editor) = state.graph_editor.take() {
-                state.new_research_graph_concurrency[editor.role.index()] = state
-                    .graph_editor_max_concurrent
-                    .text
-                    .parse()
-                    .ok()
-                    .or_else(|| editor.role.default_max_concurrent());
-                state.graph_editor_max_concurrent.clear();
-                if editor.role == beale_graphs::Role::Main {
-                    state.new_research_model = editor.models.first().cloned();
-                }
-                state.new_research_graph_models[editor.role.index()] = Some(editor.models);
-            }
-        });
-    } else {
-        save = save.opacity(0.45);
-    }
-    modal_dialog::render(
-        modal_dialog::DialogSpec {
-            key: "graph-editor-dialog",
-            title: "Edit Graph Node",
-            width: 520.0,
-            focus_return: "new-research-graph-control",
-        },
-        body,
-        row()
-            .w_full()
-            .gap(8.0)
-            .child(el().grow(1.0))
-            .child(form_button("Cancel", theme).on_press(close_graph_editor))
-            .child(save),
-        theme,
-        close_graph_editor,
+        theme.color("#242424"),
     )
+    .anchored_fit("graph-editor-model-control", Side::Bottom, Align::End, 4.0)
+    .modal(true, |state: &mut State| {
+        if let Some(editor) = state.graph_editor.as_mut() {
+            editor.model_menu_open = false;
+        }
+    })
 }
 
 fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32) -> El {
@@ -1129,12 +1203,12 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
         let description = if selected {
             beale_graphs::SIMPLE_DESCRIPTION.to_owned()
         } else {
-            "Research with one agent, without an orchestration graph.".to_owned()
+            "Research with one main agent.".to_owned()
         };
         let label = if selected {
             beale_graphs::SIMPLE_NAME
         } else {
-            "Independent"
+            "No Graph"
         };
         let selector = selection_button(
             label,
@@ -1156,9 +1230,11 @@ fn new_research_setup(state: &State, theme: ThemeStyle<'_>, available_width: f32
                     .font(ui_font(13.0, 400.0))
                     .color(theme.color("#aaaaaa")),
             );
-        if selected {
-            content = content.child(graph_preview(state, theme, available_width));
-        }
+        content = content.child(if selected {
+            graph_preview(state, theme, available_width)
+        } else {
+            main_only_preview(state, theme, available_width)
+        });
     }
     col()
         .key("new-research-graph-scroll")

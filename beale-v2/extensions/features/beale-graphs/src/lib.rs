@@ -84,7 +84,7 @@ impl GraphRuntime for SimpleRuntime {
 
     fn system_section(&self, config: &SessionGraphConfig, fallback: &GraphNodeModel) -> String {
         let mut section = format!(
-            "## Simple Graph\n\n{PROMPT_EXTENSION}\n\nUse `{DELEGATE_TOOL}` only when a specialist can help. Delegate at most {MAX_BATCH} tasks per batch and {MAX_ASSIGNMENTS_PER_TURN} per turn. Model indices by role (omit `model_index` for the first):\n"
+            "## Simple Orchestra\n\n{PROMPT_EXTENSION}\n\nUse `{DELEGATE_TOOL}` only when a specialist can help. Delegate at most {MAX_BATCH} tasks per batch and {MAX_ASSIGNMENTS_PER_TURN} per turn. Model indices by role (omit `model_index` for the first):\n"
         );
         for role in [Role::Scout, Role::Reviewer, Role::Prover] {
             let models = role_models(config, role, fallback);
@@ -155,7 +155,7 @@ impl GraphRuntime for SimpleRuntime {
 }
 
 pub const SIMPLE_ID: &str = "simple";
-pub const SIMPLE_NAME: &str = "Simple Graph";
+pub const SIMPLE_NAME: &str = "Simple Orchestra";
 pub const SIMPLE_DESCRIPTION: &str =
     "One main agent with a single layer of Scout, Reviewer, and Prover subagents.";
 

@@ -2721,7 +2721,7 @@ fn selection_menu_items(state: &State, menu: SelectionMenu) -> Vec<in_place_menu
         }],
         SelectionMenu::SessionGraph => [
             (beale_graphs::SIMPLE_ID, beale_graphs::SIMPLE_NAME),
-            ("", "Independent"),
+            ("", "No Graph"),
         ]
         .into_iter()
         .map(|(value, label)| in_place_menu::MenuItem {
@@ -5663,6 +5663,15 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
     if state.primary_view == PrimaryView::NewResearch && state.composer_menu_open {
         window = window.child(new_research::model_menu(state, theme));
     }
+    if state.primary_view == PrimaryView::NewResearch
+        && state.active_session.is_none()
+        && state
+            .graph_editor
+            .as_ref()
+            .is_some_and(|editor| editor.model_menu_open)
+    {
+        window = window.child(new_research::graph_editor_model_menu(state, theme));
+    }
     if state.primary_view == PrimaryView::Settings
         && state.color_picker.is_some()
         && state.settings_section == SettingsSection::Appearance
@@ -6378,6 +6387,11 @@ mod tests {
         );
         let (down, _) = runtime.presented("settings-scroll-down").unwrap();
         let (up, _) = runtime.presented("settings-scroll-up").unwrap();
+        let (track, _) = runtime.presented("settings-scrollbar-track").unwrap();
+        for rect in [up, track, down] {
+            runtime.pointer_move(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
+            assert_eq!(runtime.cursor(), Cursor::Default);
+        }
         let click = |runtime: &mut Runtime<State>, rect: [f32; 4]| {
             let x = rect[0] + rect[2] / 2.0;
             let y = rect[1] + rect[3] / 2.0;
@@ -6389,7 +6403,6 @@ mod tests {
         assert!(runtime.state.settings_scroll.position().offset[1] > 0.0);
         click(&mut runtime, up);
         assert!(runtime.state.settings_scroll.position().offset[1] < 1.0);
-        let (track, _) = runtime.presented("settings-scrollbar-track").unwrap();
         runtime.pointer_down(track[0] + track[2] / 2.0, track[1] + track[3] - 6.0);
         runtime.pointer_up(track[0] + track[2] / 2.0, track[1] + track[3] - 6.0);
         runtime.frame(1.0 / 60.0);
@@ -6400,6 +6413,8 @@ mod tests {
         let (thumb, _) = runtime.presented("settings-scrollbar-thumb").unwrap();
         let thumb_x = thumb[0] + thumb[2] / 2.0;
         let thumb_y = thumb[1] + thumb[3] / 2.0;
+        runtime.pointer_move(thumb_x, thumb_y);
+        assert_eq!(runtime.cursor(), Cursor::Default);
         runtime.pointer_down(thumb_x, thumb_y);
         runtime.pointer_move(thumb_x, track[1] + 6.0);
         runtime.pointer_up(thumb_x, track[1] + 6.0);
@@ -8069,12 +8084,24 @@ mod tests {
         );
         assert!(runtime.find("graph-editor-dialog").is_some());
         assert!(runtime.find("graph-editor-max-concurrent").is_some());
+        assert!(runtime.find("graph-editor-model-menu").is_none());
+        let (x, y) = runtime.find("graph-editor-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.06);
+        assert!(runtime.find("graph-editor-model-menu").is_some());
         let (x, y) = runtime
             .find("graph-editor-model-OpenAI-example-small")
             .unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
         runtime.frame(0.07);
+        assert!(runtime.state.graph_editor.as_ref().unwrap().model_menu_open);
+        assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 2);
+        let (x, y) = runtime.find("graph-editor-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.075);
         let (x, y) = runtime.find("graph-editor-save").unwrap();
         runtime.pointer_down(x, y);
         runtime.pointer_up(x, y);
@@ -8111,6 +8138,12 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(0.085);
         assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
+        assert!(runtime.find("graph-editor-max-concurrent").is_none());
+        assert!(runtime.find("graph-editor-fixed-max-concurrent").is_some());
+        let (x, y) = runtime.find("graph-editor-model-control").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.087);
         let (x, y) = runtime
             .find("graph-editor-model-OpenAI-example-small")
             .unwrap();
@@ -8118,6 +8151,7 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(0.09);
         assert_eq!(runtime.state.graph_editor.as_ref().unwrap().models.len(), 1);
+        assert!(!runtime.state.graph_editor.as_ref().unwrap().model_menu_open);
         runtime.state.graph_editor_max_concurrent = TextEdit::new("2");
         runtime.frame(0.095);
         let (x, y) = runtime.find("graph-editor-save").unwrap();
@@ -8135,14 +8169,14 @@ mod tests {
                 .find("new-research-graph-other-models-main")
                 .is_none()
         );
-        assert_eq!(runtime.state.new_research_graph_concurrency[0], Some(2));
+        assert_eq!(runtime.state.new_research_graph_concurrency[0], Some(1));
         assert_eq!(
             new_research::graph_concurrency_config(&runtime.state).len(),
             2
         );
         assert_eq!(
             new_research::graph_concurrency_config(&runtime.state)[0].max_concurrent,
-            2
+            1
         );
         let (x, y) = runtime.find("new-research-graph-control").unwrap();
         runtime.pointer_down(x, y);
@@ -8158,6 +8192,17 @@ mod tests {
         runtime.frame(0.2);
         assert!(runtime.state.new_research_graph_id.is_empty());
         assert!(runtime.find("new-research-simple-graph").is_none());
+        assert!(runtime.find("new-research-no-graph").is_some());
+        assert!(runtime.find("new-research-graph-node-main").is_some());
+        assert!(runtime.find("new-research-graph-node-main-max").is_some());
+        assert!(runtime.find("new-research-graph-node-scout").is_none());
+        let (x, y) = runtime.find("new-research-graph-node-main").unwrap();
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.21);
+        assert!(runtime.find("graph-editor-dialog").is_some());
+        assert!(runtime.find("graph-editor-max-concurrent").is_none());
+        assert!(runtime.find("graph-editor-fixed-max-concurrent").is_some());
     }
 
     #[test]

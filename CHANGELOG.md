@@ -6,7 +6,7 @@
 
 #### Added
 
-- Added a Graphs feature card, disabled by default, and a centered New Research graph dropdown beneath a workspace heading. The dotted-underlined workspace name opens an in-place selector. Simple Graph uses clickable Rune nodes for Main Agent, Scout, Reviewer, and Prover. Node forms allow one main model, multiple subagent models, and optional Max Concurrent values; only Main defaults to 1. Independent is also available. The graph settings are saved when the session begins.
+- Added a Graphs feature card, disabled by default, and a centered New Research graph dropdown beneath a workspace heading. The dotted-underlined workspace name opens an in-place selector. Simple Orchestra uses clickable Rune nodes for Main Agent, Scout, Reviewer, and Prover. Node forms allow one main model and multiple subagent models; Main has a fixed concurrency maximum of 1 while subagent limits are optional. No Graph shows a single editable Main Agent node with the same fixed maximum and no delegation. Orchestra settings are saved when the session begins.
 - Added an Automations sidebar with Active, Future, and Past run sections. Repeated first turns save a job titled from the session; Future details can skip one occurrence or cancel its series. The desktop updates run status while the view is open and opens completed runs in their sessions.
 - Fleet VM cards now save an enabled toggle, workspace scope, and separate Can Run and Can Clone allowances; both allowances default off.
 - Fleet now lists Hyper-V virtual machines detected by each reachable Windows app-server, with host, state, source, and generation in VM cards.
@@ -80,6 +80,8 @@
 
 #### Changed
 
+- Removed the separate fills behind the v2 settings scrollbar arrows and use the standard cursor across the scrollbar.
+- Replaced the Graph node editor's inline model list with an in-place dropdown that keeps subagent model selection open for multiple choices.
 - Home workspace session lists and Automations Active, Future, and Past lists show five rows by default, with Show more and Show less controls for longer lists.
 - The v2 icon rail uses filled glyphs for active destinations and outline glyphs for inactive destinations.
 - Replaced the four bundled v2 Plugin placeholders with Apple, Windows, and Meta vendor marks and compact purpose badges.
@@ -188,8 +190,8 @@
 
 #### Added
 
-- Simple Graph now runs Scout, Reviewer, and Prover subagents through a manager-controlled delegation tool. Batches use saved role models and concurrency limits, fresh contexts, reviewed base tools, paginated results, and session-retained tool activity. The main agent keeps the final response.
-- Protocol v1.47 adds per-role Max Concurrent values to graph session requests and details and limits Simple Graph's main role to one model. SQLite schema 26 stores the graph configuration atomically with the first turn; existing graph selections retain their ID and model choices. Graphs starts disabled and checks workspace scope.
+- Simple Orchestra now runs Scout, Reviewer, and Prover subagents through a manager-controlled delegation tool. Batches use saved role models and concurrency limits, fresh contexts, reviewed base tools, paginated results, and session-retained tool activity. The main agent keeps the final response.
+- Protocol v1.47 adds per-role Max Concurrent values to graph session requests and details and limits Simple Orchestra's main role to one model and a fixed concurrency maximum of 1. SQLite schema 26 stores the graph configuration atomically with the first turn; existing graph selections retain their ID and model choices. Graphs starts disabled and checks workspace scope.
 - SQLite schema 24 stores OpenAI session replay context, including encrypted reasoning and compaction items, atomically with completed turns.
 - Protocol v1.44 adds automation run status to authenticated listing. SQLite schema 23 stores saved run options and occurrence history; existing jobs keep their schedule with default effort and Goal Mode options. The app-server executes due jobs in separate sessions, recovers interrupted runs, and skips older missed occurrences. Rebuild clients and hosts together.
 - Protocol v1.42 adds authenticated VM settings updates and returns host-saved scope and allowances in inventory. SQLite schema 21 stores the settings with Can Run and Can Clone off by default; rebuild connected clients and hosts together.

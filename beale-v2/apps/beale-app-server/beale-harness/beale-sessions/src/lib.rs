@@ -123,9 +123,12 @@ fn validate_graph_selection(
         }
         let mut limited_roles = std::collections::HashSet::new();
         for item in graph_node_concurrency {
-            if beale_graphs::Role::from_id(&item.node_id).is_none()
-                || item.max_concurrent == 0
+            let Some(role) = beale_graphs::Role::from_id(&item.node_id) else {
+                return Err(StatusCode::BAD_REQUEST);
+            };
+            if item.max_concurrent == 0
                 || item.max_concurrent > beale_graphs::MAX_CONCURRENT
+                || (role == beale_graphs::Role::Main && item.max_concurrent != 1)
                 || !limited_roles.insert(item.node_id.as_str())
             {
                 return Err(StatusCode::BAD_REQUEST);
@@ -1879,6 +1882,35 @@ mod tests {
             node_id: "scout".to_owned(),
             max_concurrent: 2,
         };
+        let main_limit = GraphNodeConcurrency {
+            node_id: "main".to_owned(),
+            max_concurrent: 1,
+        };
+        assert_eq!(
+            validate_graph_selection(
+                &db,
+                "simple",
+                &[],
+                std::slice::from_ref(&main_limit),
+                "",
+                &workspace
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_graph_selection(
+                &db,
+                "simple",
+                &[],
+                &[GraphNodeConcurrency {
+                    max_concurrent: 2,
+                    ..main_limit
+                }],
+                "",
+                &workspace
+            ),
+            Err(StatusCode::BAD_REQUEST)
+        );
         assert_eq!(
             validate_graph_selection(
                 &db,
