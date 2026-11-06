@@ -1,4 +1,6 @@
-use super::{MAX_EVENT_BYTES, ProviderProgress, ProviderStep, ToolCall, append, frame_end};
+use super::{
+    MAX_EVENT_BYTES, ProviderProgress, ProviderStep, TokenUsage, ToolCall, append, frame_end,
+};
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -28,6 +30,8 @@ pub(super) async fn read_stream(
     let mut text = String::new();
     let mut completed = false;
     let mut stop_reason = None;
+    let mut input_tokens = None;
+    let mut output_tokens = None;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("Anthropic stream interrupted")?;
         ensure!(
@@ -47,6 +51,22 @@ pub(super) async fn read_stream(
             let event: Value =
                 serde_json::from_str(data).context("invalid Anthropic event JSON")?;
             match event.get("type").and_then(Value::as_str).unwrap_or("") {
+                "message_start" => {
+                    let usage = &event["message"]["usage"];
+                    input_tokens = usage
+                        .get("input_tokens")
+                        .and_then(Value::as_u64)
+                        .and_then(|input| {
+                            ["cache_read_input_tokens", "cache_creation_input_tokens"]
+                                .into_iter()
+                                .try_fold(input, |total, key| {
+                                    total.checked_add(
+                                        usage.get(key).and_then(Value::as_u64).unwrap_or(0),
+                                    )
+                                })
+                        })
+                        .filter(|&count| count <= 1_000_000_000_000);
+                }
                 "content_block_start" => {
                     let index = event["index"]
                         .as_u64()
@@ -132,6 +152,11 @@ pub(super) async fn read_stream(
                 }
                 "message_delta" => {
                     stop_reason = event["delta"]["stop_reason"].as_str().map(str::to_owned);
+                    output_tokens = event
+                        .pointer("/usage/output_tokens")
+                        .and_then(Value::as_u64)
+                        .filter(|&count| count <= 1_000_000_000_000)
+                        .or(output_tokens);
                 }
                 "message_stop" => {
                     completed = true;
@@ -206,6 +231,12 @@ pub(super) async fn read_stream(
         text,
         calls,
         reasoning_summaries: Vec::new(),
+        usage: input_tokens
+            .zip(output_tokens)
+            .map(|(input_tokens, output_tokens)| TokenUsage {
+                input_tokens,
+                output_tokens,
+            }),
         continuation: if continuation.is_empty() {
             Vec::new()
         } else {
@@ -220,6 +251,24 @@ mod tests {
     use axum::{body::Bytes, http::Response};
     use futures_util::stream;
     use std::convert::Infallible;
+
+    #[tokio::test]
+    async fn includes_cached_input_tokens_in_usage() {
+        let body = [
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":5}}}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+            r#"data: {"type":"message_stop"}"#,
+        ].join("\n\n") + "\n\n";
+        let response: reqwest::Response = Response::new(reqwest::Body::from(body)).into();
+        let step = read_stream(response, None).await.unwrap();
+        assert_eq!(
+            step.usage,
+            Some(TokenUsage {
+                input_tokens: 35,
+                output_tokens: 7
+            })
+        );
+    }
 
     #[tokio::test]
     async fn streams_text_and_preserves_tool_use_for_next_step() {

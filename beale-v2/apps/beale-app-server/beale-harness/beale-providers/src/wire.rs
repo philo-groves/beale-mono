@@ -339,9 +339,27 @@ pub struct ProviderStep {
     pub text: String,
     pub calls: Vec<ToolCall>,
     pub reasoning_summaries: Vec<String>,
+    pub usage: Option<TokenUsage>,
     /// Provider output items to replay while `store` is false.
     pub continuation: Vec<Value>,
     pub response_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+fn token_usage(value: &Value, input: &str, output: &str) -> Option<TokenUsage> {
+    let input_tokens = value.get(input)?.as_u64()?;
+    let output_tokens = value.get(output)?.as_u64()?;
+    (input_tokens <= 1_000_000_000_000 && output_tokens <= 1_000_000_000_000).then_some(
+        TokenUsage {
+            input_tokens,
+            output_tokens,
+        },
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -422,6 +440,9 @@ fn tool_request_body(
                 "function":{"name":tool["name"],"description":tool["description"],"parameters":tool["parameters"]}
             })).collect();
             let mut body = json!({"model":model,"messages":input,"tools":chat_tools,"stream":true});
+            if provider != Provider::Custom {
+                body["stream_options"] = json!({"include_usage":true});
+            }
             if provider == Provider::Custom
                 && let Some(effort) = reasoning_effort
             {
@@ -1009,6 +1030,7 @@ where
     let mut reasoning_parts = BTreeMap::<(u64, u64), String>::new();
     let mut sent_reasoning = HashSet::<(u64, u64)>::new();
     let mut sent_text = false;
+    let mut usage = None;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("provider stream interrupted")?;
         ensure!(
@@ -1134,6 +1156,9 @@ where
                             }
                         }
                         "response.completed" | "response.done" => {
+                            usage = event.pointer("/response/usage").and_then(|value| {
+                                token_usage(value, "input_tokens", "output_tokens")
+                            });
                             response_id = event
                                 .pointer("/response/id")
                                 .and_then(Value::as_str)
@@ -1156,6 +1181,9 @@ where
                     }
                 }
                 WireShape::Chat => {
+                    if let Some(value) = event.get("usage") {
+                        usage = token_usage(value, "prompt_tokens", "completion_tokens").or(usage);
+                    }
                     let before = text.len();
                     apply_chat_event(&event, &mut text, &mut chat_calls)?;
                     if let Some(tx) = progress
@@ -1213,6 +1241,7 @@ where
                 text,
                 calls,
                 reasoning_summaries,
+                usage,
                 continuation: output,
                 response_id,
             })
@@ -1237,6 +1266,7 @@ where
                 text,
                 calls,
                 reasoning_summaries: Vec::new(),
+                usage,
                 continuation,
                 response_id: None,
             })
@@ -1505,6 +1535,45 @@ fn frame_end(pending: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_usage_accepts_measured_counts_only() {
+        assert_eq!(
+            token_usage(
+                &json!({"input_tokens": 120, "output_tokens": 30}),
+                "input_tokens",
+                "output_tokens"
+            ),
+            Some(TokenUsage {
+                input_tokens: 120,
+                output_tokens: 30
+            })
+        );
+        assert!(
+            token_usage(
+                &json!({"input_tokens": 120}),
+                "input_tokens",
+                "output_tokens"
+            )
+            .is_none()
+        );
+        assert!(
+            token_usage(
+                &json!({"input_tokens": -1, "output_tokens": 30}),
+                "input_tokens",
+                "output_tokens"
+            )
+            .is_none()
+        );
+        assert!(
+            token_usage(
+                &json!({"input_tokens": 1_000_000_000_001_u64, "output_tokens": 30}),
+                "input_tokens",
+                "output_tokens"
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn routes_keep_subscription_paths_separate() {

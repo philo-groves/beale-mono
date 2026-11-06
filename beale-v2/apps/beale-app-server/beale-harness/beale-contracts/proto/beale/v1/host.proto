@@ -50,6 +50,33 @@ message ProviderUsageResponse {
   repeated ProviderUsageSnapshot providers = 1;
 }
 
+message TrackingSubscriptionPoint {
+  ProviderId provider = 1;
+  string window_id = 2;
+  string label = 3;
+  uint64 observed_at_ms = 4;
+  uint32 remaining_percent = 5;
+  uint64 resets_at_unix = 6;
+}
+
+message TrackingModelDay {
+  uint64 day_start_ms = 1;
+  ProviderId provider = 2;
+  AuthMethod method = 3;
+  string model = 4;
+  string role = 5;
+  uint64 input_tokens = 6;
+  uint64 output_tokens = 7;
+  uint64 duration_ms = 8;
+  uint32 measured_calls = 9;
+  uint32 total_calls = 10;
+}
+
+message TrackingResponse {
+  repeated TrackingSubscriptionPoint subscriptions = 1;
+  repeated TrackingModelDay model_days = 2;
+}
+
 enum DaybreakMode {
   DAYBREAK_MODE_UNSPECIFIED = 0;
   DAYBREAK_MODE_BLUE = 1;

@@ -6,6 +6,7 @@
 
 #### Added
 
+- Added the optional v2 Tracking dashboard with seven-day subscription remaining history and daily model usage charts for duration or reported tokens. Main and subagent model calls are recorded in app-server SQLite schema 27; protocol v1.48 adds an authenticated history read route. Existing usage is not backfilled.
 - Added a Graphs feature card, disabled by default, and a centered New Research graph dropdown beneath a workspace heading. The dotted-underlined workspace name opens an in-place selector. Simple Orchestra uses clickable Rune nodes for Main Agent, Scout, Reviewer, and Prover. Node forms allow one main model and multiple subagent models; Main has a fixed concurrency maximum of 1 while subagent limits are optional. No Graph shows a single editable Main Agent node with the same fixed maximum and no delegation. Orchestra settings are saved when the session begins.
 - Added an Automations sidebar with Active, Future, and Past run sections. Repeated first turns save a job titled from the session; Future details can skip one occurrence or cancel its series. The desktop updates run status while the view is open and opens completed runs in their sessions.
 - Fleet VM cards now save an enabled toggle, workspace scope, and separate Can Run and Can Clone allowances; both allowances default off.
@@ -80,6 +81,9 @@
 
 #### Changed
 
+- Gave Automations Active runs a pulse icon and Schedule a Job a calendar-plus icon.
+- Renamed the Automations sidenav's Jobs heading and empty list labels to Runs, and added a search icon beside the heading.
+- Home workspace rows now show an indented, muted No Sessions label when empty; Automations empty rows align with their section items.
 - Removed the separate fills behind the v2 settings scrollbar arrows and use the standard cursor across the scrollbar.
 - Replaced the Graph node editor's inline model list with an in-place dropdown that keeps subagent model selection open for multiple choices.
 - Home workspace session lists and Automations Active, Future, and Past lists show five rows by default, with Show more and Show less controls for longer lists.

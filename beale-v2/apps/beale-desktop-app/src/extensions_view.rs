@@ -170,6 +170,15 @@ pub(crate) fn bundled_features() -> Vec<FeatureEntry> {
         tool_count: 0,
         workspace_ids: Vec::new(),
         all_workspaces: true,
+    }, FeatureEntry {
+        id: beale_tracking::FEATURE_ID.to_owned(),
+        name: beale_tracking::FEATURE_NAME.to_owned(),
+        description: beale_tracking::FEATURE_DESCRIPTION.to_owned(),
+        enabled: false,
+        has_prompt_extension: false,
+        tool_count: 0,
+        workspace_ids: Vec::new(),
+        all_workspaces: true,
     }]
 }
 
@@ -178,6 +187,13 @@ pub(crate) fn fleet_enabled(state: &State) -> bool {
         .features
         .iter()
         .any(|feature| feature.id == "fleet" && feature.enabled)
+}
+
+pub(crate) fn tracking_enabled(state: &State) -> bool {
+    state
+        .features
+        .iter()
+        .any(|feature| feature.id == beale_tracking::FEATURE_ID && feature.enabled)
 }
 
 pub(crate) fn goal_mode_enabled(state: &State) -> bool {
@@ -831,6 +847,9 @@ pub(crate) fn start_feature_load(state: &mut State) {
             if state.primary_view == crate::PrimaryView::Fleet && !fleet_enabled(state) {
                 state.navigate_to(ViewLocation::Home);
             }
+            if state.primary_view == crate::PrimaryView::Tracking && !tracking_enabled(state) {
+                state.navigate_to(ViewLocation::Home);
+            }
         });
     });
 }
@@ -885,6 +904,11 @@ fn start_feature_toggle(state: &mut State, id: String, enabled: bool) {
                         }
                     }
                     if state.primary_view == crate::PrimaryView::Fleet && !fleet_enabled(state) {
+                        state.navigate_to(ViewLocation::Home);
+                    }
+                    if state.primary_view == crate::PrimaryView::Tracking
+                        && !tracking_enabled(state)
+                    {
                         state.navigate_to(ViewLocation::Home);
                     }
                 }
@@ -1694,24 +1718,26 @@ fn feature_card(index: usize, feature: &FeatureEntry, state: &State, theme: Them
                 .pt(12.0)
                 .center_y()
                 .child(action)
-                .child(if feature.enabled {
-                    let menu = SelectionMenu::FeatureWorkspaces { index };
-                    workspace_scope_button(
-                        workspace_scope_label(
-                            state,
-                            feature.all_workspaces,
-                            &feature.workspace_ids,
-                        ),
-                        state.selection_menu == Some(menu),
-                        move |state| crate::toggle_selection_menu(state, menu),
-                        theme,
-                    )
-                    .key(format!("feature-scope-{index}"))
-                    .ml(5.0)
-                    .max_w(160.0)
-                } else {
-                    el().size(0.0, 0.0)
-                })
+                .child(
+                    if feature.enabled && feature.id != beale_tracking::FEATURE_ID {
+                        let menu = SelectionMenu::FeatureWorkspaces { index };
+                        workspace_scope_button(
+                            workspace_scope_label(
+                                state,
+                                feature.all_workspaces,
+                                &feature.workspace_ids,
+                            ),
+                            state.selection_menu == Some(menu),
+                            move |state| crate::toggle_selection_menu(state, menu),
+                            theme,
+                        )
+                        .key(format!("feature-scope-{index}"))
+                        .ml(5.0)
+                        .max_w(160.0)
+                    } else {
+                        el().size(0.0, 0.0)
+                    },
+                )
                 .child(el().grow(1.0))
                 .child(
                     el().key(format!("feature-details-{}", feature.id))
@@ -2086,17 +2112,17 @@ mod tests {
             ..State::default()
         };
         assert_eq!(state.feature_tab, FeatureTab::All);
-        assert_eq!(feature_rows(&state).count(), 3);
+        assert_eq!(feature_rows(&state).count(), 4);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 3);
+        assert_eq!(feature_rows(&state).count(), 4);
         state.feature_tab = FeatureTab::Enabled;
         assert_eq!(feature_rows(&state).count(), 0);
         state.features[0].enabled = true;
         assert_eq!(feature_rows(&state).count(), 1);
         state.feature_tab = FeatureTab::Available;
-        assert_eq!(feature_rows(&state).count(), 2);
-        state.feature_tab = FeatureTab::All;
         assert_eq!(feature_rows(&state).count(), 3);
+        state.feature_tab = FeatureTab::All;
+        assert_eq!(feature_rows(&state).count(), 4);
     }
 
     #[test]

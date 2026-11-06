@@ -117,6 +117,30 @@ pub(crate) static AUTOMATIONS_FILLED: Icon = Icon {
     body: r#"<path fill="currentColor" d="M8 2a1 1 0 0 1 1 1v1h6V3a1 1 0 1 1 2 0v1h2a3 3 0 0 1 3 3v4h-2V9H4v10a1 1 0 0 0 1 1h4v2H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h2V3a1 1 0 0 1 1-1Z"/><path fill="currentColor" fill-rule="evenodd" d="M16 10a6 6 0 1 1 0 12 6 6 0 0 1 0-12Zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M16 13.4v2.8l1.7 1"/>"#,
 };
 
+pub(crate) static AUTOMATION_ACTIVE: Icon = Icon {
+    name: "beale-automation-active",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M2 12h5l3-7 4 14 3-7h5"/>"#,
+};
+
+pub(crate) static AUTOMATION_SCHEDULE: Icon = Icon {
+    name: "beale-automation-schedule",
+    view: 24.0,
+    body: r#"<rect x="3" y="4" width="18" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M8 2v4M16 2v4M3 10h18M12 13v6M9 16h6"/>"#,
+};
+
+pub(crate) static TRACKING: Icon = Icon {
+    name: "beale-tracking",
+    view: 24.0,
+    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 3v18h18M6 16l4-5 4 3 5-8"/><circle cx="19" cy="6" r="1.5" fill="currentColor"/>"#,
+};
+
+pub(crate) static TRACKING_FILLED: Icon = Icon {
+    name: "beale-tracking-filled",
+    view: 24.0,
+    body: r#"<path fill="currentColor" d="M3 3a1 1 0 0 1 1 1v15h17a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm3 13 4-5 4 3 5-8 1.5 1.3-5.8 9.3-4.4-3.3-2.8 3.5Z"/>"#,
+};
+
 pub(crate) static REPEAT: Icon = Icon {
     name: "lucide-repeat",
     view: 24.0,
@@ -354,8 +378,8 @@ pub(crate) static SETTINGS_FILLED: Icon = Icon {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTOMATIONS_FILLED, EXTENSIONS_FILLED, FLEET_APPLE, FLEET_FILLED, FLEET_LINUX,
-        FLEET_WINDOWS, HOME_FILLED, PLUGIN_META, SETTINGS_FILLED,
+        AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS_FILLED, EXTENSIONS_FILLED, FLEET_APPLE,
+        FLEET_FILLED, FLEET_LINUX, FLEET_WINDOWS, HOME_FILLED, PLUGIN_META, SETTINGS_FILLED,
     };
 
     #[test]
@@ -379,6 +403,18 @@ mod tests {
             &SETTINGS_FILLED,
             &FLEET_FILLED,
         ] {
+            let coverage = rune::text::icon_coverage(mark, 32);
+            assert!(
+                coverage.iter().filter(|&&pixel| pixel > 0).count() > 40,
+                "{} did not rasterize",
+                mark.name
+            );
+        }
+    }
+
+    #[test]
+    fn automation_action_icons_rasterize_in_rune() {
+        for mark in [&AUTOMATION_ACTIVE, &AUTOMATION_SCHEDULE] {
             let coverage = rune::text::icon_coverage(mark, 32);
             assert!(
                 coverage.iter().filter(|&&pixel| pixel > 0).count() > 40,

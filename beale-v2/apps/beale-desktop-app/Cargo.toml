@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 beale-graphs = { path = "../../extensions/features/beale-graphs" }
+beale-tracking = { path = "../../extensions/features/beale-tracking" }
+chrono = "0.4"
 beale-contracts = { path = "../beale-app-server/beale-harness/beale-contracts" }
 futures-util.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }

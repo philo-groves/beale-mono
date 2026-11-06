@@ -273,6 +273,7 @@ fn parse_step(value: &Value, tools: &[Value]) -> Result<ProviderStep> {
         text: text.to_owned(),
         calls,
         reasoning_summaries: Vec::new(),
+        usage: None,
         continuation,
     })
 }

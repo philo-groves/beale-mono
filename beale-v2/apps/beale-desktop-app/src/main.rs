@@ -31,6 +31,7 @@ mod provider_usage;
 mod quick_chat;
 mod sessions;
 mod settings_scroll;
+mod tracking_view;
 mod workspace_creation;
 mod workspace_view;
 mod workspaces;
@@ -519,6 +520,7 @@ const HEADER_COLLAPSED_PREFIX_WIDTH: f32 = if cfg!(target_os = "macos") {
 enum PrimaryView {
     Home,
     Automations,
+    Tracking,
     NewResearch,
     WorkspaceCreation,
     Workspace,
@@ -531,6 +533,7 @@ enum PrimaryView {
 enum ViewLocation {
     Home,
     Automations,
+    Tracking,
     NewResearch,
     WorkspaceCreation(workspace_creation::CreationTab),
     Workspace(uuid::Uuid, workspace_view::WorkspaceTab),
@@ -566,6 +569,7 @@ impl ViewHistory {
 struct State {
     primary_view: PrimaryView,
     automations: automations_view::AutomationState,
+    tracking: tracking_view::TrackingState,
     home_collection: home_sidebar::HomeCollection,
     expanded_session_workspaces: std::collections::HashSet<String>,
     new_research_prompt: TextEdit,
@@ -765,6 +769,7 @@ impl Default for State {
         Self {
             primary_view: PrimaryView::Settings,
             automations: automations_view::AutomationState::default(),
+            tracking: tracking_view::TrackingState::default(),
             home_collection: home_sidebar::HomeCollection::default(),
             expanded_session_workspaces: std::collections::HashSet::new(),
             new_research_prompt: TextEdit::new(""),
@@ -1035,6 +1040,9 @@ impl State {
         if self.primary_view == PrimaryView::Automations {
             return ViewLocation::Automations;
         }
+        if self.primary_view == PrimaryView::Tracking {
+            return ViewLocation::Tracking;
+        }
         if self.primary_view == PrimaryView::WorkspaceCreation {
             return ViewLocation::WorkspaceCreation(self.workspace_draft.tab);
         }
@@ -1068,6 +1076,13 @@ impl State {
             ViewLocation::Automations => {
                 self.primary_view = PrimaryView::Automations;
                 self.automations.loaded = false;
+            }
+            ViewLocation::Tracking => {
+                self.primary_view = if extensions_view::tracking_enabled(self) {
+                    PrimaryView::Tracking
+                } else {
+                    PrimaryView::Home
+                };
             }
             ViewLocation::NewResearch => self.primary_view = PrimaryView::NewResearch,
             ViewLocation::WorkspaceCreation(tab) => {
@@ -1176,6 +1191,9 @@ impl State {
         }
         if self.primary_view == PrimaryView::Automations {
             automations_view::start_load(self);
+        }
+        if self.primary_view == PrimaryView::Tracking {
+            tracking_view::start_load(self);
         }
     }
 
@@ -3416,6 +3434,19 @@ fn header(state: &State, prefix_width: f32) -> El {
                     .font(ui_font(13.0, 500.0))
                     .color(color("#e2e2e2")),
             );
+    } else if state.primary_view == PrimaryView::Tracking {
+        title = title
+            .child(
+                el().key("header-divider")
+                    .size(1.0, 18.0)
+                    .fill(color(NAVIGATION_DIVIDER_COLOR)),
+            )
+            .child(icon(&TRACKING, 16.0).color(color("#c8c8c8")))
+            .child(
+                text("Tracking")
+                    .font(ui_font(13.0, 500.0))
+                    .color(color("#e2e2e2")),
+            );
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         title = title
             .child(
@@ -3523,6 +3554,7 @@ fn nav_button(
             "nav-extensions" => &EXTENSIONS_FILLED,
             "nav-settings" => &SETTINGS_FILLED,
             "nav-fleet" => &FLEET_FILLED,
+            "nav-tracking" => &TRACKING_FILLED,
             _ => glyph,
         }
     } else {
@@ -3583,6 +3615,11 @@ fn nav_button(
             s.rail_tooltip = None;
             s.navigate_to(ViewLocation::Automations);
         })
+    } else if key == "nav-tracking" {
+        button.on_press(|s: &mut State| {
+            s.rail_tooltip = None;
+            s.navigate_to(ViewLocation::Tracking);
+        })
     } else if active {
         button.on_press(|s: &mut State| {
             s.rail_tooltip = None;
@@ -3613,7 +3650,8 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             state.primary_view != PrimaryView::Settings
                 && state.primary_view != PrimaryView::Extensions
                 && state.primary_view != PrimaryView::Fleet
-                && state.primary_view != PrimaryView::Automations,
+                && state.primary_view != PrimaryView::Automations
+                && state.primary_view != PrimaryView::Tracking,
             theme,
         ))
         .child(nav_button(
@@ -3637,19 +3675,29 @@ fn rail(state: &State, theme: ThemeStyle<'_>) -> El {
             state.primary_view == PrimaryView::Settings,
             theme,
         ));
-    let conditional_icons = extensions_view::fleet_enabled(state).then_some((
-        "nav-fleet",
-        "Fleet",
-        &FLEET,
-        state.primary_view == PrimaryView::Fleet,
-    ));
-    if let Some((key, label, glyph, active)) = conditional_icons {
+    let conditional_icons = [
+        extensions_view::fleet_enabled(state).then_some((
+            "nav-fleet",
+            "Fleet",
+            &FLEET,
+            state.primary_view == PrimaryView::Fleet,
+        )),
+        extensions_view::tracking_enabled(state).then_some((
+            "nav-tracking",
+            "Tracking",
+            &TRACKING,
+            state.primary_view == PrimaryView::Tracking,
+        )),
+    ];
+    if conditional_icons.iter().any(Option::is_some) {
         rail = rail.child(
             el().key("navigation-conditional-divider")
                 .w(26.0)
                 .h(1.0)
                 .fill(theme.color(NAVIGATION_DIVIDER_COLOR)),
         );
+    }
+    for (key, label, glyph, active) in conditional_icons.into_iter().flatten() {
         rail = rail.child(nav_button(key, label, glyph, active, theme));
     }
     rail = rail.child(el().grow(1.0));
@@ -5212,6 +5260,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         for item in automations_view::render(state, theme) {
             content = content.child(item);
         }
+    } else if state.primary_view == PrimaryView::Tracking {
+        let page_width = cx
+            .layout_size("content-surface")
+            .map_or(880.0, |size| (size[0] - 48.0).min(1100.0));
+        for item in tracking_view::render(state, theme, page_width) {
+            content = content.child(item);
+        }
     } else if state.primary_view == PrimaryView::WorkspaceCreation {
         content = content.child(workspace_creation::render(state, theme));
     } else if state.primary_view == PrimaryView::Workspace {
@@ -5229,7 +5284,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         .radius(16.0)
         .clip_rounded(16.0)
         .fill(color("#111111"));
-    if state.sidenav_visible {
+    if state.sidenav_visible && state.primary_view != PrimaryView::Tracking {
         settings_surface = settings_surface
             .child(match state.primary_view {
                 PrimaryView::Settings => settings_sidenav(
@@ -5281,6 +5336,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 | PrimaryView::Extensions
                 | PrimaryView::Fleet
                 | PrimaryView::Automations
+                | PrimaryView::Tracking
         ) {
             state.settings_scroll.clone()
         } else {
@@ -5292,6 +5348,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
                 | PrimaryView::Extensions
                 | PrimaryView::Fleet
                 | PrimaryView::Automations
+                | PrimaryView::Tracking
         ) {
             "settings-scroll"
         } else {
@@ -5303,6 +5360,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
             PrimaryView::Extensions => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Fleet => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Automations => col().w_full().px(24.0).pt(36.0).pb(24.0),
+            PrimaryView::Tracking => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Workspace => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::WorkspaceCreation => col().w_full().px(24.0).pt(36.0).pb(24.0),
             PrimaryView::Home | PrimaryView::NewResearch => col().w_full(),
@@ -6062,6 +6120,9 @@ fn main() -> std::process::ExitCode {
                     if state.primary_view == PrimaryView::Automations {
                         automations_view::start_load(state);
                     }
+                    if state.primary_view == PrimaryView::Tracking {
+                        tracking_view::start_load(state);
+                    }
                 });
             }
             std::thread::sleep(Duration::from_secs(2));
@@ -6166,6 +6227,84 @@ mod tests {
         runtime.pointer_up(x, y);
         runtime.frame(0.0);
         assert!(runtime.find("automations-cancel-dialog").is_some());
+    }
+
+    #[test]
+    fn empty_automation_sections_indent_their_labels() {
+        let state = State {
+            primary_view: PrimaryView::Automations,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let (runs_row, _) = runtime.presented("automations-runs-row").unwrap();
+        let (runs_label, _) = runtime.presented("automations-runs-label").unwrap();
+        let (search, _) = runtime.presented("automations-search-runs").unwrap();
+        assert_eq!(runs_label[0], runs_row[0] + 8.0);
+        assert_eq!(search[0] + search[2], runs_row[0] + runs_row[2]);
+        for section in ["Active", "Future", "Past"] {
+            let (row, _) = runtime
+                .presented(&format!("automations-{section}-empty"))
+                .unwrap();
+            let (label, _) = runtime
+                .presented(&format!("automations-{section}-empty-label"))
+                .unwrap();
+            assert_eq!(label[0], row[0] + 29.0);
+        }
+    }
+
+    #[test]
+    fn tracking_rail_destination_follows_feature_toggle() {
+        let state = State {
+            primary_view: PrimaryView::Home,
+            ..State::default()
+        };
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("nav-tracking").is_none());
+        let mut state = State {
+            primary_view: PrimaryView::Tracking,
+            ..State::default()
+        };
+        state
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == "tracking")
+            .unwrap()
+            .enabled = true;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        state.tracking.snapshot = Some(beale_contracts::v1::TrackingResponse {
+            subscriptions: vec![beale_contracts::v1::TrackingSubscriptionPoint {
+                provider: 1,
+                window_id: "weekly".to_owned(),
+                label: "Week".to_owned(),
+                observed_at_ms: now_ms,
+                remaining_percent: 65,
+                resets_at_unix: 0,
+            }],
+            model_days: vec![beale_contracts::v1::TrackingModelDay {
+                day_start_ms: now_ms / 86_400_000 * 86_400_000,
+                provider: 1,
+                method: 1,
+                model: "model-example".to_owned(),
+                role: "main".to_owned(),
+                input_tokens: 100,
+                output_tokens: 20,
+                duration_ms: 800,
+                measured_calls: 1,
+                total_calls: 1,
+            }],
+        });
+        let mut runtime = Runtime::new(state, view, (1040.0, 720.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        assert!(runtime.find("nav-tracking").is_some());
+        assert!(runtime.find("tracking-title").is_some());
+        assert!(runtime.find("tracking-subscription-chart").is_some());
+        assert!(runtime.find("tracking-model-chart").is_some());
+        assert!(runtime.find("tracking-measure-tokens").is_some());
     }
 
     #[test]
@@ -9205,6 +9344,17 @@ mod tests {
                 .is_some()
         );
         assert!(home.find("home-workspaces-empty").is_none());
+        let (workspace, _) = home
+            .presented("home-workspace-00000000-0000-4000-8000-000000000001")
+            .unwrap();
+        let (empty, _) = home
+            .presented("home-session-empty-00000000-0000-4000-8000-000000000001")
+            .unwrap();
+        let (label, _) = home
+            .presented("home-session-empty-label-00000000-0000-4000-8000-000000000001")
+            .unwrap();
+        assert!(empty[1] >= workspace[1] + workspace[3]);
+        assert_eq!(label[0], empty[0] + 29.0);
     }
 
     #[test]
@@ -9232,6 +9382,11 @@ mod tests {
         let sixth = "home-session-container-00000000-0000-4000-8000-000000000006";
         let toggle = format!("home-session-toggle-{workspace_id}");
         runtime.frame(0.0);
+        assert!(
+            runtime
+                .find(&format!("home-session-empty-{workspace_id}"))
+                .is_none()
+        );
         assert!(runtime.find(fifth).is_some());
         assert!(runtime.find(sixth).is_none());
         let (x, y) = runtime.find(&toggle).unwrap();

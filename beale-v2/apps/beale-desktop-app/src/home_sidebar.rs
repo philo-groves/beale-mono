@@ -365,6 +365,25 @@ pub(crate) fn render(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .iter()
                 .filter(|session| session.workspace_id == workspace.id)
                 .collect();
+            if sessions.is_empty() {
+                group = group.child(
+                    row()
+                        .key(format!("home-session-empty-{}", workspace.id))
+                        .inert()
+                        .w_full()
+                        .h(30.0)
+                        .px(4.0)
+                        .center_y()
+                        .gap(10.0)
+                        .child(el().size(15.0, 15.0))
+                        .child(
+                            text("No Sessions")
+                                .key(format!("home-session-empty-label-{}", workspace.id))
+                                .font(ui_font(13.0, 400.0))
+                                .color(color("#777777")),
+                        ),
+                );
+            }
             let expanded = state.expanded_session_workspaces.contains(&workspace.id);
             for session in sessions.iter().take(if expanded { usize::MAX } else { 5 }) {
                 let session_id = session.id.clone();

@@ -110,12 +110,18 @@ async fn serve() -> Result<()> {
         .merge(beale_workspaces::router(token.clone(), workspaces.clone()))
         .merge(beale_sessions::router(token.clone(), workspaces.clone())?)
         .merge(features::router(token.clone(), db.clone()));
+    #[cfg(feature = "tracking")]
+    let app = app.merge(beale_tracking::router(token.clone(), db.clone()));
     #[cfg(feature = "fleet")]
     let app = app.merge(beale_fleet::router(token.clone(), db.clone()));
     let app = app
         .merge(beale_safety::router(token.clone(), db.clone()))
-        .merge(beale_extender::router(token.clone(), db, plugin_data_root)?)
-        .merge(auth::router(token, store));
+        .merge(beale_extender::router(
+            token.clone(),
+            db.clone(),
+            plugin_data_root,
+        )?)
+        .merge(auth::router(token, store, db));
     #[cfg(windows)]
     let (tray_exit_tx, tray_exit_rx) = tokio::sync::oneshot::channel();
     #[cfg(windows)]

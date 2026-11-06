@@ -27,6 +27,7 @@ use beale_providers::{
     AuthMode, CredentialStore, CustomProvider, ModelCatalog, ModelDefaults, Provider,
     ProviderClient, login_openai_with_prompt, login_xai_with_prompt, mode_name, provider_name,
 };
+use beale_storage::{HostDatabase, SubscriptionUsageRow};
 use prost::Message;
 use std::{
     sync::Arc,
@@ -38,6 +39,7 @@ use tokio::sync::{Mutex, oneshot};
 struct AuthState {
     token: String,
     store: Arc<CredentialStore>,
+    db: HostDatabase,
     login: Arc<Mutex<[LoginState; 5]>>,
     lead_lock: Arc<Mutex<()>>,
     usage_cache: Arc<Mutex<Option<(Instant, ProviderUsageResponse)>>>,
@@ -49,7 +51,7 @@ struct LoginState {
     error: String,
 }
 
-pub(super) fn router(token: String, store: CredentialStore) -> Router {
+pub(super) fn router(token: String, store: CredentialStore, db: HostDatabase) -> Router {
     Router::new()
         .route(AUTH_PROVE_PATH, post(prove))
         .route(AUTH_STATUS_PATH, get(status))
@@ -77,6 +79,7 @@ pub(super) fn router(token: String, store: CredentialStore) -> Router {
         .with_state(AuthState {
             token,
             store: Arc::new(store),
+            db,
             login: Arc::new(Mutex::new(Default::default())),
             lead_lock: Arc::new(Mutex::new(())),
             usage_cache: Arc::new(Mutex::new(None)),
@@ -370,6 +373,26 @@ async fn provider_usage(
         })
         .collect();
     let value = ProviderUsageResponse { providers };
+    let points = value
+        .providers
+        .iter()
+        .flat_map(|provider| {
+            provider.windows.iter().map(|window| SubscriptionUsageRow {
+                provider: provider.provider,
+                window_id: window.id.clone(),
+                label: window.label.clone(),
+                observed_at_ms: provider
+                    .checked_at_unix
+                    .saturating_mul(1000)
+                    .min(i64::MAX as u64) as i64,
+                used_percent: i64::from(window.used_percent),
+                resets_at_unix: window.resets_at_unix.min(i64::MAX as u64) as i64,
+            })
+        })
+        .collect::<Vec<_>>();
+    if state.db.record_subscription_usage(&points).is_err() {
+        eprintln!("could not record subscription usage history");
+    }
     *cache = Some((Instant::now(), value.clone()));
     Ok(response(value))
 }
@@ -940,6 +963,12 @@ mod tests {
     };
     use tower::ServiceExt;
 
+    fn test_router(token: String, store: CredentialStore) -> Router {
+        let root =
+            std::env::temp_dir().join(format!("beale-auth-db-example-{}", uuid::Uuid::new_v4()));
+        router(token, store, HostDatabase::open(&root).unwrap())
+    }
+
     #[tokio::test]
     async fn custom_provider_lifecycle_keeps_key_out_of_list_and_reconciles_lead() {
         let root = std::env::temp_dir().join(format!(
@@ -948,7 +977,7 @@ mod tests {
         ));
         let store = CredentialStore::at(root.clone());
         let token = "ab".repeat(32);
-        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let app = test_router(token.clone(), CredentialStore::at(root.clone()));
         let provider = WireCustomProvider {
             id: "custom-example".to_owned(),
             name: "Example API".to_owned(),
@@ -1104,7 +1133,7 @@ mod tests {
     #[tokio::test]
     async fn local_host_proves_control_token_without_receiving_it() {
         let token = "ab".repeat(32);
-        let app = router(token.clone(), CredentialStore::at(std::env::temp_dir()));
+        let app = test_router(token.clone(), CredentialStore::at(std::env::temp_dir()));
         let nonce = vec![7_u8; CONTROL_CHALLENGE_BYTES];
         let request = Request::builder()
             .method("POST")
@@ -1126,7 +1155,7 @@ mod tests {
 
     #[tokio::test]
     async fn usage_snapshot_requires_control_token() {
-        let app = router("ab".repeat(32), CredentialStore::at(std::env::temp_dir()));
+        let app = test_router("ab".repeat(32), CredentialStore::at(std::env::temp_dir()));
         let request = Request::builder()
             .uri(PROVIDER_USAGE_PATH)
             .body(Body::empty())
@@ -1143,7 +1172,7 @@ mod tests {
             std::env::temp_dir().join(format!("beale-auth-example-{}", uuid::Uuid::new_v4()));
         let store = CredentialStore::at(root.clone());
         let token = "ab".repeat(32);
-        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let app = test_router(token.clone(), CredentialStore::at(root.clone()));
         let body = SetApiKeyRequest {
             provider: ProviderId::Openai as i32,
             api_key: "sk-example-synthetic".to_owned(),
@@ -1265,7 +1294,7 @@ mod tests {
     async fn lead_route_requires_auth_and_a_configured_provider() {
         let root = std::env::temp_dir().join(format!("beale-lead-route-{}", uuid::Uuid::new_v4()));
         let token = "ab".repeat(32);
-        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let app = test_router(token.clone(), CredentialStore::at(root.clone()));
         let body = ProviderRequest {
             provider: ProviderId::Xai as i32,
             custom_provider_id: String::new(),
@@ -1322,7 +1351,7 @@ mod tests {
             std::env::temp_dir().join(format!("beale-priority-route-{}", uuid::Uuid::new_v4()));
         let token = "ab".repeat(32);
         let store = CredentialStore::at(root.clone());
-        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let app = test_router(token.clone(), CredentialStore::at(root.clone()));
         let body = SetSourcePriorityRequest {
             provider: ProviderId::Openai as i32,
             method: AuthMethod::ApiKey as i32,
@@ -1403,7 +1432,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let token = "ab".repeat(32);
-        let app = router(token.clone(), CredentialStore::at(root.clone()));
+        let app = test_router(token.clone(), CredentialStore::at(root.clone()));
         let request = Request::builder()
             .uri(AUTH_STATUS_PATH)
             .header(header::AUTHORIZATION, format!("Bearer {token}"))

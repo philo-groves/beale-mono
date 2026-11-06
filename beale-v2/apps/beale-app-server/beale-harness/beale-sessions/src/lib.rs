@@ -26,8 +26,8 @@ use beale_safety::ReviewRequest;
 #[cfg(any(feature = "goal-mode", test))]
 use beale_storage::GoalRow;
 use beale_storage::{
-    AutomationOptions, CommentaryRow, HostDatabase, ReasoningSummaryRow, SessionRow, ToolCallRow,
-    TurnActivity, TurnMetadata, TurnRow,
+    AutomationOptions, CommentaryRow, HostDatabase, ModelUsageRow, ReasoningSummaryRow, SessionRow,
+    ToolCallRow, TurnActivity, TurnMetadata, TurnRow,
 };
 use beale_tools::{definitions, execute, model_preview, page, summary as tool_summary};
 use futures_util::stream;
@@ -1292,6 +1292,7 @@ async fn run_one_turn(
     let mut tool_rows = Vec::<ToolCallRow>::new();
     let mut reasoning_rows = Vec::<ReasoningSummaryRow>::new();
     let mut commentary_rows = Vec::<CommentaryRow>::new();
+    let mut model_usage = Vec::<ModelUsageRow>::new();
     let mut reasoning_bytes = 0_usize;
     let mut commentary_bytes = 0_usize;
     let mut call_count = 0_usize;
@@ -1338,6 +1339,7 @@ async fn run_one_turn(
             reasoning_effort,
             workspace_root: Some(&workspace),
         };
+        let call_started = Instant::now();
         let step = if provider == Provider::OpenAi {
             state
                 .provider
@@ -1387,6 +1389,21 @@ async fn run_one_turn(
                 break;
             }
         };
+        model_usage.push(ModelUsageRow {
+            agent_id: "main".to_owned(),
+            role: "main".to_owned(),
+            provider: request.provider,
+            method: request.method,
+            model: request.model.clone(),
+            input_tokens: step.usage.map(|usage| usage.input_tokens as i64),
+            output_tokens: step.usage.map(|usage| usage.output_tokens as i64),
+            duration_ms: call_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
+            observed_at_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| {
+                    duration.as_millis().min(i64::MAX as u128) as i64
+                }),
+        });
         for mut summary in step.reasoning_summaries {
             if reasoning_rows.len() >= MAX_TOOL_ROUNDS * 16
                 || reasoning_bytes >= MAX_REASONING_BYTES_PER_TURN
@@ -1523,6 +1540,7 @@ async fn run_one_turn(
                         )
                     } else {
                         delegated_count += count;
+                        let child_usage = Mutex::new(Vec::new());
                         let result = graphs::delegate(
                             &saved_graph_id,
                             graphs::ChildContext {
@@ -1533,12 +1551,14 @@ async fn run_one_turn(
                                 reasoning_effort,
                                 turn_number: next_turn_number,
                                 progress: progress.as_ref(),
+                                model_usage: &child_usage,
                             },
                             &args,
                             &active_graph_config,
                             &graph_fallback,
                         )
                         .await;
+                        model_usage.extend(child_usage.into_inner());
                         child_tools = result.tools;
                         (result.output, result.is_error)
                     }
@@ -1783,6 +1803,7 @@ async fn run_one_turn(
                 provider_context_json: provider_context_json.as_deref(),
                 graph_id: (!request.graph_id.is_empty()).then_some(request.graph_id.as_str()),
                 graph_config: graph_config.as_deref(),
+                model_usage: Some(&model_usage),
             },
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

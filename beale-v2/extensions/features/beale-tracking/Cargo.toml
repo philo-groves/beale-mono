@@ -1,0 +1,15 @@
+[package]
+name = "beale-tracking"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+beale-contracts = { path = "../../../apps/beale-app-server/beale-harness/beale-contracts" }
+beale-storage = { path = "../../../apps/beale-app-server/beale-harness/beale-storage" }
+prost.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

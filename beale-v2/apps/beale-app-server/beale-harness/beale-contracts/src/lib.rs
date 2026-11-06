@@ -81,6 +81,54 @@ pub mod v1 {
         pub providers: Vec<ProviderUsageSnapshot>,
     }
 
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct TrackingSubscriptionPoint {
+        #[prost(enumeration = "ProviderId", tag = "1")]
+        pub provider: i32,
+        #[prost(string, tag = "2")]
+        pub window_id: String,
+        #[prost(string, tag = "3")]
+        pub label: String,
+        #[prost(uint64, tag = "4")]
+        pub observed_at_ms: u64,
+        #[prost(uint32, tag = "5")]
+        pub remaining_percent: u32,
+        #[prost(uint64, tag = "6")]
+        pub resets_at_unix: u64,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct TrackingModelDay {
+        #[prost(uint64, tag = "1")]
+        pub day_start_ms: u64,
+        #[prost(enumeration = "ProviderId", tag = "2")]
+        pub provider: i32,
+        #[prost(enumeration = "AuthMethod", tag = "3")]
+        pub method: i32,
+        #[prost(string, tag = "4")]
+        pub model: String,
+        #[prost(string, tag = "5")]
+        pub role: String,
+        #[prost(uint64, tag = "6")]
+        pub input_tokens: u64,
+        #[prost(uint64, tag = "7")]
+        pub output_tokens: u64,
+        #[prost(uint64, tag = "8")]
+        pub duration_ms: u64,
+        #[prost(uint32, tag = "9")]
+        pub measured_calls: u32,
+        #[prost(uint32, tag = "10")]
+        pub total_calls: u32,
+    }
+
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct TrackingResponse {
+        #[prost(message, repeated, tag = "1")]
+        pub subscriptions: Vec<TrackingSubscriptionPoint>,
+        #[prost(message, repeated, tag = "2")]
+        pub model_days: Vec<TrackingModelDay>,
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum DaybreakMode {
@@ -1077,11 +1125,12 @@ pub mod v1 {
 }
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 47;
+pub const PROTOCOL_MINOR: u32 = 48;
 pub const SERVICE_NAME: &str = "beale-app-server";
 pub const HEALTH_PATH: &str = "/v1/health";
 pub const AUTH_STATUS_PATH: &str = "/v1/providers/status";
 pub const PROVIDER_USAGE_PATH: &str = "/v1/providers/usage";
+pub const TRACKING_PATH: &str = "/v1/tracking";
 pub const AUTH_PROVE_PATH: &str = "/v1/providers/prove";
 pub const AUTH_API_KEY_PATH: &str = "/v1/providers/api-key";
 pub const AUTH_SUBSCRIPTION_START_PATH: &str = "/v1/providers/subscription/start";

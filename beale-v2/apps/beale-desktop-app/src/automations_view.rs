@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     AUTH_HANDLE, ConnectionStatus, SelectionMenu, State, ThemeStyle, form_button,
-    icons::{ARCHIVE, AUTOMATIONS, NEW_RESEARCH},
+    icons::{ARCHIVE, AUTOMATION_ACTIVE, AUTOMATION_SCHEDULE, AUTOMATIONS, SEARCH},
     sidenav_heading, start_session_load, ui_font, view_title_font,
 };
 
@@ -320,7 +320,8 @@ fn run_row(run: &AutomationRun, active: bool, selected: bool, theme: ThemeStyle<
             }
         })
         .child(
-            icon(if active { &NEW_RESEARCH } else { &ARCHIVE }, 15.0).color(theme.color("#9d9d9d")),
+            icon(if active { &AUTOMATION_ACTIVE } else { &ARCHIVE }, 15.0)
+                .color(theme.color("#9d9d9d")),
         )
         .child(
             text(run.title.clone())
@@ -395,7 +396,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
         .iter()
         .filter(|run| run.status != AutomationRunStatus::Active as i32)
         .collect();
-    list = list.child(section_header("Active", &NEW_RESEARCH, theme));
+    list = list.child(section_header("Active", &AUTOMATION_ACTIVE, theme));
     if active.is_empty() {
         list = list.child(empty_section("Active", theme));
     }
@@ -490,7 +491,7 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 .radius(8.0)
                 .hover(theme.color("#282828"))
                 .on_press(schedule_job)
-                .child(icon(&NEW_RESEARCH, 16.0).color(theme.color("#bdbdbd")))
+                .child(icon(&AUTOMATION_SCHEDULE, 16.0).color(theme.color("#bdbdbd")))
                 .child(
                     text("Schedule a Job")
                         .font(ui_font(14.0, 400.0))
@@ -498,11 +499,30 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
                 ),
         )
         .child(
-            row().h(26.0).px(8.0).mt(12.0).center_y().child(
-                text("Jobs")
-                    .font(ui_font(13.0, 400.0))
-                    .color(theme.color("#b8b8b8")),
-            ),
+            row()
+                .key("automations-runs-row")
+                .w_full()
+                .h(28.0)
+                .mt(12.0)
+                .center_y()
+                .child(
+                    text("Runs")
+                        .key("automations-runs-label")
+                        .ml(8.0)
+                        .font(ui_font(13.0, 400.0))
+                        .color(theme.color("#b8b8b8")),
+                )
+                .child(el().grow(1.0))
+                .child(
+                    el().key("automations-search-runs")
+                        .role("button")
+                        .label("Search runs unavailable")
+                        .size(26.0, 26.0)
+                        .center()
+                        .radius(8.0)
+                        .continuous_corners()
+                        .child(icon(&SEARCH, 15.0).color(theme.color("#777777"))),
+                ),
         )
         .child(
             col()
@@ -517,10 +537,21 @@ pub(crate) fn sidenav(state: &State, width: f32, theme: ThemeStyle<'_>) -> El {
 }
 
 fn empty_section(label: &str, theme: ThemeStyle<'_>) -> El {
-    text(format!("No {label} Jobs"))
-        .ml(8.0)
-        .font(ui_font(13.0, 400.0))
-        .color(theme.color("#777777"))
+    row()
+        .key(format!("automations-{label}-empty"))
+        .inert()
+        .w_full()
+        .h(30.0)
+        .px(4.0)
+        .center_y()
+        .gap(10.0)
+        .child(el().size(15.0, 15.0))
+        .child(
+            text(format!("No {label} Runs"))
+                .key(format!("automations-{label}-empty-label"))
+                .font(ui_font(13.0, 400.0))
+                .color(theme.color("#777777")),
+        )
 }
 
 fn repeat_label(preset: &str) -> &'static str {

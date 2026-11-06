@@ -54,6 +54,15 @@ fn feature_specs() -> Vec<FeatureSpec> {
             tool_count: beale_graphs::TOOL_COUNT,
             prompt_extension: beale_graphs::PROMPT_EXTENSION,
         },
+        #[cfg(feature = "tracking")]
+        FeatureSpec {
+            id: beale_tracking::FEATURE_ID,
+            name: beale_tracking::FEATURE_NAME,
+            description: beale_tracking::FEATURE_DESCRIPTION,
+            has_prompt_extension: beale_tracking::HAS_PROMPT_EXTENSION,
+            tool_count: beale_tracking::TOOL_COUNT,
+            prompt_extension: beale_tracking::PROMPT_EXTENSION,
+        },
     ]
 }
 
@@ -224,6 +233,9 @@ async fn set_scope(
     let request =
         SetExtensionWorkspaceScopeRequest::decode(body).map_err(|_| StatusCode::BAD_REQUEST)?;
     let spec = feature_spec(&request.id).ok_or(StatusCode::NOT_FOUND)?;
+    if spec.id == "tracking" && (!request.all_workspaces || !request.workspace_ids.is_empty()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     if !state
         .db
         .feature_enabled(spec.id)

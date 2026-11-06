@@ -17,7 +17,7 @@ use beale_providers::{
     provider_error_message,
 };
 use beale_safety::ReviewRequest;
-use beale_storage::ToolCallRow;
+use beale_storage::{ModelUsageRow, ToolCallRow};
 use beale_tools::{definitions, execute, model_preview, page, summary};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
@@ -71,6 +71,7 @@ pub(super) struct ChildContext<'a> {
     pub reasoning_effort: Option<&'a str>,
     pub turn_number: i64,
     pub progress: Option<&'a mpsc::Sender<SessionStreamEvent>>,
+    pub model_usage: &'a Mutex<Vec<ModelUsageRow>>,
 }
 
 async fn run_child(
@@ -79,6 +80,7 @@ async fn run_child(
     mutation_lock: &Mutex<()>,
     tool_sequence: &AtomicI64,
 ) -> ChildOutcome {
+    let agent_id = uuid::Uuid::new_v4().to_string();
     let Some((provider, mode)) = provider_for(&assignment.model) else {
         return ChildOutcome {
             result: "Configured subagent provider is invalid.".to_owned(),
@@ -116,6 +118,7 @@ async fn run_child(
             reasoning_effort: context.reasoning_effort,
             workspace_root: Some(context.workspace),
         };
+        let call_started = std::time::Instant::now();
         let step = if provider == Provider::OpenAi {
             context
                 .state
@@ -146,6 +149,21 @@ async fn run_child(
                 };
             }
         };
+        context.model_usage.lock().await.push(ModelUsageRow {
+            agent_id: agent_id.clone(),
+            role: assignment.role.id().to_owned(),
+            provider: assignment.model.provider,
+            method: assignment.model.method,
+            model: assignment.model.model.clone(),
+            input_tokens: step.usage.map(|usage| usage.input_tokens as i64),
+            output_tokens: step.usage.map(|usage| usage.output_tokens as i64),
+            duration_ms: call_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
+            observed_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| {
+                    duration.as_millis().min(i64::MAX as u128) as i64
+                }),
+        });
         input.extend(step.continuation);
         if step.calls.is_empty() {
             let result = step.text.trim();

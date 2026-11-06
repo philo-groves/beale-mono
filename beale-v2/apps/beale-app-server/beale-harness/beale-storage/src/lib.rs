@@ -218,6 +218,43 @@ pub struct TurnRow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubscriptionUsageRow {
+    pub provider: i32,
+    pub window_id: String,
+    pub label: String,
+    pub observed_at_ms: i64,
+    pub used_percent: i64,
+    pub resets_at_unix: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelUsageRow {
+    pub agent_id: String,
+    pub role: String,
+    pub provider: i32,
+    pub method: i32,
+    pub model: String,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub duration_ms: i64,
+    pub observed_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelUsageDayRow {
+    pub day_start_ms: i64,
+    pub role: String,
+    pub provider: i32,
+    pub method: i32,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub duration_ms: i64,
+    pub measured_calls: i64,
+    pub total_calls: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolCallRow {
     pub id: String,
     pub turn_number: i64,
@@ -266,6 +303,7 @@ pub struct TurnMetadata<'a> {
     pub provider_context_json: Option<&'a str>,
     pub graph_id: Option<&'a str>,
     pub graph_config: Option<&'a [u8]>,
+    pub model_usage: Option<&'a [ModelUsageRow]>,
 }
 
 #[derive(Clone, Debug)]
@@ -290,7 +328,7 @@ impl HostDatabase {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 26 {
+        if version > 27 {
             bail!("unsupported host database schema version {version}");
         }
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")?;
@@ -670,7 +708,139 @@ impl HostDatabase {
                 )?;
             }
         }
+        if version < 27 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE IF NOT EXISTS subscription_usage_history (
+                     provider INTEGER NOT NULL, window_id TEXT NOT NULL, label TEXT NOT NULL,
+                     observed_at_ms INTEGER NOT NULL, used_percent INTEGER NOT NULL,
+                     resets_at_unix INTEGER NOT NULL,
+                     PRIMARY KEY(provider, window_id, observed_at_ms)
+                 );
+                 CREATE INDEX IF NOT EXISTS subscription_usage_observed ON subscription_usage_history(observed_at_ms);
+                 CREATE TABLE IF NOT EXISTS session_model_usage (
+                     session_id TEXT NOT NULL, turn_number INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+                     agent_id TEXT NOT NULL, role TEXT NOT NULL, provider INTEGER NOT NULL, method INTEGER NOT NULL,
+                     model TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER,
+                     duration_ms INTEGER NOT NULL, observed_at_ms INTEGER NOT NULL,
+                     PRIMARY KEY(session_id, turn_number, ordinal),
+                     FOREIGN KEY(session_id, turn_number) REFERENCES session_turns(session_id, number) ON DELETE CASCADE
+                 );
+                 CREATE INDEX IF NOT EXISTS session_model_usage_observed ON session_model_usage(observed_at_ms);
+                 PRAGMA user_version = 27;
+                 COMMIT;",
+            )?;
+        }
         Ok(Self(Arc::new(Mutex::new(connection))))
+    }
+
+    pub fn record_subscription_usage(&self, points: &[SubscriptionUsageRow]) -> Result<()> {
+        ensure!(points.len() <= 8, "too many usage windows");
+        if points.is_empty() {
+            return Ok(());
+        }
+        self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            for point in points {
+                ensure!(
+                    point.window_id.len() <= 40
+                        && point.label.len() <= 40
+                        && (0..=100).contains(&point.used_percent)
+                        && point.observed_at_ms >= 0,
+                    "invalid subscription history point"
+                );
+                transaction.execute(
+                    "INSERT OR IGNORE INTO subscription_usage_history
+                     (provider, window_id, label, observed_at_ms, used_percent, resets_at_unix)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        point.provider,
+                        point.window_id,
+                        point.label,
+                        point.observed_at_ms,
+                        point.used_percent,
+                        point.resets_at_unix
+                    ],
+                )?;
+            }
+            transaction.execute(
+                "DELETE FROM subscription_usage_history WHERE observed_at_ms < ?1",
+                [points[0].observed_at_ms.saturating_sub(8 * 86_400_000)],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn subscription_history(&self, since_ms: i64) -> Result<Vec<SubscriptionUsageRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT provider, window_id, label, observed_at_ms, used_percent, resets_at_unix
+                 FROM subscription_usage_history WHERE observed_at_ms >= ?1
+                 ORDER BY observed_at_ms, provider, window_id LIMIT 20001",
+            )?;
+            let rows = statement
+                .query_map([since_ms], |row| {
+                    Ok(SubscriptionUsageRow {
+                        provider: row.get(0)?,
+                        window_id: row.get(1)?,
+                        label: row.get(2)?,
+                        observed_at_ms: row.get(3)?,
+                        used_percent: row.get(4)?,
+                        resets_at_unix: row.get(5)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            ensure!(rows.len() <= 20000, "too many subscription history points");
+            Ok(rows)
+        })
+    }
+
+    pub fn model_usage_days(&self, since_ms: i64) -> Result<Vec<ModelUsageDayRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT (observed_at_ms / 86400000) * 86400000 AS day, role, provider, method, model,
+                        SUM(COALESCE(input_tokens, 0)), SUM(COALESCE(output_tokens, 0)),
+                        SUM(duration_ms), SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END), COUNT(*)
+                 FROM session_model_usage WHERE observed_at_ms >= ?1
+                 GROUP BY day, role, provider, method, model ORDER BY day, provider, model, role LIMIT 2001")?;
+            let rows = statement.query_map([since_ms], |row| Ok(ModelUsageDayRow {
+                day_start_ms: row.get(0)?, role: row.get(1)?, provider: row.get(2)?,
+                method: row.get(3)?, model: row.get(4)?, input_tokens: row.get(5)?,
+                output_tokens: row.get(6)?, duration_ms: row.get(7)?,
+                measured_calls: row.get(8)?, total_calls: row.get(9)?,
+            }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            ensure!(rows.len() <= 2000, "too many model usage day rows");
+            Ok(rows)
+        })
+    }
+
+    pub fn session_model_usage(&self, session_id: &str) -> Result<Vec<ModelUsageRow>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT agent_id, role, provider, method, model, input_tokens, output_tokens,
+                        duration_ms, observed_at_ms
+                 FROM session_model_usage WHERE session_id = ?1
+                 ORDER BY turn_number, ordinal LIMIT 2001",
+            )?;
+            let rows = statement
+                .query_map([session_id], |row| {
+                    Ok(ModelUsageRow {
+                        agent_id: row.get(0)?,
+                        role: row.get(1)?,
+                        provider: row.get(2)?,
+                        method: row.get(3)?,
+                        model: row.get(4)?,
+                        input_tokens: row.get(5)?,
+                        output_tokens: row.get(6)?,
+                        duration_ms: row.get(7)?,
+                        observed_at_ms: row.get(8)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            ensure!(rows.len() <= 2000, "too many session model usage rows");
+            Ok(rows)
+        })
     }
 
     pub fn session_graph_id(&self, session_id: &str) -> Result<Option<String>> {
@@ -1649,6 +1819,7 @@ impl HostDatabase {
             provider_context_json,
             graph_id,
             graph_config,
+            model_usage,
         } = metadata;
         ensure!(
             provider_context_json.is_none_or(|value| value.len() <= 8_388_608),
@@ -1688,6 +1859,26 @@ impl HostDatabase {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![session.id, turn.number, turn.provider, turn.method, turn.model, turn.prompt, turn.answer, turn.duration_ms, turn.internal_prompt],
             )?;
+            if let Some(model_usage) = model_usage {
+                ensure!(model_usage.len() <= 256, "too many model calls in turn");
+                for (ordinal, item) in model_usage.iter().enumerate() {
+                    ensure!(!item.agent_id.is_empty() && item.agent_id.len() <= 64
+                        && item.model.len() <= 200 && item.role.len() <= 20
+                        && item.duration_ms >= 0 && item.observed_at_ms >= 0
+                        && item.input_tokens.is_none_or(|value| (0..=1_000_000_000_000).contains(&value))
+                        && item.output_tokens.is_none_or(|value| (0..=1_000_000_000_000).contains(&value)),
+                        "invalid model usage");
+                    transaction.execute(
+                        "INSERT INTO session_model_usage
+                         (session_id, turn_number, ordinal, agent_id, role, provider, method, model,
+                          input_tokens, output_tokens, duration_ms, observed_at_ms)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                        params![session.id, turn.number, ordinal as i64, item.agent_id, item.role,
+                            item.provider, item.method, item.model, item.input_tokens,
+                            item.output_tokens, item.duration_ms, item.observed_at_ms],
+                    )?;
+                }
+            }
             if !new_session {
                 transaction.execute(
                     "UPDATE sessions SET last_message_at_ms = ?2 WHERE id = ?1",
@@ -2045,6 +2236,98 @@ mod tests {
     }
 
     #[test]
+    fn tracking_history_persists_and_aggregates_agent_calls() {
+        let root = root();
+        let db = HostDatabase::open(&root).unwrap();
+        let day = 1_800_000_000_000_i64 / 86_400_000 * 86_400_000;
+        db.record_subscription_usage(&[SubscriptionUsageRow {
+            provider: 1,
+            window_id: "weekly".to_owned(),
+            label: "Week".to_owned(),
+            observed_at_ms: day + 1_000,
+            used_percent: 35,
+            resets_at_unix: 1_800_100_000,
+        }])
+        .unwrap();
+        let session = SessionRow {
+            id: "session-example".to_owned(),
+            workspace_id: "workspace-example".to_owned(),
+            title: "Example session".to_owned(),
+            created_at_ms: day,
+            last_message_at_ms: day + 3_000,
+        };
+        let turn = TurnRow {
+            number: 1,
+            provider: 1,
+            method: 1,
+            model: "model-example".to_owned(),
+            prompt: "Example prompt".to_owned(),
+            answer: "Example answer".to_owned(),
+            duration_ms: 2_000,
+            internal_prompt: false,
+        };
+        let usage = [
+            ModelUsageRow {
+                agent_id: "main".to_owned(),
+                role: "main".to_owned(),
+                provider: 1,
+                method: 1,
+                model: "model-example".to_owned(),
+                input_tokens: Some(100),
+                output_tokens: Some(20),
+                duration_ms: 800,
+                observed_at_ms: day + 1_000,
+            },
+            ModelUsageRow {
+                agent_id: "scout-example".to_owned(),
+                role: "scout".to_owned(),
+                provider: 1,
+                method: 1,
+                model: "model-example".to_owned(),
+                input_tokens: None,
+                output_tokens: None,
+                duration_ms: 500,
+                observed_at_ms: day + 2_000,
+            },
+        ];
+        db.append_turn_with_metadata(
+            &session,
+            &turn,
+            true,
+            TurnActivity {
+                tools: &[],
+                reasoning: &[],
+                commentary: &[],
+                goal: None,
+            },
+            None,
+            TurnMetadata {
+                model_usage: Some(&usage),
+                ..TurnMetadata::default()
+            },
+        )
+        .unwrap();
+        drop(db);
+
+        let db = HostDatabase::open(&root).unwrap();
+        assert_eq!(db.subscription_history(day).unwrap()[0].used_percent, 35);
+        let calls = db.session_model_usage(&session.id).unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].agent_id, "main");
+        assert_eq!(calls[1].agent_id, "scout-example");
+        let rows = db.model_usage_days(day).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].role, "main");
+        assert_eq!((rows[0].input_tokens, rows[0].output_tokens), (100, 20));
+        assert_eq!((rows[0].measured_calls, rows[0].total_calls), (1, 1));
+        assert_eq!(rows[1].role, "scout");
+        assert_eq!((rows[1].duration_ms, rows[1].measured_calls), (500, 0));
+        assert!(db.model_usage_days(day + 86_400_000).unwrap().is_empty());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn automation_series_persists_and_skips_one_occurrence() {
         let root = root();
         let db = HostDatabase::open(&root).unwrap();
@@ -2299,6 +2582,7 @@ mod tests {
                 provider_context_json: None,
                 graph_id: Some("simple"),
                 graph_config: Some(b"example-config"),
+                model_usage: None,
             },
         )
         .unwrap();
@@ -2341,6 +2625,7 @@ mod tests {
                 provider_context_json: Some(context),
                 graph_id: None,
                 graph_config: None,
+                model_usage: None,
             },
         )
         .unwrap();
@@ -2364,6 +2649,7 @@ mod tests {
                     provider_context_json: Some("[]"),
                     graph_id: None,
                     graph_config: None,
+                    model_usage: None,
                 },
             )
             .is_err()
@@ -2531,7 +2817,7 @@ mod tests {
         drop(db);
         let connection = Connection::open(root.join("state.sqlite")).unwrap();
         connection
-            .execute_batch("PRAGMA user_version = 27;")
+            .execute_batch("PRAGMA user_version = 28;")
             .unwrap();
         drop(connection);
         assert!(HostDatabase::open(&root).is_err());
@@ -2539,7 +2825,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }
